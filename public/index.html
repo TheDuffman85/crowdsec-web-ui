@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>CrowdSec Web UI</title>
+  <!-- Bootstrap CSS for styling -->
+  <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css">
+  <!-- Custom styles for dark mode and modal -->
+  <style>
+    /* Light mode (default) */
+    body.light-mode {
+      background-color: #ffffff;
+      color: #212529;
+    }
+    /* Dark mode styles */
+    body.dark-mode {
+      background-color: #121212;
+      color: #e0e0e0;
+    }
+    /* Adjust table colors for dark mode */
+    .dark-mode .table {
+      color: #e0e0e0;
+    }
+    .dark-mode .table thead th {
+      background-color: #1e1e1e;
+      color: #e0e0e0;
+    }
+    .dark-mode .table tbody td {
+      background-color: #121212;
+      border-color: #2e2e2e;
+    }
+    /* Navbar / toggle button container */
+    .theme-toggle {
+      position: absolute;
+      top: 1rem;
+      right: 1rem;
+    }
+    /* Modal overlay styling */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1050;
+    }
+    .modal-content {
+      background-color: #fff;
+      color: #212529;
+      padding: 1rem;
+      border-radius: 0.3rem;
+      max-width: 90%;
+      max-height: 90%;
+      overflow-y: auto;
+    }
+    /* Modal adjustments for dark mode */
+    body.dark-mode .modal-content {
+      background-color: #1e1e1e;
+      color: #e0e0e0;
+    }
+    /* Ensure pre elements are readable in dark mode */
+    body.dark-mode pre {
+      background-color: transparent;
+      color: #e0e0e0;
+    }
+  </style>
+  <!-- React and ReactDOM from CDN -->
+  <script crossorigin src="https://unpkg.com/react@17/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@17/umd/react-dom.production.min.js"></script>
+  <!-- Babel for JSX transpilation -->
+  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="light-mode">
+  <!-- Theme toggle button -->
+  <div class="theme-toggle">
+    <button id="toggleTheme" class="btn btn-secondary btn-sm">Toggle Dark Mode</button>
+  </div>
+
+  <div class="container mt-4">
+    <h1>CrowdSec Web UI</h1>
+    <div id="root"></div>
+  </div>
+  
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // Dark mode helper functions
+    const setTheme = (theme) => {
+      document.body.classList.remove("light-mode", "dark-mode");
+      document.body.classList.add(theme);
+      localStorage.setItem("theme", theme);
+      const toggleBtn = document.getElementById("toggleTheme");
+      toggleBtn.textContent = theme === "dark-mode" ? "Switch to Light Mode" : "Switch to Dark Mode";
+    };
+
+    // Initialize theme based on localStorage or system preference
+    const initTheme = () => {
+      const storedTheme = localStorage.getItem("theme");
+      if (storedTheme) {
+        setTheme(storedTheme);
+      } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        setTheme("dark-mode");
+      } else {
+        setTheme("light-mode");
+      }
+    };
+
+    initTheme();
+
+    document.getElementById("toggleTheme").addEventListener("click", () => {
+      const currentTheme = localStorage.getItem("theme") || "light-mode";
+      setTheme(currentTheme === "dark-mode" ? "light-mode" : "dark-mode");
+    });
+
+    // Recursive helper function to render any value (supports arrays, objects, or primitive types)
+    function renderValue(value) {
+      if (Array.isArray(value)) {
+        return (
+          <ul style={{ listStyleType: 'disc', marginLeft: '1rem' }}>
+            {value.map((item, index) => (
+              <li key={index}>{renderValue(item)}</li>
+            ))}
+          </ul>
+        );
+      } else if (value !== null && typeof value === 'object') {
+        return (
+          <div style={{ marginLeft: '1rem' }}>
+            {Object.entries(value).map(([key, val]) => (
+              <div key={key}>
+                <strong>{key}:</strong> {renderValue(val)}
+              </div>
+            ))}
+          </div>
+        );
+      } else {
+        return String(value);
+      }
+    }
+
+    // Reusable DetailView component to display key-value pairs using the recursive renderer.
+    function DetailView({ data }) {
+      return (
+        <div>
+          {Object.entries(data).map(([key, value]) => (
+            <div key={key} style={{ marginBottom: '0.5rem' }}>
+              <strong>{key}:</strong> {renderValue(value)}
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    // Modal component for overlaying details
+    function Modal({ title, children, onClose }) {
+      return (
+        <div className="modal-overlay" onClick={onClose}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <h5>{title}</h5>
+            {children}
+            <div className="mt-3 text-right">
+              <button className="btn btn-secondary" onClick={onClose}>Close</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function App() {
+      const [alerts, setAlerts] = useState([]);
+      const [decisions, setDecisions] = useState([]);
+      const [selectedAlert, setSelectedAlert] = useState(null);
+      const [selectedDecision, setSelectedDecision] = useState(null);
+      const [filter, setFilter] = useState("");
+      const [activeTab, setActiveTab] = useState("alerts");
+
+      useEffect(() => {
+        fetchAlerts();
+        fetchDecisions();
+        const interval = setInterval(() => {
+          fetchAlerts();
+          fetchDecisions();
+        }, 30000);
+        return () => clearInterval(interval);
+      }, []);
+
+      const fetchAlerts = () => {
+        fetch('/api/alerts')
+          .then(res => res.json())
+          .then(data => {
+            console.log("Received alerts:", data);
+            setAlerts(data);
+          })
+          .catch(err => console.error(err));
+      };
+
+      const fetchDecisions = () => {
+        fetch('/api/decisions')
+          .then(res => res.json())
+          .then(data => {
+            console.log("Received decisions:", data);
+            setDecisions(data);
+          })
+          .catch(err => console.error(err));
+      };
+
+      const deleteDecision = (id) => {
+        if (!window.confirm('Are you sure you want to delete this decision?')) return;
+        fetch(`/api/decisions/${id}`, { method: 'DELETE' })
+          .then(res => res.json())
+          .then(data => {
+            alert('Decision deleted successfully');
+            fetchDecisions();
+          })
+          .catch(err => console.error(err));
+      };
+
+      const filteredAlerts = alerts.filter(alert => {
+        if (!filter) return true;
+        return alert.scenario && alert.scenario.toLowerCase().includes(filter.toLowerCase());
+      });
+
+      return (
+        <div>
+          <ul className="nav nav-tabs">
+            <li className="nav-item">
+              <button
+                className={`nav-link ${activeTab === 'alerts' ? 'active' : ''}`}
+                onClick={() => { setActiveTab('alerts'); setSelectedAlert(null); setSelectedDecision(null); }}
+              >
+                Alerts
+              </button>
+            </li>
+            <li className="nav-item">
+              <button
+                className={`nav-link ${activeTab === 'decisions' ? 'active' : ''}`}
+                onClick={() => { setActiveTab('decisions'); setSelectedAlert(null); setSelectedDecision(null); }}
+              >
+                Decisions
+              </button>
+            </li>
+          </ul>
+
+          {activeTab === 'alerts' && (
+            <div className="mt-3">
+              <div className="form-group">
+                <label htmlFor="filter">Filter Alerts by Scenario:</label>
+                <input
+                  type="text"
+                  className="form-control"
+                  id="filter"
+                  value={filter}
+                  onChange={e => setFilter(e.target.value)}
+                  placeholder="Enter keyword"
+                />
+              </div>
+              <table className="table table-striped">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>When</th>
+                    <th>Scenario</th>
+                    <th>Message</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredAlerts.map(alert => (
+                    <tr key={alert.id}>
+                      <td>{alert.id}</td>
+                      <td>{alert.created_at}</td>
+                      <td>{alert.scenario}</td>
+                      <td>{alert.message}</td>
+                      <td>
+                        <button
+                          className="btn btn-primary btn-sm"
+                          onClick={() => {
+                            console.log("Viewing details for alert", alert.id);
+                            setSelectedAlert(alert);
+                          }}
+                        >
+                          View Details
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {activeTab === 'decisions' && (
+            <div className="mt-3">
+              <table className="table table-striped">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>When</th>
+                    <th>Scenario</th>
+                    <th>Value</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {decisions.map(decision => (
+                    <tr key={decision.id}>
+                      <td>{decision.id}</td>
+                      <td>{decision.created_at || "N/A"}</td>
+                      <td>{decision.scenario || "N/A"}</td>
+                      <td>{decision.value || "N/A"}</td>
+                      <td>
+                        <button
+                          className="btn btn-primary btn-sm mr-2"
+                          onClick={() => {
+                            console.log("Viewing details for decision", decision.id);
+                            setSelectedDecision(decision);
+                          }}
+                        >
+                          View Details
+                        </button>
+                        <button
+                          className="btn btn-danger btn-sm"
+                          onClick={() => deleteDecision(decision.id)}
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Modal for Alert Details using DetailView */}
+          {selectedAlert && (
+            <Modal title="Alert Details" onClose={() => setSelectedAlert(null)}>
+              <DetailView data={selectedAlert} />
+            </Modal>
+          )}
+
+          {/* Modal for Decision Details using the 'detail' field */}
+          {selectedDecision && (
+            <Modal title="Decision Details" onClose={() => setSelectedDecision(null)}>
+              <DetailView data={selectedDecision.detail} />
+            </Modal>
+          )}
+        </div>
+      );
+    }
+
+    ReactDOM.render(<App />, document.getElementById('root'));
+  </script>
+</body>
+</html>

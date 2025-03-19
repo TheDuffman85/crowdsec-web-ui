@@ -1,0 +1,25 @@
+services:
+  #crowdsec:
+  #  image: crowdsecurity/crowdsec:latest
+  #  container_name: crowdsec_container
+  #  volumes:
+  #    - ./crowdsec/config:/etc/crowdsec
+  #    - ./crowdsec/data:/var/lib/crowdsec
+
+  webui:
+    build: .
+    container_name: crowdsec_web_ui
+    ports:
+      - "3000:3000"
+    # Mount the Docker socket so the UI container can execute Docker commands.
+    volumes:
+      #- /var/run/docker.sock:/var/run/docker.sock
+      - ./certs:/certs:ro
+      - ./data:/data
+    environment:
+      - CROWDSEC_CONTAINER=crowdsec
+      - DOCKER_HOST=tcp://192.168.2.6:2375
+      - DOCKER_CERT_PATH=/certs
+      - DOCKER_TLS_VERIFY=1
+    #depends_on:
+    #  - crowdsec
