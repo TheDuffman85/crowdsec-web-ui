@@ -1,8 +1,12 @@
 # Dockerfile
-FROM node:20-alpine
+# Use node:20-slim (Debian) instead of Alpine to avoid QEMU emulation issues on ARM64
+FROM node:20-slim
 
 # Install the Docker CLI so docker commands can be executed
-RUN apk update && apk add --no-cache docker-cli
+# Debian uses apt-get. We install docker.io which contains the client.
+RUN apt-get update && \
+    apt-get install -y docker.io && \
+    rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
@@ -12,7 +16,6 @@ COPY package*.json ./
 RUN npm install
 
 # Copy frontend package files and install frontend dependencies
-# We copy this separately to leverage Docker cache
 COPY frontend/package*.json ./frontend/
 RUN cd frontend && npm install
 
