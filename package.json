@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "install-all": "npm install && cd frontend && npm install",
+    "build-ui": "cd frontend && npm run build"
   },
   "dependencies": {
     "express": "^4.17.1",

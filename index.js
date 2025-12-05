@@ -2,6 +2,7 @@
 const express = require('express');
 const { exec } = require('child_process');
 const cors = require('cors');
+const path = require('path');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -125,6 +126,12 @@ app.delete('/api/decisions/:id', (req, res) => {
 });
 
 // Serve static files from the "public" directory.
-app.use(express.static('public'));
+// Serve static files from the "frontend/dist" directory.
+app.use(express.static('frontend/dist'));
+
+// Catch-all handler for any request that doesn't match an API route
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'frontend/dist/index.html'));
+});
 
 app.listen(port, () => console.log(`Server listening on port ${port}`));
