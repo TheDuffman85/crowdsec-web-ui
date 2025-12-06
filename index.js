@@ -163,17 +163,21 @@ app.get('/api/alerts/:id', ensureAuth, async (req, res) => {
 app.get('/api/decisions', ensureAuth, async (req, res) => {
   const doRequest = async () => {
     // Fetch alerts that have active decisions
-    // Limit to 50 to prevent OOM. In a real app, pagination should be implemented.
-    const response = await apiClient.get('/v1/alerts?has_active_decision=true&limit=50');
+    // Filtering by origin at LAPI level to reduce payload and avoid OOM from CAPI
+    // origin: cscli (manual), crowdsec (scenarios), cscli-import (imported)
+    const origins = ['cscli', 'crowdsec', 'cscli-import'];
+    const originQuery = origins.map(o => `origin=${o}`).join('&');
+
+    const response = await apiClient.get(`/v1/alerts?has_active_decision=true&limit=100&${originQuery}`);
     const alerts = response.data || [];
-    console.log(`Fetched ${alerts.length} alerts with active decisions`);
+    console.log(`Fetched ${alerts.length} alerts with active decisions (filtered by origin)`);
 
     let combinedDecisions = [];
 
     // Extract decisions from each alert
     alerts.forEach(alert => {
       if (Array.isArray(alert.decisions)) {
-        // Filter out CAPI decisions
+        // Double-check filter (though API should have handled it)
         const relevantDecisions = alert.decisions.filter(d => d.origin !== 'CAPI');
 
         const mapped = relevantDecisions.map(decision => ({
