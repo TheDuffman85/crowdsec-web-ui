@@ -166,7 +166,8 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
     // Filtering by origin at LAPI level to reduce payload and avoid OOM from CAPI
     // origin: cscli (manual), crowdsec (scenarios), cscli-import (imported)
     // We run parallel requests because LAPI might not support OR logic with "origin" parameter reliably.
-    const origins = ['cscli', 'crowdsec', 'cscli-import'];
+    // Added 'manual' to origins to capture Web UI decisions.
+    const origins = ['cscli', 'crowdsec', 'cscli-import', 'manual'];
 
     // Execute requests in parallel
     const responses = await Promise.all(
@@ -289,7 +290,7 @@ app.post('/api/decisions', ensureAuth, async (req, res) => {
         type: type,
         duration: duration,
         value: ip,
-        origin: "manual",
+        origin: "cscli",
         scenario: "manual/web-ui",
         scope: "ip"
       }]
