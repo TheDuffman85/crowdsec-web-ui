@@ -63,44 +63,64 @@ export function Decisions() {
                     <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                         <thead className="bg-gray-50 dark:bg-gray-900/50">
                             <tr>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">ID</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Source</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Scenario</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Value</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Type</th>
-                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
+                                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">ID</th>
+                                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Source</th>
+                                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Scope:Value</th>
+                                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Reason</th>
+                                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Action</th>
+                                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Country</th>
+                                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">AS</th>
+                                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Events</th>
+                                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Expiration</th>
+                                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Alert ID</th>
+                                <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
                             </tr>
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                             {loading ? (
-                                <tr><td colSpan="6" className="px-6 py-4 text-center text-sm text-gray-500">Loading decisions...</td></tr>
+                                <tr><td colSpan="11" className="px-6 py-4 text-center text-sm text-gray-500">Loading decisions...</td></tr>
                             ) : decisions.length === 0 ? (
-                                <tr><td colSpan="6" className="px-6 py-4 text-center text-sm text-gray-500">No active decisions</td></tr>
+                                <tr><td colSpan="11" className="px-6 py-4 text-center text-sm text-gray-500">No active decisions</td></tr>
                             ) : (
                                 decisions.map((decision) => (
                                     <tr key={decision.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                                        <td className="px-3 py-4 whitespace-nowrap text-xs text-gray-500 dark:text-gray-400">
                                             #{decision.id}
                                         </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                                        <td className="px-3 py-4 whitespace-nowrap text-xs text-gray-900 dark:text-gray-100">
                                             {decision.detail.origin || "Unknown"}
                                         </td>
-                                        <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100">
-                                            <span className="font-mono text-xs">{decision.scenario}</span>
+                                        <td className="px-3 py-4 text-xs font-mono text-gray-900 dark:text-gray-100">
+                                            ip:{decision.value}
                                         </td>
-                                        <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100">
-                                            <span className="font-mono">{decision.value}</span>
+                                        <td className="px-3 py-4 text-xs text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={decision.detail.reason}>
+                                            {decision.detail.reason}
                                         </td>
-                                        <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100">
-                                            <Badge variant="danger">{decision.detail.type || "ban"}</Badge>
+                                        <td className="px-3 py-4 text-xs text-gray-900 dark:text-gray-100">
+                                            <Badge variant="danger">{decision.detail.action || "ban"}</Badge>
                                         </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                        <td className="px-3 py-4 text-xs text-gray-900 dark:text-gray-100">
+                                            {decision.detail.country}
+                                        </td>
+                                        <td className="px-3 py-4 text-xs text-gray-900 dark:text-gray-100 max-w-[150px] truncate" title={decision.detail.as}>
+                                            {decision.detail.as}
+                                        </td>
+                                        <td className="px-3 py-4 text-xs text-gray-900 dark:text-gray-100">
+                                            {decision.detail.events_count}
+                                        </td>
+                                        <td className="px-3 py-4 text-xs text-gray-900 dark:text-gray-100">
+                                            {new Date(decision.detail.expiration).toLocaleString()}
+                                        </td>
+                                        <td className="px-3 py-4 text-xs text-gray-500 dark:text-gray-400">
+                                            {decision.detail.alert_id}
+                                        </td>
+                                        <td className="px-3 py-4 whitespace-nowrap text-right text-sm font-medium">
                                             <button
                                                 onClick={() => handleDelete(decision.id)}
                                                 className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 transition-colors"
                                                 title="Delete Decision"
                                             >
-                                                <Trash2 size={18} />
+                                                <Trash2 size={16} />
                                             </button>
                                         </td>
                                     </tr>

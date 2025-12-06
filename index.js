@@ -194,24 +194,35 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
 
         const mapped = relevantDecisions.map(decision => {
           if (seenDecisionIds.has(decision.id)) return null;
+
+          // Filter out expired decisions
+          if (decision.stop_at && new Date(decision.stop_at) < new Date()) {
+            return null;
+          }
+
           seenDecisionIds.add(decision.id);
 
           return {
             id: decision.id,
-            created_at: decision.created_at || alert.created_at, // Use decision time or alert time
+            created_at: decision.created_at || alert.created_at,
             scenario: decision.scenario || alert.scenario || "N/A",
             value: decision.value,
-            // Optimization: Don't pass the full heavy alert (with logs/events) as detail.
-            // Just pass minimal info needed by frontend.
+            // Rich details for CSCLI parity
             detail: {
-              origin: decision.origin || alert.source?.scope || "manual", // Fallback logic
+              origin: decision.origin || alert.source?.scope || "manual",
               type: decision.type,
-              // Keep specific fields if needed, but definitely NOT events
-              id: alert.id,
+              reason: decision.scenario || alert.scenario || "manual",
+              action: decision.type,
+              country: alert.source?.cn || "Unknown",
+              as: alert.source?.as_name || "Unknown",
+              events_count: alert.events_count || 0,
+              expiration: decision.stop_at,
+              alert_id: alert.id,
+              // Backwards compatibility if needed
               message: alert.message
             }
           };
-        }).filter(Boolean); // Remove nulls from deduplication
+        }).filter(Boolean);
 
         combinedDecisions = combinedDecisions.concat(mapped);
       }
@@ -240,16 +251,36 @@ app.post('/api/decisions', ensureAuth, async (req, res) => {
       return res.status(400).json({ error: 'IP address is required' });
     }
 
-    // Construct Alert Object
+    // Measure duration to calculate stop_at
+    // Simple parsing for 4h, 1d etc.
+    let stopAt = new Date();
+    const durationMatch = duration.match(/^(\d+)([hmds])$/);
+    if (durationMatch) {
+      const val = parseInt(durationMatch[1]);
+      const unit = durationMatch[2];
+      if (unit === 'h') stopAt.setHours(stopAt.getHours() + val);
+      if (unit === 'm') stopAt.setMinutes(stopAt.getMinutes() + val);
+      if (unit === 'd') stopAt.setDate(stopAt.getDate() + val);
+      if (unit === 's') stopAt.setSeconds(stopAt.getSeconds() + val);
+    } else {
+      // default 4 hours if parsing fails
+      stopAt.setHours(stopAt.getHours() + 4);
+    }
+
+    // Construct Alert Object with required fields
     const alertPayload = [{
       scenario: "manual/web-ui",
+      campaign_name: "manual/web-ui", // optional but good practice
       message: `Manual decision from Web UI: ${reason}`,
       events_count: 1,
       start_at: new Date().toISOString(),
-      stop_at: new Date().toISOString(),
+      stop_at: stopAt.toISOString(),
       capacity: 0,
       leakspeed: "0",
       simulated: false,
+      events: [], // Required by LAPI strict validation
+      scenario_hash: "", // Required
+      scenario_version: "", // Required
       source: {
         scope: "ip",
         value: ip
