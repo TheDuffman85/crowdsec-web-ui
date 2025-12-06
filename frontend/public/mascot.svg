@@ -1,0 +1,34 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="shield_grad" x1="256" y1="0" x2="256" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#3b82f6" />
+      <stop offset="100%" stop-color="#1d4ed8" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="15" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+  
+  <!-- Outer Shield Glow -->
+  <path d="M256 32L58 120C58 248 108 420 256 480C404 420 454 248 454 120L256 32Z" fill="#3b82f6" fill-opacity="0.3" filter="url(#glow)" />
+
+  <!-- Main Shield -->
+  <path d="M256 42L78 125C78 245 125 405 256 460C387 405 434 245 434 125L256 42Z" fill="url(#shield_grad)" stroke="#1e40af" stroke-width="8" />
+
+  <!-- Hexagon Pattern (Node.js nod) -->
+  <path d="M256 160L325.28 200V280L256 320L186.72 280V200L256 160Z" fill="#1e293b" stroke="#60a5fa" stroke-width="6" />
+
+  <!-- Central Eye/Core (Watchful) -->
+  <circle cx="256" cy="240" r="30" fill="#60a5fa" />
+  <circle cx="256" cy="240" r="15" fill="#f0f9ff">
+    <animate attributeName="r" values="15;18;15" dur="3s" repeatCount="indefinite" />
+  </circle>
+
+  <!-- High-Tech Circuit Lines -->
+  <path d="M120 240H186" stroke="#93c5fd" stroke-width="4" stroke-linecap="round" />
+  <path d="M392 240H326" stroke="#93c5fd" stroke-width="4" stroke-linecap="round" />
+  <path d="M256 400V320" stroke="#93c5fd" stroke-width="4" stroke-linecap="round" />
+  <path d="M256 160V100" stroke="#93c5fd" stroke-width="4" stroke-linecap="round" />
+
+</svg>

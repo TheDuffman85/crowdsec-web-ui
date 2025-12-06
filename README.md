@@ -1,4 +1,4 @@
-![Mascot](frontend/public/mascot.png)
+![Mascot](frontend/public/mascot.svg)
 
 # CrowdSec Web UI
 
