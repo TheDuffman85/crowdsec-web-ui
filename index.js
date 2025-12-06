@@ -165,14 +165,26 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
     // Fetch alerts that have active decisions
     // Filtering by origin at LAPI level to reduce payload and avoid OOM from CAPI
     // origin: cscli (manual), crowdsec (scenarios), cscli-import (imported)
+    // We run parallel requests because LAPI might not support OR logic with "origin" parameter reliably.
     const origins = ['cscli', 'crowdsec', 'cscli-import'];
-    const originQuery = origins.map(o => `origin=${o}`).join('&');
 
-    const response = await apiClient.get(`/v1/alerts?has_active_decision=true&limit=100&${originQuery}`);
-    const alerts = response.data || [];
-    console.log(`Fetched ${alerts.length} alerts with active decisions (filtered by origin)`);
+    // Execute requests in parallel
+    const responses = await Promise.all(
+      origins.map(o => apiClient.get(`/v1/alerts?has_active_decision=true&limit=100&origin=${o}`))
+    );
+
+    // Combine all alerts flattened
+    let alerts = [];
+    responses.forEach(r => {
+      if (r.data && Array.isArray(r.data)) {
+        alerts = alerts.concat(r.data);
+      }
+    });
+
+    console.log(`Fetched ${alerts.length} alerts with active decisions (combined origins)`);
 
     let combinedDecisions = [];
+    const seenDecisionIds = new Set(); // specific deduplication just in case
 
     // Extract decisions from each alert
     alerts.forEach(alert => {
@@ -180,21 +192,27 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
         // Double-check filter (though API should have handled it)
         const relevantDecisions = alert.decisions.filter(d => d.origin !== 'CAPI');
 
-        const mapped = relevantDecisions.map(decision => ({
-          id: decision.id,
-          created_at: decision.created_at || alert.created_at, // Use decision time or alert time
-          scenario: decision.scenario || alert.scenario || "N/A",
-          value: decision.value,
-          // Optimization: Don't pass the full heavy alert (with logs/events) as detail.
-          // Just pass minimal info needed by frontend.
-          detail: {
-            origin: decision.origin || alert.source?.scope || "manual", // Fallback logic
-            type: decision.type,
-            // Keep specific fields if needed, but definitely NOT events
-            id: alert.id,
-            message: alert.message
-          }
-        }));
+        const mapped = relevantDecisions.map(decision => {
+          if (seenDecisionIds.has(decision.id)) return null;
+          seenDecisionIds.add(decision.id);
+
+          return {
+            id: decision.id,
+            created_at: decision.created_at || alert.created_at, // Use decision time or alert time
+            scenario: decision.scenario || alert.scenario || "N/A",
+            value: decision.value,
+            // Optimization: Don't pass the full heavy alert (with logs/events) as detail.
+            // Just pass minimal info needed by frontend.
+            detail: {
+              origin: decision.origin || alert.source?.scope || "manual", // Fallback logic
+              type: decision.type,
+              // Keep specific fields if needed, but definitely NOT events
+              id: alert.id,
+              message: alert.message
+            }
+          };
+        }).filter(Boolean); // Remove nulls from deduplication
+
         combinedDecisions = combinedDecisions.concat(mapped);
       }
     });
