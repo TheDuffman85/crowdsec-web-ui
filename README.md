@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="frontend/public/logo.svg" alt="CrowdSec Web UI Logo" width="200" />
+  <img src="frontend/public/logo.svg" alt="CrowdSec Web UI Logo" width="400" />
 </div>
 
 # CrowdSec Web UI
