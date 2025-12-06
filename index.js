@@ -173,7 +173,10 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
     // Extract decisions from each alert
     alerts.forEach(alert => {
       if (Array.isArray(alert.decisions)) {
-        const mapped = alert.decisions.map(decision => ({
+        // Filter out CAPI decisions
+        const relevantDecisions = alert.decisions.filter(d => d.origin !== 'CAPI');
+
+        const mapped = relevantDecisions.map(decision => ({
           id: decision.id,
           created_at: decision.created_at || alert.created_at, // Use decision time or alert time
           scenario: decision.scenario || alert.scenario || "N/A",
