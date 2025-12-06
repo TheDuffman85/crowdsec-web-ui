@@ -1,8 +1,8 @@
+![Mascot](frontend/public/mascot.png)
+
 # CrowdSec Web UI
 
 A modern, responsive web interface for managing [CrowdSec](https://crowdsec.net/) alerts and decisions. Built with **React**, **Vite**, and **Tailwind CSS**.
-
-![Mascot](frontend/public/mascot.png)
 
 ## Features
 
@@ -62,6 +62,22 @@ A modern, responsive web interface for managing [CrowdSec](https://crowdsec.net/
       crowdsec-web-ui
     ```
     *Note: Ensure the container is on the same Docker network as CrowdSec so it can reach the URL.*
+
+### Docker Compose Example
+
+```yaml
+services:
+  crowdsec-web-ui:
+    image: ghcr.io/TheDuffman85/crowdsec-web-ui:latest
+    container_name: crowdsec_web_ui
+    ports:
+      - "3000:3000"
+    environment:
+      - CROWDSEC_URL=http://crowdsec:8080
+      - CROWDSEC_USER=crowdsec-web-ui
+      - CROWDSEC_PASSWORD=<generated_password>
+    restart: unless-stopped
+```
 
 ## Local Development
 
