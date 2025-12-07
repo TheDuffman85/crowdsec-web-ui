@@ -132,6 +132,22 @@ export function Dashboard() {
                     <div className="text-center p-8 text-gray-500">Loading statistics...</div>
                 ) : (
                     <>
+                        {/* Charts */}
+                        <div className="grid gap-6 md:grid-cols-2">
+                            <TimeSeriesChart
+                                title="Alerts Per Day"
+                                icon={ShieldAlert}
+                                data={statistics.alertsPerDay}
+                                color="#dc2626"
+                            />
+                            <TimeSeriesChart
+                                title="Decisions Per Day"
+                                icon={Gavel}
+                                data={statistics.decisionsPerDay}
+                                color="#2563eb"
+                            />
+                        </div>
+
                         {/* Top Statistics Grid */}
                         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
                             <StatCard
@@ -157,22 +173,6 @@ export function Dashboard() {
                                 icon={Network}
                                 items={statistics.topAS}
                                 emptyMessage="No alerts in the last 7 days"
-                            />
-                        </div>
-
-                        {/* Charts */}
-                        <div className="grid gap-6 md:grid-cols-2">
-                            <TimeSeriesChart
-                                title="Alerts Per Day"
-                                icon={ShieldAlert}
-                                data={statistics.alertsPerDay}
-                                color="#dc2626"
-                            />
-                            <TimeSeriesChart
-                                title="Decisions Per Day"
-                                icon={Gavel}
-                                data={statistics.decisionsPerDay}
-                                color="#2563eb"
                             />
                         </div>
                     </>
