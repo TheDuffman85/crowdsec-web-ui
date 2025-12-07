@@ -12,7 +12,7 @@ export function Sidebar({ isMobileMenuOpen, onClose }) {
         <aside
             className={`
                 fixed lg:static top-0 left-0 z-30
-                w-64 h-full 
+                w-72 h-full 
                 bg-white dark:bg-gray-800 
                 border-r border-gray-200 dark:border-gray-700 
                 flex flex-col 
@@ -28,7 +28,7 @@ export function Sidebar({ isMobileMenuOpen, onClose }) {
                         alt="CrowdSec Logo"
                         className="w-8 h-8 lg:w-10 lg:h-10 flex-shrink-0"
                     />
-                    <h1 className="text-sm lg:text-2xl font-bold bg-gradient-to-r from-primary-600 to-primary-400 bg-clip-text text-transparent leading-tight">
+                    <h1 className="text-sm lg:text-2xl font-bold bg-gradient-to-r from-primary-600 to-primary-400 bg-clip-text text-transparent leading-tight whitespace-nowrap">
                         CrowdSec Web UI
                     </h1>
                 </div>
