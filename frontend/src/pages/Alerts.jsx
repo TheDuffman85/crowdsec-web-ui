@@ -1,19 +1,29 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useSearchParams, Link } from "react-router-dom";
-import * as ReactWindow from "react-window";
-import AutoSizer from "react-virtualized-auto-sizer";
 import { fetchAlerts, fetchAlert } from "../lib/api";
 import { Badge } from "../components/ui/Badge";
 import { Search, Info, ExternalLink, Shield } from "lucide-react";
-
-const List = ReactWindow.FixedSizeList || ReactWindow.default?.FixedSizeList;
 
 export function Alerts() {
     const [alerts, setAlerts] = useState([]);
     const [filter, setFilter] = useState("");
     const [loading, setLoading] = useState(true);
     const [selectedAlert, setSelectedAlert] = useState(null);
+    const [displayedCount, setDisplayedCount] = useState(50);
     const [searchParams, setSearchParams] = useSearchParams();
+
+    // Intersection Observer for infinite scroll
+    const observer = useRef();
+    const lastAlertElementRef = useCallback(node => {
+        if (loading) return;
+        if (observer.current) observer.current.disconnect();
+        observer.current = new IntersectionObserver(entries => {
+            if (entries[0].isIntersecting) {
+                setDisplayedCount(prev => prev + 50);
+            }
+        });
+        if (node) observer.current.observe(node);
+    }, [loading]);
 
     useEffect(() => {
         const loadAlerts = async () => {
@@ -53,80 +63,11 @@ export function Alerts() {
         (alert.message || "").toLowerCase().includes(filter.toLowerCase())
     );
 
-    // Grid columns configuration
-    // ID | Time | Scenario | Message | Decisions | Actions
-    const gridTemplateColumns = "80px 180px 220px 1fr 100px 80px";
-
-    const Row = ({ index, style }) => {
-        const alert = filteredAlerts[index];
-        // Apply alternate background manually since we don't have :nth-child in virtual list
-        const bgClass = index % 2 === 0 ? "bg-white dark:bg-gray-800" : "bg-gray-50 dark:bg-gray-900/30";
-
-        return (
-            <div style={style} className={`${bgClass} border-b border-gray-100 dark:border-gray-700/50 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors flex items-center group`}>
-                <div className="grid w-full items-center px-4" style={{ gridTemplateColumns }}>
-                    <div className="text-sm text-gray-500 dark:text-gray-400 truncate pr-2 font-mono">
-                        #{alert.id}
-                    </div>
-                    <div className="text-sm text-gray-900 dark:text-gray-100 truncate pr-2">
-                        {new Date(alert.created_at).toLocaleString()}
-                    </div>
-                    <div className="text-sm text-gray-900 dark:text-gray-100 pr-2 overflow-hidden">
-                        <Badge variant="warning" className="truncate block max-w-full text-center">{alert.scenario}</Badge>
-                    </div>
-                    <div className="text-sm text-gray-500 dark:text-gray-400 truncate pr-4" title={alert.message}>
-                        {alert.message}
-                    </div>
-                    <div className="text-sm pl-2">
-                        {alert.decisions && alert.decisions.length > 0 ? (() => {
-                            // Check if there are any active (non-expired) decisions
-                            const activeDecisions = alert.decisions.filter(d => {
-                                if (!d.stop_at) return true; // No expiration means active
-                                return new Date(d.stop_at) > new Date();
-                            });
-
-                            const hasActiveDecisions = activeDecisions.length > 0;
-
-                            if (hasActiveDecisions) {
-                                return (
-                                    <Link
-                                        to={`/decisions?alert_id=${alert.id}`}
-                                        className="inline-flex items-center gap-1 text-primary-600 hover:text-primary-800 dark:text-primary-400 dark:hover:text-primary-200 transition-colors"
-                                        title="View active decisions for this alert"
-                                    >
-                                        <Shield size={16} className="text-red-600 dark:text-red-400" />
-                                        <span className="text-gray-900 dark:text-gray-100 font-medium">{activeDecisions.length}</span>
-                                    </Link>
-                                );
-                            } else {
-                                return (
-                                    <div className="inline-flex items-center gap-1 text-gray-400 dark:text-gray-600 cursor-help" title="All decisions expired">
-                                        <Shield size={16} className="opacity-50" />
-                                        <span className="font-medium line-through">{alert.decisions.length}</span>
-                                    </div>
-                                );
-                            }
-                        })() : (
-                            <span className="text-gray-400">-</span>
-                        )}
-                    </div>
-                    <div className="text-right">
-                        <button
-                            onClick={() => setSelectedAlert(alert)}
-                            className="text-primary-600 hover:text-primary-900 dark:text-primary-400 dark:hover:text-primary-300 p-1 opacity-0 group-hover:opacity-100 transition-opacity"
-                            title="View Details"
-                        >
-                            <Info size={18} />
-                        </button>
-                    </div>
-                </div>
-            </div>
-        );
-    };
+    const visibleAlerts = filteredAlerts.slice(0, displayedCount);
 
     return (
-        <div className="h-[calc(100vh-140px)] flex flex-col space-y-4">
-            <div className="flex justify-between items-center flex-shrink-0">
+        <div className="space-y-6">
+            <div className="flex justify-between items-center">
                 <h2 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Alerts</h2>
                 {(filteredAlerts.length !== alerts.length) && (
                     <div className="text-sm text-gray-500">
@@ -135,53 +76,113 @@ export function Alerts() {
                 )}
             </div>
 
-            <div className="relative flex-shrink-0">
+            <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                     <Search className="h-5 w-5 text-gray-400" />
                 </div>
                 <input
                     type="text"
-                    placeholder="Filter alerts by scenario or message..."
-                    className="block w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md leading-5 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 sm:text-sm shadow-sm"
+                    placeholder="Filter alerts..."
+                    className="block w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md leading-5 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
                     value={filter}
                     onChange={(e) => setFilter(e.target.value)}
                 />
             </div>
 
-            <div className="flex-1 bg-white dark:bg-gray-800 shadow-sm rounded-lg border border-gray-200 dark:border-gray-700 flex flex-col overflow-hidden">
-                {/* Header Row */}
-                <div className="bg-gray-100 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 px-4 py-3 flex-shrink-0 z-10">
-                    <div className="grid w-full" style={{ gridTemplateColumns }}>
-                        <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">ID</div>
-                        <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Time</div>
-                        <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Scenario</div>
-                        <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Message</div>
-                        <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider pl-2">Decisions</div>
-                        <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider text-right">Actions</div>
-                    </div>
-                </div>
+            <div className="bg-white dark:bg-gray-800 shadow-sm rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700">
+                <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 transition-opacity duration-200">
+                        <thead className="bg-gray-50 dark:bg-gray-900/50">
+                            <tr>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">ID</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Time</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Scenario</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Message</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Decisions</th>
+                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+                            {loading ? (
+                                <tr><td colSpan="6" className="px-6 py-4 text-center text-sm text-gray-500">Loading alerts...</td></tr>
+                            ) : visibleAlerts.length === 0 ? (
+                                <tr><td colSpan="6" className="px-6 py-4 text-center text-sm text-gray-500">No alerts found</td></tr>
+                            ) : (
+                                visibleAlerts.map((alert, index) => {
+                                    const isLastElement = index === visibleAlerts.length - 1;
+                                    return (
+                                        <tr
+                                            key={alert.id}
+                                            ref={isLastElement ? lastAlertElementRef : null}
+                                            className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+                                        >
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                                                #{alert.id}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                                                {new Date(alert.created_at).toLocaleString()}
+                                            </td>
+                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100">
+                                                <Badge variant="warning">{alert.scenario}</Badge>
+                                            </td>
+                                            <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-xs truncate" title={alert.message}>
+                                                {alert.message}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                                {alert.decisions && alert.decisions.length > 0 ? (() => {
+                                                    // Check if there are any active (non-expired) decisions
+                                                    const activeDecisions = alert.decisions.filter(d => {
+                                                        if (d.stop_at) {
+                                                            return new Date(d.stop_at) > new Date();
+                                                        }
+                                                        // If stop_at is missing, check if duration implies expiration
+                                                        // CrowdSec LAPI often returns relative duration (e.g., "-4h20m") for expired items
+                                                        if (d.duration && d.duration.startsWith('-')) {
+                                                            return false;
+                                                        }
+                                                        return true; // Assume active if no stop_at and not definitely expired
+                                                    });
 
-                {/* Virtual List */}
-                <div className="flex-1">
-                    {loading ? (
-                        <div className="flex items-center justify-center h-full text-gray-500">Loading alerts...</div>
-                    ) : filteredAlerts.length === 0 ? (
-                        <div className="flex items-center justify-center h-full text-gray-500">No alerts found</div>
-                    ) : (
-                        <AutoSizer>
-                            {({ height, width }) => (
-                                <List
-                                    height={height}
-                                    width={width}
-                                    itemCount={filteredAlerts.length}
-                                    itemSize={64} // Row height
-                                    className="scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600"
-                                >
-                                    {Row}
-                                </List>
+                                                    const hasActiveDecisions = activeDecisions.length > 0;
+
+                                                    if (hasActiveDecisions) {
+                                                        return (
+                                                            <Link
+                                                                to={`/decisions?alert_id=${alert.id}`}
+                                                                className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors border border-primary-200 dark:border-primary-800"
+                                                                title={`View ${activeDecisions.length} active decisions`}
+                                                            >
+                                                                <Shield size={14} className="fill-current" />
+                                                                <span className="text-xs font-semibold">Active: {activeDecisions.length}</span>
+                                                                <ExternalLink size={12} className="ml-0.5" />
+                                                            </Link>
+                                                        );
+                                                    } else {
+                                                        return (
+                                                            <div className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 cursor-not-allowed">
+                                                                <Shield size={14} className="opacity-50" />
+                                                                <span className="text-xs font-medium">Inactive: {alert.decisions.length}</span>
+                                                            </div>
+                                                        );
+                                                    }
+                                                })() : (
+                                                    <span className="text-gray-400">-</span>
+                                                )}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                                <button
+                                                    onClick={() => setSelectedAlert(alert)}
+                                                    className="text-primary-600 hover:text-primary-900 dark:text-primary-400 dark:hover:text-primary-300"
+                                                >
+                                                    <Info size={18} />
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    );
+                                })
                             )}
-                        </AutoSizer>
-                    )}
+                        </tbody>
+                    </table>
                 </div>
             </div>
 
@@ -190,7 +191,7 @@ export function Alerts() {
                     <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto flex flex-col" onClick={e => e.stopPropagation()}>
 
                         {/* Header */}
-                        <div className="flex justify-between items-center p-6 border-b border-gray-100 dark:border-gray-700 flex-shrink-0 sticky top-0 bg-white dark:bg-gray-800 z-10">
+                        <div className="flex justify-between items-center p-6 border-b border-gray-100 dark:border-gray-700">
                             <div>
                                 <h3 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
                                     Alert Details <span className="text-gray-400">#{selectedAlert.id}</span>

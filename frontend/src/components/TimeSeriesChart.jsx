@@ -28,11 +28,12 @@ export function TimeSeriesChart({ title, data, color = "#3b82f6", icon: Icon }) 
     const maxValue = Math.max(...data.map(d => d.count), 1);
     const chartHeight = 200;
     const chartWidth = 100; // percentage
-    const padding = 8; // increased padding for better point visibility
+    const padding = 50; // Largely increased padding to prevent clipping
 
     // Calculate points for the line
     const points = data.map((item, index) => {
-        const x = (index / (data.length - 1)) * chartWidth;
+        // Adjust width to have some side padding too
+        const x = (index / (data.length - 1)) * (chartWidth - 10) + 5;
         const y = chartHeight - ((item.count / maxValue) * (chartHeight - padding * 2)) - padding;
         return { x, y, count: item.count, label: item.label };
     });
@@ -48,16 +49,14 @@ export function TimeSeriesChart({ title, data, color = "#3b82f6", icon: Icon }) 
     // Smart tooltip positioning - avoid edges
     const getTooltipPosition = (index) => {
         const percentage = (index / (data.length - 1)) * 100;
-        let left = `${percentage}%`;
+        let left = `${points[index].x}%`;
         let transform = 'translate(-50%, -50%)';
 
         // Adjust for edges
-        if (percentage < 15) {
-            left = '15%';
-            transform = 'translate(-50%, -50%)';
-        } else if (percentage > 85) {
-            left = '85%';
-            transform = 'translate(-50%, -50%)';
+        if (points[index].x < 15) {
+            transform = 'translate(-10%, -50%)';
+        } else if (points[index].x > 85) {
+            transform = 'translate(-90%, -50%)';
         }
 
         return { left, transform };
@@ -73,41 +72,43 @@ export function TimeSeriesChart({ title, data, color = "#3b82f6", icon: Icon }) 
             </CardHeader>
             <CardContent>
                 <div className="relative" style={{ height: `${chartHeight + 40}px` }}>
+                    {/* Data Labels (HTML Overlay for crisp text) */}
+                    <div className="absolute inset-0 pointer-events-none" style={{ height: `${chartHeight}px` }}>
+                        {points.map((point, index) => (
+                            <div
+                                key={index}
+                                className="absolute text-xs font-bold text-center transition-opacity"
+                                style={{
+                                    left: `${point.x}%`, // Use point.x directly as it's already a percentage
+                                    top: `${(point.y / chartHeight) * 100}%`,     // Use percentage for vertical pos
+                                    transform: 'translate(-50%, -150%)',           // Center and move up
+                                    color: color
+                                }}
+                            >
+                                {point.count}
+                            </div>
+                        ))}
+                    </div>
+
                     {/* Chart area */}
                     <svg
                         className="w-full"
                         height={chartHeight}
                         viewBox={`0 0 ${chartWidth} ${chartHeight}`}
                         preserveAspectRatio="none"
+                        style={{ overflow: 'visible' }} // Allow labels to overflow slightly
                     >
-                        {/* Grid lines */}
-                        {[0, 0.25, 0.5, 0.75, 1].map((ratio, i) => (
-                            <g key={i}>
-                                <line
-                                    x1="0"
-                                    y1={chartHeight * (1 - ratio)}
-                                    x2={chartWidth}
-                                    y2={chartHeight * (1 - ratio)}
-                                    stroke="currentColor"
-                                    strokeWidth="0.1"
-                                    className="text-gray-200 dark:text-gray-700"
-                                    opacity="0.5"
-                                />
-                                {/* Y-axis values - improved visibility */}
-                                <text
-                                    x="-1.5"
-                                    y={chartHeight * (1 - ratio)}
-                                    fontSize="3.5"
-                                    fill="currentColor"
-                                    className="text-gray-600 dark:text-gray-300"
-                                    textAnchor="end"
-                                    dominantBaseline="middle"
-                                    fontWeight="500"
-                                >
-                                    {Math.round(maxValue * ratio)}
-                                </text>
-                            </g>
-                        ))}
+                        {/* Grid lines (Minimal/None as per reference, maybe just baseline) */}
+                        <line
+                            x1="0"
+                            y1={chartHeight}
+                            x2={chartWidth}
+                            y2={chartHeight}
+                            stroke="currentColor"
+                            strokeWidth="1"
+                            vectorEffect="non-scaling-stroke"
+                            className="text-gray-200 dark:text-gray-700"
+                        />
 
                         {/* Area under the line */}
                         <path
@@ -121,43 +122,43 @@ export function TimeSeriesChart({ title, data, color = "#3b82f6", icon: Icon }) 
                             d={linePath}
                             fill="none"
                             stroke={color}
-                            strokeWidth="0.6"
+                            strokeWidth="2"
+                            vectorEffect="non-scaling-stroke"
                             strokeLinecap="round"
                             strokeLinejoin="round"
                         />
+                    </svg>
 
-                        {/* Points - improved visibility and interaction */}
+                    {/* Points Overlay (HTML for perfect circles) */}
+                    <div className="absolute inset-0 pointer-events-none" style={{ height: `${chartHeight}px` }}>
                         {points.map((point, index) => {
                             const isHovered = hoveredIndex === index;
                             return (
-                                <g key={index}>
-                                    {/* Larger invisible hit area for better interaction */}
-                                    <circle
-                                        cx={point.x}
-                                        cy={point.y}
-                                        r="3"
-                                        fill="transparent"
-                                        className="cursor-pointer"
-                                        onMouseEnter={() => setHoveredIndex(index)}
-                                        onMouseLeave={() => setHoveredIndex(null)}
-                                    />
-                                    {/* Visible point */}
-                                    <circle
-                                        cx={point.x}
-                                        cy={point.y}
-                                        r={isHovered ? "2" : "1.2"}
-                                        fill={isHovered ? "#ffffff" : color}
-                                        stroke={isHovered ? color : "none"}
-                                        strokeWidth={isHovered ? "0.8" : "0"}
-                                        className="transition-all pointer-events-none"
+                                <div
+                                    key={index}
+                                    className="absolute transition-all cursor-pointer pointer-events-auto flex items-center justify-center transform -translate-x-1/2 -translate-y-1/2"
+                                    style={{
+                                        left: `${point.x}%`,
+                                        top: `${(point.y / chartHeight) * 100}%`,
+                                        width: '20px', // Hit area
+                                        height: '20px', // Hit area
+                                    }}
+                                    onMouseEnter={() => setHoveredIndex(index)}
+                                    onMouseLeave={() => setHoveredIndex(null)}
+                                >
+                                    {/* Visible Dot */}
+                                    <div
+                                        className="rounded-full border border-white dark:border-gray-800 transition-all shadow-sm"
                                         style={{
-                                            filter: isHovered ? 'drop-shadow(0 0 2px rgba(0,0,0,0.3))' : 'none'
+                                            backgroundColor: color,
+                                            width: isHovered ? '8px' : '6px',
+                                            height: isHovered ? '8px' : '6px',
                                         }}
                                     />
-                                </g>
+                                </div>
                             );
                         })}
-                    </svg>
+                    </div>
 
                     {/* X-axis labels */}
                     <div className="flex justify-between mt-2 px-1">
