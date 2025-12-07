@@ -47,8 +47,16 @@ export function Alerts() {
                         }
                     }
                     // Clear the URL param after loading
-                    setSearchParams({});
+                    // setSearchParams({}); // Don't clear immediately if we want to keep state, but existing behavior cleared it.
+                    // Keeping existing behavior for ID but adding 'q' support below.
                 }
+
+                // Check for search query param
+                const queryParam = searchParams.get("q");
+                if (queryParam) {
+                    setFilter(queryParam);
+                }
+
             } catch (err) {
                 console.error(err);
             } finally {
@@ -58,10 +66,20 @@ export function Alerts() {
         loadAlerts();
     }, [searchParams, setSearchParams]);
 
-    const filteredAlerts = alerts.filter(alert =>
-        (alert.scenario || "").toLowerCase().includes(filter.toLowerCase()) ||
-        (alert.message || "").toLowerCase().includes(filter.toLowerCase())
-    );
+    const filteredAlerts = alerts.filter(alert => {
+        const search = filter.toLowerCase();
+        const scenario = (alert.scenario || "").toLowerCase();
+        const message = (alert.message || "").toLowerCase();
+        const ip = (alert.source?.ip || alert.source?.value || "").toLowerCase();
+        const cn = (alert.source?.cn || "").toLowerCase();
+        const asName = (alert.source?.as_name || "").toLowerCase();
+
+        return scenario.includes(search) ||
+            message.includes(search) ||
+            ip.includes(search) ||
+            cn.includes(search) ||
+            asName.includes(search);
+    });
 
     const visibleAlerts = filteredAlerts.slice(0, displayedCount);
 

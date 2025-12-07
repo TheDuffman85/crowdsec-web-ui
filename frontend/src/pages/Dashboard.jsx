@@ -155,24 +155,28 @@ export function Dashboard() {
                                 icon={Globe}
                                 items={statistics.topIPs}
                                 emptyMessage="No alerts in the last 7 days"
+                                getLink={(item) => `/alerts?q=${encodeURIComponent(item.label)}`}
                             />
                             <StatCard
                                 title="Top Countries"
                                 icon={MapPin}
                                 items={statistics.topCountries}
                                 emptyMessage="No alerts in the last 7 days"
+                                getLink={(item) => `/alerts?q=${encodeURIComponent(item.label)}`}
                             />
                             <StatCard
                                 title="Top Scenarios"
                                 icon={AlertTriangle}
                                 items={statistics.topScenarios}
                                 emptyMessage="No alerts in the last 7 days"
+                                getLink={(item) => `/alerts?q=${encodeURIComponent(item.label)}`}
                             />
                             <StatCard
                                 title="Top AS"
                                 icon={Network}
                                 items={statistics.topAS}
                                 emptyMessage="No alerts in the last 7 days"
+                                getLink={(item) => `/alerts?q=${encodeURIComponent(item.label)}`}
                             />
                         </div>
                     </>
