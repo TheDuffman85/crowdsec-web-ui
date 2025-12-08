@@ -167,12 +167,14 @@ app.get('/api/alerts/:id', ensureAuth, async (req, res) => {
 
 /**
  * GET /api/decisions
- * Retrieves active decisions.
- * Since Machines (Watchers) cannot access GET /v1/decisions, we fetch alerts with active decisions.
+ * Retrieves decisions (active by default, or all including expired with ?include_expired=true).
+ * Since Machines (Watchers) cannot access GET /v1/decisions, we fetch alerts with decisions.
  */
 app.get('/api/decisions', ensureAuth, async (req, res) => {
   const doRequest = async () => {
-    // Fetch alerts that have active decisions
+    const includeExpired = req.query.include_expired === 'true';
+
+    // Fetch alerts that have decisions
     // Filtering by origin at LAPI level to reduce payload and avoid OOM from CAPI
     // origin: cscli (manual), crowdsec (scenarios), cscli-import (imported)
     // We run parallel requests because LAPI might not support OR logic with "origin" parameter reliably.
@@ -180,8 +182,9 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
     const origins = ['cscli', 'crowdsec', 'cscli-import', 'manual'];
 
     // Execute requests in parallel
+    const queryParam = includeExpired ? 'limit=100' : 'has_active_decision=true&limit=100';
     const responses = await Promise.all(
-      origins.map(o => apiClient.get(`/v1/alerts?has_active_decision=true&limit=100&origin=${o}`))
+      origins.map(o => apiClient.get(`/v1/alerts?${queryParam}&origin=${o}`))
     );
 
     // Combine all alerts flattened
@@ -192,7 +195,7 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
       }
     });
 
-    console.log(`Fetched ${alerts.length} alerts with active decisions (combined origins)`);
+    console.log(`Fetched ${alerts.length} alerts with ${includeExpired ? 'all' : 'active'} decisions (combined origins)`);
 
     let combinedDecisions = [];
     const seenDecisionIds = new Set(); // specific deduplication just in case
@@ -206,8 +209,11 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
         const mapped = relevantDecisions.map(decision => {
           if (seenDecisionIds.has(decision.id)) return null;
 
-          // Filter out expired decisions
-          if (decision.stop_at && new Date(decision.stop_at) < new Date()) {
+          // Check if decision is expired
+          const isExpired = decision.stop_at && new Date(decision.stop_at) < new Date();
+
+          // Filter out expired decisions unless includeExpired is true
+          if (isExpired && !includeExpired) {
             return null;
           }
 
@@ -218,6 +224,7 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
             created_at: decision.created_at || alert.created_at,
             scenario: decision.scenario || alert.scenario || "N/A",
             value: decision.value,
+            expired: isExpired,
             // Rich details for CSCLI parity
             detail: {
               origin: decision.origin || alert.source?.scope || "manual",

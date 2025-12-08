@@ -114,6 +114,8 @@ export function Alerts() {
                             <tr>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">ID</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Time</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">IP</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Country</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Scenario</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Message</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Decisions</th>
@@ -122,9 +124,9 @@ export function Alerts() {
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                             {loading ? (
-                                <tr><td colSpan="6" className="px-6 py-4 text-center text-sm text-gray-500">Loading alerts...</td></tr>
+                                <tr><td colSpan="8" className="px-6 py-4 text-center text-sm text-gray-500">Loading alerts...</td></tr>
                             ) : visibleAlerts.length === 0 ? (
-                                <tr><td colSpan="6" className="px-6 py-4 text-center text-sm text-gray-500">No alerts found</td></tr>
+                                <tr><td colSpan="8" className="px-6 py-4 text-center text-sm text-gray-500">No alerts found</td></tr>
                             ) : (
                                 visibleAlerts.map((alert, index) => {
                                     const isLastElement = index === visibleAlerts.length - 1;
@@ -139,6 +141,12 @@ export function Alerts() {
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
                                                 {new Date(alert.created_at).toLocaleString()}
+                                            </td>
+                                            <td className="px-6 py-4 text-sm font-mono text-gray-900 dark:text-gray-100">
+                                                {alert.source?.ip || alert.source?.value || "N/A"}
+                                            </td>
+                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100">
+                                                {alert.source?.cn || "Unknown"}
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100">
                                                 <Badge variant="warning">{alert.scenario}</Badge>
@@ -177,10 +185,14 @@ export function Alerts() {
                                                         );
                                                     } else {
                                                         return (
-                                                            <div className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 cursor-not-allowed">
+                                                            <Link
+                                                                to={`/decisions?alert_id=${alert.id}&include_expired=true`}
+                                                                className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                                                                title={`View ${alert.decisions.length} expired decisions`}
+                                                            >
                                                                 <Shield size={14} className="opacity-50" />
                                                                 <span className="text-xs font-medium">Inactive: {alert.decisions.length}</span>
-                                                            </div>
+                                                            </Link>
                                                         );
                                                     }
                                                 })() : (
