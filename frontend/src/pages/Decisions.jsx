@@ -148,7 +148,7 @@ export function Decisions() {
                                 <tr><td colSpan="10" className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? "No decisions for this alert" : "No decisions found"}</td></tr>
                             ) : (
                                 filteredDecisions.map((decision) => {
-                                    const isExpired = decision.expired;
+                                    const isExpired = decision.expired || (decision.detail.duration && decision.detail.duration.startsWith("-"));
                                     const rowClasses = isExpired
                                         ? "hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors opacity-60 bg-gray-50 dark:bg-gray-900/20"
                                         : "hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors";
@@ -224,7 +224,7 @@ export function Decisions() {
                                                 <button
                                                     onClick={() => !isExpired && handleDelete(decision.id)}
                                                     disabled={isExpired}
-                                                    className={`transition-colors ${isExpired ? 'text-gray-400 cursor-not-allowed' : 'text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300'}`}
+                                                    className={`transition-colors p-2 rounded-full ${isExpired ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed bg-gray-100 dark:bg-gray-800' : 'text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20'}`}
                                                     title={isExpired ? "Decision already expired" : "Delete Decision"}
                                                 >
                                                     <Trash2 size={16} />
