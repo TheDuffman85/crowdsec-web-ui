@@ -399,16 +399,7 @@ export function Alerts() {
                             {/* Decisions */}
                             {selectedAlert.decisions && selectedAlert.decisions.length > 0 && (
                                 <div>
-                                    <div className="flex justify-between items-center mb-3">
-                                        <h4 className="text-lg font-semibold text-gray-900 dark:text-white">Decisions Taken</h4>
-                                        <Link
-                                            to={`/decisions?alert_id=${selectedAlert.id}`}
-                                            className="p-2 rounded-full text-primary-600 hover:text-primary-800 dark:text-primary-400 dark:hover:text-primary-200 hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-colors"
-                                            title="View in Decisions"
-                                        >
-                                            <ExternalLink size={18} />
-                                        </Link>
-                                    </div>
+                                    <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">Decisions Taken</h4>
                                     <div className="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700">
                                         <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                                             <thead className="bg-gray-50 dark:bg-gray-900">
@@ -417,17 +408,55 @@ export function Alerts() {
                                                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Value</th>
                                                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Duration</th>
                                                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Origin</th>
+                                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">View</th>
                                                 </tr>
                                             </thead>
                                             <tbody className="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-800">
-                                                {selectedAlert.decisions.map((decision, idx) => (
-                                                    <tr key={idx}>
-                                                        <td className="px-4 py-2 text-sm"><Badge variant="danger">{decision.type}</Badge></td>
-                                                        <td className="px-4 py-2 text-sm font-mono">{decision.value}</td>
-                                                        <td className="px-4 py-2 text-sm">{decision.duration}</td>
-                                                        <td className="px-4 py-2 text-sm">{decision.origin}</td>
-                                                    </tr>
-                                                ))}
+                                                {selectedAlert.decisions.map((decision, idx) => {
+                                                    // Check if this decision is active or expired
+                                                    const activeDecisions = selectedAlert.decisions.filter(d => {
+                                                        if (d.stop_at) {
+                                                            return new Date(d.stop_at) > new Date();
+                                                        }
+                                                        // If stop_at is missing, check if duration implies expiration
+                                                        if (d.duration && d.duration.startsWith('-')) {
+                                                            return false;
+                                                        }
+                                                        return true; // Assume active if no stop_at and not definitely expired
+                                                    });
+                                                    const hasActiveDecisions = activeDecisions.length > 0;
+
+                                                    return (
+                                                        <tr key={idx}>
+                                                            <td className="px-4 py-2 text-sm"><Badge variant="danger">{decision.type}</Badge></td>
+                                                            <td className="px-4 py-2 text-sm font-mono">{decision.value}</td>
+                                                            <td className="px-4 py-2 text-sm">{decision.duration}</td>
+                                                            <td className="px-4 py-2 text-sm">{decision.origin}</td>
+                                                            <td className="px-4 py-2 text-sm">
+                                                                {hasActiveDecisions ? (
+                                                                    <Link
+                                                                        to={`/decisions?alert_id=${selectedAlert.id}`}
+                                                                        className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors border border-primary-200 dark:border-primary-800"
+                                                                        title={`View ${activeDecisions.length} active decisions`}
+                                                                    >
+                                                                        <Shield size={14} className="fill-current" />
+                                                                        <span className="text-xs font-semibold">Active: {activeDecisions.length}</span>
+                                                                        <ExternalLink size={12} className="ml-0.5" />
+                                                                    </Link>
+                                                                ) : (
+                                                                    <Link
+                                                                        to={`/decisions?alert_id=${selectedAlert.id}&include_expired=true`}
+                                                                        className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                                                                        title={`View ${selectedAlert.decisions.length} expired decisions`}
+                                                                    >
+                                                                        <Shield size={14} className="opacity-50" />
+                                                                        <span className="text-xs font-medium">Inactive: {selectedAlert.decisions.length}</span>
+                                                                    </Link>
+                                                                )}
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
                                             </tbody>
                                         </table>
                                     </div>
@@ -468,8 +497,8 @@ export function Alerts() {
 
                                         return (
                                             <div key={idx} className={`p-3 rounded border text-sm ${isAppSecEvent
-                                                    ? 'bg-red-50 dark:bg-red-900/10 border-red-100 dark:border-red-900/30'
-                                                    : 'bg-gray-50 dark:bg-gray-900/30 border-gray-100 dark:border-gray-800'
+                                                ? 'bg-red-50 dark:bg-red-900/10 border-red-100 dark:border-red-900/30'
+                                                : 'bg-gray-50 dark:bg-gray-900/30 border-gray-100 dark:border-gray-800'
                                                 }`}>
                                                 {/* AppSec Badge */}
                                                 {isAppSecEvent && (
