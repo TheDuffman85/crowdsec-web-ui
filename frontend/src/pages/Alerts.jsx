@@ -313,6 +313,50 @@ export function Alerts() {
                                 </div>
                             </div>
 
+                            {/* AppSec / WAF Context */}
+                            {(() => {
+                                // Find an event with AppSec data
+                                const appSecEvent = selectedAlert.events?.find(e =>
+                                    e.meta?.some(m => m.key === 'waf_rule_id' || m.key === 'rule_type' && m.value === 'appsec_rule')
+                                );
+
+                                if (!appSecEvent) return null;
+
+                                const getMeta = (key) => appSecEvent.meta?.find(m => m.key === key)?.value;
+                                const wafRuleId = getMeta('waf_rule_id');
+                                const matchedZone = getMeta('matched_zone');
+                                const match = getMeta('match');
+                                const ruleType = getMeta('rule_type');
+
+                                return (
+                                    <div className="p-5 bg-red-50 dark:bg-red-900/10 rounded-lg border border-red-100 dark:border-red-900/30">
+                                        <h4 className="text-lg font-bold text-red-700 dark:text-red-400 mb-4 flex items-center gap-2">
+                                            <Shield size={20} /> AppSec Violation
+                                        </h4>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                            <div>
+                                                <h5 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Rule ID</h5>
+                                                <div className="font-mono text-sm text-gray-900 dark:text-gray-100 font-medium">{wafRuleId || "N/A"}</div>
+                                            </div>
+                                            <div>
+                                                <h5 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Matched Zone</h5>
+                                                <div className="font-mono text-sm text-gray-900 dark:text-gray-100">
+                                                    <Badge variant="outline">{matchedZone || "N/A"}</Badge>
+                                                </div>
+                                            </div>
+                                            {match && (
+                                                <div className="col-span-1 md:col-span-2">
+                                                    <h5 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Malicious Payload (Match)</h5>
+                                                    <div className="font-mono text-xs bg-white dark:bg-gray-950 p-3 rounded border border-gray-200 dark:border-gray-800 break-all text-red-600 dark:text-red-400">
+                                                        {match}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            })()}
+
                             {/* Decisions */}
                             {selectedAlert.decisions && selectedAlert.decisions.length > 0 && (
                                 <div>
