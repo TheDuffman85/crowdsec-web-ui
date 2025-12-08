@@ -330,113 +330,71 @@ export function Alerts() {
                                     </div>
                                 </div>
                                 <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
-                                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Attacker IP</h4>
+                                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">IP</h4>
                                     <div className="flex items-center gap-2">
                                         <span className="font-mono text-lg font-bold text-gray-900 dark:text-white">
                                             {selectedAlert.source?.ip || selectedAlert.source?.value || "N/A"}
                                         </span>
                                     </div>
+                                    {selectedAlert.source?.range && (
+                                        <div className="text-xs text-gray-400 font-mono mt-1">
+                                            Range: {selectedAlert.source.range}
+                                        </div>
+                                    )}
                                     <div className="text-sm text-gray-500 mt-1">
-                                        {selectedAlert.source?.as_name} ({selectedAlert.source?.as_number})
+                                        {selectedAlert.source?.as_number && (
+                                            <a
+                                                href={`https://bgp.he.net/AS${selectedAlert.source.as_number}`}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="hover:text-primary-600 dark:hover:text-primary-400 transition-colors inline-flex items-center gap-1"
+                                                title="View AS info on Hurricane Electric"
+                                            >
+                                                {selectedAlert.source?.as_name} (AS{selectedAlert.source.as_number})
+                                                <ExternalLink size={12} />
+                                            </a>
+                                        )}
+                                        {!selectedAlert.source?.as_number && selectedAlert.source?.as_name && (
+                                            <span>{selectedAlert.source.as_name}</span>
+                                        )}
                                     </div>
                                 </div>
                                 <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
                                     <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Location</h4>
-                                    <div className="text-lg text-gray-900 dark:text-gray-100 font-medium">
-                                        {selectedAlert.source?.cn}
+                                    <div className="text-lg text-gray-900 dark:text-gray-100 font-medium flex items-center gap-2">
+                                        {selectedAlert.source?.cn && (
+                                            <span className={`fi fi-${selectedAlert.source.cn.toLowerCase()}`}></span>
+                                        )}
+                                        {selectedAlert.source?.cn || "Unknown"}
                                     </div>
-                                    <div className="text-xs text-gray-400 font-mono mt-1">
-                                        Lat: {selectedAlert.source?.latitude}, Long: {selectedAlert.source?.longitude}
-                                    </div>
+                                    {selectedAlert.source?.latitude && selectedAlert.source?.longitude && (
+                                        <div className="text-xs text-gray-400 font-mono mt-1">
+                                            <a
+                                                href={`https://www.google.com/maps?q=${selectedAlert.source.latitude},${selectedAlert.source.longitude}`}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="hover:text-primary-600 dark:hover:text-primary-400 transition-colors inline-flex items-center gap-1"
+                                                title="View on Google Maps"
+                                            >
+                                                Lat: {selectedAlert.source.latitude}, Long: {selectedAlert.source.longitude}
+                                                <ExternalLink size={10} />
+                                            </a>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
 
-                            {/* AppSec / WAF Context */}
-                            {(() => {
-                                // Find an event with AppSec data (look for matched_zones or specific rule names)
-                                const appSecEvent = selectedAlert.events?.find(e =>
-                                    e.meta?.some(m => m.key === 'matched_zones' || m.key === 'rule_name' || m.key === 'appsec_action')
-                                );
-
-                                if (!appSecEvent) return null;
-
-                                const getMeta = (key) => appSecEvent.meta?.find(m => m.key === key)?.value;
-
-                                const ruleName = getMeta('rule_name');
-                                const ruleIds = getMeta('rule_ids');
-                                const matchedZones = getMeta('matched_zones');
-                                const uri = getMeta('uri') || getMeta('target_uri');
-                                const msg = getMeta('msg') || getMeta('message');
-                                // 'match' might not be present, check specific known keys or fallback
-                                const payload = getMeta('match') || getMeta('data');
-
-                                return (
-                                    <div className="p-5 bg-red-50 dark:bg-red-900/10 rounded-lg border border-red-100 dark:border-red-900/30">
-                                        <h4 className="text-lg font-bold text-red-700 dark:text-red-400 mb-4 flex items-center gap-2">
-                                            <Shield size={20} /> AppSec Violation
-                                        </h4>
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                            {ruleName && (
-                                                <div className="col-span-1 md:col-span-2">
-                                                    <h5 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Rule Name</h5>
-                                                    <div className="font-mono text-sm text-gray-900 dark:text-gray-100 font-medium break-all">
-                                                        {(() => {
-                                                            const hubUrl = getHubUrl(ruleName);
-                                                            return hubUrl ? (
-                                                                <a
-                                                                    href={hubUrl}
-                                                                    target="_blank"
-                                                                    rel="noopener noreferrer"
-                                                                    className="flex items-center gap-1.5 hover:text-primary-600 dark:hover:text-primary-400 transition-colors"
-                                                                >
-                                                                    <span>{ruleName}</span>
-                                                                    <ExternalLink size={12} />
-                                                                </a>
-                                                            ) : (
-                                                                ruleName
-                                                            );
-                                                        })()}
-                                                    </div>
-                                                </div>
-                                            )}
-                                            {ruleIds && (
-                                                <div>
-                                                    <h5 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Rule ID(s)</h5>
-                                                    <div className="font-mono text-sm text-gray-900 dark:text-gray-100">{ruleIds}</div>
-                                                </div>
-                                            )}
-                                            {matchedZones && (
-                                                <div>
-                                                    <h5 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Matched Zone</h5>
-                                                    <div className="font-mono text-sm text-gray-900 dark:text-gray-100">
-                                                        <Badge variant="outline">{matchedZones}</Badge>
-                                                    </div>
-                                                </div>
-                                            )}
-                                            {uri && (
-                                                <div className="col-span-1 md:col-span-2">
-                                                    <h5 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Target URI</h5>
-                                                    <div className="font-mono text-sm text-gray-900 dark:text-gray-100 break-all">{uri}</div>
-                                                </div>
-                                            )}
-                                            {msg && (
-                                                <div className="col-span-1 md:col-span-2">
-                                                    <h5 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Details</h5>
-                                                    <div className="text-sm text-gray-900 dark:text-gray-100 font-medium">{msg}</div>
-                                                </div>
-                                            )}
-                                            {payload && (
-                                                <div className="col-span-1 md:col-span-2">
-                                                    <h5 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Malicious Payload</h5>
-                                                    <div className="font-mono text-xs bg-white dark:bg-gray-950 p-3 rounded border border-gray-200 dark:border-gray-800 break-all text-red-600 dark:text-red-400">
-                                                        {payload}
-                                                    </div>
-                                                </div>
-                                            )}
+                            {/* Message */}
+                            {selectedAlert.message && (
+                                <div className="p-4 bg-blue-50 dark:bg-blue-900/10 rounded-lg border border-blue-100 dark:border-blue-900/30">
+                                    <div className="flex items-start gap-2">
+                                        <Info size={18} className="text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+                                        <div className="text-sm text-gray-900 dark:text-gray-100">
+                                            {selectedAlert.message}
                                         </div>
                                     </div>
-                                );
-                            })()}
+                                </div>
+                            )}
 
                             {/* Decisions */}
                             {selectedAlert.decisions && selectedAlert.decisions.length > 0 && (
@@ -484,21 +442,131 @@ export function Alerts() {
                                 <div className="space-y-2">
                                     {selectedAlert.events?.slice(0, 10).map((event, idx) => {
                                         // Helper to extract meta value
-                                        const getMeta = (key) => event.meta?.find(m => m.key === key)?.value || "-";
+                                        const getMeta = (key) => event.meta?.find(m => m.key === key)?.value;
+
+                                        // Check if this is an AppSec event
+                                        const isAppSecEvent = event.meta?.some(m =>
+                                            m.key === 'matched_zones' || m.key === 'rule_name' || m.key === 'appsec_action'
+                                        );
+
+                                        // AppSec-specific fields
+                                        const ruleName = getMeta('rule_name');
+                                        const matchedZones = getMeta('matched_zones');
+                                        const ruleIds = getMeta('rule_ids');
+                                        const message = getMeta('msg') || getMeta('message');
+
+                                        // Common fields
+                                        const targetFqdn = getMeta('target_fqdn');
+                                        const targetHost = getMeta('target_host');
+                                        const targetUri = getMeta('target_uri') || getMeta('uri');
+                                        const traefikRouter = getMeta('traefik_router_name');
+                                        const httpVerb = getMeta('http_verb');
+                                        const httpPath = getMeta('http_path');
+                                        const httpStatus = getMeta('http_status');
+                                        const httpUserAgent = getMeta('http_user_agent');
+                                        const service = getMeta('service');
 
                                         return (
-                                            <div key={idx} className="p-3 bg-gray-50 dark:bg-gray-900/30 rounded border border-gray-100 dark:border-gray-800 text-sm">
-                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                                    <div>
-                                                        <span className="text-gray-500">Timestamp:</span> <span className="font-mono text-xs">{event.timestamp}</span>
+                                            <div key={idx} className={`p-3 rounded border text-sm ${isAppSecEvent
+                                                    ? 'bg-red-50 dark:bg-red-900/10 border-red-100 dark:border-red-900/30'
+                                                    : 'bg-gray-50 dark:bg-gray-900/30 border-gray-100 dark:border-gray-800'
+                                                }`}>
+                                                {/* AppSec Badge */}
+                                                {isAppSecEvent && (
+                                                    <div className="mb-2 flex items-center gap-2">
+                                                        <Badge variant="danger" className="flex items-center gap-1">
+                                                            <Shield size={12} />
+                                                            AppSec / WAF
+                                                        </Badge>
                                                     </div>
-                                                    <div>
-                                                        <span className="text-gray-500">Service:</span> {getMeta('service')}
+                                                )}
+
+                                                <div className="space-y-2">
+                                                    {/* Timestamp and Service */}
+                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                                        <div>
+                                                            <span className="text-gray-500">Timestamp:</span> <span className="font-mono text-xs">{event.timestamp}</span>
+                                                        </div>
+                                                        {service && (
+                                                            <div>
+                                                                <span className="text-gray-500">Service:</span> {service}
+                                                            </div>
+                                                        )}
                                                     </div>
-                                                    <div className="col-span-1 md:col-span-2 font-mono text-xs break-all bg-white dark:bg-gray-950 p-2 rounded border border-gray-200 dark:border-gray-800 mt-1">
-                                                        <span className="text-blue-600 dark:text-blue-400 font-bold">{getMeta('http_verb')}</span> {getMeta('http_path') || getMeta('target_fqdn')}
-                                                        <div className="text-gray-400 mt-1">Status: {getMeta('http_status')} | UA: {getMeta('http_user_agent')}</div>
-                                                    </div>
+
+                                                    {/* Target FQDN/Host */}
+                                                    {(targetFqdn || targetHost) && (
+                                                        <div>
+                                                            <span className="text-gray-500">Target:</span> <span className="font-mono text-xs">{targetFqdn || targetHost}</span>
+                                                        </div>
+                                                    )}
+
+                                                    {/* Traefik Router */}
+                                                    {traefikRouter && (
+                                                        <div>
+                                                            <span className="text-gray-500">Router:</span> <span className="font-mono text-xs">{traefikRouter}</span>
+                                                        </div>
+                                                    )}
+
+                                                    {/* AppSec Rule Info */}
+                                                    {isAppSecEvent && ruleName && (
+                                                        <div>
+                                                            <span className="text-gray-500">Rule:</span>{' '}
+                                                            {(() => {
+                                                                const hubUrl = getHubUrl(ruleName);
+                                                                return hubUrl ? (
+                                                                    <a
+                                                                        href={hubUrl}
+                                                                        target="_blank"
+                                                                        rel="noopener noreferrer"
+                                                                        className="font-mono text-xs hover:text-primary-600 dark:hover:text-primary-400 transition-colors inline-flex items-center gap-1"
+                                                                    >
+                                                                        {ruleName}
+                                                                        <ExternalLink size={10} />
+                                                                    </a>
+                                                                ) : (
+                                                                    <span className="font-mono text-xs">{ruleName}</span>
+                                                                );
+                                                            })()}
+                                                        </div>
+                                                    )}
+
+                                                    {/* AppSec Details */}
+                                                    {isAppSecEvent && (
+                                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                                            {matchedZones && (
+                                                                <div>
+                                                                    <span className="text-gray-500">Matched Zone:</span> <Badge variant="outline" className="ml-1">{matchedZones}</Badge>
+                                                                </div>
+                                                            )}
+                                                            {ruleIds && (
+                                                                <div>
+                                                                    <span className="text-gray-500">Rule ID:</span> <span className="font-mono text-xs">{ruleIds}</span>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )}
+
+                                                    {/* Message/Description */}
+                                                    {isAppSecEvent && message && (
+                                                        <div className="text-xs text-gray-600 dark:text-gray-300 italic">
+                                                            {message}
+                                                        </div>
+                                                    )}
+
+                                                    {/* HTTP Request Details */}
+                                                    {(httpVerb || httpPath || targetUri) && (
+                                                        <div className="font-mono text-xs break-all bg-white dark:bg-gray-950 p-2 rounded border border-gray-200 dark:border-gray-800">
+                                                            <span className="text-blue-600 dark:text-blue-400 font-bold">{httpVerb || 'GET'}</span> {httpPath || targetUri || '/'}
+                                                            {(httpStatus || httpUserAgent) && (
+                                                                <div className="text-gray-400 mt-1">
+                                                                    {httpStatus && `Status: ${httpStatus}`}
+                                                                    {httpStatus && httpUserAgent && ' | '}
+                                                                    {httpUserAgent && `UA: ${httpUserAgent}`}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )}
                                                 </div>
                                             </div>
                                         );
