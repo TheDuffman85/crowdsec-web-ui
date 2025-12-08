@@ -1,10 +1,13 @@
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/Card";
+import { ExternalLink } from "lucide-react";
 
 /**
  * StatCard component for displaying top statistics
  */
-export function StatCard({ title, icon: Icon, items, emptyMessage = "No data available", getLink }) {
+export function StatCard({ title, icon: Icon, items, emptyMessage = "No data available", getLink, getExternalLink }) {
+    const navigate = useNavigate();
+
     return (
         <Card className="h-full">
             <CardHeader>
@@ -21,8 +24,20 @@ export function StatCard({ title, icon: Icon, items, emptyMessage = "No data ava
                 ) : (
                     <div className="space-y-2">
                         {items.map((item, idx) => {
-                            const content = (
-                                <>
+                            const handleRowClick = () => {
+                                if (getLink) {
+                                    navigate(getLink(item));
+                                }
+                            };
+
+                            const hubUrl = getExternalLink ? getExternalLink(item) : null;
+
+                            return (
+                                <div
+                                    key={idx}
+                                    onClick={handleRowClick}
+                                    className={`flex items-center justify-between p-2 rounded-lg transition-colors ${getLink ? 'hover:bg-primary-50 dark:hover:bg-primary-900/10 cursor-pointer' : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'}`}
+                                >
                                     <div className="flex items-center gap-2 min-w-0 flex-1">
                                         <span className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full bg-primary-100 dark:bg-primary-900/30 text-xs font-semibold text-primary-700 dark:text-primary-300">
                                             {idx + 1}
@@ -33,30 +48,22 @@ export function StatCard({ title, icon: Icon, items, emptyMessage = "No data ava
                                         <span className="text-sm text-gray-900 dark:text-gray-100 truncate font-medium" title={item.label}>
                                             {item.label}
                                         </span>
+                                        {hubUrl && (
+                                            <a
+                                                href={hubUrl}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                onClick={(e) => e.stopPropagation()}
+                                                className="ml-1 p-1 text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors"
+                                                title="View on CrowdSec Hub"
+                                            >
+                                                <ExternalLink size={12} />
+                                            </a>
+                                        )}
                                     </div>
                                     <span className="flex-shrink-0 ml-2 px-2 py-1 bg-gray-100 dark:bg-gray-800 rounded text-sm font-bold text-gray-700 dark:text-gray-300">
                                         {item.count}
                                     </span>
-                                </>
-                            );
-
-                            const className = "flex items-center justify-between p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors";
-
-                            if (getLink) {
-                                return (
-                                    <Link
-                                        key={idx}
-                                        to={getLink(item)}
-                                        className={`${className} hover:bg-primary-50 dark:hover:bg-primary-900/10 block`}
-                                    >
-                                        {content}
-                                    </Link>
-                                );
-                            }
-
-                            return (
-                                <div key={idx} className={className}>
-                                    {content}
                                 </div>
                             );
                         })}

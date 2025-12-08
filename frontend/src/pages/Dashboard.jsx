@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+
 import { fetchAlerts, fetchDecisions, fetchDecisionsForStats } from "../lib/api";
+import { getHubUrl } from "../lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card";
 import { StatCard } from "../components/StatCard";
 import { TimeSeriesChart } from "../components/TimeSeriesChart";
@@ -170,6 +172,7 @@ export function Dashboard() {
                                 items={statistics.topScenarios}
                                 emptyMessage="No alerts in the last 7 days"
                                 getLink={(item) => `/alerts?scenario=${encodeURIComponent(item.label)}`}
+                                getExternalLink={(item) => getHubUrl(item.label)}
                             />
                             <StatCard
                                 title="Top AS"

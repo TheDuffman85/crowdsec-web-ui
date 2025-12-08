@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { fetchDecisions, deleteDecision, addDecision } from "../lib/api";
 import { Badge } from "../components/ui/Badge";
+import { getHubUrl } from "../lib/utils";
 import { Trash2, Gavel, X, ExternalLink, Shield } from "lucide-react";
 import "flag-icons/css/flag-icons.min.css";
 
@@ -174,7 +175,16 @@ export function Decisions() {
                                                 )}
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={decision.detail.reason}>
-                                                <Badge variant="warning" className="truncate block w-full">{decision.detail.reason}</Badge>
+                                                {(() => {
+                                                    const hubUrl = getHubUrl(decision.detail.reason);
+                                                    return hubUrl ? (
+                                                        <a href={hubUrl} target="_blank" rel="noopener noreferrer" className="hover:underline text-primary-600 dark:text-primary-400">
+                                                            <Badge variant="warning" className="truncate block w-full">{decision.detail.reason}</Badge>
+                                                        </a>
+                                                    ) : (
+                                                        <Badge variant="warning" className="truncate block w-full">{decision.detail.reason}</Badge>
+                                                    );
+                                                })()}
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100">
                                                 <Badge variant="danger">{decision.detail.action || "ban"}</Badge>
@@ -203,9 +213,10 @@ export function Decisions() {
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                                                 <button
-                                                    onClick={() => handleDelete(decision.id)}
-                                                    className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 transition-colors"
-                                                    title="Delete Decision"
+                                                    onClick={() => !isExpired && handleDelete(decision.id)}
+                                                    disabled={isExpired}
+                                                    className={`transition-colors ${isExpired ? 'text-gray-400 cursor-not-allowed' : 'text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300'}`}
+                                                    title={isExpired ? "Decision already expired" : "Delete Decision"}
                                                 >
                                                     <Trash2 size={16} />
                                                 </button>

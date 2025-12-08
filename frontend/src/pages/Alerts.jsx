@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { fetchAlerts, fetchAlert } from "../lib/api";
 import { Badge } from "../components/ui/Badge";
+import { getHubUrl } from "../lib/utils";
 import { Search, Info, ExternalLink, Shield } from "lucide-react";
 import "flag-icons/css/flag-icons.min.css";
 
@@ -203,7 +204,18 @@ export function Alerts() {
                                                 )}
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={alert.scenario}>
-                                                <Badge variant="warning" className="truncate block w-full">{alert.scenario}</Badge>
+                                                {(() => {
+                                                    const hubUrl = getHubUrl(alert.scenario);
+                                                    return hubUrl ? (
+                                                        <a href={hubUrl} target="_blank" rel="noopener noreferrer" className="hover:underline text-primary-600 dark:text-primary-400 group flex items-center gap-1">
+                                                            <Badge variant="warning" className="truncate block w-full group-hover:bg-yellow-200 dark:group-hover:bg-yellow-900/50 transition-colors">
+                                                                {alert.scenario}
+                                                            </Badge>
+                                                        </a>
+                                                    ) : (
+                                                        <Badge variant="warning" className="truncate block w-full">{alert.scenario}</Badge>
+                                                    );
+                                                })()}
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-xs truncate" title={alert.message}>
                                                 {alert.message}
@@ -288,7 +300,17 @@ export function Alerts() {
                                 <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
                                     <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Scenario</h4>
                                     <div className="font-medium text-gray-900 dark:text-gray-100 break-words">
-                                        <Badge variant="warning">{selectedAlert.scenario}</Badge>
+                                        {(() => {
+                                            const hubUrl = getHubUrl(selectedAlert.scenario);
+                                            return hubUrl ? (
+                                                <a href={hubUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 hover:underline text-primary-600 dark:text-primary-400">
+                                                    <Badge variant="warning">{selectedAlert.scenario}</Badge>
+                                                    <ExternalLink size={12} />
+                                                </a>
+                                            ) : (
+                                                <Badge variant="warning">{selectedAlert.scenario}</Badge>
+                                            );
+                                        })()}
                                     </div>
                                 </div>
                                 <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
