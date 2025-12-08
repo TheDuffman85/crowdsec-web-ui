@@ -22,6 +22,9 @@ A modern, responsive web interface for managing [CrowdSec](https://crowdsec.net/
     -   Responsive design for mobile and desktop.
     -   Real-time feeling with fast React interactions.
 
+> [!CAUTION]
+> **Security Notice**: This application **does not provide any built-in authentication mechanism**. It is NOT intended to be exposed publicly without protection. We strongly recommend deploying this application behind a reverse proxy with an Identity Provider (IdP) such as [Authentik](https://goauthentik.io/), [Authelia](https://www.authelia.com/), or [Keycloak](https://www.keycloak.org/) to handle authentication and authorization.
+
 ## Architecture
 
 -   **Frontend**: React (Vite) + Tailwind CSS. Located in `frontend/`.
