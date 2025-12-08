@@ -160,6 +160,13 @@ export function Dashboard() {
                                 getLink={(item) => `/alerts?ip=${encodeURIComponent(item.label)}`}
                             />
                             <StatCard
+                                title="Top AS"
+                                icon={Network}
+                                items={statistics.topAS}
+                                emptyMessage="No alerts in the last 7 days"
+                                getLink={(item) => `/alerts?as=${encodeURIComponent(item.label)}`}
+                            />
+                            <StatCard
                                 title="Top Countries"
                                 icon={MapPin}
                                 items={statistics.topCountries}
@@ -173,13 +180,6 @@ export function Dashboard() {
                                 emptyMessage="No alerts in the last 7 days"
                                 getLink={(item) => `/alerts?scenario=${encodeURIComponent(item.label)}`}
                                 getExternalLink={(item) => getHubUrl(item.label)}
-                            />
-                            <StatCard
-                                title="Top AS"
-                                icon={Network}
-                                items={statistics.topAS}
-                                emptyMessage="No alerts in the last 7 days"
-                                getLink={(item) => `/alerts?as=${encodeURIComponent(item.label)}`}
                             />
                         </div>
                     </>
