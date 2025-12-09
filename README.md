@@ -82,7 +82,8 @@ services:
       - CROWDSEC_URL=http://crowdsec:8080
       - CROWDSEC_USER=crowdsec-web-ui
       - CROWDSEC_PASSWORD=<generated_password>
-      - CROWDSEC_LOOKBACK_PERIOD=168h # Optional: Lookback period for alerts/stats (default: 168h/7d)
+      # Optional: Lookback period for alerts/stats (default: 168h/7d)
+      - CROWDSEC_LOOKBACK_PERIOD=168h
     restart: unless-stopped
 ```
 
