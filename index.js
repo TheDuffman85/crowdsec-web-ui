@@ -137,8 +137,9 @@ app.get('/api/alerts', ensureAuth, async (req, res) => {
     const scopes = ['Ip', 'Range'];
 
     // Execute requests in parallel
-    const originPromises = origins.map(o => apiClient.get(`/v1/alerts?since=${since}&origin=${o}`));
-    const scopePromises = scopes.map(s => apiClient.get(`/v1/alerts?since=${since}&scope=${s}`));
+    const limit = 10000;
+    const originPromises = origins.map(o => apiClient.get(`/v1/alerts?since=${since}&origin=${o}&limit=${limit}`));
+    const scopePromises = scopes.map(s => apiClient.get(`/v1/alerts?since=${since}&scope=${s}&limit=${limit}`));
 
     const responses = await Promise.all([...originPromises, ...scopePromises]);
 
@@ -210,8 +211,9 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
     // So we will apply 'since' to this query as well.
     const queryParam = includeExpired ? `since=${since}` : `has_active_decision=true&since=${since}`;
 
-    const originPromises = origins.map(o => apiClient.get(`/v1/alerts?${queryParam}&origin=${o}`));
-    const scopePromises = scopes.map(s => apiClient.get(`/v1/alerts?${queryParam}&scope=${s}`));
+    const limit = 10000;
+    const originPromises = origins.map(o => apiClient.get(`/v1/alerts?${queryParam}&origin=${o}&limit=${limit}`));
+    const scopePromises = scopes.map(s => apiClient.get(`/v1/alerts?${queryParam}&scope=${s}&limit=${limit}`));
 
     const responses = await Promise.all([...originPromises, ...scopePromises]);
 
@@ -331,8 +333,9 @@ app.get('/api/stats/decisions', ensureAuth, async (req, res) => {
     const scopes = ['Ip', 'Range'];
 
     // Execute requests in parallel
-    const originPromises = origins.map(o => apiClient.get(`/v1/alerts?since=${since}&origin=${o}`));
-    const scopePromises = scopes.map(s => apiClient.get(`/v1/alerts?since=${since}&scope=${s}`));
+    const limit = 10000;
+    const originPromises = origins.map(o => apiClient.get(`/v1/alerts?since=${since}&origin=${o}&limit=${limit}`));
+    const scopePromises = scopes.map(s => apiClient.get(`/v1/alerts?since=${since}&scope=${s}&limit=${limit}`));
 
     const responses = await Promise.all([...originPromises, ...scopePromises]);
 
