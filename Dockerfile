@@ -16,6 +16,16 @@ RUN cd frontend && npm install
 # Copy the rest of the application code
 COPY . .
 
+# Build args
+ARG VITE_COMMIT_HASH
+ARG VITE_BUILD_DATE
+ARG VITE_REPO_URL
+
+# Set as env vars for the build
+ENV VITE_COMMIT_HASH=$VITE_COMMIT_HASH
+ENV VITE_BUILD_DATE=$VITE_BUILD_DATE
+ENV VITE_REPO_URL=$VITE_REPO_URL
+
 # Build the frontend
 RUN npm run build-ui
 

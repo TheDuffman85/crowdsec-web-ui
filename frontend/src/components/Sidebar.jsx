@@ -58,8 +58,18 @@ export function Sidebar({ isMobileMenuOpen, onClose }) {
                 ))}
             </nav>
             <div className="p-4 border-t border-gray-200 dark:border-gray-700">
-                <p className="text-xs text-center text-gray-400 dark:text-gray-500">
-                    v1.0.0
+                <p className="text-xs text-center text-gray-400 dark:text-gray-500 flex flex-col items-center gap-1">
+                    <span>{import.meta.env.VITE_BUILD_DATE || "Dev Build"}</span>
+                    {import.meta.env.VITE_COMMIT_HASH && (
+                        <a
+                            href={`${import.meta.env.VITE_REPO_URL}/commit/${import.meta.env.VITE_COMMIT_HASH}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="hover:text-primary-500 transition-colors font-mono"
+                        >
+                            ({import.meta.env.VITE_COMMIT_HASH})
+                        </a>
+                    )}
                 </p>
             </div>
         </aside>

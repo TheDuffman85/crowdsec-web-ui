@@ -63,7 +63,7 @@ A modern, responsive web interface for managing [CrowdSec](https://crowdsec.net/
       -e CROWDSEC_URL=http://crowdsec-container-name:8080 \
       -e CROWDSEC_USER=crowdsec-web-ui \
       -e CROWDSEC_PASSWORD=<your-secure-password> \
-      -e CROWDSEC_LOOKBACK_PERIOD=168h \
+      -e CROWDSEC_LOOKBACK_PERIOD=5d \
       --network your_crowdsec_network \
       crowdsec-web-ui
     ```
@@ -74,7 +74,7 @@ A modern, responsive web interface for managing [CrowdSec](https://crowdsec.net/
 ```yaml
 services:
   crowdsec-web-ui:
-    image: ghcr.io/TheDuffman85/crowdsec-web-ui:latest
+    image: ghcr.io/theduffman85/crowdsec-web-ui:latest
     container_name: crowdsec_web_ui
     ports:
       - "3000:3000"
@@ -83,7 +83,7 @@ services:
       - CROWDSEC_USER=crowdsec-web-ui
       - CROWDSEC_PASSWORD=<generated_password>
       # Optional: Lookback period for alerts/stats (default: 168h/7d)
-      - CROWDSEC_LOOKBACK_PERIOD=168h
+      - CROWDSEC_LOOKBACK_PERIOD=5d
     restart: unless-stopped
 ```
 
@@ -99,6 +99,7 @@ services:
     export CROWDSEC_URL=http://localhost:8080
     export CROWDSEC_USER=crowdsec-web-ui
     export CROWDSEC_PASSWORD=<your-secure-password>
+    export CROWDSEC_LOOKBACK_PERIOD=5d
     npm start
     ```
 
