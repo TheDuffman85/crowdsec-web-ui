@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - dev
   schedule:
     - cron: '0 0 * * 1'  # Jeden Montag um 00:00 UTC
 
@@ -24,11 +25,20 @@ jobs:
           registry: ${{ secrets.REGISTRY }}
           username: ${{ secrets.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_TOKEN }}
-     
+
+      - name: Docker metadata extrahieren
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.REGISTRY_IMAGE }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
+
       - name: Docker-Images für mehrere Architekturen bauen und pushen
         uses: docker/build-push-action@v5
         with:
            context: .
            push: true
            platforms: linux/amd64,linux/arm64
-           tags: ${{ secrets.REGISTRY_IMAGE }}:latest
+           tags: ${{ steps.meta.outputs.tags }}
