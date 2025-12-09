@@ -1,7 +1,7 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, ShieldAlert, Gavel, X } from "lucide-react";
+import { LayoutDashboard, ShieldAlert, Gavel, X, Sun, Moon } from "lucide-react";
 
-export function Sidebar({ isMobileMenuOpen, onClose }) {
+export function Sidebar({ isMobileMenuOpen, onClose, theme, toggleTheme }) {
     const links = [
         { to: "/", label: "Dashboard", icon: LayoutDashboard },
         { to: "/alerts", label: "Alerts", icon: ShieldAlert },
@@ -57,7 +57,17 @@ export function Sidebar({ isMobileMenuOpen, onClose }) {
                     </NavLink>
                 ))}
             </nav>
-            <div className="p-4 border-t border-gray-200 dark:border-gray-700">
+            <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex flex-col items-center gap-4">
+                <button
+                    onClick={toggleTheme}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-gray-100 dark:bg-gray-700/50 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                >
+                    {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
+                    <span className="text-sm font-medium">
+                        {theme === "light" ? "Dark Mode" : "Light Mode"}
+                    </span>
+                </button>
+
                 <p className="text-xs text-center text-gray-400 dark:text-gray-500 flex flex-col items-center gap-1">
                     <span>{import.meta.env.VITE_BUILD_DATE || "Dev Build"}</span>
                     {import.meta.env.VITE_COMMIT_HASH && (
