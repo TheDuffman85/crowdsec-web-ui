@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { fetchAlerts, fetchDecisions, fetchDecisionsForStats } from "../lib/api";
+import { fetchAlerts, fetchDecisions, fetchDecisionsForStats, fetchConfig } from "../lib/api";
 import { getHubUrl } from "../lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card";
 import { StatCard } from "../components/StatCard";
@@ -31,6 +31,7 @@ export function Dashboard() {
     const [stats, setStats] = useState({ alerts: 0, decisions: 0 });
     const [loading, setLoading] = useState(true);
     const [statsLoading, setStatsLoading] = useState(true);
+    const [config, setConfig] = useState({ lookback_days: 7 });
     const [statistics, setStatistics] = useState({
         topIPs: [],
         topCountries: [],
@@ -43,6 +44,11 @@ export function Dashboard() {
     useEffect(() => {
         async function loadData() {
             try {
+                // Fetch config first to know how many days to filter
+                const configData = await fetchConfig();
+                setConfig(configData);
+                const lookbackDays = configData.lookback_days || 7;
+
                 const [alerts, decisions, decisionsForStats] = await Promise.all([
                     fetchAlerts(),
                     fetchDecisions(),
@@ -50,17 +56,17 @@ export function Dashboard() {
                 ]);
                 setStats({ alerts: alerts.length, decisions: decisions.length });
 
-                // Calculate statistics for last 7 days
-                const last7DaysAlerts = filterLastNDays(alerts, 7);
-                const last7DaysDecisions = filterLastNDays(decisionsForStats, 7);
+                // Calculate statistics for configured days
+                const recentAlerts = filterLastNDays(alerts, lookbackDays);
+                const recentDecisions = filterLastNDays(decisionsForStats, lookbackDays);
 
                 setStatistics({
-                    topIPs: getTopIPs(last7DaysAlerts, 10),
-                    topCountries: getTopCountries(last7DaysAlerts, 10),
-                    topScenarios: getTopScenarios(last7DaysAlerts, 10),
-                    topAS: getTopAS(last7DaysAlerts, 10),
-                    alertsPerDay: getAlertsPerDay(last7DaysAlerts, 7),
-                    decisionsPerDay: getDecisionsPerDay(last7DaysDecisions, 7)
+                    topIPs: getTopIPs(recentAlerts, 10),
+                    topCountries: getTopCountries(recentAlerts, 10),
+                    topScenarios: getTopScenarios(recentAlerts, 10),
+                    topAS: getTopAS(recentAlerts, 10),
+                    alertsPerDay: getAlertsPerDay(recentAlerts, lookbackDays),
+                    decisionsPerDay: getDecisionsPerDay(recentDecisions, lookbackDays)
                 });
             } catch (error) {
                 console.error("Failed to load dashboard data", error);
@@ -127,7 +133,9 @@ export function Dashboard() {
             <div className="space-y-4">
                 <div className="flex items-center gap-2">
                     <TrendingUp className="w-6 h-6 text-primary-600 dark:text-primary-400" />
-                    <h3 className="text-2xl font-bold text-gray-900 dark:text-white">Last 7 Days Statistics</h3>
+                    <h3 className="text-2xl font-bold text-gray-900 dark:text-white">
+                        Last {config.lookback_days} Days Statistics
+                    </h3>
                 </div>
 
                 {statsLoading ? (
@@ -156,28 +164,28 @@ export function Dashboard() {
                                 title="Top IPs"
                                 icon={Globe}
                                 items={statistics.topIPs}
-                                emptyMessage="No alerts in the last 7 days"
+                                emptyMessage={`No alerts in the last ${config.lookback_days} days`}
                                 getLink={(item) => `/alerts?ip=${encodeURIComponent(item.label)}`}
                             />
                             <StatCard
                                 title="Top AS"
                                 icon={Network}
                                 items={statistics.topAS}
-                                emptyMessage="No alerts in the last 7 days"
+                                emptyMessage={`No alerts in the last ${config.lookback_days} days`}
                                 getLink={(item) => `/alerts?as=${encodeURIComponent(item.label)}`}
                             />
                             <StatCard
                                 title="Top Countries"
                                 icon={MapPin}
                                 items={statistics.topCountries}
-                                emptyMessage="No alerts in the last 7 days"
+                                emptyMessage={`No alerts in the last ${config.lookback_days} days`}
                                 getLink={(item) => `/alerts?country=${encodeURIComponent(item.label)}`}
                             />
                             <StatCard
                                 title="Top Scenarios"
                                 icon={AlertTriangle}
                                 items={statistics.topScenarios}
-                                emptyMessage="No alerts in the last 7 days"
+                                emptyMessage={`No alerts in the last ${config.lookback_days} days`}
                                 getLink={(item) => `/alerts?scenario=${encodeURIComponent(item.label)}`}
                                 getExternalLink={(item) => getHubUrl(item.label)}
                             />

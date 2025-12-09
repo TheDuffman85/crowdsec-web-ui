@@ -63,6 +63,7 @@ A modern, responsive web interface for managing [CrowdSec](https://crowdsec.net/
       -e CROWDSEC_URL=http://crowdsec-container-name:8080 \
       -e CROWDSEC_USER=crowdsec-web-ui \
       -e CROWDSEC_PASSWORD=<your-secure-password> \
+      -e CROWDSEC_LOOKBACK_PERIOD=168h \
       --network your_crowdsec_network \
       crowdsec-web-ui
     ```
@@ -81,6 +82,7 @@ services:
       - CROWDSEC_URL=http://crowdsec:8080
       - CROWDSEC_USER=crowdsec-web-ui
       - CROWDSEC_PASSWORD=<generated_password>
+      - CROWDSEC_LOOKBACK_PERIOD=168h # Optional: Lookback period for alerts/stats (default: 168h/7d)
     restart: unless-stopped
 ```
 

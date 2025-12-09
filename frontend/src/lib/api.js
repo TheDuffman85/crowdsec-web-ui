@@ -37,3 +37,9 @@ export async function addDecision(data) {
     if (!res.ok) throw new Error('Failed to add decision');
     return res.json();
 }
+
+export async function fetchConfig() {
+    const res = await fetch('/api/config');
+    if (!res.ok) throw new Error('Failed to fetch config');
+    return res.json();
+}

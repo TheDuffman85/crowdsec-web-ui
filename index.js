@@ -1,4 +1,3 @@
-// index.js
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
@@ -11,6 +10,8 @@ const port = process.env.PORT || 3000;
 const CROWDSEC_URL = process.env.CROWDSEC_URL || 'http://crowdsec:8080';
 const CROWDSEC_USER = process.env.CROWDSEC_USER;
 const CROWDSEC_PASSWORD = process.env.CROWDSEC_PASSWORD;
+// Default lookback period (default 7 days / 168h) - used for alerts, decisions and stats defaults
+const CROWDSEC_LOOKBACK_PERIOD = process.env.CROWDSEC_LOOKBACK_PERIOD || '168h';
 
 // Token state
 let requestToken = null;
@@ -124,22 +125,30 @@ const handleApiError = async (error, res, action, replayCallback) => {
  */
 app.get('/api/alerts', ensureAuth, async (req, res) => {
   const doRequest = async () => {
-    // Fetch alerts and filter CAPI after
-    const response = await apiClient.get('/v1/alerts?limit=1000');
-    let alertArray = response.data || [];
+    // Default to configured lookback period if not specified
+    const since = req.query.since || CROWDSEC_LOOKBACK_PERIOD;
 
-    // Filter out CAPI alerts
-    alertArray = alertArray.filter(alert => {
-      // Check if any decision is from CAPI
-      const hasCapiDecision = alert.decisions?.some(d => d.origin === 'CAPI' || d.origin === 'capi');
-      return !hasCapiDecision;
+    // Filter by origin at LAPI level
+    // origin: cscli (manual), crowdsec (scenarios), cscli-import (imported)
+    // Exclude CAPI by not requesting it.
+    const origins = ['cscli', 'crowdsec', 'cscli-import'];
+
+    // Execute requests in parallel
+    const responses = await Promise.all(
+      origins.map(o => apiClient.get(`/v1/alerts?since=${since}&origin=${o}`))
+    );
+
+    let alertArray = [];
+    responses.forEach(r => {
+      if (r.data && Array.isArray(r.data)) {
+        alertArray = alertArray.concat(r.data);
+      }
     });
 
-    console.log(`Fetched ${alertArray.length} alerts (excluding CAPI)`);
+    console.log(`Fetched ${alertArray.length} alerts (excluding CAPI) Since: ${since}`);
     alertArray.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-    // Limit to 1000 after filtering
-    res.json(alertArray.slice(0, 1000));
+    res.json(alertArray);
   };
 
   try {
@@ -173,16 +182,25 @@ app.get('/api/alerts/:id', ensureAuth, async (req, res) => {
 app.get('/api/decisions', ensureAuth, async (req, res) => {
   const doRequest = async () => {
     const includeExpired = req.query.include_expired === 'true';
+    const since = req.query.since || CROWDSEC_LOOKBACK_PERIOD;
 
     // Fetch alerts that have decisions
-    // Filtering by origin at LAPI level to reduce payload and avoid OOM from CAPI
-    // origin: cscli (manual), crowdsec (scenarios), cscli-import (imported)
-    // We run parallel requests because LAPI might not support OR logic with "origin" parameter reliably.
-    // Added 'manual' to origins to capture Web UI decisions.
+    // Filtering by origin at LAPI level
     const origins = ['cscli', 'crowdsec', 'cscli-import', 'manual'];
 
     // Execute requests in parallel
-    const queryParam = includeExpired ? 'limit=100' : 'has_active_decision=true&limit=100';
+    // If includeExpired is true, we just want everything since X time.
+    // If includeExpired is false (active only), technically we want decisions that haven't stopped yet.
+    // LAPI 'alert' endpoint doesn't strictly filter 'active decisions' easily combined with 'since' in a way that excludes old alerts with still-active decisions if the alert is too old. 
+    // However, usually decisions are recent. 
+    // We will ask for alerts 'since' the duration, and then filter for active/expired.
+
+    // Note: 'has_active_decision=true' is useful but if we want strictly time based, 'since' is better.
+    // But for "Active Decisions" view, we probably want ALL active decisions regardless of when the alert started?
+    // The user requested: "limit the data with the since parameter to 7 days by default".
+    // So we will apply 'since' to this query as well.
+    const queryParam = includeExpired ? `since=${since}` : `has_active_decision=true&since=${since}`;
+
     const responses = await Promise.all(
       origins.map(o => apiClient.get(`/v1/alerts?${queryParam}&origin=${o}`))
     );
@@ -259,18 +277,47 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
 });
 
 /**
+ * GET /api/config
+ * Returns the public configuration for the frontend
+ */
+app.get('/api/config', ensureAuth, (req, res) => {
+  // Simple parser to estimate days/hours for display
+  // Supports h, d. Default 168h.
+  let hours = 168;
+  let duration = CROWDSEC_LOOKBACK_PERIOD;
+
+  const match = duration.match(/^(\d+)([hmd])$/);
+  if (match) {
+    const val = parseInt(match[1]);
+    const unit = match[2];
+    if (unit === 'h') hours = val;
+    if (unit === 'd') hours = val * 24;
+    // m is minimal, treat as <1 hour or round up? For dashboard "days", 
+    // we might need a better logic. 
+    // Assuming hours/days are the main use cases.
+  }
+
+  res.json({
+    lookback_period: CROWDSEC_LOOKBACK_PERIOD,
+    lookback_hours: hours,
+    lookback_days: Math.max(1, Math.round(hours / 24))
+  });
+});
+
+/**
  * GET /api/stats/decisions
  * Retrieves ALL decisions from alerts (not just active ones) for statistics purposes.
  * This includes expired decisions to show accurate historical data.
  */
 app.get('/api/stats/decisions', ensureAuth, async (req, res) => {
   const doRequest = async () => {
-    // Fetch recent alerts (not filtering by has_active_decision)
+    // Default lookback period
+    const since = req.query.since || CROWDSEC_LOOKBACK_PERIOD;
     const origins = ['cscli', 'crowdsec', 'cscli-import', 'manual'];
 
     // Execute requests in parallel
     const responses = await Promise.all(
-      origins.map(o => apiClient.get(`/v1/alerts?limit=250&origin=${o}`))
+      origins.map(o => apiClient.get(`/v1/alerts?since=${since}&origin=${o}`))
     );
 
     // Combine all alerts
