@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import "flag-icons/css/flag-icons.min.css";
 import {
     BarChart,
     Bar,
@@ -55,11 +56,6 @@ export function ActivityBarChart({ alertsData, decisionsData, onDateSelect, sele
                         <BarChart
                             data={data}
                             margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
-                            onClick={(data) => {
-                                if (data && data.activePayload && data.activePayload[0]) {
-                                    onDateSelect(data.activePayload[0].payload.date);
-                                }
-                            }}
                         >
                             <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
                             <XAxis dataKey="label" stroke="#888888" fontSize={12} tickLine={false} axisLine={false} />
@@ -72,18 +68,30 @@ export function ActivityBarChart({ alertsData, decisionsData, onDateSelect, sele
                             <Bar
                                 dataKey="alerts"
                                 name="Alerts"
-                                fill="#FF9AA2" // Pastel Red
+                                fill="#FF9AA2"
                                 radius={[4, 4, 0, 0]}
                                 opacity={selectedDate ? (d => d.date === selectedDate ? 1 : 0.3) : 1}
                                 cursor="pointer"
+                                onClick={(data) => {
+                                    console.log('Bar clicked:', data);
+                                    if (data && data.date) {
+                                        onDateSelect(data.date);
+                                    }
+                                }}
                             />
                             <Bar
                                 dataKey="decisions"
                                 name="Decisions"
-                                fill="#C7CEEA" // Pastel Blue
+                                fill="#C7CEEA"
                                 radius={[4, 4, 0, 0]}
                                 opacity={selectedDate ? (d => d.date === selectedDate ? 1 : 0.3) : 1}
                                 cursor="pointer"
+                                onClick={(data) => {
+                                    console.log('Bar clicked:', data);
+                                    if (data && data.date) {
+                                        onDateSelect(data.date);
+                                    }
+                                }}
                             />
                         </BarChart>
                     </ResponsiveContainer>
@@ -166,9 +174,13 @@ export function CountryPieChart({ data, onCountrySelect, selectedCountry }) {
                                     outerRadius={90}
                                     fill="#8884d8"
                                     dataKey="value"
-                                    onClick={(data) => onCountrySelect(data.code)}
                                     cursor="pointer"
-                                    layout="centric"
+                                    onClick={(data) => {
+                                        console.log('Pie slice clicked:', data);
+                                        if (data && data.code) {
+                                            onCountrySelect(data.code);
+                                        }
+                                    }}
                                 >
                                     {chartData.map((entry, index) => (
                                         <Cell
