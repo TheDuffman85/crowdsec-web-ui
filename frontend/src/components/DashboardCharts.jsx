@@ -1,5 +1,4 @@
 import { useMemo } from 'react';
-import "flag-icons/css/flag-icons.min.css";
 import {
     BarChart,
     Bar,
@@ -73,7 +72,7 @@ export function ActivityBarChart({ alertsData, decisionsData, onDateSelect, sele
                                 opacity={selectedDate ? (d => d.date === selectedDate ? 1 : 0.3) : 1}
                                 cursor="pointer"
                                 onClick={(data) => {
-                                    console.log('Bar clicked:', data);
+                                    console.log('Alerts bar clicked, data:', data);
                                     if (data && data.date) {
                                         onDateSelect(data.date);
                                     }
@@ -87,7 +86,7 @@ export function ActivityBarChart({ alertsData, decisionsData, onDateSelect, sele
                                 opacity={selectedDate ? (d => d.date === selectedDate ? 1 : 0.3) : 1}
                                 cursor="pointer"
                                 onClick={(data) => {
-                                    console.log('Bar clicked:', data);
+                                    console.log('Decisions bar clicked, data:', data);
                                     if (data && data.date) {
                                         onDateSelect(data.date);
                                     }
@@ -137,12 +136,12 @@ export function CountryPieChart({ data, onCountrySelect, selectedCountry }) {
                 {payload.map((entry, index) => {
                     const item = chartData.find(d => d.name === entry.value);
                     return (
-                        <li key={`item-${index}`} className="flex items-center gap-1.5 text-gray-700 dark:text-gray-300">
-                            <span className="w-3 h-3 rounded-full" style={{ backgroundColor: entry.color }} />
+                        <li key={`item-${index}`} className="flex items-center gap-2 text-gray-700 dark:text-gray-300">
+                            <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: entry.color }} />
                             {item && item.code && (
-                                <span className={`fi fi-${item.code.toLowerCase()} w-5 h-4 inline-block rounded-sm shadow-sm`} />
+                                <span className={`fi fi-${item.code.toLowerCase()}`} style={{ width: '1.2em', height: '1.2em', marginRight: '0.25rem', display: 'inline-block' }} />
                             )}
-                            <span>{entry.value}</span>
+                            <span className="whitespace-nowrap">{entry.value}</span>
                         </li>
                     );
                 })}
@@ -175,20 +174,21 @@ export function CountryPieChart({ data, onCountrySelect, selectedCountry }) {
                                     fill="#8884d8"
                                     dataKey="value"
                                     cursor="pointer"
-                                    onClick={(data) => {
-                                        console.log('Pie slice clicked:', data);
-                                        if (data && data.code) {
-                                            onCountrySelect(data.code);
-                                        }
-                                    }}
                                 >
                                     {chartData.map((entry, index) => (
                                         <Cell
                                             key={`cell-${index}`}
                                             fill={entry.color}
-                                            opacity={selectedCountry && selectedCountry !== entry.code ? 0.3 : 1}
+                                            opacity={selectedCountry && selectedCountry !== (entry.code || entry.name) ? 0.3 : 1}
                                             stroke="none"
-                                            strokeWidth={selectedCountry === entry.code ? 2 : 0}
+                                            strokeWidth={selectedCountry === (entry.code || entry.name) ? 2 : 0}
+                                            onClick={() => {
+                                                const filterValue = entry.code || entry.name;
+                                                if (filterValue) {
+                                                    onCountrySelect(filterValue);
+                                                }
+                                            }}
+                                            style={{ cursor: 'pointer' }}
                                         />
                                     ))}
                                 </Pie>

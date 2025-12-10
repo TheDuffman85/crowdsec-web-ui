@@ -41,21 +41,16 @@ export function getTopCountries(alerts, limit = 10) {
     const countryStats = {};
 
     alerts.forEach(alert => {
-        // Use ISO code as key for precision, fallback to CN
         const code = alert.source?.iso_code;
         const name = alert.source?.cn || "Unknown";
 
-        if (code) {
-            if (!countryStats[code]) {
-                countryStats[code] = { count: 0, label: name, code: code };
+        if (name !== "Unknown") {
+            // Use code as key if available, otherwise use name
+            const key = code || name;
+            if (!countryStats[key]) {
+                countryStats[key] = { count: 0, label: name, code: code || null };
             }
-            countryStats[code].count++;
-        } else if (name !== "Unknown") {
-            // Fallback if no ISO code
-            if (!countryStats[name]) {
-                countryStats[name] = { count: 0, label: name, code: null };
-            }
-            countryStats[name].count++;
+            countryStats[key].count++;
         }
     });
 
@@ -65,7 +60,7 @@ export function getTopCountries(alerts, limit = 10) {
         .map(item => ({
             label: item.label,
             count: item.count,
-            countryCode: item.code
+            countryCode: item.code  // Can be null if no ISO code
         }));
 }
 

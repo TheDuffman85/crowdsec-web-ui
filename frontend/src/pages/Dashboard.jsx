@@ -90,25 +90,40 @@ export function Dashboard() {
 
         if (filters.country) {
             filteredAlerts = filteredAlerts.filter(a => {
-                // Try to match ISO code first, then Country Name if ISO is missing/mismatched
+                // Match by ISO code if available, otherwise by country name
                 const isoMatch = a.source.iso_code === filters.country;
-                // Some alerts might not have iso_code but have country name. 
-                // However, the pie chart returns whatever we put in 'countryCode'. 
-                // We standardized 'countryCode' to be ISO code in stats.js if available.
-                return isoMatch;
+                const nameMatch = a.source.cn === filters.country;
+                return isoMatch || nameMatch;
             });
+            // Filter decisions by country - match IPs from filtered alerts
+            const ipsInCountry = new Set(
+                filteredAlerts.map(a => a.source.ip).filter(ip => ip)
+            );
+            filteredDecisions = filteredDecisions.filter(d => ipsInCountry.has(d.value));
         }
 
         if (filters.scenario) {
             filteredAlerts = filteredAlerts.filter(a => a.scenario === filters.scenario);
+            // Filter decisions by scenario - match decisions whose value (IP) appears in alerts with this scenario
+            const ipsInScenario = new Set(
+                filteredAlerts.map(a => a.source.ip).filter(ip => ip)
+            );
+            filteredDecisions = filteredDecisions.filter(d => ipsInScenario.has(d.value));
         }
 
         if (filters.as) {
             filteredAlerts = filteredAlerts.filter(a => a.source.as_name === filters.as);
+            // Filter decisions by AS - match decisions whose value (IP) appears in alerts with this AS
+            const ipsInAS = new Set(
+                filteredAlerts.map(a => a.source.ip).filter(ip => ip)
+            );
+            filteredDecisions = filteredDecisions.filter(d => ipsInAS.has(d.value));
         }
 
         if (filters.ip) {
             filteredAlerts = filteredAlerts.filter(a => a.source.ip === filters.ip);
+            // Filter decisions by IP - direct match on the value field
+            filteredDecisions = filteredDecisions.filter(d => d.value === filters.ip);
         }
 
         return { alerts: filteredAlerts, decisions: filteredDecisions };
