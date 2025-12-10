@@ -132,7 +132,7 @@ export function CountryPieChart({ data, onCountrySelect, selectedCountry }) {
                         <li key={`item-${index}`} className="flex items-center gap-1.5 text-gray-700 dark:text-gray-300">
                             <span className="w-3 h-3 rounded-full" style={{ backgroundColor: entry.color }} />
                             {item && item.code && (
-                                <span className={`fi fi-${item.code.toLowerCase()} rounded-sm shadow-sm`} />
+                                <span className={`fi fi-${item.code.toLowerCase()} w-5 h-4 inline-block rounded-sm shadow-sm`} />
                             )}
                             <span>{entry.value}</span>
                         </li>
