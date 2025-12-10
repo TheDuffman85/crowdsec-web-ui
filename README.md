@@ -9,14 +9,14 @@ A modern, responsive web interface for managing [CrowdSec](https://crowdsec.net/
 ## Features
 
 ### Dashboard
-High-level overview of total alerts and active decisions.
+High-level overview of total alerts and active decisions. Statistics and top lists with dynamic filtering. 
 
 <a href="screenshots/dashboard.png">
   <img src="screenshots/dashboard.png" alt="Dashboard" width="50%">
 </a>
 
 ### Alerts Management
-View detailed logs of security events. Filter alerts by scenario, IP, or country.
+View detailed logs of security events.
 
 <a href="screenshots/alerts.png">
   <img src="screenshots/alerts.png" alt="Alerts" width="50%">
