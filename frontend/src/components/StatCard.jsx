@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/Card";
 import { ExternalLink } from "lucide-react";
+import { useMemo } from "react";
 
 /**
  * StatCard component for displaying top statistics
@@ -14,6 +15,11 @@ export function StatCard({
     selectedValue, // The currently selected value for highlighting
     getExternalLink
 }) {
+    // Calculate total for percentages
+    const totalCount = useMemo(() => {
+        return items.reduce((sum, item) => sum + item.count, 0);
+    }, [items]);
+
     return (
         <Card className="h-full">
             <CardHeader>
@@ -31,6 +37,8 @@ export function StatCard({
                     <div className="space-y-2">
                         {items.map((item, idx) => {
                             const isSelected = selectedValue === item.value || selectedValue === item.label; // Handle both potential value types
+                            const percent = totalCount > 0 ? (item.count / totalCount * 100).toFixed(1) : '0.0';
+
                             const handleRowClick = () => {
                                 if (onSelect) {
                                     onSelect(item);
@@ -74,12 +82,17 @@ export function StatCard({
                                             </a>
                                         )}
                                     </div>
-                                    <span className={`flex-shrink-0 ml-2 px-2 py-1 rounded text-sm font-bold ${isSelected
-                                        ? 'bg-primary-200 dark:bg-primary-700 text-primary-800 dark:text-primary-100'
-                                        : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300'
-                                        }`}>
-                                        {item.count}
-                                    </span>
+                                    <div className="flex flex-col items-end ml-2 flex-shrink-0">
+                                        <span className={`text-sm font-bold ${isSelected
+                                            ? 'text-primary-800 dark:text-primary-100'
+                                            : 'text-gray-900 dark:text-white'
+                                            }`}>
+                                            {item.count.toLocaleString()}
+                                        </span>
+                                        <span className="text-xs text-gray-500 dark:text-gray-400">
+                                            {percent}%
+                                        </span>
+                                    </div>
                                 </div>
                             );
                         })}

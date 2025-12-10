@@ -5,11 +5,13 @@ import { fetchAlerts, fetchDecisions, fetchDecisionsForStats, fetchConfig } from
 import { getHubUrl } from "../lib/utils";
 import { Card, CardContent } from "../components/ui/Card";
 import { StatCard } from "../components/StatCard";
-import { ActivityBarChart, CountryPieChart } from "../components/DashboardCharts";
+import { ActivityBarChart } from "../components/DashboardCharts";
+import { WorldMapCard } from "../components/WorldMapCard";
 import {
     filterLastNDays,
     getTopIPs,
     getTopCountries,
+    getAllCountries,
     getTopScenarios,
     getTopAS,
     getAlertsPerDay,
@@ -31,6 +33,7 @@ export function Dashboard() {
     const [loading, setLoading] = useState(true);
     const [statsLoading, setStatsLoading] = useState(true);
     const [config, setConfig] = useState({ lookback_days: 7 });
+    const [isOnline, setIsOnline] = useState(true);
 
     // Raw data
     const [rawData, setRawData] = useState({
@@ -63,9 +66,11 @@ export function Dashboard() {
 
                 setRawData({ alerts, decisions, decisionsForStats });
                 setStats({ alerts: alerts.length, decisions: decisions.length });
+                setIsOnline(true);
 
             } catch (error) {
                 console.error("Failed to load dashboard data", error);
+                setIsOnline(false);
             } finally {
                 setLoading(false);
                 setStatsLoading(false);
@@ -144,6 +149,7 @@ export function Dashboard() {
             topIPs: getTopIPs(filteredData.alerts, 10),
             // Top Countries list is removed per requirements, but we calculate it for the Pie Chart
             topCountries: getTopCountries(filteredData.alerts, 10), // Get more for the pie chart
+            allCountries: getAllCountries(filteredData.alerts),  // For map display
             topScenarios: getTopScenarios(filteredData.alerts, 10),
             topAS: getTopAS(filteredData.alerts, 10),
             alertsPerDay: getAlertsPerDay(filteredData.alerts, lookbackDays),
@@ -225,12 +231,21 @@ export function Dashboard() {
 
                 <Card>
                     <CardContent className="flex items-center p-6">
-                        <div className="p-4 bg-green-100 dark:bg-green-900/20 rounded-full mr-4">
-                            <Activity className="w-8 h-8 text-green-600 dark:text-green-400" />
+                        <div className={`p-4 rounded-full mr-4 ${isOnline
+                            ? 'bg-green-100 dark:bg-green-900/20'
+                            : 'bg-red-100 dark:bg-red-900/20'
+                            }`}>
+                            <Activity className={`w-8 h-8 ${isOnline
+                                ? 'text-green-600 dark:text-green-400'
+                                : 'text-red-600 dark:text-red-400'
+                                }`} />
                         </div>
                         <div>
                             <p className="text-sm font-medium text-gray-500 dark:text-gray-400">System Status</p>
-                            <h3 className="text-2xl font-bold text-gray-900 dark:text-white">Online</h3>
+                            <h3 className={`text-2xl font-bold ${isOnline
+                                ? 'text-gray-900 dark:text-white'
+                                : 'text-red-600 dark:text-red-400'
+                                }`}>{isOnline ? 'Online' : 'Offline'}</h3>
                         </div>
                     </CardContent>
                 </Card>
@@ -251,7 +266,8 @@ export function Dashboard() {
                     <>
                         {/* Charts Area */}
                         <div className="grid gap-8 md:grid-cols-2">
-                            <div className="h-[400px]">
+                            {/* Activity Chart - Left */}
+                            <div className="h-[280px]">
                                 <ActivityBarChart
                                     alertsData={statistics.alertsPerDay}
                                     decisionsData={statistics.decisionsPerDay}
@@ -259,39 +275,41 @@ export function Dashboard() {
                                     selectedDate={filters.date}
                                 />
                             </div>
-                            <div className="h-[400px]">
-                                <CountryPieChart
-                                    data={statistics.topCountries}
+
+                            {/* World Map - Right */}
+                            <div className="h-[280px]">
+                                <WorldMapCard
+                                    data={statistics.allCountries}
                                     onCountrySelect={(code) => toggleFilter('country', code)}
                                     selectedCountry={filters.country}
                                 />
                             </div>
                         </div>
 
-                        {/* Top Statistics Grid - "Top Countries lists removed" */}
-                        <div className="grid gap-8 md:grid-cols-3">
+                        {/* Top Statistics Grid */}
+                        <div className="grid gap-8 md:grid-cols-2 lg:grid-cols-4">
+                            <StatCard
+                                title="Top Countries"
+                                items={statistics.topCountries}
+                                onSelect={(item) => toggleFilter('country', item.countryCode)}
+                                selectedValue={filters.country}
+                            />
                             <StatCard
                                 title="Top IPs"
-                                icon={Globe}
                                 items={statistics.topIPs}
-                                emptyMessage={`No alerts matching filters`}
                                 onSelect={(item) => toggleFilter('ip', item.label)}
                                 selectedValue={filters.ip}
                             />
                             <StatCard
                                 title="Top Scenarios"
-                                icon={AlertTriangle}
                                 items={statistics.topScenarios}
-                                emptyMessage={`No alerts matching filters`}
                                 onSelect={(item) => toggleFilter('scenario', item.label)}
                                 selectedValue={filters.scenario}
                                 getExternalLink={(item) => getHubUrl(item.label)}
                             />
                             <StatCard
                                 title="Top AS"
-                                icon={Network}
                                 items={statistics.topAS}
-                                emptyMessage={`No alerts matching filters`}
                                 onSelect={(item) => toggleFilter('as', item.label)}
                                 selectedValue={filters.as}
                             />

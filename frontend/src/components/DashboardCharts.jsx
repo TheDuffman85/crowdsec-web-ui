@@ -7,16 +7,10 @@ import {
     CartesianGrid,
     Tooltip,
     Legend,
-    ResponsiveContainer,
-    PieChart,
-    Pie,
-    Cell
+    ResponsiveContainer
 } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
-import { BarChart3, PieChart as PieChartIcon } from 'lucide-react';
-
-// Pastel Colors
-const COLORS = ['#FF9AA2', '#FFB7B2', '#FFDAC1', '#E2F0CB', '#B5EAD7', '#C7CEEA', '#F0E68C', '#DDA0DD'];
+import { BarChart3 } from 'lucide-react';
 
 /**
  * Combined Bar Chart for Alerts and Decisions
@@ -42,7 +36,7 @@ export function ActivityBarChart({ alertsData, decisionsData, onDateSelect, sele
     }, [alertsData, decisionsData]);
 
     return (
-        <Card className="h-full">
+        <Card className="h-full outline-none">
             <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                     <BarChart3 className="w-5 h-5 text-primary-600 dark:text-primary-400" />
@@ -50,7 +44,7 @@ export function ActivityBarChart({ alertsData, decisionsData, onDateSelect, sele
                 </CardTitle>
             </CardHeader>
             <CardContent>
-                <div className="h-[300px] w-full">
+                <div className="h-[200px] w-full outline-none">
                     <ResponsiveContainer width="100%" height="100%">
                         <BarChart
                             data={data}
@@ -60,14 +54,15 @@ export function ActivityBarChart({ alertsData, decisionsData, onDateSelect, sele
                             <XAxis dataKey="label" stroke="#888888" fontSize={12} tickLine={false} axisLine={false} />
                             <YAxis stroke="#888888" fontSize={12} tickLine={false} axisLine={false} />
                             <Tooltip
-                                cursor={{ fill: 'rgba(0,0,0,0.1)' }}
+                                cursor={{ fill: 'transparent' }}
                                 contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
                             />
                             <Legend verticalAlign="top" height={36} />
                             <Bar
                                 dataKey="alerts"
                                 name="Alerts"
-                                fill="#FF9AA2"
+                                fill="#dc2626"
+                                stroke="none"
                                 radius={[4, 4, 0, 0]}
                                 opacity={selectedDate ? (d => d.date === selectedDate ? 1 : 0.3) : 1}
                                 cursor="pointer"
@@ -81,7 +76,8 @@ export function ActivityBarChart({ alertsData, decisionsData, onDateSelect, sele
                             <Bar
                                 dataKey="decisions"
                                 name="Decisions"
-                                fill="#C7CEEA"
+                                fill="#2563eb"
+                                stroke="none"
                                 radius={[4, 4, 0, 0]}
                                 opacity={selectedDate ? (d => d.date === selectedDate ? 1 : 0.3) : 1}
                                 cursor="pointer"
@@ -95,115 +91,6 @@ export function ActivityBarChart({ alertsData, decisionsData, onDateSelect, sele
                         </BarChart>
                     </ResponsiveContainer>
                 </div>
-            </CardContent>
-        </Card>
-    );
-}
-
-/**
- * Country Distribution Pie Chart
- */
-export function CountryPieChart({ data, onCountrySelect, selectedCountry }) {
-    const chartData = useMemo(() => {
-        return data.map((item, index) => ({
-            name: item.label,
-            value: item.count,
-            code: item.countryCode,
-            color: COLORS[index % COLORS.length]
-        }));
-    }, [data]);
-
-    const RADIAN = Math.PI / 180;
-    const renderCustomizedLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent }) => {
-        const radius = innerRadius + (outerRadius - innerRadius) * 0.5;
-        const x = cx + radius * Math.cos(-midAngle * RADIAN);
-        const y = cy + radius * Math.sin(-midAngle * RADIAN);
-
-        return (
-            <text x={x} y={y} fill="#4b5563" textAnchor={x > cx ? 'start' : 'end'} dominantBaseline="central" className="text-xs font-bold pointer-events-none">
-                {`${(percent * 100).toFixed(0)}%`}
-            </text>
-        );
-    };
-
-    /**
-     * Custom Legend renderer to include country flags
-     */
-    const renderLegend = (props) => {
-        const { payload } = props;
-        return (
-            <ul className="flex flex-wrap justify-center gap-4 text-xs mt-2">
-                {payload.map((entry, index) => {
-                    const item = chartData.find(d => d.name === entry.value);
-                    return (
-                        <li key={`item-${index}`} className="flex items-center gap-2 text-gray-700 dark:text-gray-300">
-                            <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: entry.color }} />
-                            {item && item.code && (
-                                <span className={`fi fi-${item.code.toLowerCase()}`} style={{ width: '1.2em', height: '1.2em', marginRight: '0.25rem', display: 'inline-block' }} />
-                            )}
-                            <span className="whitespace-nowrap">{entry.value}</span>
-                        </li>
-                    );
-                })}
-            </ul>
-        );
-    };
-
-    return (
-        <Card className="h-full">
-            <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                    <PieChartIcon className="w-5 h-5 text-primary-600 dark:text-primary-400" />
-                    Country Distribution
-                </CardTitle>
-            </CardHeader>
-            <CardContent>
-                {chartData.length === 0 ? (
-                    <div className="h-[300px] flex items-center justify-center text-gray-500">No country data available</div>
-                ) : (
-                    <div className="h-[300px] w-full">
-                        <ResponsiveContainer width="100%" height="100%">
-                            <PieChart>
-                                <Pie
-                                    data={chartData}
-                                    cx="50%"
-                                    cy="50%"
-                                    labelLine={false}
-                                    label={renderCustomizedLabel}
-                                    outerRadius={90}
-                                    fill="#8884d8"
-                                    dataKey="value"
-                                    cursor="pointer"
-                                >
-                                    {chartData.map((entry, index) => {
-                                        const filterValue = entry.code || entry.name;
-                                        return (
-                                            <Cell
-                                                key={`cell-${index}`}
-                                                fill={entry.color}
-                                                opacity={selectedCountry && selectedCountry !== filterValue ? 0.3 : 1}
-                                                stroke="none"
-                                                strokeWidth={selectedCountry === filterValue ? 2 : 0}
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    if (filterValue) {
-                                                        onCountrySelect(filterValue);
-                                                    }
-                                                }}
-                                                style={{ cursor: 'pointer', pointerEvents: 'auto' }}
-                                            />
-                                        );
-                                    })}
-                                </Pie>
-                                <Tooltip
-                                    formatter={(value, name) => [value, name]}
-                                    contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                                />
-                                <Legend content={renderLegend} />
-                            </PieChart>
-                        </ResponsiveContainer>
-                    </div>
-                )}
             </CardContent>
         </Card>
     );

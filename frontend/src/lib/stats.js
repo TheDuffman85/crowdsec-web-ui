@@ -65,6 +65,32 @@ export function getTopCountries(alerts, limit = 10) {
 }
 
 /**
+ * Get ALL countries with alert counts (not limited)
+ */
+export function getAllCountries(alerts) {
+    const countryStats = {};
+
+    alerts.forEach(alert => {
+        const code = alert.source?.cn;
+        const name = alert.source?.cn || "Unknown";
+
+        if (name !== "Unknown" && code) {
+            if (!countryStats[code]) {
+                countryStats[code] = { count: 0, label: code.toUpperCase(), code: code };
+            }
+            countryStats[code].count++;
+        }
+    });
+
+    return Object.values(countryStats)
+        .map(item => ({
+            label: item.label,
+            count: item.count,
+            countryCode: item.code
+        }));
+}
+
+/**
  * Get top scenarios by alert count
  */
 export function getTopScenarios(alerts, limit = 10) {
