@@ -41,16 +41,16 @@ export function getTopCountries(alerts, limit = 10) {
     const countryStats = {};
 
     alerts.forEach(alert => {
-        const code = alert.source?.iso_code;
+        // Use CN (2-letter country code) - same as used for flags in Alerts.jsx
+        const code = alert.source?.cn;
         const name = alert.source?.cn || "Unknown";
 
-        if (name !== "Unknown") {
-            // Use code as key if available, otherwise use name
-            const key = code || name;
-            if (!countryStats[key]) {
-                countryStats[key] = { count: 0, label: name, code: code || null };
+        if (name !== "Unknown" && code) {
+            // Use code as key
+            if (!countryStats[code]) {
+                countryStats[code] = { count: 0, label: code.toUpperCase(), code: code };
             }
-            countryStats[key].count++;
+            countryStats[code].count++;
         }
     });
 
@@ -60,7 +60,7 @@ export function getTopCountries(alerts, limit = 10) {
         .map(item => ({
             label: item.label,
             count: item.count,
-            countryCode: item.code  // Can be null if no ISO code
+            countryCode: item.code  // Will be the 2-letter code
         }));
 }
 

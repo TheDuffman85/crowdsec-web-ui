@@ -90,10 +90,8 @@ export function Dashboard() {
 
         if (filters.country) {
             filteredAlerts = filteredAlerts.filter(a => {
-                // Match by ISO code if available, otherwise by country name
-                const isoMatch = a.source.iso_code === filters.country;
-                const nameMatch = a.source.cn === filters.country;
-                return isoMatch || nameMatch;
+                // Match by CN (2-letter country code)
+                return a.source.cn === filters.country;
             });
             // Filter decisions by country - match IPs from filtered alerts
             const ipsInCountry = new Set(
@@ -252,8 +250,8 @@ export function Dashboard() {
                 ) : (
                     <>
                         {/* Charts Area */}
-                        <div className="grid gap-8 md:grid-cols-2 h-[450px]">
-                            <div className="h-full">
+                        <div className="grid gap-8 md:grid-cols-2">
+                            <div className="h-[400px]">
                                 <ActivityBarChart
                                     alertsData={statistics.alertsPerDay}
                                     decisionsData={statistics.decisionsPerDay}
@@ -261,7 +259,7 @@ export function Dashboard() {
                                     selectedDate={filters.date}
                                 />
                             </div>
-                            <div className="h-full">
+                            <div className="h-[400px]">
                                 <CountryPieChart
                                     data={statistics.topCountries}
                                     onCountrySelect={(code) => toggleFilter('country', code)}

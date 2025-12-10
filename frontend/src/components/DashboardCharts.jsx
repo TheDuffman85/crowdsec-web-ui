@@ -175,22 +175,25 @@ export function CountryPieChart({ data, onCountrySelect, selectedCountry }) {
                                     dataKey="value"
                                     cursor="pointer"
                                 >
-                                    {chartData.map((entry, index) => (
-                                        <Cell
-                                            key={`cell-${index}`}
-                                            fill={entry.color}
-                                            opacity={selectedCountry && selectedCountry !== (entry.code || entry.name) ? 0.3 : 1}
-                                            stroke="none"
-                                            strokeWidth={selectedCountry === (entry.code || entry.name) ? 2 : 0}
-                                            onClick={() => {
-                                                const filterValue = entry.code || entry.name;
-                                                if (filterValue) {
-                                                    onCountrySelect(filterValue);
-                                                }
-                                            }}
-                                            style={{ cursor: 'pointer' }}
-                                        />
-                                    ))}
+                                    {chartData.map((entry, index) => {
+                                        const filterValue = entry.code || entry.name;
+                                        return (
+                                            <Cell
+                                                key={`cell-${index}`}
+                                                fill={entry.color}
+                                                opacity={selectedCountry && selectedCountry !== filterValue ? 0.3 : 1}
+                                                stroke="none"
+                                                strokeWidth={selectedCountry === filterValue ? 2 : 0}
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    if (filterValue) {
+                                                        onCountrySelect(filterValue);
+                                                    }
+                                                }}
+                                                style={{ cursor: 'pointer', pointerEvents: 'auto' }}
+                                            />
+                                        );
+                                    })}
                                 </Pie>
                                 <Tooltip
                                     formatter={(value, name) => [value, name]}
