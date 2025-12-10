@@ -11,7 +11,7 @@ RUN npm install
 
 # Copy frontend package files and install frontend dependencies
 COPY frontend/package*.json ./frontend/
-RUN cd frontend && npm install
+RUN cd frontend && npm install --legacy-peer-deps
 
 # Copy the rest of the application code
 COPY . .
