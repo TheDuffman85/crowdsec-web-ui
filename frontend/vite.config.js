@@ -9,7 +9,7 @@ export default defineConfig(({ mode }) => {
     server: {
       proxy: {
         '/api': {
-          target: env.CROWDSEC_URL || 'http://localhost:3000',
+          target: 'http://localhost:3000',
           changeOrigin: true,
           configure: (proxy, options) => {
             if (env.CROWDSEC_USER && env.CROWDSEC_PASSWORD) {
