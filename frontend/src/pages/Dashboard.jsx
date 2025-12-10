@@ -289,16 +289,22 @@ export function Dashboard() {
                         {/* Top Statistics Grid */}
                         <div className="grid gap-8 md:grid-cols-2 lg:grid-cols-4">
                             <StatCard
-                                title="Top Countries"
-                                items={statistics.topCountries}
-                                onSelect={(item) => toggleFilter('country', item.countryCode)}
-                                selectedValue={filters.country}
-                            />
-                            <StatCard
                                 title="Top IPs"
                                 items={statistics.topIPs}
                                 onSelect={(item) => toggleFilter('ip', item.label)}
                                 selectedValue={filters.ip}
+                            />
+                            <StatCard
+                                title="Top AS"
+                                items={statistics.topAS}
+                                onSelect={(item) => toggleFilter('as', item.label)}
+                                selectedValue={filters.as}
+                            />
+                            <StatCard
+                                title="Top Countries"
+                                items={statistics.topCountries}
+                                onSelect={(item) => toggleFilter('country', item.countryCode)}
+                                selectedValue={filters.country}
                             />
                             <StatCard
                                 title="Top Scenarios"
@@ -306,12 +312,6 @@ export function Dashboard() {
                                 onSelect={(item) => toggleFilter('scenario', item.label)}
                                 selectedValue={filters.scenario}
                                 getExternalLink={(item) => getHubUrl(item.label)}
-                            />
-                            <StatCard
-                                title="Top AS"
-                                items={statistics.topAS}
-                                onSelect={(item) => toggleFilter('as', item.label)}
-                                selectedValue={filters.as}
                             />
                         </div>
                     </>
