@@ -38,22 +38,55 @@ export function getTopIPs(alerts, limit = 10) {
  * Get top countries by alert count
  */
 export function getTopCountries(alerts, limit = 10) {
-    const countryCounts = {};
+    const countryStats = {};
 
     alerts.forEach(alert => {
-        const country = alert.source?.cn;
-        if (country) {
-            countryCounts[country] = (countryCounts[country] || 0) + 1;
+        // Use CN (2-letter country code) - same as used for flags in Alerts.jsx
+        const code = alert.source?.cn;
+        const name = alert.source?.cn || "Unknown";
+
+        if (name !== "Unknown" && code) {
+            // Use code as key
+            if (!countryStats[code]) {
+                countryStats[code] = { count: 0, label: code.toUpperCase(), code: code };
+            }
+            countryStats[code].count++;
         }
     });
 
-    return Object.entries(countryCounts)
-        .sort((a, b) => b[1] - a[1])
+    return Object.values(countryStats)
+        .sort((a, b) => b.count - a.count)
         .slice(0, limit)
-        .map(([country, count]) => ({
-            label: country,
-            count,
-            countryCode: country
+        .map(item => ({
+            label: item.label,
+            count: item.count,
+            countryCode: item.code  // Will be the 2-letter code
+        }));
+}
+
+/**
+ * Get ALL countries with alert counts (not limited)
+ */
+export function getAllCountries(alerts) {
+    const countryStats = {};
+
+    alerts.forEach(alert => {
+        const code = alert.source?.cn;
+        const name = alert.source?.cn || "Unknown";
+
+        if (name !== "Unknown" && code) {
+            if (!countryStats[code]) {
+                countryStats[code] = { count: 0, label: code.toUpperCase(), code: code };
+            }
+            countryStats[code].count++;
+        }
+    });
+
+    return Object.values(countryStats)
+        .map(item => ({
+            label: item.label,
+            count: item.count,
+            countryCode: item.code
         }));
 }
 
