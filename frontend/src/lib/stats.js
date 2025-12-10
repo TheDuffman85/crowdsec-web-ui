@@ -38,22 +38,34 @@ export function getTopIPs(alerts, limit = 10) {
  * Get top countries by alert count
  */
 export function getTopCountries(alerts, limit = 10) {
-    const countryCounts = {};
+    const countryStats = {};
 
     alerts.forEach(alert => {
-        const country = alert.source?.cn;
-        if (country) {
-            countryCounts[country] = (countryCounts[country] || 0) + 1;
+        // Use ISO code as key for precision, fallback to CN
+        const code = alert.source?.iso_code;
+        const name = alert.source?.cn || "Unknown";
+
+        if (code) {
+            if (!countryStats[code]) {
+                countryStats[code] = { count: 0, label: name, code: code };
+            }
+            countryStats[code].count++;
+        } else if (name !== "Unknown") {
+            // Fallback if no ISO code
+            if (!countryStats[name]) {
+                countryStats[name] = { count: 0, label: name, code: null };
+            }
+            countryStats[name].count++;
         }
     });
 
-    return Object.entries(countryCounts)
-        .sort((a, b) => b[1] - a[1])
+    return Object.values(countryStats)
+        .sort((a, b) => b.count - a.count)
         .slice(0, limit)
-        .map(([country, count]) => ({
-            label: country,
-            count,
-            countryCode: country
+        .map(item => ({
+            label: item.label,
+            count: item.count,
+            countryCode: item.code
         }));
 }
 

@@ -83,15 +83,20 @@ export function Dashboard() {
 
         // Apply Cross-Filtering
         if (filters.date) {
-            filteredAlerts = filteredAlerts.filter(a => a.created_at.startsWith(filters.date));
-            filteredDecisions = filteredDecisions.filter(d => d.created_at.startsWith(filters.date));
+            // Safe date matching (handles potentially different formats if needed, but strict 'startsWith' matches YYYY-MM-DD)
+            filteredAlerts = filteredAlerts.filter(a => a.created_at && a.created_at.startsWith(filters.date));
+            filteredDecisions = filteredDecisions.filter(d => d.created_at && d.created_at.startsWith(filters.date));
         }
 
         if (filters.country) {
-            filteredAlerts = filteredAlerts.filter(a => a.source.iso_code === filters.country);
-            // Decisions usually don't have direct country info in the same structure unless joined, 
-            // but for now we filter alerts mainly as they populate the charts.
-            // If decisions have country metadata, filter them too.
+            filteredAlerts = filteredAlerts.filter(a => {
+                // Try to match ISO code first, then Country Name if ISO is missing/mismatched
+                const isoMatch = a.source.iso_code === filters.country;
+                // Some alerts might not have iso_code but have country name. 
+                // However, the pie chart returns whatever we put in 'countryCode'. 
+                // We standardized 'countryCode' to be ISO code in stats.js if available.
+                return isoMatch;
+            });
         }
 
         if (filters.scenario) {
@@ -158,7 +163,7 @@ export function Dashboard() {
     }
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-8">
             <div className="flex items-center justify-between">
                 <h2 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Dashboard</h2>
                 {hasActiveFilters && (
@@ -176,7 +181,7 @@ export function Dashboard() {
                 Let's make them show GLOBAL status as they link effectively to other pages. 
                 But updating them to show "Filtered Count" is a nice touch. Let's keep them global for now.
             */}
-            <div className="grid gap-6 md:grid-cols-3">
+            <div className="grid gap-8 md:grid-cols-3">
                 <Link to="/alerts" className="block transition-transform hover:scale-105">
                     <Card className="h-full cursor-pointer hover:shadow-lg transition-shadow">
                         <CardContent className="flex items-center p-6">
@@ -232,7 +237,7 @@ export function Dashboard() {
                 ) : (
                     <>
                         {/* Charts Area */}
-                        <div className="grid gap-6 md:grid-cols-2 h-[400px]">
+                        <div className="grid gap-8 md:grid-cols-2 h-[450px]">
                             <div className="h-full">
                                 <ActivityBarChart
                                     alertsData={statistics.alertsPerDay}
@@ -251,7 +256,7 @@ export function Dashboard() {
                         </div>
 
                         {/* Top Statistics Grid - "Top Countries lists removed" */}
-                        <div className="grid gap-6 md:grid-cols-3">
+                        <div className="grid gap-8 md:grid-cols-3">
                             <StatCard
                                 title="Top IPs"
                                 icon={Globe}
