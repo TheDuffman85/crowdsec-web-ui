@@ -175,7 +175,7 @@ export function CountryPieChart({ data, onCountrySelect, selectedCountry }) {
                                             key={`cell-${index}`}
                                             fill={entry.color}
                                             opacity={selectedCountry && selectedCountry !== entry.code ? 0.3 : 1}
-                                            stroke={selectedCountry === entry.code ? "#000" : "none"}
+                                            stroke="none"
                                             strokeWidth={selectedCountry === entry.code ? 2 : 0}
                                         />
                                     ))}
