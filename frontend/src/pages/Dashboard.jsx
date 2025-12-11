@@ -14,8 +14,7 @@ import {
     getAllCountries,
     getTopScenarios,
     getTopAS,
-    getAlertsPerDay,
-    getDecisionsPerDay
+    getAggregatedData
 } from "../lib/stats";
 import {
     ShieldAlert,
@@ -33,6 +32,7 @@ export function Dashboard() {
     const [loading, setLoading] = useState(true);
     const [statsLoading, setStatsLoading] = useState(true);
     const [config, setConfig] = useState({ lookback_days: 7 });
+    const [granularity, setGranularity] = useState('day');
     const [isOnline, setIsOnline] = useState(true);
 
     // Raw data
@@ -152,10 +152,10 @@ export function Dashboard() {
             allCountries: getAllCountries(filteredData.alerts),  // For map display
             topScenarios: getTopScenarios(filteredData.alerts, 10),
             topAS: getTopAS(filteredData.alerts, 10),
-            alertsPerDay: getAlertsPerDay(filteredData.alerts, lookbackDays),
-            decisionsPerDay: getDecisionsPerDay(filteredData.decisions, lookbackDays)
+            alertsHistory: getAggregatedData(filteredData.alerts, lookbackDays, granularity),
+            decisionsHistory: getAggregatedData(filteredData.decisions, lookbackDays, granularity)
         };
-    }, [filteredData, config.lookback_days]);
+    }, [filteredData, config.lookback_days, granularity]);
 
     // Handle Filters
     const toggleFilter = (type, value) => {
@@ -267,17 +267,19 @@ export function Dashboard() {
                         {/* Charts Area */}
                         <div className="grid gap-8 md:grid-cols-2">
                             {/* Activity Chart - Left */}
-                            <div className="h-[280px]">
+                            <div className="h-[350px]">
                                 <ActivityBarChart
-                                    alertsData={statistics.alertsPerDay}
-                                    decisionsData={statistics.decisionsPerDay}
+                                    alertsData={statistics.alertsHistory}
+                                    decisionsData={statistics.decisionsHistory}
                                     onDateSelect={(date) => toggleFilter('date', date)}
                                     selectedDate={filters.date}
+                                    granularity={granularity}
+                                    setGranularity={setGranularity}
                                 />
                             </div>
 
                             {/* World Map - Right */}
-                            <div className="h-[280px]">
+                            <div className="h-[350px]">
                                 <WorldMapCard
                                     data={statistics.allCountries}
                                     onCountrySelect={(code) => toggleFilter('country', code)}

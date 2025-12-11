@@ -129,61 +129,63 @@ export function getTopAS(alerts, limit = 10) {
 }
 
 /**
- * Get alerts grouped by day for the last N days
+ * Get aggregated stats for the given time range and granularity
+ * @param {Array} items - List of items with created_at
+ * @param {number} days - Number of days to look back
+ * @param {string} granularity - 'day', 'hour'
  */
-export function getAlertsPerDay(alerts, days = 7) {
-    const dayMap = {};
+export function getAggregatedData(items, days = 7, granularity = 'day') {
+    const dataMap = {};
+    const now = new Date();
+    const start = new Date(now);
+    start.setDate(start.getDate() - days);
 
-    // Initialize all days with 0
-    for (let i = days - 1; i >= 0; i--) {
-        const date = new Date();
-        date.setDate(date.getDate() - i);
-        const dateKey = date.toISOString().split('T')[0];
-        dayMap[dateKey] = 0;
+    // Function to generate key based on granularity
+    const getKey = (date) => {
+        const iso = date.toISOString();
+        if (granularity === 'hour') return iso.slice(0, 13);   // YYYY-MM-DDTHH
+        return iso.slice(0, 10);                               // YYYY-MM-DD
+    };
+
+    // Label formatter
+    const getLabel = (date) => {
+        if (granularity === 'hour') {
+            return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ', ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    };
+
+    // Initialize all slots with 0
+    let current = new Date(start);
+    // Align current to start of the period to be clean
+    if (granularity === 'hour') current.setMinutes(0, 0, 0);
+    else current.setHours(0, 0, 0, 0);
+
+    while (current <= now) {
+        const key = getKey(current);
+        dataMap[key] = {
+            date: key,
+            count: 0,
+            label: getLabel(current),
+            fullDate: current.toISOString() // Store full date for sorting/reference
+        };
+
+        // Increment
+        if (granularity === 'hour') current.setHours(current.getHours() + 1);
+        else current.setDate(current.getDate() + 1);
     }
 
-    // Count alerts per day
-    alerts.forEach(alert => {
-        const date = new Date(alert.created_at);
-        const dateKey = date.toISOString().split('T')[0];
-        if (dayMap.hasOwnProperty(dateKey)) {
-            dayMap[dateKey]++;
+    // Populate counts
+    items.forEach(item => {
+        if (!item.created_at) return;
+        const itemDate = new Date(item.created_at);
+        if (itemDate < start) return; // Should be filtered already but safety check
+
+        const key = getKey(itemDate);
+        if (dataMap[key]) {
+            dataMap[key].count++;
         }
     });
 
-    return Object.entries(dayMap).map(([date, count]) => ({
-        date,
-        count,
-        label: new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-    }));
-}
-
-/**
- * Get decisions grouped by day for the last N days
- */
-export function getDecisionsPerDay(decisions, days = 7) {
-    const dayMap = {};
-
-    // Initialize all days with 0
-    for (let i = days - 1; i >= 0; i--) {
-        const date = new Date();
-        date.setDate(date.getDate() - i);
-        const dateKey = date.toISOString().split('T')[0];
-        dayMap[dateKey] = 0;
-    }
-
-    // Count decisions per day
-    decisions.forEach(decision => {
-        const date = new Date(decision.created_at);
-        const dateKey = date.toISOString().split('T')[0];
-        if (dayMap.hasOwnProperty(dateKey)) {
-            dayMap[dateKey]++;
-        }
-    });
-
-    return Object.entries(dayMap).map(([date, count]) => ({
-        date,
-        count,
-        label: new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-    }));
+    return Object.values(dataMap).sort((a, b) => a.date.localeCompare(b.date));
 }
