@@ -3,6 +3,7 @@ import { useSearchParams, Link } from "react-router-dom";
 import { fetchAlerts, fetchAlert } from "../lib/api";
 import { useRefresh } from "../contexts/RefreshContext";
 import { Badge } from "../components/ui/Badge";
+import { Modal } from "../components/ui/Modal";
 import { getHubUrl } from "../lib/utils";
 import { Search, Info, ExternalLink, Shield } from "lucide-react";
 import "flag-icons/css/flag-icons.min.css";
@@ -291,337 +292,327 @@ export function Alerts() {
                 </div>
             </div>
 
-            {selectedAlert && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => setSelectedAlert(null)}>
-                    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto flex flex-col" onClick={e => e.stopPropagation()}>
+            {/* Alert Details Modal */}
+            <Modal
+                isOpen={!!selectedAlert}
+                onClose={() => setSelectedAlert(null)}
+                title={selectedAlert ? `Alert Details #${selectedAlert.id}` : "Alert Details"}
+                maxWidth="max-w-4xl"
+            >
+                {selectedAlert && (
+                    <div className="space-y-6">
+                        <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2 mb-4">
+                            Captured at {new Date(selectedAlert.created_at).toLocaleString()}
+                        </p>
 
-                        {/* Header */}
-                        <div className="flex justify-between items-center p-6 border-b border-gray-100 dark:border-gray-700">
-                            <div>
-                                <h3 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                                    Alert Details <span className="text-gray-400">#{selectedAlert.id}</span>
-                                </h3>
-                                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                                    Captured at {new Date(selectedAlert.created_at).toLocaleString()}
-                                </p>
+                        {/* Summary Cards */}
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
+                                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Scenario</h4>
+                                <div className="font-medium text-gray-900 dark:text-gray-100 break-words">
+                                    {(() => {
+                                        const hubUrl = getHubUrl(selectedAlert.scenario);
+                                        return (
+                                            <div className="flex items-center gap-1.5">
+                                                <span className="font-medium text-gray-900 dark:text-gray-200">{selectedAlert.scenario}</span>
+                                                {hubUrl && (
+                                                    <a
+                                                        href={hubUrl}
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        className="text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors"
+                                                        title="View on CrowdSec Hub"
+                                                    >
+                                                        <ExternalLink size={14} />
+                                                    </a>
+                                                )}
+                                            </div>
+                                        );
+                                    })()}
+                                </div>
                             </div>
-                            <button onClick={() => setSelectedAlert(null)} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors text-gray-500 dark:text-gray-400">
-                                ✕
-                            </button>
+                            <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
+                                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">IP</h4>
+                                <div className="flex items-center gap-2">
+                                    <span className="font-mono text-lg font-bold text-gray-900 dark:text-white">
+                                        {selectedAlert.source?.ip || selectedAlert.source?.value || "N/A"}
+                                    </span>
+                                </div>
+                                {selectedAlert.source?.range && (
+                                    <div className="text-xs text-gray-400 font-mono mt-1">
+                                        Range: {selectedAlert.source.range}
+                                    </div>
+                                )}
+                                <div className="text-sm text-gray-500 mt-1">
+                                    {selectedAlert.source?.as_number && (
+                                        <a
+                                            href={`https://bgp.he.net/AS${selectedAlert.source.as_number}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="hover:text-primary-600 dark:hover:text-primary-400 transition-colors inline-flex items-center gap-1"
+                                            title="View AS info on Hurricane Electric"
+                                        >
+                                            {selectedAlert.source?.as_name} (AS{selectedAlert.source.as_number})
+                                            <ExternalLink size={12} />
+                                        </a>
+                                    )}
+                                    {!selectedAlert.source?.as_number && selectedAlert.source?.as_name && (
+                                        <span>{selectedAlert.source.as_name}</span>
+                                    )}
+                                </div>
+                            </div>
+                            <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
+                                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Location</h4>
+                                <div className="text-lg text-gray-900 dark:text-gray-100 font-medium flex items-center gap-2">
+                                    {selectedAlert.source?.cn && (
+                                        <span className={`fi fi-${selectedAlert.source.cn.toLowerCase()}`}></span>
+                                    )}
+                                    {selectedAlert.source?.cn || "Unknown"}
+                                </div>
+                                {selectedAlert.source?.latitude && selectedAlert.source?.longitude && (
+                                    <div className="text-xs text-gray-400 font-mono mt-1">
+                                        <a
+                                            href={`https://www.google.com/maps?q=${selectedAlert.source.latitude},${selectedAlert.source.longitude}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="hover:text-primary-600 dark:hover:text-primary-400 transition-colors inline-flex items-center gap-1"
+                                            title="View on Google Maps"
+                                        >
+                                            Lat: {selectedAlert.source.latitude}, Long: {selectedAlert.source.longitude}
+                                            <ExternalLink size={10} />
+                                        </a>
+                                    </div>
+                                )}
+                            </div>
                         </div>
 
-                        {/* Content */}
-                        <div className="p-6 space-y-6">
-
-                            {/* Summary Cards */}
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
-                                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Scenario</h4>
-                                    <div className="font-medium text-gray-900 dark:text-gray-100 break-words">
-                                        {(() => {
-                                            const hubUrl = getHubUrl(selectedAlert.scenario);
-                                            return (
-                                                <div className="flex items-center gap-1.5">
-                                                    <span className="font-medium text-gray-900 dark:text-gray-200">{selectedAlert.scenario}</span>
-                                                    {hubUrl && (
-                                                        <a
-                                                            href={hubUrl}
-                                                            target="_blank"
-                                                            rel="noopener noreferrer"
-                                                            className="text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors"
-                                                            title="View on CrowdSec Hub"
-                                                        >
-                                                            <ExternalLink size={14} />
-                                                        </a>
-                                                    )}
-                                                </div>
-                                            );
-                                        })()}
+                        {/* Message */}
+                        {selectedAlert.message && (
+                            <div className="p-4 bg-blue-50 dark:bg-blue-900/10 rounded-lg border border-blue-100 dark:border-blue-900/30">
+                                <div className="flex items-start gap-2">
+                                    <Info size={18} className="text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+                                    <div className="text-sm text-gray-900 dark:text-gray-100">
+                                        {selectedAlert.message}
                                     </div>
-                                </div>
-                                <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
-                                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">IP</h4>
-                                    <div className="flex items-center gap-2">
-                                        <span className="font-mono text-lg font-bold text-gray-900 dark:text-white">
-                                            {selectedAlert.source?.ip || selectedAlert.source?.value || "N/A"}
-                                        </span>
-                                    </div>
-                                    {selectedAlert.source?.range && (
-                                        <div className="text-xs text-gray-400 font-mono mt-1">
-                                            Range: {selectedAlert.source.range}
-                                        </div>
-                                    )}
-                                    <div className="text-sm text-gray-500 mt-1">
-                                        {selectedAlert.source?.as_number && (
-                                            <a
-                                                href={`https://bgp.he.net/AS${selectedAlert.source.as_number}`}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="hover:text-primary-600 dark:hover:text-primary-400 transition-colors inline-flex items-center gap-1"
-                                                title="View AS info on Hurricane Electric"
-                                            >
-                                                {selectedAlert.source?.as_name} (AS{selectedAlert.source.as_number})
-                                                <ExternalLink size={12} />
-                                            </a>
-                                        )}
-                                        {!selectedAlert.source?.as_number && selectedAlert.source?.as_name && (
-                                            <span>{selectedAlert.source.as_name}</span>
-                                        )}
-                                    </div>
-                                </div>
-                                <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
-                                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Location</h4>
-                                    <div className="text-lg text-gray-900 dark:text-gray-100 font-medium flex items-center gap-2">
-                                        {selectedAlert.source?.cn && (
-                                            <span className={`fi fi-${selectedAlert.source.cn.toLowerCase()}`}></span>
-                                        )}
-                                        {selectedAlert.source?.cn || "Unknown"}
-                                    </div>
-                                    {selectedAlert.source?.latitude && selectedAlert.source?.longitude && (
-                                        <div className="text-xs text-gray-400 font-mono mt-1">
-                                            <a
-                                                href={`https://www.google.com/maps?q=${selectedAlert.source.latitude},${selectedAlert.source.longitude}`}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="hover:text-primary-600 dark:hover:text-primary-400 transition-colors inline-flex items-center gap-1"
-                                                title="View on Google Maps"
-                                            >
-                                                Lat: {selectedAlert.source.latitude}, Long: {selectedAlert.source.longitude}
-                                                <ExternalLink size={10} />
-                                            </a>
-                                        </div>
-                                    )}
                                 </div>
                             </div>
+                        )}
 
-                            {/* Message */}
-                            {selectedAlert.message && (
-                                <div className="p-4 bg-blue-50 dark:bg-blue-900/10 rounded-lg border border-blue-100 dark:border-blue-900/30">
-                                    <div className="flex items-start gap-2">
-                                        <Info size={18} className="text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
-                                        <div className="text-sm text-gray-900 dark:text-gray-100">
-                                            {selectedAlert.message}
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Decisions */}
-                            {selectedAlert.decisions && selectedAlert.decisions.length > 0 && (
-                                <div>
-                                    <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">Decisions Taken</h4>
-                                    <div className="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700">
-                                        <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-                                            <thead className="bg-gray-50 dark:bg-gray-900">
-                                                <tr>
-                                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
-                                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Value</th>
-                                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Duration</th>
-                                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Origin</th>
-                                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">View</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-800">
-                                                {selectedAlert.decisions.map((decision, idx) => {
-                                                    // Check if this decision is active or expired
-                                                    const activeDecisions = selectedAlert.decisions.filter(d => {
-                                                        if (d.stop_at) {
-                                                            return new Date(d.stop_at) > new Date();
-                                                        }
-                                                        // If stop_at is missing, check if duration implies expiration
-                                                        if (d.duration && d.duration.startsWith('-')) {
-                                                            return false;
-                                                        }
-                                                        return true; // Assume active if no stop_at and not definitely expired
-                                                    });
-                                                    const hasActiveDecisions = activeDecisions.length > 0;
-
-                                                    return (
-                                                        <tr key={idx}>
-                                                            <td className="px-4 py-2 text-sm"><Badge variant="danger">{decision.type}</Badge></td>
-                                                            <td className="px-4 py-2 text-sm font-mono">{decision.value}</td>
-                                                            <td className="px-4 py-2 text-sm">{decision.duration}</td>
-                                                            <td className="px-4 py-2 text-sm">{decision.origin}</td>
-                                                            <td className="px-4 py-2 text-sm">
-                                                                {hasActiveDecisions ? (
-                                                                    <Link
-                                                                        to={`/decisions?alert_id=${selectedAlert.id}`}
-                                                                        className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors border border-primary-200 dark:border-primary-800"
-                                                                        title={`View ${activeDecisions.length} active decisions`}
-                                                                    >
-                                                                        <Shield size={14} className="fill-current" />
-                                                                        <span className="text-xs font-semibold">Active: {activeDecisions.length}</span>
-                                                                        <ExternalLink size={12} className="ml-0.5" />
-                                                                    </Link>
-                                                                ) : (
-                                                                    <Link
-                                                                        to={`/decisions?alert_id=${selectedAlert.id}&include_expired=true`}
-                                                                        className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-                                                                        title={`View ${selectedAlert.decisions.length} expired decisions`}
-                                                                    >
-                                                                        <Shield size={14} className="opacity-50" />
-                                                                        <span className="text-xs font-medium">Inactive: {selectedAlert.decisions.length}</span>
-                                                                    </Link>
-                                                                )}
-                                                            </td>
-                                                        </tr>
-                                                    );
-                                                })}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Events Breakdown */}
+                        {/* Decisions */}
+                        {selectedAlert.decisions && selectedAlert.decisions.length > 0 && (
                             <div>
-                                <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">
-                                    Events ({selectedAlert.events_count})
-                                </h4>
-                                <div className="space-y-2">
-                                    {selectedAlert.events?.slice(0, 10).map((event, idx) => {
-                                        // Helper to extract meta value
-                                        const getMeta = (key) => event.meta?.find(m => m.key === key)?.value;
+                                <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">Decisions Taken</h4>
+                                <div className="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700">
+                                    <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                                        <thead className="bg-gray-50 dark:bg-gray-900">
+                                            <tr>
+                                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+                                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Value</th>
+                                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Duration</th>
+                                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Origin</th>
+                                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">View</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-800">
+                                            {selectedAlert.decisions.map((decision, idx) => {
+                                                // Check if this decision is active or expired
+                                                const activeDecisions = selectedAlert.decisions.filter(d => {
+                                                    if (d.stop_at) {
+                                                        return new Date(d.stop_at) > new Date();
+                                                    }
+                                                    // If stop_at is missing, check if duration implies expiration
+                                                    if (d.duration && d.duration.startsWith('-')) {
+                                                        return false;
+                                                    }
+                                                    return true; // Assume active if no stop_at and not definitely expired
+                                                });
+                                                const hasActiveDecisions = activeDecisions.length > 0;
 
-                                        // Check if this is an AppSec event
-                                        const isAppSecEvent = event.meta?.some(m =>
-                                            m.key === 'matched_zones' || m.key === 'rule_name' || m.key === 'appsec_action'
-                                        );
+                                                return (
+                                                    <tr key={idx}>
+                                                        <td className="px-4 py-2 text-sm"><Badge variant="danger">{decision.type}</Badge></td>
+                                                        <td className="px-4 py-2 text-sm font-mono">{decision.value}</td>
+                                                        <td className="px-4 py-2 text-sm">{decision.duration}</td>
+                                                        <td className="px-4 py-2 text-sm">{decision.origin}</td>
+                                                        <td className="px-4 py-2 text-sm">
+                                                            {hasActiveDecisions ? (
+                                                                <Link
+                                                                    to={`/decisions?alert_id=${selectedAlert.id}`}
+                                                                    className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors border border-primary-200 dark:border-primary-800"
+                                                                    title={`View ${activeDecisions.length} active decisions`}
+                                                                >
+                                                                    <Shield size={14} className="fill-current" />
+                                                                    <span className="text-xs font-semibold">Active: {activeDecisions.length}</span>
+                                                                    <ExternalLink size={12} className="ml-0.5" />
+                                                                </Link>
+                                                            ) : (
+                                                                <Link
+                                                                    to={`/decisions?alert_id=${selectedAlert.id}&include_expired=true`}
+                                                                    className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                                                                    title={`View ${selectedAlert.decisions.length} expired decisions`}
+                                                                >
+                                                                    <Shield size={14} className="opacity-50" />
+                                                                    <span className="text-xs font-medium">Inactive: {selectedAlert.decisions.length}</span>
+                                                                </Link>
+                                                            )}
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
 
-                                        // AppSec-specific fields
-                                        const ruleName = getMeta('rule_name');
-                                        const matchedZones = getMeta('matched_zones');
-                                        const ruleIds = getMeta('rule_ids');
-                                        const message = getMeta('msg') || getMeta('message');
+                        {/* Events Breakdown */}
+                        <div>
+                            <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">
+                                Events ({selectedAlert.events_count})
+                            </h4>
+                            <div className="space-y-2">
+                                {selectedAlert.events?.slice(0, 10).map((event, idx) => {
+                                    // Helper to extract meta value
+                                    const getMeta = (key) => event.meta?.find(m => m.key === key)?.value;
 
-                                        // Common fields
-                                        const targetFqdn = getMeta('target_fqdn');
-                                        const targetHost = getMeta('target_host');
-                                        const targetUri = getMeta('target_uri') || getMeta('uri');
-                                        const traefikRouter = getMeta('traefik_router_name');
-                                        const httpVerb = getMeta('http_verb');
-                                        const httpPath = getMeta('http_path');
-                                        const httpStatus = getMeta('http_status');
-                                        const httpUserAgent = getMeta('http_user_agent');
-                                        const service = getMeta('service');
+                                    // Check if this is an AppSec event
+                                    const isAppSecEvent = event.meta?.some(m =>
+                                        m.key === 'matched_zones' || m.key === 'rule_name' || m.key === 'appsec_action'
+                                    );
 
-                                        return (
-                                            <div key={idx} className={`p-3 rounded border text-sm ${isAppSecEvent
-                                                ? 'bg-red-50 dark:bg-red-900/10 border-red-100 dark:border-red-900/30'
-                                                : 'bg-gray-50 dark:bg-gray-900/30 border-gray-100 dark:border-gray-800'
-                                                }`}>
-                                                {/* AppSec Badge */}
-                                                {isAppSecEvent && (
-                                                    <div className="mb-2 flex items-center gap-2">
-                                                        <Badge variant="danger" className="flex items-center gap-1">
-                                                            <Shield size={12} />
-                                                            AppSec / WAF
-                                                        </Badge>
+                                    // AppSec-specific fields
+                                    const ruleName = getMeta('rule_name');
+                                    const matchedZones = getMeta('matched_zones');
+                                    const ruleIds = getMeta('rule_ids');
+                                    const message = getMeta('msg') || getMeta('message');
+
+                                    // Common fields
+                                    const targetFqdn = getMeta('target_fqdn');
+                                    const targetHost = getMeta('target_host');
+                                    const targetUri = getMeta('target_uri') || getMeta('uri');
+                                    const traefikRouter = getMeta('traefik_router_name');
+                                    const httpVerb = getMeta('http_verb');
+                                    const httpPath = getMeta('http_path');
+                                    const httpStatus = getMeta('http_status');
+                                    const httpUserAgent = getMeta('http_user_agent');
+                                    const service = getMeta('service');
+
+                                    return (
+                                        <div key={idx} className={`p-3 rounded border text-sm ${isAppSecEvent
+                                            ? 'bg-red-50 dark:bg-red-900/10 border-red-100 dark:border-red-900/30'
+                                            : 'bg-gray-50 dark:bg-gray-900/30 border-gray-100 dark:border-gray-800'
+                                            }`}>
+                                            {/* AppSec Badge */}
+                                            {isAppSecEvent && (
+                                                <div className="mb-2 flex items-center gap-2">
+                                                    <Badge variant="danger" className="flex items-center gap-1">
+                                                        <Shield size={12} />
+                                                        AppSec / WAF
+                                                    </Badge>
+                                                </div>
+                                            )}
+
+                                            <div className="space-y-2">
+                                                {/* Timestamp and Service */}
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                                    <div>
+                                                        <span className="text-gray-500">Timestamp:</span> <span className="font-mono text-xs">{event.timestamp}</span>
+                                                    </div>
+                                                    {service && (
+                                                        <div>
+                                                            <span className="text-gray-500">Service:</span> {service}
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                {/* Target FQDN/Host */}
+                                                {(targetFqdn || targetHost) && (
+                                                    <div>
+                                                        <span className="text-gray-500">Target:</span> <span className="font-mono text-xs">{targetFqdn || targetHost}</span>
                                                     </div>
                                                 )}
 
-                                                <div className="space-y-2">
-                                                    {/* Timestamp and Service */}
+                                                {/* Traefik Router */}
+                                                {traefikRouter && (
+                                                    <div>
+                                                        <span className="text-gray-500">Router:</span> <span className="font-mono text-xs">{traefikRouter}</span>
+                                                    </div>
+                                                )}
+
+                                                {/* AppSec Rule Info */}
+                                                {isAppSecEvent && ruleName && (
+                                                    <div>
+                                                        <span className="text-gray-500">Rule:</span>{' '}
+                                                        {(() => {
+                                                            const hubUrl = getHubUrl(ruleName);
+                                                            return hubUrl ? (
+                                                                <a
+                                                                    href={hubUrl}
+                                                                    target="_blank"
+                                                                    rel="noopener noreferrer"
+                                                                    className="font-mono text-xs hover:text-primary-600 dark:hover:text-primary-400 transition-colors inline-flex items-center gap-1"
+                                                                >
+                                                                    {ruleName}
+                                                                    <ExternalLink size={10} />
+                                                                </a>
+                                                            ) : (
+                                                                <span className="font-mono text-xs">{ruleName}</span>
+                                                            );
+                                                        })()}
+                                                    </div>
+                                                )}
+
+                                                {/* AppSec Details */}
+                                                {isAppSecEvent && (
                                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                                        <div>
-                                                            <span className="text-gray-500">Timestamp:</span> <span className="font-mono text-xs">{event.timestamp}</span>
-                                                        </div>
-                                                        {service && (
+                                                        {matchedZones && (
                                                             <div>
-                                                                <span className="text-gray-500">Service:</span> {service}
+                                                                <span className="text-gray-500">Matched Zone:</span> <Badge variant="outline" className="ml-1">{matchedZones}</Badge>
+                                                            </div>
+                                                        )}
+                                                        {ruleIds && (
+                                                            <div>
+                                                                <span className="text-gray-500">Rule ID:</span> <span className="font-mono text-xs">{ruleIds}</span>
                                                             </div>
                                                         )}
                                                     </div>
+                                                )}
 
-                                                    {/* Target FQDN/Host */}
-                                                    {(targetFqdn || targetHost) && (
-                                                        <div>
-                                                            <span className="text-gray-500">Target:</span> <span className="font-mono text-xs">{targetFqdn || targetHost}</span>
-                                                        </div>
-                                                    )}
+                                                {/* Message/Description */}
+                                                {isAppSecEvent && message && (
+                                                    <div className="text-xs text-gray-600 dark:text-gray-300 italic">
+                                                        {message}
+                                                    </div>
+                                                )}
 
-                                                    {/* Traefik Router */}
-                                                    {traefikRouter && (
-                                                        <div>
-                                                            <span className="text-gray-500">Router:</span> <span className="font-mono text-xs">{traefikRouter}</span>
-                                                        </div>
-                                                    )}
-
-                                                    {/* AppSec Rule Info */}
-                                                    {isAppSecEvent && ruleName && (
-                                                        <div>
-                                                            <span className="text-gray-500">Rule:</span>{' '}
-                                                            {(() => {
-                                                                const hubUrl = getHubUrl(ruleName);
-                                                                return hubUrl ? (
-                                                                    <a
-                                                                        href={hubUrl}
-                                                                        target="_blank"
-                                                                        rel="noopener noreferrer"
-                                                                        className="font-mono text-xs hover:text-primary-600 dark:hover:text-primary-400 transition-colors inline-flex items-center gap-1"
-                                                                    >
-                                                                        {ruleName}
-                                                                        <ExternalLink size={10} />
-                                                                    </a>
-                                                                ) : (
-                                                                    <span className="font-mono text-xs">{ruleName}</span>
-                                                                );
-                                                            })()}
-                                                        </div>
-                                                    )}
-
-                                                    {/* AppSec Details */}
-                                                    {isAppSecEvent && (
-                                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                                            {matchedZones && (
-                                                                <div>
-                                                                    <span className="text-gray-500">Matched Zone:</span> <Badge variant="outline" className="ml-1">{matchedZones}</Badge>
-                                                                </div>
-                                                            )}
-                                                            {ruleIds && (
-                                                                <div>
-                                                                    <span className="text-gray-500">Rule ID:</span> <span className="font-mono text-xs">{ruleIds}</span>
-                                                                </div>
-                                                            )}
-                                                        </div>
-                                                    )}
-
-                                                    {/* Message/Description */}
-                                                    {isAppSecEvent && message && (
-                                                        <div className="text-xs text-gray-600 dark:text-gray-300 italic">
-                                                            {message}
-                                                        </div>
-                                                    )}
-
-                                                    {/* HTTP Request Details */}
-                                                    {(httpVerb || httpPath || targetUri) && (
-                                                        <div className="font-mono text-xs break-all bg-white dark:bg-gray-950 p-2 rounded border border-gray-200 dark:border-gray-800">
-                                                            <span className="text-blue-600 dark:text-blue-400 font-bold">{httpVerb || 'GET'}</span> {httpPath || targetUri || '/'}
-                                                            {(httpStatus || httpUserAgent) && (
-                                                                <div className="text-gray-400 mt-1">
-                                                                    {httpStatus && `Status: ${httpStatus}`}
-                                                                    {httpStatus && httpUserAgent && ' | '}
-                                                                    {httpUserAgent && `UA: ${httpUserAgent}`}
-                                                                </div>
-                                                            )}
-                                                        </div>
-                                                    )}
-                                                </div>
+                                                {/* HTTP Request Details */}
+                                                {(httpVerb || httpPath || targetUri) && (
+                                                    <div className="font-mono text-xs break-all bg-white dark:bg-gray-950 p-2 rounded border border-gray-200 dark:border-gray-800">
+                                                        <span className="text-blue-600 dark:text-blue-400 font-bold">{httpVerb || 'GET'}</span> {httpPath || targetUri || '/'}
+                                                        {(httpStatus || httpUserAgent) && (
+                                                            <div className="text-gray-400 mt-1">
+                                                                {httpStatus && `Status: ${httpStatus}`}
+                                                                {httpStatus && httpUserAgent && ' | '}
+                                                                {httpUserAgent && `UA: ${httpUserAgent}`}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
                                             </div>
-                                        );
-                                    })}
-                                    {selectedAlert.events?.length > 10 && (
-                                        <div className="text-center text-sm text-gray-500">
-                                            + {selectedAlert.events.length - 10} more events
                                         </div>
-                                    )}
-                                </div>
+                                    );
+                                })}
+                                {selectedAlert.events?.length > 10 && (
+                                    <div className="text-center text-sm text-gray-500">
+                                        + {selectedAlert.events.length - 10} more events
+                                    </div>
+                                )}
                             </div>
-
                         </div>
+
                     </div>
-                </div>
-            )}
+                )}
+            </Modal>
         </div>
     );
 }
