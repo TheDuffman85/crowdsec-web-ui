@@ -5,6 +5,7 @@ import {
     Geography,
     ZoomableGroup
 } from 'react-simple-maps';
+import { scaleLinear } from 'd3-scale';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { Globe } from 'lucide-react';
 
@@ -13,18 +14,26 @@ const geoUrl = "/world-110m.json";
 
 /**
  * World Map Component for Dashboard
- * Shows all countries with alerts colored in red
+ * Shows all countries with alerts colored in red gradient based on intensity
  */
 export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
     // Create a map of country code to count for quick lookup
-    const countryDataMap = useMemo(() => {
+    const { countryDataMap, colorScale } = useMemo(() => {
         const map = {};
+        let maxCount = 0;
+
         data.forEach(item => {
             if (item.countryCode) {
                 map[item.countryCode.toUpperCase()] = item.count;
+                if (item.count > maxCount) maxCount = item.count;
             }
         });
-        return map;
+
+        const scale = scaleLinear()
+            .domain([1, maxCount > 1 ? maxCount : 10]) // Use 1 as min to keep 0 gray
+            .range(['#fca5a5', '#7f1d1d']); // Tailwind red-300 to red-900
+
+        return { countryDataMap: map, colorScale: scale };
     }, [data]);
 
     return (
@@ -65,7 +74,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                                                 <Geography
                                                     key={geo.rsmKey}
                                                     geography={geo}
-                                                    fill={hasAlerts ? '#dc2626' : '#E5E7EB'}
+                                                    fill={hasAlerts ? colorScale(count) : '#E5E7EB'}
                                                     stroke={'#fff'}
                                                     strokeWidth={0.5}
                                                     style={{
@@ -74,7 +83,8 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                                                             opacity: isSelected ? 1 : (selectedCountry ? 0.3 : 1)
                                                         },
                                                         hover: {
-                                                            fill: hasAlerts ? '#b91c1c' : '#D1D5DB',
+                                                            fill: hasAlerts ? colorScale(count) : '#D1D5DB', // Keep same color on hover, slightly darker handled by opacity or just keep it
+                                                            filter: hasAlerts ? 'brightness(0.9)' : 'none', // Darken slightly on hover
                                                             outline: 'none',
                                                             cursor: hasAlerts ? 'pointer' : 'default',
                                                             opacity: 1,
