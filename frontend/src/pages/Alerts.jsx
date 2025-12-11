@@ -1,12 +1,14 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { fetchAlerts, fetchAlert } from "../lib/api";
+import { useRefresh } from "../contexts/RefreshContext";
 import { Badge } from "../components/ui/Badge";
 import { getHubUrl } from "../lib/utils";
 import { Search, Info, ExternalLink, Shield } from "lucide-react";
 import "flag-icons/css/flag-icons.min.css";
 
 export function Alerts() {
+    const { refreshSignal, setLastUpdated } = useRefresh();
     const [alerts, setAlerts] = useState([]);
     const [filter, setFilter] = useState("");
     const [loading, setLoading] = useState(true);
@@ -27,43 +29,51 @@ export function Alerts() {
         if (node) observer.current.observe(node);
     }, [loading]);
 
-    useEffect(() => {
-        const loadAlerts = async () => {
-            try {
-                const alertsData = await fetchAlerts();
-                setAlerts(alertsData);
+    const loadAlerts = useCallback(async (isBackground = false) => {
+        try {
+            if (!isBackground) setLoading(true);
+            const alertsData = await fetchAlerts();
+            setAlerts(alertsData);
 
-                // Check if there's an alert ID in the URL
-                const alertIdParam = searchParams.get("id");
-                if (alertIdParam) {
-                    const existingAlert = alertsData.find(a => String(a.id) === alertIdParam);
-                    if (existingAlert) {
-                        setSelectedAlert(existingAlert);
-                    } else {
-                        // Fetch the specific alert if not in the list
-                        try {
-                            const alertData = await fetchAlert(alertIdParam);
-                            setSelectedAlert(alertData);
-                        } catch (err) {
-                            console.error("Alert not found", err);
-                        }
+            // Check if there's an alert ID in the URL
+            const alertIdParam = searchParams.get("id");
+            if (alertIdParam) {
+                const existingAlert = alertsData.find(a => String(a.id) === alertIdParam);
+                if (existingAlert) {
+                    setSelectedAlert(existingAlert);
+                } else {
+                    // Fetch the specific alert if not in the list
+                    try {
+                        const alertData = await fetchAlert(alertIdParam);
+                        setSelectedAlert(alertData);
+                    } catch (err) {
+                        console.error("Alert not found", err);
                     }
                 }
-
-                // Check for generic search query param
-                const queryParam = searchParams.get("q");
-                if (queryParam) {
-                    setFilter(queryParam);
-                }
-
-            } catch (err) {
-                console.error(err);
-            } finally {
-                setLoading(false);
             }
-        };
-        loadAlerts();
-    }, [searchParams, setSearchParams]);
+
+            // Check for generic search query param
+            const queryParam = searchParams.get("q");
+            if (queryParam) {
+                setFilter(queryParam);
+            }
+
+            setLastUpdated(new Date());
+
+        } catch (err) {
+            console.error(err);
+        } finally {
+            if (!isBackground) setLoading(false);
+        }
+    }, [searchParams, setLastUpdated]);
+
+    useEffect(() => {
+        loadAlerts(false);
+    }, [loadAlerts]);
+
+    useEffect(() => {
+        if (refreshSignal > 0) loadAlerts(true);
+    }, [refreshSignal, loadAlerts]);
 
     const filteredAlerts = alerts.filter(alert => {
         const search = filter.toLowerCase();

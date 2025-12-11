@@ -25,6 +25,7 @@ export async function fetchDecisionsForStats() {
 export async function deleteDecision(id) {
     const res = await fetch(`/api/decisions/${id}`, { method: 'DELETE' });
     if (!res.ok) throw new Error('Failed to delete decision');
+    if (res.status === 204) return null;
     return res.json();
 }
 

@@ -1,12 +1,19 @@
 import { NavLink } from "react-router-dom";
 import { LayoutDashboard, ShieldAlert, Gavel, X, Sun, Moon } from "lucide-react";
+import { useRefresh } from "../contexts/RefreshContext";
 
 export function Sidebar({ isMobileMenuOpen, onClose, theme, toggleTheme }) {
+    const { intervalMs, setIntervalMs, lastUpdated } = useRefresh();
     const links = [
         { to: "/", label: "Dashboard", icon: LayoutDashboard },
         { to: "/alerts", label: "Alerts", icon: ShieldAlert },
         { to: "/decisions", label: "Decisions", icon: Gavel },
     ];
+
+    const formatTime = (date) => {
+        if (!date) return "";
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    };
 
     return (
         <aside
@@ -57,7 +64,30 @@ export function Sidebar({ isMobileMenuOpen, onClose, theme, toggleTheme }) {
                     </NavLink>
                 ))}
             </nav>
-            <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex flex-col items-center gap-4">
+            <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex flex-col gap-4">
+                {/* Refresh Settings */}
+                <div className="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                        <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                            Refresh
+                        </label>
+                        {lastUpdated && (
+                            <span className="text-[10px] items-center text-gray-400 font-mono">
+                                {formatTime(lastUpdated)}
+                            </span>
+                        )}
+                    </div>
+                    <select
+                        value={intervalMs}
+                        onChange={(e) => setIntervalMs(Number(e.target.value))}
+                        className="w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs rounded-md px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary-500 cursor-pointer"
+                    >
+                        <option value={0}>Manual Only</option>
+                        <option value={30000}>Every 30s</option>
+                        <option value={60000}>Every 1m</option>
+                        <option value={300000}>Every 5m</option>
+                    </select>
+                </div>
                 <button
                     onClick={toggleTheme}
                     className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-gray-100 dark:bg-gray-700/50 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
