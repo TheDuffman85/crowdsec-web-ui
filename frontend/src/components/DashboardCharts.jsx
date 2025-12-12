@@ -162,7 +162,7 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
                         >
                             <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
                             <XAxis dataKey="label" stroke="#888888" fontSize={12} tickLine={false} axisLine={false} />
-                            <YAxis stroke="#888888" fontSize={12} tickLine={false} axisLine={false} />
+                            <YAxis stroke="#888888" fontSize={12} tickLine={false} axisLine={false} width={40} />
                             <Tooltip content={<CustomTooltip />} cursor={{ fill: 'transparent' }} />
                             <Legend verticalAlign="top" height={36} />
                             <Bar
@@ -190,7 +190,7 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
                     <ResponsiveContainer width="100%" height="100%">
                         <BarChart
                             data={sliderData}
-                            margin={{ top: 0, right: 30, left: 20, bottom: 0 }}
+                            margin={{ top: 0, right: 30, left: 60, bottom: 0 }}
                         >
                             <Brush
                                 key={`${granularity}-${brushKey}`}
