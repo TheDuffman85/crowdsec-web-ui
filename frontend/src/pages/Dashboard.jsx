@@ -48,12 +48,17 @@ export function Dashboard() {
 
     // Active filters
     const [filters, setFilters] = useState({
-        date: null,
+        dateRange: null,
         country: null,
         scenario: null,
         as: null,
         ip: null
     });
+
+    // Clear dateRange filter when granularity changes
+    useEffect(() => {
+        setFilters(prev => ({ ...prev, dateRange: null }));
+    }, [granularity]);
 
     const loadData = useCallback(async (isBackground = false) => {
         try {
@@ -116,12 +121,42 @@ export function Dashboard() {
         // Filter ALL decisions (including expired) for historical charts
         let chartDecisions = filterLastNDays(rawData.decisionsForStats, lookbackDays);
 
-        // Apply Cross-Filtering to both datasets
-        if (filters.date) {
-            // Safe date matching (handles potentially different formats if needed, but strict 'startsWith' matches YYYY-MM-DD)
-            filteredAlerts = filteredAlerts.filter(a => a.created_at && a.created_at.startsWith(filters.date));
-            activeDecisions = activeDecisions.filter(d => d.created_at && d.created_at.startsWith(filters.date));
-            chartDecisions = chartDecisions.filter(d => d.created_at && d.created_at.startsWith(filters.date));
+        // Create separate datasets for charts (no date range filter to avoid zoom feedback loop)
+        let chartAlerts = [...filteredAlerts];
+        let chartDecisionsData = [...chartDecisions];
+
+        // Apply Cross-Filtering to cards and lists (including dateRange)
+        if (filters.dateRange) {
+            // Helper function to extract date/time key from ISO timestamp
+            // For hourly: YYYY-MM-DDTHH, for daily: YYYY-MM-DD
+            const getItemKey = (isoString) => {
+                if (!isoString) return null;
+                const date = new Date(isoString);
+                const year = date.getFullYear();
+                const month = String(date.getMonth() + 1).padStart(2, '0');
+                const day = String(date.getDate()).padStart(2, '0');
+
+                // If filter range includes time (has 'T' separator), use hourly precision
+                if (filters.dateRange.start.includes('T')) {
+                    const hour = String(date.getHours()).padStart(2, '0');
+                    return `${year}-${month}-${day}T${hour}`;
+                }
+                return `${year}-${month}-${day}`;
+            };
+
+            // Filter by date range - check if item's date falls within the range
+            filteredAlerts = filteredAlerts.filter(a => {
+                const itemKey = getItemKey(a.created_at);
+                if (!itemKey) return false;
+                return itemKey >= filters.dateRange.start && itemKey <= filters.dateRange.end;
+            });
+            activeDecisions = activeDecisions.filter(d => {
+                const itemKey = getItemKey(d.created_at);
+                if (!itemKey) return false;
+                return itemKey >= filters.dateRange.start && itemKey <= filters.dateRange.end;
+            });
+            // Note: We do NOT filter chartAlerts or chartDecisionsData by dateRange
+            // This allows the zoom control to show and select the full range
         }
 
         if (filters.country) {
@@ -134,7 +169,13 @@ export function Dashboard() {
                 filteredAlerts.map(a => a.source.ip).filter(ip => ip)
             );
             activeDecisions = activeDecisions.filter(d => ipsInCountry.has(d.value));
-            chartDecisions = chartDecisions.filter(d => ipsInCountry.has(d.value));
+
+            // Also filter chart data by country
+            chartAlerts = chartAlerts.filter(a => a.source.cn === filters.country);
+            const chartIpsInCountry = new Set(
+                chartAlerts.map(a => a.source.ip).filter(ip => ip)
+            );
+            chartDecisionsData = chartDecisionsData.filter(d => chartIpsInCountry.has(d.value));
         }
 
         if (filters.scenario) {
@@ -144,7 +185,13 @@ export function Dashboard() {
                 filteredAlerts.map(a => a.source.ip).filter(ip => ip)
             );
             activeDecisions = activeDecisions.filter(d => ipsInScenario.has(d.value));
-            chartDecisions = chartDecisions.filter(d => ipsInScenario.has(d.value));
+
+            // Also filter chart data
+            chartAlerts = chartAlerts.filter(a => a.scenario === filters.scenario);
+            const chartIpsInScenario = new Set(
+                chartAlerts.map(a => a.source.ip).filter(ip => ip)
+            );
+            chartDecisionsData = chartDecisionsData.filter(d => chartIpsInScenario.has(d.value));
         }
 
         if (filters.as) {
@@ -154,20 +201,30 @@ export function Dashboard() {
                 filteredAlerts.map(a => a.source.ip).filter(ip => ip)
             );
             activeDecisions = activeDecisions.filter(d => ipsInAS.has(d.value));
-            chartDecisions = chartDecisions.filter(d => ipsInAS.has(d.value));
+
+            // Also filter chart data
+            chartAlerts = chartAlerts.filter(a => a.source.as_name === filters.as);
+            const chartIpsInAS = new Set(
+                chartAlerts.map(a => a.source.ip).filter(ip => ip)
+            );
+            chartDecisionsData = chartDecisionsData.filter(d => chartIpsInAS.has(d.value));
         }
 
         if (filters.ip) {
             filteredAlerts = filteredAlerts.filter(a => a.source.ip === filters.ip);
             // Filter decisions by IP - direct match on the value field
             activeDecisions = activeDecisions.filter(d => d.value === filters.ip);
-            chartDecisions = chartDecisions.filter(d => d.value === filters.ip);
+
+            // Also filter chart data
+            chartAlerts = chartAlerts.filter(a => a.source.ip === filters.ip);
+            chartDecisionsData = chartDecisionsData.filter(d => d.value === filters.ip);
         }
 
         return {
             alerts: filteredAlerts,
             decisions: activeDecisions,  // Active decisions for card/lists
-            chartDecisions: chartDecisions  // All decisions for charts
+            chartAlerts: chartAlerts,  // Alerts for charts (no dateRange filter)
+            chartDecisions: chartDecisionsData  // All decisions for charts (no dateRange filter)
         };
     }, [rawData, config.lookback_days, filters]);
 
@@ -192,7 +249,7 @@ export function Dashboard() {
             allCountries: getAllCountries(filteredData.alerts),  // For map display
             topScenarios: getTopScenarios(filteredData.alerts, 10),
             topAS: getTopAS(filteredData.alerts, 10),
-            alertsHistory: getAggregatedData(filteredData.alerts, lookbackDays, granularity),
+            alertsHistory: getAggregatedData(filteredData.chartAlerts, lookbackDays, granularity),
             decisionsHistory: getAggregatedData(filteredData.chartDecisions, lookbackDays, granularity)
         };
     }, [filteredData, config.lookback_days, granularity]);
@@ -207,7 +264,7 @@ export function Dashboard() {
 
     const clearFilters = () => {
         setFilters({
-            date: null,
+            dateRange: null,
             country: null,
             scenario: null,
             as: null,
@@ -231,7 +288,10 @@ export function Dashboard() {
                             onClick={() => {
                                 // Build query parameters from active filters
                                 const params = new URLSearchParams();
-                                if (filters.date) params.set('date', filters.date);
+                                if (filters.dateRange) {
+                                    params.set('dateStart', filters.dateRange.start);
+                                    params.set('dateEnd', filters.dateRange.end);
+                                }
                                 if (filters.country) params.set('country', filters.country);
                                 if (filters.scenario) params.set('scenario', filters.scenario);
                                 if (filters.as) params.set('as', filters.as);
@@ -340,8 +400,8 @@ export function Dashboard() {
                                 <ActivityBarChart
                                     alertsData={statistics.alertsHistory}
                                     decisionsData={statistics.decisionsHistory}
-                                    onDateSelect={(date) => toggleFilter('date', date)}
-                                    selectedDate={filters.date}
+                                    onDateRangeSelect={(dateRange) => setFilters(prev => ({ ...prev, dateRange }))}
+                                    selectedDateRange={filters.dateRange}
                                     granularity={granularity}
                                     setGranularity={setGranularity}
                                 />

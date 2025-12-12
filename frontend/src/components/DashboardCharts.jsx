@@ -35,20 +35,12 @@ const CustomTooltip = ({ active, payload, label }) => {
 /**
  * Combined Bar Chart for Alerts and Decisions
  */
-export function ActivityBarChart({ alertsData, decisionsData, onDateSelect, selectedDate, granularity, setGranularity }) {
-    // Store zoom state as DATES, not indices
-    const [zoomDateRange, setZoomDateRange] = useState(null);
-
-    // Reset zoom state when granularity changes
-    useEffect(() => {
-        setZoomDateRange(null);
-    }, [granularity]);
-
+export function ActivityBarChart({ alertsData, decisionsData, onDateRangeSelect, selectedDateRange, granularity, setGranularity }) {
+    // Debounce timeout ref to only update filter when user stops dragging
+    const debounceTimeoutRef = useRef(null);
     // Merge data by date
     const data = useMemo(() => {
         const merged = {};
-        // Use a set of all keys from both datasets to ensure complete coverage
-        // although getAggregatedData should already handle this.
 
         // Process alerts
         alertsData.forEach(item => {
@@ -78,93 +70,48 @@ export function ActivityBarChart({ alertsData, decisionsData, onDateSelect, sele
 
     const granularities = ['day', 'hour'];
 
-    // Calculate effective indices based on stored DATES
+    // Calculate Brush position based on selectedDateRange from parent
     const { startIndex, endIndex } = useMemo(() => {
-        if (!data || data.length === 0) return { startIndex: 0, endIndex: 0 };
+        if (!data || data.length === 0) return { startIndex: 0, endIndex: data.length - 1 };
 
-        // Default: Last 12 hours for 'hour' view, or full range for 'day'
-        if (zoomDateRange === null) {
-            if (granularity === 'hour') {
-                return {
-                    startIndex: Math.max(0, data.length - 12),
-                    endIndex: data.length - 1
-                };
-            }
+        // If no date range filter is active, show full range
+        if (!selectedDateRange) {
             return { startIndex: 0, endIndex: data.length - 1 };
         }
 
-        // Find indices matching stored dates (or closest available)
-        // For Start: Find first item where date >= zoomDateRange.start
-        let start = data.findIndex(d => d.date >= zoomDateRange.start);
-
-        // For End: Find last item where date <= zoomDateRange.end
-        // Since data is sorted, we can reverse find or just find normal and take last
-        // Efficient way: findIndex of first item > end, then go back one? 
-        // Or just map/reduce. Let's iterate backwards for 'end'
+        // Find indices for the selected date range
+        let start = data.findIndex(d => d.bucketKey >= selectedDateRange.start);
         let end = -1;
         for (let i = data.length - 1; i >= 0; i--) {
-            if (data[i].date <= zoomDateRange.end) {
+            if (data[i].bucketKey <= selectedDateRange.end) {
                 end = i;
                 break;
             }
         }
 
-        // Fallbacks if user scrolled strictly off-screen
-        // If "start" is -1, it means NO item is >= zoomStart. So all items are older? Or all newer?
-        // Data is sorted asc. 
-        // If all items < zoomStart, findIndex returns -1. Meaning data is "to the left". 
-        // If all items > zoomStart, findIndex returns 0. Correct.
-        if (start === -1) {
-            // Zoom window is in the future compared to data?
-            // Should we show empty? Or last few?
-            // Let's safe fallback to 0 but it's likely weird.
-            start = 0;
-        }
-
-        if (end === -1) {
-            // No item is <= zoomEnd. All items are > zoomEnd?
-            // Data is "to the right".
-            end = data.length - 1;
-        }
+        // Fallbacks
+        if (start === -1) start = 0;
+        if (end === -1) end = data.length - 1;
 
         // Ensure validity
-        start = Math.max(0, start);
-        end = Math.min(data.length - 1, end);
+        start = Math.max(0, Math.min(start, data.length - 1));
+        end = Math.max(0, Math.min(end, data.length - 1));
         if (start > end) {
-            // Overlap invalid? Reset to full or keep tight?
-            // Maybe default to single point?
-            start = 0;
-            end = data.length - 1;
+            return { startIndex: 0, endIndex: data.length - 1 };
         }
 
-        console.log(`[CalcIndices] S:${start} E:${end} (Zoom: ${zoomDateRange.start} - ${zoomDateRange.end})`);
         return { startIndex: start, endIndex: end };
-    }, [data, zoomDateRange, granularity]);
+    }, [data, selectedDateRange]);
 
-    // Calculate a data signature to force re-render when values change
-    // This is necessary to prevent Recharts from resetting the Brush state locally
-    // when data updates (e.g. filtering), ensuring our controlled zoomState takes precedence.
+    // Calculate hash to force re-render when data changes
     const dataHash = useMemo(() => {
         if (!data || data.length === 0) return '';
         const totalAlerts = data.reduce((acc, item) => acc + (item.alerts || 0), 0);
         const totalDecisions = data.reduce((acc, item) => acc + (item.decisions || 0), 0);
-        // Include start and end date in hash to detect data shifting even if counts are same
         const start = data[0]?.date || '';
         const end = data[data.length - 1]?.date || '';
         return `${totalAlerts}-${totalDecisions}-${start}-${end}`;
     }, [data]);
-
-    // Flag to ignore the spurious reset that Recharts Brush triggers immediately after mounting
-    const ignoreNextResetRef = useRef(false);
-
-    // Extra key to force Brush to remount when we detect it's "stuck" or "desynced"
-    const [brushKey, setBrushKey] = useState(0);
-
-    // Set flag when data changes (and Brush remounts via key)
-    useLayoutEffect(() => {
-        console.log('[Immunity] Activated for', dataHash);
-        ignoreNextResetRef.current = true;
-    }, [dataHash, brushKey]); // Reset immunity when we rotate key too
 
     return (
         <Card className="h-full outline-none">
@@ -209,10 +156,7 @@ export function ActivityBarChart({ alertsData, decisionsData, onDateSelect, sele
                             <Tooltip content={<CustomTooltip />} cursor={{ fill: 'transparent' }} />
                             <Legend verticalAlign="top" height={36} />
                             <Brush
-                                // Keyed Brush: Combines DataHash (Logic) + BrushKey (Enforcement).
-                                // If Data changes, we remount.
-                                // If Brush misbehaves (resets), we increment brushKey to KILL IT and try again.
-                                key={`${dataHash}-${brushKey}`}
+                                key={`${dataHash}`}
                                 dataKey="date"
                                 height={30}
                                 stroke="#888888"
@@ -226,30 +170,25 @@ export function ActivityBarChart({ alertsData, decisionsData, onDateSelect, sele
                                     const isEndReset = e.endIndex >= data.length - 1;
                                     const isFullRange = isStartReset && isEndReset;
 
-                                    // Spurious Reset Protection
-                                    if (ignoreNextResetRef.current) {
-                                        // If we get a reset while immune...
-                                        if (isStartReset && zoomDateRange) {
-                                            console.debug('[BrushEvent] BLOCKED spurious reset -> Rotating Key to Force Sync');
-                                            ignoreNextResetRef.current = false;
-
-                                            // KILL THE DEFECTIVE BRUSH
-                                            // It thinks it's at 0. We know it should be at [startIndex].
-                                            // Increment key to destroy it and mount a fresh one that obeys.
-                                            setBrushKey(k => k + 1);
-                                            return;
-                                        }
-                                        ignoreNextResetRef.current = false;
-                                    }
-
                                     const startItem = data[e.startIndex];
                                     const endItem = data[e.endIndex];
 
-                                    if (startItem && endItem) {
-                                        setZoomDateRange({
-                                            start: startItem.date,
-                                            end: endItem.date
-                                        });
+                                    if (startItem && endItem && onDateRangeSelect) {
+                                        // Clear any pending timeout
+                                        if (debounceTimeoutRef.current) {
+                                            clearTimeout(debounceTimeoutRef.current);
+                                        }
+
+                                        // Emit date range for filtering (null if full range selected)
+                                        const dateRange = isFullRange ? null : {
+                                            start: startItem.bucketKey,
+                                            end: endItem.bucketKey
+                                        };
+
+                                        // Debounce: only update filter 500ms after user stops dragging
+                                        debounceTimeoutRef.current = setTimeout(() => {
+                                            onDateRangeSelect(dateRange);
+                                        }, 500);
                                     }
                                 }}
                                 tickFormatter={(date) => {
@@ -268,13 +207,6 @@ export function ActivityBarChart({ alertsData, decisionsData, onDateSelect, sele
                                 fill="#dc2626"
                                 stroke="none"
                                 radius={[4, 4, 0, 0]}
-                                opacity={selectedDate ? (d => d.date === selectedDate ? 1 : 0.3) : 1}
-                                cursor="pointer"
-                                onClick={(data) => {
-                                    if (data && data.bucketKey) {
-                                        onDateSelect(data.bucketKey);
-                                    }
-                                }}
                             />
                             <Bar
                                 isAnimationActive={false} // Disable animation to reduce visual noise on refresh
@@ -283,13 +215,6 @@ export function ActivityBarChart({ alertsData, decisionsData, onDateSelect, sele
                                 fill="#2563eb"
                                 stroke="none"
                                 radius={[4, 4, 0, 0]}
-                                opacity={selectedDate ? (d => d.date === selectedDate ? 1 : 0.3) : 1}
-                                cursor="pointer"
-                                onClick={(data) => {
-                                    if (data && data.bucketKey) {
-                                        onDateSelect(data.bucketKey);
-                                    }
-                                }}
                             />
                         </BarChart>
                     </ResponsiveContainer>
