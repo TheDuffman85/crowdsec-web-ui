@@ -84,6 +84,7 @@ export function Alerts() {
         const paramCountry = (searchParams.get("country") || "").toLowerCase();
         const paramScenario = (searchParams.get("scenario") || "").toLowerCase();
         const paramAs = (searchParams.get("as") || "").toLowerCase();
+        const paramDate = searchParams.get("date") || "";
 
         const scenario = (alert.scenario || "").toLowerCase();
         const message = (alert.message || "").toLowerCase();
@@ -96,6 +97,7 @@ export function Alerts() {
         if (paramCountry && !cn.includes(paramCountry)) return false;
         if (paramScenario && !scenario.includes(paramScenario)) return false;
         if (paramAs && !asName.includes(paramAs)) return false;
+        if (paramDate && !(alert.created_at && alert.created_at.startsWith(paramDate))) return false;
 
         // Check generic search
         if (search) {
@@ -123,9 +125,9 @@ export function Alerts() {
             </div>
 
             {/* Show active filters */}
-            {(searchParams.get("ip") || searchParams.get("country") || searchParams.get("scenario") || searchParams.get("as")) && (
+            {(searchParams.get("ip") || searchParams.get("country") || searchParams.get("scenario") || searchParams.get("as") || searchParams.get("date")) && (
                 <div className="flex flex-wrap gap-2">
-                    {["ip", "country", "scenario", "as"].map(key => {
+                    {["ip", "country", "scenario", "as", "date"].map(key => {
                         const val = searchParams.get(key);
                         if (!val) return null;
                         return (

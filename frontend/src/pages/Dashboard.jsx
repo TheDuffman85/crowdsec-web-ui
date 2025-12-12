@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useCallback } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { fetchAlerts, fetchDecisions, fetchDecisionsForStats, fetchConfig } from "../lib/api";
 import { getHubUrl } from "../lib/utils";
@@ -25,10 +25,12 @@ import {
     TrendingUp,
     AlertTriangle,
     FilterX,
-    Globe
+    Globe,
+    Filter
 } from "lucide-react";
 
 export function Dashboard() {
+    const navigate = useNavigate();
     const { refreshSignal, setLastUpdated } = useRefresh();
     const [stats, setStats] = useState({ alerts: 0, decisions: 0 });
     const [loading, setLoading] = useState(true);
@@ -107,13 +109,19 @@ export function Dashboard() {
         const lookbackDays = config.lookback_days || 7;
 
         let filteredAlerts = filterLastNDays(rawData.alerts, lookbackDays);
-        let filteredDecisions = filterLastNDays(rawData.decisionsForStats, lookbackDays);
 
-        // Apply Cross-Filtering
+        // Filter ACTIVE decisions for card display and top lists
+        let activeDecisions = filterLastNDays(rawData.decisions, lookbackDays);
+
+        // Filter ALL decisions (including expired) for historical charts
+        let chartDecisions = filterLastNDays(rawData.decisionsForStats, lookbackDays);
+
+        // Apply Cross-Filtering to both datasets
         if (filters.date) {
             // Safe date matching (handles potentially different formats if needed, but strict 'startsWith' matches YYYY-MM-DD)
             filteredAlerts = filteredAlerts.filter(a => a.created_at && a.created_at.startsWith(filters.date));
-            filteredDecisions = filteredDecisions.filter(d => d.created_at && d.created_at.startsWith(filters.date));
+            activeDecisions = activeDecisions.filter(d => d.created_at && d.created_at.startsWith(filters.date));
+            chartDecisions = chartDecisions.filter(d => d.created_at && d.created_at.startsWith(filters.date));
         }
 
         if (filters.country) {
@@ -125,7 +133,8 @@ export function Dashboard() {
             const ipsInCountry = new Set(
                 filteredAlerts.map(a => a.source.ip).filter(ip => ip)
             );
-            filteredDecisions = filteredDecisions.filter(d => ipsInCountry.has(d.value));
+            activeDecisions = activeDecisions.filter(d => ipsInCountry.has(d.value));
+            chartDecisions = chartDecisions.filter(d => ipsInCountry.has(d.value));
         }
 
         if (filters.scenario) {
@@ -134,7 +143,8 @@ export function Dashboard() {
             const ipsInScenario = new Set(
                 filteredAlerts.map(a => a.source.ip).filter(ip => ip)
             );
-            filteredDecisions = filteredDecisions.filter(d => ipsInScenario.has(d.value));
+            activeDecisions = activeDecisions.filter(d => ipsInScenario.has(d.value));
+            chartDecisions = chartDecisions.filter(d => ipsInScenario.has(d.value));
         }
 
         if (filters.as) {
@@ -143,17 +153,24 @@ export function Dashboard() {
             const ipsInAS = new Set(
                 filteredAlerts.map(a => a.source.ip).filter(ip => ip)
             );
-            filteredDecisions = filteredDecisions.filter(d => ipsInAS.has(d.value));
+            activeDecisions = activeDecisions.filter(d => ipsInAS.has(d.value));
+            chartDecisions = chartDecisions.filter(d => ipsInAS.has(d.value));
         }
 
         if (filters.ip) {
             filteredAlerts = filteredAlerts.filter(a => a.source.ip === filters.ip);
             // Filter decisions by IP - direct match on the value field
-            filteredDecisions = filteredDecisions.filter(d => d.value === filters.ip);
+            activeDecisions = activeDecisions.filter(d => d.value === filters.ip);
+            chartDecisions = chartDecisions.filter(d => d.value === filters.ip);
         }
 
-        return { alerts: filteredAlerts, decisions: filteredDecisions };
+        return {
+            alerts: filteredAlerts,
+            decisions: activeDecisions,  // Active decisions for card/lists
+            chartDecisions: chartDecisions  // All decisions for charts
+        };
     }, [rawData, config.lookback_days, filters]);
+
 
 
     // Derived Statistics
@@ -176,7 +193,7 @@ export function Dashboard() {
             topScenarios: getTopScenarios(filteredData.alerts, 10),
             topAS: getTopAS(filteredData.alerts, 10),
             alertsHistory: getAggregatedData(filteredData.alerts, lookbackDays, granularity),
-            decisionsHistory: getAggregatedData(filteredData.decisions, lookbackDays, granularity)
+            decisionsHistory: getAggregatedData(filteredData.chartDecisions, lookbackDays, granularity)
         };
     }, [filteredData, config.lookback_days, granularity]);
 
@@ -209,20 +226,35 @@ export function Dashboard() {
             <div className="flex items-center justify-between">
                 <h2 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Dashboard</h2>
                 {hasActiveFilters && (
-                    <button
-                        onClick={clearFilters}
-                        className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
-                    >
-                        <FilterX className="w-4 h-4" />
-                        Clear Filters
-                    </button>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={() => {
+                                // Build query parameters from active filters
+                                const params = new URLSearchParams();
+                                if (filters.date) params.set('date', filters.date);
+                                if (filters.country) params.set('country', filters.country);
+                                if (filters.scenario) params.set('scenario', filters.scenario);
+                                if (filters.as) params.set('as', filters.as);
+                                if (filters.ip) params.set('ip', filters.ip);
+                                navigate(`/alerts?${params.toString()}`);
+                            }}
+                            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
+                        >
+                            <Filter className="w-4 h-4" />
+                            View Alerts
+                        </button>
+                        <button
+                            onClick={clearFilters}
+                            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
+                        >
+                            <FilterX className="w-4 h-4" />
+                            Clear Filters
+                        </button>
+                    </div>
                 )}
             </div>
 
-            {/* Summary Cards - These show TOTALS regardless of view filters usually, or should they filter? 
-                Let's make them show GLOBAL status as they link effectively to other pages. 
-                But updating them to show "Filtered Count" is a nice touch. Let's keep them global for now.
-            */}
+            {/* Summary Cards */}
             <div className="grid gap-8 md:grid-cols-3">
                 <Link to="/alerts" className="block transition-transform hover:scale-105">
                     <Card className="h-full cursor-pointer hover:shadow-lg transition-shadow">
@@ -232,7 +264,14 @@ export function Dashboard() {
                             </div>
                             <div>
                                 <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Total Alerts</p>
-                                <h3 className="text-2xl font-bold text-gray-900 dark:text-white">{stats.alerts}</h3>
+                                <div className="flex items-baseline gap-2">
+                                    <h3 className="text-2xl font-bold text-gray-900 dark:text-white">{stats.alerts}</h3>
+                                    {hasActiveFilters && (
+                                        <span className="text-sm text-gray-500 dark:text-gray-400">
+                                            {filteredData.alerts.length}
+                                        </span>
+                                    )}
+                                </div>
                             </div>
                         </CardContent>
                     </Card>
@@ -246,7 +285,14 @@ export function Dashboard() {
                             </div>
                             <div>
                                 <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Active Decisions</p>
-                                <h3 className="text-2xl font-bold text-gray-900 dark:text-white">{stats.decisions}</h3>
+                                <div className="flex items-baseline gap-2">
+                                    <h3 className="text-2xl font-bold text-gray-900 dark:text-white">{stats.decisions}</h3>
+                                    {hasActiveFilters && (
+                                        <span className="text-sm text-gray-500 dark:text-gray-400">
+                                            {filteredData.decisions.length}
+                                        </span>
+                                    )}
+                                </div>
                             </div>
                         </CardContent>
                     </Card>
