@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { Globe } from 'lucide-react';
 
 // Using local Natural Earth data which has proper ISO properties
-const geoUrl = "/world-110m.json";
+const geoUrl = "/world-110m-miller.json";
 
 /**
  * World Map Component for Dashboard
@@ -52,6 +52,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                 ) : (
                     <div className="w-full h-full flex items-start justify-center overflow-hidden">
                         <ComposableMap
+                            projection="geoNaturalEarth1"
                             projectionConfig={{
                                 scale: 200
                             }}
@@ -63,9 +64,26 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                                     {({ geographies }) =>
                                         geographies.map((geo) => {
                                             const props = geo.properties || {};
-                                            // Try ISO_A2, iso_a2, ADM0_A3 (convert to A2), or name mapping
-                                            let alpha2Code = (props.ISO_A2 || props.iso_a2 || props.WB_A2)?.toUpperCase();
 
+                                            // Extract valid country code, filtering out -99 sentinel values
+                                            const getValidCountryCode = (properties) => {
+                                                const candidates = [
+                                                    properties.ISO_A2,
+                                                    properties.iso_a2,
+                                                    properties.ISO_A2_EH,  // Enhanced Harmonized ISO code
+                                                    properties.WB_A2,       // World Bank code
+                                                    properties.POSTAL       // Postal code (fallback)
+                                                ];
+
+                                                for (const code of candidates) {
+                                                    if (code && code !== '-99' && /^[A-Z]{2}$/i.test(String(code))) {
+                                                        return String(code).toUpperCase();
+                                                    }
+                                                }
+                                                return null;
+                                            };
+
+                                            const alpha2Code = getValidCountryCode(props);
                                             const count = alpha2Code ? (countryDataMap[alpha2Code] || 0) : 0;
                                             const isSelected = alpha2Code && selectedCountry?.toUpperCase() === alpha2Code;
                                             const hasAlerts = count > 0;
