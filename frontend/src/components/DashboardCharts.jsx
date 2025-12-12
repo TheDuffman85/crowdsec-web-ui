@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef, useLayoutEffect } from 'react';
+import { useMemo, useRef } from 'react';
 import {
     BarChart,
     Bar,
@@ -11,7 +11,8 @@ import {
     Brush
 } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
-import { BarChart3 } from 'lucide-react';
+import { BarChart3, Clock } from 'lucide-react';
+
 
 /**
  * Custom Tooltip Component for better dark mode support
@@ -35,11 +36,11 @@ const CustomTooltip = ({ active, payload, label }) => {
 /**
  * Combined Bar Chart for Alerts and Decisions
  */
-export function ActivityBarChart({ alertsData, decisionsData, onDateRangeSelect, selectedDateRange, granularity, setGranularity }) {
-    // Debounce timeout ref to only update filter when user stops dragging
-    const debounceTimeoutRef = useRef(null);
-    // Merge data by date
-    const data = useMemo(() => {
+export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsData, unfilteredDecisionsData, granularity, setGranularity, onDateRangeSelect, selectedDateRange }) {
+    // -------------------------------------------------------------------------
+    // 1. Process Filtered Data (Main Chart)
+    // -------------------------------------------------------------------------
+    const filteredData = useMemo(() => {
         const merged = {};
 
         // Process alerts
@@ -68,54 +69,65 @@ export function ActivityBarChart({ alertsData, decisionsData, onDateRangeSelect,
         return Object.values(merged).sort((a, b) => a.date.localeCompare(b.date));
     }, [alertsData, decisionsData]);
 
-    const granularities = ['day', 'hour'];
 
-    // Calculate Brush position based on selectedDateRange from parent
-    const { startIndex, endIndex } = useMemo(() => {
-        if (!data || data.length === 0) return { startIndex: 0, endIndex: data.length - 1 };
-
-        // If no date range filter is active, show full range
-        if (!selectedDateRange) {
-            return { startIndex: 0, endIndex: data.length - 1 };
+    // -------------------------------------------------------------------------
+    // 2. Process Unfiltered Data (Slider)
+    // -------------------------------------------------------------------------
+    const sliderData = useMemo(() => {
+        const merged = {};
+        if (unfilteredAlertsData) {
+            unfilteredAlertsData.forEach(item => {
+                merged[item.date] = {
+                    date: item.fullDate || item.date,
+                    bucketKey: item.date,
+                    label: item.label
+                    // We don't need counts for visual bars if we are hiding them
+                };
+            });
         }
+        if (unfilteredDecisionsData) {
+            unfilteredDecisionsData.forEach(item => {
+                if (!merged[item.date]) merged[item.date] = {
+                    date: item.fullDate || item.date,
+                    bucketKey: item.date,
+                    label: item.label
+                };
+            });
+        }
+        return Object.values(merged).sort((a, b) => a.date.localeCompare(b.date));
+    }, [unfilteredAlertsData, unfilteredDecisionsData]);
 
-        // Find indices for the selected date range
-        let start = data.findIndex(d => d.bucketKey >= selectedDateRange.start);
+    // Slider Brush Logic
+    const debounceTimeoutRef = useRef(null);
+    const brushKey = useMemo(() => {
+        // Generate a unique key whenever the data reference changes to force proper re-initialization
+        // of the Brush component. This prevents it from losing the selection state on auto-refresh.
+        return `brush-${Date.now()}`;
+    }, [sliderData]);
+
+    const { startIndex, endIndex } = useMemo(() => {
+        if (!sliderData || sliderData.length === 0) return { startIndex: 0, endIndex: 0 };
+        if (!selectedDateRange) return { startIndex: 0, endIndex: sliderData.length - 1 };
+
+        let start = sliderData.findIndex(d => d.bucketKey >= selectedDateRange.start);
         let end = -1;
-        for (let i = data.length - 1; i >= 0; i--) {
-            if (data[i].bucketKey <= selectedDateRange.end) {
+        for (let i = sliderData.length - 1; i >= 0; i--) {
+            if (sliderData[i].bucketKey <= selectedDateRange.end) {
                 end = i;
                 break;
             }
         }
-
-        // Fallbacks
         if (start === -1) start = 0;
-        if (end === -1) end = data.length - 1;
-
-        // Ensure validity
-        start = Math.max(0, Math.min(start, data.length - 1));
-        end = Math.max(0, Math.min(end, data.length - 1));
-        if (start > end) {
-            return { startIndex: 0, endIndex: data.length - 1 };
-        }
-
+        if (end === -1) end = sliderData.length - 1;
         return { startIndex: start, endIndex: end };
-    }, [data, selectedDateRange]);
+    }, [sliderData, selectedDateRange]);
 
-    // Calculate hash to force re-render when data changes
-    const dataHash = useMemo(() => {
-        if (!data || data.length === 0) return '';
-        const totalAlerts = data.reduce((acc, item) => acc + (item.alerts || 0), 0);
-        const totalDecisions = data.reduce((acc, item) => acc + (item.decisions || 0), 0);
-        const start = data[0]?.date || '';
-        const end = data[data.length - 1]?.date || '';
-        return `${totalAlerts}-${totalDecisions}-${start}-${end}`;
-    }, [data]);
+
+    const granularities = ['day', 'hour'];
 
     return (
-        <Card className="h-full outline-none">
-            <CardHeader>
+        <Card className="h-full outline-none flex flex-col">
+            <CardHeader className="flex-none">
                 <div className="flex items-center justify-between w-full">
                     <CardTitle className="flex items-center gap-2">
                         <BarChart3 className="w-5 h-5 text-primary-600 dark:text-primary-400" />
@@ -140,25 +152,50 @@ export function ActivityBarChart({ alertsData, decisionsData, onDateRangeSelect,
                     </div>
                 </div>
             </CardHeader>
-            <CardContent>
-                <div className="h-[300px] w-full outline-none">
+            <CardContent className="flex-1 min-h-0 flex flex-col gap-4">
+                {/* Main Chart Section */}
+                <div className="flex-1 min-h-0">
                     <ResponsiveContainer width="100%" height="100%">
                         <BarChart
-                            // Force re-render when granularity OR data content changes (filtering)
-                            // This ensures Brush initializes with the correct [zoomState] rather than resetting
-                            key={`${granularity}-${dataHash}`}
-                            data={data}
-                            margin={{ top: 20, right: 30, left: 20, bottom: 50 }}
+                            data={filteredData}
+                            margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
                         >
                             <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
                             <XAxis dataKey="label" stroke="#888888" fontSize={12} tickLine={false} axisLine={false} />
                             <YAxis stroke="#888888" fontSize={12} tickLine={false} axisLine={false} />
                             <Tooltip content={<CustomTooltip />} cursor={{ fill: 'transparent' }} />
                             <Legend verticalAlign="top" height={36} />
+                            <Bar
+                                isAnimationActive={false}
+                                dataKey="alerts"
+                                name="Alerts"
+                                fill="#dc2626"
+                                stroke="none"
+                                radius={[4, 4, 0, 0]}
+                            />
+                            <Bar
+                                isAnimationActive={false}
+                                dataKey="decisions"
+                                name="Decisions"
+                                fill="#2563eb"
+                                stroke="none"
+                                radius={[4, 4, 0, 0]}
+                            />
+                        </BarChart>
+                    </ResponsiveContainer>
+                </div>
+
+                {/* Slider Section */}
+                <div className="h-[40px] shrink-0">
+                    <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                            data={sliderData}
+                            margin={{ top: 0, right: 30, left: 20, bottom: 0 }}
+                        >
                             <Brush
-                                key={`${dataHash}`}
+                                key={`${granularity}-${brushKey}`}
                                 dataKey="date"
-                                height={30}
+                                height={40}
                                 stroke="#888888"
                                 fill="transparent"
                                 startIndex={startIndex}
@@ -167,28 +204,25 @@ export function ActivityBarChart({ alertsData, decisionsData, onDateRangeSelect,
                                     if (!e || e.startIndex === undefined || e.endIndex === undefined) return;
 
                                     const isStartReset = e.startIndex === 0;
-                                    const isEndReset = e.endIndex >= data.length - 1;
+                                    const isEndReset = e.endIndex >= sliderData.length - 1;
                                     const isFullRange = isStartReset && isEndReset;
 
-                                    const startItem = data[e.startIndex];
-                                    const endItem = data[e.endIndex];
+                                    const startItem = sliderData[e.startIndex];
+                                    const endItem = sliderData[e.endIndex];
 
                                     if (startItem && endItem && onDateRangeSelect) {
-                                        // Clear any pending timeout
                                         if (debounceTimeoutRef.current) {
                                             clearTimeout(debounceTimeoutRef.current);
                                         }
 
-                                        // Emit date range for filtering (null if full range selected)
                                         const dateRange = isFullRange ? null : {
                                             start: startItem.bucketKey,
                                             end: endItem.bucketKey
                                         };
 
-                                        // Debounce: only update filter 500ms after user stops dragging
                                         debounceTimeoutRef.current = setTimeout(() => {
                                             onDateRangeSelect(dateRange);
-                                        }, 500);
+                                        }, 300);
                                     }
                                 }}
                                 tickFormatter={(date) => {
@@ -200,22 +234,6 @@ export function ActivityBarChart({ alertsData, decisionsData, onDateRangeSelect,
                                     return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
                                 }}
                             />
-                            <Bar
-                                isAnimationActive={false} // Disable animation to reduce visual noise on refresh
-                                dataKey="alerts"
-                                name="Alerts"
-                                fill="#dc2626"
-                                stroke="none"
-                                radius={[4, 4, 0, 0]}
-                            />
-                            <Bar
-                                isAnimationActive={false} // Disable animation to reduce visual noise on refresh
-                                dataKey="decisions"
-                                name="Decisions"
-                                fill="#2563eb"
-                                stroke="none"
-                                radius={[4, 4, 0, 0]}
-                            />
                         </BarChart>
                     </ResponsiveContainer>
                 </div>
@@ -223,3 +241,4 @@ export function ActivityBarChart({ alertsData, decisionsData, onDateRangeSelect,
         </Card >
     );
 }
+

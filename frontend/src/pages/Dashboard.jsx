@@ -128,7 +128,6 @@ export function Dashboard() {
         // Apply Cross-Filtering to cards and lists (including dateRange)
         if (filters.dateRange) {
             // Helper function to extract date/time key from ISO timestamp
-            // For hourly: YYYY-MM-DDTHH, for daily: YYYY-MM-DD
             const getItemKey = (isoString) => {
                 if (!isoString) return null;
                 const date = new Date(isoString);
@@ -144,7 +143,7 @@ export function Dashboard() {
                 return `${year}-${month}-${day}`;
             };
 
-            // Filter by date range - check if item's date falls within the range
+            // Filter by date range
             filteredAlerts = filteredAlerts.filter(a => {
                 const itemKey = getItemKey(a.created_at);
                 if (!itemKey) return false;
@@ -155,9 +154,20 @@ export function Dashboard() {
                 if (!itemKey) return false;
                 return itemKey >= filters.dateRange.start && itemKey <= filters.dateRange.end;
             });
-            // Note: We do NOT filter chartAlerts or chartDecisionsData by dateRange
-            // This allows the zoom control to show and select the full range
+
+            // ALSO filter chart data by date range so the main chart reflects the selection
+            chartAlerts = chartAlerts.filter(a => {
+                const itemKey = getItemKey(a.created_at);
+                if (!itemKey) return false;
+                return itemKey >= filters.dateRange.start && itemKey <= filters.dateRange.end;
+            });
+            chartDecisionsData = chartDecisionsData.filter(d => {
+                const itemKey = getItemKey(d.created_at);
+                if (!itemKey) return false;
+                return itemKey >= filters.dateRange.start && itemKey <= filters.dateRange.end;
+            });
         }
+
 
         if (filters.country) {
             filteredAlerts = filteredAlerts.filter(a => {
@@ -250,7 +260,10 @@ export function Dashboard() {
             topScenarios: getTopScenarios(filteredData.alerts, 10),
             topAS: getTopAS(filteredData.alerts, 10),
             alertsHistory: getAggregatedData(filteredData.chartAlerts, lookbackDays, granularity),
-            decisionsHistory: getAggregatedData(filteredData.chartDecisions, lookbackDays, granularity)
+            decisionsHistory: getAggregatedData(filteredData.chartDecisions, lookbackDays, granularity),
+            // Unfiltered history for the TimeRangeSlider (Global context)
+            unfilteredAlertsHistory: getAggregatedData(filterLastNDays(rawData.alerts, lookbackDays), lookbackDays, granularity),
+            unfilteredDecisionsHistory: getAggregatedData(filterLastNDays(rawData.decisionsForStats, lookbackDays), lookbackDays, granularity)
         };
     }, [filteredData, config.lookback_days, granularity]);
 
@@ -283,19 +296,21 @@ export function Dashboard() {
             <div className="flex items-center justify-between">
                 <h2 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Dashboard</h2>
                 {hasActiveFilters && (
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-col md:flex-row items-end md:items-center gap-2">
                         <button
                             onClick={() => {
                                 // Build query parameters from active filters
                                 const params = new URLSearchParams();
-                                if (filters.dateRange) {
-                                    params.set('dateStart', filters.dateRange.start);
-                                    params.set('dateEnd', filters.dateRange.end);
-                                }
                                 if (filters.country) params.set('country', filters.country);
                                 if (filters.scenario) params.set('scenario', filters.scenario);
                                 if (filters.as) params.set('as', filters.as);
                                 if (filters.ip) params.set('ip', filters.ip);
+                                if (filters.dateRange) {
+                                    params.set('dateStart', filters.dateRange.start);
+                                    // For the end date, we might ideally want to cover the full day/hour
+                                    // But simple passing often works if the receiving end is smart, or if it's just 'created_before'
+                                    params.set('dateEnd', filters.dateRange.end);
+                                }
                                 navigate(`/alerts?${params.toString()}`);
                             }}
                             className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
@@ -396,10 +411,12 @@ export function Dashboard() {
                         {/* Charts Area */}
                         <div className="grid gap-8 md:grid-cols-2">
                             {/* Activity Chart - Left */}
-                            <div className="h-[350px]">
+                            <div className="h-[450px]">
                                 <ActivityBarChart
                                     alertsData={statistics.alertsHistory}
                                     decisionsData={statistics.decisionsHistory}
+                                    unfilteredAlertsData={statistics.unfilteredAlertsHistory}
+                                    unfilteredDecisionsData={statistics.unfilteredDecisionsHistory}
                                     onDateRangeSelect={(dateRange) => setFilters(prev => ({ ...prev, dateRange }))}
                                     selectedDateRange={filters.dateRange}
                                     granularity={granularity}
@@ -408,7 +425,7 @@ export function Dashboard() {
                             </div>
 
                             {/* World Map - Right */}
-                            <div className="h-[350px]">
+                            <div className="h-[450px]">
                                 <WorldMapCard
                                     data={statistics.allCountries}
                                     onCountrySelect={(code) => toggleFilter('country', code)}
