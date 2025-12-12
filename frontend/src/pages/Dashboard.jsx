@@ -36,7 +36,12 @@ export function Dashboard() {
     const [loading, setLoading] = useState(true);
     const [statsLoading, setStatsLoading] = useState(true);
     const [config, setConfig] = useState({ lookback_days: 7 });
-    const [granularity, setGranularity] = useState('day');
+
+    // Initialize state from local storage or defaults
+    const [granularity, setGranularity] = useState(() => {
+        return localStorage.getItem('dashboard_granularity') || 'day';
+    });
+
     const [isOnline, setIsOnline] = useState(true);
 
     // Raw data
@@ -47,18 +52,40 @@ export function Dashboard() {
     });
 
     // Active filters
-    const [filters, setFilters] = useState({
-        dateRange: null,
-        country: null,
-        scenario: null,
-        as: null,
-        ip: null
+    // Active filters
+    const [filters, setFilters] = useState(() => {
+        const saved = localStorage.getItem('dashboard_filters');
+        if (saved) {
+            try {
+                return JSON.parse(saved);
+            } catch (e) {
+                console.error("Failed to parse saved filters", e);
+            }
+        }
+        return {
+            dateRange: null,
+            country: null,
+            scenario: null,
+            as: null,
+            ip: null
+        };
     });
 
     // Clear dateRange filter when granularity changes
+    // Persist filters and granularity
     useEffect(() => {
-        setFilters(prev => ({ ...prev, dateRange: null }));
+        localStorage.setItem('dashboard_filters', JSON.stringify(filters));
+    }, [filters]);
+
+    useEffect(() => {
+        localStorage.setItem('dashboard_granularity', granularity);
     }, [granularity]);
+
+    // Handler to change granularity and clear date range simultaneously (explicit user action)
+    const handleGranularityChange = (newGranularity) => {
+        setGranularity(newGranularity);
+        setFilters(prev => ({ ...prev, dateRange: null }));
+    };
 
     const loadData = useCallback(async (isBackground = false) => {
         try {
@@ -420,7 +447,7 @@ export function Dashboard() {
                                     onDateRangeSelect={(dateRange) => setFilters(prev => ({ ...prev, dateRange }))}
                                     selectedDateRange={filters.dateRange}
                                     granularity={granularity}
-                                    setGranularity={setGranularity}
+                                    setGranularity={handleGranularityChange}
                                 />
                             </div>
 
