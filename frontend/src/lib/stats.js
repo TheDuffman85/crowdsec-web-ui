@@ -138,13 +138,23 @@ export function getAggregatedData(items, days = 7, granularity = 'day') {
     const dataMap = {};
     const now = new Date();
     const start = new Date(now);
-    start.setDate(start.getDate() - days);
+    // Go back (days - 1) to get exactly 'days' complete calendar days including today
+    start.setDate(start.getDate() - (days - 1));
+    // Align to start of day for complete-day buckets
+    start.setHours(0, 0, 0, 0);
 
     // Function to generate key based on granularity
+    // Use LOCAL time components to avoid timezone shifts
     const getKey = (date) => {
-        const iso = date.toISOString();
-        if (granularity === 'hour') return iso.slice(0, 13);   // YYYY-MM-DDTHH
-        return iso.slice(0, 10);                               // YYYY-MM-DD
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+
+        if (granularity === 'hour') {
+            const hour = String(date.getHours()).padStart(2, '0');
+            return `${year}-${month}-${day}T${hour}`;   // YYYY-MM-DDTHH in local time
+        }
+        return `${year}-${month}-${day}`;                // YYYY-MM-DD in local time
     };
 
     // Label formatter
@@ -167,7 +177,7 @@ export function getAggregatedData(items, days = 7, granularity = 'day') {
             date: key,
             count: 0,
             label: getLabel(current),
-            fullDate: current.toISOString() // Store full date for sorting/reference
+            fullDate: new Date(current).toISOString() // Store full date for sorting/reference
         };
 
         // Increment
