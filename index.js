@@ -313,10 +313,33 @@ app.get('/api/config', ensureAuth, (req, res) => {
     // Assuming hours/days are the main use cases.
   }
 
+  // Parse Refresh Interval from Env
+  // Default: Manual (0)
+  // Supported: manual, 30s, 1m, 5m
+  let refreshInterval = 0;
+  const envRefresh = process.env.CROWDSEC_REFRESH_INTERVAL || 'manual';
+
+  switch (envRefresh.toLowerCase()) {
+    case '30s':
+      refreshInterval = 30000;
+      break;
+    case '1m':
+      refreshInterval = 60000;
+      break;
+    case '5m':
+      refreshInterval = 300000;
+      break;
+    case 'manual':
+    default:
+      refreshInterval = 0;
+      break;
+  }
+
   res.json({
     lookback_period: CROWDSEC_LOOKBACK_PERIOD,
     lookback_hours: hours,
-    lookback_days: Math.max(1, Math.round(hours / 24))
+    lookback_days: Math.max(1, Math.round(hours / 24)),
+    refresh_interval: refreshInterval
   });
 });
 

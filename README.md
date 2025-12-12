@@ -90,6 +90,7 @@ Ban IPs directly from the UI with custom duration and reason.
       -e CROWDSEC_USER=crowdsec-web-ui \
       -e CROWDSEC_PASSWORD=<your-secure-password> \
       -e CROWDSEC_LOOKBACK_PERIOD=5d \
+      -e CROWDSEC_REFRESH_INTERVAL=1m \
       --network your_crowdsec_network \
       crowdsec-web-ui
     ```
@@ -110,6 +111,8 @@ services:
       - CROWDSEC_PASSWORD=<generated_password>
       # Optional: Lookback period for alerts/stats (default: 168h/7d)
       - CROWDSEC_LOOKBACK_PERIOD=5d
+      # Optional: Auto-refresh interval. Values: manual (default), 30s, 1m, 5m
+      - CROWDSEC_REFRESH_INTERVAL=1m
     restart: unless-stopped
 ```
 
