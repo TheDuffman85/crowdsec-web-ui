@@ -392,7 +392,8 @@ app.get('/api/stats/decisions', ensureAuth, async (req, res) => {
             id: decision.id,
             created_at: decision.created_at || alert.created_at,
             scenario: decision.scenario || alert.scenario || "N/A",
-            value: decision.value
+            value: decision.value,
+            stop_at: decision.stop_at
           };
         }).filter(Boolean);
 

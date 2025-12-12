@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useCallback } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { fetchAlerts, fetchDecisions, fetchDecisionsForStats, fetchConfig } from "../lib/api";
 import { getHubUrl } from "../lib/utils";
@@ -25,16 +25,23 @@ import {
     TrendingUp,
     AlertTriangle,
     FilterX,
-    Globe
+    Globe,
+    Filter
 } from "lucide-react";
 
 export function Dashboard() {
+    const navigate = useNavigate();
     const { refreshSignal, setLastUpdated } = useRefresh();
     const [stats, setStats] = useState({ alerts: 0, decisions: 0 });
     const [loading, setLoading] = useState(true);
     const [statsLoading, setStatsLoading] = useState(true);
     const [config, setConfig] = useState({ lookback_days: 7 });
-    const [granularity, setGranularity] = useState('day');
+
+    // Initialize state from local storage or defaults
+    const [granularity, setGranularity] = useState(() => {
+        return localStorage.getItem('dashboard_granularity') || 'day';
+    });
+
     const [isOnline, setIsOnline] = useState(true);
 
     // Raw data
@@ -45,13 +52,40 @@ export function Dashboard() {
     });
 
     // Active filters
-    const [filters, setFilters] = useState({
-        date: null,
-        country: null,
-        scenario: null,
-        as: null,
-        ip: null
+    // Active filters
+    const [filters, setFilters] = useState(() => {
+        const saved = localStorage.getItem('dashboard_filters');
+        if (saved) {
+            try {
+                return JSON.parse(saved);
+            } catch (e) {
+                console.error("Failed to parse saved filters", e);
+            }
+        }
+        return {
+            dateRange: null,
+            country: null,
+            scenario: null,
+            as: null,
+            ip: null
+        };
     });
+
+    // Clear dateRange filter when granularity changes
+    // Persist filters and granularity
+    useEffect(() => {
+        localStorage.setItem('dashboard_filters', JSON.stringify(filters));
+    }, [filters]);
+
+    useEffect(() => {
+        localStorage.setItem('dashboard_granularity', granularity);
+    }, [granularity]);
+
+    // Handler to change granularity and clear date range simultaneously (explicit user action)
+    const handleGranularityChange = (newGranularity) => {
+        setGranularity(newGranularity);
+        setFilters(prev => ({ ...prev, dateRange: null }));
+    };
 
     const loadData = useCallback(async (isBackground = false) => {
         try {
@@ -107,14 +141,60 @@ export function Dashboard() {
         const lookbackDays = config.lookback_days || 7;
 
         let filteredAlerts = filterLastNDays(rawData.alerts, lookbackDays);
-        let filteredDecisions = filterLastNDays(rawData.decisionsForStats, lookbackDays);
 
-        // Apply Cross-Filtering
-        if (filters.date) {
-            // Safe date matching (handles potentially different formats if needed, but strict 'startsWith' matches YYYY-MM-DD)
-            filteredAlerts = filteredAlerts.filter(a => a.created_at && a.created_at.startsWith(filters.date));
-            filteredDecisions = filteredDecisions.filter(d => d.created_at && d.created_at.startsWith(filters.date));
+        // Filter ACTIVE decisions for card display and top lists
+        let activeDecisions = filterLastNDays(rawData.decisions, lookbackDays);
+
+        // Filter ALL decisions (including expired) for historical charts
+        let chartDecisions = filterLastNDays(rawData.decisionsForStats, lookbackDays);
+
+        // Create separate datasets for charts (no date range filter to avoid zoom feedback loop)
+        let chartAlerts = [...filteredAlerts];
+        let chartDecisionsData = [...chartDecisions];
+
+        // Apply Cross-Filtering to cards and lists (including dateRange)
+        if (filters.dateRange) {
+            // Helper function to extract date/time key from ISO timestamp
+            const getItemKey = (isoString) => {
+                if (!isoString) return null;
+                const date = new Date(isoString);
+                const year = date.getFullYear();
+                const month = String(date.getMonth() + 1).padStart(2, '0');
+                const day = String(date.getDate()).padStart(2, '0');
+
+                // If filter range includes time (has 'T' separator), use hourly precision
+                if (filters.dateRange.start.includes('T')) {
+                    const hour = String(date.getHours()).padStart(2, '0');
+                    return `${year}-${month}-${day}T${hour}`;
+                }
+                return `${year}-${month}-${day}`;
+            };
+
+            // Filter by date range
+            filteredAlerts = filteredAlerts.filter(a => {
+                const itemKey = getItemKey(a.created_at);
+                if (!itemKey) return false;
+                return itemKey >= filters.dateRange.start && itemKey <= filters.dateRange.end;
+            });
+            activeDecisions = activeDecisions.filter(d => {
+                const itemKey = getItemKey(d.created_at);
+                if (!itemKey) return false;
+                return itemKey >= filters.dateRange.start && itemKey <= filters.dateRange.end;
+            });
+
+            // ALSO filter chart data by date range so the main chart reflects the selection
+            chartAlerts = chartAlerts.filter(a => {
+                const itemKey = getItemKey(a.created_at);
+                if (!itemKey) return false;
+                return itemKey >= filters.dateRange.start && itemKey <= filters.dateRange.end;
+            });
+            chartDecisionsData = chartDecisionsData.filter(d => {
+                const itemKey = getItemKey(d.created_at);
+                if (!itemKey) return false;
+                return itemKey >= filters.dateRange.start && itemKey <= filters.dateRange.end;
+            });
         }
+
 
         if (filters.country) {
             filteredAlerts = filteredAlerts.filter(a => {
@@ -125,7 +205,14 @@ export function Dashboard() {
             const ipsInCountry = new Set(
                 filteredAlerts.map(a => a.source.ip).filter(ip => ip)
             );
-            filteredDecisions = filteredDecisions.filter(d => ipsInCountry.has(d.value));
+            activeDecisions = activeDecisions.filter(d => ipsInCountry.has(d.value));
+
+            // Also filter chart data by country
+            chartAlerts = chartAlerts.filter(a => a.source.cn === filters.country);
+            const chartIpsInCountry = new Set(
+                chartAlerts.map(a => a.source.ip).filter(ip => ip)
+            );
+            chartDecisionsData = chartDecisionsData.filter(d => chartIpsInCountry.has(d.value));
         }
 
         if (filters.scenario) {
@@ -134,7 +221,14 @@ export function Dashboard() {
             const ipsInScenario = new Set(
                 filteredAlerts.map(a => a.source.ip).filter(ip => ip)
             );
-            filteredDecisions = filteredDecisions.filter(d => ipsInScenario.has(d.value));
+            activeDecisions = activeDecisions.filter(d => ipsInScenario.has(d.value));
+
+            // Also filter chart data
+            chartAlerts = chartAlerts.filter(a => a.scenario === filters.scenario);
+            const chartIpsInScenario = new Set(
+                chartAlerts.map(a => a.source.ip).filter(ip => ip)
+            );
+            chartDecisionsData = chartDecisionsData.filter(d => chartIpsInScenario.has(d.value));
         }
 
         if (filters.as) {
@@ -143,17 +237,34 @@ export function Dashboard() {
             const ipsInAS = new Set(
                 filteredAlerts.map(a => a.source.ip).filter(ip => ip)
             );
-            filteredDecisions = filteredDecisions.filter(d => ipsInAS.has(d.value));
+            activeDecisions = activeDecisions.filter(d => ipsInAS.has(d.value));
+
+            // Also filter chart data
+            chartAlerts = chartAlerts.filter(a => a.source.as_name === filters.as);
+            const chartIpsInAS = new Set(
+                chartAlerts.map(a => a.source.ip).filter(ip => ip)
+            );
+            chartDecisionsData = chartDecisionsData.filter(d => chartIpsInAS.has(d.value));
         }
 
         if (filters.ip) {
             filteredAlerts = filteredAlerts.filter(a => a.source.ip === filters.ip);
             // Filter decisions by IP - direct match on the value field
-            filteredDecisions = filteredDecisions.filter(d => d.value === filters.ip);
+            activeDecisions = activeDecisions.filter(d => d.value === filters.ip);
+
+            // Also filter chart data
+            chartAlerts = chartAlerts.filter(a => a.source.ip === filters.ip);
+            chartDecisionsData = chartDecisionsData.filter(d => d.value === filters.ip);
         }
 
-        return { alerts: filteredAlerts, decisions: filteredDecisions };
+        return {
+            alerts: filteredAlerts,
+            decisions: activeDecisions,  // Active decisions for card/lists
+            chartAlerts: chartAlerts,  // Alerts for charts (no dateRange filter)
+            chartDecisions: chartDecisionsData  // All decisions for charts (no dateRange filter)
+        };
     }, [rawData, config.lookback_days, filters]);
+
 
 
     // Derived Statistics
@@ -175,8 +286,11 @@ export function Dashboard() {
             allCountries: getAllCountries(filteredData.alerts),  // For map display
             topScenarios: getTopScenarios(filteredData.alerts, 10),
             topAS: getTopAS(filteredData.alerts, 10),
-            alertsHistory: getAggregatedData(filteredData.alerts, lookbackDays, granularity),
-            decisionsHistory: getAggregatedData(filteredData.decisions, lookbackDays, granularity)
+            alertsHistory: getAggregatedData(filteredData.chartAlerts, lookbackDays, granularity),
+            decisionsHistory: getAggregatedData(filteredData.chartDecisions, lookbackDays, granularity),
+            // Unfiltered history for the TimeRangeSlider (Global context)
+            unfilteredAlertsHistory: getAggregatedData(filterLastNDays(rawData.alerts, lookbackDays), lookbackDays, granularity),
+            unfilteredDecisionsHistory: getAggregatedData(filterLastNDays(rawData.decisionsForStats, lookbackDays), lookbackDays, granularity)
         };
     }, [filteredData, config.lookback_days, granularity]);
 
@@ -190,7 +304,7 @@ export function Dashboard() {
 
     const clearFilters = () => {
         setFilters({
-            date: null,
+            dateRange: null,
             country: null,
             scenario: null,
             as: null,
@@ -209,20 +323,40 @@ export function Dashboard() {
             <div className="flex items-center justify-between">
                 <h2 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Dashboard</h2>
                 {hasActiveFilters && (
-                    <button
-                        onClick={clearFilters}
-                        className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
-                    >
-                        <FilterX className="w-4 h-4" />
-                        Clear Filters
-                    </button>
+                    <div className="flex flex-col md:flex-row items-end md:items-center gap-2">
+                        <button
+                            onClick={() => {
+                                // Build query parameters from active filters
+                                const params = new URLSearchParams();
+                                if (filters.country) params.set('country', filters.country);
+                                if (filters.scenario) params.set('scenario', filters.scenario);
+                                if (filters.as) params.set('as', filters.as);
+                                if (filters.ip) params.set('ip', filters.ip);
+                                if (filters.dateRange) {
+                                    params.set('dateStart', filters.dateRange.start);
+                                    // For the end date, we might ideally want to cover the full day/hour
+                                    // But simple passing often works if the receiving end is smart, or if it's just 'created_before'
+                                    params.set('dateEnd', filters.dateRange.end);
+                                }
+                                navigate(`/alerts?${params.toString()}`);
+                            }}
+                            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
+                        >
+                            <Filter className="w-4 h-4" />
+                            View Alerts
+                        </button>
+                        <button
+                            onClick={clearFilters}
+                            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
+                        >
+                            <FilterX className="w-4 h-4" />
+                            Clear Filters
+                        </button>
+                    </div>
                 )}
             </div>
 
-            {/* Summary Cards - These show TOTALS regardless of view filters usually, or should they filter? 
-                Let's make them show GLOBAL status as they link effectively to other pages. 
-                But updating them to show "Filtered Count" is a nice touch. Let's keep them global for now.
-            */}
+            {/* Summary Cards */}
             <div className="grid gap-8 md:grid-cols-3">
                 <Link to="/alerts" className="block transition-transform hover:scale-105">
                     <Card className="h-full cursor-pointer hover:shadow-lg transition-shadow">
@@ -232,7 +366,14 @@ export function Dashboard() {
                             </div>
                             <div>
                                 <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Total Alerts</p>
-                                <h3 className="text-2xl font-bold text-gray-900 dark:text-white">{stats.alerts}</h3>
+                                <div className="flex items-baseline gap-2">
+                                    <h3 className="text-2xl font-bold text-gray-900 dark:text-white">{stats.alerts}</h3>
+                                    {hasActiveFilters && (
+                                        <span className="text-sm text-gray-500 dark:text-gray-400">
+                                            {filteredData.alerts.length}
+                                        </span>
+                                    )}
+                                </div>
                             </div>
                         </CardContent>
                     </Card>
@@ -246,7 +387,14 @@ export function Dashboard() {
                             </div>
                             <div>
                                 <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Active Decisions</p>
-                                <h3 className="text-2xl font-bold text-gray-900 dark:text-white">{stats.decisions}</h3>
+                                <div className="flex items-baseline gap-2">
+                                    <h3 className="text-2xl font-bold text-gray-900 dark:text-white">{stats.decisions}</h3>
+                                    {hasActiveFilters && (
+                                        <span className="text-sm text-gray-500 dark:text-gray-400">
+                                            {filteredData.decisions.length}
+                                        </span>
+                                    )}
+                                </div>
                             </div>
                         </CardContent>
                     </Card>
@@ -290,19 +438,21 @@ export function Dashboard() {
                         {/* Charts Area */}
                         <div className="grid gap-8 md:grid-cols-2">
                             {/* Activity Chart - Left */}
-                            <div className="h-[350px]">
+                            <div className="h-[450px]">
                                 <ActivityBarChart
                                     alertsData={statistics.alertsHistory}
                                     decisionsData={statistics.decisionsHistory}
-                                    onDateSelect={(date) => toggleFilter('date', date)}
-                                    selectedDate={filters.date}
+                                    unfilteredAlertsData={statistics.unfilteredAlertsHistory}
+                                    unfilteredDecisionsData={statistics.unfilteredDecisionsHistory}
+                                    onDateRangeSelect={(dateRange) => setFilters(prev => ({ ...prev, dateRange }))}
+                                    selectedDateRange={filters.dateRange}
                                     granularity={granularity}
-                                    setGranularity={setGranularity}
+                                    setGranularity={handleGranularityChange}
                                 />
                             </div>
 
                             {/* World Map - Right */}
-                            <div className="h-[350px]">
+                            <div className="h-[450px]">
                                 <WorldMapCard
                                     data={statistics.allCountries}
                                     onCountrySelect={(code) => toggleFilter('country', code)}

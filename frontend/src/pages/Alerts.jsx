@@ -84,6 +84,9 @@ export function Alerts() {
         const paramCountry = (searchParams.get("country") || "").toLowerCase();
         const paramScenario = (searchParams.get("scenario") || "").toLowerCase();
         const paramAs = (searchParams.get("as") || "").toLowerCase();
+        const paramDate = searchParams.get("date") || "";
+        const paramDateStart = searchParams.get("dateStart") || "";
+        const paramDateEnd = searchParams.get("dateEnd") || "";
 
         const scenario = (alert.scenario || "").toLowerCase();
         const message = (alert.message || "").toLowerCase();
@@ -96,6 +99,34 @@ export function Alerts() {
         if (paramCountry && !cn.includes(paramCountry)) return false;
         if (paramScenario && !scenario.includes(paramScenario)) return false;
         if (paramAs && !asName.includes(paramAs)) return false;
+
+        // Single date filter (legacy support)
+        if (paramDate && !(alert.created_at && alert.created_at.startsWith(paramDate))) return false;
+
+        // Date range filter (dateStart/dateEnd)
+        if (paramDateStart || paramDateEnd) {
+            if (!alert.created_at) return false;
+
+            // Helper to extract date/time key from ISO timestamp
+            const getItemKey = (isoString) => {
+                const date = new Date(isoString);
+                const year = date.getFullYear();
+                const month = String(date.getMonth() + 1).padStart(2, '0');
+                const day = String(date.getDate()).padStart(2, '0');
+
+                // If filter includes time (has 'T'), use hourly precision
+                if (paramDateStart.includes('T') || paramDateEnd.includes('T')) {
+                    const hour = String(date.getHours()).padStart(2, '0');
+                    return `${year}-${month}-${day}T${hour}`;
+                }
+                return `${year}-${month}-${day}`;
+            };
+
+            const itemKey = getItemKey(alert.created_at);
+
+            if (paramDateStart && itemKey < paramDateStart) return false;
+            if (paramDateEnd && itemKey > paramDateEnd) return false;
+        }
 
         // Check generic search
         if (search) {
@@ -123,9 +154,9 @@ export function Alerts() {
             </div>
 
             {/* Show active filters */}
-            {(searchParams.get("ip") || searchParams.get("country") || searchParams.get("scenario") || searchParams.get("as")) && (
+            {(searchParams.get("ip") || searchParams.get("country") || searchParams.get("scenario") || searchParams.get("as") || searchParams.get("date") || searchParams.get("dateStart") || searchParams.get("dateEnd")) && (
                 <div className="flex flex-wrap gap-2">
-                    {["ip", "country", "scenario", "as"].map(key => {
+                    {["ip", "country", "scenario", "as", "date", "dateStart", "dateEnd"].map(key => {
                         const val = searchParams.get(key);
                         if (!val) return null;
                         return (
