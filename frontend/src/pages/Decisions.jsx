@@ -5,7 +5,7 @@ import { useRefresh } from "../contexts/RefreshContext";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
 import { ScenarioName } from "../components/ScenarioName";
-import { getHubUrl } from "../lib/utils";
+import { getHubUrl, getCountryName } from "../lib/utils";
 import { Trash2, Gavel, X, ExternalLink, Shield } from "lucide-react";
 import "flag-icons/css/flag-icons.min.css";
 
@@ -186,12 +186,12 @@ export function Decisions() {
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 flex items-center gap-2">
                                                 {decision.detail.country ? (
-                                                    <>
-                                                        <span className={`fi fi-${decision.detail.country.toLowerCase()}`}></span>
-                                                        <span>{decision.detail.country}</span>
-                                                    </>
+                                                    <div className="flex items-center gap-2" title={decision.detail.country}>
+                                                        <span className={`fi fi-${decision.detail.country.toLowerCase()} flex-shrink-0`}></span>
+                                                        <span>{getCountryName(decision.detail.country)}</span>
+                                                    </div>
                                                 ) : (
-                                                    decision.detail.country || "Unknown"
+                                                    "Unknown"
                                                 )}
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={decision.detail.reason}>

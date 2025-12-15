@@ -18,3 +18,13 @@ export function getHubUrl(scenarioName) {
     }
     return null;
 }
+
+export function getCountryName(code) {
+    if (!code) return "Unknown";
+    try {
+        const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
+        return regionNames.of(code.toUpperCase());
+    } catch (e) {
+        return code;
+    }
+}

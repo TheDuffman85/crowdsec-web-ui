@@ -5,7 +5,7 @@ import { useRefresh } from "../contexts/RefreshContext";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
 import { ScenarioName } from "../components/ScenarioName";
-import { getHubUrl } from "../lib/utils";
+import { getHubUrl, getCountryName } from "../lib/utils";
 import { Search, Info, ExternalLink, Shield } from "lucide-react";
 import "flag-icons/css/flag-icons.min.css";
 
@@ -241,10 +241,10 @@ export function Alerts() {
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 flex items-center gap-2">
                                                 {alert.source?.cn ? (
-                                                    <>
-                                                        <span className={`fi fi-${alert.source.cn.toLowerCase()}`}></span>
-                                                        <span>{alert.source.cn}</span>
-                                                    </>
+                                                    <div className="flex items-center gap-2" title={alert.source.cn}>
+                                                        <span className={`fi fi-${alert.source.cn.toLowerCase()} flex-shrink-0`}></span>
+                                                        <span className="truncate max-w-[150px]">{getCountryName(alert.source.cn)}</span>
+                                                    </div>
                                                 ) : (
                                                     "Unknown"
                                                 )}
@@ -360,9 +360,9 @@ export function Alerts() {
                                 <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Location</h4>
                                 <div className="text-lg text-gray-900 dark:text-gray-100 font-medium flex items-center gap-2">
                                     {selectedAlert.source?.cn && (
-                                        <span className={`fi fi-${selectedAlert.source.cn.toLowerCase()}`}></span>
+                                        <span className={`fi fi-${selectedAlert.source.cn.toLowerCase()} flex-shrink-0`} title={selectedAlert.source.cn}></span>
                                     )}
-                                    {selectedAlert.source?.cn || "Unknown"}
+                                    {getCountryName(selectedAlert.source?.cn) || "Unknown"}
                                 </div>
                                 {selectedAlert.source?.latitude && selectedAlert.source?.longitude && (
                                     <div className="text-xs text-gray-400 font-mono mt-1">

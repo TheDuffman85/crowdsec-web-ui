@@ -2,6 +2,8 @@
  * Statistics utility functions for dashboard analytics
  */
 
+import { getCountryName } from "./utils";
+
 /**
  * Filter items to only include those from the last N days
  */
@@ -58,7 +60,7 @@ export function getTopCountries(alerts, limit = 10) {
         .sort((a, b) => b.count - a.count)
         .slice(0, limit)
         .map(item => ({
-            label: item.label,
+            label: getCountryName(item.code), // Use full name for display
             count: item.count,
             countryCode: item.code  // Will be the 2-letter code
         }));
@@ -84,7 +86,7 @@ export function getAllCountries(alerts) {
 
     return Object.values(countryStats)
         .map(item => ({
-            label: item.label,
+            label: getCountryName(item.code), // Use full name
             count: item.count,
             countryCode: item.code
         }));
