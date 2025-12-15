@@ -83,6 +83,7 @@ export function Sidebar({ isMobileMenuOpen, onClose, theme, toggleTheme }) {
                         className="w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs rounded-md px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary-500 cursor-pointer"
                     >
                         <option value={0}>Manual Only</option>
+                        <option value={5000}>Every 5s</option>
                         <option value={30000}>Every 30s</option>
                         <option value={60000}>Every 1m</option>
                         <option value={300000}>Every 5m</option>

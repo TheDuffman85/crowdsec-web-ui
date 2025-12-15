@@ -54,7 +54,7 @@ Ban IPs directly from the UI with custom duration and reason.
 ## Architecture
 
 -   **Frontend**: React (Vite) + Tailwind CSS. Located in `frontend/`.
--   **Backend**: Node.js (Express). Acts as a proxy to the CrowdSec Local API (LAPI).
+-   **Backend**: Node.js (Express). Acts as an intelligent caching layer for CrowdSec Local API (LAPI) with delta updates.
 -   **Security**: The application runs as a non-root user (`node`) inside the container and communicates with CrowdSec via HTTP/LAPI. It uses **Machine Authentication** (User/Password) to obtain a JWT for full access (read/write).
 
 ## Prerequisites
@@ -111,7 +111,7 @@ services:
       - CROWDSEC_PASSWORD=<generated_password>
       # Optional: Lookback period for alerts/stats (default: 168h/7d)
       - CROWDSEC_LOOKBACK_PERIOD=5d
-      # Optional: Auto-refresh interval. Values: manual (default), 30s, 1m, 5m
+      # Optional: Backend auto-refresh interval. Values: manual (default), 5s, 30s, 1m, 5m
       - CROWDSEC_REFRESH_INTERVAL=manual
     restart: unless-stopped
 ```
