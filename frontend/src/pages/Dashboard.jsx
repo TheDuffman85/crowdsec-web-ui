@@ -8,6 +8,7 @@ import { Card, CardContent } from "../components/ui/Card";
 import { StatCard } from "../components/StatCard";
 import { ActivityBarChart } from "../components/DashboardCharts";
 import { WorldMapCard } from "../components/WorldMapCard";
+import { ScenarioName } from "../components/ScenarioName";
 import {
     filterLastNDays,
     getTopIPs,
@@ -486,7 +487,9 @@ export function Dashboard() {
                                 items={statistics.topScenarios}
                                 onSelect={(item) => toggleFilter('scenario', item.label)}
                                 selectedValue={filters.scenario}
-                                getExternalLink={(item) => getHubUrl(item.label)}
+                                renderLabel={(item) => (
+                                    <ScenarioName name={item.label} showLink={true} />
+                                )}
                             />
                         </div>
                     </>

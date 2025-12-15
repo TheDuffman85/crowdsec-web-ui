@@ -4,6 +4,7 @@ import { fetchDecisions, deleteDecision, addDecision } from "../lib/api";
 import { useRefresh } from "../contexts/RefreshContext";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
+import { ScenarioName } from "../components/ScenarioName";
 import { getHubUrl } from "../lib/utils";
 import { Trash2, Gavel, X, ExternalLink, Shield } from "lucide-react";
 import "flag-icons/css/flag-icons.min.css";
@@ -193,26 +194,8 @@ export function Decisions() {
                                                     decision.detail.country || "Unknown"
                                                 )}
                                             </td>
-                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={decision.detail.reason}>
-                                                {(() => {
-                                                    const hubUrl = getHubUrl(decision.detail.reason);
-                                                    return (
-                                                        <div className="flex items-center gap-1.5">
-                                                            <span className="truncate block font-medium text-gray-900 dark:text-gray-200">{decision.detail.reason}</span>
-                                                            {hubUrl && (
-                                                                <a
-                                                                    href={hubUrl}
-                                                                    target="_blank"
-                                                                    rel="noopener noreferrer"
-                                                                    className="text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors flex-shrink-0"
-                                                                    title="View on CrowdSec Hub"
-                                                                >
-                                                                    <ExternalLink size={14} />
-                                                                </a>
-                                                            )}
-                                                        </div>
-                                                    );
-                                                })()}
+                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={decision.detail.reason}>
+                                                <ScenarioName name={decision.detail.reason} showLink={true} />
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100">
                                                 <Badge variant="danger">{decision.detail.action || "ban"}</Badge>

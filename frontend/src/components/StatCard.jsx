@@ -13,6 +13,7 @@ export function StatCard({
     emptyMessage = "No data available",
     onSelect, // Changed from getLink to generic onSelect
     selectedValue, // The currently selected value for highlighting
+    renderLabel, // Optional function to render custom label content
     getExternalLink
 }) {
     // Calculate total for percentages
@@ -66,10 +67,14 @@ export function StatCard({
                                         {item.countryCode && (
                                             <span className={`fi fi-${item.countryCode.toLowerCase()} flex-shrink-0 rounded-sm`} />
                                         )}
-                                        <span className={`text-sm truncate font-medium ${isSelected ? 'text-primary-900 dark:text-white' : 'text-gray-900 dark:text-gray-100'}`} title={item.label}>
-                                            {item.label}
-                                        </span>
-                                        {hubUrl && (
+                                        {renderLabel ? (
+                                            renderLabel(item)
+                                        ) : (
+                                            <span className={`text-sm truncate font-medium ${isSelected ? 'text-primary-900 dark:text-white' : 'text-gray-900 dark:text-gray-100'}`} title={item.label}>
+                                                {item.label}
+                                            </span>
+                                        )}
+                                        {hubUrl && !renderLabel && (
                                             <a
                                                 href={hubUrl}
                                                 target="_blank"

@@ -4,6 +4,7 @@ import { fetchAlerts, fetchAlert } from "../lib/api";
 import { useRefresh } from "../contexts/RefreshContext";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
+import { ScenarioName } from "../components/ScenarioName";
 import { getHubUrl } from "../lib/utils";
 import { Search, Info, ExternalLink, Shield } from "lucide-react";
 import "flag-icons/css/flag-icons.min.css";
@@ -248,27 +249,8 @@ export function Alerts() {
                                                     "Unknown"
                                                 )}
                                             </td>
-                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={alert.scenario}>
-                                                {(() => {
-                                                    const hubUrl = getHubUrl(alert.scenario);
-                                                    return (
-                                                        <div className="flex items-center gap-1.5">
-                                                            <span className="truncate block font-medium text-gray-900 dark:text-gray-200">{alert.scenario}</span>
-                                                            {hubUrl && (
-                                                                <a
-                                                                    href={hubUrl}
-                                                                    target="_blank"
-                                                                    rel="noopener noreferrer"
-                                                                    className="text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors flex-shrink-0"
-                                                                    onClick={(e) => e.stopPropagation()}
-                                                                    title="View on CrowdSec Hub"
-                                                                >
-                                                                    <ExternalLink size={14} />
-                                                                </a>
-                                                            )}
-                                                        </div>
-                                                    );
-                                                })()}
+                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={alert.scenario}>
+                                                <ScenarioName name={alert.scenario} showLink={true} />
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
                                                 {alert.decisions && alert.decisions.length > 0 ? (() => {
@@ -341,25 +323,7 @@ export function Alerts() {
                             <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
                                 <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Scenario</h4>
                                 <div className="font-medium text-gray-900 dark:text-gray-100 break-words">
-                                    {(() => {
-                                        const hubUrl = getHubUrl(selectedAlert.scenario);
-                                        return (
-                                            <div className="flex items-center gap-1.5">
-                                                <span className="font-medium text-gray-900 dark:text-gray-200">{selectedAlert.scenario}</span>
-                                                {hubUrl && (
-                                                    <a
-                                                        href={hubUrl}
-                                                        target="_blank"
-                                                        rel="noopener noreferrer"
-                                                        className="text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors"
-                                                        title="View on CrowdSec Hub"
-                                                    >
-                                                        <ExternalLink size={14} />
-                                                    </a>
-                                                )}
-                                            </div>
-                                        );
-                                    })()}
+                                    <ScenarioName name={selectedAlert.scenario} showLink={true} />
                                 </div>
                             </div>
                             <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
