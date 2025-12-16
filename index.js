@@ -4,6 +4,22 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 
+// ============================================================================
+// CONSOLE LOGGING OVERRIDES (Add Timestamps)
+// ============================================================================
+const originalLog = console.log;
+const originalError = console.error;
+
+console.log = function (...args) {
+  const timestamp = new Date().toISOString();
+  originalLog.apply(console, [`[${timestamp}]`, ...args]);
+};
+
+console.error = function (...args) {
+  const timestamp = new Date().toISOString();
+  originalError.apply(console, [`[${timestamp}]`, ...args]);
+};
+
 // Persist refresh interval to a config file
 const CONFIG_FILE = path.join(__dirname, '.config.json');
 
@@ -61,6 +77,39 @@ apiClient.interceptors.request.use(config => {
   }
   return config;
 });
+
+// Add interceptor to retry requests on 401 (Token Expired)
+apiClient.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config;
+
+    // Check if error is 401 and we haven't already retried
+    if (error.response && error.response.status === 401 && !originalRequest._retry) {
+      // Avoid infinite loops for login requests themselves
+      if (originalRequest.url.includes('/watchers/login')) {
+        return Promise.reject(error);
+      }
+
+      console.log('Detected 401 Unauthorized. Attempting to re-authenticate...');
+      originalRequest._retry = true;
+
+      const success = await loginToLAPI();
+      if (success) {
+        console.log('Re-authentication successful. Retrying original request...');
+        // Update the token in the original request header
+        originalRequest.headers.Authorization = `Bearer ${requestToken}`;
+        // Retry the request
+        return apiClient(originalRequest);
+      } else {
+        console.error('Re-authentication failed.');
+      }
+    }
+
+    return Promise.reject(error);
+  }
+);
+
 
 // Login helper
 const loginToLAPI = async () => {
