@@ -27,8 +27,11 @@ import {
     AlertTriangle,
     FilterX,
     Globe,
-    Filter
+
+    Filter,
+    Percent
 } from "lucide-react";
+import { Switch } from "../components/ui/Switch";
 
 export function Dashboard() {
     const navigate = useNavigate();
@@ -41,6 +44,11 @@ export function Dashboard() {
     // Initialize state from local storage or defaults
     const [granularity, setGranularity] = useState(() => {
         return localStorage.getItem('dashboard_granularity') || 'day';
+    });
+
+    // Percentage Basis: 'filtered' or 'global'
+    const [percentageBasis, setPercentageBasis] = useState(() => {
+        return localStorage.getItem('dashboard_percentage_basis') || 'global';
     });
 
     const [isOnline, setIsOnline] = useState(true);
@@ -81,6 +89,10 @@ export function Dashboard() {
     useEffect(() => {
         localStorage.setItem('dashboard_granularity', granularity);
     }, [granularity]);
+
+    useEffect(() => {
+        localStorage.setItem('dashboard_percentage_basis', percentageBasis);
+    }, [percentageBasis]);
 
     // Handler to change granularity and clear date range simultaneously (explicit user action)
     const handleGranularityChange = (newGranularity) => {
@@ -262,7 +274,13 @@ export function Dashboard() {
             alerts: filteredAlerts,
             decisions: activeDecisions,  // Active decisions for card/lists
             chartAlerts: chartAlerts,  // Alerts for charts (no dateRange filter)
-            chartDecisions: chartDecisionsData  // All decisions for charts (no dateRange filter)
+            chartDecisions: chartDecisionsData,  // All decisions for charts (no dateRange filter)
+            // Global total (filtered by Lookback ONLY, ignoring sidebar filters)
+            // Note: filterLastNDays is already done on rawData.alerts
+            // But we want to ensure we get the count consistent with the chart's context if no other filters applied.
+            // If we use 'filtered' mode -> total is filteredData.alerts.length.
+            // If we use 'global' mode -> total is filterLastNDays(rawData.alerts).length.
+            globalTotal: filterLastNDays(rawData.alerts, lookbackDays).length
         };
     }, [rawData, config.lookback_days, filters]);
 
@@ -321,40 +339,62 @@ export function Dashboard() {
 
     return (
         <div className="space-y-8">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
                 <h2 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Dashboard</h2>
-                {hasActiveFilters && (
-                    <div className="flex flex-col md:flex-row items-end md:items-center gap-2">
-                        <button
-                            onClick={() => {
-                                // Build query parameters from active filters
-                                const params = new URLSearchParams();
-                                if (filters.country) params.set('country', filters.country);
-                                if (filters.scenario) params.set('scenario', filters.scenario);
-                                if (filters.as) params.set('as', filters.as);
-                                if (filters.ip) params.set('ip', filters.ip);
-                                if (filters.dateRange) {
-                                    params.set('dateStart', filters.dateRange.start);
-                                    // For the end date, we might ideally want to cover the full day/hour
-                                    // But simple passing often works if the receiving end is smart, or if it's just 'created_before'
-                                    params.set('dateEnd', filters.dateRange.end);
-                                }
-                                navigate(`/alerts?${params.toString()}`);
-                            }}
-                            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
-                        >
-                            <Filter className="w-4 h-4" />
-                            View Alerts
-                        </button>
-                        <button
-                            onClick={clearFilters}
-                            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
-                        >
-                            <FilterX className="w-4 h-4" />
-                            Clear Filters
-                        </button>
-                    </div>
-                )}
+
+                <div className="flex flex-col md:flex-row items-end md:items-center gap-4 w-full md:w-auto">
+                    {hasActiveFilters && (
+                        <>
+                            <div className="flex flex-row items-center gap-2">
+                                <button
+                                    onClick={() => {
+                                        // Build query parameters from active filters
+                                        const params = new URLSearchParams();
+                                        if (filters.country) params.set('country', filters.country);
+                                        if (filters.scenario) params.set('scenario', filters.scenario);
+                                        if (filters.as) params.set('as', filters.as);
+                                        if (filters.ip) params.set('ip', filters.ip);
+                                        if (filters.dateRange) {
+                                            params.set('dateStart', filters.dateRange.start);
+                                            params.set('dateEnd', filters.dateRange.end);
+                                        }
+                                        navigate(`/alerts?${params.toString()}`);
+                                    }}
+                                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
+                                >
+                                    <Filter className="w-4 h-4" />
+                                    <span className="hidden sm:inline">View Alerts</span>
+                                    <span className="sm:hidden">Alerts</span>
+                                </button>
+                                <button
+                                    onClick={clearFilters}
+                                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
+                                >
+                                    <FilterX className="w-4 h-4" />
+                                    <span className="hidden sm:inline">Clear Filters</span>
+                                    <span className="sm:hidden">Clear</span>
+                                </button>
+                            </div>
+
+                            {/* Percentage Basis Toggle */}
+                            <div className="flex items-center gap-3 bg-white dark:bg-gray-800 p-2 rounded-lg border border-gray-100 dark:border-gray-700 shadow-sm">
+                                <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+                                    <Percent className="w-4 h-4" />
+                                    <span className="hidden sm:inline">Basis:</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <span className={`text-xs font-medium ${percentageBasis === 'filtered' ? 'text-primary-600' : 'text-gray-500'}`}>Filtered</span>
+                                    <Switch
+                                        id="percentage-basis"
+                                        checked={percentageBasis === 'global'}
+                                        onCheckedChange={(checked) => setPercentageBasis(checked ? 'global' : 'filtered')}
+                                    />
+                                    <span className={`text-xs font-medium ${percentageBasis === 'global' ? 'text-primary-600' : 'text-gray-500'}`}>Global</span>
+                                </div>
+                            </div>
+                        </>
+                    )}
+                </div>
             </div>
 
             {/* Summary Cards */}
@@ -425,7 +465,7 @@ export function Dashboard() {
 
             {/* Statistics Section */}
             <div className="space-y-4">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 mb-4">
                     <TrendingUp className="w-6 h-6 text-primary-600 dark:text-primary-400" />
                     <h3 className="text-2xl font-bold text-gray-900 dark:text-white">
                         Last {config.lookback_days} Days Statistics
@@ -469,18 +509,21 @@ export function Dashboard() {
                                 items={statistics.topIPs}
                                 onSelect={(item) => toggleFilter('ip', item.label)}
                                 selectedValue={filters.ip}
+                                total={percentageBasis === 'global' ? filteredData.globalTotal : filteredData.alerts.length}
                             />
                             <StatCard
                                 title="Top AS"
                                 items={statistics.topAS}
                                 onSelect={(item) => toggleFilter('as', item.label)}
                                 selectedValue={filters.as}
+                                total={percentageBasis === 'global' ? filteredData.globalTotal : filteredData.alerts.length}
                             />
                             <StatCard
                                 title="Top Countries"
                                 items={statistics.topCountries}
                                 onSelect={(item) => toggleFilter('country', item.countryCode)}
                                 selectedValue={filters.country}
+                                total={percentageBasis === 'global' ? filteredData.globalTotal : filteredData.alerts.length}
                             />
                             <StatCard
                                 title="Top Scenarios"
@@ -490,6 +533,7 @@ export function Dashboard() {
                                 renderLabel={(item) => (
                                     <ScenarioName name={item.label} showLink={true} />
                                 )}
+                                total={percentageBasis === 'global' ? filteredData.globalTotal : filteredData.alerts.length}
                             />
                         </div>
                     </>
