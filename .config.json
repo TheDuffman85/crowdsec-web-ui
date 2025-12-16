@@ -1,0 +1,4 @@
+{
+  "refresh_interval_ms": 5000,
+  "refresh_interval_name": "5s"
+}

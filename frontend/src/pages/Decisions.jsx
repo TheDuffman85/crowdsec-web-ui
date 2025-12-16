@@ -4,7 +4,9 @@ import { fetchDecisions, deleteDecision, addDecision } from "../lib/api";
 import { useRefresh } from "../contexts/RefreshContext";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
-import { getHubUrl } from "../lib/utils";
+import { ScenarioName } from "../components/ScenarioName";
+import { TimeDisplay } from "../components/TimeDisplay";
+import { getHubUrl, getCountryName } from "../lib/utils";
 import { Trash2, Gavel, X, ExternalLink, Shield } from "lucide-react";
 import "flag-icons/css/flag-icons.min.css";
 
@@ -145,12 +147,11 @@ export function Decisions() {
                     <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                         <thead className="bg-gray-50 dark:bg-gray-900/50">
                             <tr>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">ID</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Time</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">IP</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">AS</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Country</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Scenario</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Country</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">AS</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">IP</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Action</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Expiration</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Alert</th>
@@ -159,9 +160,9 @@ export function Decisions() {
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                             {loading ? (
-                                <tr><td colSpan="10" className="px-6 py-4 text-center text-sm text-gray-500">Loading decisions...</td></tr>
+                                <tr><td colSpan="9" className="px-6 py-4 text-center text-sm text-gray-500">Loading decisions...</td></tr>
                             ) : filteredDecisions.length === 0 ? (
-                                <tr><td colSpan="10" className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? "No decisions for this alert" : "No decisions found"}</td></tr>
+                                <tr><td colSpan="9" className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? "No decisions for this alert" : "No decisions found"}</td></tr>
                             ) : (
                                 filteredDecisions.map((decision) => {
                                     const isExpired = decision.expired || (decision.detail.duration && decision.detail.duration.startsWith("-"));
@@ -171,48 +172,27 @@ export function Decisions() {
 
                                     return (
                                         <tr key={decision.id} className={rowClasses}>
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                                                #{decision.id}
-                                            </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
-                                                {new Date(decision.created_at).toLocaleString()}
+                                                <TimeDisplay timestamp={decision.created_at} />
                                             </td>
-                                            <td className="px-6 py-4 text-sm font-mono text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={decision.value}>
-                                                {decision.value}
+                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={decision.detail.reason}>
+                                                <ScenarioName name={decision.detail.reason} showLink={true} />
+                                            </td>
+                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 align-middle">
+                                                {decision.detail.country ? (
+                                                    <div className="flex items-center gap-2" title={decision.detail.country}>
+                                                        <span className={`fi fi-${decision.detail.country.toLowerCase()} flex-shrink-0`}></span>
+                                                        <span>{getCountryName(decision.detail.country)}</span>
+                                                    </div>
+                                                ) : (
+                                                    "Unknown"
+                                                )}
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[150px] truncate" title={decision.detail.as}>
                                                 {decision.detail.as}
                                             </td>
-                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 flex items-center gap-2">
-                                                {decision.detail.country ? (
-                                                    <>
-                                                        <span className={`fi fi-${decision.detail.country.toLowerCase()}`}></span>
-                                                        <span>{decision.detail.country}</span>
-                                                    </>
-                                                ) : (
-                                                    decision.detail.country || "Unknown"
-                                                )}
-                                            </td>
-                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={decision.detail.reason}>
-                                                {(() => {
-                                                    const hubUrl = getHubUrl(decision.detail.reason);
-                                                    return (
-                                                        <div className="flex items-center gap-1.5">
-                                                            <span className="truncate block font-medium text-gray-900 dark:text-gray-200">{decision.detail.reason}</span>
-                                                            {hubUrl && (
-                                                                <a
-                                                                    href={hubUrl}
-                                                                    target="_blank"
-                                                                    rel="noopener noreferrer"
-                                                                    className="text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors flex-shrink-0"
-                                                                    title="View on CrowdSec Hub"
-                                                                >
-                                                                    <ExternalLink size={14} />
-                                                                </a>
-                                                            )}
-                                                        </div>
-                                                    );
-                                                })()}
+                                            <td className="px-6 py-4 text-sm font-mono text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={decision.value}>
+                                                {decision.value}
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100">
                                                 <Badge variant="danger">{decision.detail.action || "ban"}</Badge>

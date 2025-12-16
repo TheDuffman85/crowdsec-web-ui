@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { Globe } from 'lucide-react';
 
 // Using local Natural Earth data which has proper ISO properties
-const geoUrl = "/world-110m-miller.json";
+const geoUrl = "/world-50m.json";
 
 /**
  * World Map Component for Dashboard
@@ -54,12 +54,12 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                         <ComposableMap
                             projection="geoNaturalEarth1"
                             projectionConfig={{
-                                scale: 200
+                                scale: 225
                             }}
                             className="w-full h-auto"
                             style={{ maxHeight: '100%', maxWidth: '100%' }}
                         >
-                            <ZoomableGroup center={[0, 0]} zoom={1}>
+                            <ZoomableGroup center={[0, 15]} zoom={1}>
                                 <Geographies geography={geoUrl}>
                                     {({ geographies }) =>
                                         geographies.map((geo) => {

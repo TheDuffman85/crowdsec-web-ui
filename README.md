@@ -54,7 +54,7 @@ Ban IPs directly from the UI with custom duration and reason.
 ## Architecture
 
 -   **Frontend**: React (Vite) + Tailwind CSS. Located in `frontend/`.
--   **Backend**: Node.js (Express). Acts as a proxy to the CrowdSec Local API (LAPI).
+-   **Backend**: Node.js (Express). Acts as an intelligent caching layer for CrowdSec Local API (LAPI) with delta updates.
 -   **Security**: The application runs as a non-root user (`node`) inside the container and communicates with CrowdSec via HTTP/LAPI. It uses **Machine Authentication** (User/Password) to obtain a JWT for full access (read/write).
 
 ## Prerequisites
@@ -90,7 +90,7 @@ Ban IPs directly from the UI with custom duration and reason.
       -e CROWDSEC_USER=crowdsec-web-ui \
       -e CROWDSEC_PASSWORD=<your-secure-password> \
       -e CROWDSEC_LOOKBACK_PERIOD=5d \
-      -e CROWDSEC_REFRESH_INTERVAL=manual \
+      -e CROWDSEC_REFRESH_INTERVAL=0 \
       --network your_crowdsec_network \
       crowdsec-web-ui
     ```
@@ -111,8 +111,16 @@ services:
       - CROWDSEC_PASSWORD=<generated_password>
       # Optional: Lookback period for alerts/stats (default: 168h/7d)
       - CROWDSEC_LOOKBACK_PERIOD=5d
-      # Optional: Auto-refresh interval. Values: manual (default), 30s, 1m, 5m
-      - CROWDSEC_REFRESH_INTERVAL=manual
+      # Optional: Backend auto-refresh interval. Values: 0 (Off), 5s, 30s (default), 1m, 5m
+      - CROWDSEC_REFRESH_INTERVAL=30s
+      # Optional: Idle Mode settings to save resources
+      # Interval to use when no users are active (default: 5m)
+      - CROWDSEC_IDLE_REFRESH_INTERVAL=5m
+      # Time without API requests to consider system idle (default: 2m)
+      - CROWDSEC_IDLE_THRESHOLD=2m
+      # Optional: Interval for full cache refresh (default: 5m)
+      # Forces a complete data reload when active, skipped when idle.
+      - CROWDSEC_FULL_REFRESH_INTERVAL=5m
     restart: unless-stopped
 ```
 
@@ -129,7 +137,7 @@ services:
     export CROWDSEC_USER=crowdsec-web-ui
     export CROWDSEC_PASSWORD=<your-secure-password>
     export CROWDSEC_LOOKBACK_PERIOD=5d
-    export CROWDSEC_REFRESH_INTERVAL=manual
+    export CROWDSEC_REFRESH_INTERVAL=30s
     npm start
     ```
 

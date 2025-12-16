@@ -4,7 +4,9 @@ import { fetchAlerts, fetchAlert } from "../lib/api";
 import { useRefresh } from "../contexts/RefreshContext";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
-import { getHubUrl } from "../lib/utils";
+import { ScenarioName } from "../components/ScenarioName";
+import { TimeDisplay } from "../components/TimeDisplay";
+import { getHubUrl, getCountryName } from "../lib/utils";
 import { Search, Info, ExternalLink, Shield } from "lucide-react";
 import "flag-icons/css/flag-icons.min.css";
 
@@ -51,6 +53,13 @@ export function Alerts() {
                         console.error("Alert not found", err);
                     }
                 }
+            } else {
+                // If a modal is open but no ID param (e.g. clicked row), update it with fresh data
+                setSelectedAlert(prev => {
+                    if (!prev) return null;
+                    const updated = alertsData.find(a => a.id === prev.id);
+                    return updated || prev;
+                });
             }
 
             // Check for generic search query param
@@ -202,20 +211,19 @@ export function Alerts() {
                     <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 transition-opacity duration-200">
                         <thead className="bg-gray-50 dark:bg-gray-900/50">
                             <tr>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">ID</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Time</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">IP</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">AS</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Country</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Scenario</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Country</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">AS</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">IP</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Decisions</th>
                             </tr>
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                             {loading ? (
-                                <tr><td colSpan="7" className="px-6 py-4 text-center text-sm text-gray-500">Loading alerts...</td></tr>
+                                <tr><td colSpan="6" className="px-6 py-4 text-center text-sm text-gray-500">Loading alerts...</td></tr>
                             ) : visibleAlerts.length === 0 ? (
-                                <tr><td colSpan="7" className="px-6 py-4 text-center text-sm text-gray-500">No alerts found</td></tr>
+                                <tr><td colSpan="6" className="px-6 py-4 text-center text-sm text-gray-500">No alerts found</td></tr>
                             ) : (
                                 visibleAlerts.map((alert, index) => {
                                     const isLastElement = index === visibleAlerts.length - 1;
@@ -226,49 +234,27 @@ export function Alerts() {
                                             onClick={() => setSelectedAlert(alert)}
                                             className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors cursor-pointer"
                                         >
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                                                #{alert.id}
-                                            </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
-                                                {new Date(alert.created_at).toLocaleString()}
+                                                <TimeDisplay timestamp={alert.created_at} />
                                             </td>
-                                            <td className="px-6 py-4 text-sm font-mono text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={alert.source?.ip || alert.source?.value}>
-                                                {alert.source?.ip || alert.source?.value || "N/A"}
+                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={alert.scenario}>
+                                                <ScenarioName name={alert.scenario} showLink={true} />
                                             </td>
-                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[150px] truncate" title={alert.source?.as_name}>
-                                                {alert.source?.as_name || "Unknown"}
-                                            </td>
-                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 align-middle">
                                                 {alert.source?.cn ? (
-                                                    <>
-                                                        <span className={`fi fi-${alert.source.cn.toLowerCase()}`}></span>
-                                                        <span>{alert.source.cn}</span>
-                                                    </>
+                                                    <div className="flex items-center gap-2" title={alert.source.cn}>
+                                                        <span className={`fi fi-${alert.source.cn.toLowerCase()} flex-shrink-0`}></span>
+                                                        <span className="truncate max-w-[150px]">{getCountryName(alert.source.cn)}</span>
+                                                    </div>
                                                 ) : (
                                                     "Unknown"
                                                 )}
                                             </td>
-                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={alert.scenario}>
-                                                {(() => {
-                                                    const hubUrl = getHubUrl(alert.scenario);
-                                                    return (
-                                                        <div className="flex items-center gap-1.5">
-                                                            <span className="truncate block font-medium text-gray-900 dark:text-gray-200">{alert.scenario}</span>
-                                                            {hubUrl && (
-                                                                <a
-                                                                    href={hubUrl}
-                                                                    target="_blank"
-                                                                    rel="noopener noreferrer"
-                                                                    className="text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors flex-shrink-0"
-                                                                    onClick={(e) => e.stopPropagation()}
-                                                                    title="View on CrowdSec Hub"
-                                                                >
-                                                                    <ExternalLink size={14} />
-                                                                </a>
-                                                            )}
-                                                        </div>
-                                                    );
-                                                })()}
+                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[150px] truncate" title={alert.source?.as_name}>
+                                                {alert.source?.as_name || "Unknown"}
+                                            </td>
+                                            <td className="px-6 py-4 text-sm font-mono text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={alert.source?.ip || alert.source?.value}>
+                                                {alert.source?.ip || alert.source?.value || "N/A"}
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
                                                 {alert.decisions && alert.decisions.length > 0 ? (() => {
@@ -326,9 +312,14 @@ export function Alerts() {
             {/* Alert Details Modal */}
             <Modal
                 isOpen={!!selectedAlert}
-                onClose={() => setSelectedAlert(null)}
+                onClose={() => {
+                    setSelectedAlert(null);
+                    const newParams = new URLSearchParams(searchParams);
+                    newParams.delete("id");
+                    setSearchParams(newParams);
+                }}
                 title={selectedAlert ? `Alert Details #${selectedAlert.id}` : "Alert Details"}
-                maxWidth="max-w-4xl"
+                maxWidth="max-w-6xl"
             >
                 {selectedAlert && (
                     <div className="space-y-6">
@@ -341,26 +332,31 @@ export function Alerts() {
                             <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
                                 <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Scenario</h4>
                                 <div className="font-medium text-gray-900 dark:text-gray-100 break-words">
-                                    {(() => {
-                                        const hubUrl = getHubUrl(selectedAlert.scenario);
-                                        return (
-                                            <div className="flex items-center gap-1.5">
-                                                <span className="font-medium text-gray-900 dark:text-gray-200">{selectedAlert.scenario}</span>
-                                                {hubUrl && (
-                                                    <a
-                                                        href={hubUrl}
-                                                        target="_blank"
-                                                        rel="noopener noreferrer"
-                                                        className="text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors"
-                                                        title="View on CrowdSec Hub"
-                                                    >
-                                                        <ExternalLink size={14} />
-                                                    </a>
-                                                )}
-                                            </div>
-                                        );
-                                    })()}
+                                    <ScenarioName name={selectedAlert.scenario} showLink={true} />
                                 </div>
+                            </div>
+                            <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
+                                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Location</h4>
+                                <div className="text-lg text-gray-900 dark:text-gray-100 font-medium flex items-center gap-2">
+                                    {selectedAlert.source?.cn && (
+                                        <span className={`fi fi-${selectedAlert.source.cn.toLowerCase()} flex-shrink-0`} title={selectedAlert.source.cn}></span>
+                                    )}
+                                    {getCountryName(selectedAlert.source?.cn) || "Unknown"}
+                                </div>
+                                {selectedAlert.source?.latitude && selectedAlert.source?.longitude && (
+                                    <div className="text-xs text-gray-400 font-mono mt-1">
+                                        <a
+                                            href={`https://www.google.com/maps?q=${selectedAlert.source.latitude},${selectedAlert.source.longitude}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="hover:text-primary-600 dark:hover:text-primary-400 transition-colors inline-flex items-center gap-1"
+                                            title="View on Google Maps"
+                                        >
+                                            Lat: {selectedAlert.source.latitude}, Long: {selectedAlert.source.longitude}
+                                            <ExternalLink size={10} />
+                                        </a>
+                                    </div>
+                                )}
                             </div>
                             <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
                                 <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">IP</h4>
@@ -392,29 +388,6 @@ export function Alerts() {
                                     )}
                                 </div>
                             </div>
-                            <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
-                                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Location</h4>
-                                <div className="text-lg text-gray-900 dark:text-gray-100 font-medium flex items-center gap-2">
-                                    {selectedAlert.source?.cn && (
-                                        <span className={`fi fi-${selectedAlert.source.cn.toLowerCase()}`}></span>
-                                    )}
-                                    {selectedAlert.source?.cn || "Unknown"}
-                                </div>
-                                {selectedAlert.source?.latitude && selectedAlert.source?.longitude && (
-                                    <div className="text-xs text-gray-400 font-mono mt-1">
-                                        <a
-                                            href={`https://www.google.com/maps?q=${selectedAlert.source.latitude},${selectedAlert.source.longitude}`}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="hover:text-primary-600 dark:hover:text-primary-400 transition-colors inline-flex items-center gap-1"
-                                            title="View on Google Maps"
-                                        >
-                                            Lat: {selectedAlert.source.latitude}, Long: {selectedAlert.source.longitude}
-                                            <ExternalLink size={10} />
-                                        </a>
-                                    </div>
-                                )}
-                            </div>
                         </div>
 
                         {/* Message */}
@@ -437,6 +410,7 @@ export function Alerts() {
                                     <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                                         <thead className="bg-gray-50 dark:bg-gray-900">
                                             <tr>
+                                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
                                                 <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
                                                 <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Value</th>
                                                 <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Duration</th>
@@ -461,6 +435,7 @@ export function Alerts() {
 
                                                 return (
                                                     <tr key={idx}>
+                                                        <td className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400">#{decision.id}</td>
                                                         <td className="px-4 py-2 text-sm"><Badge variant="danger">{decision.type}</Badge></td>
                                                         <td className="px-4 py-2 text-sm font-mono">{decision.value}</td>
                                                         <td className="px-4 py-2 text-sm">{decision.duration}</td>

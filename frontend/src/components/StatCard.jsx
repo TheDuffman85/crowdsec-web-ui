@@ -13,12 +13,15 @@ export function StatCard({
     emptyMessage = "No data available",
     onSelect, // Changed from getLink to generic onSelect
     selectedValue, // The currently selected value for highlighting
-    getExternalLink
+    renderLabel, // Optional function to render custom label content
+    getExternalLink,
+    total // Optional total count to calculate percentages against global total instead of visible items
 }) {
     // Calculate total for percentages
-    const totalCount = useMemo(() => {
+    const denominator = useMemo(() => {
+        if (total !== undefined) return total;
         return items.reduce((sum, item) => sum + item.count, 0);
-    }, [items]);
+    }, [items, total]);
 
     return (
         <Card className="h-full">
@@ -37,7 +40,7 @@ export function StatCard({
                     <div className="space-y-2">
                         {items.map((item, idx) => {
                             const isSelected = selectedValue === item.value || selectedValue === item.label; // Handle both potential value types
-                            const percent = totalCount > 0 ? (item.count / totalCount * 100).toFixed(1) : '0.0';
+                            const percent = denominator > 0 ? (item.count / denominator * 100).toFixed(1) : '0.0';
 
                             const handleRowClick = () => {
                                 if (onSelect) {
@@ -66,10 +69,14 @@ export function StatCard({
                                         {item.countryCode && (
                                             <span className={`fi fi-${item.countryCode.toLowerCase()} flex-shrink-0 rounded-sm`} />
                                         )}
-                                        <span className={`text-sm truncate font-medium ${isSelected ? 'text-primary-900 dark:text-white' : 'text-gray-900 dark:text-gray-100'}`} title={item.label}>
-                                            {item.label}
-                                        </span>
-                                        {hubUrl && (
+                                        {renderLabel ? (
+                                            renderLabel(item)
+                                        ) : (
+                                            <span className={`text-sm truncate font-medium ${isSelected ? 'text-primary-900 dark:text-white' : 'text-gray-900 dark:text-gray-100'}`} title={item.label}>
+                                                {item.label}
+                                            </span>
+                                        )}
+                                        {hubUrl && !renderLabel && (
                                             <a
                                                 href={hubUrl}
                                                 target="_blank"
