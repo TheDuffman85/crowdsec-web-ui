@@ -5,6 +5,7 @@ import { useRefresh } from "../contexts/RefreshContext";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
 import { ScenarioName } from "../components/ScenarioName";
+import { TimeDisplay } from "../components/TimeDisplay";
 import { getHubUrl, getCountryName } from "../lib/utils";
 import { Search, Info, ExternalLink, Shield } from "lucide-react";
 import "flag-icons/css/flag-icons.min.css";
@@ -210,10 +211,9 @@ export function Alerts() {
                     <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 transition-opacity duration-200">
                         <thead className="bg-gray-50 dark:bg-gray-900/50">
                             <tr>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">ID</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Time</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Country</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Scenario</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Country</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">AS</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">IP</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Decisions</th>
@@ -221,9 +221,9 @@ export function Alerts() {
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                             {loading ? (
-                                <tr><td colSpan="7" className="px-6 py-4 text-center text-sm text-gray-500">Loading alerts...</td></tr>
+                                <tr><td colSpan="6" className="px-6 py-4 text-center text-sm text-gray-500">Loading alerts...</td></tr>
                             ) : visibleAlerts.length === 0 ? (
-                                <tr><td colSpan="7" className="px-6 py-4 text-center text-sm text-gray-500">No alerts found</td></tr>
+                                <tr><td colSpan="6" className="px-6 py-4 text-center text-sm text-gray-500">No alerts found</td></tr>
                             ) : (
                                 visibleAlerts.map((alert, index) => {
                                     const isLastElement = index === visibleAlerts.length - 1;
@@ -234,11 +234,11 @@ export function Alerts() {
                                             onClick={() => setSelectedAlert(alert)}
                                             className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors cursor-pointer"
                                         >
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                                                #{alert.id}
-                                            </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
-                                                {new Date(alert.created_at).toLocaleString()}
+                                                <TimeDisplay timestamp={alert.created_at} />
+                                            </td>
+                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={alert.scenario}>
+                                                <ScenarioName name={alert.scenario} showLink={true} />
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 flex items-center gap-2">
                                                 {alert.source?.cn ? (
@@ -249,9 +249,6 @@ export function Alerts() {
                                                 ) : (
                                                     "Unknown"
                                                 )}
-                                            </td>
-                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={alert.scenario}>
-                                                <ScenarioName name={alert.scenario} showLink={true} />
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[150px] truncate" title={alert.source?.as_name}>
                                                 {alert.source?.as_name || "Unknown"}
@@ -322,7 +319,7 @@ export function Alerts() {
                     setSearchParams(newParams);
                 }}
                 title={selectedAlert ? `Alert Details #${selectedAlert.id}` : "Alert Details"}
-                maxWidth="max-w-4xl"
+                maxWidth="max-w-6xl"
             >
                 {selectedAlert && (
                     <div className="space-y-6">
@@ -332,6 +329,12 @@ export function Alerts() {
 
                         {/* Summary Cards */}
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
+                                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Scenario</h4>
+                                <div className="font-medium text-gray-900 dark:text-gray-100 break-words">
+                                    <ScenarioName name={selectedAlert.scenario} showLink={true} />
+                                </div>
+                            </div>
                             <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
                                 <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Location</h4>
                                 <div className="text-lg text-gray-900 dark:text-gray-100 font-medium flex items-center gap-2">
@@ -354,12 +357,6 @@ export function Alerts() {
                                         </a>
                                     </div>
                                 )}
-                            </div>
-                            <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
-                                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Scenario</h4>
-                                <div className="font-medium text-gray-900 dark:text-gray-100 break-words">
-                                    <ScenarioName name={selectedAlert.scenario} showLink={true} />
-                                </div>
                             </div>
                             <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
                                 <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">IP</h4>
@@ -413,6 +410,7 @@ export function Alerts() {
                                     <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                                         <thead className="bg-gray-50 dark:bg-gray-900">
                                             <tr>
+                                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
                                                 <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
                                                 <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Value</th>
                                                 <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Duration</th>
@@ -437,6 +435,7 @@ export function Alerts() {
 
                                                 return (
                                                     <tr key={idx}>
+                                                        <td className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400">#{decision.id}</td>
                                                         <td className="px-4 py-2 text-sm"><Badge variant="danger">{decision.type}</Badge></td>
                                                         <td className="px-4 py-2 text-sm font-mono">{decision.value}</td>
                                                         <td className="px-4 py-2 text-sm">{decision.duration}</td>
