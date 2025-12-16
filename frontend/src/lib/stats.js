@@ -61,6 +61,7 @@ export function getTopCountries(alerts, limit = 10) {
         .slice(0, limit)
         .map(item => ({
             label: getCountryName(item.code), // Use full name for display
+            value: item.code, // StartCard uses this for equality check
             count: item.count,
             countryCode: item.code  // Will be the 2-letter code
         }));
