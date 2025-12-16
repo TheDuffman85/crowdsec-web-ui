@@ -26,7 +26,7 @@ export function RefreshProvider({ children }) {
     // Function to update interval via API
     const setIntervalMs = async (newIntervalMs) => {
         // Convert milliseconds back to interval name
-        let intervalName = 'manual';
+        let intervalName = '0';
         if (newIntervalMs === 5000) intervalName = '5s';
         else if (newIntervalMs === 30000) intervalName = '30s';
         else if (newIntervalMs === 60000) intervalName = '1m';

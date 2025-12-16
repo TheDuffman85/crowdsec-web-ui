@@ -125,14 +125,32 @@ function parseLookbackToMs(lookbackPeriod) {
 }
 
 // Parse refresh interval to milliseconds
+// Parse refresh interval to milliseconds
 function parseRefreshInterval(intervalStr) {
-  switch (intervalStr.toLowerCase()) {
+  if (!intervalStr) return 0;
+  const str = intervalStr.toLowerCase();
+
+  // Specific keywords
+  if (str === 'manual' || str === '0') return 0;
+
+  // Generic parsing
+  const match = str.match(/^(\d+)([smhd])$/);
+  if (match) {
+    const val = parseInt(match[1]);
+    const unit = match[2];
+    if (unit === 's') return val * 1000;
+    if (unit === 'm') return val * 60 * 1000;
+    if (unit === 'h') return val * 60 * 60 * 1000;
+    if (unit === 'd') return val * 24 * 60 * 60 * 1000;
+  }
+
+  // Fallback for hardcoded values if regex somehow fails or for back-compat
+  switch (str) {
     case '5s': return 5000;
     case '30s': return 30000;
     case '1m': return 60000;
     case '5m': return 300000;
-    case 'manual':
-    default: return 0; // 0 means manual only
+    default: return 0;
   }
 }
 
@@ -142,7 +160,7 @@ const LOOKBACK_MS = parseLookbackToMs(CROWDSEC_LOOKBACK_PERIOD);
 const persistedConfig = loadPersistedConfig();
 let REFRESH_INTERVAL_MS = persistedConfig.refresh_interval_ms !== undefined
   ? persistedConfig.refresh_interval_ms
-  : parseRefreshInterval(process.env.CROWDSEC_REFRESH_INTERVAL || 'manual');
+  : parseRefreshInterval(process.env.CROWDSEC_REFRESH_INTERVAL || '30s');
 let refreshTimer = null; // Track the background refresh interval timer
 
 console.log(`Cache Configuration:
@@ -394,32 +412,116 @@ async function updateCache() {
   cleanupOldData();
 }
 
+// Idle & Full Refresh Configuration
+const IDLE_REFRESH_INTERVAL_MS = parseRefreshInterval(process.env.CROWDSEC_IDLE_REFRESH_INTERVAL || '5m');
+const IDLE_THRESHOLD_MS = parseRefreshInterval(process.env.CROWDSEC_IDLE_THRESHOLD || '2m');
+const FULL_REFRESH_INTERVAL_MS = parseRefreshInterval(process.env.CROWDSEC_FULL_REFRESH_INTERVAL || '5m');
+
+// Activity Tracker
+let lastRequestTime = Date.now();
+let lastFullRefreshTime = Date.now();
+
+const activityTracker = (req, res, next) => {
+  const now = Date.now();
+  const wasIdle = (now - lastRequestTime) > IDLE_THRESHOLD_MS;
+  lastRequestTime = now;
+
+  if (wasIdle && isSchedulerRunning) {
+    console.log("System waking up from idle mode. Triggering immediate refresh...");
+    // Cancel pending sleep and run immediately
+    if (schedulerTimeout) clearTimeout(schedulerTimeout);
+    runSchedulerLoop();
+  }
+
+  next();
+};
+
 // Scheduler management functions
+let schedulerTimeout = null;
+let isSchedulerRunning = false;
+
+async function runSchedulerLoop() {
+  if (!isSchedulerRunning) return;
+
+  const now = Date.now();
+  const timeSinceLastRequest = now - lastRequestTime;
+  const isIdle = timeSinceLastRequest > IDLE_THRESHOLD_MS;
+  const timeSinceLastFull = now - lastFullRefreshTime;
+
+  // Decide Update Type
+  // We do Full Refresh if:
+  // 1. Not Idle (we don't do full refresh when idle to save resources)
+  // 2. Full Refresh interval exceeded
+  // 3. OR manually forced? (not implemented here yet)
+
+  let doFullRefresh = !isIdle && (FULL_REFRESH_INTERVAL_MS > 0 && timeSinceLastFull > FULL_REFRESH_INTERVAL_MS);
+
+  try {
+    if (doFullRefresh) {
+      console.log(`Triggering FULL refresh (last full: ${Math.round(timeSinceLastFull / 1000)}s ago)...`);
+      await initializeCache();
+      lastFullRefreshTime = Date.now();
+      console.log('Full refresh completed.');
+    } else {
+      console.log(`Background refresh triggered (${isIdle ? 'IDLE' : 'ACTIVE'})...`);
+      await updateCache(); // Delta + Cleanup
+    }
+  } catch (err) {
+    console.error("Scheduler update failed:", err);
+  }
+
+  if (!isSchedulerRunning) return;
+
+  // 2. Determine Next Interval
+  // Re-check idle status as it might have changed during await
+  const currentIdle = (Date.now() - lastRequestTime) > IDLE_THRESHOLD_MS;
+
+  let currentTargetInterval = REFRESH_INTERVAL_MS;
+
+  if (currentTargetInterval > 0) {
+    if (currentIdle) {
+      if (currentTargetInterval < IDLE_REFRESH_INTERVAL_MS) {
+        // Slow down
+        currentTargetInterval = IDLE_REFRESH_INTERVAL_MS;
+        console.log(`Idle mode active. Next refresh in ${getIntervalName(currentTargetInterval)}.`);
+      }
+    }
+  } else {
+    console.log("Scheduler in manual mode. Stopping loop.");
+    isSchedulerRunning = false;
+    return;
+  }
+
+  // 3. Schedule Next Run
+  schedulerTimeout = setTimeout(runSchedulerLoop, currentTargetInterval);
+}
+
 function startRefreshScheduler() {
   stopRefreshScheduler();
 
   if (REFRESH_INTERVAL_MS > 0) {
-    console.log(`Starting refresh scheduler (interval: ${REFRESH_INTERVAL_MS}ms)...`);
-    refreshTimer = setInterval(async () => {
-      console.log('Background refresh triggered...');
-      await updateCache();
-    }, REFRESH_INTERVAL_MS);
+    console.log(`Starting smart scheduler (active: ${getIntervalName(REFRESH_INTERVAL_MS)}, idle: ${getIntervalName(IDLE_REFRESH_INTERVAL_MS)})...`);
+    isSchedulerRunning = true;
+    // Wait for first interval before first run
+    schedulerTimeout = setTimeout(runSchedulerLoop, REFRESH_INTERVAL_MS);
   } else {
     console.log('Manual refresh mode - cache will update on each request');
   }
 }
 
 function stopRefreshScheduler() {
-  if (refreshTimer) {
+  isSchedulerRunning = false;
+  if (schedulerTimeout) {
     console.log('Stopping refresh scheduler...');
-    clearInterval(refreshTimer);
-    refreshTimer = null;
+    clearTimeout(schedulerTimeout);
+    schedulerTimeout = null;
   }
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; } // Cleanup old
 }
 
 // Helper to convert interval string to name for display
 function getIntervalName(intervalMs) {
-  if (intervalMs === 0) return 'manual';
+  if (intervalMs === 0) return 'Off';
   if (intervalMs === 5000) return '5s';
   if (intervalMs === 30000) return '30s';
   if (intervalMs === 60000) return '1m';
@@ -433,6 +535,7 @@ function getIntervalName(intervalMs) {
 
 app.use(cors());
 app.use(express.json());
+app.use(activityTracker); // Apply to all routes
 
 /**
  * Middleware to ensure we have a token or try to get one
@@ -479,6 +582,50 @@ const handleApiError = async (error, res, action, replayCallback) => {
 };
 
 /**
+ * Helper to hydrate an alert's decisions with fresh data from the active cache
+ * This ensures even stale alerts (from delta updates) show current decision loops
+ */
+const hydrateAlertWithDecisions = (alert) => {
+  // Clone to safe mutate
+  const alertClone = { ...alert };
+
+  if (alertClone.decisions && Array.isArray(alertClone.decisions)) {
+    alertClone.decisions = alertClone.decisions.map(decision => {
+      // Check if we have fresh data for this decision in our active cache
+      // The cache.decisions map contains the LATEST data from LAPI
+      const cachedDecision = cache.decisions.get(decision.id);
+
+      if (cachedDecision) {
+        // Hydrate with fresh details where applicable
+        // We preserve the original ID/structure but update mutable fields
+        return {
+          ...decision,
+          duration: cachedDecision.detail?.duration || decision.duration, // Update duration string
+          stop_at: cachedDecision.detail?.expiration || decision.stop_at, // Update expiration time
+          type: cachedDecision.detail?.type || decision.type,
+          value: cachedDecision.value || decision.value,
+          origin: cachedDecision.detail?.origin || decision.origin
+        };
+      } else {
+        // Not in active cache = Expired or Deleted
+        // Force it to look expired if it doesn't already
+        const now = new Date();
+        const stopAt = decision.stop_at ? new Date(decision.stop_at) : null;
+
+        if (!stopAt || stopAt > now) {
+          return {
+            ...decision,
+            stop_at: new Date(Date.now() - 1000).toISOString() // Set to 1s ago
+          };
+        }
+      }
+      return decision;
+    });
+  }
+  return alertClone;
+};
+
+/**
  * GET /api/alerts
  * Returns alerts from cache
  */
@@ -494,8 +641,10 @@ app.get('/api/alerts', ensureAuth, async (req, res) => {
       await initializeCache();
     }
 
-    // Return alerts from cache
-    const alerts = Array.from(cache.alerts.values());
+    // Return alerts from cache, hydrated with fresh decision status
+    const cachedAlerts = Array.from(cache.alerts.values());
+    const alerts = cachedAlerts.map(hydrateAlertWithDecisions);
+
     alerts.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
     res.json(alerts);
@@ -511,7 +660,17 @@ app.get('/api/alerts', ensureAuth, async (req, res) => {
 app.get('/api/alerts/:id', ensureAuth, async (req, res) => {
   const doRequest = async () => {
     const response = await apiClient.get(`/v1/alerts/${req.params.id}`);
-    res.json(response.data);
+
+    // Process response to sync decisions with active cache
+    let alertData = response.data;
+
+    if (Array.isArray(alertData)) {
+      alertData = alertData.map(hydrateAlertWithDecisions);
+    } else {
+      alertData = hydrateAlertWithDecisions(alertData);
+    }
+
+    res.json(alertData);
   };
 
   try {

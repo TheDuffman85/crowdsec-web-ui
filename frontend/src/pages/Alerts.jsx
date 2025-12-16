@@ -52,6 +52,13 @@ export function Alerts() {
                         console.error("Alert not found", err);
                     }
                 }
+            } else {
+                // If a modal is open but no ID param (e.g. clicked row), update it with fresh data
+                setSelectedAlert(prev => {
+                    if (!prev) return null;
+                    const updated = alertsData.find(a => a.id === prev.id);
+                    return updated || prev;
+                });
             }
 
             // Check for generic search query param
@@ -308,7 +315,12 @@ export function Alerts() {
             {/* Alert Details Modal */}
             <Modal
                 isOpen={!!selectedAlert}
-                onClose={() => setSelectedAlert(null)}
+                onClose={() => {
+                    setSelectedAlert(null);
+                    const newParams = new URLSearchParams(searchParams);
+                    newParams.delete("id");
+                    setSearchParams(newParams);
+                }}
                 title={selectedAlert ? `Alert Details #${selectedAlert.id}` : "Alert Details"}
                 maxWidth="max-w-4xl"
             >
