@@ -240,7 +240,7 @@ export function Alerts() {
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={alert.scenario}>
                                                 <ScenarioName name={alert.scenario} showLink={true} />
                                             </td>
-                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 align-middle">
                                                 {alert.source?.cn ? (
                                                     <div className="flex items-center gap-2" title={alert.source.cn}>
                                                         <span className={`fi fi-${alert.source.cn.toLowerCase()} flex-shrink-0`}></span>

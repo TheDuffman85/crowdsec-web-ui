@@ -178,7 +178,7 @@ export function Decisions() {
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={decision.detail.reason}>
                                                 <ScenarioName name={decision.detail.reason} showLink={true} />
                                             </td>
-                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 align-middle">
                                                 {decision.detail.country ? (
                                                     <div className="flex items-center gap-2" title={decision.detail.country}>
                                                         <span className={`fi fi-${decision.detail.country.toLowerCase()} flex-shrink-0`}></span>
