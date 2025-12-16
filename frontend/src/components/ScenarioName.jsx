@@ -17,10 +17,10 @@ export function ScenarioName({ name, showLink = false, className = "" }) {
     const hubUrl = showLink ? getHubUrl(name) : null;
 
     return (
-        <div className={`flex flex-col items-start ${className}`}>
-            {namespace && <span className="text-xs text-gray-500 font-normal">{namespace}</span>}
+        <div className={`flex flex-col items-start leading-tight ${className}`}>
+            {namespace && <span className="text-xs text-gray-500 font-normal leading-none">{namespace}</span>}
             <div className="flex items-center gap-1">
-                <span className="font-medium truncate text-gray-900 dark:text-gray-200">{shortName}</span>
+                <span className="font-medium truncate text-gray-900 dark:text-gray-200 text-sm leading-tight">{shortName}</span>
                 {showLink && hubUrl && (
                     <a
                         href={hubUrl}
