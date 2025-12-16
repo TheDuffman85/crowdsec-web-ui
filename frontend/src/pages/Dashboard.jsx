@@ -509,20 +509,6 @@ export function Dashboard() {
                         {/* Top Statistics Grid */}
                         <div className="grid gap-8 md:grid-cols-2 lg:grid-cols-4">
                             <StatCard
-                                title="Top IPs"
-                                items={statistics.topIPs}
-                                onSelect={(item) => toggleFilter('ip', item.label)}
-                                selectedValue={filters.ip}
-                                total={percentageBasis === 'global' ? filteredData.globalTotal : filteredData.alerts.length}
-                            />
-                            <StatCard
-                                title="Top AS"
-                                items={statistics.topAS}
-                                onSelect={(item) => toggleFilter('as', item.label)}
-                                selectedValue={filters.as}
-                                total={percentageBasis === 'global' ? filteredData.globalTotal : filteredData.alerts.length}
-                            />
-                            <StatCard
                                 title="Top Countries"
                                 items={statistics.topCountries}
                                 onSelect={(item) => toggleFilter('country', item.countryCode)}
@@ -537,6 +523,20 @@ export function Dashboard() {
                                 renderLabel={(item) => (
                                     <ScenarioName name={item.label} showLink={true} />
                                 )}
+                                total={percentageBasis === 'global' ? filteredData.globalTotal : filteredData.alerts.length}
+                            />
+                            <StatCard
+                                title="Top AS"
+                                items={statistics.topAS}
+                                onSelect={(item) => toggleFilter('as', item.label)}
+                                selectedValue={filters.as}
+                                total={percentageBasis === 'global' ? filteredData.globalTotal : filteredData.alerts.length}
+                            />
+                            <StatCard
+                                title="Top IPs"
+                                items={statistics.topIPs}
+                                onSelect={(item) => toggleFilter('ip', item.label)}
+                                selectedValue={filters.ip}
                                 total={percentageBasis === 'global' ? filteredData.globalTotal : filteredData.alerts.length}
                             />
                         </div>
