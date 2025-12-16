@@ -342,59 +342,7 @@ export function Dashboard() {
             <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
                 <h2 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Dashboard</h2>
 
-                <div className="flex flex-col md:flex-row items-end md:items-center gap-4 w-full md:w-auto">
-                    {hasActiveFilters && (
-                        <>
-                            <div className="flex flex-row items-center gap-2">
-                                <button
-                                    onClick={() => {
-                                        // Build query parameters from active filters
-                                        const params = new URLSearchParams();
-                                        if (filters.country) params.set('country', filters.country);
-                                        if (filters.scenario) params.set('scenario', filters.scenario);
-                                        if (filters.as) params.set('as', filters.as);
-                                        if (filters.ip) params.set('ip', filters.ip);
-                                        if (filters.dateRange) {
-                                            params.set('dateStart', filters.dateRange.start);
-                                            params.set('dateEnd', filters.dateRange.end);
-                                        }
-                                        navigate(`/alerts?${params.toString()}`);
-                                    }}
-                                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
-                                >
-                                    <Filter className="w-4 h-4" />
-                                    <span className="hidden sm:inline">View Alerts</span>
-                                    <span className="sm:hidden">Alerts</span>
-                                </button>
-                                <button
-                                    onClick={clearFilters}
-                                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
-                                >
-                                    <FilterX className="w-4 h-4" />
-                                    <span className="hidden sm:inline">Clear Filters</span>
-                                    <span className="sm:hidden">Clear</span>
-                                </button>
-                            </div>
-
-                            {/* Percentage Basis Toggle */}
-                            <div className="flex items-center gap-3 bg-white dark:bg-gray-800 p-2 rounded-lg border border-gray-100 dark:border-gray-700 shadow-sm">
-                                <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
-                                    <Percent className="w-4 h-4" />
-                                    <span className="hidden sm:inline">Basis:</span>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    <span className={`text-xs font-medium ${percentageBasis === 'filtered' ? 'text-primary-600' : 'text-gray-500'}`}>Filtered</span>
-                                    <Switch
-                                        id="percentage-basis"
-                                        checked={percentageBasis === 'global'}
-                                        onCheckedChange={(checked) => setPercentageBasis(checked ? 'global' : 'filtered')}
-                                    />
-                                    <span className={`text-xs font-medium ${percentageBasis === 'global' ? 'text-primary-600' : 'text-gray-500'}`}>Global</span>
-                                </div>
-                            </div>
-                        </>
-                    )}
-                </div>
+                {/* Controls moved to Statistics Header */}
             </div>
 
             {/* Summary Cards */}
@@ -465,11 +413,67 @@ export function Dashboard() {
 
             {/* Statistics Section */}
             <div className="space-y-4">
-                <div className="flex items-center gap-2 mb-4">
-                    <TrendingUp className="w-6 h-6 text-primary-600 dark:text-primary-400" />
-                    <h3 className="text-2xl font-bold text-gray-900 dark:text-white">
-                        Last {config.lookback_days} Days Statistics
-                    </h3>
+                <div className="flex flex-col md:flex-row items-center justify-between mb-4 gap-4 md:min-h-[3rem]">
+                    <div className="flex items-center gap-2">
+                        <TrendingUp className="w-6 h-6 text-primary-600 dark:text-primary-400" />
+                        <h3 className="text-2xl font-bold text-gray-900 dark:text-white">
+                            Last {config.lookback_days} Days Statistics
+                        </h3>
+                    </div>
+
+                    <div className="flex flex-col md:flex-row items-center gap-4">
+                        {hasActiveFilters && (
+                            <>
+                                <div className="flex flex-row items-center gap-2">
+                                    <button
+                                        onClick={() => {
+                                            // Build query parameters from active filters
+                                            const params = new URLSearchParams();
+                                            if (filters.country) params.set('country', filters.country);
+                                            if (filters.scenario) params.set('scenario', filters.scenario);
+                                            if (filters.as) params.set('as', filters.as);
+                                            if (filters.ip) params.set('ip', filters.ip);
+                                            if (filters.dateRange) {
+                                                params.set('dateStart', filters.dateRange.start);
+                                                params.set('dateEnd', filters.dateRange.end);
+                                            }
+                                            navigate(`/alerts?${params.toString()}`);
+                                        }}
+                                        className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
+                                    >
+                                        <Filter className="w-4 h-4" />
+                                        <span className="hidden sm:inline">View Alerts</span>
+                                        <span className="sm:hidden">Alerts</span>
+                                    </button>
+                                    <button
+                                        onClick={clearFilters}
+                                        className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
+                                    >
+                                        <FilterX className="w-4 h-4" />
+                                        <span className="hidden sm:inline">Clear Filters</span>
+                                        <span className="sm:hidden">Clear</span>
+                                    </button>
+                                </div>
+
+                                {/* Percentage Basis Toggle */}
+                                <div className="flex items-center gap-3 bg-white dark:bg-gray-800 px-3 py-1.5 rounded-lg border border-gray-100 dark:border-gray-700 shadow-sm h-[38px] box-border">
+                                    <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+                                        <Percent className="w-4 h-4" />
+                                        <span className="hidden sm:inline">Basis:</span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <span className={`text-xs font-medium ${percentageBasis === 'filtered' ? 'text-primary-600' : 'text-gray-500'}`}>Filtered</span>
+                                        <Switch
+                                            id="percentage-basis"
+                                            checked={percentageBasis === 'global'}
+                                            onCheckedChange={(checked) => setPercentageBasis(checked ? 'global' : 'filtered')}
+                                        />
+                                        <span className={`text-xs font-medium ${percentageBasis === 'global' ? 'text-primary-600' : 'text-gray-500'}`}>Global</span>
+                                    </div>
+                                </div>
+                            </>
+                        )}
+                    </div>
                 </div>
 
                 {statsLoading ? (
