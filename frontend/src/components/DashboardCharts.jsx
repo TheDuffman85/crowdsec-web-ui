@@ -170,7 +170,7 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
             </CardHeader>
             <CardContent className="flex-1 min-h-0 flex flex-col gap-0">
                 {/* Main Chart Section */}
-                <div className="flex-1 min-h-0 outline-none" tabIndex={-1}>
+                <div className="flex-1 min-h-0 outline-none">
                     <ResponsiveContainer width="100%" height="100%">
                         <BarChart
                             data={filteredData}
@@ -202,7 +202,7 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
                 </div>
 
                 {/* Slider Section */}
-                <div className="h-[60px] outline-none" tabIndex={-1}>
+                <div className="h-[60px] outline-none">
                     <ResponsiveContainer width="100%" height="100%">
                         <BarChart
                             data={sliderData}
