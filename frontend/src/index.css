@@ -15,18 +15,19 @@
 }
 
 /* Global override to ensure Recharts focus outline is removed */
+/* Global override to ensure Recharts focus outline is removed */
 .recharts-wrapper,
-.recharts-surface {
-  outline: 0 !important;
+.recharts-surface,
+.recharts-surface :focus,
+.recharts-tooltip-wrapper {
+  outline: none !important;
   outline-offset: 0 !important;
   box-shadow: none !important;
 }
 
-.recharts-wrapper:focus,
-.recharts-wrapper:focus-visible,
-.recharts-surface:focus,
-.recharts-surface:focus-visible {
-  outline: 0 !important;
-  outline-offset: 0 !important;
-  box-shadow: none !important;
+/* Target specifically the SVG and groups which might receive focus */
+svg.recharts-surface:focus,
+g:focus,
+path:focus {
+  outline: none !important;
 }
