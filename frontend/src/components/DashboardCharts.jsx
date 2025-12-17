@@ -134,14 +134,9 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
     }, [sliderData, selectedDateRange]);
 
     // Sync local state with target when NOT dragging
-    useEffect(() => {
-        if (!isDragging.current) {
-            setLocalBrushState({ startIndex: targetStartIndex, endIndex: targetEndIndex });
-        }
-    }, [targetStartIndex, targetEndIndex]);
-
-    // Use local state for the brush
-    const { startIndex, endIndex } = localBrushState;
+    // Use target indices when not dragging to prevent "collapse" during data updates
+    const startIndex = isDragging.current ? localBrushState.startIndex : targetStartIndex;
+    const endIndex = isDragging.current ? localBrushState.endIndex : targetEndIndex;
 
 
     const granularities = ['day', 'hour'];
