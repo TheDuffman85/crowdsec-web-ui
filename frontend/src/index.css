@@ -9,3 +9,24 @@
     @apply bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 antialiased;
   }
 }
+
+@layer utilities {
+  /* Recharts focus suppression moved to global scope */
+}
+
+/* Global override to ensure Recharts focus outline is removed */
+.recharts-wrapper,
+.recharts-surface {
+  outline: 0 !important;
+  outline-offset: 0 !important;
+  box-shadow: none !important;
+}
+
+.recharts-wrapper:focus,
+.recharts-wrapper:focus-visible,
+.recharts-surface:focus,
+.recharts-surface:focus-visible {
+  outline: 0 !important;
+  outline-offset: 0 !important;
+  box-shadow: none !important;
+}

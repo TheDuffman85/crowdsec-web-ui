@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { useMemo, useRef, useState, useEffect } from 'react';
 import {
     BarChart,
     Bar,
@@ -80,8 +80,9 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
                 merged[item.date] = {
                     date: item.fullDate || item.date,
                     bucketKey: item.date,
-                    label: item.label
-                    // We don't need counts for visual bars if we are hiding them
+                    label: item.label,
+                    alerts: item.count, // Include counts
+                    decisions: 0
                 };
             });
         }
@@ -90,22 +91,32 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
                 if (!merged[item.date]) merged[item.date] = {
                     date: item.fullDate || item.date,
                     bucketKey: item.date,
-                    label: item.label
+                    label: item.label,
+                    alerts: 0,
+                    decisions: 0
                 };
+                merged[item.date].decisions = item.count; // Include counts
             });
         }
         return Object.values(merged).sort((a, b) => a.date.localeCompare(b.date));
     }, [unfilteredAlertsData, unfilteredDecisionsData]);
 
     // Slider Brush Logic
-    const debounceTimeoutRef = useRef(null);
+    const [localBrushState, setLocalBrushState] = useState({ startIndex: 0, endIndex: 0 });
+    const localBrushStateRef = useRef({ startIndex: 0, endIndex: 0 });
+    const isDragging = useRef(false);
+
+    // Keep ref in sync
+    useEffect(() => {
+        localBrushStateRef.current = localBrushState;
+    }, [localBrushState]);
+
     const brushKey = useMemo(() => {
-        // Generate a unique key whenever the data reference changes to force proper re-initialization
-        // of the Brush component. This prevents it from losing the selection state on auto-refresh.
         return `brush-${Date.now()}`;
     }, [sliderData]);
 
-    const { startIndex, endIndex } = useMemo(() => {
+    // Calculate the 'target' indices based on props
+    const { startIndex: targetStartIndex, endIndex: targetEndIndex } = useMemo(() => {
         if (!sliderData || sliderData.length === 0) return { startIndex: 0, endIndex: 0 };
         if (!selectedDateRange) return { startIndex: 0, endIndex: sliderData.length - 1 };
 
@@ -121,6 +132,16 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
         if (end === -1) end = sliderData.length - 1;
         return { startIndex: start, endIndex: end };
     }, [sliderData, selectedDateRange]);
+
+    // Sync local state with target when NOT dragging
+    useEffect(() => {
+        if (!isDragging.current) {
+            setLocalBrushState({ startIndex: targetStartIndex, endIndex: targetEndIndex });
+        }
+    }, [targetStartIndex, targetEndIndex]);
+
+    // Use local state for the brush
+    const { startIndex, endIndex } = localBrushState;
 
 
     const granularities = ['day', 'hour'];
@@ -152,13 +173,13 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
                     </div>
                 </div>
             </CardHeader>
-            <CardContent className="flex-1 min-h-0 flex flex-col gap-4">
+            <CardContent className="flex-1 min-h-0 flex flex-col gap-0">
                 {/* Main Chart Section */}
-                <div className="flex-1 min-h-0">
+                <div className="flex-1 min-h-0 outline-none" tabIndex={-1}>
                     <ResponsiveContainer width="100%" height="100%">
                         <BarChart
                             data={filteredData}
-                            margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
+                            margin={{ top: 20, right: 30, left: 20, bottom: 0 }}
                         >
                             <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
                             <XAxis dataKey="label" stroke="#888888" fontSize={12} tickLine={false} axisLine={false} />
@@ -186,12 +207,13 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
                 </div>
 
                 {/* Slider Section */}
-                <div className="h-[40px] shrink-0">
+                <div className="h-[60px] outline-none" tabIndex={-1}>
                     <ResponsiveContainer width="100%" height="100%">
                         <BarChart
                             data={sliderData}
                             margin={{ top: 0, right: 30, left: 60, bottom: 0 }}
                         >
+
                             <Brush
                                 key={`${granularity}-${brushKey}`}
                                 dataKey="date"
@@ -203,26 +225,40 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
                                 onChange={(e) => {
                                     if (!e || e.startIndex === undefined || e.endIndex === undefined) return;
 
-                                    const isStartReset = e.startIndex === 0;
-                                    const isEndReset = e.endIndex >= sliderData.length - 1;
-                                    const isFullRange = isStartReset && isEndReset;
+                                    // Update local UI immediately
+                                    setLocalBrushState({ startIndex: e.startIndex, endIndex: e.endIndex });
 
-                                    const startItem = sliderData[e.startIndex];
-                                    const endItem = sliderData[e.endIndex];
+                                    // Start tracking drag if not already
+                                    if (!isDragging.current) {
+                                        isDragging.current = true;
 
-                                    if (startItem && endItem && onDateRangeSelect) {
-                                        if (debounceTimeoutRef.current) {
-                                            clearTimeout(debounceTimeoutRef.current);
-                                        }
+                                        const handleDragEnd = () => {
+                                            isDragging.current = false;
+                                            window.removeEventListener('mouseup', handleDragEnd);
+                                            window.removeEventListener('touchend', handleDragEnd);
 
-                                        const dateRange = isFullRange ? null : {
-                                            start: startItem.bucketKey,
-                                            end: endItem.bucketKey
+                                            // Commit the value
+                                            // We need to use the ref to get the LATEST state inside the callback
+                                            const currentStart = localBrushStateRef.current?.startIndex ?? e.startIndex;
+                                            const currentEnd = localBrushStateRef.current?.endIndex ?? e.endIndex;
+
+                                            const isStartReset = currentStart === 0;
+                                            const isEndReset = currentEnd >= sliderData.length - 1;
+                                            const isFullRange = isStartReset && isEndReset;
+
+                                            const startItem = sliderData[currentStart];
+                                            const endItem = sliderData[currentEnd];
+
+                                            if (startItem && endItem && onDateRangeSelect) {
+                                                const dateRange = isFullRange ? null : {
+                                                    start: startItem.bucketKey,
+                                                    end: endItem.bucketKey
+                                                };
+                                                onDateRangeSelect(dateRange);
+                                            }
                                         };
-
-                                        debounceTimeoutRef.current = setTimeout(() => {
-                                            onDateRangeSelect(dateRange);
-                                        }, 300);
+                                        window.addEventListener('mouseup', handleDragEnd);
+                                        window.addEventListener('touchend', handleDragEnd);
                                     }
                                 }}
                                 tickFormatter={(date) => {

@@ -165,6 +165,11 @@ export function Dashboard() {
         let chartAlerts = [...filteredAlerts];
         let chartDecisionsData = [...chartDecisions];
 
+        // Create datasets for the Slider/Brush (Context-aware but Time-ignorant)
+        // We start with the lookback-filtered data (Global scope)
+        let sliderAlerts = filterLastNDays(rawData.alerts, lookbackDays);
+        let sliderDecisions = filterLastNDays(rawData.decisionsForStats, lookbackDays);
+
         // Apply Cross-Filtering to cards and lists (including dateRange)
         if (filters.dateRange) {
             // Helper function to extract date/time key from ISO timestamp
@@ -226,6 +231,13 @@ export function Dashboard() {
                 chartAlerts.map(a => a.source.ip).filter(ip => ip)
             );
             chartDecisionsData = chartDecisionsData.filter(d => chartIpsInCountry.has(d.value));
+
+            // Also filter Slider data by country
+            sliderAlerts = sliderAlerts.filter(a => a.source.cn === filters.country);
+            const sliderIpsInCountry = new Set(
+                sliderAlerts.map(a => a.source.ip).filter(ip => ip)
+            );
+            sliderDecisions = sliderDecisions.filter(d => sliderIpsInCountry.has(d.value));
         }
 
         if (filters.scenario) {
@@ -242,6 +254,13 @@ export function Dashboard() {
                 chartAlerts.map(a => a.source.ip).filter(ip => ip)
             );
             chartDecisionsData = chartDecisionsData.filter(d => chartIpsInScenario.has(d.value));
+
+            // Also filter Slider data
+            sliderAlerts = sliderAlerts.filter(a => a.scenario === filters.scenario);
+            const sliderIpsInScenario = new Set(
+                sliderAlerts.map(a => a.source.ip).filter(ip => ip)
+            );
+            sliderDecisions = sliderDecisions.filter(d => sliderIpsInScenario.has(d.value));
         }
 
         if (filters.as) {
@@ -258,6 +277,13 @@ export function Dashboard() {
                 chartAlerts.map(a => a.source.ip).filter(ip => ip)
             );
             chartDecisionsData = chartDecisionsData.filter(d => chartIpsInAS.has(d.value));
+
+            // Also filter Slider data
+            sliderAlerts = sliderAlerts.filter(a => a.source.as_name === filters.as);
+            const sliderIpsInAS = new Set(
+                sliderAlerts.map(a => a.source.ip).filter(ip => ip)
+            );
+            sliderDecisions = sliderDecisions.filter(d => sliderIpsInAS.has(d.value));
         }
 
         if (filters.ip) {
@@ -268,6 +294,10 @@ export function Dashboard() {
             // Also filter chart data
             chartAlerts = chartAlerts.filter(a => a.source.ip === filters.ip);
             chartDecisionsData = chartDecisionsData.filter(d => d.value === filters.ip);
+
+            // Also filter Slider data
+            sliderAlerts = sliderAlerts.filter(a => a.source.ip === filters.ip);
+            sliderDecisions = sliderDecisions.filter(d => d.value === filters.ip);
         }
 
         return {
@@ -275,6 +305,8 @@ export function Dashboard() {
             decisions: activeDecisions,  // Active decisions for card/lists
             chartAlerts: chartAlerts,  // Alerts for charts (no dateRange filter)
             chartDecisions: chartDecisionsData,  // All decisions for charts (no dateRange filter)
+            sliderAlerts: sliderAlerts, // Alerts for slider (context filtered, time unfiltered)
+            sliderDecisions: sliderDecisions, // Decisions for slider (context filtered, time unfiltered)
             // Global total (filtered by Lookback ONLY, ignoring sidebar filters)
             // Note: filterLastNDays is already done on rawData.alerts
             // But we want to ensure we get the count consistent with the chart's context if no other filters applied.
@@ -305,13 +337,13 @@ export function Dashboard() {
             allCountries: getAllCountries(filteredData.alerts),  // For map display
             topScenarios: getTopScenarios(filteredData.alerts, 10),
             topAS: getTopAS(filteredData.alerts, 10),
-            alertsHistory: getAggregatedData(filteredData.chartAlerts, lookbackDays, granularity),
-            decisionsHistory: getAggregatedData(filteredData.chartDecisions, lookbackDays, granularity),
-            // Unfiltered history for the TimeRangeSlider (Global context)
-            unfilteredAlertsHistory: getAggregatedData(filterLastNDays(rawData.alerts, lookbackDays), lookbackDays, granularity),
-            unfilteredDecisionsHistory: getAggregatedData(filterLastNDays(rawData.decisionsForStats, lookbackDays), lookbackDays, granularity)
+            alertsHistory: getAggregatedData(filteredData.chartAlerts, lookbackDays, granularity, filters.dateRange), // Match zoomed range
+            decisionsHistory: getAggregatedData(filteredData.chartDecisions, lookbackDays, granularity, filters.dateRange), // Match zoomed range
+            // Unfiltered history for the TimeRangeSlider (Global context + Sidebar Filters)
+            unfilteredAlertsHistory: getAggregatedData(filteredData.sliderAlerts, lookbackDays, granularity),
+            unfilteredDecisionsHistory: getAggregatedData(filteredData.sliderDecisions, lookbackDays, granularity)
         };
-    }, [filteredData, config.lookback_days, granularity]);
+    }, [filteredData, config.lookback_days, granularity, filters.dateRange]);
 
     // Handle Filters
     const toggleFilter = (type, value) => {
