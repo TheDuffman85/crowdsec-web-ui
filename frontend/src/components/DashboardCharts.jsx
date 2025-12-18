@@ -133,10 +133,38 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
         return { startIndex: start, endIndex: end };
     }, [sliderData, selectedDateRange]);
 
+
     // Sync local state with target when NOT dragging
     // Use target indices when not dragging to prevent "collapse" during data updates
     const startIndex = isDragging.current ? localBrushState.startIndex : targetStartIndex;
     const endIndex = isDragging.current ? localBrushState.endIndex : targetEndIndex;
+
+    // Sticky Brush Logic: Auto-follow time
+    const lastBucketKeyRef = useRef(null);
+
+    useEffect(() => {
+        if (!sliderData || sliderData.length === 0) return;
+
+        const currentLastBucketKey = sliderData[sliderData.length - 1].bucketKey;
+        const prevLastBucketKey = lastBucketKeyRef.current;
+
+        // Always update ref to current for next time
+        lastBucketKeyRef.current = currentLastBucketKey;
+
+        // If valid previous state exists and end data changed
+        if (prevLastBucketKey && prevLastBucketKey !== currentLastBucketKey) {
+            // If we have an active selection that was touching the previous end
+            if (selectedDateRange && selectedDateRange.end === prevLastBucketKey) {
+                // Update selection to include the new bucket
+                if (onDateRangeSelect) {
+                    onDateRangeSelect({
+                        ...selectedDateRange,
+                        end: currentLastBucketKey
+                    });
+                }
+            }
+        }
+    }, [sliderData, selectedDateRange, onDateRangeSelect]);
 
 
     const granularities = ['day', 'hour'];
