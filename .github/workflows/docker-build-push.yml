@@ -4,6 +4,8 @@ on:
   push:
     paths-ignore:
       - 'README.md'
+      - 'scripts/*'
+      - 'screenshots/*'
     branches:
       - main
       - dev
