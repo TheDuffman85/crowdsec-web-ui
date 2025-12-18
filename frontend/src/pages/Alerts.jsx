@@ -260,6 +260,11 @@ export function Alerts() {
                                                 {alert.decisions && alert.decisions.length > 0 ? (() => {
                                                     // Check if there are any active (non-expired) decisions
                                                     const activeDecisions = alert.decisions.filter(d => {
+                                                        // If we have explicit status from backend (hydrated), trust it
+                                                        if (d.expired !== undefined) {
+                                                            return !d.expired;
+                                                        }
+
                                                         if (d.stop_at) {
                                                             return new Date(d.stop_at) > new Date();
                                                         }
@@ -420,18 +425,21 @@ export function Alerts() {
                                         </thead>
                                         <tbody className="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-800">
                                             {selectedAlert.decisions.map((decision, idx) => {
-                                                // Check if this decision is active or expired
-                                                const activeDecisions = selectedAlert.decisions.filter(d => {
-                                                    if (d.stop_at) {
-                                                        return new Date(d.stop_at) > new Date();
+                                                // Check if this specific decision is active or expired
+                                                const isActive = (() => {
+                                                    if (decision.expired !== undefined) {
+                                                        return !decision.expired;
+                                                    }
+
+                                                    if (decision.stop_at) {
+                                                        return new Date(decision.stop_at) > new Date();
                                                     }
                                                     // If stop_at is missing, check if duration implies expiration
-                                                    if (d.duration && d.duration.startsWith('-')) {
+                                                    if (decision.duration && decision.duration.startsWith('-')) {
                                                         return false;
                                                     }
                                                     return true; // Assume active if no stop_at and not definitely expired
-                                                });
-                                                const hasActiveDecisions = activeDecisions.length > 0;
+                                                })();
 
                                                 return (
                                                     <tr key={idx}>
@@ -441,24 +449,24 @@ export function Alerts() {
                                                         <td className="px-4 py-2 text-sm">{decision.duration}</td>
                                                         <td className="px-4 py-2 text-sm">{decision.origin}</td>
                                                         <td className="px-4 py-2 text-sm">
-                                                            {hasActiveDecisions ? (
+                                                            {isActive ? (
                                                                 <Link
                                                                     to={`/decisions?alert_id=${selectedAlert.id}`}
                                                                     className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors border border-primary-200 dark:border-primary-800"
-                                                                    title={`View ${activeDecisions.length} active decisions`}
+                                                                    title="View active decision"
                                                                 >
                                                                     <Shield size={14} className="fill-current" />
-                                                                    <span className="text-xs font-semibold">Active: {activeDecisions.length}</span>
+                                                                    <span className="text-xs font-semibold">Active</span>
                                                                     <ExternalLink size={12} className="ml-0.5" />
                                                                 </Link>
                                                             ) : (
                                                                 <Link
                                                                     to={`/decisions?alert_id=${selectedAlert.id}&include_expired=true`}
                                                                     className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-                                                                    title={`View ${selectedAlert.decisions.length} expired decisions`}
+                                                                    title="View expired decision"
                                                                 >
                                                                     <Shield size={14} className="opacity-50" />
-                                                                    <span className="text-xs font-medium">Inactive: {selectedAlert.decisions.length}</span>
+                                                                    <span className="text-xs font-medium">Inactive</span>
                                                                 </Link>
                                                             )}
                                                         </td>
