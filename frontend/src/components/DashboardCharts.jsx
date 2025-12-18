@@ -155,12 +155,28 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
         if (prevLastBucketKey && prevLastBucketKey !== currentLastBucketKey) {
             // If we have an active selection that was touching the previous end
             if (selectedDateRange && selectedDateRange.end === prevLastBucketKey) {
-                // Update selection to include the new bucket
-                if (onDateRangeSelect) {
-                    onDateRangeSelect({
-                        ...selectedDateRange,
-                        end: currentLastBucketKey
-                    });
+                // Find indices in the CURRENT sliderData
+                const startBucketIndex = sliderData.findIndex(d => d.bucketKey === selectedDateRange.start);
+                const prevEndBucketIndex = sliderData.findIndex(d => d.bucketKey === prevLastBucketKey);
+
+                if (startBucketIndex !== -1 && prevEndBucketIndex !== -1) {
+                    // Calculate window size (distance between start and old end)
+                    const windowSize = prevEndBucketIndex - startBucketIndex;
+
+                    // New end is the last item
+                    const newEndIndex = sliderData.length - 1;
+                    // New start preserves the window size
+                    // Ensure we don't go below 0 (though unlikely for sticky at end)
+                    const newStartIndex = Math.max(0, newEndIndex - windowSize);
+
+                    const newStartKey = sliderData[newStartIndex].bucketKey;
+
+                    if (onDateRangeSelect) {
+                        onDateRangeSelect({
+                            start: newStartKey,
+                            end: currentLastBucketKey
+                        });
+                    }
                 }
             }
         }
@@ -176,6 +192,11 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
                     <CardTitle className="flex items-center gap-2">
                         <BarChart3 className="w-5 h-5 text-primary-600 dark:text-primary-400" />
                         Activity History
+                        {selectedDateRange && sliderData.length > 0 && (
+                            <span className="ml-2 text-sm font-normal text-gray-500 dark:text-gray-400">
+                                {endIndex === sliderData.length - 1 ? 'Last' : 'Selected'} {endIndex - startIndex + 1} {granularity === 'day' ? 'Days' : 'Hours'}
+                            </span>
+                        )}
                     </CardTitle>
                     <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-lg">
                         {granularities.map((g) => (
