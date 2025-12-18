@@ -21,7 +21,8 @@ console.error = function (...args) {
 };
 
 // Persist refresh interval to a config file
-const CONFIG_FILE = path.join(__dirname, '.config.json');
+// Allow overriding via env var (for Docker persistence), otherwise default to local .config.json
+const CONFIG_FILE = process.env.CONFIG_FILE || path.join(__dirname, '.config.json');
 
 function loadPersistedConfig() {
   try {
@@ -38,6 +39,10 @@ function loadPersistedConfig() {
 
 function savePersistedConfig(config) {
   try {
+    const configDir = path.dirname(CONFIG_FILE);
+    if (!fs.existsSync(configDir)) {
+      fs.mkdirSync(configDir, { recursive: true });
+    }
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
     console.log('Saved config to file:', config);
   } catch (error) {
@@ -992,7 +997,7 @@ app.delete('/api/decisions/:id', ensureAuth, async (req, res) => {
 });
 
 // Serve static files from the "frontend/dist" directory.
-app.use(express.static('frontend/dist'));
+app.use(express.static(path.join(__dirname, 'frontend/dist')));
 
 // Catch-all handler for any request that doesn't match an API route
 app.get('*', (req, res) => {

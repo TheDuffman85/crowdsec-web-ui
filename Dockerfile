@@ -37,6 +37,7 @@ USER node
 
 # Increase Node.js memory limit to avoid OOM with large datasets
 ENV NODE_OPTIONS="--max-old-space-size=4096"
+ENV CONFIG_FILE="/app/config/config.json"
 
 # Run the application
 CMD ["npm", "start"]

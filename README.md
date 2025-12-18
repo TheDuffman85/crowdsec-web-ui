@@ -91,6 +91,7 @@ Ban IPs directly from the UI with custom duration and reason.
       -e CROWDSEC_PASSWORD=<your-secure-password> \
       -e CROWDSEC_LOOKBACK_PERIOD=5d \
       -e CROWDSEC_REFRESH_INTERVAL=0 \
+      -v $(pwd)/config:/app/config \
       --network your_crowdsec_network \
       crowdsec-web-ui
     ```
@@ -121,7 +122,25 @@ services:
       # Optional: Interval for full cache refresh (default: 5m)
       # Forces a complete data reload when active, skipped when idle.
       - CROWDSEC_FULL_REFRESH_INTERVAL=5m
+    volumes:
+      - ./config:/app/config
     restart: unless-stopped
+```
+
+## Persistence
+
+To persist configuration changes (like the refresh interval) across container restarts, you need to mount the `/app/config` directory.
+
+The application stores its runtime configuration in `/app/config/config.json`.
+
+**Docker Run:**
+Add `-v $(pwd)/config:/app/config` to your command.
+
+**Docker Compose:**
+Add the volume mapping:
+```yaml
+volumes:
+  - ./config:/app/config
 ```
 
 ## Local Development
@@ -131,22 +150,29 @@ services:
     npm run install-all
     ```
 
-2.  **Start the Backend**:
+2.  **Configuration**:
+    Create a `.env` file in the root directory with your CrowdSec credentials:
     ```bash
-    export CROWDSEC_URL=http://localhost:8080
-    export CROWDSEC_USER=crowdsec-web-ui
-    export CROWDSEC_PASSWORD=<your-secure-password>
-    export CROWDSEC_LOOKBACK_PERIOD=5d
-    export CROWDSEC_REFRESH_INTERVAL=30s
-    npm start
+    CROWDSEC_URL=http://localhost:8080
+    CROWDSEC_USER=crowdsec-web-ui
+    CROWDSEC_PASSWORD=<your-secure-password>
+    CROWDSEC_REFRESH_INTERVAL=30s
     ```
 
-3.  **Start the Frontend (in a separate terminal)**:
+3.  **Start the Application**:
+    The project includes a helper script `run.sh` to manage both services.
+
+    **Development Mode** (Hot Reload):
+    Starts both backend (port 3000) and frontend (port 5173).
     ```bash
-    cd frontend
-    npm run dev
+    ./run.sh dev
     ```
-    The frontend will proxy API requests to `http://localhost:3000`.
+
+    **Production Mode** (Optimized Build):
+    Builds the frontend and starts the backend (port 3000).
+    ```bash
+    ./run.sh
+    ```
 
 ## API Endpoints
 
