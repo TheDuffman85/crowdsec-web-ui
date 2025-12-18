@@ -1,7 +1,6 @@
 services:
   crowdsec-web-ui:
     build: .
-    # image: ghcr.io/TheDuffman85/crowdsec-web-ui:latest
     container_name: crowdsec_web_ui
     ports:
       - "3000:3000"
