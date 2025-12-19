@@ -848,7 +848,7 @@ app.put('/api/config/refresh-interval', ensureAuth, (req, res) => {
     }
 
     // Validate interval value
-    const validIntervals = ['manual', '5s', '30s', '1m', '5m'];
+    const validIntervals = ['manual', '0', '5s', '30s', '1m', '5m'];
     if (!validIntervals.includes(interval)) {
       return res.status(400).json({
         error: `Invalid interval. Must be one of: ${validIntervals.join(', ')}`
