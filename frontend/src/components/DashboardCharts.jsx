@@ -176,6 +176,42 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
     }, [sliderData, selectedDateRange, isSticky, onDateRangeSelect]);
 
 
+    // -------------------------------------------------------------------------
+    // 4. Dynamic Bar Size Calculation
+    // -------------------------------------------------------------------------
+    const containerRef = useRef(null);
+    const [containerWidth, setContainerWidth] = useState(0);
+
+    useEffect(() => {
+        if (!containerRef.current) return;
+
+        const resizeObserver = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+                setContainerWidth(entry.contentRect.width);
+            }
+        });
+
+        resizeObserver.observe(containerRef.current);
+        return () => resizeObserver.disconnect();
+    }, []);
+
+    // Calculate bar size: minimum 4px, maximum 40px, based on available space
+    const dynamicBarSize = useMemo(() => {
+        if (!containerWidth || !filteredData.length) return undefined;
+
+        // Available width for bars (subtract margins: 20 left + 30 right + 40 yAxis)
+        const availableWidth = containerWidth - 90;
+        // Each data point has 2 bars (alerts + decisions) + gap between them
+        const numBarGroups = filteredData.length;
+        // Calculate width per bar group, accounting for category gap (typically ~30% of bar group)
+        const barGroupWidth = availableWidth / numBarGroups;
+        // Each bar is about 35% of the bar group width (leaving room for gaps)
+        const calculatedBarSize = barGroupWidth * 0.35;
+
+        // Clamp between 4 and 40
+        return Math.max(4, Math.min(40, calculatedBarSize));
+    }, [containerWidth, filteredData.length]);
+
     const granularities = ['day', 'hour'];
 
     return (
@@ -212,11 +248,12 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
             </CardHeader>
             <CardContent className="flex-1 min-h-0 flex flex-col gap-0">
                 {/* Main Chart Section */}
-                <div className="flex-1 min-h-0 outline-none">
+                <div ref={containerRef} className="flex-1 min-h-0 outline-none">
                     <ResponsiveContainer width="100%" height="100%">
                         <BarChart
                             data={filteredData}
                             margin={{ top: 20, right: 30, left: 20, bottom: 0 }}
+                            barGap={2}
                         >
                             <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
                             <XAxis dataKey="label" stroke="#888888" fontSize={12} tickLine={false} axisLine={false} />
@@ -230,7 +267,7 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
                                 fill="#dc2626"
                                 stroke="none"
                                 radius={[4, 4, 0, 0]}
-                                barSize={5}
+                                barSize={dynamicBarSize}
                             />
                             <Bar
                                 isAnimationActive={false}
@@ -239,7 +276,7 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
                                 fill="#2563eb"
                                 stroke="none"
                                 radius={[4, 4, 0, 0]}
-                                barSize={5}
+                                barSize={dynamicBarSize}
                             />
                         </BarChart>
                     </ResponsiveContainer>
