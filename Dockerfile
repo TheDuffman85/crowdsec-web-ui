@@ -28,19 +28,23 @@ ENV VITE_BUILD_DATE=$VITE_BUILD_DATE
 ENV VITE_REPO_URL=$VITE_REPO_URL
 ENV VITE_BRANCH=$VITE_BRANCH
 
+# Install gosu for easy step-down from root
+RUN apt-get update && apt-get install -y gosu && rm -rf /var/lib/apt/lists/*
+
+# Copy entrypoint script
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 # Build the frontend
 RUN npm run build-ui
 
 # Expose port 3000
 EXPOSE 3000
 
-# Security: Run as non-root user
-RUN chown -R node:node /app
-USER node
-
 # Increase Node.js memory limit to avoid OOM with large datasets
 ENV NODE_OPTIONS="--max-old-space-size=4096"
 ENV CONFIG_FILE="/app/config/config.json"
 
-# Run the application
+# Use entrypoint to handle permissions then switch to node user
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["npm", "start"]
