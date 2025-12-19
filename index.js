@@ -637,15 +637,39 @@ async function checkForUpdates() {
     const token = await getGhcrToken();
     if (!token) throw new Error('No GHCR token obtained');
 
-    // 1. Get Manifest to find Config Digest
+    // 1. Get Manifest (or Index)
     const manifestUrl = `https://ghcr.io/v2/theduffman85/crowdsec-web-ui/manifests/${tag}`;
-    const manifestResponse = await axios.get(manifestUrl, {
+
+    let manifestResponse = await axios.get(manifestUrl, {
       headers: {
         'Authorization': `Bearer ${token}`,
-        'Accept': 'application/vnd.docker.distribution.manifest.v2+json'
+        'Accept': 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'
       },
       timeout: 10000
     });
+
+    // Handle OCI Index or Manifest List (Multi-arch)
+    const mediaType = manifestResponse.headers['content-type'];
+    if (mediaType === 'application/vnd.docker.distribution.manifest.list.v2+json' || mediaType === 'application/vnd.oci.image.index.v1+json') {
+      const manifests = manifestResponse.data.manifests;
+      const targetPlatform = manifests.find(m => m.platform?.architecture === 'amd64' && m.platform?.os === 'linux');
+
+      if (!targetPlatform) {
+        throw new Error('No linux/amd64 manifest found in index');
+      }
+
+      const resolvedDigest = targetPlatform.digest;
+
+      // Fetch the specific manifest
+      const specificManifestUrl = `https://ghcr.io/v2/theduffman85/crowdsec-web-ui/manifests/${resolvedDigest}`;
+      manifestResponse = await axios.get(specificManifestUrl, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json'
+        },
+        timeout: 10000
+      });
+    }
 
     const configDigest = manifestResponse.data.config?.digest;
     if (!configDigest) throw new Error('Config digest not found in manifest');
