@@ -40,6 +40,10 @@ jobs:
         id: slug
         run: echo "sha8=$(echo ${GITHUB_SHA} | cut -c1-8)" >> $GITHUB_OUTPUT
 
+      - name: Get branch name
+        id: branch
+        run: echo "name=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+
       - name: Log in to the Container registry
         uses: docker/login-action@v3
         with:
@@ -68,3 +72,4 @@ jobs:
             VITE_COMMIT_HASH=${{ steps.slug.outputs.sha8 }}
             VITE_BUILD_DATE=${{ steps.date.outputs.date }}
             VITE_REPO_URL=${{ github.server_url }}/${{ github.repository }}
+            VITE_BRANCH=${{ steps.branch.outputs.name }}

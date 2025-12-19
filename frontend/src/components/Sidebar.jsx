@@ -100,7 +100,7 @@ export function Sidebar({ isMobileMenuOpen, onClose, theme, toggleTheme }) {
                 </button>
 
                 <p className="text-xs text-center text-gray-400 dark:text-gray-500 flex flex-col items-center gap-1">
-                    <span>{import.meta.env.VITE_BUILD_DATE || "Dev Build"}</span>
+                    <span>{import.meta.env.VITE_BRANCH === 'dev' ? 'Development Build' : 'Build'} {import.meta.env.VITE_BUILD_DATE}</span>
                     {import.meta.env.VITE_COMMIT_HASH && (
                         <a
                             href={`${import.meta.env.VITE_REPO_URL}/commit/${import.meta.env.VITE_COMMIT_HASH}`}
