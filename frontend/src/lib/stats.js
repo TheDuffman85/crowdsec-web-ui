@@ -188,12 +188,13 @@ export function getAggregatedData(items, days = 7, granularity = 'day', explicit
         return `${year}-${month}-${day}`;                // YYYY-MM-DD in local time
     };
 
-    // Label formatter
+    // Label formatter - use browser's default locale
     const getLabel = (date) => {
+        const dateStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
         if (granularity === 'hour') {
-            return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ', ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            return dateStr + ', ' + date.getHours().toString().padStart(2, '0') + ':00';
         }
-        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        return dateStr;
     };
 
     // Initialize all slots with 0

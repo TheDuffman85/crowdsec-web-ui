@@ -309,7 +309,7 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
                                     if (!date) return '';
                                     const d = new Date(date);
                                     if (granularity === 'hour') {
-                                        return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit' });
+                                        return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ', ' + d.getHours().toString().padStart(2, '0') + ':00';
                                     }
                                     return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
                                 }}
