@@ -365,7 +365,11 @@ export function Dashboard() {
         });
     };
 
-    const hasActiveFilters = Object.values(filters).some(v => v !== null);
+    const hasActiveFilters = filters.dateRange !== null ||
+        filters.country !== null ||
+        filters.scenario !== null ||
+        filters.as !== null ||
+        filters.ip !== null;
 
     if (loading) {
         return <div className="text-center p-8 text-gray-500">Loading dashboard...</div>;
