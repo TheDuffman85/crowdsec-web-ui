@@ -593,6 +593,132 @@ function getIntervalName(intervalMs) {
 // END CACHE SYSTEM
 // ============================================================================
 
+// ============================================================================
+// UPDATE CHECKER (GHCR)
+// ============================================================================
+
+const UPDATE_CHECK_CACHE_DURATION = 6 * 60 * 60 * 1000; // 6 hours
+let updateCheckCache = {
+  lastCheck: 0,
+  data: null
+};
+
+async function getGhcrToken() {
+  try {
+    const response = await axios.get('https://ghcr.io/token?service=ghcr.io&scope=repository:theduffman85/crowdsec-web-ui:pull', {
+      timeout: 5000
+    });
+    return response.data.token;
+  } catch (error) {
+    console.error('Failed to get GHCR token:', error.message);
+    return null;
+  }
+}
+
+async function checkForUpdates() {
+  // Return cached result if valid
+  const now = Date.now();
+  if (updateCheckCache.data && (now - updateCheckCache.lastCheck < UPDATE_CHECK_CACHE_DURATION)) {
+    return updateCheckCache.data;
+  }
+
+  const currentBranch = process.env.VITE_BRANCH || 'main'; // Default to main if not set (which maps to latest)
+  const currentHash = process.env.VITE_COMMIT_HASH;
+
+  // Map branch to tag
+  const tag = currentBranch === 'dev' ? 'dev' : 'latest';
+
+  if (!currentHash) {
+    console.log('Update check skipped: VITE_COMMIT_HASH not set.');
+    return { update_available: false, reason: 'no_local_hash' };
+  }
+
+  try {
+    const token = await getGhcrToken();
+    if (!token) throw new Error('No GHCR token obtained');
+
+    // 1. Get Manifest (or Index)
+    const manifestUrl = `https://ghcr.io/v2/theduffman85/crowdsec-web-ui/manifests/${tag}`;
+
+    let manifestResponse = await axios.get(manifestUrl, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'
+      },
+      timeout: 10000
+    });
+
+    // Handle OCI Index or Manifest List (Multi-arch)
+    const mediaType = manifestResponse.headers['content-type'];
+    if (mediaType === 'application/vnd.docker.distribution.manifest.list.v2+json' || mediaType === 'application/vnd.oci.image.index.v1+json') {
+      const manifests = manifestResponse.data.manifests;
+      const targetPlatform = manifests.find(m => m.platform?.architecture === 'amd64' && m.platform?.os === 'linux');
+
+      if (!targetPlatform) {
+        throw new Error('No linux/amd64 manifest found in index');
+      }
+
+      const resolvedDigest = targetPlatform.digest;
+
+      // Fetch the specific manifest
+      const specificManifestUrl = `https://ghcr.io/v2/theduffman85/crowdsec-web-ui/manifests/${resolvedDigest}`;
+      manifestResponse = await axios.get(specificManifestUrl, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json'
+        },
+        timeout: 10000
+      });
+    }
+
+    const configDigest = manifestResponse.data.config?.digest;
+    if (!configDigest) throw new Error('Config digest not found in manifest');
+
+    // 2. Get Config Blob to find Labels
+    const blobUrl = `https://ghcr.io/v2/theduffman85/crowdsec-web-ui/blobs/${configDigest}`;
+    const blobResponse = await axios.get(blobUrl, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
+      timeout: 10000
+    });
+
+    const remoteRevision = blobResponse.data.config?.Labels?.['org.opencontainers.image.revision'];
+
+    if (!remoteRevision) {
+      console.log('Update check: Remote image has no revision label.');
+      return { update_available: false, reason: 'no_remote_label' };
+    }
+
+    // Check if remote revision starts with local hash (remote is full SHA, local is short 8 chars)
+    const isMismatch = !remoteRevision.startsWith(currentHash);
+
+    const result = {
+      update_available: isMismatch,
+      local_hash: currentHash,
+      remote_hash: remoteRevision.substring(0, 8), // Shorten for display
+      tag: tag
+    };
+
+    // Update cache
+    updateCheckCache = {
+      lastCheck: now,
+      data: result
+    };
+
+    console.log(`Update check complete. Update available: ${isMismatch} (Local: ${currentHash}, Remote: ${remoteRevision.substring(0, 8)})`);
+    return result;
+
+  } catch (error) {
+    console.error('Update check failed:', error.message);
+    return { update_available: false, error: error.message };
+  }
+}
+
+// ============================================================================
+// END UPDATE CHECKER
+// ============================================================================
+
 app.use(cors());
 app.use(express.json());
 app.use(activityTracker); // Apply to all routes
@@ -1002,6 +1128,19 @@ app.delete('/api/decisions/:id', ensureAuth, async (req, res) => {
   }
 });
 
+/**
+ * GET /api/update-check
+ */
+app.get('/api/update-check', ensureAuth, async (req, res) => {
+  try {
+    const status = await checkForUpdates();
+    res.json(status);
+  } catch (error) {
+    console.error('Error checking for updates:', error.message);
+    res.status(500).json({ error: 'Update check failed' });
+  }
+});
+
 // Serve static files from the "frontend/dist" directory.
 app.use(express.static(path.join(__dirname, 'frontend/dist')));
 
@@ -1038,4 +1177,6 @@ app.get('*', (req, res) => {
 
 // ============================================================================
 
-app.listen(port, () => console.log(`Server listening on port ${port}`));
+
+
+const server = app.listen(port, '0.0.0.0', () => { console.log(`Server listening on port ${port}`); });

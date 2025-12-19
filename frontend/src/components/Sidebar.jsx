@@ -1,14 +1,34 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, ShieldAlert, Gavel, X, Sun, Moon } from "lucide-react";
+import { LayoutDashboard, ShieldAlert, Gavel, X, Sun, Moon, ArrowUpCircle } from "lucide-react";
 import { useRefresh } from "../contexts/RefreshContext";
+import { useState, useEffect } from "react";
+import axios from "axios";
 
 export function Sidebar({ isMobileMenuOpen, onClose, theme, toggleTheme }) {
     const { intervalMs, setIntervalMs, lastUpdated } = useRefresh();
+    const [updateStatus, setUpdateStatus] = useState(null);
+
     const links = [
         { to: "/", label: "Dashboard", icon: LayoutDashboard },
         { to: "/alerts", label: "Alerts", icon: ShieldAlert },
         { to: "/decisions", label: "Decisions", icon: Gavel },
     ];
+
+    useEffect(() => {
+        const checkUpdates = async () => {
+            try {
+                // Determine API base URL
+                const apiBase = import.meta.env.VITE_API_BASE || '';
+                const response = await axios.get(`${apiBase}/api/update-check`);
+                setUpdateStatus(response.data);
+            } catch (error) {
+                console.error("Failed to check for updates", error);
+            }
+        };
+
+        checkUpdates();
+        // Check once on mount
+    }, []);
 
     const formatTime = (date) => {
         if (!date) return "";
@@ -65,6 +85,7 @@ export function Sidebar({ isMobileMenuOpen, onClose, theme, toggleTheme }) {
                 ))}
             </nav>
             <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex flex-col gap-4">
+
                 {/* Refresh Settings */}
                 <div className="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-3 space-y-2">
                     <div className="flex items-center justify-between">
@@ -98,6 +119,23 @@ export function Sidebar({ isMobileMenuOpen, onClose, theme, toggleTheme }) {
                         {theme === "light" ? "Dark Mode" : "Light Mode"}
                     </span>
                 </button>
+
+                {/* Update Notification */}
+                {updateStatus?.update_available && (
+                    <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-3">
+                        <div className="flex items-start gap-3">
+                            <ArrowUpCircle className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+                            <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-blue-800 dark:text-blue-200 mb-1">
+                                    Update Available
+                                </p>
+                                <p className="text-xs text-blue-600 dark:text-blue-400">
+                                    New version available for tag <span className="font-mono bg-blue-100 dark:bg-blue-800 px-1 rounded">{updateStatus.tag}</span>
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 <p className="text-xs text-center text-gray-400 dark:text-gray-500 flex flex-col items-center gap-1">
                     <span>{import.meta.env.VITE_BRANCH === 'dev' ? 'Dev Build' : 'Build'} {import.meta.env.VITE_BUILD_DATE}</span>

@@ -60,6 +60,9 @@ Ban IPs directly from the UI with custom duration and reason.
   <img src="screenshots/add_decision.png" alt="Add Decision" width="50%">
 </a>
 
+### Update Notifications
+Automatically detects new container images on GitHub Container Registry (GHCR). A badge appears in the sidebar when an update is available for your current tag.
+
 ### Modern UI
 -   **Dark/Light Mode**: Full support for both themes.
 -   **Responsive**: Optimized for mobile and desktop.
