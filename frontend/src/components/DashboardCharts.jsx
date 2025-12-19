@@ -237,6 +237,7 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
                                 fill="#dc2626"
                                 stroke="none"
                                 radius={[4, 4, 0, 0]}
+                                barSize={5}
                             />
                             <Bar
                                 isAnimationActive={false}
@@ -245,6 +246,7 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
                                 fill="#2563eb"
                                 stroke="none"
                                 radius={[4, 4, 0, 0]}
+                                barSize={5}
                             />
                         </BarChart>
                     </ResponsiveContainer>
