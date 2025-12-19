@@ -35,6 +35,7 @@ RUN npm run build-ui
 EXPOSE 3000
 
 # Security: Run as non-root user
+RUN chown -R node:node /app
 USER node
 
 # Increase Node.js memory limit to avoid OOM with large datasets

@@ -30,6 +30,12 @@ function loadPersistedConfig() {
       const data = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
       console.log('Loaded persisted config:', data);
       return data;
+    } else {
+      // Create empty config file if it doesn't exist
+      console.log(`Config file not found at ${CONFIG_FILE}. Creating default...`);
+      const defaultConfig = {};
+      savePersistedConfig(defaultConfig);
+      return defaultConfig;
     }
   } catch (error) {
     console.error('Error loading config file:', error.message);
