@@ -36,7 +36,7 @@ const CustomTooltip = ({ active, payload, label }) => {
 /**
  * Combined Bar Chart for Alerts and Decisions
  */
-export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsData, unfilteredDecisionsData, granularity, setGranularity, onDateRangeSelect, selectedDateRange }) {
+export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsData, unfilteredDecisionsData, granularity, setGranularity, onDateRangeSelect, selectedDateRange, isSticky }) {
     // -------------------------------------------------------------------------
     // 1. Process Filtered Data (Main Chart)
     // -------------------------------------------------------------------------
@@ -140,47 +140,40 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
     const endIndex = isDragging.current ? localBrushState.endIndex : targetEndIndex;
 
     // Sticky Brush Logic: Auto-follow time
-    const lastBucketKeyRef = useRef(null);
-
     useEffect(() => {
         if (!sliderData || sliderData.length === 0) return;
+        if (!isSticky || !selectedDateRange) return;
 
         const currentLastBucketKey = sliderData[sliderData.length - 1].bucketKey;
-        const prevLastBucketKey = lastBucketKeyRef.current;
 
-        // Always update ref to current for next time
-        lastBucketKeyRef.current = currentLastBucketKey;
+        // Check if the current selection already ends at the rightmost bucket
+        if (selectedDateRange.end === currentLastBucketKey) return;
 
-        // If valid previous state exists and end data changed
-        if (prevLastBucketKey && prevLastBucketKey !== currentLastBucketKey) {
-            // If we have an active selection that was touching the previous end
-            if (selectedDateRange && selectedDateRange.end === prevLastBucketKey) {
-                // Find indices in the CURRENT sliderData
-                const startBucketIndex = sliderData.findIndex(d => d.bucketKey === selectedDateRange.start);
-                const prevEndBucketIndex = sliderData.findIndex(d => d.bucketKey === prevLastBucketKey);
+        // The brush is sticky and new data has arrived - expand to include new buckets
+        // Find the original window size based on current selection
+        const startBucketIndex = sliderData.findIndex(d => d.bucketKey === selectedDateRange.start);
+        const endBucketIndex = sliderData.findIndex(d => d.bucketKey === selectedDateRange.end);
 
-                if (startBucketIndex !== -1 && prevEndBucketIndex !== -1) {
-                    // Calculate window size (distance between start and old end)
-                    const windowSize = prevEndBucketIndex - startBucketIndex;
+        if (startBucketIndex !== -1 && endBucketIndex !== -1) {
+            // Calculate window size (distance between start and old end)
+            const windowSize = endBucketIndex - startBucketIndex;
 
-                    // New end is the last item
-                    const newEndIndex = sliderData.length - 1;
-                    // New start preserves the window size
-                    // Ensure we don't go below 0 (though unlikely for sticky at end)
-                    const newStartIndex = Math.max(0, newEndIndex - windowSize);
+            // New end is the last item
+            const newEndIndex = sliderData.length - 1;
+            // New start preserves the window size
+            const newStartIndex = Math.max(0, newEndIndex - windowSize);
 
-                    const newStartKey = sliderData[newStartIndex].bucketKey;
+            const newStartKey = sliderData[newStartIndex].bucketKey;
 
-                    if (onDateRangeSelect) {
-                        onDateRangeSelect({
-                            start: newStartKey,
-                            end: currentLastBucketKey
-                        });
-                    }
-                }
+            if (onDateRangeSelect) {
+                // Keep sticky = true since we're still at the end
+                onDateRangeSelect({
+                    start: newStartKey,
+                    end: currentLastBucketKey
+                }, true);
             }
         }
-    }, [sliderData, selectedDateRange, onDateRangeSelect]);
+    }, [sliderData, selectedDateRange, isSticky, onDateRangeSelect]);
 
 
     const granularities = ['day', 'hour'];
@@ -300,7 +293,8 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
                                                     start: startItem.bucketKey,
                                                     end: endItem.bucketKey
                                                 };
-                                                onDateRangeSelect(dateRange);
+                                                // Pass isAtEnd to indicate if brush is at the rightmost position
+                                                onDateRangeSelect(dateRange, isEndReset);
                                             }
                                         };
                                         window.addEventListener('mouseup', handleDragEnd);
