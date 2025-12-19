@@ -132,6 +132,53 @@ export function getTopAS(alerts, limit = 10) {
 }
 
 /**
+ * Get the target identifier for an alert
+ * Prioritizes: target_fqdn > target_host > service > machine_alias > machine_id
+ */
+export function getAlertTarget(alert) {
+    if (!alert) return "Unknown";
+
+    // Try to find target in events
+    if (alert.events) {
+        for (const event of alert.events) {
+            if (event.meta) {
+                // Check common meta keys for target info
+                const targetFqdn = event.meta.find(m => m.key === 'target_fqdn')?.value;
+                if (targetFqdn) return targetFqdn;
+
+                const targetHost = event.meta.find(m => m.key === 'target_host')?.value;
+                if (targetHost) return targetHost;
+
+                const service = event.meta.find(m => m.key === 'service')?.value;
+                if (service) return service;
+            }
+        }
+    }
+
+    // Fallback
+    return alert.machine_alias || alert.machine_id || "Unknown";
+}
+
+/**
+ * Get top Targets by alert count
+ */
+export function getTopTargets(alerts, limit = 10) {
+    const targetCounts = {};
+
+    alerts.forEach(alert => {
+        const target = getAlertTarget(alert);
+        if (target && target !== "Unknown") {
+            targetCounts[target] = (targetCounts[target] || 0) + 1;
+        }
+    });
+
+    return Object.entries(targetCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, limit)
+        .map(([target, count]) => ({ label: target, count }));
+}
+
+/**
  * Get aggregated stats for the given time range and granularity
  * @param {Array} items - List of items with created_at
  * @param {number} days - Number of days to look back

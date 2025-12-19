@@ -11,7 +11,9 @@ import { WorldMapCard } from "../components/WorldMapCard";
 import { ScenarioName } from "../components/ScenarioName";
 import {
     filterLastNDays,
-    getTopIPs,
+
+    getTopTargets,
+    getAlertTarget,
     getTopCountries,
     getAllCountries,
     getTopScenarios,
@@ -76,8 +78,10 @@ export function Dashboard() {
             dateRangeSticky: false,
             country: null,
             scenario: null,
+            scenario: null,
             as: null,
-            ip: null
+            ip: null,
+            target: null
         };
     });
 
@@ -301,6 +305,34 @@ export function Dashboard() {
             sliderDecisions = sliderDecisions.filter(d => d.value === filters.ip);
         }
 
+        if (filters.target) {
+            filteredAlerts = filteredAlerts.filter(a => getAlertTarget(a) === filters.target);
+            // Decisions don't inherently have a "target" field compatible with getAlertTarget (which looks at events)
+            // But we can filter decisions by seeing if they are associated with alerts that match the target.
+            // However, decisions are often standalone or the link is weak. 
+            // BUT, if we view "Decisions" as "Decisions made on this Target", we need to filter decisions.
+            // Since we don't have a direct link in the decision object to the target (machine_id is origin, but not target per se?),
+            // let's try to match by alerts again.
+            const ipsOnTarget = new Set(
+                filteredAlerts.map(a => a.source.ip).filter(ip => ip)
+            );
+            activeDecisions = activeDecisions.filter(d => ipsOnTarget.has(d.value));
+
+            // Charts
+            chartAlerts = chartAlerts.filter(a => getAlertTarget(a) === filters.target);
+            const chartIpsOnTarget = new Set(
+                chartAlerts.map(a => a.source.ip).filter(ip => ip)
+            );
+            chartDecisionsData = chartDecisionsData.filter(d => chartIpsOnTarget.has(d.value));
+
+            // Slider
+            sliderAlerts = sliderAlerts.filter(a => getAlertTarget(a) === filters.target);
+            const sliderIpsOnTarget = new Set(
+                sliderAlerts.map(a => a.source.ip).filter(ip => ip)
+            );
+            sliderDecisions = sliderDecisions.filter(d => sliderIpsOnTarget.has(d.value));
+        }
+
         return {
             alerts: filteredAlerts,
             decisions: activeDecisions,  // Active decisions for card/lists
@@ -332,7 +364,7 @@ export function Dashboard() {
         // So the pie chart should reflect the date selection. The bar chart should reflect the country selection.
 
         return {
-            topIPs: getTopIPs(filteredData.alerts, 10),
+            topTargets: getTopTargets(filteredData.alerts, 10),
             // Top Countries list is removed per requirements, but we calculate it for the Pie Chart
             topCountries: getTopCountries(filteredData.alerts, 10), // Get more for the pie chart
             allCountries: getAllCountries(filteredData.alerts),  // For map display
@@ -361,7 +393,8 @@ export function Dashboard() {
             country: null,
             scenario: null,
             as: null,
-            ip: null
+            ip: null,
+            target: null
         });
     };
 
@@ -369,7 +402,8 @@ export function Dashboard() {
         filters.country !== null ||
         filters.scenario !== null ||
         filters.as !== null ||
-        filters.ip !== null;
+        filters.ip !== null ||
+        filters.target !== null;
 
     if (loading) {
         return <div className="text-center p-8 text-gray-500">Loading dashboard...</div>;
@@ -471,6 +505,7 @@ export function Dashboard() {
                                             if (filters.scenario) params.set('scenario', filters.scenario);
                                             if (filters.as) params.set('as', filters.as);
                                             if (filters.ip) params.set('ip', filters.ip);
+                                            if (filters.target) params.set('target', filters.target);
                                             if (filters.dateRange) {
                                                 params.set('dateStart', filters.dateRange.start);
                                                 params.set('dateEnd', filters.dateRange.end);
@@ -575,10 +610,10 @@ export function Dashboard() {
                                 total={percentageBasis === 'global' ? filteredData.globalTotal : filteredData.alerts.length}
                             />
                             <StatCard
-                                title="Top IPs"
-                                items={statistics.topIPs}
-                                onSelect={(item) => toggleFilter('ip', item.label)}
-                                selectedValue={filters.ip}
+                                title="Top Targets"
+                                items={statistics.topTargets}
+                                onSelect={(item) => toggleFilter('target', item.label)}
+                                selectedValue={filters.target}
                                 total={percentageBasis === 'global' ? filteredData.globalTotal : filteredData.alerts.length}
                             />
                         </div>

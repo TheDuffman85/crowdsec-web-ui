@@ -7,6 +7,7 @@ import { Modal } from "../components/ui/Modal";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { getHubUrl, getCountryName } from "../lib/utils";
+import { getAlertTarget } from "../lib/stats";
 import { Search, Info, ExternalLink, Shield } from "lucide-react";
 import "flag-icons/css/flag-icons.min.css";
 
@@ -95,7 +96,9 @@ export function Alerts() {
         const paramAs = (searchParams.get("as") || "").toLowerCase();
         const paramDate = searchParams.get("date") || "";
         const paramDateStart = searchParams.get("dateStart") || "";
+
         const paramDateEnd = searchParams.get("dateEnd") || "";
+        const paramTarget = (searchParams.get("target") || "").toLowerCase();
 
         const scenario = (alert.scenario || "").toLowerCase();
         const message = (alert.message || "").toLowerCase();
@@ -107,7 +110,9 @@ export function Alerts() {
         if (paramIp && !ip.includes(paramIp)) return false;
         if (paramCountry && !cn.includes(paramCountry)) return false;
         if (paramScenario && !scenario.includes(paramScenario)) return false;
+        if (paramScenario && !scenario.includes(paramScenario)) return false;
         if (paramAs && !asName.includes(paramAs)) return false;
+        if (paramTarget && !(getAlertTarget(alert) || "").toLowerCase().includes(paramTarget)) return false;
 
         // Single date filter (legacy support)
         if (paramDate && !(alert.created_at && alert.created_at.startsWith(paramDate))) return false;
@@ -143,7 +148,8 @@ export function Alerts() {
                 message.includes(search) ||
                 ip.includes(search) ||
                 cn.includes(search) ||
-                asName.includes(search);
+                asName.includes(search) ||
+                (getAlertTarget(alert) || "").toLowerCase().includes(search);
         }
 
         return true;
@@ -163,9 +169,9 @@ export function Alerts() {
             </div>
 
             {/* Show active filters */}
-            {(searchParams.get("ip") || searchParams.get("country") || searchParams.get("scenario") || searchParams.get("as") || searchParams.get("date") || searchParams.get("dateStart") || searchParams.get("dateEnd")) && (
+            {(searchParams.get("ip") || searchParams.get("country") || searchParams.get("scenario") || searchParams.get("as") || searchParams.get("target") || searchParams.get("date") || searchParams.get("dateStart") || searchParams.get("dateEnd")) && (
                 <div className="flex flex-wrap gap-2">
-                    {["ip", "country", "scenario", "as", "date", "dateStart", "dateEnd"].map(key => {
+                    {["ip", "country", "scenario", "as", "target", "date", "dateStart", "dateEnd"].map(key => {
                         const val = searchParams.get(key);
                         if (!val) return null;
                         return (
