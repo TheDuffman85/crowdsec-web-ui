@@ -140,13 +140,16 @@ const loginToLAPI = async () => {
       // Some versions might just return the token object directly or differently
       requestToken = response.data.token;
       console.log('Successfully logged in to CrowdSec LAPI');
+      updateLapiStatus(true);
       return true;
     } else {
       console.error('Login response did not contain token:', response.data);
+      updateLapiStatus(false, { message: 'Login response invalid' });
       return false;
     }
   } catch (error) {
     console.error(`Login failed: ${error.message}`);
+    updateLapiStatus(false, error);
     if (error.response) {
       console.error('Response data:', error.response.data);
     }
@@ -168,6 +171,20 @@ const cache = {
   lastUpdate: null,            // ISO timestamp of last successful fetch
   isInitialized: false         // Whether initial load is complete
 };
+
+// Global LAPI Status Tracker
+const lapiStatus = {
+  isConnected: false,
+  lastCheck: null,
+  lastError: null
+};
+
+// Helper to update LAPI status
+function updateLapiStatus(isConnected, error = null) {
+  lapiStatus.isConnected = isConnected;
+  lapiStatus.lastCheck = new Date().toISOString();
+  lapiStatus.lastError = error ? error.message : null;
+}
 
 // Parse lookback period to milliseconds
 function parseLookbackToMs(lookbackPeriod) {
@@ -331,10 +348,12 @@ async function initializeCache() {
   - ${cache.decisionsForStats.size} total decisions
   - Last update: ${cache.lastUpdate}
 `);
+    updateLapiStatus(true);
 
   } catch (error) {
     console.error('Failed to initialize cache:', error.message);
     cache.isInitialized = false;
+    updateLapiStatus(false, error);
   }
 }
 
@@ -423,9 +442,11 @@ async function updateCacheDelta() {
     cache.lastUpdate = new Date().toISOString();
 
     console.log(`Delta update complete: ${cache.alerts.size} alerts, ${cache.decisions.size} active decisions`);
+    updateLapiStatus(true);
 
   } catch (error) {
     console.error('Failed to update cache delta:', error.message);
+    updateLapiStatus(false, error);
   }
 }
 
@@ -956,8 +977,10 @@ app.get('/api/config', ensureAuth, (req, res) => {
     lookback_period: CROWDSEC_LOOKBACK_PERIOD,
     lookback_hours: hours,
     lookback_days: Math.max(1, Math.round(hours / 24)),
+    lookback_days: Math.max(1, Math.round(hours / 24)),
     refresh_interval: REFRESH_INTERVAL_MS,
-    current_interval_name: getIntervalName(REFRESH_INTERVAL_MS)
+    current_interval_name: getIntervalName(REFRESH_INTERVAL_MS),
+    lapi_status: lapiStatus
   });
 });
 

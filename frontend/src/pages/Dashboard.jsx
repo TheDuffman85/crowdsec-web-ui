@@ -128,7 +128,15 @@ export function Dashboard() {
 
             setRawData({ alerts, decisions, decisionsForStats });
             setStats({ alerts: alerts.length, decisions: decisions.length });
-            setIsOnline(true);
+
+            // Check LAPI status from config
+            if (configData.lapi_status) {
+                setIsOnline(configData.lapi_status.isConnected);
+            } else {
+                // Fallback for older backend versions
+                setIsOnline(true);
+            }
+
             setLastUpdated(new Date());
 
         } catch (error) {
@@ -473,7 +481,7 @@ export function Dashboard() {
                                 }`} />
                         </div>
                         <div>
-                            <p className="text-sm font-medium text-gray-500 dark:text-gray-400">System Status</p>
+                            <p className="text-sm font-medium text-gray-500 dark:text-gray-400">CrowdSec LAPI</p>
                             <h3 className={`text-2xl font-bold ${isOnline
                                 ? 'text-gray-900 dark:text-white'
                                 : 'text-red-600 dark:text-red-400'

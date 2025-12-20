@@ -5,7 +5,7 @@ import { useState, useEffect } from "react";
 import axios from "axios";
 
 export function Sidebar({ isMobileMenuOpen, onClose, theme, toggleTheme }) {
-    const { intervalMs, setIntervalMs, lastUpdated } = useRefresh();
+    const { intervalMs, setIntervalMs, lastUpdated, refreshSignal } = useRefresh();
     const [updateStatus, setUpdateStatus] = useState(null);
 
     const links = [
@@ -27,8 +27,8 @@ export function Sidebar({ isMobileMenuOpen, onClose, theme, toggleTheme }) {
         };
 
         checkUpdates();
-        // Check once on mount
-    }, []);
+        // Check on mount and when refresh signal triggers
+    }, [refreshSignal]);
 
     const formatTime = (date) => {
         if (!date) return "";
