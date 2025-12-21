@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { fetchDecisions, deleteDecision, addDecision } from "../lib/api";
 import { useRefresh } from "../contexts/RefreshContext";
@@ -21,6 +21,20 @@ export function Decisions() {
     const alertIdFilter = searchParams.get("alert_id");
     const includeExpiredParam = searchParams.get("include_expired") === "true";
     const [showExpired, setShowExpired] = useState(includeExpiredParam);
+    const [displayedCount, setDisplayedCount] = useState(50);
+
+    // Intersection Observer for infinite scroll
+    const observer = useRef();
+    const lastDecisionElementRef = useCallback(node => {
+        if (loading) return;
+        if (observer.current) observer.current.disconnect();
+        observer.current = new IntersectionObserver(entries => {
+            if (entries[0].isIntersecting) {
+                setDisplayedCount(prev => prev + 50);
+            }
+        });
+        if (node) observer.current.observe(node);
+    }, [loading]);
 
     const loadDecisions = useCallback(async (isBackground = false) => {
         if (!isBackground) setLoading(true);
@@ -99,6 +113,8 @@ export function Decisions() {
         ? decisions.filter(d => String(d.detail.alert_id) === alertIdFilter)
         : decisions;
 
+    const visibleDecisions = filteredDecisions.slice(0, displayedCount);
+
     return (
         <div className="space-y-6">
             <div className="flex justify-between items-center">
@@ -161,17 +177,23 @@ export function Decisions() {
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                             {loading ? (
                                 <tr><td colSpan="9" className="px-6 py-4 text-center text-sm text-gray-500">Loading decisions...</td></tr>
-                            ) : filteredDecisions.length === 0 ? (
+                            ) : visibleDecisions.length === 0 ? (
                                 <tr><td colSpan="9" className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? "No decisions for this alert" : "No decisions found"}</td></tr>
                             ) : (
-                                filteredDecisions.map((decision) => {
+                                visibleDecisions.map((decision, index) => {
                                     const isExpired = decision.expired || (decision.detail.duration && decision.detail.duration.startsWith("-"));
                                     const rowClasses = isExpired
                                         ? "hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors opacity-60 bg-gray-50 dark:bg-gray-900/20"
                                         : "hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors";
 
+                                    const isLastElement = index === visibleDecisions.length - 1;
+
                                     return (
-                                        <tr key={decision.id} className={rowClasses}>
+                                        <tr
+                                            key={decision.id}
+                                            className={rowClasses}
+                                            ref={isLastElement ? lastDecisionElementRef : null}
+                                        >
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
                                                 <TimeDisplay timestamp={decision.created_at} />
                                             </td>
