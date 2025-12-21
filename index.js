@@ -917,6 +917,13 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
     if (includeExpired) {
       // Convert decisionsForStats to full decision object format
       decisions = Array.from(cache.decisionsForStats.values()).map(d => {
+        // OPTIMIZATION: Check if we have fresh data in the active decisions cache
+        // This ensures that active decisions returned in this list have up-to-date durations
+        const activeDecision = cache.decisions.get(String(d.id));
+        if (activeDecision) {
+          return activeDecision;
+        }
+
         // Find matching alert to get full details
         const alert = Array.from(cache.alerts.values()).find(a =>
           a.decisions && a.decisions.some(dec => dec.id === d.id)

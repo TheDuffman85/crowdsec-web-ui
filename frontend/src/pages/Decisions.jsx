@@ -51,16 +51,12 @@ export function Decisions() {
         if (!isBackground) setLoading(true);
         try {
             const url = includeExpiredParam ? '/api/decisions?include_expired=true' : '/api/decisions';
-            const res = await fetch(url);
+
+            const res = await fetch(url, { cache: "no-store" });
             if (!res.ok) throw new Error('Failed to fetch decisions');
             const data = await res.json();
-            setDecisions(data);
 
-            // Check for generic search query param
-            const queryParam = searchParams.get("q");
-            if (queryParam) {
-                setFilter(queryParam);
-            }
+            setDecisions(data);
 
             setLastUpdated(new Date());
         } catch (error) {
@@ -68,7 +64,15 @@ export function Decisions() {
         } finally {
             if (!isBackground) setLoading(false);
         }
-    }, [includeExpiredParam, setLastUpdated, searchParams]); // Added searchParams dependency
+    }, [includeExpiredParam, setLastUpdated]);
+
+    // Sync "q" param to filter state
+    useEffect(() => {
+        const queryParam = searchParams.get("q");
+        if (queryParam) {
+            setFilter(queryParam);
+        }
+    }, [searchParams]);
 
     useEffect(() => {
         loadDecisions(false);
@@ -392,7 +396,7 @@ export function Decisions() {
 
                                     return (
                                         <tr
-                                            key={decision.id}
+                                            key={`${decision.id}-${decision.detail.duration}`}
                                             className={rowClasses}
                                             ref={isLastElement ? lastDecisionElementRef : null}
                                         >
