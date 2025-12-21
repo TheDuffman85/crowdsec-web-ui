@@ -32,7 +32,6 @@ export function Decisions() {
     const dateStartFilter = searchParams.get("dateStart");
     const dateEndFilter = searchParams.get("dateEnd");
 
-    const [showExpired, setShowExpired] = useState(includeExpiredParam);
     const [displayedCount, setDisplayedCount] = useState(50);
 
     // Intersection Observer for infinite scroll
@@ -51,7 +50,7 @@ export function Decisions() {
     const loadDecisions = useCallback(async (isBackground = false) => {
         if (!isBackground) setLoading(true);
         try {
-            const url = showExpired ? '/api/decisions?include_expired=true' : '/api/decisions';
+            const url = includeExpiredParam ? '/api/decisions?include_expired=true' : '/api/decisions';
             const res = await fetch(url);
             if (!res.ok) throw new Error('Failed to fetch decisions');
             const data = await res.json();
@@ -69,7 +68,7 @@ export function Decisions() {
         } finally {
             if (!isBackground) setLoading(false);
         }
-    }, [showExpired, setLastUpdated]);
+    }, [includeExpiredParam, setLastUpdated, searchParams]); // Added searchParams dependency
 
     useEffect(() => {
         loadDecisions(false);
@@ -112,7 +111,6 @@ export function Decisions() {
 
     const clearFilter = () => {
         setSearchParams({});
-        setShowExpired(false);
     };
 
     const removeParam = (key) => {
@@ -122,8 +120,7 @@ export function Decisions() {
     }
 
     const toggleExpired = () => {
-        const newValue = !showExpired;
-        setShowExpired(newValue);
+        const newValue = !includeExpiredParam;
 
         // Update URL params
         const newParams = new URLSearchParams(searchParams);
@@ -231,9 +228,9 @@ export function Decisions() {
             </div>
 
             {/* Show active filters */}
-            {(showExpired || !showExpired || alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter) && (
+            {(includeExpiredParam || !includeExpiredParam || alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter) && (
                 <div className="flex flex-wrap gap-2">
-                    {!showExpired && (
+                    {!includeExpiredParam && (
                         <Badge variant="secondary" className="flex items-center gap-1">
                             <span className="font-semibold uppercase">STATUS:</span> ACTIVE
                             <button
@@ -335,7 +332,7 @@ export function Decisions() {
                     )}
 
                     {/* Show Reset button if we have any active filters OR if we are showing expired (non-default state) */}
-                    {(alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter || showExpired) && (
+                    {(alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter || includeExpiredParam) && (
                         <button
                             onClick={clearFilter}
                             className="text-xs text-gray-500 hover:text-gray-900 dark:hover:text-gray-300 underline"
