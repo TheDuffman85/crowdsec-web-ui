@@ -330,7 +330,10 @@ async function initializeCache() {
                 duration: decision.duration || "N/A",
                 expiration: decision.stop_at || alert.stop_at,
                 alert_id: alert.id,
-                message: alert.message
+                message: alert.message,
+                events: alert.events,
+                machine_alias: alert.machine_alias,
+                machine_id: alert.machine_id
               }
             };
             cache.decisions.set(String(decision.id), decisionData);
@@ -407,7 +410,10 @@ async function updateCacheDelta() {
                 duration: decision.duration || "N/A",
                 expiration: decision.stop_at || alert.stop_at,
                 alert_id: alert.id,
-                message: alert.message
+                message: alert.message,
+                events: alert.events,
+                machine_alias: alert.machine_alias,
+                machine_id: alert.machine_id
               }
             };
             cache.decisions.set(String(decision.id), decisionData);
@@ -935,7 +941,10 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
             duration: alert.decisions.find(dec => dec.id === d.id)?.duration || "N/A",
             expiration: d.stop_at,
             alert_id: alert.id,
-            message: alert.message
+            message: alert.message,
+            events: alert.events,
+            machine_alias: alert.machine_alias,
+            machine_id: alert.machine_id
           } : {}
         };
       });

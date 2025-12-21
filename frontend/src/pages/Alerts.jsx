@@ -159,7 +159,7 @@ export function Alerts() {
 
     return (
         <div className="space-y-6">
-            <div className="flex justify-between items-center">
+            <div className="flex items-center gap-3">
                 <h2 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Alerts</h2>
                 {(filteredAlerts.length !== alerts.length) && (
                     <div className="text-sm text-gray-500">
@@ -194,7 +194,7 @@ export function Alerts() {
                         onClick={() => setSearchParams({})}
                         className="text-xs text-gray-500 hover:text-gray-900 dark:hover:text-gray-300 underline"
                     >
-                        Clear all filters
+                        Reset all filters
                     </button>
                 </div>
             )}

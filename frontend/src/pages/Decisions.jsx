@@ -7,6 +7,7 @@ import { Modal } from "../components/ui/Modal";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { getHubUrl, getCountryName } from "../lib/utils";
+import { getAlertTarget } from "../lib/stats";
 import { Trash2, Gavel, X, ExternalLink, Shield, Search } from "lucide-react";
 import "flag-icons/css/flag-icons.min.css";
 
@@ -21,6 +22,16 @@ export function Decisions() {
     const [searchParams, setSearchParams] = useSearchParams();
     const alertIdFilter = searchParams.get("alert_id");
     const includeExpiredParam = searchParams.get("include_expired") === "true";
+
+    // New Filters from URL
+    const countryFilter = searchParams.get("country");
+    const scenarioFilter = searchParams.get("scenario");
+    const asFilter = searchParams.get("as");
+    const ipFilter = searchParams.get("ip");
+    const targetFilter = searchParams.get("target");
+    const dateStartFilter = searchParams.get("dateStart");
+    const dateEndFilter = searchParams.get("dateEnd");
+
     const [showExpired, setShowExpired] = useState(includeExpiredParam);
     const [displayedCount, setDisplayedCount] = useState(50);
 
@@ -101,7 +112,14 @@ export function Decisions() {
 
     const clearFilter = () => {
         setSearchParams({});
+        setShowExpired(false);
     };
+
+    const removeParam = (key) => {
+        const newParams = new URLSearchParams(searchParams);
+        newParams.delete(key);
+        setSearchParams(newParams);
+    }
 
     const toggleExpired = () => {
         const newValue = !showExpired;
@@ -117,73 +135,219 @@ export function Decisions() {
         setSearchParams(newParams);
     };
 
-    const filteredDecisions = (alertIdFilter
-        ? decisions.filter(d => String(d.detail.alert_id) === alertIdFilter)
-        : decisions).filter(decision => {
-            const search = filter.toLowerCase();
-            if (!search) return true;
+    const filteredDecisions = decisions.filter(decision => {
+        // Debug logging
+        // console.log("Filtering decision:", decision.value, "Target Filter:", targetFilter);
 
-            const ip = (decision.value || "").toLowerCase();
-            const reason = (decision.detail.reason || "").toLowerCase();
-            const country = (getCountryName(decision.detail.country) || "").toLowerCase();
-            const as = (decision.detail.as || "").toLowerCase();
-            const type = (decision.type || "").toLowerCase();
-            const action = (decision.detail.action || "").toLowerCase();
+        // 1. Alert ID Filter
+        if (alertIdFilter && String(decision.detail.alert_id) !== alertIdFilter) return false;
 
-            return ip.includes(search) ||
-                reason.includes(search) ||
-                country.includes(search) ||
-                as.includes(search) ||
-                type.includes(search) ||
-                action.includes(search);
-        });
+        // 2. Exact Field Filters (from Dashboard)
+        if (countryFilter && decision.detail.country !== countryFilter) return false;
+        if (scenarioFilter && decision.detail.reason !== scenarioFilter) return false;
+        if (asFilter && decision.detail.as !== asFilter) return false;
+        if (asFilter && decision.detail.as !== asFilter) return false;
+        if (ipFilter && decision.value !== ipFilter) return false;
+        if (targetFilter) {
+            const decisionTarget = (decision.value || "").toLowerCase();
+            const alertTarget = (getAlertTarget(decision.detail) || "").toLowerCase();
+            const filterValue = targetFilter.toLowerCase();
+
+            if (!decisionTarget.includes(filterValue) && !alertTarget.includes(filterValue)) {
+                return false;
+            }
+        }
+
+        // 3. Date Range Filter
+        if (dateStartFilter || dateEndFilter) {
+            if (!decision.created_at) return false;
+
+            // Helper to extract date/time key from ISO timestamp (Matches Alerts.jsx logic)
+            // This ensures we compare "apples to apples" with the dashboard local-time based filters
+            const getItemKey = (isoString) => {
+                const date = new Date(isoString);
+                const year = date.getFullYear();
+                const month = String(date.getMonth() + 1).padStart(2, '0');
+                const day = String(date.getDate()).padStart(2, '0');
+
+                // If filter includes time (has 'T'), use hourly precision
+                if ((dateStartFilter && dateStartFilter.includes('T')) || (dateEndFilter && dateEndFilter.includes('T'))) {
+                    const hour = String(date.getHours()).padStart(2, '0');
+                    return `${year}-${month}-${day}T${hour}`;
+                }
+                return `${year}-${month}-${day}`;
+            };
+
+            const itemKey = getItemKey(decision.created_at);
+
+            if (dateStartFilter && itemKey < dateStartFilter) return false;
+            if (dateEndFilter && itemKey > dateEndFilter) return false;
+        }
+
+
+
+        // 4. Generic Text Search (existing)
+        const search = filter.toLowerCase();
+        if (!search) return true;
+
+        const ip = (decision.value || "").toLowerCase();
+        const reason = (decision.detail.reason || "").toLowerCase();
+        const country = (getCountryName(decision.detail.country) || "").toLowerCase();
+        const as = (decision.detail.as || "").toLowerCase();
+        const type = (decision.type || "").toLowerCase();
+        const action = (decision.detail.action || "").toLowerCase();
+
+        return ip.includes(search) ||
+            reason.includes(search) ||
+            country.includes(search) ||
+            as.includes(search) ||
+            type.includes(search) ||
+            action.includes(search);
+    });
 
     const visibleDecisions = filteredDecisions.slice(0, displayedCount);
 
     return (
         <div className="space-y-6">
-            <div className="flex flex-col gap-4">
-                <div className="flex justify-between items-center">
-                    <div className="flex items-center gap-3">
-                        <h2 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Decisions</h2>
-                        {alertIdFilter && (
-                            <button
-                                onClick={clearFilter}
-                                className="flex items-center gap-1 text-sm bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 px-3 py-1 rounded-full hover:bg-primary-200 dark:hover:bg-primary-900/50 transition-colors"
-                            >
-                                Filtered by Alert #{alertIdFilter}
-                                <X size={14} />
-                            </button>
-                        )}
-                        {showExpired && !alertIdFilter && (
-                            <button
-                                onClick={toggleExpired}
-                                className="flex items-center gap-1 text-sm bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 px-3 py-1 rounded-full hover:bg-orange-200 dark:hover:bg-orange-900/50 transition-colors"
-                            >
-                                Including Expired Decisions
-                                <X size={14} />
-                            </button>
-                        )}
-                    </div>
-                    <div className="flex items-center gap-3">
-                        {!showExpired && !alertIdFilter && (
-                            <button
-                                onClick={toggleExpired}
-                                className="text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 transition-colors"
-                            >
-                                Show Expired
-                            </button>
-                        )}
-                        <button
-                            onClick={() => setShowAddModal(true)}
-                            className="bg-primary-600 hover:bg-primary-700 text-white font-medium py-2 px-4 rounded-md transition-colors flex items-center gap-2 text-sm"
-                        >
-                            <Gavel size={16} />
-                            Add Decision
-                        </button>
-                    </div>
+            <div className="flex justify-between items-center">
+                <div className="flex items-center gap-3">
+                    <h2 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Decisions</h2>
+                    {(filteredDecisions.length !== decisions.length) && (
+                        <div className="text-sm text-gray-500">
+                            Showing {filteredDecisions.length} of {decisions.length} decisions
+                        </div>
+                    )}
+                </div>
+                <div className="flex items-center gap-3">
+
+                    <button
+                        onClick={() => setShowAddModal(true)}
+                        className="bg-primary-600 hover:bg-primary-700 text-white font-medium py-2 px-4 rounded-md transition-colors flex items-center gap-2 text-sm"
+                    >
+                        <Gavel size={16} />
+                        Add Decision
+                    </button>
                 </div>
             </div>
+
+            {/* Show active filters */}
+            {(showExpired || !showExpired || alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter) && (
+                <div className="flex flex-wrap gap-2">
+                    {!showExpired && (
+                        <Badge variant="secondary" className="flex items-center gap-1">
+                            <span className="font-semibold uppercase">STATUS:</span> ACTIVE
+                            <button
+                                onClick={toggleExpired}
+                                className="ml-1 hover:text-red-500"
+                            >
+                                &times;
+                            </button>
+                        </Badge>
+                    )}
+                    {alertIdFilter && (
+                        <Badge variant="secondary" className="flex items-center gap-1">
+                            <span className="font-semibold uppercase">ALERT:</span> #{alertIdFilter}
+                            <button
+                                onClick={() => removeParam("alert_id")}
+                                className="ml-1 hover:text-red-500"
+                            >
+                                &times;
+                            </button>
+                        </Badge>
+                    )}
+                    {/* Iterate over other filters to cleaner code, or keep explicit for now to match exactly what we have but styled better */}
+                    {searchParams.get("country") && (
+                        <Badge variant="secondary" className="flex items-center gap-1">
+                            <span className="font-semibold uppercase">COUNTRY:</span> {countryFilter}
+                            <button
+                                onClick={() => removeParam("country")}
+                                className="ml-1 hover:text-red-500"
+                            >
+                                &times;
+                            </button>
+                        </Badge>
+                    )}
+                    {searchParams.get("scenario") && (
+                        <Badge variant="secondary" className="flex items-center gap-1 max-w-[300px] truncate" title={scenarioFilter}>
+                            <span className="font-semibold uppercase">SCENARIO:</span> {scenarioFilter}
+                            <button
+                                onClick={() => removeParam("scenario")}
+                                className="ml-1 hover:text-red-500"
+                            >
+                                &times;
+                            </button>
+                        </Badge>
+                    )}
+                    {searchParams.get("as") && (
+                        <Badge variant="secondary" className="flex items-center gap-1 max-w-[300px] truncate" title={asFilter}>
+                            <span className="font-semibold uppercase">AS:</span> {asFilter}
+                            <button
+                                onClick={() => removeParam("as")}
+                                className="ml-1 hover:text-red-500"
+                            >
+                                &times;
+                            </button>
+                        </Badge>
+                    )}
+                    {searchParams.get("ip") && (
+                        <Badge variant="secondary" className="flex items-center gap-1">
+                            <span className="font-semibold uppercase">IP:</span> {ipFilter}
+                            <button
+                                onClick={() => removeParam("ip")}
+                                className="ml-1 hover:text-red-500"
+                            >
+                                &times;
+                            </button>
+                        </Badge>
+                    )}
+                    {targetFilter && (
+                        <Badge variant="secondary" className="flex items-center gap-1">
+                            <span className="font-semibold uppercase">TARGET:</span> {targetFilter}
+                            <button
+                                onClick={() => removeParam("target")}
+                                className="ml-1 hover:text-red-500"
+                            >
+                                &times;
+                            </button>
+                        </Badge>
+                    )}
+                    {dateStartFilter && (
+                        <Badge variant="secondary" className="flex items-center gap-1">
+                            <span className="font-semibold uppercase">DATESTART:</span> {dateStartFilter}
+                            <button
+                                onClick={() => removeParam("dateStart")}
+                                className="ml-1 hover:text-red-500"
+                            >
+                                &times;
+                            </button>
+                        </Badge>
+                    )}
+                    {dateEndFilter && (
+                        <Badge variant="secondary" className="flex items-center gap-1">
+                            <span className="font-semibold uppercase">DATEEND:</span> {dateEndFilter}
+                            <button
+                                onClick={() => removeParam("dateEnd")}
+                                className="ml-1 hover:text-red-500"
+                            >
+                                &times;
+                            </button>
+                        </Badge>
+                    )}
+
+                    {/* Show Reset button if we have any active filters OR if we are showing expired (non-default state) */}
+                    {(alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter || showExpired) && (
+                        <button
+                            onClick={clearFilter}
+                            className="text-xs text-gray-500 hover:text-gray-900 dark:hover:text-gray-300 underline"
+                        >
+                            Reset all filters
+                        </button>
+                    )}
+                </div>
+            )}
+
+
+
 
             <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">

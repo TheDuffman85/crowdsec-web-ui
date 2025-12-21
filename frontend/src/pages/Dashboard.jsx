@@ -527,12 +527,37 @@ export function Dashboard() {
                                         <span className="sm:hidden">Alerts</span>
                                     </button>
                                     <button
+                                        onClick={() => {
+                                            // Build query parameters from active filters
+                                            const params = new URLSearchParams();
+                                            if (filters.country) params.set('country', filters.country);
+                                            // Decisions uses 'reason' but mapped from scenario usually, let's pass scenario and handle it in Decisions
+                                            if (filters.scenario) params.set('scenario', filters.scenario);
+                                            if (filters.as) params.set('as', filters.as);
+                                            if (filters.ip) params.set('ip', filters.ip);
+                                            // No direct target support in decisions yet, but let's pass it
+                                            if (filters.target) params.set('target', filters.target);
+                                            if (filters.dateRange) {
+                                                params.set('dateStart', filters.dateRange.start);
+                                                params.set('dateEnd', filters.dateRange.end);
+                                            }
+                                            // Ensure we include expired decisions when navigating from Dashboard
+                                            params.set('include_expired', 'true');
+                                            navigate(`/decisions?${params.toString()}`);
+                                        }}
+                                        className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
+                                    >
+                                        <Filter className="w-4 h-4" />
+                                        <span className="hidden sm:inline">View Decisions</span>
+                                        <span className="sm:hidden">Decisions</span>
+                                    </button>
+                                    <button
                                         onClick={clearFilters}
                                         className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
                                     >
                                         <FilterX className="w-4 h-4" />
-                                        <span className="hidden sm:inline">Clear Filters</span>
-                                        <span className="sm:hidden">Clear</span>
+                                        <span className="hidden sm:inline">Reset Filters</span>
+                                        <span className="sm:hidden">Reset</span>
                                     </button>
                                 </div>
 
