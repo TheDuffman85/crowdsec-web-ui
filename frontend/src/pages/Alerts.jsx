@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useSearchParams, Link } from "react-router-dom";
-import { fetchAlerts, fetchAlert } from "../lib/api";
+import { fetchAlerts, fetchAlert, deleteAlert } from "../lib/api";
 import { useRefresh } from "../contexts/RefreshContext";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
@@ -17,6 +17,7 @@ export function Alerts() {
     const [filter, setFilter] = useState("");
     const [loading, setLoading] = useState(true);
     const [selectedAlert, setSelectedAlert] = useState(null);
+    const [alertToDelete, setAlertToDelete] = useState(null);
     const [displayedCount, setDisplayedCount] = useState(50);
     const [searchParams, setSearchParams] = useSearchParams();
 
@@ -79,12 +80,26 @@ export function Alerts() {
     }, [searchParams, setLastUpdated]);
 
     useEffect(() => {
+        if (alertToDelete) return; // Don't reload if modal open
         loadAlerts(false);
-    }, [loadAlerts]);
+    }, [loadAlerts, alertToDelete]);
 
     useEffect(() => {
         if (refreshSignal > 0) loadAlerts(true);
     }, [refreshSignal, loadAlerts]);
+
+    const confirmDelete = async () => {
+        if (!alertToDelete) return;
+        try {
+            await deleteAlert(alertToDelete);
+            setAlertToDelete(null);
+            setSelectedAlert(null); // Close details modal if open
+            loadAlerts();
+        } catch (error) {
+            console.error("Failed to delete alert", error);
+            alert("Failed to delete alert");
+        }
+    };
 
     const filteredAlerts = alerts.filter(alert => {
         const search = filter.toLowerCase();
@@ -339,6 +354,16 @@ export function Alerts() {
                         </p>
 
                         {/* Summary Cards */}
+                        {agent && (
+                            <div className="flex justify-end">
+                                <button
+                                    onClick={() => setAlertToDelete(selectedAlert.id)}
+                                    className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 px-3 py-1 rounded border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-900/10 text-sm font-medium transition-colors"
+                                >
+                                    Delete Alert
+                                </button>
+                            </div>
+                        )}
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
                                 <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Scenario</h4>
@@ -633,6 +658,33 @@ export function Alerts() {
                     </div>
                 )}
             </Modal>
-        </div>
+
+            {/* Delete Confirmation Modal */}
+            <Modal
+                isOpen={!!alertToDelete}
+                onClose={() => setAlertToDelete(null)}
+                title="Delete Alert?"
+                maxWidth="max-w-sm"
+                showCloseButton={false}
+            >
+                <p className="text-gray-600 dark:text-gray-300 mb-6">
+                    Are you sure you want to delete alert <span className="font-mono text-sm font-bold">#{alertToDelete}</span>? This action cannot be undone.
+                </p>
+                <div className="flex justify-end gap-3">
+                    <button
+                        onClick={() => setAlertToDelete(null)}
+                        className="px-4 py-2 text-sm font-medium text-gray-700 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        onClick={confirmDelete}
+                        className="px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                    >
+                        Delete
+                    </button>
+                </div>
+            </Modal>
+        </div >
     );
 }

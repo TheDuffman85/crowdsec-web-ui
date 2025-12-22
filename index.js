@@ -60,104 +60,44 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // CrowdSec LAPI Configuration
-const CROWDSEC_URL = process.env.CROWDSEC_URL || 'http://crowdsec:8080';
-const CROWDSEC_USER = process.env.CROWDSEC_USER;
-const CROWDSEC_PASSWORD = process.env.CROWDSEC_PASSWORD;
-// Default lookback period (default 7 days / 168h) - used for alerts, decisions and stats defaults
-const CROWDSEC_LOOKBACK_PERIOD = process.env.CROWDSEC_LOOKBACK_PERIOD || '168h';
+// Agent Configuration
+const AGENT_URL = process.env.AGENT_URL; // e.g., http://crowdsec-agent:3001
+const AGENT_TOKEN = process.env.AGENT_TOKEN;
 
-// Token state
-let requestToken = null;
-
-if (!CROWDSEC_USER || !CROWDSEC_PASSWORD) {
-  console.warn('WARNING: CROWDSEC_USER and CROWDSEC_PASSWORD must be set for full functionality.');
+// Agent Client (REQUIRED)
+let agentClient = null;
+if (AGENT_URL && AGENT_TOKEN) {
+  console.log(`Agent configured at ${AGENT_URL}`);
+  agentClient = axios.create({
+    baseURL: AGENT_URL,
+    timeout: 30000, // Higher timeout for cscli operations
+    headers: {
+      'Authorization': `Bearer ${AGENT_TOKEN}`
+    }
+  });
+} else {
+  console.error("FATAL: Agent not configured. AGENT_URL and AGENT_TOKEN are required in pure Agent mode.");
+  process.exit(1);
 }
 
-const apiClient = axios.create({
-  baseURL: CROWDSEC_URL,
-  timeout: 5000,
-  headers: {
-    'User-Agent': 'crowdsec-web-ui/1.0.0'
-  }
-});
+// Global LAPI Status Tracker (Mocked or Agent Status)
+const lapiStatus = {
+  isConnected: true, // Optimistic, will rely on failures to set false
+  lastCheck: new Date().toISOString(),
+  lastError: null
+};
 
-// Add interceptor to inject token
-apiClient.interceptors.request.use(config => {
-  if (requestToken && !config.url.includes('/watchers/login')) {
-    config.headers.Authorization = `Bearer ${requestToken}`;
-  }
-  return config;
-});
-
-// Add interceptor to retry requests on 401 (Token Expired)
-apiClient.interceptors.response.use(
-  (response) => response,
-  async (error) => {
-    const originalRequest = error.config;
-
-    // Check if error is 401 and we haven't already retried
-    if (error.response && error.response.status === 401 && !originalRequest._retry) {
-      // Avoid infinite loops for login requests themselves
-      if (originalRequest.url.includes('/watchers/login')) {
-        return Promise.reject(error);
-      }
-
-      console.log('Detected 401 Unauthorized. Attempting to re-authenticate...');
-      originalRequest._retry = true;
-
-      const success = await loginToLAPI();
-      if (success) {
-        console.log('Re-authentication successful. Retrying original request...');
-        // Update the token in the original request header
-        originalRequest.headers.Authorization = `Bearer ${requestToken}`;
-        // Retry the request
-        return apiClient(originalRequest);
-      } else {
-        console.error('Re-authentication failed.');
-      }
-    }
-
-    return Promise.reject(error);
-  }
-);
+// Helper to update LAPI status (now Agent status really)
+function updateLapiStatus(isConnected, error = null) {
+  lapiStatus.isConnected = isConnected;
+  lapiStatus.lastCheck = new Date().toISOString();
+  lapiStatus.lastError = error ? error.message : null;
+}
 
 
 // Login helper
-const loginToLAPI = async () => {
-  try {
-    console.log(`Attempting login to CrowdSec LAPI at ${CROWDSEC_URL} as ${CROWDSEC_USER}...`);
-    const response = await apiClient.post('/v1/watchers/login', {
-      machine_id: CROWDSEC_USER,
-      password: CROWDSEC_PASSWORD,
-      scenarios: ["manual/web-ui"] // Informative only
-    });
-
-    if (response.data && response.data.code === 200 && response.data.token) {
-      requestToken = response.data.token;
-      console.log('Successfully logged in to CrowdSec LAPI');
-      return true;
-    } else if (response.data && response.data.token) {
-      // Some versions might just return the token object directly or differently
-      requestToken = response.data.token;
-      console.log('Successfully logged in to CrowdSec LAPI');
-      updateLapiStatus(true);
-      return true;
-    } else {
-      console.error('Login response did not contain token:', response.data);
-      updateLapiStatus(false, { message: 'Login response invalid' });
-      return false;
-    }
-  } catch (error) {
-    console.error(`Login failed: ${error.message}`);
-    updateLapiStatus(false, error);
-    if (error.response) {
-      console.error('Response data:', error.response.data);
-    }
-    return false;
-  }
-};
-
-// Login will be called during cache initialization
+// Default lookback period (default 7 days / 168h)
+const CROWDSEC_LOOKBACK_PERIOD = process.env.CROWDSEC_LOOKBACK_PERIOD || '168h';
 
 // ============================================================================
 // CACHE SYSTEM
@@ -172,19 +112,7 @@ const cache = {
   isInitialized: false         // Whether initial load is complete
 };
 
-// Global LAPI Status Tracker
-const lapiStatus = {
-  isConnected: false,
-  lastCheck: null,
-  lastError: null
-};
 
-// Helper to update LAPI status
-function updateLapiStatus(isConnected, error = null) {
-  lapiStatus.isConnected = isConnected;
-  lapiStatus.lastCheck = new Date().toISOString();
-  lapiStatus.lastError = error ? error.message : null;
-}
 
 // Parse lookback period to milliseconds
 function parseLookbackToMs(lookbackPeriod) {
@@ -246,33 +174,21 @@ console.log(`Cache Configuration:
 `);
 
 // Fetch alerts from LAPI with optional 'since' parameter and active decision filter
-async function fetchAlertsFromLAPI(since = null, hasActiveDecision = false) {
-  const sinceParam = since || CROWDSEC_LOOKBACK_PERIOD;
-  const origins = ['cscli', 'crowdsec', 'cscli-import', 'manual', 'appsec', 'lists'];
-  const scopes = ['Ip', 'Range'];
-  const limit = 10000;
+// Fetch alerts from Agent
+async function fetchAlertsFromAgent(since = null) {
+  const params = {};
+  if (since) params.since = since;
+  params.limit = 5000; // Cap to avoid massive payloads
 
-  const activeDecisionParam = hasActiveDecision ? '&has_active_decision=true' : '';
-
-  const originPromises = origins.map(o =>
-    apiClient.get(`/v1/alerts?since=${sinceParam}&origin=${o}&limit=${limit}${activeDecisionParam}`)
-  );
-  const scopePromises = scopes.map(s =>
-    apiClient.get(`/v1/alerts?since=${sinceParam}&scope=${s}&limit=${limit}${activeDecisionParam}`)
-  );
-
-  const responses = await Promise.all([...originPromises, ...scopePromises]);
-
-  let alertMap = new Map();
-  responses.forEach(r => {
-    if (r.data && Array.isArray(r.data)) {
-      r.data.forEach(alert => {
-        alertMap.set(alert.id, alert);
-      });
-    }
-  });
-
-  return Array.from(alertMap.values());
+  try {
+    console.log(`Fetching alerts from Agent (since: ${since || 'all'})...`);
+    const response = await agentClient.get('/alerts', { params });
+    // Assuming Agent returns standard LAPI-like array of alerts
+    return response.data || [];
+  } catch (error) {
+    console.error('Error fetching alerts from Agent:', error.message);
+    throw error;
+  }
 }
 
 // Initial cache load - fetch full dataset
@@ -280,13 +196,20 @@ async function initializeCache() {
   try {
     console.log('Initializing cache with full data load...');
 
-    // Fetch all alerts for the alerts cache and stats
-    const allAlerts = await fetchAlertsFromLAPI();
+    // Fetch all alerts from Agent
+    const allAlerts = await fetchAlertsFromAgent(CROWDSEC_LOOKBACK_PERIOD);
     console.log(`Loaded ${allAlerts.length} alerts into cache`);
 
-    // Fetch alerts with ACTIVE decisions for the decisions cache
-    const activeDecisionAlerts = await fetchAlertsFromLAPI(null, true);
-    console.log(`Loaded ${activeDecisionAlerts.length} alerts with active decisions`);
+    // In Agent mode, we don't have a direct "alerts with active decisions" filter easily via cscli list unless we parse everything.
+    // However, we can use the main alerts list if it's comprehensive.
+    // OR we can explicitly fetch decisions which we need anyway for decisions cache.
+
+    // Fetch ALL decisions for accurate decision cache
+    // Note: cscli decisions list -a returns all including expired? By default active.
+    // We want active for sure.
+    const activeDecisionsRes = await agentClient.get('/decisions', { params: { limit: 10000 } });
+    const activeDecisions = activeDecisionsRes.data || [];
+    console.log(`Loaded ${activeDecisions.length} active decisions from Agent`);
 
     // Populate alerts cache
     allAlerts.forEach(alert => {
@@ -308,38 +231,43 @@ async function initializeCache() {
       }
     });
 
-    // Populate active decisions cache from alerts with active decisions
-    activeDecisionAlerts.forEach(alert => {
-      if (Array.isArray(alert.decisions)) {
-        alert.decisions.forEach(decision => {
-          if (decision.origin !== 'CAPI') {
-            const decisionData = {
-              id: decision.id,
-              created_at: decision.created_at || alert.created_at,
-              scenario: decision.scenario || alert.scenario || "N/A",
-              value: decision.value,
-              expired: false, // These are confirmed active by LAPI
-              detail: {
-                origin: decision.origin || alert.source?.scope || "manual",
-                type: decision.type,
-                reason: decision.scenario || alert.scenario || "manual",
-                action: decision.type,
-                country: alert.source?.cn || "Unknown",
-                as: alert.source?.as_name || "Unknown",
-                events_count: alert.events_count || 0,
-                duration: decision.duration || "N/A",
-                expiration: decision.stop_at || alert.stop_at,
-                alert_id: alert.id,
-                message: alert.message,
-                events: alert.events,
-                machine_alias: alert.machine_alias,
-                machine_id: alert.machine_id
-              }
-            };
-            cache.decisions.set(String(decision.id), decisionData);
-          }
-        });
+    // Populate active decisions cache directly from the decisions list
+    // Ensure data structure matches
+    activeDecisions.forEach(decision => {
+      // cscli json output for decisions might be slightly different or missing alert details if not expanded.
+      // But usually it contains enough info.
+      // We map it to our internal structure.
+      const decisionData = {
+        id: decision.id,
+        created_at: decision.created_at,
+        scenario: decision.scenario || "N/A",
+        value: decision.value,
+        expired: false,
+        detail: {
+          origin: decision.origin || "manual",
+          type: decision.type,
+          reason: decision.scenario || "manual",
+          action: decision.type,
+          country: decision.scenario?.includes("geo") ? "Unknown" : "Unknown", // Enriched data might be missing in simple list
+          as: "Unknown",
+          events_count: decision.events_count || 0,
+          duration: decision.duration || "N/A",
+          expiration: decision.stop_at,
+          alert_id: decision.alert_id, // Important for linking
+          message: "", // Might be missing
+        }
+      };
+
+      // Try to enrich from alerts cache if possible
+      if (decision.alert_id && cache.alerts.has(decision.alert_id)) {
+        const alert = cache.alerts.get(decision.alert_id);
+        decisionData.detail.country = alert.source?.cn || "Unknown";
+        decisionData.detail.as = alert.source?.as_name || "Unknown";
+        decisionData.detail.message = alert.message;
+        decisionData.detail.events = alert.events;
       }
+
+      cache.decisions.set(String(decision.id), decisionData);
     });
 
     cache.lastUpdate = new Date().toISOString();
@@ -381,45 +309,43 @@ async function updateCacheDelta() {
 
     console.log(`Fetching delta updates (since: ${sinceDuration})...`);
 
-    // Fetch both in parallel: new alerts AND active decisions
-    const [newAlerts, activeDecisionAlerts] = await Promise.all([
-      fetchAlertsFromLAPI(sinceDuration),
-      fetchAlertsFromLAPI(null, true)  // Always refresh active decisions to detect expirations
-    ]);
+    // Fetch new alerts from Agent
+    const newAlerts = await fetchAlertsFromAgent(sinceDuration);
 
-    // Rebuild active decisions cache from LAPI response
+    // Refresh active decisions fully to catch expirations/deletions
+    // Optimization: In pure agent mode with cscli, we can just list active decisions.
+    const activeDecisionsRes = await agentClient.get('/decisions', { params: { limit: 10000 } });
+    const activeDecisions = activeDecisionsRes.data || [];
+
+    // Rebuild active decisions cache
     cache.decisions.clear();
-    activeDecisionAlerts.forEach(alert => {
-      if (Array.isArray(alert.decisions)) {
-        alert.decisions.forEach(decision => {
-          if (decision.origin !== 'CAPI') {
-            const decisionData = {
-              id: decision.id,
-              created_at: decision.created_at || alert.created_at,
-              scenario: decision.scenario || alert.scenario || "N/A",
-              value: decision.value,
-              expired: false,
-              detail: {
-                origin: decision.origin || alert.source?.scope || "manual",
-                type: decision.type,
-                reason: decision.scenario || alert.scenario || "manual",
-                action: decision.type,
-                country: alert.source?.cn || "Unknown",
-                as: alert.source?.as_name || "Unknown",
-                events_count: alert.events_count || 0,
-                duration: decision.duration || "N/A",
-                expiration: decision.stop_at || alert.stop_at,
-                alert_id: alert.id,
-                message: alert.message,
-                events: alert.events,
-                machine_alias: alert.machine_alias,
-                machine_id: alert.machine_id
-              }
-            };
-            cache.decisions.set(String(decision.id), decisionData);
-          }
-        });
+    activeDecisions.forEach(decision => {
+      const decisionData = {
+        id: decision.id,
+        created_at: decision.created_at,
+        scenario: decision.scenario || "N/A",
+        value: decision.value,
+        expired: false,
+        detail: {
+          origin: decision.origin || "manual",
+          type: decision.type,
+          reason: decision.scenario || "manual",
+          action: decision.type,
+          country: "Unknown",
+          as: "Unknown",
+          events_count: decision.events_count || 0,
+          duration: decision.duration || "N/A",
+          expiration: decision.stop_at,
+          alert_id: decision.alert_id,
+        }
+      };
+      if (decision.alert_id && cache.alerts.has(decision.alert_id)) {
+        const alert = cache.alerts.get(decision.alert_id);
+        decisionData.detail.country = alert.source?.cn || "Unknown";
+        decisionData.detail.as = alert.source?.as_name || "Unknown";
+        decisionData.detail.message = alert.message;
       }
+      cache.decisions.set(String(decision.id), decisionData);
     });
 
     // Add new alerts and their stats decisions
@@ -746,9 +672,77 @@ async function checkForUpdates() {
 // END UPDATE CHECKER
 // ============================================================================
 
+// ============================================================================
+// END UPDATE CHECKER
+// ============================================================================
+
 app.use(cors());
 app.use(express.json());
 app.use(activityTracker); // Apply to all routes
+
+// API: Config / Capabilities
+app.get('/api/config', (req, res) => {
+  res.json({
+    online: lapiStatus.isConnected,
+    last_check: lapiStatus.lastCheck,
+    update_available: updateCheckCache.data ? updateCheckCache.data.update_available : false,
+    update_info: updateCheckCache.data,
+    capabilities: {
+      agent: !!agentClient,
+    }
+  });
+});
+
+// Allowlist Management Proxies
+app.get('/api/allowlist', (req, res) => proxyToAgent(req, res, 'get', '/allowlist'));
+app.post('/api/allowlist', (req, res) => proxyToAgent(req, res, 'post', '/allowlist', req.body));
+app.delete('/api/allowlist', (req, res) => proxyToAgent(req, res, 'delete', '/allowlist', req.body));
+
+// Helper for Agent Proxy
+const proxyToAgent = async (req, res, method, path, data = null) => {
+  if (!agentClient) {
+    return res.status(501).json({ error: 'Agent not configured' });
+  }
+  try {
+    const response = await agentClient.request({
+      method: method,
+      url: path,
+      data: data,
+      params: req.query // Forward query params like 'limit'
+    });
+    res.json(response.data);
+  } catch (error) {
+    if (error.response) {
+      res.status(error.response.status).json(error.response.data);
+    } else {
+      res.status(502).json({ error: 'Agent communication failed' });
+    }
+  }
+};
+
+// --- Agent Proxy Routes ---
+
+// Delete Alert
+app.delete('/api/alerts/:id', (req, res) => {
+  proxyToAgent(req, res, 'DELETE', `/alerts/${req.params.id}`);
+});
+
+// Add Decision
+app.post('/api/decisions', (req, res) => {
+  proxyToAgent(req, res, 'POST', '/decisions', req.body);
+});
+
+// Delete Decision
+app.delete('/api/decisions/:id', (req, res) => {
+  proxyToAgent(req, res, 'DELETE', `/decisions/${req.params.id}`);
+});
+
+// Add Allowlist (Add Decision with type=allow)
+app.post('/api/allowlist', (req, res) => {
+  proxyToAgent(req, res, 'POST', '/allowlist', req.body);
+});
+
+// --- End Agent Proxy Routes ---
 
 /**
  * Middleware to ensure we have a token or try to get one

@@ -9,5 +9,14 @@ if [ -d "/app/config" ]; then
     chown -R node:node /app/config
 fi
 
+# Determine Mode
+if [ -z "$AGENT_URL" ]; then
+    echo "AGENT_URL is not set. Starting LEGACY mode..."
+    cd /app/legacy
+else
+    echo "AGENT_URL is set ($AGENT_URL). Starting NEW mode..."
+    cd /app
+fi
+
 # Switch to 'node' user and execute the command
 exec gosu node "$@"

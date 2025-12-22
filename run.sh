@@ -55,8 +55,18 @@ cd "$PROJECT_ROOT" || exit 1
 if [ "$MODE" == "dev" ]; then
     log "Starting in DEVELOPMENT mode..."
     
+    # Start Agent in background
+    log "Starting agent (nodemon)..."
+    cd agent
+    npm run dev &
+    AGENT_PID=$!
+    cd ..
+
     # Start Backend in background
     log "Starting backend (nodemon)..."
+    # Ensure backend knows about agent
+    export AGENT_URL="http://localhost:3001"
+    export AGENT_TOKEN="your_secure_agent_token_here"
     npm run dev &
     BACKEND_PID=$!
     
@@ -66,11 +76,12 @@ if [ "$MODE" == "dev" ]; then
     npm run dev &
     FRONTEND_PID=$!
     
-    log "Services started. Backend PID: $BACKEND_PID, Frontend PID: $FRONTEND_PID"
+    log "Services started. Agent PID: $AGENT_PID, Backend PID: $BACKEND_PID, Frontend PID: $FRONTEND_PID"
     
     # Trap for cleanup
     cleanup() {
         log "Stopping services..."
+        kill $AGENT_PID 2>/dev/null
         kill $BACKEND_PID 2>/dev/null
         kill $FRONTEND_PID 2>/dev/null
         exit
@@ -81,14 +92,39 @@ if [ "$MODE" == "dev" ]; then
 else
     log "Starting in PRODUCTION mode..."
     
-    # Build Frontend
+    # Check if we should run legacy or new mode based on args or env? 
+    # For local production-like run, we usually just run the main app.
+    # The 'agent' functionality relies on a separate process. 
+    # run.sh is typically for "Monolithic" local dev.
+    # If we want to run "Production" locally with agent, we need to start agent too.
+    
     log "Building frontend..."
     npm run build-ui
     
     if [ $? -eq 0 ]; then
         log "Frontend build successful."
+        
+        log "Starting agent..."
+        cd agent
+        npm install --only=production
+        npm start & 
+        AGENT_PID=$!
+        cd ..
+        
         log "Starting backend..."
-        npm start
+        export AGENT_URL="http://localhost:3001"
+        export AGENT_TOKEN="your_secure_agent_token_here"
+        npm start &
+        BACKEND_PID=$!
+        
+        cleanup_prod() {
+            kill $AGENT_PID 2>/dev/null
+            kill $BACKEND_PID 2>/dev/null
+            exit
+        }
+        trap cleanup_prod SIGINT SIGTERM
+        
+        wait
     else
         log "Frontend build failed. Aborting."
         exit 1

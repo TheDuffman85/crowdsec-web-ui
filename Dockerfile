@@ -28,8 +28,16 @@ ENV VITE_BUILD_DATE=$VITE_BUILD_DATE
 ENV VITE_REPO_URL=$VITE_REPO_URL
 ENV VITE_BRANCH=$VITE_BRANCH
 
-# Install gosu for easy step-down from root
-RUN apt-get update && apt-get install -y gosu && rm -rf /var/lib/apt/lists/*
+# Install gosu and git
+RUN apt-get update && apt-get install -y gosu git && rm -rf /var/lib/apt/lists/*
+
+# Clone Legacy Branch
+RUN git clone --branch legacy --depth 1 https://github.com/TheDuffman85/crowdsec-web-ui.git /app/legacy && \
+    cd /app/legacy && \
+    npm install && \
+    cd frontend && \
+    npm install --legacy-peer-deps && \
+    npm run build-ui
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh /usr/local/bin/
