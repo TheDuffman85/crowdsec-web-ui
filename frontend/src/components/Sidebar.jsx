@@ -1,24 +1,19 @@
 import { NavLink } from "react-router-dom";
 import { LayoutDashboard, ShieldAlert, Gavel, X, Sun, Moon, ArrowUpCircle } from "lucide-react";
 import { useRefresh } from "../contexts/RefreshContext";
-import { useCapabilities } from "../contexts/CapabilityContext";
 import { useState, useEffect } from "react";
 import axios from "axios";
 
 export function Sidebar({ isMobileMenuOpen, onClose, theme, toggleTheme }) {
     const { intervalMs, setIntervalMs, lastUpdated, refreshSignal } = useRefresh();
-    const { agent } = useCapabilities();
     const [updateStatus, setUpdateStatus] = useState(null);
 
     const links = [
         { to: "/", label: "Dashboard", icon: LayoutDashboard },
         { to: "/alerts", label: "Alerts", icon: ShieldAlert },
         { to: "/decisions", label: "Decisions", icon: Gavel },
+        { to: "/allowlist", label: "Allowlist", icon: ShieldAlert }, // Always show allowlist
     ];
-
-    if (agent) {
-        links.push({ to: "/allowlist", label: "Allowlist", icon: ShieldAlert }); // Reusing shield icon or verify import
-    }
 
     useEffect(() => {
         const checkUpdates = async () => {
