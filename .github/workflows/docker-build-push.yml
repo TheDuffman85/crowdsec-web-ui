@@ -10,12 +10,12 @@ on:
     branches:
       - main
       - dev
+      - feature/agent-mode
   schedule:
     - cron: '0 0 * * 1'  # Every Monday at 00:00 UTC
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build:
@@ -24,6 +24,15 @@ jobs:
     permissions:
       contents: read
       packages: write
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - context: .
+            image_suffix: ''
+          - context: ./agent
+            image_suffix: '-agent'
 
     steps:
       - name: Checkout repository
@@ -55,15 +64,16 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ github.repository }}${{ matrix.image_suffix }}
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=raw,value=agent-mode,enable=${{ github.ref == 'refs/heads/feature/agent-mode' }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: ${{ matrix.context }}
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
