@@ -63,7 +63,6 @@ export function Dashboard() {
     });
 
     // Active filters
-    // Active filters
     const [filters, setFilters] = useState(() => {
         const saved = localStorage.getItem('dashboard_filters');
         if (saved) {
@@ -77,7 +76,6 @@ export function Dashboard() {
             dateRange: null,
             dateRangeSticky: false,
             country: null,
-            scenario: null,
             scenario: null,
             as: null,
             ip: null,
