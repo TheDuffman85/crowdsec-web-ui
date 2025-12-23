@@ -32,12 +32,13 @@ ENV VITE_BRANCH=$VITE_BRANCH
 RUN apt-get update && apt-get install -y gosu git && rm -rf /var/lib/apt/lists/*
 
 # Clone LAPI Branch
-RUN git clone --branch lapi --depth 1 https://github.com/TheDuffman85/crowdsec-web-ui.git /app/lapi && \
-    cd /app/lapi && \
+# Copy LAPI Branch
+COPY lapi-src /app/lapi
+RUN cd /app/lapi && \
     npm install && \
     cd frontend && \
     npm install --legacy-peer-deps && \
-    npm run build-ui
+    npm run build
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh /usr/local/bin/
