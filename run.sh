@@ -62,11 +62,17 @@ if [ "$MODE" == "dev" ]; then
     AGENT_PID=$!
     cd ..
 
+    # Wait for Agent to be ready
+    log "Waiting for Agent to be ready on port 3001..."
+    while ! nc -z localhost 3001; do   
+      sleep 1
+    done
+    log "Agent is ready!"
+
     # Start Backend in background
     log "Starting backend (nodemon)..."
     # Ensure backend knows about agent
     export AGENT_URL="http://localhost:3001"
-    export AGENT_TOKEN="your_secure_agent_token_here"
     npm run dev &
     BACKEND_PID=$!
     

@@ -74,8 +74,8 @@ Automatically detects new container images on GitHub Container Registry (GHCR). 
 ## Architecture
 
 -   **Frontend**: React (Vite) + Tailwind CSS. Located in `frontend/`.
--   **Backend**: Node.js (Express). Acts as an intelligent caching layer for CrowdSec Local API (LAPI) with delta updates.
--   **Security**: The application runs as a non-root user (`node`) inside the container and communicates with CrowdSec via HTTP/LAPI. It uses **Machine Authentication** (User/Password) to obtain a JWT for full access (read/write).
+-   **Backend**: Node.js (Express). Acts as an intelligent caching layer for CrowdSec Agent with delta updates.
+-   **Security**: The application runs as a non-root user (`node`) inside the container and communicates with CrowdSec via the Agent.
 
 ## Prerequisites
 
@@ -93,29 +93,42 @@ Automatically detects new container images on GitHub Container Registry (GHCR). 
         > [!NOTE]
         > The `-f /dev/null` flag is crucial. It tells `cscli` **not** to overwrite the existing credentials file of the CrowdSec container. We only want to register the machine in the database, not change the container's local config.
 
-## Run with Docker (Recommended)
+## Run with Docker
 
-1.  **Build the image**:
+1.  **Create a Network**:
+    Ensure all containers (CrowdSec, Agent, Web UI) are on the same network.
     ```bash
-    docker build -t crowdsec-web-ui .
+    docker network create your_crowdsec_network
     ```
 
-2.  **Run the container**:
-    Provide the CrowdSec LAPI URL and your Machine Credentials.
-    
+2.  **Start the Agent**:
+    The agent communicates with the Docker socket to manage containers.
     ```bash
     docker run -d \
+      --name crowdsec-web-ui-agent \
+      --network your_crowdsec_network \
+      -e AGENT_TOKEN=<generated_agent_token> \
+      -e CROWDSEC_CONTAINER=crowdsec \
+      -v /var/run/docker.sock:/var/run/docker.sock \
+      ghcr.io/theduffman85/crowdsec-web-ui-agent:latest
+    ```
+    *Note: Replace `crowdsec` in `CROWDSEC_CONTAINER` with your actual CrowdSec container name.*
+
+3.  **Start the Web UI**:
+    Provide the CrowdSec Agent URL, Machine Credentials, and Agent details.
+    ```bash
+    docker run -d \
+      --name crowdsec-web-ui \
+      --network your_crowdsec_network \
       -p 3000:3000 \
-      -e CROWDSEC_URL=http://crowdsec-container-name:8080 \
-      -e CROWDSEC_USER=crowdsec-web-ui \
-      -e CROWDSEC_PASSWORD=<your-secure-password> \
+      -e AGENT_URL=http://crowdsec-web-ui-agent:3001 \
+      -e AGENT_TOKEN=<generated_agent_token> \
       -e CROWDSEC_LOOKBACK_PERIOD=5d \
       -e CROWDSEC_REFRESH_INTERVAL=0 \
       -v $(pwd)/config:/app/config \
-      --network your_crowdsec_network \
-      crowdsec-web-ui
+      ghcr.io/theduffman85/crowdsec-web-ui:latest
     ```
-    *Note: Ensure the container is on the same Docker network as CrowdSec so it can reach the URL.*
+    *Note: Ensure `CROWDSEC_URL` points to your CrowdSec container.*
 
 ### Docker Compose Example
 
@@ -127,9 +140,8 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - CROWDSEC_URL=http://crowdsec:8080
-      - CROWDSEC_USER=crowdsec-web-ui
-      - CROWDSEC_PASSWORD=<generated_password>
+      - AGENT_URL=http://crowdsec_web_ui_agent:3001
+      - AGENT_TOKEN=<generated_agent_token>
       # Optional: Lookback period for alerts/stats (default: 168h/7d)
       - CROWDSEC_LOOKBACK_PERIOD=5d
       # Optional: Backend auto-refresh interval. Values: 0 (Off), 5s, 30s (default), 1m, 5m
@@ -142,8 +154,20 @@ services:
       # Optional: Interval for full cache refresh (default: 5m)
       # Forces a complete data reload when active, skipped when idle.
       - CROWDSEC_FULL_REFRESH_INTERVAL=5m
+    depends_on:
+      - crowdsec-web-ui-agent
     volumes:
       - ./config:/app/config
+    restart: unless-stopped
+
+  crowdsec-web-ui-agent:
+    image: ghcr.io/theduffman85/crowdsec-web-ui-agent:latest
+    container_name: crowdsec_web_ui_agent
+    environment:
+      - AGENT_TOKEN=<generated_agent_token>
+      - CROWDSEC_CONTAINER=crowdsec
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
 ```
 
@@ -173,10 +197,8 @@ volumes:
 2.  **Configuration**:
     Create a `.env` file in the root directory with your CrowdSec credentials:
     ```bash
-    CROWDSEC_URL=http://localhost:8080
-    CROWDSEC_USER=crowdsec-web-ui
-    CROWDSEC_PASSWORD=<your-secure-password>
-    CROWDSEC_REFRESH_INTERVAL=30s
+    AGENT_URL=http://localhost:3001
+    AGENT_TOKEN=<your-agent-token>
     ```
 
 3.  **Start the Application**:
@@ -194,9 +216,34 @@ volumes:
     ./run.sh
     ```
 
+
+## Remote Development
+
+To develop locally while connecting to a remote CrowdSec instance (e.g., via mTLS):
+
+1.  **Prepare Certificates**:
+    Place your mTLS certificates (CA, Cert, Key) in a local `certs/` directory (ignored by git).
+
+2.  **Configure Agent**:
+    Update your `.env` file with the connection details:
+    ```bash
+    # Remote Docker Connection
+    DOCKER_HOST=1.2.3.4
+    DOCKER_PORT=2376
+    DOCKER_CAFILE=../certs/ca.pem
+    DOCKER_CERTFILE=../certs/cert.pem
+    DOCKER_KEYFILE=../certs/key.pem
+    DOCKER_TLS_VERIFY=true
+    ```
+
+3.  **Run Agent**:
+    ```bash
+    cd agent && npm run dev
+    ```
+
 ## API Endpoints
 
-The backend exposes the following endpoints (proxying to CrowdSec LAPI):
+The backend exposes the following endpoints (proxying to CrowdSec Agent):
 
 -   `GET /api/alerts`: List all alerts.
 -   `GET /api/alerts/:id`: Get detailed information for a specific alert.
@@ -204,6 +251,6 @@ The backend exposes the following endpoints (proxying to CrowdSec LAPI):
 -   `POST /api/decisions`: Add a new decision (Body: `{ ip, duration, reason, type }`).
 -   `DELETE /api/decisions/:id`: Delete a decision by ID.
 -   `GET /api/stats/decisions`: List all decisions (including expired) for statistics.
--   `GET /api/config`: Get current configuration and LAPI connection status.
+-   `GET /api/config`: Get current configuration and Agent connection status.
 -   `PUT /api/config/refresh-interval`: Update the background refresh interval.
 -   `GET /api/update-check`: Check for available container updates.

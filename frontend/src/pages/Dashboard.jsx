@@ -127,11 +127,13 @@ export function Dashboard() {
             setRawData({ alerts, decisions, decisionsForStats });
             setStats({ alerts: alerts.length, decisions: decisions.length });
 
-            // Check LAPI status from config
-            if (configData.lapi_status) {
+            // Check Agent status from config
+            if (configData.agent_status) {
+                setIsOnline(configData.agent_status.isConnected);
+            } else if (configData.lapi_status) {
+                // Fallback for older backend versions
                 setIsOnline(configData.lapi_status.isConnected);
             } else {
-                // Fallback for older backend versions
                 setIsOnline(true);
             }
 
@@ -479,7 +481,7 @@ export function Dashboard() {
                                 }`} />
                         </div>
                         <div>
-                            <p className="text-sm font-medium text-gray-500 dark:text-gray-400">CrowdSec LAPI</p>
+                            <p className="text-sm font-medium text-gray-500 dark:text-gray-400">CrowdSec Agent</p>
                             <h3 className={`text-2xl font-bold ${isOnline
                                 ? 'text-gray-900 dark:text-white'
                                 : 'text-red-600 dark:text-red-400'

@@ -1,6 +1,7 @@
 const express = require('express');
 const Docker = require('dockerode');
 const cors = require('cors');
+const path = require('path');
 
 const app = express();
 app.use(express.json());
@@ -18,7 +19,68 @@ if (!AGENT_TOKEN) {
 }
 
 // Docker Client
-const docker = new Docker({ socketPath: '/var/run/docker.sock' });
+// Docker Client Configuration
+const fs = require('fs');
+
+let dockerConfig = { socketPath: '/var/run/docker.sock' };
+
+if (process.env.DOCKER_HOST) {
+    console.log('Using custom Docker Host:', process.env.DOCKER_HOST);
+
+    // Construct simplified config for dockerode
+    // If DOCKER_HOST is provided, we ignore socketPath
+    dockerConfig = {
+        host: process.env.DOCKER_HOST,
+        port: process.env.DOCKER_PORT || 2375, // Default non-TLS port, usually 2376 for TLS but let user override
+        protocol: 'https', // Assume HTTPS if certs are present, logic below refines this
+    };
+
+    // Helper to read file if it exists, with smart path resolution
+    const readFile = (filePath) => {
+        if (!filePath) return null;
+        try {
+            // 1. Try absolute or direct relative path
+            if (fs.existsSync(filePath)) {
+                return fs.readFileSync(filePath);
+            }
+
+            // 2. Try looking in parent dir (useful when running from agent/ subdir but configured from root)
+            // Note: __dirname is the directory of index.js (agent/)
+            const parentRelativePath = path.join(__dirname, '..', filePath);
+            if (fs.existsSync(parentRelativePath)) {
+                console.log(`Resolved certificate at: ${parentRelativePath}`);
+                return fs.readFileSync(parentRelativePath);
+            }
+
+            console.warn(`Warning: Certificate file not found at ${filePath} or ${parentRelativePath}`);
+            return null;
+        } catch (e) {
+            console.error(`Error reading certificate ${filePath}:`, e.message);
+            return null;
+        }
+    };
+
+    const ca = readFile(process.env.DOCKER_CAFILE);
+    const cert = readFile(process.env.DOCKER_CERTFILE);
+    const key = readFile(process.env.DOCKER_KEYFILE);
+
+    if (ca || cert || key) {
+        dockerConfig.ca = ca;
+        dockerConfig.cert = cert;
+        dockerConfig.key = key;
+        dockerConfig.protocol = 'https';
+    } else {
+        dockerConfig.protocol = 'http';
+    }
+
+    if (process.env.DOCKER_TLS_VERIFY === 'false') {
+        console.log('DISABLING TLS VERIFICATION');
+        dockerConfig.rejectUnauthorized = false;
+        dockerConfig.checkServerIdentity = () => undefined;
+    }
+}
+
+const docker = new Docker(dockerConfig);
 
 // Middleware: Authentication
 const authenticate = (req, res, next) => {

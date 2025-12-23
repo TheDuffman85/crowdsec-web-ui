@@ -5,3 +5,4 @@ frontend/dist
 *.log
 .env
 .config.json
+/certs

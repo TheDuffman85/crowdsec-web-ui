@@ -13,6 +13,8 @@ import "flag-icons/css/flag-icons.min.css";
 
 export function Alerts() {
     const { refreshSignal, setLastUpdated } = useRefresh();
+    // TODO: Get actual agent status from config context
+    const agent = true;
     const [alerts, setAlerts] = useState([]);
     const [filter, setFilter] = useState("");
     const [loading, setLoading] = useState(true);

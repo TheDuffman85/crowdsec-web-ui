@@ -59,7 +59,7 @@ function savePersistedConfig(config) {
 const app = express();
 const port = process.env.PORT || 3000;
 
-// CrowdSec LAPI Configuration
+// CrowdSec Agent Configuration
 // Agent Configuration
 const AGENT_URL = process.env.AGENT_URL; // e.g., http://crowdsec-agent:3001
 const AGENT_TOKEN = process.env.AGENT_TOKEN;
@@ -80,24 +80,24 @@ if (AGENT_URL && AGENT_TOKEN) {
   process.exit(1);
 }
 
-// Global LAPI Status Tracker (Mocked or Agent Status)
-const lapiStatus = {
+// Global Agent Status Tracker
+const agentStatus = {
   isConnected: true, // Optimistic, will rely on failures to set false
   lastCheck: new Date().toISOString(),
   lastError: null
 };
 
-// Helper to update LAPI status (now Agent status really)
-function updateLapiStatus(isConnected, error = null) {
-  lapiStatus.isConnected = isConnected;
-  lapiStatus.lastCheck = new Date().toISOString();
-  lapiStatus.lastError = error ? error.message : null;
+// Helper to update Agent status
+function updateAgentStatus(isConnected, error = null) {
+  agentStatus.isConnected = isConnected;
+  agentStatus.lastCheck = new Date().toISOString();
+  agentStatus.lastError = error ? error.message : null;
 }
-
 
 // Login helper
 // Default lookback period (default 7 days / 168h)
 const CROWDSEC_LOOKBACK_PERIOD = process.env.CROWDSEC_LOOKBACK_PERIOD || '168h';
+console.log(`CrowdSec Lookback Period configured as: "${CROWDSEC_LOOKBACK_PERIOD}"`);
 
 // ============================================================================
 // CACHE SYSTEM
@@ -174,6 +174,79 @@ console.log(`Cache Configuration:
 `);
 
 // Fetch alerts from LAPI with optional 'since' parameter and active decision filter
+// Helper to process and cache decision items (handling both nested Alerts and flat Decisions)
+function processDecisionItem(item) {
+  // Case A: Item is an Alert containing decisions (Nested)
+  if (item.decisions && Array.isArray(item.decisions)) {
+    // Rescue: If agent returns empty decisions list for an active item, check if we have data in Alerts cache
+    let decisionsToProcess = item.decisions;
+    if (decisionsToProcess.length === 0 && cache.alerts.has(String(item.id))) {
+      const cachedAlert = cache.alerts.get(String(item.id));
+      if (cachedAlert.decisions && cachedAlert.decisions.length > 0) {
+        decisionsToProcess = cachedAlert.decisions;
+        // console.log(`Rescued ${decisionsToProcess.length} decisions for Active Item ${item.id} from Alerts Cache`);
+      }
+    }
+
+    decisionsToProcess.forEach(decision => {
+      const decisionData = {
+        id: decision.id,
+        created_at: item.created_at, // Use Alert timestamp
+        scenario: decision.scenario || item.scenario || "N/A",
+        value: decision.value, // Inner value should be correct
+        expired: false,
+        detail: {
+          origin: decision.origin || item.origin || "crowdsec",
+          type: decision.type,
+          reason: decision.scenario || item.scenario || "manual",
+          action: decision.type,
+          country: item.source?.cn || "Unknown", // Enriched from Alert Source
+          as: item.source?.as_name || "Unknown", // Enriched from Alert Source
+          events_count: item.events_count || 0,
+          duration: decision.duration || "N/A",
+          expiration: decision.stop_at,
+          alert_id: item.id, // Parent Alert ID
+          message: item.message
+        }
+      };
+      cache.decisions.set(String(decision.id), decisionData);
+    });
+  }
+  // Case B: Item is a flat Decision (e.g. Manual decision or CLI origin without Alert wrapper)
+  else {
+    const decisionData = {
+      id: item.id,
+      created_at: item.created_at,
+      scenario: item.scenario || "manual",
+      value: item.value,
+      expired: false,
+      detail: {
+        origin: item.origin || "manual",
+        type: item.type,
+        reason: item.scenario || "manual",
+        action: item.type,
+        country: "Unknown", // No source info in flat decision usually
+        as: "Unknown",
+        events_count: item.events_count || 0,
+        duration: item.duration || "N/A",
+        expiration: item.stop_at,
+        alert_id: item.alert_id || null,
+        message: ""
+      }
+    };
+
+    // Attempt enrichment if we have an alert_id and it's in cache
+    if (decisionData.detail.alert_id && cache.alerts.has(String(decisionData.detail.alert_id))) {
+      const alert = cache.alerts.get(String(decisionData.detail.alert_id));
+      decisionData.detail.country = alert.source?.cn || "Unknown";
+      decisionData.detail.as = alert.source?.as_name || "Unknown";
+      decisionData.detail.message = alert.message;
+    }
+
+    cache.decisions.set(String(item.id), decisionData);
+  }
+}
+
 // Fetch alerts from Agent
 async function fetchAlertsFromAgent(since = null) {
   const params = {};
@@ -213,7 +286,7 @@ async function initializeCache() {
 
     // Populate alerts cache
     allAlerts.forEach(alert => {
-      cache.alerts.set(alert.id, alert);
+      cache.alerts.set(String(alert.id), alert);
 
       // Extract all decisions for stats
       if (Array.isArray(alert.decisions)) {
@@ -233,41 +306,9 @@ async function initializeCache() {
 
     // Populate active decisions cache directly from the decisions list
     // Ensure data structure matches
-    activeDecisions.forEach(decision => {
-      // cscli json output for decisions might be slightly different or missing alert details if not expanded.
-      // But usually it contains enough info.
-      // We map it to our internal structure.
-      const decisionData = {
-        id: decision.id,
-        created_at: decision.created_at,
-        scenario: decision.scenario || "N/A",
-        value: decision.value,
-        expired: false,
-        detail: {
-          origin: decision.origin || "manual",
-          type: decision.type,
-          reason: decision.scenario || "manual",
-          action: decision.type,
-          country: decision.scenario?.includes("geo") ? "Unknown" : "Unknown", // Enriched data might be missing in simple list
-          as: "Unknown",
-          events_count: decision.events_count || 0,
-          duration: decision.duration || "N/A",
-          expiration: decision.stop_at,
-          alert_id: decision.alert_id, // Important for linking
-          message: "", // Might be missing
-        }
-      };
-
-      // Try to enrich from alerts cache if possible
-      if (decision.alert_id && cache.alerts.has(decision.alert_id)) {
-        const alert = cache.alerts.get(decision.alert_id);
-        decisionData.detail.country = alert.source?.cn || "Unknown";
-        decisionData.detail.as = alert.source?.as_name || "Unknown";
-        decisionData.detail.message = alert.message;
-        decisionData.detail.events = alert.events;
-      }
-
-      cache.decisions.set(String(decision.id), decisionData);
+    // Populate active decisions cache using helper
+    activeDecisions.forEach(item => {
+      processDecisionItem(item);
     });
 
     cache.lastUpdate = new Date().toISOString();
@@ -279,12 +320,13 @@ async function initializeCache() {
   - ${cache.decisionsForStats.size} total decisions
   - Last update: ${cache.lastUpdate}
 `);
-    updateLapiStatus(true);
+
+    updateAgentStatus(true);
 
   } catch (error) {
     console.error('Failed to initialize cache:', error.message);
     cache.isInitialized = false;
-    updateLapiStatus(false, error);
+    updateAgentStatus(false, error);
   }
 }
 
@@ -319,33 +361,8 @@ async function updateCacheDelta() {
 
     // Rebuild active decisions cache
     cache.decisions.clear();
-    activeDecisions.forEach(decision => {
-      const decisionData = {
-        id: decision.id,
-        created_at: decision.created_at,
-        scenario: decision.scenario || "N/A",
-        value: decision.value,
-        expired: false,
-        detail: {
-          origin: decision.origin || "manual",
-          type: decision.type,
-          reason: decision.scenario || "manual",
-          action: decision.type,
-          country: "Unknown",
-          as: "Unknown",
-          events_count: decision.events_count || 0,
-          duration: decision.duration || "N/A",
-          expiration: decision.stop_at,
-          alert_id: decision.alert_id,
-        }
-      };
-      if (decision.alert_id && cache.alerts.has(decision.alert_id)) {
-        const alert = cache.alerts.get(decision.alert_id);
-        decisionData.detail.country = alert.source?.cn || "Unknown";
-        decisionData.detail.as = alert.source?.as_name || "Unknown";
-        decisionData.detail.message = alert.message;
-      }
-      cache.decisions.set(String(decision.id), decisionData);
+    activeDecisions.forEach(item => {
+      processDecisionItem(item);
     });
 
     // Add new alerts and their stats decisions
@@ -353,11 +370,11 @@ async function updateCacheDelta() {
       console.log(`Delta update: ${newAlerts.length} new alerts`);
 
       newAlerts.forEach(alert => {
-        cache.alerts.set(alert.id, alert);
+        cache.alerts.set(String(alert.id), alert);
 
         if (Array.isArray(alert.decisions)) {
           alert.decisions.forEach(decision => {
-            if (decision.origin !== 'CAPI' && !cache.decisionsForStats.has(decision.id)) {
+            if (decision.origin !== 'CAPI' && !cache.decisionsForStats.has(String(decision.id))) {
               cache.decisionsForStats.set(String(decision.id), {
                 id: decision.id,
                 created_at: decision.created_at || alert.created_at,
@@ -374,11 +391,11 @@ async function updateCacheDelta() {
     cache.lastUpdate = new Date().toISOString();
 
     console.log(`Delta update complete: ${cache.alerts.size} alerts, ${cache.decisions.size} active decisions`);
-    updateLapiStatus(true);
+    updateAgentStatus(true);
 
   } catch (error) {
     console.error('Failed to update cache delta:', error.message);
-    updateLapiStatus(false, error);
+    updateAgentStatus(false, error);
   }
 }
 
@@ -680,18 +697,7 @@ app.use(cors());
 app.use(express.json());
 app.use(activityTracker); // Apply to all routes
 
-// API: Config / Capabilities
-app.get('/api/config', (req, res) => {
-  res.json({
-    online: lapiStatus.isConnected,
-    last_check: lapiStatus.lastCheck,
-    update_available: updateCheckCache.data ? updateCheckCache.data.update_available : false,
-    update_info: updateCheckCache.data,
-    capabilities: {
-      agent: !!agentClient,
-    }
-  });
-});
+
 
 // Allowlist Management Proxies
 app.get('/api/allowlist', (req, res) => proxyToAgent(req, res, 'get', '/allowlist'));
@@ -744,49 +750,7 @@ app.post('/api/allowlist', (req, res) => {
 
 // --- End Agent Proxy Routes ---
 
-/**
- * Middleware to ensure we have a token or try to get one
- */
-const ensureAuth = async (req, res, next) => {
-  if (!requestToken) {
-    const success = await loginToLAPI();
-    if (!success) {
-      return res.status(502).json({ error: 'Failed to authenticate with CrowdSec LAPI' });
-    }
-  }
-  next();
-};
 
-/**
- * Helper to handle Axios errors with intelligent retry for 401
- */
-const handleApiError = async (error, res, action, replayCallback) => {
-  if (error.response && error.response.status === 401) {
-    console.log(`Received 401 during ${action}, attempting re-login...`);
-    const success = await loginToLAPI();
-    if (success && replayCallback) {
-      try {
-        await replayCallback();
-        return; // Successful replay
-      } catch (retryError) {
-        // Replay failed, fall through to error handling
-        console.error(`Retry failed for ${action}: ${retryError.message}`);
-        error = retryError;
-      }
-    }
-  }
-
-  if (error.response) {
-    console.error(`Error ${action}: ${error.response.status} - ${JSON.stringify(error.response.data)}`);
-    res.status(error.response.status).json(error.response.data);
-  } else if (error.request) {
-    console.error(`Error ${action}: No response received`);
-    res.status(502).json({ error: 'Bad Gateway: No response from CrowdSec LAPI' });
-  } else {
-    console.error(`Error ${action}: ${error.message}`);
-    res.status(500).json({ error: `Internal Server Error: ${error.message}` });
-  }
-};
 
 /**
  * Helper to hydrate an alert's decisions with fresh data from the active cache
@@ -837,7 +801,7 @@ const hydrateAlertWithDecisions = (alert) => {
  * GET /api/alerts
  * Returns alerts from cache
  */
-app.get('/api/alerts', ensureAuth, async (req, res) => {
+app.get('/api/alerts', async (req, res) => {
   try {
     // If in manual mode (REFRESH_INTERVAL_MS === 0), update cache on every request
     if (REFRESH_INTERVAL_MS === 0) {
@@ -865,13 +829,15 @@ app.get('/api/alerts', ensureAuth, async (req, res) => {
 /**
  * GET /api/alerts/:id
  */
-app.get('/api/alerts/:id', ensureAuth, async (req, res) => {
-  const doRequest = async () => {
-    const response = await apiClient.get(`/v1/alerts/${req.params.id}`);
+app.get('/api/alerts/:id', async (req, res) => {
+  try {
+    console.log(`Fetching alert details from Agent: ${req.params.id}`);
+    const response = await agentClient.get(`/alerts/${req.params.id}`);
 
     // Process response to sync decisions with active cache
     let alertData = response.data;
 
+    // Use common hydration logic helper
     if (Array.isArray(alertData)) {
       alertData = alertData.map(hydrateAlertWithDecisions);
     } else {
@@ -879,12 +845,13 @@ app.get('/api/alerts/:id', ensureAuth, async (req, res) => {
     }
 
     res.json(alertData);
-  };
-
-  try {
-    await doRequest();
   } catch (error) {
-    handleApiError(error, res, 'fetching alert details', doRequest);
+    if (error.response) {
+      res.status(error.response.status).json(error.response.data);
+    } else {
+      console.error(`Error fetching alert details: ${error.message}`);
+      res.status(502).json({ error: 'Agent communication failed' });
+    }
   }
 });
 
@@ -892,7 +859,7 @@ app.get('/api/alerts/:id', ensureAuth, async (req, res) => {
  * GET /api/decisions
  * Returns decisions from cache (active by default, or all including expired with ?include_expired=true)
  */
-app.get('/api/decisions', ensureAuth, async (req, res) => {
+app.get('/api/decisions', async (req, res) => {
   try {
     // If in manual mode, update cache on every request
     if (REFRESH_INTERVAL_MS === 0) {
@@ -968,29 +935,44 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
  * GET /api/config
  * Returns the public configuration for the frontend
  */
-app.get('/api/config', ensureAuth, (req, res) => {
+app.get('/api/config', (req, res) => {
   // Simple parser to estimate days/hours for display
   // Supports h, d. Default 168h.
   let hours = 168;
-  let duration = CROWDSEC_LOOKBACK_PERIOD;
+  const rawDuration = CROWDSEC_LOOKBACK_PERIOD || '';
+  const duration = rawDuration.toLowerCase().trim();
 
-  const match = duration.match(/^(\d+)([hmd])$/);
+  const match = duration.match(/^(\d+)([a-z]*)$/);
   if (match) {
     const val = parseInt(match[1]);
     const unit = match[2];
-    if (unit === 'h') hours = val;
-    if (unit === 'd') hours = val * 24;
+
+    if (unit === 'd' || unit === 'day' || unit === 'days') hours = val * 24;
+    else if (unit === 'h' || unit === 'hour' || unit === 'hours') hours = val;
+    else if (unit === '') {
+      // Fallback: If no unit, assume days if value is small (< 100), else hours? 
+      // Or just assume days as that's the primary dashboard metric.
+      // Let's assume Days for user convenience in this customized dashboard context.
+      if (val < 1000) hours = val * 24;
+      else hours = val; // Large number likely hours (e.g. 720)
+    }
   }
 
-  // Return current runtime state (not env var)
+  // Return current runtime state
   res.json({
     lookback_period: CROWDSEC_LOOKBACK_PERIOD,
     lookback_hours: hours,
     lookback_days: Math.max(1, Math.round(hours / 24)),
-    lookback_days: Math.max(1, Math.round(hours / 24)),
     refresh_interval: REFRESH_INTERVAL_MS,
     current_interval_name: getIntervalName(REFRESH_INTERVAL_MS),
-    lapi_status: lapiStatus
+    agent_status: agentStatus,
+    online: agentStatus.isConnected,
+    last_check: agentStatus.lastCheck,
+    update_available: updateCheckCache.data ? updateCheckCache.data.update_available : false,
+    update_info: updateCheckCache.data,
+    capabilities: {
+      agent: !!agentClient,
+    }
   });
 });
 
@@ -998,7 +980,7 @@ app.get('/api/config', ensureAuth, (req, res) => {
  * PUT /api/config/refresh-interval
  * Updates the refresh interval at runtime and restarts the scheduler
  */
-app.put('/api/config/refresh-interval', ensureAuth, (req, res) => {
+app.put('/api/config/refresh-interval', (req, res) => {
   try {
     const { interval } = req.body;
 
@@ -1045,7 +1027,7 @@ app.put('/api/config/refresh-interval', ensureAuth, (req, res) => {
  * GET /api/stats/decisions
  * Returns ALL decisions (including expired) for statistics purposes from cache
  */
-app.get('/api/stats/decisions', ensureAuth, async (req, res) => {
+app.get('/api/stats/decisions', async (req, res) => {
   try {
     // If in manual mode, update cache on every request
     if (REFRESH_INTERVAL_MS === 0) {
@@ -1068,103 +1050,14 @@ app.get('/api/stats/decisions', ensureAuth, async (req, res) => {
   }
 });
 
-/**
- * POST /api/decisions
- * Creates a manual decision via POST /v1/alerts
- */
-app.post('/api/decisions', ensureAuth, async (req, res) => {
-  const doRequest = async () => {
-    const { ip, duration = "4h", reason = "manual", type = "ban" } = req.body;
 
-    if (!ip) {
-      return res.status(400).json({ error: 'IP address is required' });
-    }
 
-    // Measure duration to calculate stop_at
-    // Simple parsing for 4h, 1d etc.
-    let stopAt = new Date();
-    const durationMatch = duration.match(/^(\d+)([hmds])$/);
-    if (durationMatch) {
-      const val = parseInt(durationMatch[1]);
-      const unit = durationMatch[2];
-      if (unit === 'h') stopAt.setHours(stopAt.getHours() + val);
-      if (unit === 'm') stopAt.setMinutes(stopAt.getMinutes() + val);
-      if (unit === 'd') stopAt.setDate(stopAt.getDate() + val);
-      if (unit === 's') stopAt.setSeconds(stopAt.getSeconds() + val);
-    } else {
-      // default 4 hours if parsing fails
-      stopAt.setHours(stopAt.getHours() + 4);
-    }
 
-    // Construct Alert Object with required fields
-    const alertPayload = [{
-      scenario: "manual/web-ui",
-      campaign_name: "manual/web-ui", // optional but good practice
-      message: `Manual decision from Web UI: ${reason}`,
-      events_count: 1,
-      start_at: new Date().toISOString(),
-      stop_at: stopAt.toISOString(),
-      capacity: 0,
-      leakspeed: "0",
-      simulated: false,
-      events: [], // Required by LAPI strict validation
-      scenario_hash: "", // Required
-      scenario_version: "", // Required
-      source: {
-        scope: "ip",
-        value: ip
-      },
-      decisions: [{
-        type: type,
-        duration: duration,
-        value: ip,
-        origin: "cscli",
-        scenario: "manual/web-ui",
-        scope: "ip"
-      }]
-    }];
-
-    const response = await apiClient.post('/v1/alerts', alertPayload);
-
-    // Immediately refresh cache to include new decision
-    console.log('Refreshing cache after adding decision...');
-    await initializeCache();
-
-    res.json({ message: 'Decision added (via Alert)', result: response.data });
-  };
-
-  try {
-    await doRequest();
-  } catch (error) {
-    handleApiError(error, res, 'adding decision', doRequest);
-  }
-});
-
-/**
- * DELETE /api/decisions/:id
- */
-app.delete('/api/decisions/:id', ensureAuth, async (req, res) => {
-  const doRequest = async () => {
-    const response = await apiClient.delete(`/v1/decisions/${req.params.id}`);
-
-    // Immediately refresh cache to reflect deleted decision
-    console.log('Refreshing cache after deleting decision...');
-    await initializeCache();
-
-    res.json(response.data || { message: 'Deleted' });
-  };
-
-  try {
-    await doRequest();
-  } catch (error) {
-    handleApiError(error, res, 'deleting decision', doRequest);
-  }
-});
 
 /**
  * GET /api/update-check
  */
-app.get('/api/update-check', ensureAuth, async (req, res) => {
+app.get('/api/update-check', async (req, res) => {
   try {
     const status = await checkForUpdates();
     res.json(status);
@@ -1182,34 +1075,25 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'frontend/dist/index.html'));
 });
 
+
+
 // ============================================================================
 // CACHE INITIALIZATION AND SCHEDULER
 // ============================================================================
 
 // Initialize cache on startup
 (async () => {
-  // First, ensure we're logged in
-  if (CROWDSEC_USER && CROWDSEC_PASSWORD) {
-    console.log('Ensuring authentication before cache initialization...');
-    const loginSuccess = await loginToLAPI();
-
-    if (!loginSuccess) {
-      console.error('Failed to login - cache initialization aborted');
-      return;
-    }
-
+  if (agentClient) {
     console.log('Starting cache initialization...');
     await initializeCache();
 
     // Start background refresh scheduler
     startRefreshScheduler();
   } else {
-    console.warn('Cache initialization skipped - credentials not configured');
+    console.warn('Cache initialization skipped - agent not configured');
   }
 })();
 
 // ============================================================================
-
-
 
 const server = app.listen(port, '0.0.0.0', () => { console.log(`Server listening on port ${port}`); });

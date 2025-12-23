@@ -5,9 +5,6 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - CROWDSEC_URL=http://crowdsec:8080
-      - CROWDSEC_USER=crowdsec-web-ui
-      - CROWDSEC_PASSWORD=your_secure_password_here
       - AGENT_URL=http://crowdsec_web_ui_agent:3001
       - AGENT_TOKEN=your_secure_agent_token_here
     restart: unless-stopped
