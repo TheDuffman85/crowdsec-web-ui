@@ -11,6 +11,7 @@ on:
       - main
       - dev
       - feature/agent
+      - lapi
   schedule:
     - cron: '0 0 * * 1'  # Every Monday at 00:00 UTC
 
@@ -61,6 +62,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata (tags, labels) for Docker
+        if: matrix.context != './agent' || github.ref != 'refs/heads/lapi'
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -69,8 +71,10 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
             type=raw,value=agent,enable=${{ github.ref == 'refs/heads/feature/agent' }}
+            type=raw,value=lapi,enable=${{ github.ref == 'refs/heads/lapi' }}
 
       - name: Build and push Docker image
+        if: matrix.context != './agent' || github.ref != 'refs/heads/lapi'
         uses: docker/build-push-action@v5
         with:
           context: ${{ matrix.context }}
