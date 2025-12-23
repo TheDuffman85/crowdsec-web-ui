@@ -92,7 +92,7 @@ if [ "$MODE" == "dev" ]; then
 else
     log "Starting in PRODUCTION mode..."
     
-    # Check if we should run legacy or new mode based on args or env? 
+    # Check if we should run lapi or new mode based on args or env? 
     # For local production-like run, we usually just run the main app.
     # The 'agent' functionality relies on a separate process. 
     # run.sh is typically for "Monolithic" local dev.

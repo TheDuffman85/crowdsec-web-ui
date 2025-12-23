@@ -31,9 +31,9 @@ ENV VITE_BRANCH=$VITE_BRANCH
 # Install gosu and git
 RUN apt-get update && apt-get install -y gosu git && rm -rf /var/lib/apt/lists/*
 
-# Clone Legacy Branch
-RUN git clone --branch legacy --depth 1 https://github.com/TheDuffman85/crowdsec-web-ui.git /app/legacy && \
-    cd /app/legacy && \
+# Clone LAPI Branch
+RUN git clone --branch lapi --depth 1 https://github.com/TheDuffman85/crowdsec-web-ui.git /app/lapi && \
+    cd /app/lapi && \
     npm install && \
     cd frontend && \
     npm install --legacy-peer-deps && \

@@ -10,7 +10,7 @@ on:
     branches:
       - main
       - dev
-      - feature/agent-mode
+      - feature/agent
   schedule:
     - cron: '0 0 * * 1'  # Every Monday at 00:00 UTC
 
@@ -68,7 +68,7 @@ jobs:
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
-            type=raw,value=agent-mode,enable=${{ github.ref == 'refs/heads/feature/agent-mode' }}
+            type=raw,value=agent,enable=${{ github.ref == 'refs/heads/feature/agent' }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5

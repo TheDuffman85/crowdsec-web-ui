@@ -11,8 +11,8 @@ fi
 
 # Determine Mode
 if [ -z "$AGENT_URL" ]; then
-    echo "AGENT_URL is not set. Starting LEGACY mode..."
-    cd /app/legacy
+    echo "AGENT_URL is not set. Starting LAPI mode..."
+    cd /app/lapi
 else
     echo "AGENT_URL is set ($AGENT_URL). Starting NEW mode..."
     cd /app
