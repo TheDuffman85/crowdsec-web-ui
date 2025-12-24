@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "install-all": "npm install && cd frontend && npm install",
+    "install-all": "npm install && cd frontend && npm install --legacy-peer-deps",
     "build-ui": "cd frontend && npm run build"
   },
   "dependencies": {
