@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Trash2, Plus, Shield, CheckCircle, AlertTriangle } from "lucide-react";
 import { Badge } from "../components/ui/Badge";
+import { Modal } from "../components/ui/Modal";
 import { fetchAllowlist, addToAllowlist, removeFromAllowlist } from "../lib/api";
 
 export function Allowlist() {
@@ -9,7 +10,11 @@ export function Allowlist() {
     const [error, setError] = useState(null);
     const [newItem, setNewItem] = useState("");
     const [adding, setAdding] = useState(false);
-    const [successMessage, setSuccessMessage] = useState(null);
+
+
+    // Modal states
+    const [showAddModal, setShowAddModal] = useState(false);
+    const [itemToDelete, setItemToDelete] = useState(null);
 
     const loadData = async () => {
         setLoading(true);
@@ -34,15 +39,16 @@ export function Allowlist() {
         if (!newItem) return;
         setAdding(true);
         setError(null);
-        setSuccessMessage(null);
+
 
         try {
             const isRange = newItem.includes('/');
             const payload = isRange ? { range: newItem } : { ip: newItem };
 
             await addToAllowlist(payload);
-            setSuccessMessage(`Added ${newItem} to allowlist`);
+
             setNewItem("");
+            setShowAddModal(false); // Close modal on success
             loadData();
         } catch (err) {
             setError(err.message || "Failed to add to allowlist");
@@ -51,11 +57,24 @@ export function Allowlist() {
         }
     };
 
-    const handleDelete = async (value) => {
-        if (!confirm(`Remove ${value} from allowlist?`)) return;
+    // Open add modal and reset states
+    const openAddModal = () => {
+        setError(null);
+
+        setNewItem("");
+        setShowAddModal(true);
+    };
+
+    const handleDeleteClick = (value) => {
+        setItemToDelete(value);
+    };
+
+    const confirmDelete = async () => {
+        if (!itemToDelete) return;
 
         try {
-            await removeFromAllowlist(value);
+            await removeFromAllowlist(itemToDelete);
+            setItemToDelete(null); // Close modal
             loadData();
         } catch (err) {
             setError(err.message || "Failed to remove item");
@@ -74,44 +93,23 @@ export function Allowlist() {
                         Manage IP bypass rules. These IPs will not be banned.
                     </p>
                 </div>
+                <button
+                    onClick={openAddModal}
+                    className="bg-primary-600 hover:bg-primary-700 text-white font-medium py-2 px-4 rounded-md transition-colors flex items-center gap-2 text-sm self-start md:self-auto"
+                >
+                    <Plus size={16} />
+                    Add Entry
+                </button>
             </div>
 
-            {/* Add Form */}
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-                <form onSubmit={handleAdd} className="flex gap-4 items-end">
-                    <div className="flex-1">
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                            IP Address or CIDR Range
-                        </label>
-                        <input
-                            type="text"
-                            value={newItem}
-                            onChange={(e) => setNewItem(e.target.value)}
-                            placeholder="e.g. 192.168.1.5 or 10.0.0.0/24"
-                            className="w-full px-4 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition-all"
-                        />
-                    </div>
-                    <button
-                        type="submit"
-                        disabled={adding || !newItem}
-                        className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-md font-medium transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                        {adding ? 'Adding...' : <><Plus size={18} /> Add Entry</>}
-                    </button>
-                </form>
-                {successMessage && (
-                    <div className="mt-4 p-3 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 rounded-md flex items-center gap-2 text-sm">
-                        <CheckCircle size={16} />
-                        {successMessage}
-                    </div>
-                )}
-                {error && (
-                    <div className="mt-4 p-3 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 rounded-md flex items-center gap-2 text-sm">
-                        <AlertTriangle size={16} />
-                        {error}
-                    </div>
-                )}
-            </div>
+            {/* Error/Success Messages (keep global visual feedback if needed, mainly for non-modal errors) */}
+            {error && !showAddModal && !itemToDelete && (
+                <div className="p-3 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 rounded-md flex items-center gap-2 text-sm">
+                    <AlertTriangle size={16} />
+                    {error}
+                </div>
+            )}
+
 
             {/* List */}
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
@@ -147,7 +145,7 @@ export function Allowlist() {
                                     </td>
                                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                                         <button
-                                            onClick={() => handleDelete(item.value)}
+                                            onClick={() => handleDeleteClick(item.value)}
                                             className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 transition-colors"
                                             title="Delete"
                                         >
@@ -160,6 +158,81 @@ export function Allowlist() {
                     </table>
                 )}
             </div>
+
+            {/* Add Modal */}
+            <Modal
+                isOpen={showAddModal}
+                onClose={() => setShowAddModal(false)}
+                title="Add to Allowlist"
+                maxWidth="max-w-md"
+            >
+                <form onSubmit={handleAdd} className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                            IP Address or CIDR Range
+                        </label>
+                        <input
+                            type="text"
+                            value={newItem}
+                            onChange={(e) => setNewItem(e.target.value)}
+                            placeholder="e.g. 192.168.1.5 or 10.0.0.0/24"
+                            className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                            autoFocus
+                        />
+                    </div>
+
+                    {error && (
+                        <div className="p-3 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 rounded-md flex items-center gap-2 text-sm">
+                            <AlertTriangle size={16} />
+                            {error}
+                        </div>
+                    )}
+
+                    <div className="flex justify-end gap-3 mt-6">
+                        <button
+                            type="button"
+                            onClick={() => setShowAddModal(false)}
+                            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            type="submit"
+                            disabled={adding || !newItem}
+                            className="px-4 py-2 text-sm font-medium text-white bg-primary-600 border border-transparent rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {adding ? 'Adding...' : 'Add Entry'}
+                        </button>
+                    </div>
+                </form>
+            </Modal>
+
+            {/* Delete Modal */}
+            <Modal
+                isOpen={!!itemToDelete}
+                onClose={() => setItemToDelete(null)}
+                title="Remove from Allowlist?"
+                maxWidth="max-w-sm"
+                showCloseButton={false}
+            >
+                <p className="text-gray-600 dark:text-gray-300 mb-6">
+                    Are you sure you want to remove <span className="font-mono text-sm font-bold">{itemToDelete}</span> from the allowlist?
+                </p>
+                <div className="flex justify-end gap-3">
+                    <button
+                        onClick={() => setItemToDelete(null)}
+                        className="px-4 py-2 text-sm font-medium text-gray-700 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        onClick={confirmDelete}
+                        className="px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                    >
+                        Remove
+                    </button>
+                </div>
+            </Modal>
         </div>
     );
 }

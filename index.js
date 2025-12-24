@@ -729,8 +729,37 @@ const proxyToAgent = async (req, res, method, path, data = null) => {
 // --- Agent Proxy Routes ---
 
 // Delete Alert
-app.delete('/api/alerts/:id', (req, res) => {
-  proxyToAgent(req, res, 'DELETE', `/alerts/${req.params.id}`);
+app.delete('/api/alerts/:id', async (req, res) => {
+  try {
+    // 1. Send delete request to Agent
+    await agentClient.delete(`/alerts/${req.params.id}`);
+
+    // 2. Clear from local cache if successful
+    const alertId = req.params.id;
+    if (cache.alerts.has(alertId)) {
+      const alert = cache.alerts.get(alertId);
+
+      // Remove associated decisions from cache
+      if (alert.decisions && Array.isArray(alert.decisions)) {
+        alert.decisions.forEach(d => {
+          cache.decisions.delete(String(d.id));
+          cache.decisionsForStats.delete(String(d.id));
+        });
+      }
+
+      cache.alerts.delete(alertId);
+      console.log(`Deleted alert ${alertId} and associated decisions from cache`);
+    }
+
+    res.json({ success: true, message: `Alert ${alertId} deleted` });
+  } catch (error) {
+    if (error.response) {
+      res.status(error.response.status).json(error.response.data);
+    } else {
+      console.error(`Error deleting alert ${req.params.id}: ${error.message}`);
+      res.status(502).json({ error: 'Agent communication failed' });
+    }
+  }
 });
 
 // Add Decision
@@ -739,8 +768,31 @@ app.post('/api/decisions', (req, res) => {
 });
 
 // Delete Decision
-app.delete('/api/decisions/:id', (req, res) => {
-  proxyToAgent(req, res, 'DELETE', `/decisions/${req.params.id}`);
+app.delete('/api/decisions/:id', async (req, res) => {
+  try {
+    // 1. Send delete request to Agent
+    await agentClient.delete(`/decisions/${req.params.id}`);
+
+    // 2. Clear from local cache if successful
+    const decisionId = req.params.id;
+    let removed = 0;
+
+    if (cache.decisions.delete(decisionId)) removed++;
+    if (cache.decisionsForStats.delete(decisionId)) removed++;
+
+    if (removed > 0) {
+      console.log(`Deleted decision ${decisionId} from cache`);
+    }
+
+    res.json({ success: true, message: `Decision ${decisionId} deleted` });
+  } catch (error) {
+    if (error.response) {
+      res.status(error.response.status).json(error.response.data);
+    } else {
+      console.error(`Error deleting decision ${req.params.id}: ${error.message}`);
+      res.status(502).json({ error: 'Agent communication failed' });
+    }
+  }
 });
 
 // Add Allowlist (Add Decision with type=allow)

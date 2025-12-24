@@ -8,7 +8,7 @@ import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { getHubUrl, getCountryName } from "../lib/utils";
 import { getAlertTarget } from "../lib/stats";
-import { Search, Info, ExternalLink, Shield } from "lucide-react";
+import { Search, Info, ExternalLink, Shield, Trash2 } from "lucide-react";
 import "flag-icons/css/flag-icons.min.css";
 
 export function Alerts() {
@@ -240,6 +240,7 @@ export function Alerts() {
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">AS</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">IP</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Decisions</th>
+                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
                             </tr>
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
@@ -328,6 +329,18 @@ export function Alerts() {
                                                     <span className="text-gray-400">-</span>
                                                 )}
                                             </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium" onClick={(e) => e.stopPropagation()}>
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setAlertToDelete(alert.id);
+                                                    }}
+                                                    className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 transition-colors p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full cursor-pointer z-10 relative"
+                                                    title="Delete Alert"
+                                                >
+                                                    <Trash2 size={16} />
+                                                </button>
+                                            </td>
                                         </tr>
                                     );
                                 })
@@ -358,12 +371,6 @@ export function Alerts() {
                         {/* Summary Cards */}
                         {agent && (
                             <div className="flex justify-end">
-                                <button
-                                    onClick={() => setAlertToDelete(selectedAlert.id)}
-                                    className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 px-3 py-1 rounded border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-900/10 text-sm font-medium transition-colors"
-                                >
-                                    Delete Alert
-                                </button>
                             </div>
                         )}
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
