@@ -609,7 +609,12 @@ async function checkForUpdates() {
   const currentHash = process.env.VITE_COMMIT_HASH;
 
   // Map branch to tag
-  const tag = currentBranch === 'dev' ? 'dev' : 'latest';
+  let tag = 'latest';
+  if (currentBranch === 'dev') {
+    tag = 'dev';
+  } else if (currentBranch === 'feature/agent' || currentBranch === 'agent') {
+    tag = 'agent';
+  }
 
   if (!currentHash) {
     console.log('Update check skipped: VITE_COMMIT_HASH not set.');
