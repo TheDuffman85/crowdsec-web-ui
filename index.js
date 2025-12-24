@@ -68,9 +68,22 @@ const AGENT_TOKEN = process.env.AGENT_TOKEN;
 let agentClient = null;
 if (AGENT_URL && AGENT_TOKEN) {
   console.log(`Agent configured at ${AGENT_URL}`);
+
+  const https = require('https');
+  const agentTlsVerify = process.env.AGENT_TLS_VERIFY !== 'false';
+
+  const httpsAgent = new https.Agent({
+    rejectUnauthorized: agentTlsVerify
+  });
+
+  if (!agentTlsVerify) {
+    console.warn('WARNING: Agent TLS validation is DISABLED (AGENT_TLS_VERIFY=false)');
+  }
+
   agentClient = axios.create({
     baseURL: AGENT_URL,
-    timeout: 30000, // Higher timeout for cscli operations
+    timeout: 30000,
+    httpsAgent: httpsAgent,
     headers: {
       'Authorization': `Bearer ${AGENT_TOKEN}`
     }

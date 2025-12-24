@@ -3,6 +3,10 @@ const Docker = require('dockerode');
 const cors = require('cors');
 const path = require('path');
 
+const https = require('https');
+const selfsigned = require('selfsigned');
+const fs = require('fs');
+
 const app = express();
 app.use(express.json());
 app.use(cors());
@@ -12,6 +16,9 @@ const PORT = process.env.PORT || 3001;
 const CROWDSEC_CONTAINER = process.env.CROWDSEC_CONTAINER || 'crowdsec';
 const AGENT_TOKEN = process.env.AGENT_TOKEN;
 
+const HTTPS_CERT_FILE = process.env.HTTPS_CERT_FILE || path.join(__dirname, 'certs', 'server.cert');
+const HTTPS_KEY_FILE = process.env.HTTPS_KEY_FILE || path.join(__dirname, 'certs', 'server.key');
+
 // Validation
 if (!AGENT_TOKEN) {
     console.error("FATAL: AGENT_TOKEN environment variable is not set.");
@@ -20,7 +27,7 @@ if (!AGENT_TOKEN) {
 
 // Docker Client
 // Docker Client Configuration
-const fs = require('fs');
+// fs is already imported at the top
 
 let dockerConfig = { socketPath: '/var/run/docker.sock' };
 
@@ -362,6 +369,48 @@ app.delete('/allowlist', async (req, res) => {
 });
 
 
-app.listen(PORT, () => {
-    console.log(`Agent running on port ${PORT}`);
-});
+// HTTPS Certificate Management
+async function getCertificates() {
+    const certDir = path.dirname(HTTPS_CERT_FILE);
+    if (!fs.existsSync(certDir)) {
+        console.log(`Creating certificate directory at ${certDir}`);
+        fs.mkdirSync(certDir, { recursive: true });
+    }
+
+    if (fs.existsSync(HTTPS_CERT_FILE) && fs.existsSync(HTTPS_KEY_FILE)) {
+        console.log('Loading existing SSL certificates...');
+        return {
+            key: fs.readFileSync(HTTPS_KEY_FILE),
+            cert: fs.readFileSync(HTTPS_CERT_FILE)
+        };
+    }
+
+    console.log('No certificates found. Generating self-signed certificates...');
+    const attrs = [{ name: 'commonName', value: 'localhost' }];
+
+    // selfsigned.generate is async in current versions
+    const pems = await selfsigned.generate(attrs, { days: 365 });
+
+    fs.writeFileSync(HTTPS_CERT_FILE, pems.cert);
+    fs.writeFileSync(HTTPS_KEY_FILE, pems.private);
+
+    console.log(`Generated self-signed certificates at ${HTTPS_CERT_FILE} and ${HTTPS_KEY_FILE}`);
+    return {
+        key: pems.private,
+        cert: pems.cert
+    };
+}
+
+async function startServer() {
+    try {
+        const httpsOptions = await getCertificates();
+        https.createServer(httpsOptions, app).listen(PORT, () => {
+            console.log(`Agent running on port ${PORT} (HTTPS)`);
+        });
+    } catch (e) {
+        console.error("Failed to start server:", e);
+        process.exit(1);
+    }
+}
+
+startServer();

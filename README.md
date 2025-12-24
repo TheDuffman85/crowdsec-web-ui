@@ -121,14 +121,15 @@ Automatically detects new container images on GitHub Container Registry (GHCR). 
       --name crowdsec-web-ui \
       --network your_crowdsec_network \
       -p 3000:3000 \
-      -e AGENT_URL=http://crowdsec-web-ui-agent:3001 \
+      -e AGENT_URL=https://crowdsec-web-ui-agent:3001 \
       -e AGENT_TOKEN=<generated_agent_token> \
+      -e AGENT_TLS_VERIFY=false \
       -e CROWDSEC_LOOKBACK_PERIOD=5d \
       -e CROWDSEC_REFRESH_INTERVAL=0 \
       -v $(pwd)/config:/app/config \
       ghcr.io/theduffman85/crowdsec-web-ui:latest
     ```
-    *Note: Ensure `CROWDSEC_URL` points to your CrowdSec container.*
+    *Note: Ensure `CROWDSEC_URL` points to your CrowdSec container. `AGENT_TLS_VERIFY=false` is required if using the auto-generated self-signed certificate.*
 
 ### Docker Compose Example
 
@@ -140,8 +141,10 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - AGENT_URL=http://crowdsec_web_ui_agent:3001
+      - AGENT_URL=https://crowdsec_web_ui_agent:3001
       - AGENT_TOKEN=<generated_agent_token>
+      # Set to false to accept self-signed certificates from the agent
+      - AGENT_TLS_VERIFY=false
       # Optional: Lookback period for alerts/stats (default: 168h/7d)
       - CROWDSEC_LOOKBACK_PERIOD=5d
       # Optional: Backend auto-refresh interval. Values: 0 (Off), 5s, 30s (default), 1m, 5m
@@ -166,8 +169,13 @@ services:
     environment:
       - AGENT_TOKEN=<generated_agent_token>
       - CROWDSEC_CONTAINER=crowdsec
+      # Optional: Path to custom certificates inside the container
+      # - HTTPS_CERT_FILE=/app/certs/server.cert
+      # - HTTPS_KEY_FILE=/app/certs/server.key
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      # Optional: Persist generated certificates or mount custom ones
+      # - ./certs:/app/certs
     restart: unless-stopped
 ```
 

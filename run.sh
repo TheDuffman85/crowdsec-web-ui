@@ -72,7 +72,12 @@ if [ "$MODE" == "dev" ]; then
     # Start Backend in background
     log "Starting backend (nodemon)..."
     # Ensure backend knows about agent
-    export AGENT_URL="http://localhost:3001"
+    if [ -z "$AGENT_URL" ]; then
+        export AGENT_URL="https://localhost:3001"
+    fi
+    if [ -z "$AGENT_TLS_VERIFY" ]; then
+        export AGENT_TLS_VERIFY="false"
+    fi
     npm run dev &
     BACKEND_PID=$!
     
@@ -118,8 +123,12 @@ else
         cd ..
         
         log "Starting backend..."
-        export AGENT_URL="http://localhost:3001"
-        export AGENT_TOKEN="your_secure_agent_token_here"
+        if [ -z "$AGENT_URL" ]; then
+            export AGENT_URL="https://localhost:3001"
+        fi
+        if [ -z "$AGENT_TOKEN" ]; then
+            log "Warning: AGENT_TOKEN not set in environment."
+        fi
         npm start &
         BACKEND_PID=$!
         
