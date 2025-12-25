@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { fetchConfig } from '../lib/api';
 
 const RefreshContext = createContext();
@@ -7,21 +7,57 @@ export function RefreshProvider({ children }) {
     const [intervalMs, setIntervalMsState] = useState(null);
     const [lastUpdated, setLastUpdated] = useState(null);
     const [refreshSignal, setRefreshSignal] = useState(0);
+    const [syncStatus, setSyncStatus] = useState(null);
+
+    // Track previous sync status to detect when sync completes
+    const prevIsSyncing = useRef(null);
+
+    // Function to fetch current config including sync status
+    const updateConfig = useCallback(async () => {
+        try {
+            const config = await fetchConfig();
+            if (config) {
+                if (config.refresh_interval !== undefined) {
+                    setIntervalMsState(config.refresh_interval);
+                }
+                if (config.sync_status !== undefined) {
+                    setSyncStatus(config.sync_status);
+                }
+            }
+        } catch (err) {
+            console.error("Failed to load config", err);
+        }
+    }, []);
 
     // Fetch initial config from backend
     useEffect(() => {
-        fetchConfig().then(config => {
-            if (config && config.refresh_interval !== undefined) {
-                console.log('Setting refresh interval from backend:', config.refresh_interval);
-                setIntervalMsState(config.refresh_interval);
-            } else {
-                setIntervalMsState(0);
-            }
-        }).catch(err => {
-            console.error("Failed to load refresh config", err);
-            setIntervalMsState(0);
-        });
-    }, []);
+        updateConfig();
+    }, [updateConfig]);
+
+    // Poll more frequently while syncing
+    useEffect(() => {
+        if (syncStatus?.isSyncing) {
+            const pollInterval = setInterval(() => {
+                updateConfig();
+            }, 1000); // Poll every second during sync
+
+            return () => clearInterval(pollInterval);
+        }
+    }, [syncStatus?.isSyncing, updateConfig]);
+
+    // Trigger refresh when sync completes (transitions from true to false)
+    useEffect(() => {
+        const currentIsSyncing = syncStatus?.isSyncing;
+
+        // If we were syncing and now we're not, trigger a refresh
+        if (prevIsSyncing.current === true && currentIsSyncing === false) {
+            console.log('Historical sync completed - triggering data refresh');
+            setRefreshSignal(prev => prev + 1);
+        }
+
+        // Update the ref for next comparison
+        prevIsSyncing.current = currentIsSyncing;
+    }, [syncStatus?.isSyncing]);
 
     // Function to update interval via API
     const setIntervalMs = async (newIntervalMs) => {
@@ -71,7 +107,8 @@ export function RefreshProvider({ children }) {
             setLastUpdated,
             intervalMs,
             setIntervalMs,
-            refreshSignal
+            refreshSignal,
+            syncStatus
         }}>
             {children}
         </RefreshContext.Provider>

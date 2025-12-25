@@ -159,6 +159,19 @@ const loginToLAPI = async () => {
 
 // Login will be called during cache initialization
 
+// Historical Sync Status Tracker
+const syncStatus = {
+  isSyncing: false,
+  progress: 0, // 0-100 percentage
+  message: '',
+  startedAt: null,
+  completedAt: null
+};
+
+function updateSyncStatus(updates) {
+  Object.assign(syncStatus, updates);
+}
+
 // ============================================================================
 // CACHE SYSTEM (SQLite Backed)
 // ============================================================================
@@ -267,6 +280,17 @@ function parseGoDuration(str) {
   return totalMs * multiplier;
 }
 
+// Helper to convert a timestamp to a Go-style relative duration from now
+// e.g., a timestamp 2 hours ago becomes "2h0m0s"
+function toDuration(timestampMs) {
+  const now = Date.now();
+  const diffMs = now - timestampMs;
+  const hours = Math.floor(diffMs / 3600000);
+  const minutes = Math.floor((diffMs % 3600000) / 60000);
+  const seconds = Math.floor((diffMs % 60000) / 1000);
+  return `${hours}h${minutes}m${seconds}s`;
+}
+
 // Helper to process an alert and store in SQLite
 function processAlertForDb(alert) {
   if (!alert || !alert.id) return;
@@ -373,22 +397,98 @@ async function fetchAlertsFromLAPI(since = null, hasActiveDecision = false) {
   return Array.from(alertMap.values());
 }
 
-// Initial cache load - fetch full dataset and store in SQLite
+// Chunked Historical Sync - fetches data in 6-hour chunks with progress updates
+async function syncHistory() {
+  console.log('Starting historical data sync...');
+
+  updateSyncStatus({
+    isSyncing: true,
+    progress: 0,
+    message: 'Starting historical data sync...',
+    startedAt: new Date().toISOString(),
+    completedAt: null
+  });
+
+  const now = Date.now();
+  const lookbackStart = now - LOOKBACK_MS;
+  const chunkSizeMs = 6 * 60 * 60 * 1000; // 6 hours
+  const totalDuration = now - lookbackStart;
+
+  let currentStart = lookbackStart;
+  let totalAlerts = 0;
+
+  while (currentStart < now) {
+    const currentEnd = Math.min(currentStart + chunkSizeMs, now);
+
+    // Calculate progress percentage
+    const progress = Math.round(((currentEnd - lookbackStart) / totalDuration) * 100);
+
+    // Convert to relative durations for LAPI
+    const sinceDuration = toDuration(currentStart);
+    const untilDuration = toDuration(currentEnd);
+
+    const progressMessage = `Syncing: ${sinceDuration} → ${untilDuration} ago (${totalAlerts} alerts)`;
+    console.log(progressMessage);
+    updateSyncStatus({ progress: Math.min(progress, 90), message: progressMessage });
+
+    try {
+      // Fetch alerts for this chunk
+      const alerts = await fetchAlertsFromLAPI(sinceDuration);
+
+      if (alerts.length > 0) {
+        const insertTransaction = db.db.transaction((items) => {
+          for (const alert of items) processAlertForDb(alert);
+        });
+        insertTransaction(alerts);
+        totalAlerts += alerts.length;
+        console.log(`  -> Imported ${alerts.length} alerts.`);
+      }
+    } catch (err) {
+      console.error(`Failed to sync chunk:`, err.message);
+      // Continue to next chunk to get partial data
+    }
+
+    currentStart = currentEnd;
+
+    // Small pause to prevent overwhelming LAPI
+    await new Promise(r => setTimeout(r, 100));
+  }
+
+  console.log(`Historical sync complete. Total imported: ${totalAlerts}`);
+
+  // Sync active decisions at the end
+  updateSyncStatus({ progress: 95, message: 'Syncing active decisions...' });
+
+  try {
+    const activeDecisionAlerts = await fetchAlertsFromLAPI(null, true);
+    if (activeDecisionAlerts.length > 0) {
+      const refreshTransaction = db.db.transaction((alerts) => {
+        for (const alert of alerts) processAlertForDb(alert);
+      });
+      refreshTransaction(activeDecisionAlerts);
+      console.log(`  -> Synced ${activeDecisionAlerts.length} alerts with active decisions.`);
+    }
+  } catch (err) {
+    console.error('Failed to sync active decisions:', err.message);
+  }
+
+  updateSyncStatus({
+    isSyncing: false,
+    progress: 100,
+    message: `Sync complete. ${totalAlerts} alerts imported.`,
+    completedAt: new Date().toISOString()
+  });
+
+  return totalAlerts;
+}
+
+// Initial cache load - uses chunked sync for progress feedback
 async function initializeCache() {
   try {
-    console.log('Initializing cache with full data load...');
+    console.log('Initializing cache with chunked data load...');
 
-    // Fetch all alerts for the alerts cache and stats
-    const allAlerts = await fetchAlertsFromLAPI();
-    console.log(`Fetched ${allAlerts.length} alerts from LAPI`);
-
-    // Store alerts and decisions in SQLite using transaction for efficiency
-    const insertTransaction = db.db.transaction((alerts) => {
-      for (const alert of alerts) {
-        processAlertForDb(alert);
-      }
-    });
-    insertTransaction(allAlerts);
+    // Use chunked sync for progress tracking
+    const totalAlerts = await syncHistory();
 
     cache.lastUpdate = new Date().toISOString();
     cache.isInitialized = true;
@@ -406,6 +506,12 @@ async function initializeCache() {
     console.error('Failed to initialize cache:', error.message);
     cache.isInitialized = false;
     updateLapiStatus(false, error);
+    updateSyncStatus({
+      isSyncing: false,
+      progress: 0,
+      message: `Sync failed: ${error.message}`,
+      completedAt: new Date().toISOString()
+    });
   }
 }
 
@@ -1059,10 +1165,10 @@ app.get('/api/config', ensureAuth, (req, res) => {
     lookback_period: CROWDSEC_LOOKBACK_PERIOD,
     lookback_hours: hours,
     lookback_days: Math.max(1, Math.round(hours / 24)),
-    lookback_days: Math.max(1, Math.round(hours / 24)),
     refresh_interval: REFRESH_INTERVAL_MS,
     current_interval_name: getIntervalName(REFRESH_INTERVAL_MS),
-    lapi_status: lapiStatus
+    lapi_status: lapiStatus,
+    sync_status: syncStatus
   });
 });
 

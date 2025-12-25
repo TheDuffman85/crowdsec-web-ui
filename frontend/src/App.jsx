@@ -3,11 +3,16 @@ import { Layout } from "./components/Layout";
 import { Dashboard } from "./pages/Dashboard";
 import { Alerts } from "./pages/Alerts";
 import { Decisions } from "./pages/Decisions";
-import { RefreshProvider } from "./contexts/RefreshContext";
+import { RefreshProvider, useRefresh } from "./contexts/RefreshContext";
+import { SyncOverlay } from "./components/SyncOverlay";
 
-function App() {
+// Inner component to access refresh context
+function AppContent() {
+  const { syncStatus } = useRefresh();
+
   return (
-    <RefreshProvider>
+    <>
+      <SyncOverlay syncStatus={syncStatus} />
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<Layout />}>
@@ -17,6 +22,14 @@ function App() {
           </Route>
         </Routes>
       </BrowserRouter>
+    </>
+  );
+}
+
+function App() {
+  return (
+    <RefreshProvider>
+      <AppContent />
     </RefreshProvider>
   );
 }
