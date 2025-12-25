@@ -78,7 +78,6 @@ export function Dashboard() {
             dateRangeSticky: false,
             country: null,
             scenario: null,
-            scenario: null,
             as: null,
             ip: null,
             target: null
