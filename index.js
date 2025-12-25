@@ -164,6 +164,32 @@ function toDuration(targetTime) {
   return `${minutes}m`;
 }
 
+/**
+ * Calculate the remaining duration from stop_at timestamp
+ * Returns a Go-style duration string (e.g., "3h2m15s" or "-1h30m5s" for expired)
+ */
+function calculateRemainingDuration(stopAt) {
+  if (!stopAt) return '0s';
+  const now = Date.now();
+  const stopTime = new Date(stopAt).getTime();
+  let diffMs = stopTime - now;
+
+  const isNegative = diffMs < 0;
+  if (isNegative) diffMs = -diffMs;
+
+  const hours = Math.floor(diffMs / 3600000);
+  const minutes = Math.floor((diffMs % 3600000) / 60000);
+  const seconds = Math.floor((diffMs % 60000) / 1000);
+
+  let result = '';
+  if (hours > 0) result += `${hours}h`;
+  if (minutes > 0 || hours > 0) result += `${minutes}m`;
+  result += `${seconds}s`;
+
+  return isNegative ? `-${result}` : result;
+}
+
+
 const db = require('./sqlite');
 
 // ============================================================================
@@ -246,6 +272,9 @@ function processAlertForDb(alert) {
       return;
     }
 
+    // Extract source info from alert for country/AS data
+    const alertSource = alert.source || {};
+
     // Enrich decision details from Alert where possible
     // CRITICAL: We must include these enriched fields in raw_data for the frontend
     const enrichedDecision = {
@@ -257,9 +286,13 @@ function processAlertForDb(alert) {
       alert_id: alert.id,
       // Ensure values needed for filtering are present
       // If decision is actually the Alert (missing value), use source.value
-      value: decision.value || (decision.source && decision.source.value) || (decision.source && decision.source.ip),
-      type: decision.type || 'ban'
+      value: decision.value || (decision.source && decision.source.value) || (decision.source && decision.source.ip) || alertSource.ip,
+      type: decision.type || 'ban',
+      // Add country and AS from alert source
+      country: decision.country || alertSource.cn,
+      as: decision.as || alertSource.as_name
     };
+
 
     // Sanitize: Remove Alert-specific fields that might cause confusion or bloat
     delete enrichedDecision.events;
@@ -440,11 +473,16 @@ async function syncActiveDecisions() {
       const decisions = alert.decisions || [];
       return decisions.map(d => {
         const createdAt = d.created_at || alert.created_at || new Date().toISOString();
-        let stopAt = d.stop_at || alert.stop_at || createdAt;
+        let stopAt;
 
-        if (!d.stop_at && d.duration) {
+        // ALWAYS calculate stop_at from duration when available, as duration represents
+        // the remaining time for active decisions. This fixes the regression where
+        // decisions with old stop_at values from historical alerts weren't being updated.
+        if (d.duration) {
           const ms = parseGoDuration(d.duration);
           stopAt = new Date(Date.now() + ms).toISOString();
+        } else {
+          stopAt = d.stop_at || alert.stop_at || createdAt;
         }
 
         const source = alert.source || {};
@@ -1006,11 +1044,19 @@ app.get('/api/decisions', async (req, res) => {
 
     const decisions = rawDecisions.map(row => {
       try {
-        return JSON.parse(row.raw_data);
+        const decision = JSON.parse(row.raw_data);
+        // Recalculate duration dynamically from stop_at
+        // This ensures expired decisions show negative durations like "-1h30m5s"
+        // and active decisions show accurate remaining time
+        if (decision.stop_at) {
+          decision.duration = calculateRemainingDuration(decision.stop_at);
+        }
+        return decision;
       } catch (e) { return null; }
     }).filter(d => d !== null);
 
     res.json(decisions);
+
   } catch (error) {
     console.error('Error serving decisions from db:', error.message);
     res.status(500).json({ error: 'Failed to retrieve decisions' });
@@ -1125,7 +1171,12 @@ app.get('/api/stats/decisions', async (req, res) => {
 
     const decisions = rawDecisions.map(row => {
       try {
-        return JSON.parse(row.raw_data);
+        const decision = JSON.parse(row.raw_data);
+        // Recalculate duration dynamically from stop_at (same as /api/decisions)
+        if (decision.stop_at) {
+          decision.duration = calculateRemainingDuration(decision.stop_at);
+        }
+        return decision;
       } catch (e) { return null; }
     }).filter(d => d !== null);
 
