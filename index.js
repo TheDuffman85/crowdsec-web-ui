@@ -304,6 +304,27 @@ function processAlertForDb(alert) {
     // Extract source info from alert for country/AS data
     const alertSource = alert.source || {};
 
+    // Extract target info from alert events
+    let target = null;
+    if (alert.events && alert.events.length > 0) {
+      for (const event of alert.events) {
+        if (event.meta) {
+          const targetFqdn = event.meta.find(m => m.key === 'target_fqdn')?.value;
+          if (targetFqdn) { target = targetFqdn; break; }
+
+          const targetHost = event.meta.find(m => m.key === 'target_host')?.value;
+          if (targetHost) { target = targetHost; break; }
+
+          const service = event.meta.find(m => m.key === 'service')?.value;
+          if (service) { target = service; break; }
+        }
+      }
+    }
+    // Fallback to machine info
+    if (!target) {
+      target = alert.machine_alias || alert.machine_id || null;
+    }
+
     // Calculate stop_at from duration if available
     // LAPI provides 'duration' as remaining time for active decisions
     const createdAt = decision.created_at || alert.created_at;
@@ -326,7 +347,8 @@ function processAlertForDb(alert) {
       value: decision.value || alertSource.ip,
       type: decision.type || 'ban',
       country: alertSource.cn,
-      as: alertSource.as_name
+      as: alertSource.as_name,
+      target: target
     };
 
     const decisionData = {
@@ -997,8 +1019,59 @@ const hydrateAlertWithDecisions = (alert) => {
 };
 
 /**
+ * Create a slim version of an alert for list views
+ * Only includes fields necessary for the Alerts table and Dashboard statistics
+ */
+const slimAlert = (alert) => {
+  // Create lightweight decision summary
+  const decisions = (alert.decisions || []).map(d => ({
+    id: d.id,
+    type: d.type,
+    value: d.value,
+    duration: d.duration,
+    stop_at: d.stop_at,
+    origin: d.origin,
+    expired: d.expired
+  }));
+
+  // Extract target info from first event's meta (for getAlertTarget in stats)
+  let targetMeta = null;
+  if (alert.events && alert.events.length > 0) {
+    const firstEvent = alert.events[0];
+    if (firstEvent.meta) {
+      const relevantMeta = firstEvent.meta.filter(m =>
+        ['target_fqdn', 'target_host', 'service'].includes(m.key)
+      );
+      if (relevantMeta.length > 0) {
+        targetMeta = [{ meta: relevantMeta }];
+      }
+    }
+  }
+
+  return {
+    id: alert.id,
+    created_at: alert.created_at,
+    scenario: alert.scenario,
+    message: alert.message,
+    events_count: alert.events_count,
+    machine_id: alert.machine_id,
+    machine_alias: alert.machine_alias,
+    source: alert.source ? {
+      ip: alert.source.ip,
+      value: alert.source.value,
+      cn: alert.source.cn,
+      as_name: alert.source.as_name,
+      as_number: alert.source.as_number
+    } : null,
+    // Include minimal event data for target detection
+    events: targetMeta,
+    decisions
+  };
+};
+
+/**
  * GET /api/alerts
- * Returns alerts from SQLite database
+ * Returns alerts from SQLite database (slim payload for list views)
  */
 app.get('/api/alerts', ensureAuth, async (req, res) => {
   try {
@@ -1018,10 +1091,11 @@ app.get('/api/alerts', ensureAuth, async (req, res) => {
     // Query alerts from SQLite
     const rawAlerts = db.getAlerts.all({ since, limit: 10000 });
 
-    // Parse raw_data and hydrate with decision status
+    // Parse raw_data, hydrate with decision status, then slim for list view
     const alerts = rawAlerts.map(row => {
       const alert = JSON.parse(row.raw_data);
-      return hydrateAlertWithDecisions(alert);
+      const hydrated = hydrateAlertWithDecisions(alert);
+      return slimAlert(hydrated);
     });
 
     alerts.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
@@ -1102,7 +1176,8 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
             events_count: d.events_count || 0,
             duration: d.duration || "N/A",
             expiration: d.stop_at,
-            alert_id: d.alert_id
+            alert_id: d.alert_id,
+            target: d.target || null
           }
         };
       });
@@ -1127,7 +1202,8 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
             events_count: d.events_count || 0,
             duration: d.duration || "N/A",
             expiration: d.stop_at,
-            alert_id: d.alert_id
+            alert_id: d.alert_id,
+            target: d.target || null
           }
         };
       });

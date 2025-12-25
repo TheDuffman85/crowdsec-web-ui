@@ -6,8 +6,7 @@ import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
-import { getHubUrl, getCountryName } from "../lib/utils";
-import { getAlertTarget } from "../lib/stats";
+import { getCountryName } from "../lib/utils";
 import { Trash2, Gavel, X, ExternalLink, Shield, Search } from "lucide-react";
 import "flag-icons/css/flag-icons.min.css";
 
@@ -151,10 +150,10 @@ export function Decisions() {
         if (ipFilter && decision.value !== ipFilter) return false;
         if (targetFilter) {
             const decisionTarget = (decision.value || "").toLowerCase();
-            const alertTarget = (getAlertTarget(decision.detail) || "").toLowerCase();
+            const targetFromDetail = (decision.detail.target || "").toLowerCase();
             const filterValue = targetFilter.toLowerCase();
 
-            if (!decisionTarget.includes(filterValue) && !alertTarget.includes(filterValue)) {
+            if (!decisionTarget.includes(filterValue) && !targetFromDetail.includes(filterValue)) {
                 return false;
             }
         }

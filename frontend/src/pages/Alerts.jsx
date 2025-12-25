@@ -42,16 +42,16 @@ export function Alerts() {
             // Check if there's an alert ID in the URL
             const alertIdParam = searchParams.get("id");
             if (alertIdParam) {
-                const existingAlert = alertsData.find(a => String(a.id) === alertIdParam);
-                if (existingAlert) {
-                    setSelectedAlert(existingAlert);
-                } else {
-                    // Fetch the specific alert if not in the list
-                    try {
-                        const alertData = await fetchAlert(alertIdParam);
-                        setSelectedAlert(alertData);
-                    } catch (err) {
-                        console.error("Alert not found", err);
+                // Always fetch full alert data since list now returns slim payloads
+                try {
+                    const alertData = await fetchAlert(alertIdParam);
+                    setSelectedAlert(alertData);
+                } catch (err) {
+                    console.error("Alert not found", err);
+                    // Fallback to slim data from list if fetch fails
+                    const existingAlert = alertsData.find(a => String(a.id) === alertIdParam);
+                    if (existingAlert) {
+                        setSelectedAlert(existingAlert);
                     }
                 }
             } else {
@@ -85,6 +85,21 @@ export function Alerts() {
     useEffect(() => {
         if (refreshSignal > 0) loadAlerts(true);
     }, [refreshSignal, loadAlerts]);
+
+    // Handler to fetch full alert data when clicking on a row
+    // Since list view now returns slim alerts, we need to fetch full data for the modal
+    const handleAlertClick = async (alert) => {
+        // Show slim data immediately while loading
+        setSelectedAlert(alert);
+
+        try {
+            const fullAlert = await fetchAlert(alert.id);
+            setSelectedAlert(fullAlert);
+        } catch (err) {
+            console.error("Failed to fetch full alert details", err);
+            // Keep showing slim data as fallback
+        }
+    };
 
     const filteredAlerts = alerts.filter(alert => {
         const search = filter.toLowerCase();
@@ -237,7 +252,7 @@ export function Alerts() {
                                         <tr
                                             key={alert.id}
                                             ref={isLastElement ? lastAlertElementRef : null}
-                                            onClick={() => setSelectedAlert(alert)}
+                                            onClick={() => handleAlertClick(alert)}
                                             className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors cursor-pointer"
                                         >
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
