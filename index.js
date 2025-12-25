@@ -469,9 +469,13 @@ async function syncActiveDecisions() {
     const decisionsRes = await agentClient.get('/decisions', { params: { limit: 10000 } });
     const rawResponse = decisionsRes.data || [];
 
-    const activeDecisions = rawResponse.flatMap(alert => {
+    // First pass: collect actual decisions and build IP->decision mapping
+    const ipToDecision = new Map(); // IP -> decision with stop_at
+    const activeDecisions = [];
+
+    rawResponse.forEach(alert => {
       const decisions = alert.decisions || [];
-      return decisions.map(d => {
+      decisions.forEach(d => {
         const createdAt = d.created_at || alert.created_at || new Date().toISOString();
         let stopAt;
 
@@ -486,7 +490,7 @@ async function syncActiveDecisions() {
         }
 
         const source = alert.source || {};
-        return {
+        const enrichedDecision = {
           ...d,
           alert_id: alert.id,
           created_at: createdAt,
@@ -495,7 +499,55 @@ async function syncActiveDecisions() {
           country: source.cn,
           as: source.as_name
         };
+
+        activeDecisions.push(enrichedDecision);
+
+        // Track IP->decision for duplicated entries lookup
+        if (d.value) {
+          ipToDecision.set(d.value, enrichedDecision);
+        }
       });
+    });
+
+    // Second pass: handle "duplicated entries" - alerts with empty decisions array
+    // These IPs are already banned, so we create virtual decision entries
+    rawResponse.forEach(alert => {
+      const decisions = alert.decisions || [];
+
+      // Only process alerts with empty decisions (duplicated entries)
+      if (decisions.length === 0) {
+        const source = alert.source || {};
+        const ip = source.ip || source.value;
+
+        if (ip) {
+          // Find the existing decision for this IP
+          const existingDecision = ipToDecision.get(ip);
+
+          if (existingDecision) {
+            // Create a virtual decision entry for this duplicated alert
+            // Use the alert ID with a suffix to create unique ID for this entry
+            const virtualDecision = {
+              id: `${existingDecision.id}_dup_${alert.id}`, // Unique ID for duplicated entry
+              origin: existingDecision.origin,
+              type: existingDecision.type,
+              value: ip,
+              scope: existingDecision.scope || 'Ip',
+              simulated: existingDecision.simulated || false,
+              alert_id: alert.id,
+              created_at: alert.created_at,
+              stop_at: existingDecision.stop_at, // Same expiration as parent decision
+              scenario: alert.scenario,
+              country: source.cn,
+              as: source.as_name,
+              // Mark as duplicated entry for UI differentiation if needed
+              is_duplicate: true,
+              parent_decision_id: existingDecision.id
+            };
+
+            activeDecisions.push(virtualDecision);
+          }
+        }
+      }
     });
 
     const nowStr = new Date().toISOString();

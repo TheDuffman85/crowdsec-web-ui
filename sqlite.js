@@ -54,7 +54,7 @@ function initSchema() {
 
   const createDecisionsTable = `
     CREATE TABLE IF NOT EXISTS decisions (
-      id INTEGER PRIMARY KEY,
+      id TEXT PRIMARY KEY,
       uuid TEXT UNIQUE,
       alert_id INTEGER,
       created_at TEXT NOT NULL,
@@ -77,8 +77,54 @@ function initSchema() {
   `;
 
   db.exec(createAlertsTable);
-  db.exec(createDecisionsTable);
   db.exec(createMetaTable);
+
+  // Migration: Check if decisions table needs to be recreated with TEXT id
+  // This handles existing databases that have INTEGER id column
+  const tableInfo = db.pragma(`table_info(decisions)`);
+  const idColumn = tableInfo.find(col => col.name === 'id');
+
+  if (idColumn && idColumn.type.toUpperCase() === 'INTEGER') {
+    console.log('Migration: Recreating decisions table with TEXT id column...');
+
+    // Backup existing data
+    const existingDecisions = db.prepare('SELECT * FROM decisions').all();
+    console.log(`  - Backing up ${existingDecisions.length} existing decisions...`);
+
+    // Drop old table and indexes
+    db.exec('DROP INDEX IF EXISTS idx_decisions_stop_at');
+    db.exec('DROP INDEX IF EXISTS idx_decisions_alert_id');
+    db.exec('DROP TABLE IF EXISTS decisions');
+
+    // Create new table with TEXT id
+    db.exec(createDecisionsTable);
+
+    // Restore data
+    if (existingDecisions.length > 0) {
+      const insertStmt = db.prepare(`
+        INSERT OR REPLACE INTO decisions (id, uuid, alert_id, created_at, stop_at, value, type, origin, scenario, raw_data)
+        VALUES (@id, @uuid, @alert_id, @created_at, @stop_at, @value, @type, @origin, @scenario, @raw_data)
+      `);
+
+      const restoreTransaction = db.transaction((decisions) => {
+        for (const decision of decisions) {
+          insertStmt.run({
+            ...decision,
+            id: String(decision.id) // Convert ID to string
+          });
+        }
+      });
+
+      restoreTransaction(existingDecisions);
+      console.log(`  - Restored ${existingDecisions.length} decisions with TEXT ids.`);
+    }
+
+    console.log('Migration complete.');
+  } else {
+    // Table doesn't exist yet or already has TEXT id
+    db.exec(createDecisionsTable);
+  }
+
   console.log('Database schema initialized.');
 }
 
