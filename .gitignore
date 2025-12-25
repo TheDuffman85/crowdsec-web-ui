@@ -7,3 +7,6 @@ frontend/dist
 .config.json
 /certs
 agent/certs
+crowdsec.db
+crowdsec.db-shm
+crowdsec.db-wal

@@ -75,6 +75,7 @@ Automatically detects new container images on GitHub Container Registry (GHCR). 
 
 -   **Frontend**: React (Vite) + Tailwind CSS. Located in `frontend/`.
 -   **Backend**: Node.js (Express). Acts as an intelligent caching layer for CrowdSec Agent with delta updates.
+-   **Database**: SQLite (better-sqlite3). Persists alerts and decisions locally in `/app/data/crowdsec.db` to reduce memory usage and support historical data.
 -   **Security**: The application runs as a non-root user (`node`) inside the container and communicates with CrowdSec via the Agent.
 
 ## Prerequisites
@@ -127,6 +128,7 @@ Automatically detects new container images on GitHub Container Registry (GHCR). 
       -e CROWDSEC_LOOKBACK_PERIOD=5d \
       -e CROWDSEC_REFRESH_INTERVAL=0 \
       -v $(pwd)/config:/app/config \
+      -v $(pwd)/data:/app/data \
       ghcr.io/theduffman85/crowdsec-web-ui:latest
     ```
     *Note: Ensure `CROWDSEC_URL` points to your CrowdSec container. `AGENT_TLS_VERIFY=false` is required if using the auto-generated self-signed certificate.*
@@ -161,6 +163,7 @@ services:
       - crowdsec-web-ui-agent
     volumes:
       - ./config:/app/config
+      - ./data:/app/data
     restart: unless-stopped
 
   crowdsec-web-ui-agent:
@@ -181,18 +184,21 @@ services:
 
 ## Persistence
 
-To persist configuration changes (like the refresh interval) across container restarts, you need to mount the `/app/config` directory.
+to persist configuration changes (like the refresh interval) across container restarts, you need to mount the `/app/config` directory.
+To persist the alert history and decision cache, you must mount the `/app/data` directory.
 
-The application stores its runtime configuration in `/app/config/config.json`.
+- **Config**: `/app/config/config.json`
+- **Database**: `/app/data/crowdsec.db`
 
 **Docker Run:**
-Add `-v $(pwd)/config:/app/config` to your command.
+Add `-v $(pwd)/config:/app/config -v $(pwd)/data:/app/data` to your command.
 
 **Docker Compose:**
 Add the volume mapping:
 ```yaml
 volumes:
   - ./config:/app/config
+  - ./data:/app/data
 ```
 
 ## Local Development

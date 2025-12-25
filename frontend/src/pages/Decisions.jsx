@@ -141,17 +141,29 @@ export function Decisions() {
         // console.log("Filtering decision:", decision.value, "Target Filter:", targetFilter);
 
         // 1. Alert ID Filter
-        if (alertIdFilter && String(decision.detail.alert_id) !== alertIdFilter) return false;
+        // Use loose equality for ID matching (string vs number)
+        // Also: Explicitly filter out expired items if not requested, to protect against API staleness
+        const now = new Date();
+        const isLogicallyExpired = (d) => {
+            if (d.stop_at && new Date(d.stop_at) < now) return true;
+            if (d.duration && d.duration.startsWith('-')) return true;
+            return false; // Assuming active otherwise
+        };
+
+        if (!includeExpiredParam && isLogicallyExpired(decision)) return false;
+
+        if (alertIdFilter && String(decision.alert_id) !== alertIdFilter) return false;
+        if (alertIdFilter && String(decision.alert_id) !== alertIdFilter) return false;
 
         // 2. Exact Field Filters (from Dashboard)
-        if (countryFilter && decision.detail.country !== countryFilter) return false;
-        if (scenarioFilter && decision.detail.reason !== scenarioFilter) return false;
-        if (asFilter && decision.detail.as !== asFilter) return false;
-        if (asFilter && decision.detail.as !== asFilter) return false;
+        if (countryFilter && decision.country !== countryFilter) return false;
+        if (scenarioFilter && decision.scenario !== scenarioFilter) return false;
+        if (asFilter && decision.as !== asFilter) return false;
         if (ipFilter && decision.value !== ipFilter) return false;
+
         if (targetFilter) {
             const decisionTarget = (decision.value || "").toLowerCase();
-            const alertTarget = (getAlertTarget(decision.detail) || "").toLowerCase();
+            const alertTarget = (getAlertTarget(decision) || "").toLowerCase();
             const filterValue = targetFilter.toLowerCase();
 
             if (!decisionTarget.includes(filterValue) && !alertTarget.includes(filterValue)) {
@@ -185,25 +197,21 @@ export function Decisions() {
             if (dateEndFilter && itemKey > dateEndFilter) return false;
         }
 
-
-
         // 4. Generic Text Search (existing)
         const search = filter.toLowerCase();
         if (!search) return true;
 
         const ip = (decision.value || "").toLowerCase();
-        const reason = (decision.detail.reason || "").toLowerCase();
-        const country = (getCountryName(decision.detail.country) || "").toLowerCase();
-        const as = (decision.detail.as || "").toLowerCase();
+        const reason = (decision.scenario || "").toLowerCase();
+        const country = (getCountryName(decision.country) || "").toLowerCase();
+        const as = (decision.as || "").toLowerCase();
         const type = (decision.type || "").toLowerCase();
-        const action = (decision.detail.action || "").toLowerCase();
 
         return ip.includes(search) ||
             reason.includes(search) ||
             country.includes(search) ||
             as.includes(search) ||
-            type.includes(search) ||
-            action.includes(search);
+            type.includes(search);
     });
 
     const visibleDecisions = filteredDecisions.slice(0, displayedCount);
@@ -387,7 +395,7 @@ export function Decisions() {
                                 <tr><td colSpan="9" className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? "No decisions for this alert" : "No decisions found"}</td></tr>
                             ) : (
                                 visibleDecisions.map((decision, index) => {
-                                    const isExpired = decision.expired || (decision.detail.duration && decision.detail.duration.startsWith("-"));
+                                    const isExpired = decision.expired || (decision.duration && decision.duration.startsWith("-")) || (decision.stop_at && new Date(decision.stop_at) < new Date());
                                     const rowClasses = isExpired
                                         ? "hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors opacity-60 bg-gray-50 dark:bg-gray-900/20"
                                         : "hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors";
@@ -396,45 +404,45 @@ export function Decisions() {
 
                                     return (
                                         <tr
-                                            key={`${decision.id}-${decision.detail.duration}`}
+                                            key={`${decision.id}-${decision.duration}`}
                                             className={rowClasses}
                                             ref={isLastElement ? lastDecisionElementRef : null}
                                         >
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
                                                 <TimeDisplay timestamp={decision.created_at} />
                                             </td>
-                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={decision.detail.reason}>
-                                                <ScenarioName name={decision.detail.reason} showLink={true} />
+                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={decision.scenario}>
+                                                <ScenarioName name={decision.scenario} showLink={true} />
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 align-middle">
-                                                {decision.detail.country ? (
-                                                    <div className="flex items-center gap-2" title={decision.detail.country}>
-                                                        <span className={`fi fi-${decision.detail.country.toLowerCase()} flex-shrink-0`}></span>
-                                                        <span>{getCountryName(decision.detail.country)}</span>
+                                                {decision.country ? (
+                                                    <div className="flex items-center gap-2" title={decision.country}>
+                                                        <span className={`fi fi-${decision.country.toLowerCase()} flex-shrink-0`}></span>
+                                                        <span>{getCountryName(decision.country)}</span>
                                                     </div>
                                                 ) : (
                                                     "Unknown"
                                                 )}
                                             </td>
-                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[150px] truncate" title={decision.detail.as}>
-                                                {decision.detail.as}
+                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[150px] truncate" title={decision.as}>
+                                                {decision.as}
                                             </td>
                                             <td className="px-6 py-4 text-sm font-mono text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={decision.value}>
                                                 {decision.value}
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100">
-                                                <Badge variant="danger">{decision.detail.action || "ban"}</Badge>
+                                                <Badge variant="danger">{decision.type || "ban"}</Badge>
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100 whitespace-nowrap">
-                                                {decision.detail.duration}
+                                                {decision.duration}
                                                 {isExpired && <span className="ml-2 text-xs text-red-500 dark:text-red-400">(Expired)</span>}
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm">
-                                                {decision.detail.alert_id ? (
+                                                {decision.alert_id ? (
                                                     <Link
-                                                        to={`/alerts?id=${decision.detail.alert_id}`}
+                                                        to={`/alerts?id=${decision.alert_id}`}
                                                         className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors border border-primary-200 dark:border-primary-800"
-                                                        title={`View Alert #${decision.detail.alert_id}`}
+                                                        title={`View Alert #${decision.alert_id}`}
                                                     >
                                                         <Shield size={14} className="fill-current" />
                                                         <span className="text-xs font-semibold">Alert</span>

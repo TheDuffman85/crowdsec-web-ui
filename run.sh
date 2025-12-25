@@ -55,6 +55,12 @@ cd "$PROJECT_ROOT" || exit 1
 if [ "$MODE" == "dev" ]; then
     log "Starting in DEVELOPMENT mode..."
     
+    # Clear data for fresh start
+    if [ -f "crowdsec.db" ]; then
+        log "Clearing existing database (crowdsec.db)..."
+        rm crowdsec.db
+    fi
+
     # Start Agent in background
     log "Starting agent (nodemon)..."
     cd agent
