@@ -20,41 +20,42 @@ console.error = function (...args) {
   originalError.apply(console, [`[${timestamp}]`, ...args]);
 };
 
-// Persist refresh interval to a config file
-// Allow overriding via env var (for Docker persistence), otherwise default to local .config.json
-const CONFIG_FILE = process.env.CONFIG_FILE || path.join(__dirname, '.config.json');
+// Persist refresh interval to database (meta table)
+// Database is loaded after this section, so we defer actual reads
+
+let db; // Forward declaration - assigned after require('./sqlite')
 
 function loadPersistedConfig() {
+  // This will be called after db is initialized
   try {
-    if (fs.existsSync(CONFIG_FILE)) {
-      const data = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-      console.log('Loaded persisted config:', data);
-      return data;
-    } else {
-      // Create empty config file if it doesn't exist
-      console.log(`Config file not found at ${CONFIG_FILE}. Creating default...`);
-      const defaultConfig = {};
-      savePersistedConfig(defaultConfig);
-      return defaultConfig;
+    const intervalMsRow = db.getMeta.get('refresh_interval_ms');
+    if (intervalMsRow && intervalMsRow.value !== undefined) {
+      const config = {
+        refresh_interval_ms: parseInt(intervalMsRow.value, 10)
+      };
+      console.log('Loaded persisted config from database:', config);
+      return config;
     }
   } catch (error) {
-    console.error('Error loading config file:', error.message);
+    console.error('Error loading config from database:', error.message);
   }
   return {};
 }
 
 function savePersistedConfig(config) {
   try {
-    const configDir = path.dirname(CONFIG_FILE);
-    if (!fs.existsSync(configDir)) {
-      fs.mkdirSync(configDir, { recursive: true });
+    if (config.refresh_interval_ms !== undefined) {
+      db.setMeta.run('refresh_interval_ms', String(config.refresh_interval_ms));
     }
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
-    console.log('Saved config to file:', config);
+    if (config.refresh_interval_name !== undefined) {
+      db.setMeta.run('refresh_interval_name', config.refresh_interval_name);
+    }
+    console.log('Saved config to database:', config);
   } catch (error) {
-    console.error('Error saving config file:', error.message);
+    console.error('Error saving config to database:', error.message);
   }
 }
+
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -190,7 +191,7 @@ function calculateRemainingDuration(stopAt) {
 }
 
 
-const db = require('./sqlite');
+db = require('./sqlite');
 
 // ============================================================================
 // CACHE SYSTEM (SQLite Backed)

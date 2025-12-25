@@ -52,7 +52,7 @@ EXPOSE 3000
 
 # Increase Node.js memory limit to avoid OOM with large datasets
 ENV NODE_OPTIONS="--max-old-space-size=4096"
-ENV CONFIG_FILE="/app/config/config.json"
+
 
 # Use entrypoint to handle permissions then switch to node user
 ENTRYPOINT ["docker-entrypoint.sh"]

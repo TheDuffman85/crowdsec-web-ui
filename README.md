@@ -127,7 +127,6 @@ Automatically detects new container images on GitHub Container Registry (GHCR). 
       -e AGENT_TLS_VERIFY=false \
       -e CROWDSEC_LOOKBACK_PERIOD=5d \
       -e CROWDSEC_REFRESH_INTERVAL=0 \
-      -v $(pwd)/config:/app/config \
       -v $(pwd)/data:/app/data \
       ghcr.io/theduffman85/crowdsec-web-ui:latest
     ```
@@ -162,7 +161,6 @@ services:
     depends_on:
       - crowdsec-web-ui-agent
     volumes:
-      - ./config:/app/config
       - ./data:/app/data
     restart: unless-stopped
 
@@ -184,20 +182,17 @@ services:
 
 ## Persistence
 
-to persist configuration changes (like the refresh interval) across container restarts, you need to mount the `/app/config` directory.
-To persist the alert history and decision cache, you must mount the `/app/data` directory.
+To persist alert history, decisions cache, and configuration across container restarts, mount the `/app/data` directory. All data is stored in a single SQLite database.
 
-- **Config**: `/app/config/config.json`
 - **Database**: `/app/data/crowdsec.db`
 
 **Docker Run:**
-Add `-v $(pwd)/config:/app/config -v $(pwd)/data:/app/data` to your command.
+Add `-v $(pwd)/data:/app/data` to your command.
 
 **Docker Compose:**
 Add the volume mapping:
 ```yaml
 volumes:
-  - ./config:/app/config
   - ./data:/app/data
 ```
 
