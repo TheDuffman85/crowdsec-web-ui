@@ -1,9 +1,12 @@
 import { Outlet } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
+import { SyncOverlay } from "./SyncOverlay";
 import { Sun, Moon } from "lucide-react";
 import { useState, useEffect } from "react";
+import { useRefresh } from "../contexts/RefreshContext";
 
 export function Layout() {
+    const { syncStatus } = useRefresh();
     const [theme, setTheme] = useState(() => {
         if (typeof window !== 'undefined') {
             const savedTheme = localStorage.getItem("theme");
@@ -33,6 +36,9 @@ export function Layout() {
 
     return (
         <div className="flex h-screen bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 font-sans">
+            {/* Sync Overlay */}
+            <SyncOverlay syncStatus={syncStatus} />
+
             {/* Mobile Sidebar Overlay */}
             {isMobileMenuOpen && (
                 <div
@@ -65,3 +71,4 @@ export function Layout() {
         </div>
     );
 }
+

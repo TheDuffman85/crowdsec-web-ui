@@ -107,6 +107,19 @@ function updateAgentStatus(isConnected, error = null) {
   agentStatus.lastError = error ? error.message : null;
 }
 
+// Historical Sync Status Tracker
+const syncStatus = {
+  isSyncing: false,
+  progress: 0, // 0-100 percentage
+  message: '',
+  startedAt: null,
+  completedAt: null
+};
+
+function updateSyncStatus(updates) {
+  Object.assign(syncStatus, updates);
+}
+
 // Login helper
 // Default lookback period (default 7 days / 168h)
 const CROWDSEC_LOOKBACK_PERIOD = process.env.CROWDSEC_LOOKBACK_PERIOD || '168h';
@@ -305,9 +318,19 @@ async function fetchAlertsFromAgent(params) {
 // Chunked Historical Sync
 async function syncHistory() {
   console.log('Starting historical data sync...');
+
+  updateSyncStatus({
+    isSyncing: true,
+    progress: 0,
+    message: 'Starting historical data sync...',
+    startedAt: new Date().toISOString(),
+    completedAt: null
+  });
+
   const now = Date.now();
   const lookbackStart = now - LOOKBACK_MS;
   const chunkSizeMs = 6 * 60 * 60 * 1000; // 6 hours
+  const totalDuration = now - lookbackStart;
 
   // We sync from lookbackStart up to now in 6h chunks
   // BUT: The "since" and "until" parameters in LAPI are usually cleaner if we go chronological.
@@ -318,6 +341,9 @@ async function syncHistory() {
 
   while (currentStart < now) {
     const currentEnd = Math.min(currentStart + chunkSizeMs, now);
+
+    // Calculate progress percentage
+    const progress = Math.round(((currentEnd - lookbackStart) / totalDuration) * 100);
 
     // cscli expects relative duration for 'since'
     // since = duration ago from NOW.
@@ -334,7 +360,9 @@ async function syncHistory() {
     const sinceDuration = toDuration(currentStart);
     const untilDuration = toDuration(currentEnd);
 
-    console.log(`Syncing chunk: ${sinceDuration} ago -> ${untilDuration} ago`);
+    const progressMessage = `Syncing chunk: ${sinceDuration} ago → ${untilDuration} ago (${totalAlerts} alerts imported)`;
+    console.log(progressMessage);
+    updateSyncStatus({ progress, message: progressMessage });
 
     try {
       const alerts = await fetchAlertsFromAgent({
@@ -365,8 +393,120 @@ async function syncHistory() {
 
   console.log(`Historical sync complete. Total imported: ${totalAlerts}`);
 
+  // Sync active decisions before marking complete
+  updateSyncStatus({ progress: 95, message: 'Syncing active decisions...' });
+  await syncActiveDecisions();
+
+  updateSyncStatus({
+    isSyncing: false,
+    progress: 100,
+    message: `Sync complete. ${totalAlerts} alerts imported.`,
+    completedAt: new Date().toISOString()
+  });
+
   // Update last sync time
   db.setMeta.run('last_sync', new Date().toISOString());
+}
+
+// Helper to parse Go duration strings (e.g. "1h2m3s") to milliseconds
+function parseGoDuration(str) {
+  if (!str) return 0;
+  let multiplier = 1;
+  let s = str.trim();
+  if (s.startsWith('-')) {
+    multiplier = -1;
+    s = s.substring(1);
+  }
+  const regex = /(\d+)(h|m|s)/g;
+  let totalMs = 0;
+  let match;
+  while ((match = regex.exec(s)) !== null) {
+    const val = parseInt(match[1]);
+    const unit = match[2];
+    if (unit === 'h') totalMs += val * 3600000;
+    if (unit === 'm') totalMs += val * 60000;
+    if (unit === 's') totalMs += val * 1000;
+  }
+  return totalMs * multiplier;
+}
+
+// Sync active decisions from agent
+async function syncActiveDecisions() {
+  try {
+    const decisionsRes = await agentClient.get('/decisions', { params: { limit: 10000 } });
+    const rawResponse = decisionsRes.data || [];
+
+    const activeDecisions = rawResponse.flatMap(alert => {
+      const decisions = alert.decisions || [];
+      return decisions.map(d => {
+        const createdAt = d.created_at || alert.created_at || new Date().toISOString();
+        let stopAt = d.stop_at || alert.stop_at || createdAt;
+
+        if (!d.stop_at && d.duration) {
+          const ms = parseGoDuration(d.duration);
+          stopAt = new Date(Date.now() + ms).toISOString();
+        }
+
+        const source = alert.source || {};
+        return {
+          ...d,
+          alert_id: alert.id,
+          created_at: createdAt,
+          stop_at: stopAt,
+          scenario: d.scenario || alert.scenario,
+          country: source.cn,
+          as: source.as_name
+        };
+      });
+    });
+
+    const nowStr = new Date().toISOString();
+    if (activeDecisions.length > 0 || db.getActiveDecisions.all({ limit: 1, now: nowStr }).length > 0) {
+      const activeIds = new Set(activeDecisions.map(d => String(d.id)));
+      const dbActive = db.getActiveDecisions.all({ limit: 10000, now: nowStr });
+
+      console.log(`Reconcile: Agent has ${activeIds.size} active, DB has ${dbActive.length} active.`);
+
+      const upsertTransaction = db.transaction((agentDecisions) => {
+        agentDecisions.forEach(item => processDecisionItem(item));
+      });
+
+      upsertTransaction(activeDecisions);
+
+      let expiredCount = 0;
+      dbActive.forEach(row => {
+        try {
+          const d = JSON.parse(row.raw_data);
+          if (!activeIds.has(String(d.id))) {
+            d.stop_at = nowStr;
+            const info = db.insertDecision.run({
+              id: d.id,
+              uuid: d.uuid,
+              alert_id: d.alert_id,
+              created_at: d.created_at || row.created_at,
+              stop_at: nowStr,
+              value: d.value,
+              type: d.type,
+              origin: d.origin,
+              scenario: d.scenario,
+              raw_data: JSON.stringify(d)
+            });
+
+            if (info.changes > 0) {
+              expiredCount++;
+            }
+          }
+        } catch (e) {
+          console.error(`Failed to expire decision ${row.id}`, e);
+        }
+      });
+
+      if (expiredCount > 0) console.log(`Reconcile: Expired ${expiredCount} stale decisions.`);
+      console.log(`Reconciliation complete. Active decisions synced.`);
+    }
+  } catch (err) {
+    console.error("Failed to sync active decisions:", err.message);
+  }
 }
 
 // Global Sync Function
@@ -411,121 +551,8 @@ async function updateCache() {
         insertTransaction(alerts);
       }
 
-      // Also fetch active decisions to ensure we have any direct decisions (manual, etc)?
-      // If we rely ONLY on alerts, we miss manual decisions added via cscli decisions add without alert wrapper?
-      // Usually manual decisions create an alert wrapper in LAPI v1? 
-      // Let's just create a separate decisions sync for safety if needed, OR relies on alerts.
-      // Better: Sync decisions endpoint specifically for active decisions.
-
-      const decisionsRes = await agentClient.get('/decisions', { params: { limit: 10000 } });
-      const rawResponse = decisionsRes.data || [];
-
-      // Flatten! The Agent API (wrapping cscli decisions list -o json) returns ALERTS containing decisions.
-      // We must enrich the inner decisions with the parent Alert's timestamp data because cscli output omits them on the decision level.
-      // Helper to parse Go duration strings (e.g. "1h2m3s") to milliseconds
-      const parseGoDuration = (str) => {
-        if (!str) return 0;
-        let multiplier = 1;
-        let s = str.trim();
-        if (s.startsWith('-')) {
-          multiplier = -1;
-          s = s.substring(1);
-        }
-        const regex = /(\d+)(h|m|s)/g; // Simple parser for h, m, s
-        let totalMs = 0;
-        let match;
-        while ((match = regex.exec(s)) !== null) {
-          const val = parseInt(match[1]);
-          const unit = match[2];
-          if (unit === 'h') totalMs += val * 3600000;
-          if (unit === 'm') totalMs += val * 60000;
-          if (unit === 's') totalMs += val * 1000;
-        }
-        return totalMs * multiplier;
-      };
-
-      const activeDecisions = rawResponse.flatMap(alert => {
-        const decisions = alert.decisions || [];
-        return decisions.map(d => {
-          const createdAt = d.created_at || alert.created_at || new Date().toISOString();
-          let stopAt = d.stop_at || alert.stop_at || createdAt;
-
-          // If we have a duration but no explicit stop_at, calculate it
-          if (!d.stop_at && d.duration) {
-            const ms = parseGoDuration(d.duration);
-            // Duration from Agent is "remaining duration", so add to NOW.
-            stopAt = new Date(Date.now() + ms).toISOString();
-          }
-
-          const source = alert.source || {};
-          return {
-            ...d,
-            alert_id: alert.id,
-            created_at: createdAt,
-            stop_at: stopAt,
-            scenario: d.scenario || alert.scenario,
-            country: source.cn,
-            as: source.as_name
-          };
-        });
-      });
-
-      // Reconcile Active Decisions
-      const nowStr = new Date().toISOString();
-      if (activeDecisions.length > 0 || db.getActiveDecisions.all({ limit: 1, now: nowStr }).length > 0) {
-        // Use String() for ID comparison to avoid Type mismatch (sqlite vs json)
-        const activeIds = new Set(activeDecisions.map(d => String(d.id)));
-        const dbActive = db.getActiveDecisions.all({ limit: 10000, now: nowStr });
-
-        console.log(`Reconcile: Agent has ${activeIds.size} active, DB has ${dbActive.length} active.`);
-        // Debug: Print Agent IDs vs DB IDs
-        // console.log("Agent IDs:", Array.from(activeIds).join(','));
-        // console.log("DB IDs:", dbActive.map(r => r.id).join(','));
-
-        const upsertTransaction = db.transaction((agentDecisions) => {
-          // 1. Upsert active ones from Agent
-          agentDecisions.forEach(item => processDecisionItem(item));
-        });
-
-        upsertTransaction(activeDecisions);
-
-        // 2. Expire missing ones (Outside transaction for debugging/isolation)
-        // const nowStr = new Date().toISOString(); // Already defined
-        let expiredCount = 0;
-        let totalChanges = 0;
-
-        dbActive.forEach(row => {
-          try {
-            const d = JSON.parse(row.raw_data);
-            // Compare as string
-            if (!activeIds.has(String(d.id))) {
-              // Expire locally
-              d.stop_at = nowStr;
-              const info = db.insertDecision.run({
-                id: d.id,
-                uuid: d.uuid,
-                alert_id: d.alert_id,
-                created_at: d.created_at || row.created_at,
-                stop_at: nowStr,
-                value: d.value,
-                type: d.type,
-                origin: d.origin,
-                scenario: d.scenario,
-                raw_data: JSON.stringify(d)
-              });
-
-              if (info.changes > 0) {
-                expiredCount++;
-              }
-            }
-          } catch (e) {
-            console.error(`Failed to expire decision ${row.id}`, e);
-          }
-        });
-
-        if (expiredCount > 0) console.log(`Reconcile: Expired ${expiredCount} stale decisions.`);
-        console.log(`Reconciliation complete. Active decisions synced.`);
-      }
+      // Sync active decisions
+      await syncActiveDecisions();
 
     } catch (err) {
       console.error("Delta sync failed:", err.message);
@@ -1030,6 +1057,7 @@ app.get('/api/config', (req, res) => {
     last_check: agentStatus.lastCheck,
     update_available: updateCheckCache.data ? updateCheckCache.data.update_available : false,
     update_info: updateCheckCache.data,
+    sync_status: syncStatus,
     capabilities: {
       agent: !!agentClient,
     }
