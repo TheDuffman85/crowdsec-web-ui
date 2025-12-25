@@ -28,8 +28,13 @@ ENV VITE_BUILD_DATE=$VITE_BUILD_DATE
 ENV VITE_REPO_URL=$VITE_REPO_URL
 ENV VITE_BRANCH=$VITE_BRANCH
 
-# Install gosu for easy step-down from root
-RUN apt-get update && apt-get install -y gosu && rm -rf /var/lib/apt/lists/*
+# Install gosu for easy step-down from root, and build tools for better-sqlite3
+RUN apt-get update && apt-get install -y \
+    gosu \
+    python3 \
+    make \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh /usr/local/bin/
@@ -43,7 +48,7 @@ EXPOSE 3000
 
 # Increase Node.js memory limit to avoid OOM with large datasets
 ENV NODE_OPTIONS="--max-old-space-size=4096"
-ENV CONFIG_FILE="/app/config/config.json"
+ENV DB_DIR="/app/data"
 
 # Use entrypoint to handle permissions then switch to node user
 ENTRYPOINT ["docker-entrypoint.sh"]

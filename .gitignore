@@ -5,3 +5,8 @@ frontend/dist
 *.log
 .env
 .config.json
+/certs
+agent/certs
+crowdsec.db
+crowdsec.db-shm
+crowdsec.db-wal

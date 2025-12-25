@@ -75,6 +75,7 @@ Automatically detects new container images on GitHub Container Registry (GHCR). 
 
 -   **Frontend**: React (Vite) + Tailwind CSS. Located in `frontend/`.
 -   **Backend**: Node.js (Express). Acts as an intelligent caching layer for CrowdSec Local API (LAPI) with delta updates.
+-   **Database**: SQLite (better-sqlite3). Persists alerts and decisions locally in `/app/data/crowdsec.db` to reduce memory usage and support historical data.
 -   **Security**: The application runs as a non-root user (`node`) inside the container and communicates with CrowdSec via HTTP/LAPI. It uses **Machine Authentication** (User/Password) to obtain a JWT for full access (read/write).
 
 ## Prerequisites
@@ -111,7 +112,7 @@ Automatically detects new container images on GitHub Container Registry (GHCR). 
       -e CROWDSEC_PASSWORD=<your-secure-password> \
       -e CROWDSEC_LOOKBACK_PERIOD=5d \
       -e CROWDSEC_REFRESH_INTERVAL=0 \
-      -v $(pwd)/config:/app/config \
+      -v $(pwd)/data:/app/data \
       --network your_crowdsec_network \
       crowdsec-web-ui
     ```
@@ -143,24 +144,22 @@ services:
       # Forces a complete data reload when active, skipped when idle.
       - CROWDSEC_FULL_REFRESH_INTERVAL=5m
     volumes:
-      - ./config:/app/config
+      - ./data:/app/data
     restart: unless-stopped
 ```
 
 ## Persistence
 
-To persist configuration changes (like the refresh interval) across container restarts, you need to mount the `/app/config` directory.
-
-The application stores its runtime configuration in `/app/config/config.json`.
+To persist alert history, decisions cache, and configuration across container restarts, mount the `/app/data` directory. All data is stored in a single SQLite database.
 
 **Docker Run:**
-Add `-v $(pwd)/config:/app/config` to your command.
+Add `-v $(pwd)/data:/app/data` to your command.
 
 **Docker Compose:**
 Add the volume mapping:
 ```yaml
 volumes:
-  - ./config:/app/config
+  - ./data:/app/data
 ```
 
 ## Local Development

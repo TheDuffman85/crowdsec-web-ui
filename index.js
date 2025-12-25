@@ -20,39 +20,39 @@ console.error = function (...args) {
   originalError.apply(console, [`[${timestamp}]`, ...args]);
 };
 
-// Persist refresh interval to a config file
-// Allow overriding via env var (for Docker persistence), otherwise default to local .config.json
-const CONFIG_FILE = process.env.CONFIG_FILE || path.join(__dirname, '.config.json');
+// Persist refresh interval to database (meta table)
+// Database is loaded after this section, so we defer actual reads
+
+let db; // Forward declaration - assigned after require('./sqlite')
 
 function loadPersistedConfig() {
+  // This will be called after db is initialized
   try {
-    if (fs.existsSync(CONFIG_FILE)) {
-      const data = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-      console.log('Loaded persisted config:', data);
-      return data;
-    } else {
-      // Create empty config file if it doesn't exist
-      console.log(`Config file not found at ${CONFIG_FILE}. Creating default...`);
-      const defaultConfig = {};
-      savePersistedConfig(defaultConfig);
-      return defaultConfig;
+    const intervalMsRow = db.getMeta.get('refresh_interval_ms');
+    if (intervalMsRow && intervalMsRow.value !== undefined) {
+      const config = {
+        refresh_interval_ms: parseInt(intervalMsRow.value, 10)
+      };
+      console.log('Loaded persisted config from database:', config);
+      return config;
     }
   } catch (error) {
-    console.error('Error loading config file:', error.message);
+    console.error('Error loading config from database:', error.message);
   }
   return {};
 }
 
 function savePersistedConfig(config) {
   try {
-    const configDir = path.dirname(CONFIG_FILE);
-    if (!fs.existsSync(configDir)) {
-      fs.mkdirSync(configDir, { recursive: true });
+    if (config.refresh_interval_ms !== undefined) {
+      db.setMeta.run('refresh_interval_ms', String(config.refresh_interval_ms));
     }
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
-    console.log('Saved config to file:', config);
+    if (config.refresh_interval_name !== undefined) {
+      db.setMeta.run('refresh_interval_name', config.refresh_interval_name);
+    }
+    console.log('Saved config to database:', config);
   } catch (error) {
-    console.error('Error saving config file:', error.message);
+    console.error('Error saving config to database:', error.message);
   }
 }
 
@@ -160,16 +160,13 @@ const loginToLAPI = async () => {
 // Login will be called during cache initialization
 
 // ============================================================================
-// CACHE SYSTEM
+// CACHE SYSTEM (SQLite Backed)
 // ============================================================================
 
-// In-memory cache for alerts and decisions
+// Cache initialization state
 const cache = {
-  alerts: new Map(),           // Map<id, alert>
-  decisions: new Map(),        // Map<id, decision>
-  decisionsForStats: new Map(), // Map<id, decision> (all including expired)
-  lastUpdate: null,            // ISO timestamp of last successful fetch
-  isInitialized: false         // Whether initial load is complete
+  isInitialized: false,
+  lastUpdate: null
 };
 
 // Global LAPI Status Tracker
@@ -233,6 +230,9 @@ function parseRefreshInterval(intervalStr) {
 
 const LOOKBACK_MS = parseLookbackToMs(CROWDSEC_LOOKBACK_PERIOD);
 
+// Initialize SQLite database
+db = require('./sqlite');
+
 // Load persisted config (overrides env var if previously changed by user)
 const persistedConfig = loadPersistedConfig();
 let REFRESH_INTERVAL_MS = persistedConfig.refresh_interval_ms !== undefined
@@ -242,8 +242,106 @@ let refreshTimer = null; // Track the background refresh interval timer
 
 console.log(`Cache Configuration:
   Lookback Period: ${CROWDSEC_LOOKBACK_PERIOD} (${LOOKBACK_MS}ms)
-  Refresh Interval: ${getIntervalName ? getIntervalName(REFRESH_INTERVAL_MS) : REFRESH_INTERVAL_MS}ms (${persistedConfig.refresh_interval_ms !== undefined ? 'from saved config' : 'from env'})
+  Refresh Interval: ${getIntervalName(REFRESH_INTERVAL_MS)} (${persistedConfig.refresh_interval_ms !== undefined ? 'from saved config' : 'from env'})
 `);
+
+// Helper to parse Go duration strings (e.g. "1h2m3s") to milliseconds
+function parseGoDuration(str) {
+  if (!str) return 0;
+  let multiplier = 1;
+  let s = str.trim();
+  if (s.startsWith('-')) {
+    multiplier = -1;
+    s = s.substring(1);
+  }
+  const regex = /(\d+)(h|m|s)/g;
+  let totalMs = 0;
+  let match;
+  while ((match = regex.exec(s)) !== null) {
+    const val = parseInt(match[1]);
+    const unit = match[2];
+    if (unit === 'h') totalMs += val * 3600000;
+    if (unit === 'm') totalMs += val * 60000;
+    if (unit === 's') totalMs += val * 1000;
+  }
+  return totalMs * multiplier;
+}
+
+// Helper to process an alert and store in SQLite
+function processAlertForDb(alert) {
+  if (!alert || !alert.id) return;
+
+  const decisions = alert.decisions || [];
+
+  // Insert Decisions
+  decisions.forEach(decision => {
+    if (decision.origin === 'CAPI') return; // Skip CAPI decisions
+
+    // Extract source info from alert for country/AS data
+    const alertSource = alert.source || {};
+
+    // Calculate stop_at from duration if available
+    // LAPI provides 'duration' as remaining time for active decisions
+    const createdAt = decision.created_at || alert.created_at;
+    let stopAt;
+    if (decision.duration) {
+      const ms = parseGoDuration(decision.duration);
+      stopAt = new Date(Date.now() + ms).toISOString();
+    } else {
+      stopAt = decision.stop_at || createdAt;
+    }
+
+    // Enrich decision details from Alert where possible
+    const enrichedDecision = {
+      ...decision,
+      created_at: createdAt,
+      stop_at: stopAt,
+      scenario: decision.scenario || alert.scenario || 'unknown',
+      origin: decision.origin || decision.scenario || alert.scenario || 'unknown',
+      alert_id: alert.id,
+      value: decision.value || alertSource.ip,
+      type: decision.type || 'ban',
+      country: alertSource.cn,
+      as: alertSource.as_name
+    };
+
+    const decisionData = {
+      id: String(decision.id),
+      uuid: String(decision.id),
+      alert_id: alert.id,
+      created_at: enrichedDecision.created_at,
+      stop_at: enrichedDecision.stop_at,
+      value: decision.value,
+      type: decision.type,
+      origin: enrichedDecision.origin,
+      scenario: enrichedDecision.scenario,
+      raw_data: JSON.stringify(enrichedDecision)
+    };
+
+    try {
+      db.insertDecision.run(decisionData);
+    } catch (err) {
+      console.error(`Failed to insert decision ${decision.id}:`, err.message);
+    }
+  });
+
+  // Insert Alert
+  const alertData = {
+    id: alert.id,
+    uuid: alert.uuid || String(alert.id),
+    created_at: alert.created_at,
+    scenario: alert.scenario || 'unknown',
+    source_ip: alert.source ? alert.source.ip : 'unknown',
+    message: alert.message || '',
+    raw_data: JSON.stringify(alert)
+  };
+
+  try {
+    db.insertAlert.run(alertData);
+  } catch (err) {
+    console.error(`Failed to insert alert ${alert.id}:`, err.message);
+  }
+}
 
 // Fetch alerts from LAPI with optional 'since' parameter and active decision filter
 async function fetchAlertsFromLAPI(since = null, hasActiveDecision = false) {
@@ -275,80 +373,31 @@ async function fetchAlertsFromLAPI(since = null, hasActiveDecision = false) {
   return Array.from(alertMap.values());
 }
 
-// Initial cache load - fetch full dataset
+// Initial cache load - fetch full dataset and store in SQLite
 async function initializeCache() {
   try {
     console.log('Initializing cache with full data load...');
 
     // Fetch all alerts for the alerts cache and stats
     const allAlerts = await fetchAlertsFromLAPI();
-    console.log(`Loaded ${allAlerts.length} alerts into cache`);
+    console.log(`Fetched ${allAlerts.length} alerts from LAPI`);
 
-    // Fetch alerts with ACTIVE decisions for the decisions cache
-    const activeDecisionAlerts = await fetchAlertsFromLAPI(null, true);
-    console.log(`Loaded ${activeDecisionAlerts.length} alerts with active decisions`);
-
-    // Populate alerts cache
-    allAlerts.forEach(alert => {
-      cache.alerts.set(alert.id, alert);
-
-      // Extract all decisions for stats
-      if (Array.isArray(alert.decisions)) {
-        alert.decisions.forEach(decision => {
-          if (decision.origin !== 'CAPI') {
-            cache.decisionsForStats.set(String(decision.id), {
-              id: decision.id,
-              created_at: decision.created_at || alert.created_at,
-              scenario: decision.scenario || alert.scenario || "N/A",
-              value: decision.value,
-              stop_at: decision.stop_at
-            });
-          }
-        });
+    // Store alerts and decisions in SQLite using transaction for efficiency
+    const insertTransaction = db.db.transaction((alerts) => {
+      for (const alert of alerts) {
+        processAlertForDb(alert);
       }
     });
-
-    // Populate active decisions cache from alerts with active decisions
-    activeDecisionAlerts.forEach(alert => {
-      if (Array.isArray(alert.decisions)) {
-        alert.decisions.forEach(decision => {
-          if (decision.origin !== 'CAPI') {
-            const decisionData = {
-              id: decision.id,
-              created_at: decision.created_at || alert.created_at,
-              scenario: decision.scenario || alert.scenario || "N/A",
-              value: decision.value,
-              expired: false, // These are confirmed active by LAPI
-              detail: {
-                origin: decision.origin || alert.source?.scope || "manual",
-                type: decision.type,
-                reason: decision.scenario || alert.scenario || "manual",
-                action: decision.type,
-                country: alert.source?.cn || "Unknown",
-                as: alert.source?.as_name || "Unknown",
-                events_count: alert.events_count || 0,
-                duration: decision.duration || "N/A",
-                expiration: decision.stop_at || alert.stop_at,
-                alert_id: alert.id,
-                message: alert.message,
-                events: alert.events,
-                machine_alias: alert.machine_alias,
-                machine_id: alert.machine_id
-              }
-            };
-            cache.decisions.set(String(decision.id), decisionData);
-          }
-        });
-      }
-    });
+    insertTransaction(allAlerts);
 
     cache.lastUpdate = new Date().toISOString();
     cache.isInitialized = true;
 
+    // Get counts from database
+    const alertCount = db.countAlerts.get().count;
+
     console.log(`Cache initialized successfully:
-  - ${cache.alerts.size} alerts
-  - ${cache.decisions.size} active decisions
-  - ${cache.decisionsForStats.size} total decisions
+  - ${alertCount} alerts in database
   - Last update: ${cache.lastUpdate}
 `);
     updateLapiStatus(true);
@@ -381,73 +430,84 @@ async function updateCacheDelta() {
 
     console.log(`Fetching delta updates (since: ${sinceDuration})...`);
 
-    // Fetch both in parallel: new alerts AND active decisions
+    // Fetch both new alerts AND alerts with active decisions
+    // Active decisions need their stop_at refreshed based on updated duration
     const [newAlerts, activeDecisionAlerts] = await Promise.all([
       fetchAlertsFromLAPI(sinceDuration),
-      fetchAlertsFromLAPI(null, true)  // Always refresh active decisions to detect expirations
+      fetchAlertsFromLAPI(null, true)  // has_active_decision=true to get fresh duration
     ]);
 
-    // Rebuild active decisions cache from LAPI response
-    cache.decisions.clear();
-    activeDecisionAlerts.forEach(alert => {
-      if (Array.isArray(alert.decisions)) {
-        alert.decisions.forEach(decision => {
-          if (decision.origin !== 'CAPI') {
-            const decisionData = {
-              id: decision.id,
-              created_at: decision.created_at || alert.created_at,
-              scenario: decision.scenario || alert.scenario || "N/A",
-              value: decision.value,
-              expired: false,
-              detail: {
-                origin: decision.origin || alert.source?.scope || "manual",
-                type: decision.type,
-                reason: decision.scenario || alert.scenario || "manual",
-                action: decision.type,
-                country: alert.source?.cn || "Unknown",
-                as: alert.source?.as_name || "Unknown",
-                events_count: alert.events_count || 0,
-                duration: decision.duration || "N/A",
-                expiration: decision.stop_at || alert.stop_at,
-                alert_id: alert.id,
-                message: alert.message,
-                events: alert.events,
-                machine_alias: alert.machine_alias,
-                machine_id: alert.machine_id
-              }
-            };
-            cache.decisions.set(String(decision.id), decisionData);
-          }
-        });
-      }
-    });
-
-    // Add new alerts and their stats decisions
+    // Process new alerts
     if (newAlerts.length > 0) {
       console.log(`Delta update: ${newAlerts.length} new alerts`);
+      const insertNewTransaction = db.db.transaction((alerts) => {
+        for (const alert of alerts) {
+          processAlertForDb(alert);
+        }
+      });
+      insertNewTransaction(newAlerts);
+    }
 
-      newAlerts.forEach(alert => {
-        cache.alerts.set(alert.id, alert);
+    // Refresh active decisions with updated stop_at from duration
+    if (activeDecisionAlerts.length > 0) {
+      const refreshTransaction = db.db.transaction((alerts) => {
+        for (const alert of alerts) {
+          // Only process the decisions (to update their stop_at)
+          const decisions = alert.decisions || [];
+          decisions.forEach(decision => {
+            if (decision.origin === 'CAPI') return;
 
-        if (Array.isArray(alert.decisions)) {
-          alert.decisions.forEach(decision => {
-            if (decision.origin !== 'CAPI' && !cache.decisionsForStats.has(decision.id)) {
-              cache.decisionsForStats.set(String(decision.id), {
-                id: decision.id,
-                created_at: decision.created_at || alert.created_at,
-                scenario: decision.scenario || alert.scenario || "N/A",
+            const alertSource = alert.source || {};
+            const createdAt = decision.created_at || alert.created_at;
+
+            // Calculate fresh stop_at from duration
+            let stopAt;
+            if (decision.duration) {
+              const ms = parseGoDuration(decision.duration);
+              stopAt = new Date(Date.now() + ms).toISOString();
+            } else {
+              stopAt = decision.stop_at || createdAt;
+            }
+
+            const enrichedDecision = {
+              ...decision,
+              created_at: createdAt,
+              stop_at: stopAt,
+              scenario: decision.scenario || alert.scenario || 'unknown',
+              origin: decision.origin || decision.scenario || alert.scenario || 'unknown',
+              alert_id: alert.id,
+              value: decision.value || alertSource.ip,
+              type: decision.type || 'ban',
+              country: alertSource.cn,
+              as: alertSource.as_name
+            };
+
+            try {
+              db.insertDecision.run({
+                id: String(decision.id),
+                uuid: String(decision.id),
+                alert_id: alert.id,
+                created_at: createdAt,
+                stop_at: stopAt,
                 value: decision.value,
-                stop_at: decision.stop_at
+                type: decision.type,
+                origin: enrichedDecision.origin,
+                scenario: enrichedDecision.scenario,
+                raw_data: JSON.stringify(enrichedDecision)
               });
+            } catch (err) {
+              // Ignore errors on refresh
             }
           });
         }
       });
+      refreshTransaction(activeDecisionAlerts);
     }
 
     cache.lastUpdate = new Date().toISOString();
 
-    console.log(`Delta update complete: ${cache.alerts.size} alerts, ${cache.decisions.size} active decisions`);
+    const alertCount = db.countAlerts.get().count;
+    console.log(`Delta update complete: ${alertCount} alerts, ${activeDecisionAlerts.length} active decision alerts refreshed`);
     updateLapiStatus(true);
 
   } catch (error) {
@@ -458,38 +518,20 @@ async function updateCacheDelta() {
 
 // Cleanup old data beyond lookback period
 function cleanupOldData() {
-  const cutoffDate = new Date(Date.now() - LOOKBACK_MS);
+  const cutoffDate = new Date(Date.now() - LOOKBACK_MS).toISOString();
 
-  let removedAlerts = 0;
-  let removedDecisions = 0;
-  let removedStatsDecisions = 0;
+  try {
+    // Remove old alerts
+    const alertResult = db.deleteOldAlerts.run({ cutoff: cutoffDate });
 
-  // Remove old alerts
-  for (const [id, alert] of cache.alerts.entries()) {
-    if (alert.created_at && new Date(alert.created_at) < cutoffDate) {
-      cache.alerts.delete(id);
-      removedAlerts++;
+    // Remove old decisions (by stop_at for expired decisions)
+    const decisionResult = db.deleteOldDecisions.run({ cutoff: cutoffDate });
+
+    if (alertResult.changes > 0 || decisionResult.changes > 0) {
+      console.log(`Cleanup: Removed ${alertResult.changes} old alerts, ${decisionResult.changes} old decisions`);
     }
-  }
-
-  // Remove old decisions
-  for (const [id, decision] of cache.decisions.entries()) {
-    if (decision.created_at && new Date(decision.created_at) < cutoffDate) {
-      cache.decisions.delete(id);
-      removedDecisions++;
-    }
-  }
-
-  // Remove old stats decisions
-  for (const [id, decision] of cache.decisionsForStats.entries()) {
-    if (decision.created_at && new Date(decision.created_at) < cutoffDate) {
-      cache.decisionsForStats.delete(id);
-      removedStatsDecisions++;
-    }
-  }
-
-  if (removedAlerts > 0 || removedDecisions > 0 || removedStatsDecisions > 0) {
-    console.log(`Cleanup: Removed ${removedAlerts} old alerts, ${removedDecisions} old decisions, ${removedStatsDecisions} old stats decisions`);
+  } catch (error) {
+    console.error('Cleanup failed:', error.message);
   }
 }
 
@@ -795,8 +837,8 @@ const handleApiError = async (error, res, action, replayCallback) => {
 };
 
 /**
- * Helper to hydrate an alert's decisions with fresh data from the active cache
- * This ensures even stale alerts (from delta updates) show current decision loops
+ * Helper to hydrate an alert's decisions with fresh data from SQLite database
+ * This ensures even stale alerts (from delta updates) show current decision status
  */
 const hydrateAlertWithDecisions = (alert) => {
   // Clone to safe mutate
@@ -804,36 +846,45 @@ const hydrateAlertWithDecisions = (alert) => {
 
   if (alertClone.decisions && Array.isArray(alertClone.decisions)) {
     alertClone.decisions = alertClone.decisions.map(decision => {
-      // Check if we have fresh data for this decision in our active cache
-      // The cache.decisions map contains the LATEST data from LAPI
-      const cachedDecision = cache.decisions.get(String(decision.id));
+      // Look up the decision in SQLite to get the correct stop_at
+      const dbDecision = db.getDecisionById.get({ id: String(decision.id) });
 
-      if (cachedDecision) {
-        // Hydrate with fresh details where applicable
-        // We preserve the original ID/structure but update mutable fields
-        return {
-          ...decision,
-          duration: cachedDecision.detail?.duration || decision.duration, // Update duration string
-          stop_at: cachedDecision.detail?.expiration || decision.stop_at, // Update expiration time
-          type: cachedDecision.detail?.type || decision.type,
-          value: cachedDecision.value || decision.value,
-          origin: cachedDecision.detail?.origin || decision.origin,
-          expired: cachedDecision.expired // Add expired status from cache (LAPI truth)
-        };
+      const now = new Date();
+      let stopAt;
+
+      if (dbDecision && dbDecision.stop_at) {
+        // Use the updated stop_at from SQLite (calculated from duration)
+        stopAt = new Date(dbDecision.stop_at);
       } else {
-        // Not in active cache = Expired or Deleted
-        // Force it to look expired if it doesn't already
-        const now = new Date();
-        const stopAt = decision.stop_at ? new Date(decision.stop_at) : null;
-
-        if (!stopAt || stopAt > now) {
-          return {
-            ...decision,
-            stop_at: new Date(Date.now() - 1000).toISOString() // Set to 1s ago
-          };
-        }
+        // Fallback to original stop_at from the alert's decision
+        stopAt = decision.stop_at ? new Date(decision.stop_at) : null;
       }
-      return decision;
+
+      const isExpired = !stopAt || stopAt < now;
+
+      // Recalculate duration from the fresh stop_at
+      let duration = decision.duration;
+      if (stopAt && !isExpired) {
+        const remainingMs = stopAt.getTime() - now.getTime();
+        const hours = Math.floor(remainingMs / 3600000);
+        const minutes = Math.floor((remainingMs % 3600000) / 60000);
+        const seconds = Math.floor((remainingMs % 60000) / 1000);
+
+        let durationStr = '';
+        if (hours > 0) durationStr += `${hours}h`;
+        if (minutes > 0 || hours > 0) durationStr += `${minutes}m`;
+        durationStr += `${seconds}s`;
+        duration = durationStr;
+      } else if (isExpired) {
+        duration = '0s';
+      }
+
+      return {
+        ...decision,
+        stop_at: stopAt ? stopAt.toISOString() : decision.stop_at,
+        duration: duration,
+        expired: isExpired
+      };
     });
   }
   return alertClone;
@@ -841,7 +892,7 @@ const hydrateAlertWithDecisions = (alert) => {
 
 /**
  * GET /api/alerts
- * Returns alerts from cache
+ * Returns alerts from SQLite database
  */
 app.get('/api/alerts', ensureAuth, async (req, res) => {
   try {
@@ -855,15 +906,23 @@ app.get('/api/alerts', ensureAuth, async (req, res) => {
       await initializeCache();
     }
 
-    // Return alerts from cache, hydrated with fresh decision status
-    const cachedAlerts = Array.from(cache.alerts.values());
-    const alerts = cachedAlerts.map(hydrateAlertWithDecisions);
+    // Get lookback cutoff
+    const since = new Date(Date.now() - LOOKBACK_MS).toISOString();
+
+    // Query alerts from SQLite
+    const rawAlerts = db.getAlerts.all({ since, limit: 10000 });
+
+    // Parse raw_data and hydrate with decision status
+    const alerts = rawAlerts.map(row => {
+      const alert = JSON.parse(row.raw_data);
+      return hydrateAlertWithDecisions(alert);
+    });
 
     alerts.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
     res.json(alerts);
   } catch (error) {
-    console.error('Error serving alerts from cache:', error.message);
+    console.error('Error serving alerts from database:', error.message);
     res.status(500).json({ error: 'Failed to retrieve alerts' });
   }
 });
@@ -896,7 +955,7 @@ app.get('/api/alerts/:id', ensureAuth, async (req, res) => {
 
 /**
  * GET /api/decisions
- * Returns decisions from cache (active by default, or all including expired with ?include_expired=true)
+ * Returns decisions from SQLite database (active by default, or all including expired with ?include_expired=true)
  */
 app.get('/api/decisions', ensureAuth, async (req, res) => {
   try {
@@ -911,61 +970,68 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
     }
 
     const includeExpired = req.query.include_expired === 'true';
+    const now = new Date().toISOString();
+    const since = new Date(Date.now() - LOOKBACK_MS).toISOString();
 
-    // Return decisions from cache
     let decisions;
     if (includeExpired) {
-      // Convert decisionsForStats to full decision object format
-      decisions = Array.from(cache.decisionsForStats.values()).map(d => {
-        // OPTIMIZATION: Check if we have fresh data in the active decisions cache
-        // This ensures that active decisions returned in this list have up-to-date durations
-        const activeDecision = cache.decisions.get(String(d.id));
-        if (activeDecision) {
-          return activeDecision;
-        }
-
-        // Find matching alert to get full details
-        const alert = Array.from(cache.alerts.values()).find(a =>
-          a.decisions && a.decisions.some(dec => dec.id === d.id)
-        );
-
+      // Get all decisions within lookback period
+      const rawDecisions = db.getDecisionsSince.all({ since });
+      decisions = rawDecisions.map(row => {
+        const d = JSON.parse(row.raw_data);
         const isExpired = d.stop_at && new Date(d.stop_at) < new Date();
-
         return {
           id: d.id,
           created_at: d.created_at,
           scenario: d.scenario,
           value: d.value,
           expired: isExpired,
-          detail: alert ? {
-            origin: alert.decisions.find(dec => dec.id === d.id)?.origin || "manual",
-            type: alert.decisions.find(dec => dec.id === d.id)?.type,
+          detail: {
+            origin: d.origin || "manual",
+            type: d.type,
             reason: d.scenario,
-            action: alert.decisions.find(dec => dec.id === d.id)?.type,
-            country: alert.source?.cn || "Unknown",
-            as: alert.source?.as_name || "Unknown",
-            events_count: alert.events_count || 0,
-            duration: alert.decisions.find(dec => dec.id === d.id)?.duration || "N/A",
+            action: d.type,
+            country: d.country || "Unknown",
+            as: d.as || "Unknown",
+            events_count: d.events_count || 0,
+            duration: d.duration || "N/A",
             expiration: d.stop_at,
-            alert_id: alert.id,
-            message: alert.message,
-            events: alert.events,
-            machine_alias: alert.machine_alias,
-            machine_id: alert.machine_id
-          } : {}
+            alert_id: d.alert_id
+          }
         };
       });
     } else {
-      // Return only active decisions from cache
-      // Cache already filters expired decisions during initialization and delta updates
-      decisions = Array.from(cache.decisions.values());
+      // Get only active decisions (stop_at > now)
+      const rawDecisions = db.getActiveDecisions.all({ now, limit: 10000 });
+      decisions = rawDecisions.map(row => {
+        const d = JSON.parse(row.raw_data);
+        return {
+          id: d.id,
+          created_at: d.created_at,
+          scenario: d.scenario,
+          value: d.value,
+          expired: false,
+          detail: {
+            origin: d.origin || "manual",
+            type: d.type,
+            reason: d.scenario,
+            action: d.type,
+            country: d.country || "Unknown",
+            as: d.as || "Unknown",
+            events_count: d.events_count || 0,
+            duration: d.duration || "N/A",
+            expiration: d.stop_at,
+            alert_id: d.alert_id
+          }
+        };
+      });
     }
 
     decisions.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
     res.json(decisions);
   } catch (error) {
-    console.error('Error serving decisions from cache:', error.message);
+    console.error('Error serving decisions from database:', error.message);
     res.status(500).json({ error: 'Failed to retrieve decisions' });
   }
 });
@@ -1049,7 +1115,7 @@ app.put('/api/config/refresh-interval', ensureAuth, (req, res) => {
 
 /**
  * GET /api/stats/decisions
- * Returns ALL decisions (including expired) for statistics purposes from cache
+ * Returns ALL decisions (including expired) for statistics purposes from SQLite database
  */
 app.get('/api/stats/decisions', ensureAuth, async (req, res) => {
   try {
@@ -1063,13 +1129,26 @@ app.get('/api/stats/decisions', ensureAuth, async (req, res) => {
       await initializeCache();
     }
 
-    // Return all decisions from decisionsForStats
-    const decisions = Array.from(cache.decisionsForStats.values());
+    // Get all decisions within lookback period
+    const since = new Date(Date.now() - LOOKBACK_MS).toISOString();
+    const rawDecisions = db.getDecisionsSince.all({ since });
+
+    const decisions = rawDecisions.map(row => {
+      const d = JSON.parse(row.raw_data);
+      return {
+        id: d.id,
+        created_at: d.created_at,
+        scenario: d.scenario,
+        value: d.value,
+        stop_at: d.stop_at
+      };
+    });
+
     decisions.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
     res.json(decisions);
   } catch (error) {
-    console.error('Error serving stats decisions from cache:', error.message);
+    console.error('Error serving stats decisions from database:', error.message);
     res.status(500).json({ error: 'Failed to retrieve decision statistics' });
   }
 });
