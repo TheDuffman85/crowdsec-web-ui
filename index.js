@@ -1370,6 +1370,79 @@ app.put('/api/config/refresh-interval', ensureAuth, (req, res) => {
 });
 
 /**
+ * Helper to extract target from alert events (server-side pre-computation)
+ * Matches frontend getAlertTarget logic: target_fqdn > target_host > service > machine_alias > machine_id
+ */
+const getAlertTarget = (alert) => {
+  if (!alert) return "Unknown";
+
+  // Try to find target in events
+  if (alert.events && Array.isArray(alert.events)) {
+    for (const event of alert.events) {
+      if (event.meta && Array.isArray(event.meta)) {
+        const targetFqdn = event.meta.find(m => m.key === 'target_fqdn')?.value;
+        if (targetFqdn) return targetFqdn;
+
+        const targetHost = event.meta.find(m => m.key === 'target_host')?.value;
+        if (targetHost) return targetHost;
+
+        const service = event.meta.find(m => m.key === 'service')?.value;
+        if (service) return service;
+      }
+    }
+  }
+
+  // Fallback
+  return alert.machine_alias || alert.machine_id || "Unknown";
+};
+
+/**
+ * GET /api/stats/alerts
+ * Returns minimal alert data for Dashboard statistics (optimized payload)
+ */
+app.get('/api/stats/alerts', ensureAuth, async (req, res) => {
+  try {
+    // If in manual mode, update cache on every request
+    if (REFRESH_INTERVAL_MS === 0) {
+      await updateCache();
+    }
+
+    // Ensure cache is initialized
+    if (!cache.isInitialized) {
+      await initializeCache();
+    }
+
+    // Get lookback cutoff
+    const since = new Date(Date.now() - LOOKBACK_MS).toISOString();
+
+    // Query alerts from SQLite
+    const rawAlerts = db.getAlerts.all({ since, limit: 10000 });
+
+    // Parse raw_data and extract only stats-relevant fields with pre-computed target
+    const alerts = rawAlerts.map(row => {
+      const alert = JSON.parse(row.raw_data);
+      return {
+        created_at: alert.created_at,
+        scenario: alert.scenario,
+        source: alert.source ? {
+          ip: alert.source.ip,
+          cn: alert.source.cn,
+          as_name: alert.source.as_name
+        } : null,
+        target: getAlertTarget(alert)
+      };
+    });
+
+    alerts.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+    res.json(alerts);
+  } catch (error) {
+    console.error('Error serving stats alerts from database:', error.message);
+    res.status(500).json({ error: 'Failed to retrieve alert statistics' });
+  }
+});
+
+/**
  * GET /api/stats/decisions
  * Returns ALL decisions (including expired) for statistics purposes from SQLite database
  */

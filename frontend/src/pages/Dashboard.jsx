@@ -1,8 +1,7 @@
 import { useEffect, useState, useMemo, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-import { fetchAlerts, fetchDecisions, fetchDecisionsForStats, fetchConfig } from "../lib/api";
-import { getHubUrl } from "../lib/utils";
+import { fetchAlertsForStats, fetchDecisionsForStats, fetchConfig } from "../lib/api";
 import { useRefresh } from "../contexts/RefreshContext";
 import { Card, CardContent } from "../components/ui/Card";
 import { StatCard } from "../components/StatCard";
@@ -11,9 +10,7 @@ import { WorldMapCard } from "../components/WorldMapCard";
 import { ScenarioName } from "../components/ScenarioName";
 import {
     filterLastNDays,
-
     getTopTargets,
-    getAlertTarget,
     getTopCountries,
     getAllCountries,
     getTopScenarios,
@@ -55,10 +52,9 @@ export function Dashboard() {
 
     const [isOnline, setIsOnline] = useState(true);
 
-    // Raw data
+    // Raw data (stats endpoints only)
     const [rawData, setRawData] = useState({
-        alerts: [],
-        decisions: [],
+        alertsForStats: [],
         decisionsForStats: []
     });
 
@@ -106,27 +102,27 @@ export function Dashboard() {
 
     const loadData = useCallback(async (isBackground = false) => {
         try {
-            // Only fetch config on initial load (or if we want to support dynamic config changes, but rarely changs)
-            // Let's re-fetch config only if not background, or just always fetch it (it's fast)
-            // To be safe, let's just fetch everything.
-
             // Only set loading spinners on initial load
-            if (!isBackground) {
-                // We don't necessarily reset loading to true if we are just re-mounting? 
-                // Actually loading=true is default.
-            }
+            // (loading=true is default state)
 
             const configData = await fetchConfig();
             setConfig(configData);
 
-            const [alerts, decisions, decisionsForStats] = await Promise.all([
-                fetchAlerts(),
-                fetchDecisions(),
+            // Use optimized stats endpoints only
+            const [alertsForStats, decisionsForStats] = await Promise.all([
+                fetchAlertsForStats(),
                 fetchDecisionsForStats()
             ]);
 
-            setRawData({ alerts, decisions, decisionsForStats });
-            setStats({ alerts: alerts.length, decisions: decisions.length });
+            setRawData({ alertsForStats, decisionsForStats });
+
+            // Calculate active decisions count (stop_at > now)
+            const now = new Date();
+            const activeDecisionsCount = decisionsForStats.filter(d =>
+                d.stop_at && new Date(d.stop_at) > now
+            ).length;
+
+            setStats({ alerts: alertsForStats.length, decisions: activeDecisionsCount });
 
             // Check LAPI status from config
             if (configData.lapi_status) {
@@ -164,11 +160,14 @@ export function Dashboard() {
     // Filter Logic
     const filteredData = useMemo(() => {
         const lookbackDays = config.lookback_days || 7;
+        const now = new Date();
 
-        let filteredAlerts = filterLastNDays(rawData.alerts, lookbackDays);
+        // Use alertsForStats for all alert-related filtering and stats
+        let filteredAlerts = filterLastNDays(rawData.alertsForStats, lookbackDays);
 
-        // Filter ACTIVE decisions for card display and top lists
-        let activeDecisions = filterLastNDays(rawData.decisions, lookbackDays);
+        // Calculate active decisions (stop_at > now) for card display and filtering
+        let activeDecisions = filterLastNDays(rawData.decisionsForStats, lookbackDays)
+            .filter(d => d.stop_at && new Date(d.stop_at) > now);
 
         // Filter ALL decisions (including expired) for historical charts
         let chartDecisions = filterLastNDays(rawData.decisionsForStats, lookbackDays);
@@ -179,7 +178,7 @@ export function Dashboard() {
 
         // Create datasets for the Slider/Brush (Context-aware but Time-ignorant)
         // We start with the lookback-filtered data (Global scope)
-        let sliderAlerts = filterLastNDays(rawData.alerts, lookbackDays);
+        let sliderAlerts = filterLastNDays(rawData.alertsForStats, lookbackDays);
         let sliderDecisions = filterLastNDays(rawData.decisionsForStats, lookbackDays);
 
         // Apply Cross-Filtering to cards and lists (including dateRange)
@@ -229,25 +228,25 @@ export function Dashboard() {
         if (filters.country) {
             filteredAlerts = filteredAlerts.filter(a => {
                 // Match by CN (2-letter country code)
-                return a.source.cn === filters.country;
+                return a.source?.cn === filters.country;
             });
             // Filter decisions by country - match IPs from filtered alerts
             const ipsInCountry = new Set(
-                filteredAlerts.map(a => a.source.ip).filter(ip => ip)
+                filteredAlerts.map(a => a.source?.ip).filter(ip => ip)
             );
             activeDecisions = activeDecisions.filter(d => ipsInCountry.has(d.value));
 
             // Also filter chart data by country
-            chartAlerts = chartAlerts.filter(a => a.source.cn === filters.country);
+            chartAlerts = chartAlerts.filter(a => a.source?.cn === filters.country);
             const chartIpsInCountry = new Set(
-                chartAlerts.map(a => a.source.ip).filter(ip => ip)
+                chartAlerts.map(a => a.source?.ip).filter(ip => ip)
             );
             chartDecisionsData = chartDecisionsData.filter(d => chartIpsInCountry.has(d.value));
 
             // Also filter Slider data by country
-            sliderAlerts = sliderAlerts.filter(a => a.source.cn === filters.country);
+            sliderAlerts = sliderAlerts.filter(a => a.source?.cn === filters.country);
             const sliderIpsInCountry = new Set(
-                sliderAlerts.map(a => a.source.ip).filter(ip => ip)
+                sliderAlerts.map(a => a.source?.ip).filter(ip => ip)
             );
             sliderDecisions = sliderDecisions.filter(d => sliderIpsInCountry.has(d.value));
         }
@@ -256,86 +255,82 @@ export function Dashboard() {
             filteredAlerts = filteredAlerts.filter(a => a.scenario === filters.scenario);
             // Filter decisions by scenario - match decisions whose value (IP) appears in alerts with this scenario
             const ipsInScenario = new Set(
-                filteredAlerts.map(a => a.source.ip).filter(ip => ip)
+                filteredAlerts.map(a => a.source?.ip).filter(ip => ip)
             );
             activeDecisions = activeDecisions.filter(d => ipsInScenario.has(d.value));
 
             // Also filter chart data
             chartAlerts = chartAlerts.filter(a => a.scenario === filters.scenario);
             const chartIpsInScenario = new Set(
-                chartAlerts.map(a => a.source.ip).filter(ip => ip)
+                chartAlerts.map(a => a.source?.ip).filter(ip => ip)
             );
             chartDecisionsData = chartDecisionsData.filter(d => chartIpsInScenario.has(d.value));
 
             // Also filter Slider data
             sliderAlerts = sliderAlerts.filter(a => a.scenario === filters.scenario);
             const sliderIpsInScenario = new Set(
-                sliderAlerts.map(a => a.source.ip).filter(ip => ip)
+                sliderAlerts.map(a => a.source?.ip).filter(ip => ip)
             );
             sliderDecisions = sliderDecisions.filter(d => sliderIpsInScenario.has(d.value));
         }
 
         if (filters.as) {
-            filteredAlerts = filteredAlerts.filter(a => a.source.as_name === filters.as);
+            filteredAlerts = filteredAlerts.filter(a => a.source?.as_name === filters.as);
             // Filter decisions by AS - match decisions whose value (IP) appears in alerts with this AS
             const ipsInAS = new Set(
-                filteredAlerts.map(a => a.source.ip).filter(ip => ip)
+                filteredAlerts.map(a => a.source?.ip).filter(ip => ip)
             );
             activeDecisions = activeDecisions.filter(d => ipsInAS.has(d.value));
 
             // Also filter chart data
-            chartAlerts = chartAlerts.filter(a => a.source.as_name === filters.as);
+            chartAlerts = chartAlerts.filter(a => a.source?.as_name === filters.as);
             const chartIpsInAS = new Set(
-                chartAlerts.map(a => a.source.ip).filter(ip => ip)
+                chartAlerts.map(a => a.source?.ip).filter(ip => ip)
             );
             chartDecisionsData = chartDecisionsData.filter(d => chartIpsInAS.has(d.value));
 
             // Also filter Slider data
-            sliderAlerts = sliderAlerts.filter(a => a.source.as_name === filters.as);
+            sliderAlerts = sliderAlerts.filter(a => a.source?.as_name === filters.as);
             const sliderIpsInAS = new Set(
-                sliderAlerts.map(a => a.source.ip).filter(ip => ip)
+                sliderAlerts.map(a => a.source?.ip).filter(ip => ip)
             );
             sliderDecisions = sliderDecisions.filter(d => sliderIpsInAS.has(d.value));
         }
 
         if (filters.ip) {
-            filteredAlerts = filteredAlerts.filter(a => a.source.ip === filters.ip);
+            filteredAlerts = filteredAlerts.filter(a => a.source?.ip === filters.ip);
             // Filter decisions by IP - direct match on the value field
             activeDecisions = activeDecisions.filter(d => d.value === filters.ip);
 
             // Also filter chart data
-            chartAlerts = chartAlerts.filter(a => a.source.ip === filters.ip);
+            chartAlerts = chartAlerts.filter(a => a.source?.ip === filters.ip);
             chartDecisionsData = chartDecisionsData.filter(d => d.value === filters.ip);
 
             // Also filter Slider data
-            sliderAlerts = sliderAlerts.filter(a => a.source.ip === filters.ip);
+            sliderAlerts = sliderAlerts.filter(a => a.source?.ip === filters.ip);
             sliderDecisions = sliderDecisions.filter(d => d.value === filters.ip);
         }
 
         if (filters.target) {
-            filteredAlerts = filteredAlerts.filter(a => getAlertTarget(a) === filters.target);
-            // Decisions don't inherently have a "target" field compatible with getAlertTarget (which looks at events)
-            // But we can filter decisions by seeing if they are associated with alerts that match the target.
-            // However, decisions are often standalone or the link is weak. 
-            // BUT, if we view "Decisions" as "Decisions made on this Target", we need to filter decisions.
-            // Since we don't have a direct link in the decision object to the target (machine_id is origin, but not target per se?),
-            // let's try to match by alerts again.
+            // Use pre-computed target field from stats endpoint
+            filteredAlerts = filteredAlerts.filter(a => a.target === filters.target);
+            // Filter decisions by target - match IPs from filtered alerts
             const ipsOnTarget = new Set(
-                filteredAlerts.map(a => a.source.ip).filter(ip => ip)
+                filteredAlerts.map(a => a.source?.ip).filter(ip => ip)
             );
             activeDecisions = activeDecisions.filter(d => ipsOnTarget.has(d.value));
 
-            // Charts
-            chartAlerts = chartAlerts.filter(a => getAlertTarget(a) === filters.target);
+            // Charts - use pre-computed target
+            chartAlerts = chartAlerts.filter(a => a.target === filters.target);
             const chartIpsOnTarget = new Set(
-                chartAlerts.map(a => a.source.ip).filter(ip => ip)
+                chartAlerts.map(a => a.source?.ip).filter(ip => ip)
             );
             chartDecisionsData = chartDecisionsData.filter(d => chartIpsOnTarget.has(d.value));
 
-            // Slider
-            sliderAlerts = sliderAlerts.filter(a => getAlertTarget(a) === filters.target);
+            // Slider - use pre-computed target
+            sliderAlerts = sliderAlerts.filter(a => a.target === filters.target);
             const sliderIpsOnTarget = new Set(
-                sliderAlerts.map(a => a.source.ip).filter(ip => ip)
+                sliderAlerts.map(a => a.source?.ip).filter(ip => ip)
             );
             sliderDecisions = sliderDecisions.filter(d => sliderIpsOnTarget.has(d.value));
         }
@@ -348,11 +343,7 @@ export function Dashboard() {
             sliderAlerts: sliderAlerts, // Alerts for slider (context filtered, time unfiltered)
             sliderDecisions: sliderDecisions, // Decisions for slider (context filtered, time unfiltered)
             // Global total (filtered by Lookback ONLY, ignoring sidebar filters)
-            // Note: filterLastNDays is already done on rawData.alerts
-            // But we want to ensure we get the count consistent with the chart's context if no other filters applied.
-            // If we use 'filtered' mode -> total is filteredData.alerts.length.
-            // If we use 'global' mode -> total is filterLastNDays(rawData.alerts).length.
-            globalTotal: filterLastNDays(rawData.alerts, lookbackDays).length
+            globalTotal: filterLastNDays(rawData.alertsForStats, lookbackDays).length
         };
     }, [rawData, config.lookback_days, filters]);
 

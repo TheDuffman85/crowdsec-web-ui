@@ -166,7 +166,8 @@ export function getTopTargets(alerts, limit = 10) {
     const targetCounts = {};
 
     alerts.forEach(alert => {
-        const target = getAlertTarget(alert);
+        // Use pre-computed target from stats endpoint, fallback to getAlertTarget for compatibility
+        const target = alert.target || getAlertTarget(alert);
         if (target && target !== "Unknown") {
             targetCounts[target] = (targetCounts[target] || 0) + 1;
         }

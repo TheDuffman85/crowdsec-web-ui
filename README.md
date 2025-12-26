@@ -202,6 +202,7 @@ The backend exposes the following endpoints (proxying to CrowdSec LAPI):
 -   `GET /api/decisions`: List decisions (active by default). Supports `?include_expired=true`.
 -   `POST /api/decisions`: Add a new decision (Body: `{ ip, duration, reason, type }`).
 -   `DELETE /api/decisions/:id`: Delete a decision by ID.
+-   `GET /api/stats/alerts`: Minimal alert data for Dashboard statistics.
 -   `GET /api/stats/decisions`: List all decisions (including expired) for statistics.
 -   `GET /api/config`: Get current configuration and LAPI connection status.
 -   `PUT /api/config/refresh-interval`: Update the background refresh interval.
