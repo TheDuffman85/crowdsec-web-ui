@@ -31,6 +31,8 @@ export function Decisions() {
     const targetFilter = searchParams.get("target");
     const dateStartFilter = searchParams.get("dateStart");
     const dateEndFilter = searchParams.get("dateEnd");
+    // Default: hide duplicates unless explicitly set to false
+    const showDuplicates = searchParams.get("hide_duplicates") === "false";
 
     const [displayedCount, setDisplayedCount] = useState(50);
 
@@ -143,8 +145,8 @@ export function Decisions() {
     };
 
     const filteredDecisions = decisions.filter(decision => {
-        // Debug logging
-        // console.log("Filtering decision:", decision.value, "Target Filter:", targetFilter);
+        // 0. Duplicate Filter (applied first, default: hide duplicates)
+        if (!showDuplicates && decision.is_duplicate) return false;
 
         // 1. Alert ID Filter
         if (alertIdFilter && String(decision.detail.alert_id) !== alertIdFilter) return false;
@@ -219,7 +221,8 @@ export function Decisions() {
             <div className="flex justify-between items-center">
                 <div className="flex items-center gap-3">
                     <h2 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Decisions</h2>
-                    {(filteredDecisions.length !== decisions.length) && (
+                    {/* Only show count when non-default filters are applied */}
+                    {(alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter || includeExpiredParam || showDuplicates) && filteredDecisions.length !== decisions.length && (
                         <div className="text-sm text-gray-500">
                             Showing {filteredDecisions.length} of {decisions.length} decisions
                         </div>
@@ -261,6 +264,21 @@ export function Decisions() {
                             <span className="font-semibold uppercase">STATUS:</span> ACTIVE
                             <button
                                 onClick={toggleExpired}
+                                className="ml-1 hover:text-red-500"
+                            >
+                                &times;
+                            </button>
+                        </Badge>
+                    )}
+                    {!showDuplicates && (
+                        <Badge variant="secondary" className="flex items-center gap-1">
+                            <span className="font-semibold uppercase">HIDE:</span> DUPLICATES
+                            <button
+                                onClick={() => {
+                                    const newParams = new URLSearchParams(searchParams);
+                                    newParams.set('hide_duplicates', 'false');
+                                    setSearchParams(newParams);
+                                }}
                                 className="ml-1 hover:text-red-500"
                             >
                                 &times;
@@ -357,8 +375,8 @@ export function Decisions() {
                         </Badge>
                     )}
 
-                    {/* Show Reset button if we have any active filters OR if we are showing expired (non-default state) */}
-                    {(alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter || includeExpiredParam) && (
+                    {/* Show Reset button if we have any active filters OR if we are showing expired/duplicates (non-default state) */}
+                    {(alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter || includeExpiredParam || showDuplicates) && (
                         <button
                             onClick={clearFilter}
                             className="text-xs text-gray-500 hover:text-gray-900 dark:hover:text-gray-300 underline"

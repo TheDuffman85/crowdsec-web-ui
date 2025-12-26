@@ -1209,6 +1209,37 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
       });
     }
 
+    // Mark duplicate decisions: for each IP with multiple decisions,
+    // mark all but the earliest (by created_at, with ID as tiebreaker) as duplicates
+    const ipPrimaryMap = new Map(); // Maps IP -> { created_at, id } of the primary (non-duplicate) decision
+    for (const decision of decisions) {
+      const ip = decision.value;
+      const createdAt = new Date(decision.created_at);
+      const existing = ipPrimaryMap.get(ip);
+
+      if (!existing) {
+        // First decision for this IP
+        ipPrimaryMap.set(ip, { created_at: createdAt, id: decision.id });
+      } else if (createdAt < existing.created_at) {
+        // Earlier timestamp wins
+        ipPrimaryMap.set(ip, { created_at: createdAt, id: decision.id });
+      } else if (createdAt.getTime() === existing.created_at.getTime() && decision.id < existing.id) {
+        // Same timestamp - lower ID wins (tiebreaker)
+        ipPrimaryMap.set(ip, { created_at: createdAt, id: decision.id });
+      }
+    }
+
+    // Add is_duplicate field to each decision
+    decisions = decisions.map(decision => {
+      const ip = decision.value;
+      const primary = ipPrimaryMap.get(ip);
+      const isDuplicate = decision.id !== primary.id;
+      return {
+        ...decision,
+        is_duplicate: isDuplicate
+      };
+    });
+
     decisions.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
     res.json(decisions);
@@ -1217,6 +1248,7 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
     res.status(500).json({ error: 'Failed to retrieve decisions' });
   }
 });
+
 
 /**
  * GET /api/config
