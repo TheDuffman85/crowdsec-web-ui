@@ -128,8 +128,19 @@ function initSchema() {
   console.log('Database schema initialized.');
 }
 
+// Clear alerts and decisions on startup (will be re-synced from CrowdSec)
+function clearSyncData() {
+  console.log('Clearing alerts and decisions for fresh sync...');
+  db.exec('DELETE FROM alerts');
+  db.exec('DELETE FROM decisions');
+  console.log('Sync data cleared.');
+}
+
 // Run schema init on load
 initSchema();
+
+// Clear data for fresh sync
+clearSyncData();
 
 // --- Prepared Statements ---
 
