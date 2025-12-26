@@ -1347,36 +1347,24 @@ app.post('/api/decisions', ensureAuth, async (req, res) => {
       return res.status(400).json({ error: 'IP address is required' });
     }
 
-    // Measure duration to calculate stop_at
-    // Simple parsing for 4h, 1d etc.
-    let stopAt = new Date();
-    const durationMatch = duration.match(/^(\d+)([hmds])$/);
-    if (durationMatch) {
-      const val = parseInt(durationMatch[1]);
-      const unit = durationMatch[2];
-      if (unit === 'h') stopAt.setHours(stopAt.getHours() + val);
-      if (unit === 'm') stopAt.setMinutes(stopAt.getMinutes() + val);
-      if (unit === 'd') stopAt.setDate(stopAt.getDate() + val);
-      if (unit === 's') stopAt.setSeconds(stopAt.getSeconds() + val);
-    } else {
-      // default 4 hours if parsing fails
-      stopAt.setHours(stopAt.getHours() + 4);
-    }
+    const now = new Date().toISOString();
 
     // Construct Alert Object with required fields
+    // Note: The decision's duration field is used by LAPI to calculate the actual stop_at
+    // We don't set stop_at on the alert itself to avoid double-counting
     const alertPayload = [{
       scenario: "manual/web-ui",
-      campaign_name: "manual/web-ui", // optional but good practice
+      campaign_name: "manual/web-ui",
       message: `Manual decision from Web UI: ${reason}`,
       events_count: 1,
-      start_at: new Date().toISOString(),
-      stop_at: stopAt.toISOString(),
+      start_at: now,
+      stop_at: now, // Alert stop_at - LAPI uses decision.duration for actual expiration
       capacity: 0,
       leakspeed: "0",
       simulated: false,
-      events: [], // Required by LAPI strict validation
-      scenario_hash: "", // Required
-      scenario_version: "", // Required
+      events: [],
+      scenario_hash: "",
+      scenario_version: "",
       source: {
         scope: "ip",
         value: ip

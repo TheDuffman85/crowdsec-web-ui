@@ -18,6 +18,7 @@ export function Decisions() {
     const [filter, setFilter] = useState("");
     const [decisionToDelete, setDecisionToDelete] = useState(null);
     const [newDecision, setNewDecision] = useState({ ip: "", duration: "4h", reason: "manual" });
+    const [errorMessage, setErrorMessage] = useState(null);
     const [searchParams, setSearchParams] = useSearchParams();
     const alertIdFilter = searchParams.get("alert_id");
     const includeExpiredParam = searchParams.get("include_expired") === "true";
@@ -83,14 +84,17 @@ export function Decisions() {
 
     const handleAddDecision = async (e) => {
         e.preventDefault();
+        const decisionData = { ...newDecision };
+        setShowAddModal(false);
+        setNewDecision({ ip: "", duration: "4h", reason: "manual" });
+        setErrorMessage(null);
         try {
-            await addDecision(newDecision);
-            setShowAddModal(false);
-            setNewDecision({ ip: "", duration: "4h", reason: "manual" });
-            loadDecisions();
+            await addDecision(decisionData);
+            await loadDecisions();
+            setDisplayedCount(50); // Reset to show new decision at top
         } catch (error) {
             console.error("Failed to add decision", error);
-            alert("Failed to add decision");
+            setErrorMessage("Failed to add decision. Please try again.");
         }
     };
 
@@ -102,13 +106,16 @@ export function Decisions() {
 
     const confirmDelete = async () => {
         if (!decisionToDelete) return;
+        const idToDelete = decisionToDelete;
+        setDecisionToDelete(null);
+        setErrorMessage(null);
         try {
-            await deleteDecision(decisionToDelete);
-            setDecisionToDelete(null);
-            loadDecisions();
+            await deleteDecision(idToDelete);
+            await loadDecisions();
+            setDisplayedCount(50); // Reset scroll position
         } catch (error) {
             console.error("Failed to delete decision", error);
-            alert("Failed to delete decision");
+            setErrorMessage("Failed to delete decision. Please try again.");
         }
     };
 
@@ -229,6 +236,22 @@ export function Decisions() {
                     </button>
                 </div>
             </div>
+
+            {/* Error Message */}
+            {errorMessage && (
+                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md p-4 flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-red-700 dark:text-red-300">
+                        <X size={16} className="flex-shrink-0" />
+                        <span className="text-sm">{errorMessage}</span>
+                    </div>
+                    <button
+                        onClick={() => setErrorMessage(null)}
+                        className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-200"
+                    >
+                        <X size={16} />
+                    </button>
+                </div>
+            )}
 
             {/* Show active filters */}
             {(includeExpiredParam || !includeExpiredParam || alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter) && (
