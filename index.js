@@ -396,20 +396,21 @@ function processAlertForDb(alert) {
   }
 }
 
-// Fetch alerts from LAPI with optional 'since' parameter and active decision filter
-async function fetchAlertsFromLAPI(since = null, hasActiveDecision = false) {
+// Fetch alerts from LAPI with optional 'since'/'until' parameters and active decision filter
+async function fetchAlertsFromLAPI(since = null, until = null, hasActiveDecision = false) {
   const sinceParam = since || CROWDSEC_LOOKBACK_PERIOD;
   const origins = ['cscli', 'crowdsec', 'cscli-import', 'manual', 'appsec', 'lists'];
   const scopes = ['Ip', 'Range'];
   const limit = 10000;
 
   const activeDecisionParam = hasActiveDecision ? '&has_active_decision=true' : '';
+  const untilParam = until ? `&until=${until}` : '';
 
   const originPromises = origins.map(o =>
-    apiClient.get(`/v1/alerts?since=${sinceParam}&origin=${o}&limit=${limit}${activeDecisionParam}`)
+    apiClient.get(`/v1/alerts?since=${sinceParam}${untilParam}&origin=${o}&limit=${limit}${activeDecisionParam}`)
   );
   const scopePromises = scopes.map(s =>
-    apiClient.get(`/v1/alerts?since=${sinceParam}&scope=${s}&limit=${limit}${activeDecisionParam}`)
+    apiClient.get(`/v1/alerts?since=${sinceParam}${untilParam}&scope=${s}&limit=${limit}${activeDecisionParam}`)
   );
 
   const responses = await Promise.all([...originPromises, ...scopePromises]);
@@ -461,8 +462,8 @@ async function syncHistory() {
     updateSyncStatus({ progress: Math.min(progress, 90), message: progressMessage });
 
     try {
-      // Fetch alerts for this chunk
-      const alerts = await fetchAlertsFromLAPI(sinceDuration);
+      // Fetch alerts for this chunk (bounded by since and until)
+      const alerts = await fetchAlertsFromLAPI(sinceDuration, untilDuration);
 
       if (alerts.length > 0) {
         const insertTransaction = db.db.transaction((items) => {
@@ -489,7 +490,7 @@ async function syncHistory() {
   updateSyncStatus({ progress: 95, message: 'Syncing active decisions...' });
 
   try {
-    const activeDecisionAlerts = await fetchAlertsFromLAPI(null, true);
+    const activeDecisionAlerts = await fetchAlertsFromLAPI(null, null, true);
     if (activeDecisionAlerts.length > 0) {
       const refreshTransaction = db.db.transaction((alerts) => {
         for (const alert of alerts) processAlertForDb(alert);
@@ -583,8 +584,8 @@ async function updateCacheDelta() {
     // Fetch both new alerts AND alerts with active decisions
     // Active decisions need their stop_at refreshed based on updated duration
     const [newAlerts, activeDecisionAlerts] = await Promise.all([
-      fetchAlertsFromLAPI(sinceDuration),
-      fetchAlertsFromLAPI(null, true)  // has_active_decision=true to get fresh duration
+      fetchAlertsFromLAPI(sinceDuration, null),
+      fetchAlertsFromLAPI(null, null, true)  // has_active_decision=true to get fresh duration
     ]);
 
     // Process new alerts
