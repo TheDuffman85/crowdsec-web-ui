@@ -47,7 +47,7 @@ Detailed modal view showing attacker IP, AS information, location with map, and 
 </a>
 
 ### Decisions Management
-View and manage active bans/decisions.
+View and manage active bans/decisions. Supports filtering by status (active/expired) and hiding duplicate decisions.
 
 <a href="screenshots/decisions.png">
   <img src="screenshots/decisions.png" alt="Decisions" width="50%">
@@ -74,7 +74,7 @@ Automatically detects new container images on GitHub Container Registry (GHCR). 
 ## Architecture
 
 -   **Frontend**: React (Vite) + Tailwind CSS. Located in `frontend/`.
--   **Backend**: Node.js (Express). Acts as an intelligent caching layer for CrowdSec Local API (LAPI) with delta updates.
+-   **Backend**: Node.js (Express). Acts as an intelligent caching layer for CrowdSec Local API (LAPI) with delta updates and optimized chunked historical data sync.
 -   **Database**: SQLite (better-sqlite3). Persists alerts and decisions locally in `/app/data/crowdsec.db` to reduce memory usage and support historical data.
 -   **Security**: The application runs as a non-root user (`node`) inside the container and communicates with CrowdSec via HTTP/LAPI. It uses **Machine Authentication** (User/Password) to obtain a JWT for full access (read/write).
 
