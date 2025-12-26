@@ -20,6 +20,9 @@ export function Alerts() {
     const [displayedCount, setDisplayedCount] = useState(50);
     const [searchParams, setSearchParams] = useSearchParams();
 
+    // Ref to track selected alert ID for auto-refresh (avoids stale closure issues)
+    const selectedAlertIdRef = useRef(null);
+
     // Intersection Observer for infinite scroll
     const observer = useRef();
     const lastAlertElementRef = useCallback(node => {
@@ -55,12 +58,17 @@ export function Alerts() {
                     }
                 }
             } else {
-                // If a modal is open but no ID param (e.g. clicked row), update it with fresh data
-                setSelectedAlert(prev => {
-                    if (!prev) return null;
-                    const updated = alertsData.find(a => a.id === prev.id);
-                    return updated || prev;
-                });
+                // If a modal is open but no ID param (e.g. clicked row), refresh with full data
+                // Use the ref to get current selected alert ID (avoids stale closure)
+                if (selectedAlertIdRef.current) {
+                    try {
+                        const fullAlert = await fetchAlert(selectedAlertIdRef.current);
+                        setSelectedAlert(fullAlert);
+                    } catch (err) {
+                        console.error("Failed to refresh alert details", err);
+                        // Keep showing current data on error
+                    }
+                }
             }
 
             // Check for generic search query param
@@ -82,15 +90,22 @@ export function Alerts() {
         loadAlerts(false);
     }, [loadAlerts]);
 
+
     useEffect(() => {
         if (refreshSignal > 0) loadAlerts(true);
     }, [refreshSignal, loadAlerts]);
+
+    // Keep ref in sync with selectedAlert for auto-refresh
+    useEffect(() => {
+        selectedAlertIdRef.current = selectedAlert?.id || null;
+    }, [selectedAlert]);
 
     // Handler to fetch full alert data when clicking on a row
     // Since list view now returns slim alerts, we need to fetch full data for the modal
     const handleAlertClick = async (alert) => {
         // Show slim data immediately while loading
         setSelectedAlert(alert);
+        selectedAlertIdRef.current = alert.id;
 
         try {
             const fullAlert = await fetchAlert(alert.id);
