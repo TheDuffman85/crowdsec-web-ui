@@ -132,42 +132,15 @@ export function getTopAS(alerts, limit = 10) {
 }
 
 /**
- * Get the target identifier for an alert
- * Prioritizes: target_fqdn > target_host > service > machine_alias > machine_id
- */
-export function getAlertTarget(alert) {
-    if (!alert) return "Unknown";
-
-    // Try to find target in events
-    if (alert.events) {
-        for (const event of alert.events) {
-            if (event.meta) {
-                // Check common meta keys for target info
-                const targetFqdn = event.meta.find(m => m.key === 'target_fqdn')?.value;
-                if (targetFqdn) return targetFqdn;
-
-                const targetHost = event.meta.find(m => m.key === 'target_host')?.value;
-                if (targetHost) return targetHost;
-
-                const service = event.meta.find(m => m.key === 'service')?.value;
-                if (service) return service;
-            }
-        }
-    }
-
-    // Fallback
-    return alert.machine_alias || alert.machine_id || "Unknown";
-}
-
-/**
  * Get top Targets by alert count
+ * Uses pre-computed target field from backend (set during database import)
  */
 export function getTopTargets(alerts, limit = 10) {
     const targetCounts = {};
 
     alerts.forEach(alert => {
-        // Use pre-computed target from stats endpoint, fallback to getAlertTarget for compatibility
-        const target = alert.target || getAlertTarget(alert);
+        // Use pre-computed target from backend
+        const target = alert.target;
         if (target && target !== "Unknown") {
             targetCounts[target] = (targetCounts[target] || 0) + 1;
         }

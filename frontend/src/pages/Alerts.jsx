@@ -7,7 +7,6 @@ import { Modal } from "../components/ui/Modal";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { getHubUrl, getCountryName } from "../lib/utils";
-import { getAlertTarget } from "../lib/stats";
 import { Search, Info, ExternalLink, Shield } from "lucide-react";
 import "flag-icons/css/flag-icons.min.css";
 
@@ -142,7 +141,7 @@ export function Alerts() {
         if (paramScenario && !scenario.includes(paramScenario)) return false;
         if (paramScenario && !scenario.includes(paramScenario)) return false;
         if (paramAs && !asName.includes(paramAs)) return false;
-        if (paramTarget && !(getAlertTarget(alert) || "").toLowerCase().includes(paramTarget)) return false;
+        if (paramTarget && !(alert.target || "").toLowerCase().includes(paramTarget)) return false;
 
         // Single date filter (legacy support)
         if (paramDate && !(alert.created_at && alert.created_at.startsWith(paramDate))) return false;
@@ -179,7 +178,7 @@ export function Alerts() {
                 ip.includes(search) ||
                 cn.includes(search) ||
                 asName.includes(search) ||
-                (getAlertTarget(alert) || "").toLowerCase().includes(search);
+                (alert.target || "").toLowerCase().includes(search);
         }
 
         return true;

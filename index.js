@@ -297,6 +297,34 @@ function toDuration(timestampMs) {
   return `${hours}h${minutes}m${seconds}s`;
 }
 
+/**
+ * Helper to extract target from alert events
+ * Prioritizes: target_fqdn > target_host > service > machine_alias > machine_id
+ * This is the SINGLE SOURCE OF TRUTH for target extraction.
+ */
+function getAlertTarget(alert) {
+  if (!alert) return "Unknown";
+
+  // Try to find target in events
+  if (alert.events && Array.isArray(alert.events)) {
+    for (const event of alert.events) {
+      if (event.meta && Array.isArray(event.meta)) {
+        const targetFqdn = event.meta.find(m => m.key === 'target_fqdn')?.value;
+        if (targetFqdn) return targetFqdn;
+
+        const targetHost = event.meta.find(m => m.key === 'target_host')?.value;
+        if (targetHost) return targetHost;
+
+        const service = event.meta.find(m => m.key === 'service')?.value;
+        if (service) return service;
+      }
+    }
+  }
+
+  // Fallback
+  return alert.machine_alias || alert.machine_id || "Unknown";
+}
+
 // Helper to process an alert and store in SQLite
 function processAlertForDb(alert) {
   if (!alert || !alert.id) return;
@@ -306,25 +334,35 @@ function processAlertForDb(alert) {
   // Extract source info from alert for country/AS data
   const alertSource = alert.source || {};
 
-  // Extract target info from alert events
-  let target = null;
-  if (alert.events && alert.events.length > 0) {
-    for (const event of alert.events) {
-      if (event.meta) {
-        const targetFqdn = event.meta.find(m => m.key === 'target_fqdn')?.value;
-        if (targetFqdn) { target = targetFqdn; break; }
+  // Pre-compute target using the single helper function
+  const target = getAlertTarget(alert);
 
-        const targetHost = event.meta.find(m => m.key === 'target_host')?.value;
-        if (targetHost) { target = targetHost; break; }
+  // Enrich alert with pre-computed target
+  const enrichedAlert = {
+    ...alert,
+    target: target
+  };
 
-        const service = event.meta.find(m => m.key === 'service')?.value;
-        if (service) { target = service; break; }
-      }
+  // Insert Alert with pre-computed target
+  const alertData = {
+    id: alert.id,
+    uuid: alert.uuid || String(alert.id),
+    created_at: alert.created_at,
+    scenario: alert.scenario,
+    source_ip: alertSource.ip || alertSource.value,
+    source_cn: alertSource.cn,
+    source_as: alertSource.as_name,
+    message: alert.message || '',
+    raw_data: JSON.stringify(enrichedAlert)
+  };
+
+  try {
+    db.insertAlert.run(alertData);
+  } catch (err) {
+    // Ignore duplicate errors (UNIQUE constraint)
+    if (!err.message.includes('UNIQUE constraint')) {
+      console.error(`Failed to insert alert ${alert.id}:`, err.message);
     }
-  }
-  // Fallback to machine info
-  if (!target) {
-    target = alert.machine_alias || alert.machine_id || null;
   }
 
   // Insert Decisions
@@ -380,23 +418,6 @@ function processAlertForDb(alert) {
 
   // NOTE: Alerts with empty decisions array (like AppSec/WAF alerts) do NOT create
   // decision entries. They block traffic directly without creating CrowdSec bans.
-
-  // Insert Alert
-  const alertData = {
-    id: alert.id,
-    uuid: alert.uuid || String(alert.id),
-    created_at: alert.created_at,
-    scenario: alert.scenario || 'unknown',
-    source_ip: alert.source ? alert.source.ip : 'unknown',
-    message: alert.message || '',
-    raw_data: JSON.stringify(alert)
-  };
-
-  try {
-    db.insertAlert.run(alertData);
-  } catch (err) {
-    console.error(`Failed to insert alert ${alert.id}:`, err.message);
-  }
 }
 
 // Fetch alerts from LAPI with optional 'since'/'until' parameters and active decision filter
@@ -1065,20 +1086,6 @@ const slimAlert = (alert) => {
     expired: d.expired
   }));
 
-  // Extract target info from first event's meta (for getAlertTarget in stats)
-  let targetMeta = null;
-  if (alert.events && alert.events.length > 0) {
-    const firstEvent = alert.events[0];
-    if (firstEvent.meta) {
-      const relevantMeta = firstEvent.meta.filter(m =>
-        ['target_fqdn', 'target_host', 'service'].includes(m.key)
-      );
-      if (relevantMeta.length > 0) {
-        targetMeta = [{ meta: relevantMeta }];
-      }
-    }
-  }
-
   return {
     id: alert.id,
     created_at: alert.created_at,
@@ -1094,8 +1101,8 @@ const slimAlert = (alert) => {
       as_name: alert.source.as_name,
       as_number: alert.source.as_number
     } : null,
-    // Include minimal event data for target detection
-    events: targetMeta,
+    // Use pre-computed target from database import
+    target: alert.target,
     decisions
   };
 };
@@ -1369,32 +1376,6 @@ app.put('/api/config/refresh-interval', ensureAuth, (req, res) => {
   }
 });
 
-/**
- * Helper to extract target from alert events (server-side pre-computation)
- * Matches frontend getAlertTarget logic: target_fqdn > target_host > service > machine_alias > machine_id
- */
-const getAlertTarget = (alert) => {
-  if (!alert) return "Unknown";
-
-  // Try to find target in events
-  if (alert.events && Array.isArray(alert.events)) {
-    for (const event of alert.events) {
-      if (event.meta && Array.isArray(event.meta)) {
-        const targetFqdn = event.meta.find(m => m.key === 'target_fqdn')?.value;
-        if (targetFqdn) return targetFqdn;
-
-        const targetHost = event.meta.find(m => m.key === 'target_host')?.value;
-        if (targetHost) return targetHost;
-
-        const service = event.meta.find(m => m.key === 'service')?.value;
-        if (service) return service;
-      }
-    }
-  }
-
-  // Fallback
-  return alert.machine_alias || alert.machine_id || "Unknown";
-};
 
 /**
  * GET /api/stats/alerts
@@ -1429,7 +1410,7 @@ app.get('/api/stats/alerts', ensureAuth, async (req, res) => {
           cn: alert.source.cn,
           as_name: alert.source.as_name
         } : null,
-        target: getAlertTarget(alert)
+        target: alert.target
       };
     });
 
@@ -1470,7 +1451,8 @@ app.get('/api/stats/decisions', ensureAuth, async (req, res) => {
         created_at: d.created_at,
         scenario: d.scenario,
         value: d.value,
-        stop_at: d.stop_at
+        stop_at: d.stop_at,
+        target: d.target  // Pre-computed during import
       };
     });
 
