@@ -182,6 +182,9 @@ const cache = {
   lastUpdate: null
 };
 
+// Synchronization lock for cache initialization
+let initializationPromise = null;
+
 // Global LAPI Status Tracker
 const lapiStatus = {
   isConnected: false,
@@ -509,36 +512,51 @@ async function syncHistory() {
 }
 
 // Initial cache load - uses chunked sync for progress feedback
+// Uses synchronization lock to prevent concurrent initialization
 async function initializeCache() {
-  try {
-    console.log('Initializing cache with chunked data load...');
+  // If initialization is already in progress, wait for it to complete
+  if (initializationPromise) {
+    console.log('Cache initialization already in progress, waiting...');
+    return initializationPromise;
+  }
 
-    // Use chunked sync for progress tracking
-    const totalAlerts = await syncHistory();
+  // Create a new promise for this initialization
+  initializationPromise = (async () => {
+    try {
+      console.log('Initializing cache with chunked data load...');
 
-    cache.lastUpdate = new Date().toISOString();
-    cache.isInitialized = true;
+      // Use chunked sync for progress tracking
+      const totalAlerts = await syncHistory();
 
-    // Get counts from database
-    const alertCount = db.countAlerts.get().count;
+      cache.lastUpdate = new Date().toISOString();
+      cache.isInitialized = true;
 
-    console.log(`Cache initialized successfully:
+      // Get counts from database
+      const alertCount = db.countAlerts.get().count;
+
+      console.log(`Cache initialized successfully:
   - ${alertCount} alerts in database
   - Last update: ${cache.lastUpdate}
 `);
-    updateLapiStatus(true);
+      updateLapiStatus(true);
 
-  } catch (error) {
-    console.error('Failed to initialize cache:', error.message);
-    cache.isInitialized = false;
-    updateLapiStatus(false, error);
-    updateSyncStatus({
-      isSyncing: false,
-      progress: 0,
-      message: `Sync failed: ${error.message}`,
-      completedAt: new Date().toISOString()
-    });
-  }
+    } catch (error) {
+      console.error('Failed to initialize cache:', error.message);
+      cache.isInitialized = false;
+      updateLapiStatus(false, error);
+      updateSyncStatus({
+        isSyncing: false,
+        progress: 0,
+        message: `Sync failed: ${error.message}`,
+        completedAt: new Date().toISOString()
+      });
+    } finally {
+      // Clear the promise so future calls can initialize again if needed
+      initializationPromise = null;
+    }
+  })();
+
+  return initializationPromise;
 }
 
 // Delta update - fetch only new data since last update
@@ -799,6 +817,12 @@ let updateCheckCache = {
   data: null
 };
 
+// Check once at startup if update checking is enabled
+const UPDATE_CHECK_ENABLED = !!process.env.VITE_COMMIT_HASH;
+if (!UPDATE_CHECK_ENABLED) {
+  console.log('Update checking disabled: VITE_COMMIT_HASH not set.');
+}
+
 async function getGhcrToken() {
   try {
     const response = await axios.get('https://ghcr.io/token?service=ghcr.io&scope=repository:theduffman85/crowdsec-web-ui:pull', {
@@ -812,6 +836,11 @@ async function getGhcrToken() {
 }
 
 async function checkForUpdates() {
+  // Skip if update checking is disabled (no commit hash set)
+  if (!UPDATE_CHECK_ENABLED) {
+    return { update_available: false, reason: 'no_local_hash' };
+  }
+
   // Return cached result if valid
   const now = Date.now();
   if (updateCheckCache.data && (now - updateCheckCache.lastCheck < UPDATE_CHECK_CACHE_DURATION)) {
@@ -823,11 +852,6 @@ async function checkForUpdates() {
 
   // Map branch to tag
   const tag = currentBranch === 'dev' ? 'dev' : 'latest';
-
-  if (!currentHash) {
-    console.log('Update check skipped: VITE_COMMIT_HASH not set.');
-    return { update_available: false, reason: 'no_local_hash' };
-  }
 
   try {
     const token = await getGhcrToken();
