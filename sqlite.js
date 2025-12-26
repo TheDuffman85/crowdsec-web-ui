@@ -156,6 +156,12 @@ const insertDecision = db.prepare(`
   VALUES (@id, @uuid, @alert_id, @created_at, @stop_at, @value, @type, @origin, @scenario, @raw_data)
 `);
 
+// Update only - does NOT insert new entries, only updates existing ones
+const updateDecision = db.prepare(`
+  UPDATE decisions SET stop_at = @stop_at, raw_data = @raw_data
+  WHERE id = @id
+`);
+
 const getActiveDecisions = db.prepare(`
   SELECT raw_data, created_at FROM decisions 
   WHERE stop_at > @now
@@ -163,16 +169,22 @@ const getActiveDecisions = db.prepare(`
   LIMIT @limit
 `);
 
-// For "decisionsForStats" we might want all decisions within lookback, active or not
+// For "include_expired" view: get all active decisions PLUS expired ones within lookback
 const getDecisionsSince = db.prepare(`
     SELECT raw_data, created_at FROM decisions
-    WHERE created_at >= @since
+    WHERE created_at >= @since OR stop_at > @now
     ORDER BY stop_at DESC
 `);
 
 const deleteOldDecisions = db.prepare('DELETE FROM decisions WHERE stop_at < @cutoff');
 const deleteDecision = db.prepare('DELETE FROM decisions WHERE id = @id');
 const getDecisionById = db.prepare('SELECT raw_data, stop_at FROM decisions WHERE id = @id');
+const getActiveDecisionByValue = db.prepare(`
+  SELECT raw_data, stop_at FROM decisions 
+  WHERE value = @value AND stop_at > @now AND id NOT LIKE 'dup_%'
+  ORDER BY stop_at DESC
+  LIMIT 1
+`);
 const deleteAlert = db.prepare('DELETE FROM alerts WHERE id = @id');
 const deleteDecisionsByAlertId = db.prepare('DELETE FROM decisions WHERE alert_id = @alert_id');
 
@@ -193,9 +205,11 @@ module.exports = {
   countAlerts,
   deleteOldAlerts,
   insertDecision,
+  updateDecision,
   getActiveDecisions,
   getDecisionsSince,
   getDecisionById,
+  getActiveDecisionByValue,
   deleteOldDecisions,
   deleteDecision,
   deleteAlert,

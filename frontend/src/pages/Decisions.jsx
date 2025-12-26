@@ -31,8 +31,8 @@ export function Decisions() {
     const targetFilter = searchParams.get("target");
     const dateStartFilter = searchParams.get("dateStart");
     const dateEndFilter = searchParams.get("dateEnd");
-    // Default: hide duplicates unless explicitly set to false
-    const showDuplicates = searchParams.get("hide_duplicates") === "false";
+    // Default: hide duplicates unless explicitly set to false OR viewing a specific alert's decisions
+    const showDuplicates = searchParams.get("hide_duplicates") === "false" || !!alertIdFilter;
 
     const [displayedCount, setDisplayedCount] = useState(50);
 
@@ -261,7 +261,7 @@ export function Decisions() {
                 <div className="flex flex-wrap gap-2">
                     {!includeExpiredParam && (
                         <Badge variant="secondary" className="flex items-center gap-1">
-                            <span className="font-semibold uppercase">STATUS:</span> ACTIVE
+                            <span className="font-semibold">Hide:</span> Inactive
                             <button
                                 onClick={toggleExpired}
                                 className="ml-1 hover:text-red-500"
@@ -272,7 +272,7 @@ export function Decisions() {
                     )}
                     {!showDuplicates && (
                         <Badge variant="secondary" className="flex items-center gap-1">
-                            <span className="font-semibold uppercase">HIDE:</span> DUPLICATES
+                            <span className="font-semibold">Hide:</span> Duplicates
                             <button
                                 onClick={() => {
                                     const newParams = new URLSearchParams(searchParams);
@@ -287,7 +287,7 @@ export function Decisions() {
                     )}
                     {alertIdFilter && (
                         <Badge variant="secondary" className="flex items-center gap-1">
-                            <span className="font-semibold uppercase">ALERT:</span> #{alertIdFilter}
+                            <span className="font-semibold">Alert:</span> #{alertIdFilter}
                             <button
                                 onClick={() => removeParam("alert_id")}
                                 className="ml-1 hover:text-red-500"
@@ -299,7 +299,7 @@ export function Decisions() {
                     {/* Iterate over other filters to cleaner code, or keep explicit for now to match exactly what we have but styled better */}
                     {searchParams.get("country") && (
                         <Badge variant="secondary" className="flex items-center gap-1">
-                            <span className="font-semibold uppercase">COUNTRY:</span> {countryFilter}
+                            <span className="font-semibold">Country:</span> {countryFilter}
                             <button
                                 onClick={() => removeParam("country")}
                                 className="ml-1 hover:text-red-500"
@@ -310,7 +310,7 @@ export function Decisions() {
                     )}
                     {searchParams.get("scenario") && (
                         <Badge variant="secondary" className="flex items-center gap-1 max-w-[300px] truncate" title={scenarioFilter}>
-                            <span className="font-semibold uppercase">SCENARIO:</span> {scenarioFilter}
+                            <span className="font-semibold">Scenario:</span> {scenarioFilter}
                             <button
                                 onClick={() => removeParam("scenario")}
                                 className="ml-1 hover:text-red-500"
@@ -321,7 +321,7 @@ export function Decisions() {
                     )}
                     {searchParams.get("as") && (
                         <Badge variant="secondary" className="flex items-center gap-1 max-w-[300px] truncate" title={asFilter}>
-                            <span className="font-semibold uppercase">AS:</span> {asFilter}
+                            <span className="font-semibold">AS:</span> {asFilter}
                             <button
                                 onClick={() => removeParam("as")}
                                 className="ml-1 hover:text-red-500"
@@ -332,7 +332,7 @@ export function Decisions() {
                     )}
                     {searchParams.get("ip") && (
                         <Badge variant="secondary" className="flex items-center gap-1">
-                            <span className="font-semibold uppercase">IP:</span> {ipFilter}
+                            <span className="font-semibold">IP:</span> {ipFilter}
                             <button
                                 onClick={() => removeParam("ip")}
                                 className="ml-1 hover:text-red-500"
@@ -343,7 +343,7 @@ export function Decisions() {
                     )}
                     {targetFilter && (
                         <Badge variant="secondary" className="flex items-center gap-1">
-                            <span className="font-semibold uppercase">TARGET:</span> {targetFilter}
+                            <span className="font-semibold">Target:</span> {targetFilter}
                             <button
                                 onClick={() => removeParam("target")}
                                 className="ml-1 hover:text-red-500"
@@ -354,7 +354,7 @@ export function Decisions() {
                     )}
                     {dateStartFilter && (
                         <Badge variant="secondary" className="flex items-center gap-1">
-                            <span className="font-semibold uppercase">DATESTART:</span> {dateStartFilter}
+                            <span className="font-semibold">Date Start:</span> {dateStartFilter}
                             <button
                                 onClick={() => removeParam("dateStart")}
                                 className="ml-1 hover:text-red-500"
@@ -365,7 +365,7 @@ export function Decisions() {
                     )}
                     {dateEndFilter && (
                         <Badge variant="secondary" className="flex items-center gap-1">
-                            <span className="font-semibold uppercase">DATEEND:</span> {dateEndFilter}
+                            <span className="font-semibold">Date End:</span> {dateEndFilter}
                             <button
                                 onClick={() => removeParam("dateEnd")}
                                 className="ml-1 hover:text-red-500"

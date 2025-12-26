@@ -206,7 +206,7 @@ export function Alerts() {
                         if (!val) return null;
                         return (
                             <Badge key={key} variant="secondary" className="flex items-center gap-1">
-                                <span className="font-semibold uppercase">{key}:</span> {val}
+                                <span className="font-semibold">{key.charAt(0).toUpperCase() + key.slice(1).replace(/([A-Z])/g, ' $1')}:</span> {val}
                                 <button
                                     onClick={() => {
                                         const newParams = new URLSearchParams(searchParams);

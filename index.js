@@ -297,33 +297,33 @@ function processAlertForDb(alert) {
 
   const decisions = alert.decisions || [];
 
+  // Extract source info from alert for country/AS data
+  const alertSource = alert.source || {};
+
+  // Extract target info from alert events
+  let target = null;
+  if (alert.events && alert.events.length > 0) {
+    for (const event of alert.events) {
+      if (event.meta) {
+        const targetFqdn = event.meta.find(m => m.key === 'target_fqdn')?.value;
+        if (targetFqdn) { target = targetFqdn; break; }
+
+        const targetHost = event.meta.find(m => m.key === 'target_host')?.value;
+        if (targetHost) { target = targetHost; break; }
+
+        const service = event.meta.find(m => m.key === 'service')?.value;
+        if (service) { target = service; break; }
+      }
+    }
+  }
+  // Fallback to machine info
+  if (!target) {
+    target = alert.machine_alias || alert.machine_id || null;
+  }
+
   // Insert Decisions
   decisions.forEach(decision => {
     if (decision.origin === 'CAPI') return; // Skip CAPI decisions
-
-    // Extract source info from alert for country/AS data
-    const alertSource = alert.source || {};
-
-    // Extract target info from alert events
-    let target = null;
-    if (alert.events && alert.events.length > 0) {
-      for (const event of alert.events) {
-        if (event.meta) {
-          const targetFqdn = event.meta.find(m => m.key === 'target_fqdn')?.value;
-          if (targetFqdn) { target = targetFqdn; break; }
-
-          const targetHost = event.meta.find(m => m.key === 'target_host')?.value;
-          if (targetHost) { target = targetHost; break; }
-
-          const service = event.meta.find(m => m.key === 'service')?.value;
-          if (service) { target = service; break; }
-        }
-      }
-    }
-    // Fallback to machine info
-    if (!target) {
-      target = alert.machine_alias || alert.machine_id || null;
-    }
 
     // Calculate stop_at from duration if available
     // LAPI provides 'duration' as remaining time for active decisions
@@ -348,7 +348,8 @@ function processAlertForDb(alert) {
       type: decision.type || 'ban',
       country: alertSource.cn,
       as: alertSource.as_name,
-      target: target
+      target: target,
+      is_duplicate: false // Real decisions are not duplicates
     };
 
     const decisionData = {
@@ -370,6 +371,9 @@ function processAlertForDb(alert) {
       console.error(`Failed to insert decision ${decision.id}:`, err.message);
     }
   });
+
+  // NOTE: Alerts with empty decisions array (like AppSec/WAF alerts) do NOT create
+  // decision entries. They block traffic directly without creating CrowdSec bans.
 
   // Insert Alert
   const alertData = {
@@ -611,16 +615,11 @@ async function updateCacheDelta() {
             };
 
             try {
-              db.insertDecision.run({
+              // Use UPDATE only - don't insert new entries from enriched alert data
+              // This prevents creating phantom decisions from alerts that originally had empty decisions
+              db.updateDecision.run({
                 id: String(decision.id),
-                uuid: String(decision.id),
-                alert_id: alert.id,
-                created_at: createdAt,
                 stop_at: stopAt,
-                value: decision.value,
-                type: decision.type,
-                origin: enrichedDecision.origin,
-                scenario: enrichedDecision.scenario,
                 raw_data: JSON.stringify(enrichedDecision)
               });
             } catch (err) {
@@ -1155,8 +1154,8 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
 
     let decisions;
     if (includeExpired) {
-      // Get all decisions within lookback period
-      const rawDecisions = db.getDecisionsSince.all({ since });
+      // Get all active decisions PLUS expired ones within lookback period
+      const rawDecisions = db.getDecisionsSince.all({ since, now });
       decisions = rawDecisions.map(row => {
         const d = JSON.parse(row.raw_data);
         const isExpired = d.stop_at && new Date(d.stop_at) < new Date();
@@ -1166,6 +1165,7 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
           scenario: d.scenario,
           value: d.value,
           expired: isExpired,
+          is_duplicate: d.is_duplicate === true, // Read from raw_data, set at insert time
           detail: {
             origin: d.origin || "manual",
             type: d.type,
@@ -1192,6 +1192,7 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
           scenario: d.scenario,
           value: d.value,
           expired: false,
+          is_duplicate: d.is_duplicate === true, // Read from raw_data, set at insert time
           detail: {
             origin: d.origin || "manual",
             type: d.type,
@@ -1209,34 +1210,43 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
       });
     }
 
-    // Mark duplicate decisions: for each IP with multiple decisions,
-    // mark all but the earliest (by created_at, with ID as tiebreaker) as duplicates
-    const ipPrimaryMap = new Map(); // Maps IP -> { created_at, id } of the primary (non-duplicate) decision
+    // Compute duplicates: for each IP, only the decision with the LOWEST ID is non-duplicate
+    // This works because CrowdSec assigns ascending IDs, so the first decision for an IP has the lowest ID
+    // IMPORTANT: Only apply duplicate detection to ACTIVE decisions - expired ones should all be visible for history
+    const ipPrimaryMap = new Map(); // Maps IP -> lowest decision ID for that IP (active decisions only)
     for (const decision of decisions) {
-      const ip = decision.value;
-      const createdAt = new Date(decision.created_at);
-      const existing = ipPrimaryMap.get(ip);
+      // Skip expired decisions - they are never considered for duplicate detection
+      if (decision.expired) continue;
 
-      if (!existing) {
-        // First decision for this IP
-        ipPrimaryMap.set(ip, { created_at: createdAt, id: decision.id });
-      } else if (createdAt < existing.created_at) {
-        // Earlier timestamp wins
-        ipPrimaryMap.set(ip, { created_at: createdAt, id: decision.id });
-      } else if (createdAt.getTime() === existing.created_at.getTime() && decision.id < existing.id) {
-        // Same timestamp - lower ID wins (tiebreaker)
-        ipPrimaryMap.set(ip, { created_at: createdAt, id: decision.id });
+      const ip = decision.value;
+      const decisionIdStr = String(decision.id);
+      const numericId = decisionIdStr.startsWith('dup_')
+        ? Infinity  // Virtual duplicates always lose to real decisions
+        : parseInt(decisionIdStr, 10) || Infinity;
+
+      const existing = ipPrimaryMap.get(ip);
+      if (!existing || numericId < existing) {
+        ipPrimaryMap.set(ip, numericId);
       }
     }
 
-    // Add is_duplicate field to each decision
+    // Mark duplicates - only active decisions can be duplicates
     decisions = decisions.map(decision => {
+      // Expired decisions are never duplicates
+      if (decision.expired) {
+        return { ...decision, is_duplicate: false };
+      }
+
       const ip = decision.value;
-      const primary = ipPrimaryMap.get(ip);
-      const isDuplicate = decision.id !== primary.id;
+      const primaryId = ipPrimaryMap.get(ip);
+      const decisionIdStr = String(decision.id);
+      const numericId = decisionIdStr.startsWith('dup_')
+        ? Infinity
+        : parseInt(decisionIdStr, 10) || Infinity;
+
       return {
         ...decision,
-        is_duplicate: isDuplicate
+        is_duplicate: numericId !== primaryId
       };
     });
 
@@ -1343,9 +1353,10 @@ app.get('/api/stats/decisions', ensureAuth, async (req, res) => {
       await initializeCache();
     }
 
-    // Get all decisions within lookback period
+    // Get all decisions within lookback period (plus any still active)
     const since = new Date(Date.now() - LOOKBACK_MS).toISOString();
-    const rawDecisions = db.getDecisionsSince.all({ since });
+    const now = new Date().toISOString();
+    const rawDecisions = db.getDecisionsSince.all({ since, now });
 
     const decisions = rawDecisions.map(row => {
       const d = JSON.parse(row.raw_data);
