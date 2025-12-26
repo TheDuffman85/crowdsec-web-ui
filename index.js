@@ -168,6 +168,9 @@ const syncStatus = {
   completedAt: null
 };
 
+// Track first sync after startup - show modal only on first sync
+let isFirstSync = true;
+
 function updateSyncStatus(updates) {
   Object.assign(syncStatus, updates);
 }
@@ -431,8 +434,12 @@ async function fetchAlertsFromLAPI(since = null, until = null, hasActiveDecision
 async function syncHistory() {
   console.log('Starting historical data sync...');
 
+  // Only show the sync overlay modal on the first sync after startup
+  const showOverlay = isFirstSync;
+  isFirstSync = false;
+
   updateSyncStatus({
-    isSyncing: true,
+    isSyncing: showOverlay, // Only true on first sync
     progress: 0,
     message: 'Starting historical data sync...',
     startedAt: new Date().toISOString(),
