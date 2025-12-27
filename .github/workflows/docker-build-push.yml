@@ -6,7 +6,8 @@ on:
       - 'README.md'
       - 'screenshots/*'
       - '.gitignore'
-      - '*.sh'
+      - 'reset-dev-branch.sh'
+      - 'run.sh'
     branches:
       - main
       - dev
