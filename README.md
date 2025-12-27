@@ -148,6 +148,11 @@ services:
     restart: unless-stopped
 ```
 
+### Run with Helm
+
+A Helm chart for deploying `crowdsec-web-ui` on Kubernetes is available (maintained by the zekker6):
+[https://github.com/zekker6/helm-charts/tree/main/charts/apps/crowdsec-web-ui](https://github.com/zekker6/helm-charts/tree/main/charts/apps/crowdsec-web-ui)
+
 ## Persistence
 
 To persist alert history, decisions cache, and configuration across container restarts, mount the `/app/data` directory. All data is stored in a single SQLite database.
