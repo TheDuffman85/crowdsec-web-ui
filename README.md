@@ -117,7 +117,8 @@ Automatically detects new container images on GitHub Container Registry (GHCR). 
       --network your_crowdsec_network \
       crowdsec-web-ui
     ```
-    *Note: Ensure the container is on the same Docker network as CrowdSec so it can reach the URL.*
+> [!NOTE]
+> Ensure the container is on the same Docker network as CrowdSec so it can reach the URL.
 
 ### Docker Compose Example
 
