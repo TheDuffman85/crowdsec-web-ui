@@ -91,8 +91,9 @@ Automatically detects new container images on GitHub Container Registry (GHCR). 
         ```bash
         docker exec crowdsec cscli machines add crowdsec-web-ui --password <generated_password> -f /dev/null
         ```
-        > [!NOTE]
-        > The `-f /dev/null` flag is crucial. It tells `cscli` **not** to overwrite the existing credentials file of the CrowdSec container. We only want to register the machine in the database, not change the container's local config.
+
+> [!NOTE]
+> The `-f /dev/null` flag is crucial. It tells `cscli` **not** to overwrite the existing credentials file of the CrowdSec container. We only want to register the machine in the database, not change the container's local config.
 
 ## Run with Docker (Recommended)
 
