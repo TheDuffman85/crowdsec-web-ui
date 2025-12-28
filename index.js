@@ -82,7 +82,8 @@ const apiClient = axios.create({
   baseURL: CROWDSEC_URL,
   timeout: 30000,
   headers: {
-    'User-Agent': 'crowdsec-web-ui/1.0.0'
+    'User-Agent': 'crowdsec-web-ui/1.0.0',
+    'Connection': 'close' // Disable keep-alive to prevent Bun connection hanging
   }
 });
 
