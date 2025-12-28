@@ -78,7 +78,7 @@ if (!CROWDSEC_USER || !CROWDSEC_PASSWORD) {
 
 const apiClient = axios.create({
   baseURL: CROWDSEC_URL,
-  timeout: 5000,
+  timeout: 30000,
   headers: {
     'User-Agent': 'crowdsec-web-ui/1.0.0'
   }
@@ -428,23 +428,41 @@ async function fetchAlertsFromLAPI(since = null, until = null, hasActiveDecision
   const activeDecisionParam = hasActiveDecision ? '&has_active_decision=true' : '';
   const untilParam = until ? `&until=${until}` : '';
 
-  const originPromises = origins.map(o =>
-    apiClient.get(`/v1/alerts?since=${sinceParam}${untilParam}&origin=${o}&limit=${limit}${activeDecisionParam}`)
-  );
-  const scopePromises = scopes.map(s =>
-    apiClient.get(`/v1/alerts?since=${sinceParam}${untilParam}&scope=${s}&limit=${limit}${activeDecisionParam}`)
-  );
-
-  const responses = await Promise.all([...originPromises, ...scopePromises]);
-
   let alertMap = new Map();
-  responses.forEach(r => {
+
+  // Helper to process response
+  const processResponse = (r) => {
     if (r.data && Array.isArray(r.data)) {
       r.data.forEach(alert => {
         alertMap.set(alert.id, alert);
       });
+      return r.data.length;
     }
-  });
+    return 0;
+  };
+
+  // Execute requests SEQUENTIALLY to avoid overwhelming LAPI or triggering concurrency hang
+  for (const o of origins) {
+    try {
+      console.log(`      [DEBUG] Fetching origin=${o}...`);
+      const r = await apiClient.get(`/v1/alerts?since=${sinceParam}${untilParam}&origin=${o}&limit=${limit}${activeDecisionParam}`);
+      const count = processResponse(r);
+      console.log(`      [DEBUG] Got ${count} alerts from origin=${o}`);
+    } catch (err) {
+      console.error(`      [DEBUG] Failed to fetch origin=${o}: ${err.message}`);
+    }
+  }
+
+  for (const s of scopes) {
+    try {
+      console.log(`      [DEBUG] Fetching scope=${s}...`);
+      const r = await apiClient.get(`/v1/alerts?since=${sinceParam}${untilParam}&scope=${s}&limit=${limit}${activeDecisionParam}`);
+      const count = processResponse(r);
+      console.log(`      [DEBUG] Got ${count} alerts from scope=${s}`);
+    } catch (err) {
+      console.error(`      [DEBUG] Failed to fetch scope=${s}: ${err.message}`);
+    }
+  }
 
   return Array.from(alertMap.values());
 }
