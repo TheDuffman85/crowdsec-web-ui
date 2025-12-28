@@ -451,9 +451,6 @@ async function fetchAlertsFromLAPI(since = null, until = null, hasActiveDecision
     const timeoutId = setTimeout(() => controller.abort(), 30000);
 
     try {
-      console.log(`    [DEBUG] Fetching: ${url}`);
-      const startTime = Date.now();
-
       const response = await fetch(`${CROWDSEC_URL}${url}`, {
         method: 'GET',
         headers: {
@@ -461,21 +458,16 @@ async function fetchAlertsFromLAPI(since = null, until = null, hasActiveDecision
           'User-Agent': 'crowdsec-web-ui/1.0.0',
           'Connection': 'close'
         },
-        signal: controller.signal,
-        verbose: true  // Bun-specific: enable verbose logging
+        signal: controller.signal
       });
 
       clearTimeout(timeoutId);
-      const elapsed = Date.now() - startTime;
-      console.log(`    [DEBUG] Response status: ${response.status} (${elapsed}ms)`);
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
-      const data = await response.json();
-      console.log(`    [DEBUG] Parsed ${Array.isArray(data) ? data.length : 0} items`);
-      return data;
+      return await response.json();
     } catch (err) {
       clearTimeout(timeoutId);
       throw err;
