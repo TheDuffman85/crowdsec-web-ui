@@ -718,12 +718,14 @@ if (!UPDATE_CHECK_ENABLED) {
   console.log('Update checking disabled: VITE_COMMIT_HASH not set.');
 }
 
+const DOCKER_IMAGE_REF = process.env.DOCKER_IMAGE_REF || 'theduffman85/crowdsec-web-ui';
+
 async function getGhcrToken() {
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-    const response = await fetch('https://ghcr.io/token?service=ghcr.io&scope=repository:theduffman85/crowdsec-web-ui:pull', {
+    const response = await fetch(`https://ghcr.io/token?service=ghcr.io&scope=repository:${DOCKER_IMAGE_REF}:pull`, {
       signal: controller.signal
     });
     clearTimeout(timeoutId);
@@ -760,7 +762,7 @@ async function checkForUpdates() {
     if (!token) throw new Error('No GHCR token obtained');
 
     // 1. Get Manifest (or Index)
-    const manifestUrl = `https://ghcr.io/v2/theduffman85/crowdsec-web-ui/manifests/${tag}`;
+    const manifestUrl = `https://ghcr.io/v2/${DOCKER_IMAGE_REF}/manifests/${tag}`;
 
     let manifestFetch = await fetch(manifestUrl, {
       headers: {
@@ -785,7 +787,7 @@ async function checkForUpdates() {
       const resolvedDigest = targetPlatform.digest;
 
       // Fetch the specific manifest
-      const specificManifestUrl = `https://ghcr.io/v2/theduffman85/crowdsec-web-ui/manifests/${resolvedDigest}`;
+      const specificManifestUrl = `https://ghcr.io/v2/${DOCKER_IMAGE_REF}/manifests/${resolvedDigest}`;
       const specificFetch = await fetch(specificManifestUrl, {
         headers: {
           'Authorization': `Bearer ${token}`,

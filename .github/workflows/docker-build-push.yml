@@ -74,3 +74,4 @@ jobs:
             VITE_BUILD_DATE=${{ steps.date.outputs.date }}
             VITE_REPO_URL=${{ github.server_url }}/${{ github.repository }}
             VITE_BRANCH=${{ steps.branch.outputs.name }}
+            DOCKER_IMAGE_REF=${{ github.repository }}
