@@ -1,6 +1,6 @@
-const Database = require('better-sqlite3');
-const path = require('path');
-const fs = require('fs');
+import { Database } from "bun:sqlite";
+import path from "path";
+import fs from "fs";
 
 // Database path calculation
 const DB_DIR = process.env.DB_DIR || '/app/data';
@@ -14,7 +14,7 @@ if (!fs.existsSync(DB_DIR)) {
   } catch (err) {
     console.error(`Failed to create database directory ${DB_DIR}. Falling back to local file.`);
     // Fallback to local file in current directory
-    dbPath = path.join(__dirname, 'crowdsec.db');
+    dbPath = path.join(import.meta.dir, 'crowdsec.db');
   }
 }
 
@@ -22,8 +22,8 @@ if (!fs.existsSync(DB_DIR)) {
 let db;
 try {
   console.log(`Opening SQLite database at ${dbPath}...`);
-  db = new Database(dbPath, { verbose: null }); // Set verbose: console.log for debugging
-  db.pragma('journal_mode = WAL');
+  db = new Database(dbPath);
+  db.exec('PRAGMA journal_mode = WAL');
   console.log('Database opened successfully.');
 } catch (error) {
   console.error('Failed to open database:', error);
@@ -81,14 +81,14 @@ function initSchema() {
 
   // Migration: Check if decisions table needs to be recreated with TEXT id
   // This handles existing databases that have INTEGER id column
-  const tableInfo = db.pragma(`table_info(decisions)`);
+  const tableInfo = db.query(`PRAGMA table_info(decisions)`).all();
   const idColumn = tableInfo.find(col => col.name === 'id');
 
   if (idColumn && idColumn.type.toUpperCase() === 'INTEGER') {
     console.log('Migration: Recreating decisions table with TEXT id column...');
 
     // Backup existing data
-    const existingDecisions = db.prepare('SELECT * FROM decisions').all();
+    const existingDecisions = db.query('SELECT * FROM decisions').all();
     console.log(`  - Backing up ${existingDecisions.length} existing decisions...`);
 
     // Drop old table and indexes
@@ -101,16 +101,24 @@ function initSchema() {
 
     // Restore data
     if (existingDecisions.length > 0) {
-      const insertStmt = db.prepare(`
+      const insertStmt = db.query(`
         INSERT OR REPLACE INTO decisions (id, uuid, alert_id, created_at, stop_at, value, type, origin, scenario, raw_data)
-        VALUES (@id, @uuid, @alert_id, @created_at, @stop_at, @value, @type, @origin, @scenario, @raw_data)
+        VALUES ($id, $uuid, $alert_id, $created_at, $stop_at, $value, $type, $origin, $scenario, $raw_data)
       `);
 
       const restoreTransaction = db.transaction((decisions) => {
         for (const decision of decisions) {
           insertStmt.run({
-            ...decision,
-            id: String(decision.id) // Convert ID to string
+            $id: String(decision.id),
+            $uuid: decision.uuid,
+            $alert_id: decision.alert_id,
+            $created_at: decision.created_at,
+            $stop_at: decision.stop_at,
+            $value: decision.value,
+            $type: decision.type,
+            $origin: decision.origin,
+            $scenario: decision.scenario,
+            $raw_data: decision.raw_data
           });
         }
       });
@@ -145,71 +153,67 @@ clearSyncData();
 // --- Prepared Statements ---
 
 // Alerts
-const insertAlert = db.prepare(`
+const insertAlert = db.query(`
   INSERT OR REPLACE INTO alerts (id, uuid, created_at, scenario, source_ip, message, raw_data)
-  VALUES (@id, @uuid, @created_at, @scenario, @source_ip, @message, @raw_data)
+  VALUES ($id, $uuid, $created_at, $scenario, $source_ip, $message, $raw_data)
 `);
 
-const getAlerts = db.prepare(`
+const getAlerts = db.query(`
   SELECT raw_data FROM alerts 
-  WHERE created_at >= @since 
+  WHERE created_at >= $since 
   ORDER BY created_at DESC
-  LIMIT @limit
+  LIMIT $limit
 `);
 
-const countAlerts = db.prepare('SELECT COUNT(*) as count FROM alerts');
+const countAlerts = db.query('SELECT COUNT(*) as count FROM alerts');
 
-const deleteOldAlerts = db.prepare('DELETE FROM alerts WHERE created_at < @cutoff');
+const deleteOldAlerts = db.query('DELETE FROM alerts WHERE created_at < $cutoff');
 
 // Decisions
-const insertDecision = db.prepare(`
+const insertDecision = db.query(`
   INSERT OR REPLACE INTO decisions (id, uuid, alert_id, created_at, stop_at, value, type, origin, scenario, raw_data)
-  VALUES (@id, @uuid, @alert_id, @created_at, @stop_at, @value, @type, @origin, @scenario, @raw_data)
+  VALUES ($id, $uuid, $alert_id, $created_at, $stop_at, $value, $type, $origin, $scenario, $raw_data)
 `);
 
 // Update only - does NOT insert new entries, only updates existing ones
-const updateDecision = db.prepare(`
-  UPDATE decisions SET stop_at = @stop_at, raw_data = @raw_data
-  WHERE id = @id
+const updateDecision = db.query(`
+  UPDATE decisions SET stop_at = $stop_at, raw_data = $raw_data
+  WHERE id = $id
 `);
 
-const getActiveDecisions = db.prepare(`
+const getActiveDecisions = db.query(`
   SELECT raw_data, created_at FROM decisions 
-  WHERE stop_at > @now
+  WHERE stop_at > $now
   ORDER BY stop_at DESC
-  LIMIT @limit
+  LIMIT $limit
 `);
 
 // For "include_expired" view: get all active decisions PLUS expired ones within lookback
-const getDecisionsSince = db.prepare(`
+const getDecisionsSince = db.query(`
     SELECT raw_data, created_at FROM decisions
-    WHERE created_at >= @since OR stop_at > @now
+    WHERE created_at >= $since OR stop_at > $now
     ORDER BY stop_at DESC
 `);
 
-const deleteOldDecisions = db.prepare('DELETE FROM decisions WHERE stop_at < @cutoff');
-const deleteDecision = db.prepare('DELETE FROM decisions WHERE id = @id');
-const getDecisionById = db.prepare('SELECT raw_data, stop_at FROM decisions WHERE id = @id');
-const getActiveDecisionByValue = db.prepare(`
+const deleteOldDecisions = db.query('DELETE FROM decisions WHERE stop_at < $cutoff');
+const deleteDecision = db.query('DELETE FROM decisions WHERE id = $id');
+const getDecisionById = db.query('SELECT raw_data, stop_at FROM decisions WHERE id = $id');
+const getActiveDecisionByValue = db.query(`
   SELECT raw_data, stop_at FROM decisions 
-  WHERE value = @value AND stop_at > @now AND id NOT LIKE 'dup_%'
+  WHERE value = $value AND stop_at > $now AND id NOT LIKE 'dup_%'
   ORDER BY stop_at DESC
   LIMIT 1
 `);
-const deleteAlert = db.prepare('DELETE FROM alerts WHERE id = @id');
-const deleteDecisionsByAlertId = db.prepare('DELETE FROM decisions WHERE alert_id = @alert_id');
-
-// Bulk delete for reconciliation
-// We can't easily prepare a variable list IN clause in better-sqlite3 without generating the string
-// So we'll expose a helper for it or just iterate in a transaction
+const deleteAlert = db.query('DELETE FROM alerts WHERE id = $id');
+const deleteDecisionsByAlertId = db.query('DELETE FROM decisions WHERE alert_id = $alert_id');
 
 // Meta
-const getMeta = db.prepare('SELECT value FROM meta WHERE key = ?');
-const setMeta = db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)');
+const getMeta = db.query('SELECT value FROM meta WHERE key = ?');
+const setMeta = db.query('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)');
 
 const transaction = (cb) => db.transaction(cb);
 
-module.exports = {
+export default {
   db,
   insertAlert,
   getAlerts,

@@ -13,13 +13,13 @@
 
 # CrowdSec Web UI
 
-A modern, responsive web interface for managing [CrowdSec](https://crowdsec.net/) alerts and decisions. Built with **React**, **Vite**, and **Tailwind CSS**.
+A modern, responsive web interface for managing [CrowdSec](https://crowdsec.net/) alerts and decisions. Built with **React**, **Vite**, **Bun**, and **Tailwind CSS**.
 
 <div align="center">
   <img src="https://img.shields.io/badge/react-%2320232a.svg?style=for-the-badge&logo=react&logoColor=%2361DAFB" alt="React" />
   <img src="https://img.shields.io/badge/vite-%23646CFF.svg?style=for-the-badge&logo=vite&logoColor=white" alt="Vite" />
   <img src="https://img.shields.io/badge/tailwindcss-%2338B2AC.svg?style=for-the-badge&logo=tailwind-css&logoColor=white" alt="Tailwind CSS" />
-  <img src="https://img.shields.io/badge/node.js-6DA55F?style=for-the-badge&logo=node.js&logoColor=white" alt="NodeDJ" />
+  <img src="https://img.shields.io/badge/Bun-%23000000.svg?style=for-the-badge&logo=bun&logoColor=white" alt="Bun" />
   <img src="https://img.shields.io/badge/docker-%230db7ed.svg?style=for-the-badge&logo=docker&logoColor=white" alt="Docker" />
 </div>
 
@@ -74,9 +74,9 @@ Automatically detects new container images on GitHub Container Registry (GHCR). 
 ## Architecture
 
 -   **Frontend**: React (Vite) + Tailwind CSS. Located in `frontend/`.
--   **Backend**: Node.js (Express). Acts as an intelligent caching layer for CrowdSec Local API (LAPI) with delta updates and optimized chunked historical data sync.
--   **Database**: SQLite (better-sqlite3). Persists alerts and decisions locally in `/app/data/crowdsec.db` to reduce memory usage and support historical data.
--   **Security**: The application runs as a non-root user (`node`) inside the container and communicates with CrowdSec via HTTP/LAPI. It uses **Machine Authentication** (User/Password) to obtain a JWT for full access (read/write).
+-   **Backend**: Bun (Express). Acts as an intelligent caching layer for CrowdSec Local API (LAPI) with delta updates and optimized chunked historical data sync.
+-   **Database**: SQLite (native bun:sqlite). Persists alerts and decisions locally in `/app/data/crowdsec.db` to reduce memory usage and support historical data.
+-   **Security**: The application runs as a non-root user (`bun`) inside the container and communicates with CrowdSec via HTTP/LAPI. It uses **Machine Authentication** (User/Password) to obtain a JWT for full access (read/write).
 
 ## Prerequisites
 
@@ -172,8 +172,9 @@ volumes:
 ## Local Development
 
 1.  **Install Dependencies**:
+    You need [Bun](https://bun.sh) installed.
     ```bash
-    npm run install-all
+    bun run install-all
     ```
 
 2.  **Configuration**:
@@ -199,18 +200,3 @@ volumes:
     ```bash
     ./run.sh
     ```
-
-## API Endpoints
-
-The backend exposes the following endpoints (proxying to CrowdSec LAPI):
-
--   `GET /api/alerts`: List all alerts.
--   `GET /api/alerts/:id`: Get detailed information for a specific alert.
--   `GET /api/decisions`: List decisions (active by default). Supports `?include_expired=true`.
--   `POST /api/decisions`: Add a new decision (Body: `{ ip, duration, reason, type }`).
--   `DELETE /api/decisions/:id`: Delete a decision by ID.
--   `GET /api/stats/alerts`: Minimal alert data for Dashboard statistics.
--   `GET /api/stats/decisions`: List all decisions (including expired) for statistics.
--   `GET /api/config`: Get current configuration and LAPI connection status.
--   `PUT /api/config/refresh-interval`: Update the background refresh interval.
--   `GET /api/update-check`: Check for available container updates.

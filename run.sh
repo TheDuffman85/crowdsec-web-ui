@@ -47,6 +47,15 @@ else
     log "No .env file found at $ENV_FILE. Proceeding with default environment."
 fi
 
+# Check for Bun
+if ! command -v bun &> /dev/null; then
+    log "Error: 'bun' run-time is not installed."
+    log "Please install Bun to run this application locally: https://bun.sh"
+    log "Example: curl -fsSL https://bun.sh/install | bash"
+    log "Alternatively, use Docker to run the containerized application."
+    exit 1
+fi
+
 # 3. Determine mode
 MODE="${1:-normal}"
 
@@ -56,14 +65,14 @@ if [ "$MODE" == "dev" ]; then
     log "Starting in DEVELOPMENT mode..."
     
     # Start Backend in background
-    log "Starting backend (nodemon)..."
-    npm run dev &
+    log "Starting backend (bun --watch)..."
+    bun run dev &
     BACKEND_PID=$!
     
     # Start Frontend in background
     log "Starting frontend (vite)..."
     cd frontend
-    npm run dev &
+    bun run dev &
     FRONTEND_PID=$!
     
     log "Services started. Backend PID: $BACKEND_PID, Frontend PID: $FRONTEND_PID"
@@ -83,12 +92,12 @@ else
     
     # Build Frontend
     log "Building frontend..."
-    npm run build-ui
+    bun run build-ui
     
     if [ $? -eq 0 ]; then
         log "Frontend build successful."
         log "Starting backend..."
-        npm start
+        bun start
     else
         log "Frontend build failed. Aborting."
         exit 1

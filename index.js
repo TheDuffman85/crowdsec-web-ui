@@ -1,8 +1,14 @@
-const express = require('express');
-const axios = require('axios');
-const cors = require('cors');
-const path = require('path');
-const fs = require('fs');
+import express from 'express';
+import axios from 'axios';
+import cors from 'cors';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+import db from './sqlite.js';
+
+// ESM replacement for __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // ============================================================================
 // CONSOLE LOGGING OVERRIDES (Add Timestamps)
@@ -21,12 +27,9 @@ console.error = function (...args) {
 };
 
 // Persist refresh interval to database (meta table)
-// Database is loaded after this section, so we defer actual reads
-
-let db; // Forward declaration - assigned after require('./sqlite')
+// Database is initialized via import
 
 function loadPersistedConfig() {
-  // This will be called after db is initialized
   try {
     const intervalMsRow = db.getMeta.get('refresh_interval_ms');
     if (intervalMsRow && intervalMsRow.value !== undefined) {
@@ -249,9 +252,6 @@ function parseRefreshInterval(intervalStr) {
 
 const LOOKBACK_MS = parseLookbackToMs(CROWDSEC_LOOKBACK_PERIOD);
 
-// Initialize SQLite database
-db = require('./sqlite');
-
 // Load persisted config (overrides env var if previously changed by user)
 const persistedConfig = loadPersistedConfig();
 let REFRESH_INTERVAL_MS = persistedConfig.refresh_interval_ms !== undefined
@@ -343,17 +343,15 @@ function processAlertForDb(alert) {
     target: target
   };
 
-  // Insert Alert with pre-computed target
+  // Insert Alert with pre-computed target parameters prefixed with $
   const alertData = {
-    id: alert.id,
-    uuid: alert.uuid || String(alert.id),
-    created_at: alert.created_at,
-    scenario: alert.scenario,
-    source_ip: alertSource.ip || alertSource.value,
-    source_cn: alertSource.cn,
-    source_as: alertSource.as_name,
-    message: alert.message || '',
-    raw_data: JSON.stringify(enrichedAlert)
+    $id: alert.id,
+    $uuid: alert.uuid || String(alert.id),
+    $created_at: alert.created_at,
+    $scenario: alert.scenario,
+    $source_ip: alertSource.ip || alertSource.value,
+    $message: alert.message || '',
+    $raw_data: JSON.stringify(enrichedAlert)
   };
 
   try {
@@ -397,16 +395,16 @@ function processAlertForDb(alert) {
     };
 
     const decisionData = {
-      id: String(decision.id),
-      uuid: String(decision.id),
-      alert_id: alert.id,
-      created_at: enrichedDecision.created_at,
-      stop_at: enrichedDecision.stop_at,
-      value: decision.value,
-      type: decision.type,
-      origin: enrichedDecision.origin,
-      scenario: enrichedDecision.scenario,
-      raw_data: JSON.stringify(enrichedDecision)
+      $id: String(decision.id),
+      $uuid: String(decision.id),
+      $alert_id: alert.id,
+      $created_at: enrichedDecision.created_at,
+      $stop_at: enrichedDecision.stop_at,
+      $value: decision.value,
+      $type: decision.type,
+      $origin: enrichedDecision.origin,
+      $scenario: enrichedDecision.scenario,
+      $raw_data: JSON.stringify(enrichedDecision)
     };
 
     try {
@@ -494,7 +492,7 @@ async function syncHistory() {
       const alerts = await fetchAlertsFromLAPI(sinceDuration, untilDuration);
 
       if (alerts.length > 0) {
-        const insertTransaction = db.db.transaction((items) => {
+        const insertTransaction = db.transaction((items) => {
           for (const alert of items) processAlertForDb(alert);
         });
         insertTransaction(alerts);
@@ -520,7 +518,7 @@ async function syncHistory() {
   try {
     const activeDecisionAlerts = await fetchAlertsFromLAPI(null, null, true);
     if (activeDecisionAlerts.length > 0) {
-      const refreshTransaction = db.db.transaction((alerts) => {
+      const refreshTransaction = db.transaction((alerts) => {
         for (const alert of alerts) processAlertForDb(alert);
       });
       refreshTransaction(activeDecisionAlerts);
@@ -619,7 +617,7 @@ async function updateCacheDelta() {
     // Process new alerts
     if (newAlerts.length > 0) {
       console.log(`Delta update: ${newAlerts.length} new alerts`);
-      const insertNewTransaction = db.db.transaction((alerts) => {
+      const insertNewTransaction = db.transaction((alerts) => {
         for (const alert of alerts) {
           processAlertForDb(alert);
         }
@@ -629,7 +627,7 @@ async function updateCacheDelta() {
 
     // Refresh active decisions with updated stop_at from duration
     if (activeDecisionAlerts.length > 0) {
-      const refreshTransaction = db.db.transaction((alerts) => {
+      const refreshTransaction = db.transaction((alerts) => {
         for (const alert of alerts) {
           // Only process the decisions (to update their stop_at)
           const decisions = alert.decisions || [];
@@ -665,9 +663,9 @@ async function updateCacheDelta() {
               // Use UPDATE only - don't insert new entries from enriched alert data
               // This prevents creating phantom decisions from alerts that originally had empty decisions
               db.updateDecision.run({
-                id: String(decision.id),
-                stop_at: stopAt,
-                raw_data: JSON.stringify(enrichedDecision)
+                $id: String(decision.id),
+                $stop_at: stopAt,
+                $raw_data: JSON.stringify(enrichedDecision) // Use stringified data
               });
             } catch (err) {
               // Ignore errors on refresh
@@ -696,10 +694,10 @@ function cleanupOldData() {
 
   try {
     // Remove old alerts
-    const alertResult = db.deleteOldAlerts.run({ cutoff: cutoffDate });
+    const alertResult = db.deleteOldAlerts.run({ $cutoff: cutoffDate }); // Note $ prefix
 
     // Remove old decisions (by stop_at for expired decisions)
-    const decisionResult = db.deleteOldDecisions.run({ cutoff: cutoffDate });
+    const decisionResult = db.deleteOldDecisions.run({ $cutoff: cutoffDate }); // Note $ prefix
 
     if (alertResult.changes > 0 || decisionResult.changes > 0) {
       console.log(`Cleanup: Removed ${alertResult.changes} old alerts, ${decisionResult.changes} old decisions`);
@@ -1027,7 +1025,7 @@ const hydrateAlertWithDecisions = (alert) => {
   if (alertClone.decisions && Array.isArray(alertClone.decisions)) {
     alertClone.decisions = alertClone.decisions.map(decision => {
       // Look up the decision in SQLite to get the correct stop_at
-      const dbDecision = db.getDecisionById.get({ id: String(decision.id) });
+      const dbDecision = db.getDecisionById.get({ $id: String(decision.id) }); // Note $id for bun:sqlite
 
       const now = new Date();
       let stopAt;
@@ -1127,7 +1125,7 @@ app.get('/api/alerts', ensureAuth, async (req, res) => {
     const since = new Date(Date.now() - LOOKBACK_MS).toISOString();
 
     // Query alerts from SQLite
-    const rawAlerts = db.getAlerts.all({ since, limit: 10000 });
+    const rawAlerts = db.getAlerts.all({ $since: since, $limit: 10000 }); // Note $ prefix for bun
 
     // Parse raw_data, hydrate with decision status, then slim for list view
     const alerts = rawAlerts.map(row => {
@@ -1194,7 +1192,7 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
     let decisions;
     if (includeExpired) {
       // Get all active decisions PLUS expired ones within lookback period
-      const rawDecisions = db.getDecisionsSince.all({ since, now });
+      const rawDecisions = db.getDecisionsSince.all({ $since: since, $now: now }); // Note $ prefix
       decisions = rawDecisions.map(row => {
         const d = JSON.parse(row.raw_data);
         const isExpired = d.stop_at && new Date(d.stop_at) < new Date();
@@ -1222,7 +1220,7 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
       });
     } else {
       // Get only active decisions (stop_at > now)
-      const rawDecisions = db.getActiveDecisions.all({ now, limit: 10000 });
+      const rawDecisions = db.getActiveDecisions.all({ $now: now, $limit: 10000 }); // Note $ prefix
       decisions = rawDecisions.map(row => {
         const d = JSON.parse(row.raw_data);
         return {
@@ -1397,7 +1395,7 @@ app.get('/api/stats/alerts', ensureAuth, async (req, res) => {
     const since = new Date(Date.now() - LOOKBACK_MS).toISOString();
 
     // Query alerts from SQLite
-    const rawAlerts = db.getAlerts.all({ since, limit: 10000 });
+    const rawAlerts = db.getAlerts.all({ $since: since, $limit: 10000 }); // Note $ prefix
 
     // Parse raw_data and extract only stats-relevant fields with pre-computed target
     const alerts = rawAlerts.map(row => {
@@ -1442,7 +1440,7 @@ app.get('/api/stats/decisions', ensureAuth, async (req, res) => {
     // Get all decisions within lookback period (plus any still active)
     const since = new Date(Date.now() - LOOKBACK_MS).toISOString();
     const now = new Date().toISOString();
-    const rawDecisions = db.getDecisionsSince.all({ since, now });
+    const rawDecisions = db.getDecisionsSince.all({ $since: since, $now: now }); // Note $ prefix
 
     const decisions = rawDecisions.map(row => {
       const d = JSON.parse(row.raw_data);
@@ -1593,8 +1591,6 @@ app.get('*', (req, res) => {
   }
 })();
 
-// ============================================================================
-
-
-
-const server = app.listen(port, '0.0.0.0', () => { console.log(`Server listening on port ${port}`); });
+app.listen(port, () => {
+  console.log(`CrowdSec Web UI backend running at http://localhost:${port}`);
+});
