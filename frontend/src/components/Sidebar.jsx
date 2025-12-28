@@ -2,7 +2,6 @@ import { NavLink } from "react-router-dom";
 import { LayoutDashboard, ShieldAlert, Gavel, X, Sun, Moon, ArrowUpCircle } from "lucide-react";
 import { useRefresh } from "../contexts/RefreshContext";
 import { useState, useEffect } from "react";
-import axios from "axios";
 
 export function Sidebar({ isMobileMenuOpen, onClose, theme, toggleTheme }) {
     const { intervalMs, setIntervalMs, lastUpdated, refreshSignal } = useRefresh();
@@ -19,8 +18,10 @@ export function Sidebar({ isMobileMenuOpen, onClose, theme, toggleTheme }) {
             try {
                 // Determine API base URL
                 const apiBase = import.meta.env.VITE_API_BASE || '';
-                const response = await axios.get(`${apiBase}/api/update-check`);
-                setUpdateStatus(response.data);
+                const response = await fetch(`${apiBase}/api/update-check`);
+                if (response.ok) {
+                    setUpdateStatus(await response.json());
+                }
             } catch (error) {
                 console.error("Failed to check for updates", error);
             }
