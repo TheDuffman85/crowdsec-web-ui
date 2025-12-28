@@ -718,7 +718,7 @@ if (!UPDATE_CHECK_ENABLED) {
   console.log('Update checking disabled: VITE_COMMIT_HASH not set.');
 }
 
-const DOCKER_IMAGE_REF = process.env.DOCKER_IMAGE_REF || 'theduffman85/crowdsec-web-ui';
+const DOCKER_IMAGE_REF = (process.env.DOCKER_IMAGE_REF || 'theduffman85/crowdsec-web-ui').toLowerCase();
 
 async function getGhcrToken() {
   try {
@@ -1427,6 +1427,13 @@ app.get('/api/update-check', ensureAuth, async (c) => {
 
 // Serve static files from the "frontend/dist" directory.
 app.use('/assets/*', serveStatic({ root: './frontend/dist' }));
+
+// Also serve individual files from dist root (logo.svg, favicon.ico, etc)
+// This prevents them from being shadowed by the greedy catch-all SPA route below
+const staticFiles = ['/logo.svg', '/favicon.ico', '/robots.txt', '/world-50m.json'];
+staticFiles.forEach(file => {
+  app.use(file, serveStatic({ path: `./frontend/dist${file}` }));
+});
 
 // Catch-all handler: serve index.html for SPA routing
 app.get('*', async (c) => {
