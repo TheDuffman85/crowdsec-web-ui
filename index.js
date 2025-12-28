@@ -422,6 +422,7 @@ function processAlertForDb(alert) {
 }
 
 // Fetch alerts from LAPI with optional 'since'/'until' parameters and active decision filter
+// Uses native fetch instead of Axios to avoid Bun compatibility issues
 async function fetchAlertsFromLAPI(since = null, until = null, hasActiveDecision = false) {
   const sinceParam = since || CROWDSEC_LOOKBACK_PERIOD;
   const origins = ['cscli', 'crowdsec', 'cscli-import', 'manual', 'appsec', 'lists'];
@@ -434,21 +435,59 @@ async function fetchAlertsFromLAPI(since = null, until = null, hasActiveDecision
   let alertMap = new Map();
 
   // Helper to process response
-  const processResponse = (r) => {
-    if (r.data && Array.isArray(r.data)) {
-      r.data.forEach(alert => {
+  const processResponse = (data) => {
+    if (data && Array.isArray(data)) {
+      data.forEach(alert => {
         alertMap.set(alert.id, alert);
       });
-      return r.data.length;
+      return data.length;
     }
     return 0;
   };
 
-  // Execute requests SEQUENTIALLY to avoid overwhelming LAPI or triggering concurrency hang
+  // Helper to make a fetch request with auth and timeout
+  const fetchWithAuth = async (url) => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+    try {
+      console.log(`    [DEBUG] Fetching: ${url}`);
+      const startTime = Date.now();
+
+      const response = await fetch(`${CROWDSEC_URL}${url}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${requestToken}`,
+          'User-Agent': 'crowdsec-web-ui/1.0.0',
+          'Connection': 'close'
+        },
+        signal: controller.signal,
+        verbose: true  // Bun-specific: enable verbose logging
+      });
+
+      clearTimeout(timeoutId);
+      const elapsed = Date.now() - startTime;
+      console.log(`    [DEBUG] Response status: ${response.status} (${elapsed}ms)`);
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      console.log(`    [DEBUG] Parsed ${Array.isArray(data) ? data.length : 0} items`);
+      return data;
+    } catch (err) {
+      clearTimeout(timeoutId);
+      throw err;
+    }
+  };
+
+  // Execute requests SEQUENTIALLY
   for (const o of origins) {
     try {
-      const r = await apiClient.get(`/v1/alerts?since=${sinceParam}${untilParam}&origin=${o}&limit=${limit}${activeDecisionParam}`);
-      processResponse(r);
+      const url = `/v1/alerts?since=${sinceParam}${untilParam}&origin=${o}&limit=${limit}${activeDecisionParam}`;
+      const data = await fetchWithAuth(url);
+      processResponse(data);
     } catch (err) {
       console.error(`Failed to fetch alerts from origin=${o}: ${err.message}`);
     }
@@ -456,8 +495,9 @@ async function fetchAlertsFromLAPI(since = null, until = null, hasActiveDecision
 
   for (const s of scopes) {
     try {
-      const r = await apiClient.get(`/v1/alerts?since=${sinceParam}${untilParam}&scope=${s}&limit=${limit}${activeDecisionParam}`);
-      processResponse(r);
+      const url = `/v1/alerts?since=${sinceParam}${untilParam}&scope=${s}&limit=${limit}${activeDecisionParam}`;
+      const data = await fetchWithAuth(url);
+      processResponse(data);
     } catch (err) {
       console.error(`Failed to fetch alerts from scope=${s}: ${err.message}`);
     }
