@@ -444,23 +444,19 @@ async function fetchAlertsFromLAPI(since = null, until = null, hasActiveDecision
   // Execute requests SEQUENTIALLY to avoid overwhelming LAPI or triggering concurrency hang
   for (const o of origins) {
     try {
-      console.log(`      [DEBUG] Fetching origin=${o}...`);
       const r = await apiClient.get(`/v1/alerts?since=${sinceParam}${untilParam}&origin=${o}&limit=${limit}${activeDecisionParam}`);
-      const count = processResponse(r);
-      console.log(`      [DEBUG] Got ${count} alerts from origin=${o}`);
+      processResponse(r);
     } catch (err) {
-      console.error(`      [DEBUG] Failed to fetch origin=${o}: ${err.message}`);
+      console.error(`Failed to fetch alerts from origin=${o}: ${err.message}`);
     }
   }
 
   for (const s of scopes) {
     try {
-      console.log(`      [DEBUG] Fetching scope=${s}...`);
       const r = await apiClient.get(`/v1/alerts?since=${sinceParam}${untilParam}&scope=${s}&limit=${limit}${activeDecisionParam}`);
-      const count = processResponse(r);
-      console.log(`      [DEBUG] Got ${count} alerts from scope=${s}`);
+      processResponse(r);
     } catch (err) {
-      console.error(`      [DEBUG] Failed to fetch scope=${s}: ${err.message}`);
+      console.error(`Failed to fetch alerts from scope=${s}: ${err.message}`);
     }
   }
 
@@ -504,28 +500,21 @@ async function syncHistory() {
     const progressMessage = `Syncing: ${sinceDuration} → ${untilDuration} ago (${totalAlerts} alerts)`;
     console.log(progressMessage);
     updateSyncStatus({ progress: Math.min(progress, 90), message: progressMessage });
-
     try {
       // Fetch alerts for this chunk (bounded by since and until)
-      console.log(`    [DEBUG] Fetching chunk from LAPI...`);
       const alerts = await fetchAlertsFromLAPI(sinceDuration, untilDuration);
-      console.log(`    [DEBUG] Fetched ${alerts.length} alerts.`);
 
       if (alerts.length > 0) {
-        console.log(`    [DEBUG] Starting DB transaction...`);
         const insertTransaction = db.transaction((items) => {
           for (const alert of items) {
-            // processAlertForDb(alert); 
-            // Inline this for debugging if needed, but for now just log
             try {
               processAlertForDb(alert);
             } catch (e) {
-              console.error(`    [DEBUG] Error processing alert ${alert.id}:`, e);
+              console.error(`Error processing alert ${alert.id}:`, e);
             }
           }
         });
         insertTransaction(alerts);
-        console.log(`    [DEBUG] Transaction complete.`);
         totalAlerts += alerts.length;
         console.log(`  -> Imported ${alerts.length} alerts.`);
       }
