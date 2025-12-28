@@ -3,6 +3,7 @@ const axios = require('axios');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const compression = require('compression');
 
 // ============================================================================
 // CONSOLE LOGGING OVERRIDES (Add Timestamps)
@@ -971,6 +972,7 @@ async function checkForUpdates() {
 app.use(cors());
 app.use(express.json());
 app.use(activityTracker); // Apply to all routes
+app.use(compression());
 
 /**
  * Middleware to ensure we have a token or try to get one
