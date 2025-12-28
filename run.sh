@@ -82,11 +82,16 @@ if [ "$MODE" == "dev" ]; then
         log "Stopping services..."
         kill $BACKEND_PID 2>/dev/null
         kill $FRONTEND_PID 2>/dev/null
-        exit
+        wait $BACKEND_PID 2>/dev/null
+        wait $FRONTEND_PID 2>/dev/null
+        exit 0
     }
     trap cleanup SIGINT SIGTERM
     
-    wait
+    # Wait for both processes, re-wait if interrupted by signal
+    while kill -0 $BACKEND_PID 2>/dev/null || kill -0 $FRONTEND_PID 2>/dev/null; do
+        wait
+    done
 else
     log "Starting in PRODUCTION mode..."
     
