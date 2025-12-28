@@ -11,7 +11,6 @@
     "build-ui": "cd frontend && bun run build"
   },
   "dependencies": {
-    "axios": "^1.13.2",
     "compression": "^1.8.1",
     "cors": "^2.8.5",
     "express": "^4.17.1"

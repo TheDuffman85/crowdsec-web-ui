@@ -1,11 +1,24 @@
 import express from 'express';
-import axios from 'axios';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import compression from 'compression';
 import { fileURLToPath } from 'url';
 import db from './sqlite.js';
+import {
+  fetchLAPI,
+  login as loginToLAPI,
+  fetchAlerts as fetchAlertsFromLAPI,
+  getAlertById,
+  addDecision,
+  deleteDecision,
+  getLapiStatus,
+  updateLapiStatus,
+  hasCredentials,
+  hasToken,
+  CROWDSEC_URL,
+  CROWDSEC_LOOKBACK_PERIOD
+} from './lapi.js';
 
 // ESM replacement for __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -64,106 +77,10 @@ const app = express();
 app.use(compression());
 const port = process.env.PORT || 3000;
 
-// CrowdSec LAPI Configuration
-const CROWDSEC_URL = process.env.CROWDSEC_URL || 'http://crowdsec:8080';
-const CROWDSEC_USER = process.env.CROWDSEC_USER;
-const CROWDSEC_PASSWORD = process.env.CROWDSEC_PASSWORD;
-// Default lookback period (default 7 days / 168h) - used for alerts, decisions and stats defaults
-const CROWDSEC_LOOKBACK_PERIOD = process.env.CROWDSEC_LOOKBACK_PERIOD || '168h';
-
-// Token state
-let requestToken = null;
-
-if (!CROWDSEC_USER || !CROWDSEC_PASSWORD) {
+if (!hasCredentials()) {
   console.warn('WARNING: CROWDSEC_USER and CROWDSEC_PASSWORD must be set for full functionality.');
 }
 
-const apiClient = axios.create({
-  baseURL: CROWDSEC_URL,
-  timeout: 30000,
-  headers: {
-    'User-Agent': 'crowdsec-web-ui/1.0.0',
-    'Connection': 'close' // Disable keep-alive to prevent Bun connection hanging
-  }
-});
-
-// Add interceptor to inject token
-apiClient.interceptors.request.use(config => {
-  if (requestToken && !config.url.includes('/watchers/login')) {
-    config.headers.Authorization = `Bearer ${requestToken}`;
-  }
-  return config;
-});
-
-// Add interceptor to retry requests on 401 (Token Expired)
-apiClient.interceptors.response.use(
-  (response) => response,
-  async (error) => {
-    const originalRequest = error.config;
-
-    // Check if error is 401 and we haven't already retried
-    if (error.response && error.response.status === 401 && !originalRequest._retry) {
-      // Avoid infinite loops for login requests themselves
-      if (originalRequest.url.includes('/watchers/login')) {
-        return Promise.reject(error);
-      }
-
-      console.log('Detected 401 Unauthorized. Attempting to re-authenticate...');
-      originalRequest._retry = true;
-
-      const success = await loginToLAPI();
-      if (success) {
-        console.log('Re-authentication successful. Retrying original request...');
-        // Update the token in the original request header
-        originalRequest.headers.Authorization = `Bearer ${requestToken}`;
-        // Retry the request
-        return apiClient(originalRequest);
-      } else {
-        console.error('Re-authentication failed.');
-      }
-    }
-
-    return Promise.reject(error);
-  }
-);
-
-
-// Login helper
-const loginToLAPI = async () => {
-  try {
-    console.log(`Attempting login to CrowdSec LAPI at ${CROWDSEC_URL} as ${CROWDSEC_USER}...`);
-    const response = await apiClient.post('/v1/watchers/login', {
-      machine_id: CROWDSEC_USER,
-      password: CROWDSEC_PASSWORD,
-      scenarios: ["manual/web-ui"] // Informative only
-    });
-
-    if (response.data && response.data.code === 200 && response.data.token) {
-      requestToken = response.data.token;
-      console.log('Successfully logged in to CrowdSec LAPI');
-      return true;
-    } else if (response.data && response.data.token) {
-      // Some versions might just return the token object directly or differently
-      requestToken = response.data.token;
-      console.log('Successfully logged in to CrowdSec LAPI');
-      updateLapiStatus(true);
-      return true;
-    } else {
-      console.error('Login response did not contain token:', response.data);
-      updateLapiStatus(false, { message: 'Login response invalid' });
-      return false;
-    }
-  } catch (error) {
-    console.error(`Login failed: ${error.message}`);
-    updateLapiStatus(false, error);
-    if (error.response) {
-      console.error('Response data:', error.response.data);
-    }
-    return false;
-  }
-};
-
-// Login will be called during cache initialization
 
 // Historical Sync Status Tracker
 const syncStatus = {
@@ -193,20 +110,6 @@ const cache = {
 
 // Synchronization lock for cache initialization
 let initializationPromise = null;
-
-// Global LAPI Status Tracker
-const lapiStatus = {
-  isConnected: false,
-  lastCheck: null,
-  lastError: null
-};
-
-// Helper to update LAPI status
-function updateLapiStatus(isConnected, error = null) {
-  lapiStatus.isConnected = isConnected;
-  lapiStatus.lastCheck = new Date().toISOString();
-  lapiStatus.lastError = error ? error.message : null;
-}
 
 // Parse lookback period to milliseconds
 function parseLookbackToMs(lookbackPeriod) {
@@ -421,82 +324,6 @@ function processAlertForDb(alert) {
   // decision entries. They block traffic directly without creating CrowdSec bans.
 }
 
-// Fetch alerts from LAPI with optional 'since'/'until' parameters and active decision filter
-// Uses native fetch instead of Axios to avoid Bun compatibility issues
-async function fetchAlertsFromLAPI(since = null, until = null, hasActiveDecision = false) {
-  const sinceParam = since || CROWDSEC_LOOKBACK_PERIOD;
-  const origins = ['cscli', 'crowdsec', 'cscli-import', 'manual', 'appsec', 'lists'];
-  const scopes = ['Ip', 'Range'];
-  const limit = 10000;
-
-  const activeDecisionParam = hasActiveDecision ? '&has_active_decision=true' : '';
-  const untilParam = until ? `&until=${until}` : '';
-
-  let alertMap = new Map();
-
-  // Helper to process response
-  const processResponse = (data) => {
-    if (data && Array.isArray(data)) {
-      data.forEach(alert => {
-        alertMap.set(alert.id, alert);
-      });
-      return data.length;
-    }
-    return 0;
-  };
-
-  // Helper to make a fetch request with auth and timeout
-  const fetchWithAuth = async (url) => {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
-
-    try {
-      const response = await fetch(`${CROWDSEC_URL}${url}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${requestToken}`,
-          'User-Agent': 'crowdsec-web-ui/1.0.0',
-          'Connection': 'close'
-        },
-        signal: controller.signal
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      return await response.json();
-    } catch (err) {
-      clearTimeout(timeoutId);
-      throw err;
-    }
-  };
-
-  // Execute requests SEQUENTIALLY
-  for (const o of origins) {
-    try {
-      const url = `/v1/alerts?since=${sinceParam}${untilParam}&origin=${o}&limit=${limit}${activeDecisionParam}`;
-      const data = await fetchWithAuth(url);
-      processResponse(data);
-    } catch (err) {
-      console.error(`Failed to fetch alerts from origin=${o}: ${err.message}`);
-    }
-  }
-
-  for (const s of scopes) {
-    try {
-      const url = `/v1/alerts?since=${sinceParam}${untilParam}&scope=${s}&limit=${limit}${activeDecisionParam}`;
-      const data = await fetchWithAuth(url);
-      processResponse(data);
-    } catch (err) {
-      console.error(`Failed to fetch alerts from scope=${s}: ${err.message}`);
-    }
-  }
-
-  return Array.from(alertMap.values());
-}
 
 // Chunked Historical Sync - fetches data in 6-hour chunks with progress updates
 async function syncHistory() {
@@ -906,10 +733,17 @@ if (!UPDATE_CHECK_ENABLED) {
 
 async function getGhcrToken() {
   try {
-    const response = await axios.get('https://ghcr.io/token?service=ghcr.io&scope=repository:theduffman85/crowdsec-web-ui:pull', {
-      timeout: 5000
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+    const response = await fetch('https://ghcr.io/token?service=ghcr.io&scope=repository:theduffman85/crowdsec-web-ui:pull', {
+      signal: controller.signal
     });
-    return response.data.token;
+    clearTimeout(timeoutId);
+
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    return data.token;
   } catch (error) {
     console.error('Failed to get GHCR token:', error.message);
     return null;
@@ -941,13 +775,15 @@ async function checkForUpdates() {
     // 1. Get Manifest (or Index)
     const manifestUrl = `https://ghcr.io/v2/theduffman85/crowdsec-web-ui/manifests/${tag}`;
 
-    let manifestResponse = await axios.get(manifestUrl, {
+    let manifestFetch = await fetch(manifestUrl, {
       headers: {
         'Authorization': `Bearer ${token}`,
         'Accept': 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'
       },
-      timeout: 10000
+      signal: AbortSignal.timeout(10000)
     });
+    if (!manifestFetch.ok) throw new Error(`HTTP ${manifestFetch.status}`);
+    let manifestResponse = { data: await manifestFetch.json(), headers: { 'content-type': manifestFetch.headers.get('content-type') } };
 
     // Handle OCI Index or Manifest List (Multi-arch)
     const mediaType = manifestResponse.headers['content-type'];
@@ -963,13 +799,15 @@ async function checkForUpdates() {
 
       // Fetch the specific manifest
       const specificManifestUrl = `https://ghcr.io/v2/theduffman85/crowdsec-web-ui/manifests/${resolvedDigest}`;
-      manifestResponse = await axios.get(specificManifestUrl, {
+      const specificFetch = await fetch(specificManifestUrl, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Accept': 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json'
         },
-        timeout: 10000
+        signal: AbortSignal.timeout(10000)
       });
+      if (!specificFetch.ok) throw new Error(`HTTP ${specificFetch.status}`);
+      manifestResponse = { data: await specificFetch.json(), headers: { 'content-type': specificFetch.headers.get('content-type') } };
     }
 
     const configDigest = manifestResponse.data.config?.digest;
@@ -977,12 +815,14 @@ async function checkForUpdates() {
 
     // 2. Get Config Blob to find Labels
     const blobUrl = `https://ghcr.io/v2/theduffman85/crowdsec-web-ui/blobs/${configDigest}`;
-    const blobResponse = await axios.get(blobUrl, {
+    const blobFetch = await fetch(blobUrl, {
       headers: {
         'Authorization': `Bearer ${token}`
       },
-      timeout: 10000
+      signal: AbortSignal.timeout(10000)
     });
+    if (!blobFetch.ok) throw new Error(`HTTP ${blobFetch.status}`);
+    const blobResponse = { data: await blobFetch.json() };
 
     const remoteRevision = blobResponse.data.config?.Labels?.['org.opencontainers.image.revision'];
 
@@ -1028,7 +868,7 @@ app.use(activityTracker); // Apply to all routes
  * Middleware to ensure we have a token or try to get one
  */
 const ensureAuth = async (req, res, next) => {
-  if (!requestToken) {
+  if (!hasToken()) {
     const success = await loginToLAPI();
     if (!success) {
       return res.status(502).json({ error: 'Failed to authenticate with CrowdSec LAPI' });
@@ -1202,18 +1042,18 @@ app.get('/api/alerts', ensureAuth, async (req, res) => {
  */
 app.get('/api/alerts/:id', ensureAuth, async (req, res) => {
   const doRequest = async () => {
-    const response = await apiClient.get(`/v1/alerts/${req.params.id}`);
+    const alertData = await getAlertById(req.params.id);
 
     // Process response to sync decisions with active cache
-    let alertData = response.data;
+    let processedData = alertData;
 
-    if (Array.isArray(alertData)) {
-      alertData = alertData.map(hydrateAlertWithDecisions);
+    if (Array.isArray(processedData)) {
+      processedData = processedData.map(hydrateAlertWithDecisions);
     } else {
-      alertData = hydrateAlertWithDecisions(alertData);
+      processedData = hydrateAlertWithDecisions(processedData);
     }
 
-    res.json(alertData);
+    res.json(processedData);
   };
 
   try {
@@ -1376,7 +1216,7 @@ app.get('/api/config', ensureAuth, (req, res) => {
     lookback_days: Math.max(1, Math.round(hours / 24)),
     refresh_interval: REFRESH_INTERVAL_MS,
     current_interval_name: getIntervalName(REFRESH_INTERVAL_MS),
-    lapi_status: lapiStatus,
+    lapi_status: getLapiStatus(),
     sync_status: syncStatus
   });
 });
@@ -1529,45 +1369,13 @@ app.post('/api/decisions', ensureAuth, async (req, res) => {
       return res.status(400).json({ error: 'IP address is required' });
     }
 
-    const now = new Date().toISOString();
-
-    // Construct Alert Object with required fields
-    // Note: The decision's duration field is used by LAPI to calculate the actual stop_at
-    // We don't set stop_at on the alert itself to avoid double-counting
-    const alertPayload = [{
-      scenario: "manual/web-ui",
-      campaign_name: "manual/web-ui",
-      message: `Manual decision from Web UI: ${reason}`,
-      events_count: 1,
-      start_at: now,
-      stop_at: now, // Alert stop_at - LAPI uses decision.duration for actual expiration
-      capacity: 0,
-      leakspeed: "0",
-      simulated: false,
-      events: [],
-      scenario_hash: "",
-      scenario_version: "",
-      source: {
-        scope: "ip",
-        value: ip
-      },
-      decisions: [{
-        type: type,
-        duration: duration,
-        value: ip,
-        origin: "cscli",
-        scenario: "manual/web-ui",
-        scope: "ip"
-      }]
-    }];
-
-    const response = await apiClient.post('/v1/alerts', alertPayload);
+    const result = await addDecision(ip, type, duration, reason);
 
     // Immediately refresh cache to include new decision
     console.log('Refreshing cache after adding decision...');
     await initializeCache();
 
-    res.json({ message: 'Decision added (via Alert)', result: response.data });
+    res.json({ message: 'Decision added (via Alert)', result });
   };
 
   try {
@@ -1582,13 +1390,13 @@ app.post('/api/decisions', ensureAuth, async (req, res) => {
  */
 app.delete('/api/decisions/:id', ensureAuth, async (req, res) => {
   const doRequest = async () => {
-    const response = await apiClient.delete(`/v1/decisions/${req.params.id}`);
+    const result = await deleteDecision(req.params.id);
 
     // Immediately refresh cache to reflect deleted decision
     console.log('Refreshing cache after deleting decision...');
     await initializeCache();
 
-    res.json(response.data || { message: 'Deleted' });
+    res.json(result || { message: 'Deleted' });
   };
 
   try {
@@ -1626,7 +1434,7 @@ app.get('*', (req, res) => {
 // Initialize cache on startup
 (async () => {
   // First, ensure we're logged in
-  if (CROWDSEC_USER && CROWDSEC_PASSWORD) {
+  if (hasCredentials()) {
     console.log('Ensuring authentication before cache initialization...');
     const loginSuccess = await loginToLAPI();
 
