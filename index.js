@@ -3,6 +3,7 @@ import axios from 'axios';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
+import compression from 'compression';
 import { fileURLToPath } from 'url';
 import db from './sqlite.js';
 
@@ -60,6 +61,7 @@ function savePersistedConfig(config) {
 }
 
 const app = express();
+app.use(compression());
 const port = process.env.PORT || 3000;
 
 // CrowdSec LAPI Configuration
