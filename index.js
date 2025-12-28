@@ -1375,9 +1375,9 @@ app.post('/api/decisions', ensureAuth, async (c) => {
 
     const result = await addDecision(ip, type, duration, reason);
 
-    // Immediately refresh cache to include new decision
+    // Immediately refresh cache to include new decision (delta only)
     console.log('Refreshing cache after adding decision...');
-    await initializeCache();
+    await updateCacheDelta();
 
     return c.json({ message: 'Decision added (via Alert)', result });
   };
@@ -1396,9 +1396,9 @@ app.delete('/api/decisions/:id', ensureAuth, async (c) => {
   const doRequest = async () => {
     const result = await deleteDecision(c.req.param('id'));
 
-    // Immediately refresh cache to reflect deleted decision
+    // Immediately refresh cache to reflect deleted decision (delta only)
     console.log('Refreshing cache after deleting decision...');
-    await initializeCache();
+    await updateCacheDelta();
 
     return c.json(result || { message: 'Deleted' });
   };
