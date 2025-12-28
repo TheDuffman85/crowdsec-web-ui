@@ -11,12 +11,9 @@
     "build-ui": "cd frontend && bun run build"
   },
   "dependencies": {
-    "compression": "^1.8.1",
-    "cors": "^2.8.5",
-    "express": "^4.17.1"
+    "hono": "^4.6.0"
   },
   "devDependencies": {
-    "@types/compression": "^1.8.1",
     "bun-types": "latest"
   }
 }

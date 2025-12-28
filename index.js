@@ -1,8 +1,9 @@
-import express from 'express';
-import cors from 'cors';
+import { Hono } from 'hono';
+import { cors } from 'hono/cors';
+import { compress } from 'hono/compress';
+import { serveStatic } from 'hono/bun';
 import path from 'path';
 import fs from 'fs';
-import compression from 'compression';
 import { fileURLToPath } from 'url';
 import db from './sqlite.js';
 import {
@@ -73,8 +74,9 @@ function savePersistedConfig(config) {
   }
 }
 
-const app = express();
-app.use(compression());
+const app = new Hono();
+app.use('*', compress());
+app.use('*', cors());
 const port = process.env.PORT || 3000;
 
 if (!hasCredentials()) {
@@ -603,21 +605,6 @@ const FULL_REFRESH_INTERVAL_MS = parseRefreshInterval(process.env.CROWDSEC_FULL_
 let lastRequestTime = Date.now();
 let lastFullRefreshTime = Date.now();
 
-const activityTracker = (req, res, next) => {
-  const now = Date.now();
-  const wasIdle = (now - lastRequestTime) > IDLE_THRESHOLD_MS;
-  lastRequestTime = now;
-
-  if (wasIdle && isSchedulerRunning) {
-    console.log("System waking up from idle mode. Triggering immediate refresh...");
-    // Cancel pending sleep and run immediately
-    if (schedulerTimeout) clearTimeout(schedulerTimeout);
-    runSchedulerLoop();
-  }
-
-  next();
-};
-
 // Scheduler management functions
 let schedulerTimeout = null;
 let isSchedulerRunning = false;
@@ -860,36 +847,51 @@ async function checkForUpdates() {
 // END UPDATE CHECKER
 // ============================================================================
 
-app.use(cors());
-app.use(express.json());
-app.use(activityTracker); // Apply to all routes
+// Activity tracker middleware - Hono style
+app.use('*', activityTrackerMiddleware);
+
+/**
+ * Activity tracker as Hono middleware
+ */
+async function activityTrackerMiddleware(c, next) {
+  const now = Date.now();
+  const wasIdle = (now - lastRequestTime) > IDLE_THRESHOLD_MS;
+  lastRequestTime = now;
+
+  if (wasIdle && isSchedulerRunning) {
+    console.log("System waking up from idle mode. Triggering immediate refresh...");
+    if (schedulerTimeout) clearTimeout(schedulerTimeout);
+    runSchedulerLoop();
+  }
+
+  await next();
+}
 
 /**
  * Middleware to ensure we have a token or try to get one
  */
-const ensureAuth = async (req, res, next) => {
+const ensureAuth = async (c, next) => {
   if (!hasToken()) {
     const success = await loginToLAPI();
     if (!success) {
-      return res.status(502).json({ error: 'Failed to authenticate with CrowdSec LAPI' });
+      return c.json({ error: 'Failed to authenticate with CrowdSec LAPI' }, 502);
     }
   }
-  next();
+  await next();
 };
 
 /**
- * Helper to handle Axios errors with intelligent retry for 401
+ * Helper to handle API errors with intelligent retry for 401
+ * Returns a Response or null if replay succeeded
  */
-const handleApiError = async (error, res, action, replayCallback) => {
+const handleApiError = async (error, c, action, replayCallback) => {
   if (error.response && error.response.status === 401) {
     console.log(`Received 401 during ${action}, attempting re-login...`);
     const success = await loginToLAPI();
     if (success && replayCallback) {
       try {
-        await replayCallback();
-        return; // Successful replay
+        return await replayCallback();
       } catch (retryError) {
-        // Replay failed, fall through to error handling
         console.error(`Retry failed for ${action}: ${retryError.message}`);
         error = retryError;
       }
@@ -898,13 +900,13 @@ const handleApiError = async (error, res, action, replayCallback) => {
 
   if (error.response) {
     console.error(`Error ${action}: ${error.response.status} - ${JSON.stringify(error.response.data)}`);
-    res.status(error.response.status).json(error.response.data);
+    return c.json(error.response.data, error.response.status);
   } else if (error.request) {
     console.error(`Error ${action}: No response received`);
-    res.status(502).json({ error: 'Bad Gateway: No response from CrowdSec LAPI' });
+    return c.json({ error: 'Bad Gateway: No response from CrowdSec LAPI' }, 502);
   } else {
     console.error(`Error ${action}: ${error.message}`);
-    res.status(500).json({ error: `Internal Server Error: ${error.message}` });
+    return c.json({ error: `Internal Server Error: ${error.message}` }, 500);
   }
 };
 
@@ -1003,7 +1005,7 @@ const slimAlert = (alert) => {
  * GET /api/alerts
  * Returns alerts from SQLite database (slim payload for list views)
  */
-app.get('/api/alerts', ensureAuth, async (req, res) => {
+app.get('/api/alerts', ensureAuth, async (c) => {
   try {
     // If in manual mode (REFRESH_INTERVAL_MS === 0), update cache on every request
     if (REFRESH_INTERVAL_MS === 0) {
@@ -1030,19 +1032,19 @@ app.get('/api/alerts', ensureAuth, async (req, res) => {
 
     alerts.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-    res.json(alerts);
+    return c.json(alerts);
   } catch (error) {
     console.error('Error serving alerts from database:', error.message);
-    res.status(500).json({ error: 'Failed to retrieve alerts' });
+    return c.json({ error: 'Failed to retrieve alerts' }, 500);
   }
 });
 
 /**
  * GET /api/alerts/:id
  */
-app.get('/api/alerts/:id', ensureAuth, async (req, res) => {
+app.get('/api/alerts/:id', ensureAuth, async (c) => {
   const doRequest = async () => {
-    const alertData = await getAlertById(req.params.id);
+    const alertData = await getAlertById(c.req.param('id'));
 
     // Process response to sync decisions with active cache
     let processedData = alertData;
@@ -1053,13 +1055,13 @@ app.get('/api/alerts/:id', ensureAuth, async (req, res) => {
       processedData = hydrateAlertWithDecisions(processedData);
     }
 
-    res.json(processedData);
+    return c.json(processedData);
   };
 
   try {
-    await doRequest();
+    return await doRequest();
   } catch (error) {
-    handleApiError(error, res, 'fetching alert details', doRequest);
+    return handleApiError(error, c, 'fetching alert details', doRequest);
   }
 });
 
@@ -1067,7 +1069,7 @@ app.get('/api/alerts/:id', ensureAuth, async (req, res) => {
  * GET /api/decisions
  * Returns decisions from SQLite database (active by default, or all including expired with ?include_expired=true)
  */
-app.get('/api/decisions', ensureAuth, async (req, res) => {
+app.get('/api/decisions', ensureAuth, async (c) => {
   try {
     // If in manual mode, update cache on every request
     if (REFRESH_INTERVAL_MS === 0) {
@@ -1079,7 +1081,7 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
       await initializeCache();
     }
 
-    const includeExpired = req.query.include_expired === 'true';
+    const includeExpired = c.req.query('include_expired') === 'true';
     const now = new Date().toISOString();
     const since = new Date(Date.now() - LOOKBACK_MS).toISOString();
 
@@ -1183,10 +1185,10 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
 
     decisions.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-    res.json(decisions);
+    return c.json(decisions);
   } catch (error) {
     console.error('Error serving decisions from database:', error.message);
-    res.status(500).json({ error: 'Failed to retrieve decisions' });
+    return c.json({ error: 'Failed to retrieve decisions' }, 500);
   }
 });
 
@@ -1195,7 +1197,7 @@ app.get('/api/decisions', ensureAuth, async (req, res) => {
  * GET /api/config
  * Returns the public configuration for the frontend
  */
-app.get('/api/config', ensureAuth, (req, res) => {
+app.get('/api/config', ensureAuth, async (c) => {
   // Simple parser to estimate days/hours for display
   // Supports h, d. Default 168h.
   let hours = 168;
@@ -1210,7 +1212,7 @@ app.get('/api/config', ensureAuth, (req, res) => {
   }
 
   // Return current runtime state (not env var)
-  res.json({
+  return c.json({
     lookback_period: CROWDSEC_LOOKBACK_PERIOD,
     lookback_hours: hours,
     lookback_days: Math.max(1, Math.round(hours / 24)),
@@ -1225,20 +1227,21 @@ app.get('/api/config', ensureAuth, (req, res) => {
  * PUT /api/config/refresh-interval
  * Updates the refresh interval at runtime and restarts the scheduler
  */
-app.put('/api/config/refresh-interval', ensureAuth, (req, res) => {
+app.put('/api/config/refresh-interval', ensureAuth, async (c) => {
   try {
-    const { interval } = req.body;
+    const body = await c.req.json();
+    const { interval } = body;
 
     if (!interval) {
-      return res.status(400).json({ error: 'interval is required' });
+      return c.json({ error: 'interval is required' }, 400);
     }
 
     // Validate interval value
     const validIntervals = ['manual', '0', '5s', '30s', '1m', '5m'];
     if (!validIntervals.includes(interval)) {
-      return res.status(400).json({
+      return c.json({
         error: `Invalid interval. Must be one of: ${validIntervals.join(', ')}`
-      });
+      }, 400);
     }
 
     // Parse and update interval
@@ -1255,7 +1258,7 @@ app.put('/api/config/refresh-interval', ensureAuth, (req, res) => {
 
     console.log(`Refresh interval changed: ${oldIntervalName} → ${interval} (${newIntervalMs}ms)`);
 
-    res.json({
+    return c.json({
       success: true,
       old_interval: oldIntervalName,
       new_interval: interval,
@@ -1264,7 +1267,7 @@ app.put('/api/config/refresh-interval', ensureAuth, (req, res) => {
     });
   } catch (error) {
     console.error('Error updating refresh interval:', error.message);
-    res.status(500).json({ error: 'Failed to update refresh interval' });
+    return c.json({ error: 'Failed to update refresh interval' }, 500);
   }
 });
 
@@ -1273,7 +1276,7 @@ app.put('/api/config/refresh-interval', ensureAuth, (req, res) => {
  * GET /api/stats/alerts
  * Returns minimal alert data for Dashboard statistics (optimized payload)
  */
-app.get('/api/stats/alerts', ensureAuth, async (req, res) => {
+app.get('/api/stats/alerts', ensureAuth, async (c) => {
   try {
     // If in manual mode, update cache on every request
     if (REFRESH_INTERVAL_MS === 0) {
@@ -1308,10 +1311,10 @@ app.get('/api/stats/alerts', ensureAuth, async (req, res) => {
 
     alerts.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-    res.json(alerts);
+    return c.json(alerts);
   } catch (error) {
     console.error('Error serving stats alerts from database:', error.message);
-    res.status(500).json({ error: 'Failed to retrieve alert statistics' });
+    return c.json({ error: 'Failed to retrieve alert statistics' }, 500);
   }
 });
 
@@ -1319,7 +1322,7 @@ app.get('/api/stats/alerts', ensureAuth, async (req, res) => {
  * GET /api/stats/decisions
  * Returns ALL decisions (including expired) for statistics purposes from SQLite database
  */
-app.get('/api/stats/decisions', ensureAuth, async (req, res) => {
+app.get('/api/stats/decisions', ensureAuth, async (c) => {
   try {
     // If in manual mode, update cache on every request
     if (REFRESH_INTERVAL_MS === 0) {
@@ -1350,10 +1353,10 @@ app.get('/api/stats/decisions', ensureAuth, async (req, res) => {
 
     decisions.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-    res.json(decisions);
+    return c.json(decisions);
   } catch (error) {
     console.error('Error serving stats decisions from database:', error.message);
-    res.status(500).json({ error: 'Failed to retrieve decision statistics' });
+    return c.json({ error: 'Failed to retrieve decision statistics' }, 500);
   }
 });
 
@@ -1361,12 +1364,13 @@ app.get('/api/stats/decisions', ensureAuth, async (req, res) => {
  * POST /api/decisions
  * Creates a manual decision via POST /v1/alerts
  */
-app.post('/api/decisions', ensureAuth, async (req, res) => {
+app.post('/api/decisions', ensureAuth, async (c) => {
   const doRequest = async () => {
-    const { ip, duration = "4h", reason = "manual", type = "ban" } = req.body;
+    const body = await c.req.json();
+    const { ip, duration = "4h", reason = "manual", type = "ban" } = body;
 
     if (!ip) {
-      return res.status(400).json({ error: 'IP address is required' });
+      return c.json({ error: 'IP address is required' }, 400);
     }
 
     const result = await addDecision(ip, type, duration, reason);
@@ -1375,56 +1379,62 @@ app.post('/api/decisions', ensureAuth, async (req, res) => {
     console.log('Refreshing cache after adding decision...');
     await initializeCache();
 
-    res.json({ message: 'Decision added (via Alert)', result });
+    return c.json({ message: 'Decision added (via Alert)', result });
   };
 
   try {
-    await doRequest();
+    return await doRequest();
   } catch (error) {
-    handleApiError(error, res, 'adding decision', doRequest);
+    return handleApiError(error, c, 'adding decision', doRequest);
   }
 });
 
 /**
  * DELETE /api/decisions/:id
  */
-app.delete('/api/decisions/:id', ensureAuth, async (req, res) => {
+app.delete('/api/decisions/:id', ensureAuth, async (c) => {
   const doRequest = async () => {
-    const result = await deleteDecision(req.params.id);
+    const result = await deleteDecision(c.req.param('id'));
 
     // Immediately refresh cache to reflect deleted decision
     console.log('Refreshing cache after deleting decision...');
     await initializeCache();
 
-    res.json(result || { message: 'Deleted' });
+    return c.json(result || { message: 'Deleted' });
   };
 
   try {
-    await doRequest();
+    return await doRequest();
   } catch (error) {
-    handleApiError(error, res, 'deleting decision', doRequest);
+    return handleApiError(error, c, 'deleting decision', doRequest);
   }
 });
 
 /**
  * GET /api/update-check
  */
-app.get('/api/update-check', ensureAuth, async (req, res) => {
+app.get('/api/update-check', ensureAuth, async (c) => {
   try {
     const status = await checkForUpdates();
-    res.json(status);
+    return c.json(status);
   } catch (error) {
     console.error('Error checking for updates:', error.message);
-    res.status(500).json({ error: 'Update check failed' });
+    return c.json({ error: 'Update check failed' }, 500);
   }
 });
 
 // Serve static files from the "frontend/dist" directory.
-app.use(express.static(path.join(__dirname, 'frontend/dist')));
+app.use('/assets/*', serveStatic({ root: './frontend/dist' }));
 
-// Catch-all handler for any request that doesn't match an API route
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'frontend/dist/index.html'));
+// Catch-all handler: serve index.html for SPA routing
+app.get('*', async (c) => {
+  try {
+    const indexPath = path.join(__dirname, 'frontend/dist/index.html');
+    const html = fs.readFileSync(indexPath, 'utf-8');
+    return c.html(html);
+  } catch (error) {
+    return c.text('Not Found', 404);
+  }
 });
 
 // ============================================================================
@@ -1453,6 +1463,13 @@ app.get('*', (req, res) => {
   }
 })();
 
-app.listen(port, () => {
-  console.log(`CrowdSec Web UI backend running at http://localhost:${port}`);
-});
+// ============================================================================
+// SERVER STARTUP
+// ============================================================================
+
+console.log(`CrowdSec Web UI backend running at http://localhost:${port}`);
+
+export default {
+  port,
+  fetch: app.fetch,
+};
