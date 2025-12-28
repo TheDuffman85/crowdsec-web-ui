@@ -489,13 +489,25 @@ async function syncHistory() {
 
     try {
       // Fetch alerts for this chunk (bounded by since and until)
+      console.log(`    [DEBUG] Fetching chunk from LAPI...`);
       const alerts = await fetchAlertsFromLAPI(sinceDuration, untilDuration);
+      console.log(`    [DEBUG] Fetched ${alerts.length} alerts.`);
 
       if (alerts.length > 0) {
+        console.log(`    [DEBUG] Starting DB transaction...`);
         const insertTransaction = db.transaction((items) => {
-          for (const alert of items) processAlertForDb(alert);
+          for (const alert of items) {
+            // processAlertForDb(alert); 
+            // Inline this for debugging if needed, but for now just log
+            try {
+              processAlertForDb(alert);
+            } catch (e) {
+              console.error(`    [DEBUG] Error processing alert ${alert.id}:`, e);
+            }
+          }
         });
         insertTransaction(alerts);
+        console.log(`    [DEBUG] Transaction complete.`);
         totalAlerts += alerts.length;
         console.log(`  -> Imported ${alerts.length} alerts.`);
       }
