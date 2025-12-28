@@ -4,7 +4,7 @@ import { fetchConfig } from '../lib/api';
 const RefreshContext = createContext();
 
 export function RefreshProvider({ children }) {
-    const [intervalMs, setIntervalMsState] = useState(null);
+    const [intervalMs, setIntervalMsState] = useState(0);
     const [lastUpdated, setLastUpdated] = useState(null);
     const [refreshSignal, setRefreshSignal] = useState(0);
     const [syncStatus, setSyncStatus] = useState(null);
