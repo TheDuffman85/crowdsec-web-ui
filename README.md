@@ -74,7 +74,7 @@ Automatically detects new container images on GitHub Container Registry (GHCR). 
 ## Architecture
 
 -   **Frontend**: React (Vite) + Tailwind CSS. Located in `frontend/`.
--   **Backend**: Bun (Express). Acts as an intelligent caching layer for CrowdSec Local API (LAPI) with delta updates and optimized chunked historical data sync.
+-   **Backend**: Bun (Hono). Acts as an intelligent caching layer for CrowdSec Local API (LAPI) with delta updates and optimized chunked historical data sync.
 -   **Database**: SQLite (native bun:sqlite). Persists alerts and decisions locally in `/app/data/crowdsec.db` to reduce memory usage and support historical data.
 -   **Security**: The application runs as a non-root user (`bun`) inside the container and communicates with CrowdSec via HTTP/LAPI. It uses **Machine Authentication** (User/Password) to obtain a JWT for full access (read/write).
 
@@ -100,6 +100,11 @@ Automatically detects new container images on GitHub Container Registry (GHCR). 
 1.  **Build the image**:
     ```bash
     docker build -t crowdsec-web-ui .
+    ```
+
+    You can optionally specify `DOCKER_IMAGE_REF` to override the default image reference used for checking updates (useful for forks or private registries):
+    ```bash
+    docker build --build-arg DOCKER_IMAGE_REF=my-registry/my-image -t crowdsec-web-ui .
     ```
 
 2.  **Run the container**:
