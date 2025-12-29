@@ -112,7 +112,7 @@ api:
 
 Or using `TRUSTED_IPS` environment variable on the CrowdSec container:
 ```bash
-TRUSTED_IPS="127.0.0.1,::1,172.16.0.0/12,10.0.0.0/8"
+TRUSTED_IPS="127.0.0.1,::1,172.16.0.0/12"
 ```
 
 See the [CrowdSec documentation](https://docs.crowdsec.net/docs/local_api/intro/) for more details on LAPI configuration.
