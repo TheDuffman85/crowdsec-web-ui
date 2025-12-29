@@ -7,7 +7,7 @@ export function SyncOverlay({ syncStatus }) {
     const progress = syncStatus.progress || 0;
 
     return createPortal(
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm">
             <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-8 max-w-md w-full mx-4 text-center">
                 {/* Icon with animation */}
                 <div className="relative inline-flex items-center justify-center mb-6">
