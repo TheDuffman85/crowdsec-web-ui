@@ -1252,7 +1252,7 @@ app.put('/api/config/refresh-interval', ensureAuth, async (c) => {
 
     REFRESH_INTERVAL_MS = newIntervalMs;
 
-    // Persist to config file
+    // Persist to database
     savePersistedConfig({ refresh_interval_ms: newIntervalMs, refresh_interval_name: interval });
 
     // Restart scheduler with new interval
