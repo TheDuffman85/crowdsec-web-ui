@@ -197,7 +197,7 @@ async function login() {
  */
 async function fetchAlerts(since = null, until = null, hasActiveDecision = false) {
     const sinceParam = since || CROWDSEC_LOOKBACK_PERIOD;
-    const origins = ['cscli', 'crowdsec', 'cscli-import', 'manual', 'appsec', 'lists'];
+    const origins = ['cscli', 'crowdsec', 'cscli-import', 'manual', 'appsec'];
     const scopes = ['Ip', 'Range'];
     const limit = 10000;
 
