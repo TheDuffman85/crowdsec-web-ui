@@ -4,8 +4,8 @@ services:
     container_name: crowdsec_web_ui
     ports:
       - "3000:3000"
-    environment:
-      - CROWDSEC_URL=http://crowdsec:8080
-      - CROWDSEC_USER=crowdsec-web-ui
-      - CROWDSEC_PASSWORD=your_secure_password_here
+    env_file:
+      - .env
+    volumes:
+      - ./crowdsec.db:/app/data/crowdsec.db
     restart: unless-stopped
