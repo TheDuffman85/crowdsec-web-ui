@@ -13,6 +13,7 @@ import {
   getAlertById,
   addDecision,
   deleteDecision,
+  deleteAlert,
   getLapiStatus,
   updateLapiStatus,
   hasCredentials,
@@ -1064,6 +1065,32 @@ app.get('/api/alerts/:id', ensureAuth, async (c) => {
     return await doRequest();
   } catch (error) {
     return handleApiError(error, c, 'fetching alert details', doRequest);
+  }
+});
+
+/**
+ * DELETE /api/alerts/:id
+ * Deletes an alert by ID from LAPI and local cache
+ */
+app.delete('/api/alerts/:id', ensureAuth, async (c) => {
+  const doRequest = async () => {
+    const alertId = c.req.param('id');
+    const result = await deleteAlert(alertId);
+
+    // Remove alert from SQLite cache
+    db.deleteAlert.run({ $id: alertId });
+    // Also remove associated decisions from cache
+    db.deleteDecisionsByAlertId.run({ $alert_id: alertId });
+
+    console.log(`Deleted alert #${alertId} from LAPI and local cache`);
+
+    return c.json(result || { message: 'Deleted' });
+  };
+
+  try {
+    return await doRequest();
+  } catch (error) {
+    return handleApiError(error, c, 'deleting alert', doRequest);
   }
 });
 

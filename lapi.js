@@ -299,6 +299,18 @@ async function deleteDecision(decisionId) {
     return response.data;
 }
 
+/**
+ * Delete an alert by ID
+ * @param {string|number} alertId - The alert ID to delete
+ * @returns {Promise<Object>} Response from LAPI
+ */
+async function deleteAlert(alertId) {
+    const response = await fetchLAPI(`/v1/alerts/${alertId}`, {
+        method: 'DELETE'
+    });
+    return response.data;
+}
+
 // ============================================================================
 // EXPORTS
 // ============================================================================
@@ -315,6 +327,9 @@ export {
     // Decision management
     addDecision,
     deleteDecision,
+
+    // Alert management
+    deleteAlert,
 
     // Status functions
     getLapiStatus,
@@ -334,6 +349,7 @@ export default {
     getAlertById,
     addDecision,
     deleteDecision,
+    deleteAlert,
     getLapiStatus,
     updateLapiStatus,
     hasCredentials,

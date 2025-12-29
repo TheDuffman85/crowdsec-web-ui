@@ -95,6 +95,28 @@ Automatically detects new container images on GitHub Container Registry (GHCR). 
 > [!NOTE]
 > The `-f /dev/null` flag is crucial. It tells `cscli` **not** to overwrite the existing credentials file of the CrowdSec container. We only want to register the machine in the database, not change the container's local config.
 
+### Trusted IPs for Delete Operations (Optional)
+
+By default, CrowdSec may restrict certain write operations (like deleting alerts) to trusted IP addresses. If you encounter `403 Forbidden` errors when trying to delete alerts, you may need to add the Web UI's IP to CrowdSec's trusted IPs list.
+
+**Docker Setup**: Add the Web UI container's network to the CrowdSec configuration in `/etc/crowdsec/config.yaml` or via environment variable:
+
+```yaml
+api:
+  server:
+    trusted_ips:
+      - 127.0.0.1
+      - ::1
+      - 172.16.0.0/12  # Docker default bridge network
+```
+
+Or using `TRUSTED_IPS` environment variable on the CrowdSec container:
+```bash
+TRUSTED_IPS="127.0.0.1,::1,172.16.0.0/12,10.0.0.0/8"
+```
+
+See the [CrowdSec documentation](https://docs.crowdsec.net/docs/local_api/intro/) for more details on LAPI configuration.
+
 ## Run with Docker (Recommended)
 
 1.  **Build the image**:

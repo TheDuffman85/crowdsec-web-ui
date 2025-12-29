@@ -1,13 +1,13 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useSearchParams, Link } from "react-router-dom";
-import { fetchAlerts, fetchAlert } from "../lib/api";
+import { fetchAlerts, fetchAlert, deleteAlert } from "../lib/api";
 import { useRefresh } from "../contexts/RefreshContext";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { getHubUrl, getCountryName } from "../lib/utils";
-import { Search, Info, ExternalLink, Shield } from "lucide-react";
+import { Search, Info, ExternalLink, Shield, Trash2, X, AlertCircle } from "lucide-react";
 import "flag-icons/css/flag-icons.min.css";
 
 export function Alerts() {
@@ -18,6 +18,8 @@ export function Alerts() {
     const [selectedAlert, setSelectedAlert] = useState(null);
     const [displayedCount, setDisplayedCount] = useState(50);
     const [searchParams, setSearchParams] = useSearchParams();
+    const [alertToDelete, setAlertToDelete] = useState(null);
+    const [errorInfo, setErrorInfo] = useState(null); // { message, helpLink?, helpText? }
 
     // Ref to track selected alert ID for auto-refresh (avoids stale closure issues)
     const selectedAlertIdRef = useRef(null);
@@ -115,6 +117,35 @@ export function Alerts() {
         }
     };
 
+    // Delete handlers
+    const requestDelete = (id, event) => {
+        event.stopPropagation();
+        setAlertToDelete(id);
+    };
+
+    const confirmDelete = async () => {
+        if (!alertToDelete) return;
+        const idToDelete = alertToDelete;
+        setAlertToDelete(null);
+        setErrorInfo(null);
+        try {
+            await deleteAlert(idToDelete);
+            // Close modal if we deleted the currently viewed alert
+            if (selectedAlert && selectedAlert.id === idToDelete) {
+                setSelectedAlert(null);
+            }
+            await loadAlerts();
+            setDisplayedCount(50);
+        } catch (error) {
+            console.error("Failed to delete alert", error);
+            setErrorInfo({
+                message: error.message || "Failed to delete alert. Please try again.",
+                helpLink: error.helpLink,
+                helpText: error.helpText
+            });
+        }
+    };
+
     const filteredAlerts = alerts.filter(alert => {
         const search = filter.toLowerCase();
 
@@ -197,6 +228,37 @@ export function Alerts() {
                 )}
             </div>
 
+            {/* Error Message */}
+            {errorInfo && (
+                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md p-4 flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-red-700 dark:text-red-300">
+                        <AlertCircle size={16} className="flex-shrink-0" />
+                        <span className="text-sm">
+                            {errorInfo.message}
+                            {errorInfo.helpLink && (
+                                <>
+                                    {' See README: '}
+                                    <a
+                                        href={errorInfo.helpLink}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="underline hover:text-red-900 dark:hover:text-red-100"
+                                    >
+                                        {errorInfo.helpText || 'Learn more'}
+                                    </a>
+                                </>
+                            )}
+                        </span>
+                    </div>
+                    <button
+                        onClick={() => setErrorInfo(null)}
+                        className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-200"
+                    >
+                        <X size={16} />
+                    </button>
+                </div>
+            )}
+
             {/* Show active filters */}
             {(searchParams.get("ip") || searchParams.get("country") || searchParams.get("scenario") || searchParams.get("as") || searchParams.get("target") || searchParams.get("date") || searchParams.get("dateStart") || searchParams.get("dateEnd")) && (
                 <div className="flex flex-wrap gap-2">
@@ -226,7 +288,8 @@ export function Alerts() {
                         Reset all filters
                     </button>
                 </div>
-            )}
+            )
+            }
 
             <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -252,13 +315,14 @@ export function Alerts() {
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">AS</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">IP</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Decisions</th>
+                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
                             </tr>
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                             {loading ? (
-                                <tr><td colSpan="6" className="px-6 py-4 text-center text-sm text-gray-500">Loading alerts...</td></tr>
+                                <tr><td colSpan="7" className="px-6 py-4 text-center text-sm text-gray-500">Loading alerts...</td></tr>
                             ) : visibleAlerts.length === 0 ? (
-                                <tr><td colSpan="6" className="px-6 py-4 text-center text-sm text-gray-500">No alerts found</td></tr>
+                                <tr><td colSpan="7" className="px-6 py-4 text-center text-sm text-gray-500">No alerts found</td></tr>
                             ) : (
                                 visibleAlerts.map((alert, index) => {
                                     const isLastElement = index === visibleAlerts.length - 1;
@@ -339,6 +403,15 @@ export function Alerts() {
                                                 })() : (
                                                     <span className="text-gray-400">-</span>
                                                 )}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                                <button
+                                                    onClick={(e) => requestDelete(alert.id, e)}
+                                                    className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
+                                                    title="Delete Alert"
+                                                >
+                                                    <Trash2 size={16} />
+                                                </button>
                                             </td>
                                         </tr>
                                     );
@@ -665,6 +738,33 @@ export function Alerts() {
                     </div>
                 )}
             </Modal>
-        </div>
+
+            {/* Delete Confirmation Modal */}
+            <Modal
+                isOpen={!!alertToDelete}
+                onClose={() => setAlertToDelete(null)}
+                title="Delete Alert?"
+                maxWidth="max-w-sm"
+                showCloseButton={false}
+            >
+                <p className="text-gray-600 dark:text-gray-300 mb-6">
+                    Are you sure you want to delete alert <span className="font-mono text-sm font-bold">#{alertToDelete}</span>? This will also delete all associated decisions. This action cannot be undone.
+                </p>
+                <div className="flex justify-end gap-3">
+                    <button
+                        onClick={() => setAlertToDelete(null)}
+                        className="px-4 py-2 text-sm font-medium text-gray-700 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        onClick={confirmDelete}
+                        className="px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                    >
+                        Delete
+                    </button>
+                </div>
+            </Modal>
+        </div >
     );
 }

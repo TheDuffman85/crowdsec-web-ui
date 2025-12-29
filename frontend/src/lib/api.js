@@ -16,6 +16,27 @@ export async function fetchDecisions() {
     return res.json();
 }
 
+// Helper to handle API errors with specific 403 guidance
+function handleApiError(res, defaultMsg, operationName = 'Delete Operations') {
+    if (!res.ok) {
+        if (res.status === 403) {
+            const repoUrl = import.meta.env.VITE_REPO_URL || 'https://github.com/TheDuffman85/crowdsec-web-ui';
+            const error = new Error('Permission denied.');
+            error.helpLink = `${repoUrl}#trusted-ips-for-delete-operations-optional`;
+            error.helpText = `Trusted IPs for ${operationName}`;
+            throw error;
+        }
+        throw new Error(defaultMsg);
+    }
+}
+
+export async function deleteAlert(id) {
+    const res = await fetch(`/api/alerts/${id}`, { method: 'DELETE' });
+    handleApiError(res, 'Failed to delete alert');
+    if (res.status === 204) return null;
+    return res.json();
+}
+
 export async function fetchDecisionsForStats() {
     const res = await fetch('/api/stats/decisions');
     if (!res.ok) throw new Error('Failed to fetch decision statistics');
@@ -30,7 +51,7 @@ export async function fetchAlertsForStats() {
 
 export async function deleteDecision(id) {
     const res = await fetch(`/api/decisions/${id}`, { method: 'DELETE' });
-    if (!res.ok) throw new Error('Failed to delete decision');
+    handleApiError(res, 'Failed to delete decision');
     if (res.status === 204) return null;
     return res.json();
 }
@@ -41,7 +62,7 @@ export async function addDecision(data) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
     });
-    if (!res.ok) throw new Error('Failed to add decision');
+    handleApiError(res, 'Failed to add decision', 'Write Operations');
     return res.json();
 }
 
