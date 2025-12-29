@@ -197,7 +197,7 @@ async function login() {
  */
 async function fetchAlerts(since = null, until = null, hasActiveDecision = false) {
     const sinceParam = since || CROWDSEC_LOOKBACK_PERIOD;
-    const limit = 10000;
+    const limit = 0; // 0 = no limit, fetch all
     // Filter by scope (Ip, Range) - this also excludes CAPI/lists which have different scopes
     const scopes = ['Ip', 'Range'];
 
