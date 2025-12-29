@@ -197,89 +197,28 @@ async function login() {
  */
 async function fetchAlerts(since = null, until = null, hasActiveDecision = false) {
     const sinceParam = since || CROWDSEC_LOOKBACK_PERIOD;
-    const origins = ['cscli', 'crowdsec', 'cscli-import', 'manual', 'appsec'];
+    const limit = 0; // 0 = no limit, fetch all
+    // Filter by scope (Ip, Range) - this also excludes CAPI/lists which have different scopes
     const scopes = ['Ip', 'Range'];
-    const limit = 10000;
 
-    const activeDecisionParam = hasActiveDecision ? '&has_active_decision=true' : '';
-    const untilParam = until ? `&until=${until}` : '';
+    try {
+        const params = new URLSearchParams();
+        params.append('since', sinceParam);
+        params.append('limit', limit);
 
-    let alertMap = new Map();
+        if (until) params.append('until', until);
+        if (hasActiveDecision) params.append('has_active_decision', 'true');
 
-    // Helper to process response
-    const processResponse = (data) => {
-        if (data && Array.isArray(data)) {
-            data.forEach(alert => {
-                alertMap.set(alert.id, alert);
-            });
-            return data.length;
-        }
-        return 0;
-    };
+        scopes.forEach(s => params.append('scope', s));
 
-    // Helper to make a fetch request with auth, timeout, and 401 retry
-    const fetchWithAuth = async (url, isRetry = false) => {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 30000);
+        const url = `/v1/alerts?${params.toString()}`;
+        const response = await fetchLAPI(url);
 
-        try {
-            const response = await fetch(`${CROWDSEC_URL}${url}`, {
-                method: 'GET',
-                headers: {
-                    'Authorization': `Bearer ${requestToken}`,
-                    'User-Agent': 'crowdsec-web-ui/1.0.0',
-                    'Connection': 'close'
-                },
-                signal: controller.signal
-            });
-
-            clearTimeout(timeoutId);
-
-            // Handle 401 Unauthorized - attempt re-authentication once
-            if (response.status === 401 && !isRetry) {
-                console.log('Detected 401 Unauthorized in fetchAlerts. Attempting to re-authenticate...');
-                const success = await login();
-                if (success) {
-                    console.log('Re-authentication successful. Retrying request...');
-                    return await fetchWithAuth(url, true);
-                } else {
-                    throw new Error('HTTP 401: Re-authentication failed');
-                }
-            }
-
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-
-            return await response.json();
-        } catch (err) {
-            clearTimeout(timeoutId);
-            throw err;
-        }
-    };
-
-    // Execute requests SEQUENTIALLY to avoid overwhelming LAPI
-    for (const o of origins) {
-        try {
-            const url = `/v1/alerts?since=${sinceParam}${untilParam}&origin=${o}&limit=${limit}${activeDecisionParam}`;
-            const data = await fetchWithAuth(url);
-            processResponse(data);
-        } catch (err) {
-            console.error(`Failed to fetch alerts from origin=${o}: ${err.message}`);
-        }
+        return Array.isArray(response.data) ? response.data : [];
+    } catch (err) {
+        console.error(`Failed to fetch alerts: ${err.message}`);
+        return [];
     }
-
-    for (const s of scopes) {
-        try {
-            const url = `/v1/alerts?since=${sinceParam}${untilParam}&scope=${s}&limit=${limit}${activeDecisionParam}`;
-            const data = await fetchWithAuth(url);
-            processResponse(data);
-        } catch (err) {
-            console.error(`Failed to fetch alerts from scope=${s}: ${err.message}`);
-        }
-    }
-
-    return Array.from(alertMap.values());
 }
 
 // ============================================================================
