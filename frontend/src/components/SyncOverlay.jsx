@@ -22,7 +22,7 @@ export function SyncOverlay({ syncStatus }) {
                     Syncing Historical Data
                 </h2>
                 <p className="text-gray-600 dark:text-gray-400 text-sm mb-6">
-                    Please wait while we fetch your security data...
+                    Please wait while fetching data...
                 </p>
 
                 {/* Progress bar */}

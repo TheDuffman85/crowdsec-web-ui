@@ -20,7 +20,7 @@ export function getHubUrl(scenarioName) {
 }
 
 export function getCountryName(code) {
-    if (!code) return "Unknown";
+    if (!code) return null;
     try {
         const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
         return regionNames.of(code.toUpperCase());

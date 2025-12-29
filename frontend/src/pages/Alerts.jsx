@@ -276,17 +276,17 @@ export function Alerts() {
                                                 <ScenarioName name={alert.scenario} showLink={true} />
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 align-middle">
-                                                {alert.source?.cn ? (
+                                                {alert.source?.cn && alert.source?.cn !== "Unknown" ? (
                                                     <div className="flex items-center gap-2" title={alert.source.cn}>
                                                         <span className={`fi fi-${alert.source.cn.toLowerCase()} flex-shrink-0`}></span>
                                                         <span className="truncate max-w-[150px]">{getCountryName(alert.source.cn)}</span>
                                                     </div>
                                                 ) : (
-                                                    "Unknown"
+                                                    "-"
                                                 )}
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[150px] truncate" title={alert.source?.as_name}>
-                                                {alert.source?.as_name || "Unknown"}
+                                                {alert.source?.as_name || "-"}
                                             </td>
                                             <td className="px-6 py-4 text-sm font-mono text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={alert.source?.ip || alert.source?.value}>
                                                 {alert.source?.ip || alert.source?.value || "N/A"}
@@ -381,7 +381,7 @@ export function Alerts() {
                                     {selectedAlert.source?.cn && (
                                         <span className={`fi fi-${selectedAlert.source.cn.toLowerCase()} flex-shrink-0`} title={selectedAlert.source.cn}></span>
                                     )}
-                                    {getCountryName(selectedAlert.source?.cn) || "Unknown"}
+                                    {getCountryName(selectedAlert.source?.cn) || "-"}
                                 </div>
                                 {selectedAlert.source?.latitude && selectedAlert.source?.longitude && (
                                     <div className="text-xs text-gray-400 font-mono mt-1">
@@ -453,7 +453,7 @@ export function Alerts() {
                                                 <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
                                                 <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
                                                 <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Value</th>
-                                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Duration</th>
+                                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Expiration</th>
                                                 <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Origin</th>
                                                 <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">View</th>
                                             </tr>
@@ -481,7 +481,10 @@ export function Alerts() {
                                                         <td className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400">#{decision.id}</td>
                                                         <td className="px-4 py-2 text-sm"><Badge variant="danger">{decision.type}</Badge></td>
                                                         <td className="px-4 py-2 text-sm font-mono">{decision.value}</td>
-                                                        <td className="px-4 py-2 text-sm">{decision.duration}</td>
+                                                        <td className="px-4 py-2 text-sm">
+                                                            {decision.duration && decision.duration.startsWith('-') ? "0s" : decision.duration}
+                                                            {!isActive && <span className="ml-2 text-xs text-red-500 dark:text-red-400">(Expired)</span>}
+                                                        </td>
                                                         <td className="px-4 py-2 text-sm">{decision.origin}</td>
                                                         <td className="px-4 py-2 text-sm">
                                                             {isActive ? (

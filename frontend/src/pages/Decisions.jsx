@@ -447,17 +447,17 @@ export function Decisions() {
                                                 <ScenarioName name={decision.detail.reason} showLink={true} />
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 align-middle">
-                                                {decision.detail.country ? (
+                                                {decision.detail.country && decision.detail.country !== "Unknown" ? (
                                                     <div className="flex items-center gap-2" title={decision.detail.country}>
                                                         <span className={`fi fi-${decision.detail.country.toLowerCase()} flex-shrink-0`}></span>
                                                         <span>{getCountryName(decision.detail.country)}</span>
                                                     </div>
                                                 ) : (
-                                                    "Unknown"
+                                                    "-"
                                                 )}
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[150px] truncate" title={decision.detail.as}>
-                                                {decision.detail.as}
+                                                {decision.detail.as && decision.detail.as !== "Unknown" ? decision.detail.as : "-"}
                                             </td>
                                             <td className="px-6 py-4 text-sm font-mono text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={decision.value}>
                                                 {decision.value}
@@ -466,7 +466,7 @@ export function Decisions() {
                                                 <Badge variant="danger">{decision.detail.action || "ban"}</Badge>
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 whitespace-nowrap">
-                                                {decision.detail.duration}
+                                                {decision.detail.duration.startsWith("-") ? "0s" : decision.detail.duration}
                                                 {isExpired && <span className="ml-2 text-xs text-red-500 dark:text-red-400">(Expired)</span>}
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm">
