@@ -205,3 +205,7 @@ volumes:
     ```bash
     ./run.sh
     ```
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=TheDuffman85/crowdsec-web-ui&type=Date)](https://star-history.com/#TheDuffman85/crowdsec-web-ui&Date)
