@@ -39,8 +39,8 @@ export function Sidebar({ isMobileMenuOpen, onClose, theme, toggleTheme }) {
     return (
         <aside
             className={`
-                fixed lg:static top-0 left-0 z-30
-                w-72 h-full 
+                fixed lg:static top-0 left-0 z-[9999] will-change-transform
+                w-72 h-[100dvh] 
                 bg-white dark:bg-gray-800 
                 border-r border-gray-200 dark:border-gray-700 
                 flex flex-col 

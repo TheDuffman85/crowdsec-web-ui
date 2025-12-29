@@ -32,11 +32,11 @@ export function Layout() {
     };
 
     return (
-        <div className="flex h-screen bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 font-sans">
+        <div className="flex h-[100dvh] bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 font-sans">
             {/* Mobile Sidebar Overlay */}
             {isMobileMenuOpen && (
                 <div
-                    className="fixed inset-0 bg-black/50 z-20 lg:hidden"
+                    className="fixed inset-0 bg-black/50 z-40 lg:hidden"
                     onClick={() => setIsMobileMenuOpen(false)}
                 />
             )}
@@ -48,7 +48,7 @@ export function Layout() {
                 toggleTheme={toggleTheme}
             />
 
-            <main className="flex-1 overflow-auto relative w-full">
+            <main className={`flex-1 relative w-full z-0 isolate overflow-auto ${isMobileMenuOpen ? 'lg:overflow-auto overflow-hidden touch-none lg:touch-auto' : ''}`}>
                 <header className="absolute top-0 right-0 p-4 z-10 flex gap-2">
                     <button
                         onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
