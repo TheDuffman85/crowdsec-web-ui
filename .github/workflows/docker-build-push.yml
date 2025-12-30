@@ -75,3 +75,11 @@ jobs:
             VITE_REPO_URL=${{ github.server_url }}/${{ github.repository }}
             VITE_BRANCH=${{ steps.branch.outputs.name }}
             DOCKER_IMAGE_REF=${{ github.repository }}
+
+      - name: Delete untagged images
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ github.event.repository.name }}
+          package-type: container
+          min-versions-to-keep: 0
+          delete-only-untagged-versions: true
