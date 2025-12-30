@@ -20,9 +20,8 @@
     "react-is": "^19.2.1",
     "react-router-dom": "^7.10.1",
     "react-simple-maps": "^3.0.0",
-    "react-virtualized-auto-sizer": "^2.0.0",
     "react-window": "^2.2.3",
-    "recharts": "^3.5.1",
+    "recharts": "3.6.0",
     "tailwind-merge": "^3.4.0"
   },
   "devDependencies": {
