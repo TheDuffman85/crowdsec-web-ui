@@ -9,7 +9,8 @@ import {
     Legend,
     Brush
 } from 'recharts';
-import AutoSizer from 'react-virtualized-auto-sizer';
+import * as AutoSizerModule from 'react-virtualized-auto-sizer';
+const AutoSizer = AutoSizerModule.default || AutoSizerModule;
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { BarChart3, Clock } from 'lucide-react';
 
