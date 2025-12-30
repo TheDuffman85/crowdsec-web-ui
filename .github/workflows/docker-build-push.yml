@@ -77,9 +77,8 @@ jobs:
             DOCKER_IMAGE_REF=${{ github.repository }}
 
       - name: Delete untagged images
-        uses: actions/delete-package-versions@v5
+        uses: dataaxiom/ghcr-cleanup-action@v1
         with:
-          package-name: ${{ github.event.repository.name }}
-          package-type: container
-          min-versions-to-keep: 0
-          delete-only-untagged-versions: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+          package: ${{ github.event.repository.name }}
+          delete-untagged: true
