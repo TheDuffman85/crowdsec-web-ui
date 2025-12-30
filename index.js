@@ -789,7 +789,8 @@ async function checkForUpdates() {
       throw new Error('No head_sha in workflow run data');
     }
 
-    const updateAvailable = latestHash !== currentHash;
+    // Compare using prefix match since local hash may be short (8 chars) while remote is full SHA (40 chars)
+    const updateAvailable = !latestHash.startsWith(currentHash) && !currentHash.startsWith(latestHash);
 
     const result = {
       update_available: updateAvailable,
