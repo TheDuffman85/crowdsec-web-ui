@@ -9,8 +9,7 @@ import {
     Legend,
     Brush
 } from 'recharts';
-import * as AutoSizerModule from 'react-virtualized-auto-sizer';
-const AutoSizer = AutoSizerModule.default || AutoSizerModule;
+import { AutoSizer } from 'react-virtualized-auto-sizer';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { BarChart3, Clock } from 'lucide-react';
 
@@ -252,8 +251,8 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
             <CardContent className="flex-1 min-h-0 flex flex-col gap-0">
                 {/* Main Chart Section */}
                 <div ref={containerRef} className="flex-1 min-h-0 outline-none relative">
-                    <AutoSizer>
-                        {({ width, height }) => (
+                    <AutoSizer
+                        Child={({ width, height }) => (
                             width > 0 && height > 0 ? (
                                 <BarChart
                                     width={width}
@@ -288,7 +287,7 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
                                 </BarChart>
                             ) : null
                         )}
-                    </AutoSizer>
+                    />
                 </div>
 
                 {/* Slider Section */}
@@ -320,8 +319,8 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
                         }
                     }}
                 >
-                    <AutoSizer>
-                        {({ width, height }) => (
+                    <AutoSizer
+                        Child={({ width, height }) => (
                             width > 0 && height > 0 ? (
                                 <BarChart
                                     width={width}
@@ -438,7 +437,7 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
                                 </BarChart>
                             ) : null
                         )}
-                    </AutoSizer>
+                    />
                 </div>
             </CardContent>
         </Card >

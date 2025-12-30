@@ -579,7 +579,7 @@
 
     "react-simple-maps": ["react-simple-maps@3.0.0", "", { "dependencies": { "d3-geo": "^2.0.2", "d3-selection": "^2.0.0", "d3-zoom": "^2.0.0", "topojson-client": "^3.1.0" }, "peerDependencies": { "prop-types": "^15.7.2", "react": "^16.8.0 || 17.x || 18.x", "react-dom": "^16.8.0 || 17.x || 18.x" } }, "sha512-vKNFrvpPG8Vyfdjnz5Ne1N56rZlDfHXv5THNXOVZMqbX1rWZA48zQuYT03mx6PAKanqarJu/PDLgshIZAfHHqw=="],
 
-    "react-virtualized-auto-sizer": ["react-virtualized-auto-sizer@2.0.0", "", { "peerDependencies": { "react": "^18.0.0 || ^19.0.0", "react-dom": "^18.0.0 || ^19.0.0" } }, "sha512-VVRkdUXmqwSa287akwnYU+Z7ZuC3OzxCf/ELV6mYCgz61IQ+0UWMY30sGQEzjWjVxWCFhrMt+dIrPNZBLrj7lA=="],
+    "react-virtualized-auto-sizer": ["react-virtualized-auto-sizer@2.0.1", "", { "peerDependencies": { "react": "^18.0.0 || ^19.0.0", "react-dom": "^18.0.0 || ^19.0.0" } }, "sha512-7xaqssJeCtXCETeRDxPUXKpUFjCrhK60o8X02BJF7zcTfjwKfdSQmb2fVDLIwaO8RmmzaGL1glJUQ+/b236Y1A=="],
 
     "react-window": ["react-window@2.2.3", "", { "peerDependencies": { "react": "^18.0.0 || ^19.0.0", "react-dom": "^18.0.0 || ^19.0.0" } }, "sha512-gTRqQYC8ojbiXyd9duYFiSn2TJw0ROXCgYjenOvNKITWzK0m0eCvkUsEUM08xvydkMh7ncp+LE0uS3DeNGZxnQ=="],
 
