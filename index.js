@@ -721,24 +721,7 @@ if (!UPDATE_CHECK_ENABLED) {
 
 const DOCKER_IMAGE_REF = (process.env.DOCKER_IMAGE_REF || 'theduffman85/crowdsec-web-ui').toLowerCase();
 
-async function getGhcrToken() {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-    const response = await fetch(`https://ghcr.io/token?service=ghcr.io&scope=repository:${DOCKER_IMAGE_REF}:pull`, {
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId);
-
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = await response.json();
-    return data.token;
-  } catch (error) {
-    console.error('Failed to get GHCR token:', error.message);
-    return null;
-  }
-}
 
 async function checkForUpdates() {
   // Skip if update checking is disabled (no commit hash set)
@@ -755,79 +738,64 @@ async function checkForUpdates() {
   const currentBranch = process.env.VITE_BRANCH || 'main'; // Default to main if not set (which maps to latest)
   const currentHash = process.env.VITE_COMMIT_HASH;
 
-  // Map branch to tag
+  // Map branch to tag for display
   const tag = currentBranch === 'dev' ? 'dev' : 'latest';
 
   try {
-    const token = await getGhcrToken();
-    if (!token) throw new Error('No GHCR token obtained');
+    // Extract owner and repo from DOCKER_IMAGE_REF
+    const parts = DOCKER_IMAGE_REF.split('/');
+    let owner, repo;
 
-    // 1. Get Manifest (or Index)
-    const manifestUrl = `https://ghcr.io/v2/${DOCKER_IMAGE_REF}/manifests/${tag}`;
+    if (parts.length === 2) {
+      owner = parts[0];
+      repo = parts[1];
+    } else if (parts.length === 3) {
+      // Handle registry/owner/repo format if applicable, though GHCR usually is owner/repo
+      owner = parts[1];
+      repo = parts[2];
+    } else {
+      // Fallback or error
+      console.error(`Invalid DOCKER_IMAGE_REF format: ${DOCKER_IMAGE_REF}`);
+      return { update_available: false, reason: 'invalid_image_ref' };
+    }
 
-    let manifestFetch = await fetch(manifestUrl, {
+    // Fetch latest successful run for this branch
+    const runsUrl = `https://api.github.com/repos/${owner}/${repo}/actions/runs?branch=${currentBranch}&status=success&per_page=1`;
+
+    // We don't need a token for public repos usually, but if we hit rate limits we might need one.
+    // Ideally we'd use a token if available, but for now we'll try anonymously as it's a public read usually.
+    // If strict rate limits become an issue, we might need to inject a token.
+    const response = await fetch(runsUrl, {
       headers: {
-        'Authorization': `Bearer ${token}`,
-        'Accept': 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'crowdsec-web-ui-update-check'
       },
       signal: AbortSignal.timeout(10000)
     });
-    if (!manifestFetch.ok) throw new Error(`HTTP ${manifestFetch.status}`);
-    let manifestResponse = { data: await manifestFetch.json(), headers: { 'content-type': manifestFetch.headers.get('content-type') } };
 
-    // Handle OCI Index or Manifest List (Multi-arch)
-    const mediaType = manifestResponse.headers['content-type'];
-    if (mediaType === 'application/vnd.docker.distribution.manifest.list.v2+json' || mediaType === 'application/vnd.oci.image.index.v1+json') {
-      const manifests = manifestResponse.data.manifests;
-      const targetPlatform = manifests.find(m => m.platform?.architecture === 'amd64' && m.platform?.os === 'linux');
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-      if (!targetPlatform) {
-        throw new Error('No linux/amd64 manifest found in index');
-      }
+    const data = await response.json();
 
-      const resolvedDigest = targetPlatform.digest;
-
-      // Fetch the specific manifest
-      const specificManifestUrl = `https://ghcr.io/v2/${DOCKER_IMAGE_REF}/manifests/${resolvedDigest}`;
-      const specificFetch = await fetch(specificManifestUrl, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Accept': 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json'
-        },
-        signal: AbortSignal.timeout(10000)
-      });
-      if (!specificFetch.ok) throw new Error(`HTTP ${specificFetch.status}`);
-      manifestResponse = { data: await specificFetch.json(), headers: { 'content-type': specificFetch.headers.get('content-type') } };
+    if (!data.workflow_runs || data.workflow_runs.length === 0) {
+      console.warn('No successful workflow runs found.');
+      return { update_available: false, reason: 'no_runs_found' };
     }
 
-    const configDigest = manifestResponse.data.config?.digest;
-    if (!configDigest) throw new Error('Config digest not found in manifest');
+    const latestRun = data.workflow_runs[0];
+    const latestHash = latestRun.head_sha;
 
-    // 2. Get Config Blob to find Labels
-    const blobUrl = `https://ghcr.io/v2/theduffman85/crowdsec-web-ui/blobs/${configDigest}`;
-    const blobFetch = await fetch(blobUrl, {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      },
-      signal: AbortSignal.timeout(10000)
-    });
-    if (!blobFetch.ok) throw new Error(`HTTP ${blobFetch.status}`);
-    const blobResponse = { data: await blobFetch.json() };
-
-    const remoteRevision = blobResponse.data.config?.Labels?.['org.opencontainers.image.revision'];
-
-    if (!remoteRevision) {
-      console.log('Update check: Remote image has no revision label.');
-      return { update_available: false, reason: 'no_remote_label' };
+    if (!latestHash) {
+      throw new Error('No head_sha in workflow run data');
     }
 
-    // Check if remote revision starts with local hash (remote is full SHA, local is short 8 chars)
-    const isMismatch = !remoteRevision.startsWith(currentHash);
+    // Compare using prefix match since local hash may be short (8 chars) while remote is full SHA (40 chars)
+    const updateAvailable = !latestHash.startsWith(currentHash) && !currentHash.startsWith(latestHash);
 
     const result = {
-      update_available: isMismatch,
+      update_available: updateAvailable,
       local_hash: currentHash,
-      remote_hash: remoteRevision.substring(0, 8), // Shorten for display
+      remote_hash: latestHash,
       tag: tag
     };
 
@@ -837,7 +805,10 @@ async function checkForUpdates() {
       data: result
     };
 
-    console.log(`Update check complete. Update available: ${isMismatch} (Local: ${currentHash}, Remote: ${remoteRevision.substring(0, 8)})`);
+    if (updateAvailable) {
+      console.log(`Update check: New version available (local: ${currentHash}, remote: ${latestHash})`);
+    }
+
     return result;
 
   } catch (error) {

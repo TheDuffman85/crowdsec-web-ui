@@ -7,9 +7,9 @@ import {
     CartesianGrid,
     Tooltip,
     Legend,
-    Brush
+    Brush,
+    ResponsiveContainer
 } from 'recharts';
-import AutoSizer from 'react-virtualized-auto-sizer';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { BarChart3, Clock } from 'lucide-react';
 
@@ -251,43 +251,37 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
             <CardContent className="flex-1 min-h-0 flex flex-col gap-0">
                 {/* Main Chart Section */}
                 <div ref={containerRef} className="flex-1 min-h-0 outline-none relative">
-                    <AutoSizer>
-                        {({ width, height }) => (
-                            width > 0 && height > 0 ? (
-                                <BarChart
-                                    width={width}
-                                    height={height}
-                                    data={filteredData}
-                                    margin={{ top: 20, right: 30, left: 20, bottom: 0 }}
-                                    barGap={2}
-                                >
-                                    <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
-                                    <XAxis dataKey="label" stroke="#888888" fontSize={12} tickLine={false} axisLine={false} />
-                                    <YAxis stroke="#888888" fontSize={12} tickLine={false} axisLine={false} width={40} />
-                                    <Tooltip content={<CustomTooltip />} cursor={{ fill: 'transparent' }} />
-                                    <Legend verticalAlign="top" height={36} />
-                                    <Bar
-                                        isAnimationActive={false}
-                                        dataKey="alerts"
-                                        name="Alerts"
-                                        fill="#dc2626"
-                                        stroke="none"
-                                        radius={[4, 4, 0, 0]}
-                                        barSize={dynamicBarSize}
-                                    />
-                                    <Bar
-                                        isAnimationActive={false}
-                                        dataKey="decisions"
-                                        name="Decisions"
-                                        fill="#2563eb"
-                                        stroke="none"
-                                        radius={[4, 4, 0, 0]}
-                                        barSize={dynamicBarSize}
-                                    />
-                                </BarChart>
-                            ) : null
-                        )}
-                    </AutoSizer>
+                    <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                            data={filteredData}
+                            margin={{ top: 20, right: 30, left: 20, bottom: 0 }}
+                            barGap={2}
+                        >
+                            <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
+                            <XAxis dataKey="label" stroke="#888888" fontSize={12} tickLine={false} axisLine={false} />
+                            <YAxis stroke="#888888" fontSize={12} tickLine={false} axisLine={false} width={40} />
+                            <Tooltip content={<CustomTooltip />} cursor={{ fill: 'transparent' }} />
+                            <Legend verticalAlign="top" height={36} />
+                            <Bar
+                                isAnimationActive={false}
+                                dataKey="alerts"
+                                name="Alerts"
+                                fill="#dc2626"
+                                stroke="none"
+                                radius={[4, 4, 0, 0]}
+                                barSize={dynamicBarSize}
+                            />
+                            <Bar
+                                isAnimationActive={false}
+                                dataKey="decisions"
+                                name="Decisions"
+                                fill="#2563eb"
+                                stroke="none"
+                                radius={[4, 4, 0, 0]}
+                                barSize={dynamicBarSize}
+                            />
+                        </BarChart>
+                    </ResponsiveContainer>
                 </div>
 
                 {/* Slider Section */}
@@ -319,125 +313,118 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
                         }
                     }}
                 >
-                    <AutoSizer>
-                        {({ width, height }) => (
-                            width > 0 && height > 0 ? (
-                                <BarChart
-                                    width={width}
-                                    height={height}
-                                    data={sliderData}
-                                    margin={{ top: 0, right: 30, left: 60, bottom: 0 }}
-                                >
+                    <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                            data={sliderData}
+                            margin={{ top: 0, right: 30, left: 60, bottom: 0 }}
+                        >
+                            <Brush
+                                key={`${granularity}-${brushKey}`}
+                                dataKey="date"
+                                height={40}
+                                stroke="#888888"
+                                fill="transparent"
+                                startIndex={startIndex}
+                                endIndex={endIndex}
+                                onChange={(e) => {
+                                    if (!e || e.startIndex === undefined || e.endIndex === undefined) return;
 
-                                    <Brush
-                                        key={`${granularity}-${brushKey}`}
-                                        dataKey="date"
-                                        height={40}
-                                        stroke="#888888"
-                                        fill="transparent"
-                                        startIndex={startIndex}
-                                        endIndex={endIndex}
-                                        onChange={(e) => {
-                                            if (!e || e.startIndex === undefined || e.endIndex === undefined) return;
+                                    let newStart = e.startIndex;
+                                    let newEnd = e.endIndex;
 
-                                            let newStart = e.startIndex;
-                                            let newEnd = e.endIndex;
+                                    // Start tracking drag if not already
+                                    if (!isDragging.current) {
+                                        isDragging.current = true;
+                                        // Capture initial window size at drag start
+                                        dragStartWindowSize.current = localBrushStateRef.current.endIndex - localBrushStateRef.current.startIndex;
 
-                                            // Start tracking drag if not already
-                                            if (!isDragging.current) {
-                                                isDragging.current = true;
-                                                // Capture initial window size at drag start
-                                                dragStartWindowSize.current = localBrushStateRef.current.endIndex - localBrushStateRef.current.startIndex;
+                                        const handleDragEnd = () => {
+                                            window.removeEventListener('mouseup', handleDragEnd);
+                                            window.removeEventListener('touchend', handleDragEnd);
 
-                                                const handleDragEnd = () => {
-                                                    window.removeEventListener('mouseup', handleDragEnd);
-                                                    window.removeEventListener('touchend', handleDragEnd);
+                                            // Reset drag source
+                                            dragSource.current = null;
 
-                                                    // Reset drag source
-                                                    dragSource.current = null;
+                                            // Commit the value
+                                            // We need to use the ref to get the LATEST state inside the callback
+                                            const currentStart = localBrushStateRef.current?.startIndex ?? e.startIndex;
+                                            const currentEnd = localBrushStateRef.current?.endIndex ?? e.endIndex;
 
-                                                    // Commit the value
-                                                    // We need to use the ref to get the LATEST state inside the callback
-                                                    const currentStart = localBrushStateRef.current?.startIndex ?? e.startIndex;
-                                                    const currentEnd = localBrushStateRef.current?.endIndex ?? e.endIndex;
+                                            const isStartReset = currentStart === 0;
+                                            const isEndReset = currentEnd >= sliderData.length - 1;
+                                            const isFullRange = isStartReset && isEndReset;
 
-                                                    const isStartReset = currentStart === 0;
-                                                    const isEndReset = currentEnd >= sliderData.length - 1;
-                                                    const isFullRange = isStartReset && isEndReset;
+                                            const startItem = sliderData[currentStart];
+                                            const endItem = sliderData[currentEnd];
 
-                                                    const startItem = sliderData[currentStart];
-                                                    const endItem = sliderData[currentEnd];
-
-                                                    if (startItem && endItem && onDateRangeSelect) {
-                                                        const dateRange = isFullRange ? null : {
-                                                            start: startItem.bucketKey,
-                                                            end: endItem.bucketKey
-                                                        };
-                                                        // Pass isAtEnd to indicate if brush is at the rightmost position
-                                                        onDateRangeSelect(dateRange, isEndReset);
-                                                    }
-                                                    // Defer the isDragging reset to allow state update to propagate first
-                                                    requestAnimationFrame(() => {
-                                                        isDragging.current = false;
-                                                    });
+                                            if (startItem && endItem && onDateRangeSelect) {
+                                                const dateRange = isFullRange ? null : {
+                                                    start: startItem.bucketKey,
+                                                    end: endItem.bucketKey
                                                 };
-                                                window.addEventListener('mouseup', handleDragEnd);
-                                                window.addEventListener('touchend', handleDragEnd);
-                                            } else {
-                                                // During drag: Check if we are dragging the SLIDE
-                                                if (dragSource.current === 'slide') {
-                                                    const currentWindowSize = newEnd - newStart;
-                                                    const expectedWindowSize = dragStartWindowSize.current;
+                                                // Pass isAtEnd to indicate if brush is at the rightmost position
+                                                onDateRangeSelect(dateRange, isEndReset);
+                                            }
+                                            // Defer the isDragging reset to allow state update to propagate first
+                                            requestAnimationFrame(() => {
+                                                isDragging.current = false;
+                                            });
+                                        };
+                                        window.addEventListener('mouseup', handleDragEnd);
+                                        window.addEventListener('touchend', handleDragEnd);
+                                    } else {
+                                        // During drag: Check if we are dragging the SLIDE
+                                        if (dragSource.current === 'slide') {
+                                            const currentWindowSize = newEnd - newStart;
+                                            const expectedWindowSize = dragStartWindowSize.current;
 
-                                                    // If dragging slide, window size MUST match expected size
-                                                    // We fix both shrinking AND expansion here
-                                                    if (expectedWindowSize > 0 && currentWindowSize !== expectedWindowSize) {
+                                            // If dragging slide, window size MUST match expected size
+                                            // We fix both shrinking AND expansion here
+                                            if (expectedWindowSize > 0 && currentWindowSize !== expectedWindowSize) {
 
-                                                        // Priority: Adjust the side that is NOT at the edge first, 
-                                                        // or if at edge, ensure the other side respects size.
+                                                // Priority: Adjust the side that is NOT at the edge first, 
+                                                // or if at edge, ensure the other side respects size.
 
-                                                        if (newStart <= 0) {
-                                                            // Hit left edge: Force end to match size
-                                                            newEnd = Math.min(sliderData.length - 1, newStart + expectedWindowSize);
-                                                        } else if (newEnd >= sliderData.length - 1) {
-                                                            // Hit right edge: Force start to match size
-                                                            newStart = Math.max(0, newEnd - expectedWindowSize);
-                                                        } else {
-                                                            // Middle but size changed? 
-                                                            // This can happen due to snapping. 
-                                                            // We default to preserving the START index if dragging right? 
-                                                            // Hard to know direction here easily without prev state.
-                                                            // But generally, sticking to size is safer.
-                                                            // If we expanded, we likely want to shrink back.
-                                                            // If we assume standard drag, let's defer to Recharts in middle unless critical?
-                                                            // Actually, user compliant was specifically about EDGE behavior.
-                                                            // So let's stick to edge enforcement for now.
-                                                        }
-
-                                                        // Double Check: If we STILL have a mismatch (e.g. at right edge, calculated start < 0?)
-                                                        // Ideally strictly enforce at edges.
-                                                        // The above logic handles edges. 
-                                                        // If we are floating in middle with wrong size, it's weird but less annoying than edge expansion.
-                                                    }
+                                                if (newStart <= 0) {
+                                                    // Hit left edge: Force end to match size
+                                                    newEnd = Math.min(sliderData.length - 1, newStart + expectedWindowSize);
+                                                } else if (newEnd >= sliderData.length - 1) {
+                                                    // Hit right edge: Force start to match size
+                                                    newStart = Math.max(0, newEnd - expectedWindowSize);
+                                                } else {
+                                                    // Middle but size changed? 
+                                                    // This can happen due to snapping. 
+                                                    // We default to preserving the START index if dragging right? 
+                                                    // Hard to know direction here easily without prev state.
+                                                    // But generally, sticking to size is safer.
+                                                    // If we expanded, we likely want to shrink back.
+                                                    // If we assume standard drag, let's defer to Recharts in middle unless critical?
+                                                    // Actually, user compliant was specifically about EDGE behavior.
+                                                    // So let's stick to edge enforcement for now.
                                                 }
-                                            }
 
-                                            // Update local UI immediately
-                                            setLocalBrushState({ startIndex: newStart, endIndex: newEnd });
-                                        }}
-                                        tickFormatter={(date) => {
-                                            if (!date) return '';
-                                            const d = new Date(date);
-                                            if (granularity === 'hour') {
-                                                return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ', ' + d.getHours().toString().padStart(2, '0') + ':00';
+                                                // Double Check: If we STILL have a mismatch (e.g. at right edge, calculated start < 0?)
+                                                // Ideally strictly enforce at edges.
+                                                // The above logic handles edges. 
+                                                // If we are floating in middle with wrong size, it's weird but less annoying than edge expansion.
                                             }
-                                            return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
-                                        }}
-                                    />
-                                </BarChart>
-                            ) : null
-                        )}
-                    </AutoSizer>
+                                        }
+                                    }
+
+                                    // Update local UI immediately
+                                    setLocalBrushState({ startIndex: newStart, endIndex: newEnd });
+                                }}
+                                tickFormatter={(date) => {
+                                    if (!date) return '';
+                                    const d = new Date(date);
+                                    if (granularity === 'hour') {
+                                        return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ', ' + d.getHours().toString().padStart(2, '0') + ':00';
+                                    }
+                                    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+                                }}
+                            />
+                        </BarChart>
+                    </ResponsiveContainer>
                 </div>
             </CardContent>
         </Card >

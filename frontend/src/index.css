@@ -1,16 +1,16 @@
 @import 'flag-icons/css/flag-icons.min.css';
-
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../tailwind.config.js";
 
 @layer base {
   :root {
     color-scheme: light;
   }
+
   :root.dark {
     color-scheme: dark;
   }
+
   body {
     @apply bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 antialiased;
   }
