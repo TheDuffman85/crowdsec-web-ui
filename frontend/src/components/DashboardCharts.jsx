@@ -11,7 +11,7 @@ import {
     ResponsiveContainer
 } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
-import { BarChart3, Clock } from 'lucide-react';
+import { BarChart3, Clock, ShieldAlert, Gavel } from 'lucide-react';
 
 
 /**
@@ -22,11 +22,18 @@ const CustomTooltip = ({ active, payload, label }) => {
         return (
             <div className="bg-white dark:bg-gray-800 p-3 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg">
                 <p className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">{label}</p>
-                {payload.map((entry, index) => (
-                    <p key={index} className="text-sm" style={{ color: entry.color }}>
-                        {entry.name}: {entry.value}
-                    </p>
-                ))}
+                {payload.map((entry, index) => {
+                    const isAlert = entry.name.toLowerCase().includes('alert');
+                    const Icon = isAlert ? ShieldAlert : Gavel;
+                    return (
+                        <div key={index} className="flex items-center gap-2 mb-1 last:mb-0">
+                            <Icon className="w-4 h-4" style={{ color: entry.color }} />
+                            <span className="text-sm" style={{ color: entry.color }}>
+                                {entry.name}: {entry.value}
+                            </span>
+                        </div>
+                    );
+                })}
             </div>
         );
     }
