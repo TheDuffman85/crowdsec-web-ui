@@ -110,12 +110,12 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
     useEffect(() => {
         const handleResize = () => {
             if (transformComponentRef.current) {
-                const { setTransform } = transformComponentRef.current;
-                if (setTransform) {
+                const { centerView } = transformComponentRef.current;
+                if (centerView) {
                     // Reset to the appropriate zoom level for the new viewport size
                     const newZoomScale = window.innerWidth > 0 && window.innerWidth < 800 ? 0.7 : 1.0;
                     setInitialScale(newZoomScale);
-                    setTransform(0, 0, newZoomScale, 0);
+                    centerView(newZoomScale, 0);
                     // Scroll the map back into view if it's not visible
                     if (containerRef.current) {
                         containerRef.current.scrollIntoView({
