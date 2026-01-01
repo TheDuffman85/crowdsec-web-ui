@@ -17,6 +17,8 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
     const [isLoadingStats, setIsLoadingStats] = useState(true);
     const containerRef = useRef(null);
     const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+    const [initialScale, setInitialScale] = useState(window.innerWidth < 800 ? 0.7 : 1.0);
+
 
     // Refs for tooltip positioning
     const tooltipRef = useRef(null);
@@ -108,9 +110,12 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
     useEffect(() => {
         const handleResize = () => {
             if (transformComponentRef.current) {
-                const { resetTransform } = transformComponentRef.current;
-                if (resetTransform) {
-                    resetTransform();
+                const { setTransform } = transformComponentRef.current;
+                if (setTransform) {
+                    // Reset to the appropriate zoom level for the new viewport size
+                    const newZoomScale = window.innerWidth > 0 && window.innerWidth < 800 ? 0.7 : 1.0;
+                    setInitialScale(newZoomScale);
+                    setTransform(0, 0, newZoomScale, 0);
                     // Scroll the map back into view if it's not visible
                     if (containerRef.current) {
                         containerRef.current.scrollIntoView({
@@ -334,7 +339,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                         `}</style>
                         <TransformWrapper
                             ref={transformComponentRef}
-                            initialScale={1}
+                            initialScale={initialScale}
                             minScale={0.1}
                             maxScale={8}
                             centerOnInit={true}
@@ -389,7 +394,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                                 }
                             }}
                         >
-                            {({ zoomIn, zoomOut, resetTransform }) => (
+                            {({ zoomIn, zoomOut, resetTransform, centerView }) => (
                                 <>
                                     <div className="absolute top-2 right-2 z-10 flex flex-col gap-1">
                                         <button onClick={() => zoomIn()} className="p-1.5 bg-white dark:bg-gray-800 rounded shadow-md border dark:border-gray-600">
@@ -398,7 +403,10 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                                         <button onClick={() => zoomOut()} className="p-1.5 bg-white dark:bg-gray-800 rounded shadow-md border dark:border-gray-600">
                                             <ZoomOut className="w-4 h-4 text-gray-600 dark:text-gray-300" />
                                         </button>
-                                        <button onClick={() => resetTransform()} className="p-1.5 bg-white dark:bg-gray-800 rounded shadow-md border dark:border-gray-600">
+                                        <button
+                                            onClick={() => centerView(initialScale, 300)}
+                                            className="p-1.5 bg-white dark:bg-gray-800 rounded shadow-md border dark:border-gray-600"
+                                        >
                                             <RotateCcw className="w-4 h-4 text-gray-600 dark:text-gray-300" />
                                         </button>
                                     </div>
