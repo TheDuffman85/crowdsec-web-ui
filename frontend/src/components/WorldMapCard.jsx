@@ -80,7 +80,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                 </div>
                 <div className="flex items-center gap-2">
                     <ShieldAlert className="w-4 h-4 text-red-600 dark:text-red-400" />
-                    <span className="text-gray-700 dark:text-gray-300">
+                    <span className="text-red-600 dark:text-red-400">
                         Alerts: {value > 0 ? value.toLocaleString() : 0}
                     </span>
                 </div>
