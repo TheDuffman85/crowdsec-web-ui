@@ -104,6 +104,37 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
 
     const transformComponentRef = useRef(null);
 
+    // Add viewport resize handler to reset zoom
+    useEffect(() => {
+        const handleResize = () => {
+            if (transformComponentRef.current) {
+                const { resetTransform } = transformComponentRef.current;
+                if (resetTransform) {
+                    resetTransform();
+                    // Scroll the map back into view if it's not visible
+                    if (containerRef.current) {
+                        containerRef.current.scrollIntoView({
+                            behavior: 'smooth',
+                            block: 'center'
+                        });
+                    }
+                }
+            }
+        };
+
+        let resizeTimer;
+        const debouncedResize = () => {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(handleResize, 300);
+        };
+
+        window.addEventListener('resize', debouncedResize);
+        return () => {
+            window.removeEventListener('resize', debouncedResize);
+            clearTimeout(resizeTimer);
+        };
+    }, []);
+
     // Calculate responsive map dimensions based on container size
     // Maintain 16:9 aspect ratio while fitting within container
     const BASE_WIDTH = 800;
@@ -141,7 +172,9 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
 
         // Calculate scale factor for projection
         const scaleFactor = width / BASE_WIDTH;
-        const newProjectionScale = BASE_PROJECTION_SCALE * scaleFactor;
+        // Add padding factor for mobile viewports to ensure map fits with margins
+        const paddingFactor = width < 800 ? 0.70 : 0.95;
+        const newProjectionScale = BASE_PROJECTION_SCALE * scaleFactor * paddingFactor;
 
         return {
             mapWidth: Math.max(width, 200), // Minimum width of 200px
@@ -305,11 +338,56 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                             minScale={0.1}
                             maxScale={8}
                             centerOnInit={true}
-                            centerZoomedOut={true}
+                            centerZoomedOut={false}
                             wheel={{ step: 0.1 }}
                             panning={{ velocityDisabled: true }}
                             doubleClick={{ mode: 'zoomIn', step: 0.7 }}
                             limitToBounds={false}
+                            onPanningStop={(ref) => {
+                                // Rubberband effect: check if map is panned outside visible area
+                                if (!containerRef.current) return;
+
+                                const containerRect = containerRef.current.getBoundingClientRect();
+                                const { state } = ref;
+                                const { positionX, positionY, scale } = state;
+
+                                // Calculate the scaled map dimensions
+                                const scaledWidth = mapWidth * scale;
+                                const scaledHeight = mapHeight * scale;
+
+                                // Calculate bounds - ensure at least some part of the map is visible
+                                const minVisiblePortion = 300; // pixels
+                                const maxX = containerRect.width - minVisiblePortion;
+                                const minX = -(scaledWidth - minVisiblePortion);
+                                const maxY = containerRect.height - minVisiblePortion;
+                                const minY = -(scaledHeight - minVisiblePortion);
+
+                                // Check if map is outside bounds and snap back
+                                let newX = positionX;
+                                let newY = positionY;
+                                let needsCorrection = false;
+
+                                if (positionX > maxX) {
+                                    newX = maxX;
+                                    needsCorrection = true;
+                                }
+                                if (positionX < minX) {
+                                    newX = minX;
+                                    needsCorrection = true;
+                                }
+                                if (positionY > maxY) {
+                                    newY = maxY;
+                                    needsCorrection = true;
+                                }
+                                if (positionY < minY) {
+                                    newY = minY;
+                                    needsCorrection = true;
+                                }
+
+                                if (needsCorrection) {
+                                    ref.setTransform(newX, newY, scale, 300, 'easeOut');
+                                }
+                            }}
                         >
                             {({ zoomIn, zoomOut, resetTransform }) => (
                                 <>
