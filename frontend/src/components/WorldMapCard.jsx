@@ -18,6 +18,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
     const containerRef = useRef(null);
     const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
     const [initialScale, setInitialScale] = useState(window.innerWidth < 800 ? 0.7 : 1.0);
+    const [tooltipEnabled, setTooltipEnabled] = useState(true);
 
 
     // Refs for tooltip positioning
@@ -48,6 +49,44 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
         return () => window.removeEventListener('mousemove', handleMouseMove, { capture: true });
     }, []);
 
+    // Handle interaction events to hide tooltip - use WINDOW level to guarantee capture
+    useEffect(() => {
+        const hideTooltip = () => {
+            // Instant direct DOM manipulation for zero latency
+            const tooltip = document.getElementById('world-map-tooltip');
+            if (tooltip) tooltip.style.opacity = '0';
+            setTooltipEnabled(false);
+        };
+
+        // Catch ALL touchmove events at window level (captures map panning, page scrolling, everything)
+        const handleTouchMove = () => {
+            hideTooltip();
+        };
+
+        // Catch page scroll events
+        const handleScroll = () => {
+            hideTooltip();
+        };
+
+        // Handle touchend to re-enable tooltip for NEXT tap (not auto-show)
+        const handleTouchEnd = () => {
+            // Slight delay to avoid re-triggering on the same tap
+            setTimeout(() => {
+                setTooltipEnabled(true);
+            }, 100);
+        };
+
+        // Use capture:true AND attach to window to guarantee we see these events
+        window.addEventListener('touchmove', handleTouchMove, { passive: true, capture: true });
+        window.addEventListener('scroll', handleScroll, { passive: true, capture: true });
+        window.addEventListener('touchend', handleTouchEnd, { passive: true, capture: true });
+
+        return () => {
+            window.removeEventListener('touchmove', handleTouchMove, { capture: true });
+            window.removeEventListener('scroll', handleScroll, { capture: true });
+            window.removeEventListener('touchend', handleTouchEnd, { capture: true });
+        };
+    }, []);
     // Tooltip Component to be rendered by Nivo
     const PortalTooltip = ({ feature }) => {
         // useLayoutEffect ensures position is set BEFORE paint
@@ -67,11 +106,13 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
 
         return createPortal(
             <div
+                id="world-map-tooltip"
                 ref={tooltipRef}
-                className="fixed z-[99999] pointer-events-none bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 border border-gray-200 dark:border-gray-700 shadow-xl rounded-lg p-3 text-sm max-w-[200px]"
+                className="fixed z-[99999] pointer-events-none bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 border border-gray-200 dark:border-gray-700 shadow-xl rounded-lg p-3 text-sm max-w-[200px] transition-opacity duration-150"
                 style={{
                     left: 0,
                     top: 0,
+                    opacity: tooltipEnabled ? 1 : 0,
                     // transform is handled by refs in parent via style.left/top
                 }}
             >
@@ -348,7 +389,13 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                             panning={{ velocityDisabled: true }}
                             doubleClick={{ mode: 'zoomIn', step: 0.7 }}
                             limitToBounds={false}
+                            onPanning={() => {
+                                // Hide tooltip only when actual panning occurs
+                                setTooltipEnabled(false);
+                            }}
                             onPanningStop={(ref) => {
+                                // Re-enable tooltip after panning stops
+                                setTimeout(() => setTooltipEnabled(true), 100);
                                 // Rubberband effect: check if map is panned outside visible area
                                 if (!containerRef.current) return;
 
@@ -399,6 +446,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                                     <TransformComponent wrapperStyle={{ width: '100%', height: '100%' }} contentStyle={{ width: '100%', height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
                                         <div style={{ width: mapWidth, height: mapHeight }}>
                                             <Choropleth
+                                                key={`choropleth-${selectedCountry || 'none'}`}
                                                 width={mapWidth}
                                                 height={mapHeight}
                                                 data={nivoData}
