@@ -19,12 +19,14 @@ RUN cd frontend && bun install
 # Copy source code
 COPY . .
 
-# Build the frontend
-# Note: VITE_* env vars for the BUILD process (baked into the static files) need to be available here if they affect the build.
-# However, the user's current Dockerfile passes them as ARGs to the final image for runtime usage (e.g. update checker).
-# If the frontend build USES them, they should be declared here too.
-# Based on index.js, the update checker uses process.env.VITE_COMMIT_HASH at RUNTIME on the backend.
-# So we primarily need them in the final stage.
+# Build Args need to be declared BEFORE the build step
+# Vite bakes VITE_* env vars into the static bundle at build time
+ARG VITE_COMMIT_HASH
+ARG VITE_BUILD_DATE
+ARG VITE_REPO_URL
+ARG VITE_BRANCH
+
+# Build the frontend with VITE_* variables available
 RUN bun run build-ui
 
 
