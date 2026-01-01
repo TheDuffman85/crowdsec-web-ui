@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { ResponsiveChoropleth } from '@nivo/geo';
+import { Choropleth } from '@nivo/geo';
 import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { Globe, ZoomIn, ZoomOut, RotateCcw, ShieldAlert } from 'lucide-react';
@@ -102,11 +102,9 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
         return () => resizeObserver.disconnect();
     }, []);
 
-    // Calculate projection scale
-    const projectionScale = useMemo(() => {
-        if (dimensions.width === 0 || dimensions.height === 0) return 100;
-        return Math.min(dimensions.width / 6.3, dimensions.height / 3.3);
-    }, [dimensions.width, dimensions.height]);
+    const VIRTUAL_WIDTH = 800;
+    const VIRTUAL_HEIGHT = 450;
+    const transformComponentRef = useRef(null);
 
     // Fetch and process map data
     useEffect(() => {
@@ -224,7 +222,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                     World Map
                 </CardTitle>
             </CardHeader>
-            <CardContent className="flex-1 flex flex-col overflow-hidden relative">
+            <CardContent className="flex-1 flex flex-col overflow-hidden relative !p-0">
                 {isLoadingStats ? (
                     <div className="w-full h-full flex items-center justify-center text-gray-500">
                         Loading map...
@@ -258,13 +256,16 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                             }
                         `}</style>
                         <TransformWrapper
+                            ref={transformComponentRef}
                             initialScale={1}
-                            minScale={0.5}
+                            minScale={0.1}
                             maxScale={8}
                             centerOnInit={true}
+                            centerZoomedOut={true}
                             wheel={{ step: 0.1 }}
                             panning={{ velocityDisabled: true }}
                             doubleClick={{ mode: 'zoomIn', step: 0.7 }}
+                            limitToBounds={false}
                         >
                             {({ zoomIn, zoomOut, resetTransform }) => (
                                 <>
@@ -280,8 +281,10 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                                         </button>
                                     </div>
                                     <TransformComponent wrapperStyle={{ width: '100%', height: '100%' }} contentStyle={{ width: '100%', height: '100%' }}>
-                                        <div className="w-full h-full" style={{ minWidth: dimensions.width || '100%', minHeight: dimensions.height || '100%' }}>
-                                            <ResponsiveChoropleth
+                                        <div style={{ width: VIRTUAL_WIDTH, height: VIRTUAL_HEIGHT }}>
+                                            <Choropleth
+                                                width={VIRTUAL_WIDTH}
+                                                height={VIRTUAL_HEIGHT}
                                                 data={nivoData}
                                                 features={geoFeatures}
                                                 margin={{ top: 0, right: 0, bottom: 0, left: 0 }}
@@ -291,14 +294,13 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                                                 label="properties.NAME"
                                                 valueFormat=","
                                                 projectionType="naturalEarth1"
-                                                projectionScale={projectionScale}
+                                                projectionScale={120}
                                                 projectionTranslation={[0.5, 0.5]}
                                                 projectionRotation={[0, 0, 0]}
                                                 enableGraticule={false}
                                                 borderWidth={0.5}
                                                 borderColor="#ffffff"
                                                 onClick={(feature) => { if (feature && feature.id) onCountrySelect(feature.id); }}
-                                                // Revert to standard layers to ensure rendering
                                                 layers={['graticule', 'features', 'legends']}
                                                 tooltip={PortalTooltip}
                                             />
@@ -310,6 +312,6 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                     </div>
                 )}
             </CardContent>
-        </Card>
+        </Card >
     );
 }
