@@ -102,9 +102,53 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
         return () => resizeObserver.disconnect();
     }, []);
 
-    const VIRTUAL_WIDTH = 800;
-    const VIRTUAL_HEIGHT = 450;
     const transformComponentRef = useRef(null);
+
+    // Calculate responsive map dimensions based on container size
+    // Maintain 16:9 aspect ratio while fitting within container
+    const BASE_WIDTH = 800;
+    const BASE_HEIGHT = 450;
+    const BASE_PROJECTION_SCALE = 120;
+
+    const { mapWidth, mapHeight, projectionScale } = useMemo(() => {
+        if (dimensions.width === 0 || dimensions.height === 0) {
+            // Fallback before first measurement
+            return {
+                mapWidth: BASE_WIDTH,
+                mapHeight: BASE_HEIGHT,
+                projectionScale: BASE_PROJECTION_SCALE
+            };
+        }
+
+        // Use the actual container dimensions, but maintain aspect ratio
+        // The map should fit entirely within the container
+        const containerWidth = dimensions.width;
+        const containerHeight = dimensions.height;
+        const aspectRatio = BASE_WIDTH / BASE_HEIGHT;
+
+        let width, height;
+
+        // Calculate dimensions that fit within container while maintaining aspect ratio
+        if (containerWidth / containerHeight > aspectRatio) {
+            // Container is wider than aspect ratio - constrain by height
+            height = containerHeight;
+            width = height * aspectRatio;
+        } else {
+            // Container is taller than aspect ratio - constrain by width
+            width = containerWidth;
+            height = width / aspectRatio;
+        }
+
+        // Calculate scale factor for projection
+        const scaleFactor = width / BASE_WIDTH;
+        const newProjectionScale = BASE_PROJECTION_SCALE * scaleFactor;
+
+        return {
+            mapWidth: Math.max(width, 200), // Minimum width of 200px
+            mapHeight: Math.max(height, 112.5), // Minimum height maintaining aspect ratio
+            projectionScale: Math.max(newProjectionScale, 30) // Minimum projection scale
+        };
+    }, [dimensions.width, dimensions.height]);
 
     // Fetch and process map data
     useEffect(() => {
@@ -280,11 +324,11 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                                             <RotateCcw className="w-4 h-4 text-gray-600 dark:text-gray-300" />
                                         </button>
                                     </div>
-                                    <TransformComponent wrapperStyle={{ width: '100%', height: '100%' }} contentStyle={{ width: '100%', height: '100%' }}>
-                                        <div style={{ width: VIRTUAL_WIDTH, height: VIRTUAL_HEIGHT }}>
+                                    <TransformComponent wrapperStyle={{ width: '100%', height: '100%' }} contentStyle={{ width: '100%', height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                                        <div style={{ width: mapWidth, height: mapHeight }}>
                                             <Choropleth
-                                                width={VIRTUAL_WIDTH}
-                                                height={VIRTUAL_HEIGHT}
+                                                width={mapWidth}
+                                                height={mapHeight}
                                                 data={nivoData}
                                                 features={geoFeatures}
                                                 margin={{ top: 0, right: 0, bottom: 0, left: 0 }}
@@ -294,7 +338,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                                                 label="properties.NAME"
                                                 valueFormat=","
                                                 projectionType="naturalEarth1"
-                                                projectionScale={120}
+                                                projectionScale={projectionScale}
                                                 projectionTranslation={[0.5, 0.5]}
                                                 projectionRotation={[0, 0, 0]}
                                                 enableGraticule={false}
