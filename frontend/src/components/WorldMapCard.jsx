@@ -340,7 +340,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                         <TransformWrapper
                             ref={transformComponentRef}
                             initialScale={initialScale}
-                            minScale={0.1}
+                            minScale={Math.max(0.1, initialScale - 0.25)}
                             maxScale={8}
                             centerOnInit={true}
                             centerZoomedOut={false}
