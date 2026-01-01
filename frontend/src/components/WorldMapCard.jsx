@@ -367,30 +367,16 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                                 const maxY = containerRect.height - minVisiblePortion;
                                 const minY = -(scaledHeight - minVisiblePortion);
 
-                                // Check if map is outside bounds and snap back
-                                let newX = positionX;
-                                let newY = positionY;
-                                let needsCorrection = false;
+                                // Check if map is outside bounds
+                                const isOutOfBounds =
+                                    positionX > maxX ||
+                                    positionX < minX ||
+                                    positionY > maxY ||
+                                    positionY < minY;
 
-                                if (positionX > maxX) {
-                                    newX = maxX;
-                                    needsCorrection = true;
-                                }
-                                if (positionX < minX) {
-                                    newX = minX;
-                                    needsCorrection = true;
-                                }
-                                if (positionY > maxY) {
-                                    newY = maxY;
-                                    needsCorrection = true;
-                                }
-                                if (positionY < minY) {
-                                    newY = minY;
-                                    needsCorrection = true;
-                                }
-
-                                if (needsCorrection) {
-                                    ref.setTransform(newX, newY, scale, 300, 'easeOut');
+                                if (isOutOfBounds) {
+                                    // Reset to center if out of bounds
+                                    ref.centerView(initialScale, 300, "easeOut");
                                 }
                             }}
                         >
