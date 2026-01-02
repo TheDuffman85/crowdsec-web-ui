@@ -157,13 +157,6 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                     const newZoomScale = window.innerWidth > 0 && window.innerWidth < 800 ? 0.7 : 1.0;
                     setInitialScale(newZoomScale);
                     centerView(newZoomScale, 0);
-                    // Scroll the map back into view if it's not visible
-                    if (containerRef.current) {
-                        containerRef.current.scrollIntoView({
-                            behavior: 'smooth',
-                            block: 'center'
-                        });
-                    }
                 }
             }
         };
