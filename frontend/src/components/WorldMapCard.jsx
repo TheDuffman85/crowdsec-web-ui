@@ -233,12 +233,13 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                         .filter(f => f.properties.ISO_A2 !== 'AQ' && f.properties.NAME !== 'Antarctica')
                         .map(feature => {
                             const properties = feature.properties || {};
+                            // POSTAL removed - it can conflict with ISO codes
+                            // (e.g., N. Cyprus has POSTAL=CN which would hide China)
                             const candidates = [
                                 properties.ISO_A2,
                                 properties.iso_a2,
                                 properties.ISO_A2_EH,
-                                properties.WB_A2,
-                                properties.POSTAL
+                                properties.WB_A2
                             ];
 
                             let validCode = null;
