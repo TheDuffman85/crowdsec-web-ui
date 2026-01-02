@@ -759,8 +759,8 @@ async function checkForUpdates() {
       return { update_available: false, reason: 'invalid_image_ref' };
     }
 
-    // Fetch latest successful run for this branch
-    const runsUrl = `https://api.github.com/repos/${owner}/${repo}/actions/runs?branch=${currentBranch}&status=success&per_page=1`;
+    // Fetch latest successful run for this branch, filtered to docker-build-push workflow only
+    const runsUrl = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/docker-build-push.yml/runs?branch=${currentBranch}&status=success&per_page=1`;
 
     // We don't need a token for public repos usually, but if we hit rate limits we might need one.
     // Ideally we'd use a token if available, but for now we'll try anonymously as it's a public read usually.
