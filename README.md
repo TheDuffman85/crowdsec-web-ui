@@ -178,6 +178,45 @@ services:
     restart: unless-stopped
 ```
 
+### Using CrowdSec Web UI with a Local or Custom Certificate
+
+If your CrowdSec Local API (LAPI) uses HTTPS with a self-signed certificate or an internal Certificate Authority (CA), the Web UI container may not trust it by default. This can result in errors like:
+
+```
+Login failed: unable to get local issuer certificate
+```
+
+#### Solution: Mount the CA Certificate and Use NODE_EXTRA_CA_CERTS
+
+You can mount your CA certificate into the container and instruct Node.js to trust it using the `NODE_EXTRA_CA_CERTS` environment variable.
+
+#### Example Docker Compose
+
+```yaml
+services:
+  crowdsec-web-ui:
+    image: ghcr.io/theduffman85/crowdsec-web-ui:latest
+    container_name: crowdsec_web_ui
+    ports:
+      - "3000:3000"
+    environment:
+      - CROWDSEC_URL=https://crowdsec:8080
+      - CROWDSEC_USER=crowdsec-web-ui
+      - CROWDSEC_PASSWORD=<YOUR_API_KEY>
+      - NODE_EXTRA_CA_CERTS=/certs/root_ca.crt
+    volumes:
+      - ./data:/app/data
+      - /path/on/host/root_ca.crt:/certs/root_ca.crt:ro
+    restart: unless-stopped
+```
+
+#### Notes
+
+- Replace `/path/on/host/root_ca.crt` with the path to your local CA certificate.
+- The `:ro` ensures the certificate is mounted read-only.
+- This method avoids rebuilding the container image.
+- Works for self-signed certificates as well as private CA certificates.
+
 ### Run with Helm
 
 A Helm chart for deploying `crowdsec-web-ui` on Kubernetes is available (maintained by the zekker6):
