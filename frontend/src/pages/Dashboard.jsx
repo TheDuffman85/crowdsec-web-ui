@@ -607,7 +607,7 @@ export function Dashboard() {
                         </div>
 
                         {/* Top Statistics Grid */}
-                        <div className="grid gap-8 md:grid-cols-2 lg:grid-cols-4">
+                        <div className="grid gap-8 md:grid-cols-2 xl:grid-cols-4">
                             <StatCard
                                 title="Top Countries"
                                 items={statistics.topCountries}
