@@ -59,7 +59,7 @@ export function StatCard({
                                         : 'border-transparent hover:bg-gray-50 dark:hover:bg-gray-700/50'
                                         }`}
                                 >
-                                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                                    <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
                                         <span className={`flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full text-xs font-semibold ${isSelected
                                             ? 'bg-primary-600 text-white'
                                             : 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300'
@@ -69,20 +69,22 @@ export function StatCard({
                                         {item.countryCode && (
                                             <span className={`fi fi-${item.countryCode.toLowerCase()} flex-shrink-0 rounded-sm`} />
                                         )}
-                                        {renderLabel ? (
-                                            renderLabel(item)
-                                        ) : (
-                                            <span className={`text-sm truncate font-medium ${isSelected ? 'text-primary-900 dark:text-white' : 'text-gray-900 dark:text-gray-100'}`} title={item.label}>
-                                                {item.label}
-                                            </span>
-                                        )}
+                                        <div className="min-w-0 flex-1">
+                                            {renderLabel ? (
+                                                renderLabel(item)
+                                            ) : (
+                                                <span className={`text-sm truncate font-medium ${isSelected ? 'text-primary-900 dark:text-white' : 'text-gray-900 dark:text-gray-100'}`} title={item.label}>
+                                                    {item.label}
+                                                </span>
+                                            )}
+                                        </div>
                                         {hubUrl && !renderLabel && (
                                             <a
                                                 href={hubUrl}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
                                                 onClick={(e) => e.stopPropagation()}
-                                                className="ml-1 p-1 text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors"
+                                                className="ml-1 p-1 text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors flex-shrink-0"
                                                 title="View on CrowdSec Hub"
                                             >
                                                 <ExternalLink size={12} />
