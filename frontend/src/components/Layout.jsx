@@ -1,6 +1,5 @@
 import { Outlet } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
-import { Sun, Moon } from "lucide-react";
 import { useState, useEffect } from "react";
 
 export function Layout() {
@@ -16,10 +15,15 @@ export function Layout() {
         }
         return "light";
     });
-    const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-    const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
-        const saved = localStorage.getItem("sidebarCollapsed");
-        return saved === "true";
+    const [isMenuOpen, setIsMenuOpen] = useState(() => {
+        if (typeof window !== 'undefined') {
+            const saved = localStorage.getItem("menuOpen");
+            if (saved !== null) {
+                return saved === "true";
+            }
+            return window.innerWidth >= 1024;
+        }
+        return true;
     });
 
     useEffect(() => {
@@ -32,47 +36,44 @@ export function Layout() {
     }, [theme]);
 
     useEffect(() => {
-        localStorage.setItem("sidebarCollapsed", isSidebarCollapsed);
-    }, [isSidebarCollapsed]);
+        localStorage.setItem("menuOpen", isMenuOpen);
+    }, [isMenuOpen]);
 
     const toggleTheme = () => {
         setTheme(theme === "light" ? "dark" : "light");
     };
 
-    const toggleSidebar = () => {
-        setIsSidebarCollapsed(!isSidebarCollapsed);
+    const toggleMenu = () => {
+        setIsMenuOpen(!isMenuOpen);
     };
 
     return (
         <div className="flex h-[100dvh] bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 font-sans">
             {/* Mobile Sidebar Overlay */}
-            {isMobileMenuOpen && (
-                <div
-                    className="fixed inset-0 bg-black/50 z-40 lg:hidden"
-                    onClick={() => setIsMobileMenuOpen(false)}
-                />
-            )}
-
-            <Sidebar
-                isMobileMenuOpen={isMobileMenuOpen}
-                onClose={() => setIsMobileMenuOpen(false)}
-                theme={theme}
-                toggleTheme={toggleTheme}
-                isCollapsed={isSidebarCollapsed}
-                toggleCollapse={toggleSidebar}
+            <div
+                className={`fixed inset-0 bg-black/50 z-40 lg:hidden transition-opacity duration-300 ease-in-out ${isMenuOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
+                onClick={() => setIsMenuOpen(false)}
             />
 
-            <main className={`flex-1 relative w-full z-0 isolate overflow-auto ${isMobileMenuOpen ? 'lg:overflow-auto overflow-hidden touch-none lg:touch-auto' : ''}`}>
-                <header className="absolute top-0 right-0 p-4 z-10 flex gap-2">
-                    <button
-                        onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-                        className="lg:hidden p-2 rounded-full bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 shadow-sm transition-colors border border-gray-200 dark:border-gray-700"
-                        aria-label="Toggle Menu"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" x2="20" y1="12" y2="12" /><line x1="4" x2="20" y1="6" y2="6" /><line x1="4" x2="20" y1="18" y2="18" /></svg>
-                    </button>
-                </header>
-                <div className="container mx-auto p-4 lg:p-8 max-w-[1920px] pt-20">
+            <Sidebar
+                isOpen={isMenuOpen}
+                onClose={() => setIsMenuOpen(false)}
+                theme={theme}
+                toggleTheme={toggleTheme}
+            />
+
+            <main className={`flex-1 relative w-full z-0 isolate overflow-auto transition-[padding] duration-300 ease-in-out ${isMenuOpen ? 'lg:pl-72' : 'lg:pl-16'} ${isMenuOpen ? 'lg:overflow-auto overflow-hidden touch-none lg:touch-auto' : ''}`}>
+                <div className="container mx-auto p-4 lg:p-8 max-w-[1920px]">
+                    {/* Header con botón hamburguesa y título de página */}
+                    <div className="flex items-center gap-4 mb-6">
+                        <button
+                            onClick={toggleMenu}
+                            className="p-2 rounded-lg bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 shadow-sm transition-colors border border-gray-200 dark:border-gray-700"
+                            aria-label="Toggle Menu"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" x2="20" y1="12" y2="12" /><line x1="4" x2="20" y1="6" y2="6" /><line x1="4" x2="20" y1="18" y2="18" /></svg>
+                        </button>
+                    </div>
                     <Outlet />
                 </div>
             </main>
