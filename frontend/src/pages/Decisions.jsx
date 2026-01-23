@@ -226,26 +226,21 @@ export function Decisions() {
 
     return (
         <div className="space-y-6">
-            <div className="flex justify-between items-center">
-                <div className="flex items-center gap-3">
-                    <h2 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Decisions</h2>
-                    {/* Only show count when non-default filters are applied */}
-                    {(alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter || includeExpiredParam || showDuplicates) && filteredDecisions.length !== decisions.length && (
-                        <div className="text-sm text-gray-500">
-                            Showing {filteredDecisions.length} of {decisions.length} decisions
-                        </div>
-                    )}
+            {/* Only show count when non-default filters are applied */}
+            {(alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter || includeExpiredParam || showDuplicates) && filteredDecisions.length !== decisions.length && (
+                <div className="text-sm text-gray-500">
+                    Showing {filteredDecisions.length} of {decisions.length} decisions
                 </div>
-                <div className="flex items-center gap-3">
-
-                    <button
-                        onClick={() => setShowAddModal(true)}
-                        className="bg-primary-600 hover:bg-primary-700 text-white font-medium py-2 px-4 rounded-md transition-colors flex items-center gap-2 text-sm"
-                    >
-                        <Gavel size={16} />
-                        Add Decision
-                    </button>
-                </div>
+            )}
+            
+            <div className="flex items-center gap-3">
+                <button
+                    onClick={() => setShowAddModal(true)}
+                    className="bg-primary-600 hover:bg-primary-700 text-white font-medium py-2 px-4 rounded-md transition-colors flex items-center gap-2 text-sm"
+                >
+                    <Gavel size={16} />
+                    Add Decision
+                </button>
             </div>
 
             {/* Error Message */}

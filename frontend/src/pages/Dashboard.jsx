@@ -409,12 +409,6 @@ export function Dashboard() {
 
     return (
         <div className="space-y-8">
-            <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                <h2 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Dashboard</h2>
-
-                {/* Controls moved to Statistics Header */}
-            </div>
-
             {/* Summary Cards */}
             <div className="grid gap-8 md:grid-cols-3">
                 <Link to="/alerts" className="block transition-transform hover:scale-105">
