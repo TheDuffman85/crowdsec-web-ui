@@ -1,9 +1,9 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, ShieldAlert, Gavel, X, Sun, Moon, ArrowUpCircle } from "lucide-react";
+import { LayoutDashboard, ShieldAlert, Gavel, X, Sun, Moon, ArrowUpCircle, ChevronLeft, ChevronRight } from "lucide-react";
 import { useRefresh } from "../contexts/RefreshContext";
 import { useState, useEffect } from "react";
 
-export function Sidebar({ isMobileMenuOpen, onClose, theme, toggleTheme }) {
+export function Sidebar({ isMobileMenuOpen, onClose, theme, toggleTheme, isCollapsed, toggleCollapse }) {
     const { intervalMs, setIntervalMs, lastUpdated, refreshSignal } = useRefresh();
     const [updateStatus, setUpdateStatus] = useState(null);
 
@@ -39,24 +39,25 @@ export function Sidebar({ isMobileMenuOpen, onClose, theme, toggleTheme }) {
     return (
         <aside
             className={`
-                fixed lg:static top-0 left-0 z-[9999] will-change-transform
-                w-72 h-[100dvh] 
+                fixed lg:static top-0 left-0 z-[9999]
+                h-[100dvh] 
                 bg-white dark:bg-gray-800 
                 border-r border-gray-200 dark:border-gray-700 
                 flex flex-col 
                 bg-opacity-95 lg:bg-opacity-50 backdrop-blur-xl
-                transition-transform duration-300 ease-in-out
-                ${isMobileMenuOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"}
+                transition-[width,transform] duration-200 ease-out
+                ${isMobileMenuOpen ? "translate-x-0 w-72" : "-translate-x-full lg:translate-x-0"}
+                ${isCollapsed ? "lg:w-16" : "lg:w-72"}
             `}
         >
-            <div className="p-4 lg:p-6 flex justify-between lg:justify-center items-center">
-                <div className="flex items-center gap-2 lg:gap-3 min-w-0 lg:flex-none">
+            <div className="p-4 lg:p-5 flex justify-between lg:justify-center items-center">
+                <div className={`flex items-center gap-2 lg:gap-3 min-w-0 lg:flex-none ${isCollapsed ? 'lg:justify-center lg:w-full' : ''}`}>
                     <img
                         src="/logo.svg"
                         alt="CrowdSec Logo"
                         className="w-10 h-10 flex-shrink-0"
                     />
-                    <h1 className="text-xl lg:text-2xl font-bold bg-gradient-to-r from-primary-600 to-primary-400 bg-clip-text text-transparent leading-tight whitespace-nowrap">
+                    <h1 className={`text-xl lg:text-2xl font-bold bg-gradient-to-r from-primary-600 to-primary-400 bg-clip-text text-transparent leading-tight whitespace-nowrap transition-opacity duration-200 ${isCollapsed ? 'lg:hidden' : ''}`}>
                         CrowdSec Web UI
                     </h1>
                 </div>
@@ -67,6 +68,14 @@ export function Sidebar({ isMobileMenuOpen, onClose, theme, toggleTheme }) {
                     <X size={20} />
                 </button>
             </div>
+            {/* Desktop Toggle Button */}
+            <button
+                onClick={toggleCollapse}
+                className="hidden lg:flex absolute -right-3 top-20 z-50 w-6 h-6 items-center justify-center rounded-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 hover:border-primary-300 dark:hover:border-primary-600 transition-colors shadow-sm"
+                aria-label="Toggle Sidebar"
+            >
+                {isCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+            </button>
             <nav className="flex-1 px-4 space-y-2">
                 {links.map((link) => (
                     <NavLink
@@ -74,18 +83,19 @@ export function Sidebar({ isMobileMenuOpen, onClose, theme, toggleTheme }) {
                         to={link.to}
                         onClick={() => onClose && onClose()}
                         className={({ isActive }) =>
-                            `flex items-center px-4 py-3 rounded-lg transition-all duration-200 group ${isActive
+                            `flex items-center rounded-lg transition-[background-color,color,padding] duration-200 group ${isCollapsed ? 'lg:justify-center lg:px-2 px-4' : 'px-4'} py-3 ${isActive
                                 ? "bg-primary-50 dark:bg-primary-900/20 text-primary-600 dark:text-primary-400"
                                 : "text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50 hover:text-gray-900 dark:hover:text-gray-200"
                             }`
                         }
+                        title={isCollapsed ? link.label : undefined}
                     >
-                        <link.icon className="w-5 h-5 mr-3" />
-                        <span className="font-medium">{link.label}</span>
+                        <link.icon className={`w-5 h-5 ${isCollapsed ? '' : 'mr-3'}`} />
+                        <span className={`font-medium transition-opacity duration-200 ${isCollapsed ? 'lg:hidden' : ''}`}>{link.label}</span>
                     </NavLink>
                 ))}
             </nav>
-            <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex flex-col gap-4">
+            <div className={`p-4 border-t border-gray-200 dark:border-gray-700 flex flex-col gap-4 ${isCollapsed ? 'lg:hidden' : ''}`}>
 
                 {/* Refresh Settings */}
                 <div className="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-3 space-y-2">

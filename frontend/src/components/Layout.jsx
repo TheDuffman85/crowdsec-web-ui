@@ -17,6 +17,10 @@ export function Layout() {
         return "light";
     });
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+    const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
+        const saved = localStorage.getItem("sidebarCollapsed");
+        return saved === "true";
+    });
 
     useEffect(() => {
         if (theme === "dark") {
@@ -27,8 +31,16 @@ export function Layout() {
         localStorage.setItem("theme", theme);
     }, [theme]);
 
+    useEffect(() => {
+        localStorage.setItem("sidebarCollapsed", isSidebarCollapsed);
+    }, [isSidebarCollapsed]);
+
     const toggleTheme = () => {
         setTheme(theme === "light" ? "dark" : "light");
+    };
+
+    const toggleSidebar = () => {
+        setIsSidebarCollapsed(!isSidebarCollapsed);
     };
 
     return (
@@ -46,6 +58,8 @@ export function Layout() {
                 onClose={() => setIsMobileMenuOpen(false)}
                 theme={theme}
                 toggleTheme={toggleTheme}
+                isCollapsed={isSidebarCollapsed}
+                toggleCollapse={toggleSidebar}
             />
 
             <main className={`flex-1 relative w-full z-0 isolate overflow-auto ${isMobileMenuOpen ? 'lg:overflow-auto overflow-hidden touch-none lg:touch-auto' : ''}`}>
