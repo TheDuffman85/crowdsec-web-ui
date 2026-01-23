@@ -219,14 +219,11 @@ export function Alerts() {
 
     return (
         <div className="space-y-6">
-            <div className="flex items-center gap-3">
-                <h2 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Alerts</h2>
-                {(filteredAlerts.length !== alerts.length) && (
-                    <div className="text-sm text-gray-500">
-                        Showing {filteredAlerts.length} of {alerts.length} alerts
-                    </div>
-                )}
-            </div>
+            {(filteredAlerts.length !== alerts.length) && (
+                <div className="text-sm text-gray-500">
+                    Showing {filteredAlerts.length} of {alerts.length} alerts
+                </div>
+            )}
 
             {/* Error Message */}
             {errorInfo && (

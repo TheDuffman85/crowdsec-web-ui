@@ -3,7 +3,7 @@ import { LayoutDashboard, ShieldAlert, Gavel, X, Sun, Moon, ArrowUpCircle } from
 import { useRefresh } from "../contexts/RefreshContext";
 import { useState, useEffect } from "react";
 
-export function Sidebar({ isMobileMenuOpen, onClose, theme, toggleTheme }) {
+export function Sidebar({ isOpen, onClose, theme, toggleTheme }) {
     const { intervalMs, setIntervalMs, lastUpdated, refreshSignal } = useRefresh();
     const [updateStatus, setUpdateStatus] = useState(null);
 
@@ -37,20 +37,22 @@ export function Sidebar({ isMobileMenuOpen, onClose, theme, toggleTheme }) {
     };
 
     return (
-        <aside
-            className={`
-                fixed lg:static top-0 left-0 z-[9999] will-change-transform
-                w-72 h-[100dvh] 
-                bg-white dark:bg-gray-800 
-                border-r border-gray-200 dark:border-gray-700 
-                flex flex-col 
-                bg-opacity-95 lg:bg-opacity-50 backdrop-blur-xl
-                transition-transform duration-300 ease-in-out
-                ${isMobileMenuOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"}
-            `}
-        >
-            <div className="p-4 lg:p-6 flex justify-between lg:justify-center items-center">
-                <div className="flex items-center gap-2 lg:gap-3 min-w-0 lg:flex-none">
+        <>
+            {/* Full Sidebar */}
+            <aside
+                className={`
+                    fixed top-0 left-0 z-[9999]
+                    w-72 h-[100dvh] 
+                    bg-white dark:bg-gray-800 
+                    border-r border-gray-200 dark:border-gray-700 
+                    flex flex-col 
+                    bg-opacity-95 lg:bg-opacity-50 backdrop-blur-xl
+                    transition-transform duration-300 ease-in-out
+                    ${isOpen ? "translate-x-0" : "-translate-x-full"}
+                `}
+            >
+            <div className="p-4 lg:p-5 flex justify-between items-center">
+                <div className="flex items-center gap-2 lg:gap-3 min-w-0">
                     <img
                         src="/logo.svg"
                         alt="CrowdSec Logo"
@@ -62,7 +64,7 @@ export function Sidebar({ isMobileMenuOpen, onClose, theme, toggleTheme }) {
                 </div>
                 <button
                     onClick={onClose}
-                    className="lg:hidden p-1 rounded-md text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700 flex-shrink-0 ml-2"
+                    className="lg:hidden p-1 rounded-md text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700 flex-shrink-0"
                 >
                     <X size={20} />
                 </button>
@@ -72,7 +74,11 @@ export function Sidebar({ isMobileMenuOpen, onClose, theme, toggleTheme }) {
                     <NavLink
                         key={link.to}
                         to={link.to}
-                        onClick={() => onClose && onClose()}
+                        onClick={() => {
+                            if (window.innerWidth < 1024) {
+                                onClose && onClose();
+                            }
+                        }}
                         className={({ isActive }) =>
                             `flex items-center px-4 py-3 rounded-lg transition-all duration-200 group ${isActive
                                 ? "bg-primary-50 dark:bg-primary-900/20 text-primary-600 dark:text-primary-400"
@@ -153,5 +159,49 @@ export function Sidebar({ isMobileMenuOpen, onClose, theme, toggleTheme }) {
                 </p>
             </div>
         </aside>
+
+        {/* Collapsed sidebar desktop and tablet */}
+        <aside
+            className={`
+                hidden lg:flex
+                fixed top-0 left-0 z-[9998]
+                w-16 h-[100dvh]
+                bg-white dark:bg-gray-800
+                border-r border-gray-200 dark:border-gray-700
+                flex-col
+                bg-opacity-50 backdrop-blur-xl
+                transition-transform duration-300 ease-in-out
+                ${isOpen ? "-translate-x-full" : "translate-x-0"}
+            `}
+        >
+            {/* Logo mini */}
+            <div className="p-4 flex justify-center items-center">
+                <img
+                    src="/logo.svg"
+                    alt="CrowdSec Logo"
+                    className="w-8 h-8"
+                />
+            </div>
+
+            {/* Nav icons */}
+            <nav className="flex-1 px-2 space-y-2">
+                {links.map((link) => (
+                    <NavLink
+                        key={link.to}
+                        to={link.to}
+                        className={({ isActive }) =>
+                            `flex items-center justify-center p-3 rounded-lg transition-all duration-200 group ${isActive
+                                ? "bg-primary-50 dark:bg-primary-900/20 text-primary-600 dark:text-primary-400"
+                                : "text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50 hover:text-gray-900 dark:hover:text-gray-200"
+                            }`
+                        }
+                        title={link.label}
+                    >
+                        <link.icon className="w-5 h-5" />
+                    </NavLink>
+                ))}
+            </nav>
+        </aside>
+    </>
     );
 }
