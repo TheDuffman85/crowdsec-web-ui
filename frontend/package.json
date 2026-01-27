@@ -14,7 +14,7 @@
     "@nivo/geo": "^0.99.0",
     "clsx": "^2.1.1",
     "flag-icons": "^7.5.0",
-    "lucide-react": "^0.562.0",
+    "lucide-react": "^0.563.0",
     "prop-types": "^15.8.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
