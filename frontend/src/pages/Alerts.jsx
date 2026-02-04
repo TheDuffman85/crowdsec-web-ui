@@ -456,7 +456,7 @@ export function Alerts() {
                                 {selectedAlert.source?.latitude && selectedAlert.source?.longitude && (
                                     <div className="text-xs text-gray-400 font-mono mt-1">
                                         <a
-                                            href={`https://www.google.com/maps?q=${selectedAlert.source.latitude},${selectedAlert.source.longitude}`}
+                                            href={`https://www.google.com/maps?q=${encodeURIComponent(selectedAlert.source.latitude)},${encodeURIComponent(selectedAlert.source.longitude)}`}
                                             target="_blank"
                                             rel="noopener noreferrer"
                                             className="hover:text-primary-600 dark:hover:text-primary-400 transition-colors inline-flex items-center gap-1"
@@ -471,9 +471,20 @@ export function Alerts() {
                             <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
                                 <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">IP</h4>
                                 <div className="flex items-center gap-2">
-                                    <span className="font-mono text-lg font-bold text-gray-900 dark:text-white">
-                                        {selectedAlert.source?.ip || selectedAlert.source?.value || "N/A"}
-                                    </span>
+                                    {(selectedAlert.source?.ip || selectedAlert.source?.value) ? (
+                                        <a
+                                            href={`https://app.crowdsec.net/cti/${encodeURIComponent(selectedAlert.source?.ip || selectedAlert.source?.value)}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="font-mono text-lg font-bold text-gray-900 dark:text-white hover:text-primary-600 dark:hover:text-primary-400 transition-colors inline-flex items-center gap-1"
+                                            title="View on CrowdSec CTI"
+                                        >
+                                            {selectedAlert.source?.ip || selectedAlert.source?.value}
+                                            <ExternalLink size={14} />
+                                        </a>
+                                    ) : (
+                                        <span className="font-mono text-lg font-bold text-gray-900 dark:text-white">N/A</span>
+                                    )}
                                 </div>
                                 {selectedAlert.source?.range && (
                                     <div className="text-xs text-gray-400 font-mono mt-1">
@@ -483,7 +494,7 @@ export function Alerts() {
                                 <div className="text-sm text-gray-500 mt-1">
                                     {selectedAlert.source?.as_number && (
                                         <a
-                                            href={`https://bgp.he.net/AS${selectedAlert.source.as_number}`}
+                                            href={`https://bgp.he.net/AS${encodeURIComponent(selectedAlert.source.as_number)}`}
                                             target="_blank"
                                             rel="noopener noreferrer"
                                             className="hover:text-primary-600 dark:hover:text-primary-400 transition-colors inline-flex items-center gap-1"
