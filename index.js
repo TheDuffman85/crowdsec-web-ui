@@ -1394,11 +1394,14 @@ app.post('/api/decisions', ensureAuth, async (c) => {
  */
 app.delete('/api/decisions/:id', ensureAuth, async (c) => {
   const doRequest = async () => {
-    const result = await deleteDecision(c.req.param('id'));
+    const decisionId = c.req.param('id');
+    const result = await deleteDecision(decisionId);
 
-    // Immediately refresh cache to reflect deleted decision (delta only)
-    console.log('Refreshing cache after deleting decision...');
-    await updateCacheDelta();
+    // Remove decision from local SQLite cache immediately
+    // This ensures the decision disappears from the UI right away,
+    // rather than waiting for it to naturally expire
+    console.log(`Removing decision ${decisionId} from local cache...`);
+    db.deleteDecision.run({ $id: decisionId });
 
     return c.json(result || { message: 'Deleted' });
   };
