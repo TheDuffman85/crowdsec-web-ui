@@ -601,7 +601,7 @@ export function Alerts() {
                         {/* Events Breakdown */}
                         <div>
                             <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">
-                                Events ({selectedAlert.events_count})
+                                Events ({selectedAlert.events?.length || 0})
                             </h4>
                             <div className="space-y-2">
                                 {selectedAlert.events?.slice(0, 10).map((event, idx) => {

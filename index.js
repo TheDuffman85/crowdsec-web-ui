@@ -208,7 +208,7 @@ function toDuration(timestampMs) {
 
 /**
  * Helper to extract target from alert events
- * Prioritizes: target_fqdn > target_host > service > machine_alias > machine_id
+ * Prioritizes: target_fqdn > target_host > service > scenario_service > machine_alias > machine_id
  * This is the SINGLE SOURCE OF TRUTH for target extraction.
  */
 function getAlertTarget(alert) {
@@ -226,6 +226,20 @@ function getAlertTarget(alert) {
 
         const service = event.meta.find(m => m.key === 'service')?.value;
         if (service) return service;
+      }
+    }
+  }
+
+  // Try to extract service name from scenario (e.g., "crowdsecurity/proftpd-bf" -> "proftpd")
+  if (alert.scenario) {
+    const scenarioParts = alert.scenario.split('/');
+    if (scenarioParts.length > 1) {
+      // Get the part after the slash (e.g., "proftpd-bf", "ssh-bf", "nginx-http-400")
+      const scenarioName = scenarioParts[1];
+      // Extract the service name (first part before any dash)
+      const serviceName = scenarioName.split('-')[0];
+      if (serviceName && serviceName.length > 0) {
+        return serviceName;
       }
     }
   }
