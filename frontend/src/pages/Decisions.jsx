@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { fetchDecisions, deleteDecision, addDecision } from "../lib/api";
+import { apiUrl } from "../lib/basePath";
 import { useRefresh } from "../contexts/RefreshContext";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
@@ -52,7 +53,7 @@ export function Decisions() {
     const loadDecisions = useCallback(async (isBackground = false) => {
         if (!isBackground) setLoading(true);
         try {
-            const url = includeExpiredParam ? '/api/decisions?include_expired=true' : '/api/decisions';
+            const url = includeExpiredParam ? apiUrl('/api/decisions?include_expired=true') : apiUrl('/api/decisions');
 
             const res = await fetch(url, { cache: "no-store" });
             if (!res.ok) throw new Error('Failed to fetch decisions');
@@ -226,26 +227,21 @@ export function Decisions() {
 
     return (
         <div className="space-y-6">
-            <div className="flex justify-between items-center">
-                <div className="flex items-center gap-3">
-                    <h2 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">Decisions</h2>
-                    {/* Only show count when non-default filters are applied */}
-                    {(alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter || includeExpiredParam || showDuplicates) && filteredDecisions.length !== decisions.length && (
-                        <div className="text-sm text-gray-500">
-                            Showing {filteredDecisions.length} of {decisions.length} decisions
-                        </div>
-                    )}
+            {/* Only show count when non-default filters are applied */}
+            {(alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter || includeExpiredParam || showDuplicates) && filteredDecisions.length !== decisions.length && (
+                <div className="text-sm text-gray-500">
+                    Showing {filteredDecisions.length} of {decisions.length} decisions
                 </div>
-                <div className="flex items-center gap-3">
-
-                    <button
-                        onClick={() => setShowAddModal(true)}
-                        className="bg-primary-600 hover:bg-primary-700 text-white font-medium py-2 px-4 rounded-md transition-colors flex items-center gap-2 text-sm"
-                    >
-                        <Gavel size={16} />
-                        Add Decision
-                    </button>
-                </div>
+            )}
+            
+            <div className="flex items-center gap-3">
+                <button
+                    onClick={() => setShowAddModal(true)}
+                    className="bg-primary-600 hover:bg-primary-700 text-white font-medium py-2 px-4 rounded-md transition-colors flex items-center gap-2 text-sm"
+                >
+                    <Gavel size={16} />
+                    Add Decision
+                </button>
             </div>
 
             {/* Error Message */}

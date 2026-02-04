@@ -6,6 +6,7 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   return {
+    base: './',
     define: {
       'import.meta.env.VITE_BUILD_DATE': JSON.stringify(
         new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12)

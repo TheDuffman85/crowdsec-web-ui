@@ -132,7 +132,7 @@ See the [CrowdSec documentation](https://docs.crowdsec.net/docs/local_api/intro/
 
 2.  **Run the container**:
     Provide the CrowdSec LAPI URL and your Machine Credentials.
-    
+
     ```bash
     docker run -d \
       -p 3000:3000 \
@@ -173,10 +173,94 @@ services:
       # Optional: Interval for full cache refresh (default: 5m)
       # Forces a complete data reload when active, skipped when idle.
       - CROWDSEC_FULL_REFRESH_INTERVAL=5m
+      # Optional: Base path for reverse proxy deployments (e.g., /crowdsec)
+      # - BASE_PATH=/crowdsec
     volumes:
       - ./data:/app/data
     restart: unless-stopped
 ```
+
+### Using CrowdSec Web UI with a Local or Custom Certificate
+
+If your CrowdSec Local API (LAPI) uses HTTPS with a self-signed certificate or an internal Certificate Authority (CA), the Web UI container may not trust it by default. This can result in errors like:
+
+```
+Login failed: unable to get local issuer certificate
+```
+
+#### Solution: Mount the CA Certificate and Use NODE_EXTRA_CA_CERTS
+
+You can mount your CA certificate into the container and instruct Node.js to trust it using the `NODE_EXTRA_CA_CERTS` environment variable.
+
+#### Example Docker Compose
+
+```yaml
+services:
+  crowdsec-web-ui:
+    image: ghcr.io/theduffman85/crowdsec-web-ui:latest
+    container_name: crowdsec_web_ui
+    ports:
+      - "3000:3000"
+    environment:
+      - CROWDSEC_URL=https://crowdsec:8080
+      - CROWDSEC_USER=crowdsec-web-ui
+      - CROWDSEC_PASSWORD=<YOUR_API_KEY>
+      - NODE_EXTRA_CA_CERTS=/certs/root_ca.crt
+    volumes:
+      - ./data:/app/data
+      - /path/on/host/root_ca.crt:/certs/root_ca.crt:ro
+    restart: unless-stopped
+```
+
+#### Notes
+
+- Replace `/path/on/host/root_ca.crt` with the path to your local CA certificate.
+- The `:ro` ensures the certificate is mounted read-only.
+- This method avoids rebuilding the container image.
+- Works for self-signed certificates as well as private CA certificates.
+
+### Reverse Proxy with Base Path
+
+If you need to serve the Web UI at a non-root URL path (e.g., `https://example.com/crowdsec/` instead of `https://example.com/`), use the `BASE_PATH` environment variable.
+
+#### Docker Compose Example
+
+```yaml
+services:
+  crowdsec-web-ui:
+    image: ghcr.io/theduffman85/crowdsec-web-ui:latest
+    container_name: crowdsec_web_ui
+    ports:
+      - "3000:3000"
+    environment:
+      - CROWDSEC_URL=http://crowdsec:8080
+      - CROWDSEC_USER=crowdsec-web-ui
+      - CROWDSEC_PASSWORD=<generated_password>
+      - BASE_PATH=/crowdsec
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+```
+
+#### Nginx Reverse Proxy Example
+
+```nginx
+location /crowdsec/ {
+    proxy_pass http://localhost:3000/crowdsec/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+#### Notes
+
+- The `BASE_PATH` must start with a `/` (e.g., `/crowdsec`, not `crowdsec`)
+- Do not include a trailing slash (use `/crowdsec`, not `/crowdsec/`)
+- When `BASE_PATH` is set, accessing the root URL (`/`) will redirect to the base path
+- All API calls, assets, and navigation will automatically use the configured base path
 
 ### Run with Helm
 
@@ -212,6 +296,8 @@ volumes:
     CROWDSEC_USER=crowdsec-web-ui
     CROWDSEC_PASSWORD=<your-secure-password>
     CROWDSEC_REFRESH_INTERVAL=30s
+    # Optional: Base path for reverse proxy deployments
+    # BASE_PATH=/crowdsec
     ```
 
 3.  **Start the Application**:

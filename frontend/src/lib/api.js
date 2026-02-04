@@ -1,17 +1,19 @@
+import { apiUrl } from './basePath';
+
 export async function fetchAlerts() {
-    const res = await fetch('/api/alerts');
+    const res = await fetch(apiUrl('/api/alerts'));
     if (!res.ok) throw new Error('Failed to fetch alerts');
     return res.json();
 }
 
 export async function fetchAlert(id) {
-    const res = await fetch(`/api/alerts/${id}`);
+    const res = await fetch(apiUrl(`/api/alerts/${id}`));
     if (!res.ok) throw new Error('Failed to fetch alert');
     return res.json();
 }
 
 export async function fetchDecisions() {
-    const res = await fetch('/api/decisions');
+    const res = await fetch(apiUrl('/api/decisions'));
     if (!res.ok) throw new Error('Failed to fetch decisions');
     return res.json();
 }
@@ -31,33 +33,33 @@ function handleApiError(res, defaultMsg, operationName = 'Delete Operations') {
 }
 
 export async function deleteAlert(id) {
-    const res = await fetch(`/api/alerts/${id}`, { method: 'DELETE' });
+    const res = await fetch(apiUrl(`/api/alerts/${id}`), { method: 'DELETE' });
     handleApiError(res, 'Failed to delete alert');
     if (res.status === 204) return null;
     return res.json();
 }
 
 export async function fetchDecisionsForStats() {
-    const res = await fetch('/api/stats/decisions');
+    const res = await fetch(apiUrl('/api/stats/decisions'));
     if (!res.ok) throw new Error('Failed to fetch decision statistics');
     return res.json();
 }
 
 export async function fetchAlertsForStats() {
-    const res = await fetch('/api/stats/alerts');
+    const res = await fetch(apiUrl('/api/stats/alerts'));
     if (!res.ok) throw new Error('Failed to fetch alert statistics');
     return res.json();
 }
 
 export async function deleteDecision(id) {
-    const res = await fetch(`/api/decisions/${id}`, { method: 'DELETE' });
+    const res = await fetch(apiUrl(`/api/decisions/${id}`), { method: 'DELETE' });
     handleApiError(res, 'Failed to delete decision');
     if (res.status === 204) return null;
     return res.json();
 }
 
 export async function addDecision(data) {
-    const res = await fetch('/api/decisions', {
+    const res = await fetch(apiUrl('/api/decisions'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
@@ -67,7 +69,7 @@ export async function addDecision(data) {
 }
 
 export async function fetchConfig() {
-    const res = await fetch('/api/config');
+    const res = await fetch(apiUrl('/api/config'));
     if (!res.ok) throw new Error('Failed to fetch config');
     return res.json();
 }

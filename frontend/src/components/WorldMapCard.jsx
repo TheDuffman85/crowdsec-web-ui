@@ -4,9 +4,10 @@ import { Choropleth } from '@nivo/geo';
 import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { Globe, ZoomIn, ZoomOut, RotateCcw, ShieldAlert } from 'lucide-react';
+import { assetUrl } from '../lib/basePath';
 
 // Using local Natural Earth data which has proper ISO properties
-const geoUrl = "/world-50m.json";
+const geoUrl = assetUrl("/world-50m.json");
 
 /**
  * World Map Component for Dashboard

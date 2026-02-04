@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { fetchConfig } from '../lib/api';
+import { apiUrl } from '../lib/basePath';
 
 const RefreshContext = createContext();
 
@@ -69,7 +70,7 @@ export function RefreshProvider({ children }) {
         else if (newIntervalMs === 300000) intervalName = '5m';
 
         try {
-            const response = await fetch('/api/config/refresh-interval', {
+            const response = await fetch(apiUrl('/api/config/refresh-interval'), {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ interval: intervalName })
