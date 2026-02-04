@@ -26,6 +26,9 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// BASE_PATH for reverse proxy deployments (e.g., /crowdsec)
+const BASE_PATH = (process.env.BASE_PATH || '').replace(/\/$/, '');
+
 // ============================================================================
 // CONSOLE LOGGING OVERRIDES (Add Timestamps)
 // ============================================================================
@@ -993,7 +996,7 @@ const slimAlert = (alert) => {
  * GET /api/alerts
  * Returns alerts from SQLite database (slim payload for list views)
  */
-app.get('/api/alerts', ensureAuth, async (c) => {
+app.get(`${BASE_PATH}/api/alerts`, ensureAuth, async (c) => {
   try {
     // If in manual mode (REFRESH_INTERVAL_MS === 0), update cache on every request
     if (REFRESH_INTERVAL_MS === 0) {
@@ -1030,7 +1033,7 @@ app.get('/api/alerts', ensureAuth, async (c) => {
 /**
  * GET /api/alerts/:id
  */
-app.get('/api/alerts/:id', ensureAuth, async (c) => {
+app.get(`${BASE_PATH}/api/alerts/:id`, ensureAuth, async (c) => {
   const doRequest = async () => {
     const alertData = await getAlertById(c.req.param('id'));
 
@@ -1057,7 +1060,7 @@ app.get('/api/alerts/:id', ensureAuth, async (c) => {
  * DELETE /api/alerts/:id
  * Deletes an alert by ID from LAPI and local cache
  */
-app.delete('/api/alerts/:id', ensureAuth, async (c) => {
+app.delete(`${BASE_PATH}/api/alerts/:id`, ensureAuth, async (c) => {
   const doRequest = async () => {
     const alertId = c.req.param('id');
     const result = await deleteAlert(alertId);
@@ -1083,7 +1086,7 @@ app.delete('/api/alerts/:id', ensureAuth, async (c) => {
  * GET /api/decisions
  * Returns decisions from SQLite database (active by default, or all including expired with ?include_expired=true)
  */
-app.get('/api/decisions', ensureAuth, async (c) => {
+app.get(`${BASE_PATH}/api/decisions`, ensureAuth, async (c) => {
   try {
     // If in manual mode, update cache on every request
     if (REFRESH_INTERVAL_MS === 0) {
@@ -1211,7 +1214,7 @@ app.get('/api/decisions', ensureAuth, async (c) => {
  * GET /api/config
  * Returns the public configuration for the frontend
  */
-app.get('/api/config', ensureAuth, async (c) => {
+app.get(`${BASE_PATH}/api/config`, ensureAuth, async (c) => {
   // Simple parser to estimate days/hours for display
   // Supports h, d. Default 168h.
   let hours = 168;
@@ -1241,7 +1244,7 @@ app.get('/api/config', ensureAuth, async (c) => {
  * PUT /api/config/refresh-interval
  * Updates the refresh interval at runtime and restarts the scheduler
  */
-app.put('/api/config/refresh-interval', ensureAuth, async (c) => {
+app.put(`${BASE_PATH}/api/config/refresh-interval`, ensureAuth, async (c) => {
   try {
     const body = await c.req.json();
     const { interval } = body;
@@ -1290,7 +1293,7 @@ app.put('/api/config/refresh-interval', ensureAuth, async (c) => {
  * GET /api/stats/alerts
  * Returns minimal alert data for Dashboard statistics (optimized payload)
  */
-app.get('/api/stats/alerts', ensureAuth, async (c) => {
+app.get(`${BASE_PATH}/api/stats/alerts`, ensureAuth, async (c) => {
   try {
     // If in manual mode, update cache on every request
     if (REFRESH_INTERVAL_MS === 0) {
@@ -1336,7 +1339,7 @@ app.get('/api/stats/alerts', ensureAuth, async (c) => {
  * GET /api/stats/decisions
  * Returns ALL decisions (including expired) for statistics purposes from SQLite database
  */
-app.get('/api/stats/decisions', ensureAuth, async (c) => {
+app.get(`${BASE_PATH}/api/stats/decisions`, ensureAuth, async (c) => {
   try {
     // If in manual mode, update cache on every request
     if (REFRESH_INTERVAL_MS === 0) {
@@ -1378,7 +1381,7 @@ app.get('/api/stats/decisions', ensureAuth, async (c) => {
  * POST /api/decisions
  * Creates a manual decision via POST /v1/alerts
  */
-app.post('/api/decisions', ensureAuth, async (c) => {
+app.post(`${BASE_PATH}/api/decisions`, ensureAuth, async (c) => {
   const doRequest = async () => {
     const body = await c.req.json();
     const { ip, duration = "4h", reason = "manual", type = "ban" } = body;
@@ -1406,7 +1409,7 @@ app.post('/api/decisions', ensureAuth, async (c) => {
 /**
  * DELETE /api/decisions/:id
  */
-app.delete('/api/decisions/:id', ensureAuth, async (c) => {
+app.delete(`${BASE_PATH}/api/decisions/:id`, ensureAuth, async (c) => {
   const doRequest = async () => {
     const decisionId = c.req.param('id');
     const result = await deleteDecision(decisionId);
@@ -1430,7 +1433,7 @@ app.delete('/api/decisions/:id', ensureAuth, async (c) => {
 /**
  * GET /api/update-check
  */
-app.get('/api/update-check', ensureAuth, async (c) => {
+app.get(`${BASE_PATH}/api/update-check`, ensureAuth, async (c) => {
   try {
     const status = await checkForUpdates();
     return c.json(status);
@@ -1441,25 +1444,61 @@ app.get('/api/update-check', ensureAuth, async (c) => {
 });
 
 // Serve static files from the "frontend/dist" directory.
-app.use('/assets/*', serveStatic({ root: './frontend/dist' }));
+// When BASE_PATH is set, we need to strip it from the request path before looking up files
+app.use(`${BASE_PATH}/assets/*`, serveStatic({
+  root: './frontend/dist',
+  rewriteRequestPath: (path) => BASE_PATH ? path.replace(BASE_PATH, '') : path
+}));
 
 // Also serve individual files from dist root (logo.svg, favicon.ico, etc)
 // This prevents them from being shadowed by the greedy catch-all SPA route below
-const staticFiles = ['/logo.svg', '/favicon.ico', '/robots.txt', '/world-50m.json'];
+const staticFiles = ['/logo.svg', '/favicon.ico', '/robots.txt', '/world-50m.json', '/favicon-96x96.png', '/apple-touch-icon.png', '/android-chrome-192x192.png', '/android-chrome-512x512.png'];
 staticFiles.forEach(file => {
-  app.use(file, serveStatic({ path: `./frontend/dist${file}` }));
+  app.use(`${BASE_PATH}${file}`, serveStatic({ path: `./frontend/dist${file}` }));
+});
+
+// Dynamic site.webmanifest endpoint with BASE_PATH-aware icon paths
+app.get(`${BASE_PATH}/site.webmanifest`, (c) => {
+  return c.json({
+    name: "CrowdSec Web UI",
+    short_name: "CrowdSec",
+    icons: [
+      { src: `${BASE_PATH}/android-chrome-192x192.png`, sizes: "192x192", type: "image/png" },
+      { src: `${BASE_PATH}/android-chrome-512x512.png`, sizes: "512x512", type: "image/png" }
+    ],
+    theme_color: "#ffffff",
+    background_color: "#ffffff",
+    display: "standalone",
+    start_url: BASE_PATH || "/"
+  });
 });
 
 // Catch-all handler: serve index.html for SPA routing
-app.get('*', async (c) => {
+app.get(`${BASE_PATH}/*`, async (c) => {
   try {
     const indexPath = path.join(__dirname, 'frontend/dist/index.html');
-    const html = fs.readFileSync(indexPath, 'utf-8');
+    let html = fs.readFileSync(indexPath, 'utf-8');
+
+    // Inject runtime configuration for BASE_PATH
+    const configScript = `<script>window.__BASE_PATH__="${BASE_PATH}";</script>`;
+    html = html.replace('</head>', `${configScript}\n</head>`);
+
+    // Fix asset paths in index.html when BASE_PATH is set
+    if (BASE_PATH) {
+      html = html.replace(/href="\.\//g, `href="${BASE_PATH}/`);
+      html = html.replace(/src="\.\//g, `src="${BASE_PATH}/`);
+    }
+
     return c.html(html);
   } catch (error) {
     return c.text('Not Found', 404);
   }
 });
+
+// Redirect root to BASE_PATH if configured
+if (BASE_PATH) {
+  app.get('/', (c) => c.redirect(BASE_PATH + '/'));
+}
 
 // ============================================================================
 // CACHE INITIALIZATION AND SCHEDULER
@@ -1491,7 +1530,10 @@ app.get('*', async (c) => {
 // SERVER STARTUP
 // ============================================================================
 
-console.log(`CrowdSec Web UI backend running at http://localhost:${port}`);
+console.log(`CrowdSec Web UI backend running at http://localhost:${port}${BASE_PATH || ''}/`);
+if (BASE_PATH) {
+  console.log(`BASE_PATH configured: ${BASE_PATH}`);
+}
 
 export default {
   port,

@@ -132,7 +132,7 @@ See the [CrowdSec documentation](https://docs.crowdsec.net/docs/local_api/intro/
 
 2.  **Run the container**:
     Provide the CrowdSec LAPI URL and your Machine Credentials.
-    
+
     ```bash
     docker run -d \
       -p 3000:3000 \
@@ -173,6 +173,8 @@ services:
       # Optional: Interval for full cache refresh (default: 5m)
       # Forces a complete data reload when active, skipped when idle.
       - CROWDSEC_FULL_REFRESH_INTERVAL=5m
+      # Optional: Base path for reverse proxy deployments (e.g., /crowdsec)
+      # - BASE_PATH=/crowdsec
     volumes:
       - ./data:/app/data
     restart: unless-stopped
@@ -217,6 +219,49 @@ services:
 - This method avoids rebuilding the container image.
 - Works for self-signed certificates as well as private CA certificates.
 
+### Reverse Proxy with Base Path
+
+If you need to serve the Web UI at a non-root URL path (e.g., `https://example.com/crowdsec/` instead of `https://example.com/`), use the `BASE_PATH` environment variable.
+
+#### Docker Compose Example
+
+```yaml
+services:
+  crowdsec-web-ui:
+    image: ghcr.io/theduffman85/crowdsec-web-ui:latest
+    container_name: crowdsec_web_ui
+    ports:
+      - "3000:3000"
+    environment:
+      - CROWDSEC_URL=http://crowdsec:8080
+      - CROWDSEC_USER=crowdsec-web-ui
+      - CROWDSEC_PASSWORD=<generated_password>
+      - BASE_PATH=/crowdsec
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+```
+
+#### Nginx Reverse Proxy Example
+
+```nginx
+location /crowdsec/ {
+    proxy_pass http://localhost:3000/crowdsec/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+#### Notes
+
+- The `BASE_PATH` must start with a `/` (e.g., `/crowdsec`, not `crowdsec`)
+- Do not include a trailing slash (use `/crowdsec`, not `/crowdsec/`)
+- When `BASE_PATH` is set, accessing the root URL (`/`) will redirect to the base path
+- All API calls, assets, and navigation will automatically use the configured base path
+
 ### Run with Helm
 
 A Helm chart for deploying `crowdsec-web-ui` on Kubernetes is available (maintained by the zekker6):
@@ -251,6 +296,8 @@ volumes:
     CROWDSEC_USER=crowdsec-web-ui
     CROWDSEC_PASSWORD=<your-secure-password>
     CROWDSEC_REFRESH_INTERVAL=30s
+    # Optional: Base path for reverse proxy deployments
+    # BASE_PATH=/crowdsec
     ```
 
 3.  **Start the Application**:

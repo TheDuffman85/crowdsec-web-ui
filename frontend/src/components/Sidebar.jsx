@@ -2,6 +2,7 @@ import { NavLink } from "react-router-dom";
 import { LayoutDashboard, ShieldAlert, Gavel, X, Sun, Moon, ArrowUpCircle, Menu, PanelLeftClose } from "lucide-react";
 import { useRefresh } from "../contexts/RefreshContext";
 import { useState, useEffect } from "react";
+import { apiUrl, assetUrl } from "../lib/basePath";
 
 export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }) {
     const { intervalMs, setIntervalMs, lastUpdated, refreshSignal } = useRefresh();
@@ -16,9 +17,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }) {
     useEffect(() => {
         const checkUpdates = async () => {
             try {
-                // Determine API base URL
-                const apiBase = import.meta.env.VITE_API_BASE || '';
-                const response = await fetch(`${apiBase}/api/update-check`);
+                const response = await fetch(apiUrl('/api/update-check'));
                 if (response.ok) {
                     setUpdateStatus(await response.json());
                 }
@@ -54,7 +53,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }) {
             <div className="p-4 lg:p-5 flex justify-between items-center gap-2">
                 <div className="flex items-center gap-2 lg:gap-3">
                     <img
-                        src="/logo.svg"
+                        src={assetUrl('/logo.svg')}
                         alt="CrowdSec Logo"
                         className="w-10 h-10 flex-shrink-0"
                     />
@@ -187,7 +186,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }) {
             {/* Logo mini and expand button */}
             <div className="p-4 flex flex-col items-center gap-3">
                 <img
-                    src="/logo.svg"
+                    src={assetUrl('/logo.svg')}
                     alt="CrowdSec Logo"
                     className="w-8 h-8"
                 />

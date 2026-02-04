@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { fetchDecisions, deleteDecision, addDecision } from "../lib/api";
+import { apiUrl } from "../lib/basePath";
 import { useRefresh } from "../contexts/RefreshContext";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
@@ -52,7 +53,7 @@ export function Decisions() {
     const loadDecisions = useCallback(async (isBackground = false) => {
         if (!isBackground) setLoading(true);
         try {
-            const url = includeExpiredParam ? '/api/decisions?include_expired=true' : '/api/decisions';
+            const url = includeExpiredParam ? apiUrl('/api/decisions?include_expired=true') : apiUrl('/api/decisions');
 
             const res = await fetch(url, { cache: "no-store" });
             if (!res.ok) throw new Error('Failed to fetch decisions');

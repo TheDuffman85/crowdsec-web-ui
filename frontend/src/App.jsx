@@ -5,6 +5,7 @@ import { Alerts } from "./pages/Alerts";
 import { Decisions } from "./pages/Decisions";
 import { RefreshProvider, useRefresh } from "./contexts/RefreshContext";
 import { SyncOverlay } from "./components/SyncOverlay";
+import { getBasePath } from "./lib/basePath";
 
 // Inner component to access refresh context
 function AppContent() {
@@ -13,7 +14,7 @@ function AppContent() {
   return (
     <>
       <SyncOverlay syncStatus={syncStatus} />
-      <BrowserRouter>
+      <BrowserRouter basename={getBasePath() || '/'}>
         <Routes>
           <Route path="/" element={<Layout />}>
             <Route index element={<Dashboard />} />
