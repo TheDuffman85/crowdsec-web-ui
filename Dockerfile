@@ -53,8 +53,8 @@ ENV DOCKER_IMAGE_REF=$DOCKER_IMAGE_REF
 ENV DB_DIR="/app/data"
 ENV NODE_ENV=production
 
-# Install gosu (for entrypoint)
-RUN apt-get update && apt-get install -y \
+# Install gosu (for entrypoint) and apply security updates
+RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     gosu \
     && rm -rf /var/lib/apt/lists/*
 
