@@ -120,8 +120,11 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
         localBrushStateRef.current = localBrushState;
     }, [localBrushState]);
 
+    const brushKeyRef = useRef(0);
     const brushKey = useMemo(() => {
-        return `brush-${Date.now()}`;
+        brushKeyRef.current += 1;
+        return `brush-${brushKeyRef.current}`;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [sliderData]);
 
     // Calculate the 'target' indices based on props
