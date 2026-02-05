@@ -8,8 +8,11 @@ if [ -d "/app/data" ]; then
     if [ "$UID" == "0" ]; then
         echo "Fixing permissions for /app/data..."
         chown -R bun:bun /app/data
-    else
-        echo "Running as non-root - skipping permission fix..."
+    elif [ ! -w "/app/data" ]; then
+        echo "ERROR: /app/data is not writable by user $(id -u)."
+        echo "Either remove 'user: \"1000:1000\"' from your compose file to let the container fix permissions automatically,"
+        echo "or fix permissions on the host: chown -R $(id -u):$(id -g) /path/to/your/data"
+        exit 1
     fi
 
     # Clean up stale SQLite WAL/SHM files to prevent locking/compatibility issues

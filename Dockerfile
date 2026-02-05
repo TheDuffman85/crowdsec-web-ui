@@ -74,6 +74,10 @@ COPY docker-entrypoint.sh /usr/local/bin/
 # Set permissions
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
+# Pre-create data directory with correct ownership
+# This ensures Docker named volumes inherit the right permissions
+RUN mkdir -p /app/data && chown bun:bun /app/data
+
 # Expose port
 EXPOSE 3000
 
