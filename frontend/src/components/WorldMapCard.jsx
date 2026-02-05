@@ -422,7 +422,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                                 }
                             }}
                         >
-                            {({ zoomIn, zoomOut, resetTransform, centerView }) => (
+                            {({ zoomIn, zoomOut, centerView }) => (
                                 <>
                                     <div className="absolute top-2 right-2 z-10 flex flex-col gap-1">
                                         <button onClick={() => zoomIn()} className="p-1.5 bg-white dark:bg-gray-800 rounded shadow-md border dark:border-gray-600">

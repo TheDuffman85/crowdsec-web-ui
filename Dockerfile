@@ -8,7 +8,7 @@ FROM oven/bun:1 AS builder
 WORKDIR /app
 
 # 1. Install backend dependencies (for production)
-COPY package.json bun.lockb* ./
+COPY package.json bun.lock* ./
 RUN bun install --production
 
 # 2. Build Frontend
@@ -53,8 +53,8 @@ ENV DOCKER_IMAGE_REF=$DOCKER_IMAGE_REF
 ENV DB_DIR="/app/data"
 ENV NODE_ENV=production
 
-# Install gosu (for entrypoint)
-RUN apt-get update && apt-get install -y \
+# Install gosu (for entrypoint) and apply security updates
+RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     gosu \
     && rm -rf /var/lib/apt/lists/*
 
@@ -73,6 +73,10 @@ COPY docker-entrypoint.sh /usr/local/bin/
 
 # Set permissions
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# Pre-create data directory with correct ownership
+# This ensures Docker named volumes inherit the right permissions
+RUN mkdir -p /app/data && chown bun:bun /app/data
 
 # Expose port
 EXPOSE 3000

@@ -41,7 +41,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }) {
             <aside
                 className={`
                     fixed top-0 left-0 z-[9999]
-                    w-[340px] h-[100dvh] 
+                    w-[340px] h-[100dvh]
                     bg-white dark:bg-gray-800 
                     border-r border-gray-200 dark:border-gray-700 
                     flex flex-col 

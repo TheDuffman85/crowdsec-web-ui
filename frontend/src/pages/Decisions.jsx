@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useSearchParams, Link } from "react-router-dom";
-import { fetchDecisions, deleteDecision, addDecision } from "../lib/api";
+import { deleteDecision, addDecision } from "../lib/api";
 import { apiUrl } from "../lib/basePath";
 import { useRefresh } from "../contexts/RefreshContext";
 import { Badge } from "../components/ui/Badge";

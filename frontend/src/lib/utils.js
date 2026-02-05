@@ -24,7 +24,7 @@ export function getCountryName(code) {
     try {
         const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
         return regionNames.of(code.toUpperCase());
-    } catch (e) {
+    } catch {
         return code;
     }
 }

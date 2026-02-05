@@ -11,7 +11,7 @@
     "build-ui": "cd frontend && bun run build"
   },
   "dependencies": {
-    "hono": "^4.6.0"
+    "hono": "^4.11.7"
   },
   "devDependencies": {
     "bun-types": "latest"
