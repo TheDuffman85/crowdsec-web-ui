@@ -20,7 +20,7 @@
     "react-dom": "^19.2.4",
     "react-is": "^19.2.4",
     "react-router-dom": "^7.13.0",
-    "react-window": "^2.2.3",
+    "react-window": "^2.2.6",
     "react-zoom-pan-pinch": "^3.7.0",
     "recharts": "3.6.0",
     "tailwind-merge": "^3.4.0"
