@@ -8,7 +8,7 @@ FROM oven/bun:1 AS builder
 WORKDIR /app
 
 # 1. Install backend dependencies (for production)
-COPY package.json bun.lockb* ./
+COPY package.json bun.lock* ./
 RUN bun install --production
 
 # 2. Build Frontend
