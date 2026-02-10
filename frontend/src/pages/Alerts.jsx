@@ -527,7 +527,7 @@ export function Alerts() {
                         {selectedAlert.decisions && selectedAlert.decisions.length > 0 && (
                             <div>
                                 <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">Decisions Taken</h4>
-                                <div className="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700">
+                                <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
                                     <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                                         <thead className="bg-gray-50 dark:bg-gray-900">
                                             <tr>
