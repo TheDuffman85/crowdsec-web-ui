@@ -146,7 +146,18 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }) {
                                     Update Available
                                 </p>
                                 <p className="text-xs text-blue-600 dark:text-blue-400">
-                                    New version available for tag <span className="font-mono bg-blue-100 dark:bg-blue-800 px-1 rounded">{updateStatus.tag}</span>
+                                    {updateStatus.remote_version ? (
+                                        <a
+                                            href={updateStatus.release_url}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="underline hover:text-blue-800 dark:hover:text-blue-200"
+                                        >
+                                            v{updateStatus.remote_version}
+                                        </a>
+                                    ) : (
+                                        <>New version available for tag <span className="font-mono bg-blue-100 dark:bg-blue-800 px-1 rounded">{updateStatus.tag}</span></>
+                                    )}
                                 </p>
                             </div>
                         </div>
@@ -154,16 +165,36 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }) {
                 )}
 
                 <p className="text-xs text-center text-gray-400 dark:text-gray-500 flex flex-col items-center gap-1">
-                    <span>{import.meta.env.VITE_BRANCH === 'dev' ? 'Dev Build' : 'Build'} {import.meta.env.VITE_BUILD_DATE}</span>
-                    {import.meta.env.VITE_COMMIT_HASH && (
-                        <a
-                            href={`${import.meta.env.VITE_REPO_URL}/commit/${import.meta.env.VITE_COMMIT_HASH}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="hover:text-primary-500 transition-colors font-mono"
-                        >
-                            ({import.meta.env.VITE_COMMIT_HASH})
-                        </a>
+                    {import.meta.env.VITE_VERSION ? (
+                        <>
+                            <a
+                                href={
+                                    import.meta.env.VITE_BRANCH === 'dev'
+                                        ? `${import.meta.env.VITE_REPO_URL}/commit/${import.meta.env.VITE_COMMIT_HASH}`
+                                        : `${import.meta.env.VITE_REPO_URL}/releases/tag/${import.meta.env.VITE_VERSION}`
+                                }
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="hover:text-primary-500 transition-colors font-mono"
+                            >
+                                {import.meta.env.VITE_BRANCH === 'dev' ? 'dev-' : 'v'}{import.meta.env.VITE_VERSION}
+                            </a>
+                            <span>{import.meta.env.VITE_BUILD_DATE}</span>
+                        </>
+                    ) : (
+                        <>
+                            <span>Development</span>
+                            {import.meta.env.VITE_COMMIT_HASH && (
+                                <a
+                                    href={`${import.meta.env.VITE_REPO_URL}/commit/${import.meta.env.VITE_COMMIT_HASH}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="hover:text-primary-500 transition-colors font-mono"
+                                >
+                                    ({import.meta.env.VITE_COMMIT_HASH})
+                                </a>
+                            )}
+                        </>
                     )}
                 </p>
             </div>

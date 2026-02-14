@@ -1,4 +1,4 @@
-name: Build and Push Docker Image
+name: Dev Build
 
 on:
   push:
@@ -9,7 +9,6 @@ on:
       - 'reset-dev-branch.sh'
       - 'run.sh'
     branches:
-      - main
       - dev
   schedule:
     - cron: '0 0 * * 1'  # Every Monday at 00:00 UTC
@@ -21,29 +20,43 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    if: github.event_name != 'schedule' || github.ref == 'refs/heads/main'
     permissions:
-      contents: read
+      contents: write
       packages: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Calculate dev version
+        id: version
+        run: |
+          YEAR=$(date -u +%Y)
+          MONTH=$(date -u +%-m)
+          PREFIX="dev-${YEAR}.${MONTH}."
+
+          git fetch --tags
+          LATEST_N=$(git tag -l "${PREFIX}*" --sort=-v:refname | head -1 | sed "s/^${PREFIX}//")
+
+          if [ -z "$LATEST_N" ]; then
+            NEXT_N=1
+          else
+            NEXT_N=$((LATEST_N + 1))
+          fi
+
+          VERSION="${YEAR}.${MONTH}.${NEXT_N}"
+          DEV_TAG="dev-${VERSION}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "dev_tag=${DEV_TAG}" >> $GITHUB_OUTPUT
+          echo "date=$(date -u +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+          echo "sha8=$(echo ${GITHUB_SHA} | cut -c1-8)" >> $GITHUB_OUTPUT
+          echo "Calculated dev version: ${DEV_TAG}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: Get current date
-        id: date
-        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
-
-      - name: Get short SHA
-        id: slug
-        run: echo "sha8=$(echo ${GITHUB_SHA} | cut -c1-8)" >> $GITHUB_OUTPUT
-
-      - name: Get branch name
-        id: branch
-        run: echo "name=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
 
       - name: Log in to the Container registry
         uses: docker/login-action@v3
@@ -52,14 +65,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels) for Docker
+      - name: Extract metadata for Docker
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=raw,value=dev
+            type=raw,value=${{ steps.version.outputs.dev_tag }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -70,11 +83,19 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VITE_COMMIT_HASH=${{ steps.slug.outputs.sha8 }}
-            VITE_BUILD_DATE=${{ steps.date.outputs.date }}
+            VITE_COMMIT_HASH=${{ steps.version.outputs.sha8 }}
+            VITE_BUILD_DATE=${{ steps.version.outputs.date }}
             VITE_REPO_URL=${{ github.server_url }}/${{ github.repository }}
-            VITE_BRANCH=${{ steps.branch.outputs.name }}
+            VITE_BRANCH=dev
+            VITE_VERSION=${{ steps.version.outputs.version }}
             DOCKER_IMAGE_REF=${{ github.repository }}
+
+      - name: Create dev version tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.version.outputs.dev_tag }}"
+          git push origin "${{ steps.version.outputs.dev_tag }}"
 
       - name: Delete untagged images
         uses: dataaxiom/ghcr-cleanup-action@v1
