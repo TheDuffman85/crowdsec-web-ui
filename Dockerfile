@@ -3,7 +3,7 @@
 # ==========================================
 # Stage 1: Builder
 # ==========================================
-FROM oven/bun:1 AS builder
+FROM oven/bun:1.3.5 AS builder
 
 WORKDIR /app
 
@@ -34,7 +34,7 @@ RUN bun run build-ui
 # ==========================================
 # Stage 2: Runner
 # ==========================================
-FROM oven/bun:1-slim
+FROM oven/bun:1.3.5-slim
 
 WORKDIR /app
 
