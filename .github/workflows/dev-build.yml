@@ -48,12 +48,10 @@ jobs:
           fi
 
           VERSION="${YEAR}.${MONTH}.${NEXT_N}"
-          DEV_TAG="dev-${VERSION}"
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "dev_tag=${DEV_TAG}" >> $GITHUB_OUTPUT
           echo "date=$(date -u +'%Y-%m-%d')" >> $GITHUB_OUTPUT
           echo "sha8=$(echo ${GITHUB_SHA} | cut -c1-8)" >> $GITHUB_OUTPUT
-          echo "Calculated dev version: ${DEV_TAG}"
+          echo "Calculated dev version: ${VERSION}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -72,7 +70,6 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=dev
-            type=raw,value=${{ steps.version.outputs.dev_tag }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -89,13 +86,6 @@ jobs:
             VITE_BRANCH=dev
             VITE_VERSION=${{ steps.version.outputs.version }}
             DOCKER_IMAGE_REF=${{ github.repository }}
-
-      - name: Create dev version tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "${{ steps.version.outputs.dev_tag }}"
-          git push origin "${{ steps.version.outputs.dev_tag }}"
 
       - name: Delete untagged images
         uses: dataaxiom/ghcr-cleanup-action@v1
