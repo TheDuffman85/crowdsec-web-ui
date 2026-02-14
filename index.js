@@ -731,9 +731,9 @@ let updateCheckCache = {
 };
 
 // Check once at startup if update checking is enabled
-const UPDATE_CHECK_ENABLED = !!process.env.VITE_COMMIT_HASH;
+const UPDATE_CHECK_ENABLED = !!(process.env.VITE_COMMIT_HASH || process.env.VITE_VERSION);
 if (!UPDATE_CHECK_ENABLED) {
-  console.log('Update checking disabled: VITE_COMMIT_HASH not set.');
+  console.log('Update checking disabled: VITE_COMMIT_HASH and VITE_VERSION not set.');
 }
 
 const DOCKER_IMAGE_REF = (process.env.DOCKER_IMAGE_REF || 'theduffman85/crowdsec-web-ui').toLowerCase();
@@ -741,7 +741,6 @@ const DOCKER_IMAGE_REF = (process.env.DOCKER_IMAGE_REF || 'theduffman85/crowdsec
 
 
 async function checkForUpdates() {
-  // Skip if update checking is disabled (no commit hash set)
   if (!UPDATE_CHECK_ENABLED) {
     return { update_available: false, reason: 'no_local_hash' };
   }
@@ -752,10 +751,9 @@ async function checkForUpdates() {
     return updateCheckCache.data;
   }
 
-  const currentBranch = process.env.VITE_BRANCH || 'main'; // Default to main if not set (which maps to latest)
+  const currentBranch = process.env.VITE_BRANCH || 'main';
   const currentHash = process.env.VITE_COMMIT_HASH;
-
-  // Map branch to tag for display
+  const currentVersion = process.env.VITE_VERSION || null;
   const tag = currentBranch === 'dev' ? 'dev' : 'latest';
 
   try {
@@ -767,63 +765,79 @@ async function checkForUpdates() {
       owner = parts[0];
       repo = parts[1];
     } else if (parts.length === 3) {
-      // Handle registry/owner/repo format if applicable, though GHCR usually is owner/repo
       owner = parts[1];
       repo = parts[2];
     } else {
-      // Fallback or error
       console.error(`Invalid DOCKER_IMAGE_REF format: ${DOCKER_IMAGE_REF}`);
       return { update_available: false, reason: 'invalid_image_ref' };
     }
 
-    // Fetch latest successful run for this branch, filtered to docker-build-push workflow only
-    const runsUrl = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/docker-build-push.yml/runs?branch=${currentBranch}&status=success&per_page=1`;
+    let result;
 
-    // We don't need a token for public repos usually, but if we hit rate limits we might need one.
-    // Ideally we'd use a token if available, but for now we'll try anonymously as it's a public read usually.
-    // If strict rate limits become an issue, we might need to inject a token.
-    const response = await fetch(runsUrl, {
-      headers: {
-        'Accept': 'application/vnd.github.v3+json',
-        'User-Agent': 'crowdsec-web-ui-update-check'
-      },
-      signal: AbortSignal.timeout(10000)
-    });
+    if (currentBranch === 'dev') {
+      // Dev: compare commit hashes via workflow runs API
+      const runsUrl = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/dev-build.yml/runs?branch=dev&status=success&per_page=1`;
 
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const response = await fetch(runsUrl, {
+        headers: {
+          'Accept': 'application/vnd.github.v3+json',
+          'User-Agent': 'crowdsec-web-ui-update-check'
+        },
+        signal: AbortSignal.timeout(10000)
+      });
 
-    const data = await response.json();
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
 
-    if (!data.workflow_runs || data.workflow_runs.length === 0) {
-      console.warn('No successful workflow runs found.');
-      return { update_available: false, reason: 'no_runs_found' };
+      if (!data.workflow_runs || data.workflow_runs.length === 0) {
+        return { update_available: false, reason: 'no_runs_found' };
+      }
+
+      const latestHash = data.workflow_runs[0].head_sha;
+      if (!latestHash) throw new Error('No head_sha in workflow run data');
+
+      const updateAvailable = currentHash
+        ? !latestHash.startsWith(currentHash) && !currentHash.startsWith(latestHash)
+        : false;
+
+      result = {
+        update_available: updateAvailable,
+        local_hash: currentHash,
+        remote_hash: latestHash,
+        tag: tag
+      };
+    } else {
+      // Prod: compare versions via GitHub Releases API
+      const releasesUrl = `https://api.github.com/repos/${owner}/${repo}/releases/latest`;
+
+      const response = await fetch(releasesUrl, {
+        headers: {
+          'Accept': 'application/vnd.github.v3+json',
+          'User-Agent': 'crowdsec-web-ui-update-check'
+        },
+        signal: AbortSignal.timeout(10000)
+      });
+
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const release = await response.json();
+
+      const latestVersion = release.tag_name;
+      const updateAvailable = currentVersion ? (latestVersion !== currentVersion) : false;
+
+      result = {
+        update_available: updateAvailable,
+        local_version: currentVersion,
+        remote_version: latestVersion,
+        release_url: release.html_url,
+        tag: tag
+      };
     }
-
-    const latestRun = data.workflow_runs[0];
-    const latestHash = latestRun.head_sha;
-
-    if (!latestHash) {
-      throw new Error('No head_sha in workflow run data');
-    }
-
-    // Compare using prefix match since local hash may be short (8 chars) while remote is full SHA (40 chars)
-    const updateAvailable = !latestHash.startsWith(currentHash) && !currentHash.startsWith(latestHash);
-
-    const result = {
-      update_available: updateAvailable,
-      local_hash: currentHash,
-      remote_hash: latestHash,
-      tag: tag
-    };
 
     // Update cache
-    updateCheckCache = {
-      lastCheck: now,
-      data: result
-    };
+    updateCheckCache = { lastCheck: now, data: result };
 
-    if (updateAvailable) {
-      console.log(`Update check: New version available (local: ${currentHash}, remote: ${latestHash})`);
+    if (result.update_available) {
+      console.log(`Update check: New version available (local: ${currentVersion || currentHash}, remote: ${result.remote_version || result.remote_hash})`);
     }
 
     return result;
