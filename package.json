@@ -1,6 +1,6 @@
 {
   "name": "crowdsec-web-ui",
-  "version": "1.0.0",
+  "version": "0.0.0",
   "description": "A web UI for CrowdSec alerts and decisions",
   "main": "index.js",
   "type": "module",

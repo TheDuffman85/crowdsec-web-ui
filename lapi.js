@@ -73,7 +73,7 @@ async function fetchLAPI(endpoint, options = {}, isRetry = false) {
     const isLoginRequest = endpoint.includes('/watchers/login');
 
     const headers = {
-        'User-Agent': 'crowdsec-web-ui/1.0.0',
+        'User-Agent': `crowdsec-web-ui/${process.env.VITE_VERSION || '0.0.0'}`,
         'Connection': 'close',
         'Content-Type': 'application/json',
         ...options.headers
