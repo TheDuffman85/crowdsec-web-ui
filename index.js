@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import { cors } from 'hono/cors';
 import { compress } from 'hono/compress';
 import { serveStatic } from 'hono/bun';
 import path from 'path';
@@ -80,7 +79,18 @@ function savePersistedConfig(config) {
 
 const app = new Hono();
 app.use('*', compress());
-app.use('*', cors());
+// CORS disabled — the app is designed to run behind a reverse proxy on the same origin.
+// Enabling cors() with wildcard would allow any website to make cross-origin requests.
+
+// Security headers
+app.use('*', async (c, next) => {
+  await next();
+  c.header('X-Content-Type-Options', 'nosniff');
+  c.header('X-Frame-Options', 'DENY');
+  c.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+  c.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+});
+
 const port = process.env.PORT || 3000;
 
 if (!hasCredentials()) {
@@ -844,7 +854,7 @@ async function checkForUpdates() {
 
   } catch (error) {
     console.error('Update check failed:', error.message);
-    return { update_available: false, error: error.message };
+    return { update_available: false, error: 'Update check failed' };
   }
 }
 
@@ -904,14 +914,15 @@ const handleApiError = async (error, c, action, replayCallback) => {
   }
 
   if (error.response) {
-    console.error(`Error ${action}: ${error.response.status} - ${JSON.stringify(error.response.data)}`);
-    return c.json(error.response.data, error.response.status);
+    console.error(`Error ${action}: ${error.response.status}`);
+    const status = error.response.status;
+    return c.json({ error: `Request failed with status ${status}` }, status);
   } else if (error.request) {
     console.error(`Error ${action}: No response received`);
     return c.json({ error: 'Bad Gateway: No response from CrowdSec LAPI' }, 502);
   } else {
     console.error(`Error ${action}: ${error.message}`);
-    return c.json({ error: `Internal Server Error: ${error.message}` }, 500);
+    return c.json({ error: 'Internal server error' }, 500);
   }
 };
 
@@ -1048,8 +1059,11 @@ app.get(`${BASE_PATH}/api/alerts`, ensureAuth, async (c) => {
  * GET /api/alerts/:id
  */
 app.get(`${BASE_PATH}/api/alerts/:id`, ensureAuth, async (c) => {
+  const alertId = c.req.param('id');
+  if (!/^\d+$/.test(alertId)) return c.json({ error: 'Invalid alert ID' }, 400);
+
   const doRequest = async () => {
-    const alertData = await getAlertById(c.req.param('id'));
+    const alertData = await getAlertById(alertId);
 
     // Process response to sync decisions with active cache
     let processedData = alertData;
@@ -1075,8 +1089,10 @@ app.get(`${BASE_PATH}/api/alerts/:id`, ensureAuth, async (c) => {
  * Deletes an alert by ID from LAPI and local cache
  */
 app.delete(`${BASE_PATH}/api/alerts/:id`, ensureAuth, async (c) => {
+  const alertId = c.req.param('id');
+  if (!/^\d+$/.test(alertId)) return c.json({ error: 'Invalid alert ID' }, 400);
+
   const doRequest = async () => {
-    const alertId = c.req.param('id');
     const result = await deleteAlert(alertId);
 
     // Remove alert from SQLite cache
@@ -1404,7 +1420,28 @@ app.post(`${BASE_PATH}/api/decisions`, ensureAuth, async (c) => {
       return c.json({ error: 'IP address is required' }, 400);
     }
 
-    const result = await addDecision(ip, type, duration, reason);
+    // Validate IP address format (IPv4, IPv6, or CIDR notation)
+    const ipv4Re = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/;
+    const ipv6Re = /^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}(\/\d{1,3})?$/;
+    if (!ipv4Re.test(ip) && !ipv6Re.test(ip)) {
+      return c.json({ error: 'Invalid IP address format' }, 400);
+    }
+
+    // Validate decision type
+    const validTypes = ['ban', 'captcha'];
+    if (!validTypes.includes(type)) {
+      return c.json({ error: `Invalid type. Must be one of: ${validTypes.join(', ')}` }, 400);
+    }
+
+    // Validate duration format (e.g. "4h", "30m", "1d", "3600s")
+    if (!/^\d+[smhd]$/.test(duration)) {
+      return c.json({ error: 'Invalid duration format. Use e.g. "4h", "30m", "1d"' }, 400);
+    }
+
+    // Limit reason length
+    const sanitizedReason = reason ? reason.slice(0, 256) : 'manual';
+
+    const result = await addDecision(ip, type, duration, sanitizedReason);
 
     // Immediately refresh cache to include new decision (delta only)
     console.log('Refreshing cache after adding decision...');
@@ -1424,8 +1461,10 @@ app.post(`${BASE_PATH}/api/decisions`, ensureAuth, async (c) => {
  * DELETE /api/decisions/:id
  */
 app.delete(`${BASE_PATH}/api/decisions/:id`, ensureAuth, async (c) => {
+  const decisionId = c.req.param('id');
+  if (!/^\d+$/.test(decisionId)) return c.json({ error: 'Invalid decision ID' }, 400);
+
   const doRequest = async () => {
-    const decisionId = c.req.param('id');
     const result = await deleteDecision(decisionId);
 
     // Remove decision from local SQLite cache immediately
@@ -1494,7 +1533,9 @@ app.get(`${BASE_PATH}/*`, async (c) => {
     let html = fs.readFileSync(indexPath, 'utf-8');
 
     // Inject runtime configuration for BASE_PATH
-    const configScript = `<script>window.__BASE_PATH__="${BASE_PATH}";</script>`;
+    // Sanitize BASE_PATH to prevent script injection via environment variable
+    const safePath = BASE_PATH.replace(/[^a-zA-Z0-9/_-]/g, '');
+    const configScript = `<script>window.__BASE_PATH__="${safePath}";</script>`;
     html = html.replace('</head>', `${configScript}\n</head>`);
 
     // Fix asset paths in index.html when BASE_PATH is set

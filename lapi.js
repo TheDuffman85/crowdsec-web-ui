@@ -146,7 +146,7 @@ async function fetchLAPI(endpoint, options = {}, isRetry = false) {
  */
 async function login() {
     try {
-        console.log(`Attempting login to CrowdSec LAPI at ${CROWDSEC_URL} as ${CROWDSEC_USER}...`);
+        console.log(`Attempting login to CrowdSec LAPI at ${CROWDSEC_URL}...`);
         const response = await fetchLAPI('/v1/watchers/login', {
             method: 'POST',
             body: {
@@ -168,7 +168,7 @@ async function login() {
             updateLapiStatus(true);
             return true;
         } else {
-            console.error('Login response did not contain token:', response.data);
+            console.error('Login response did not contain expected token');
             updateLapiStatus(false, { message: 'Login response invalid' });
             return false;
         }
@@ -176,7 +176,7 @@ async function login() {
         console.error(`Login failed: ${error.message}`);
         updateLapiStatus(false, error);
         if (error.response) {
-            console.error('Response data:', error.response.data);
+            console.error('Response status:', error.response.status);
         }
         return false;
     }
