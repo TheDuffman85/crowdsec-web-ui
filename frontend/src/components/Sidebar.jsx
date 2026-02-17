@@ -146,7 +146,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }) {
                                     Update Available
                                 </p>
                                 <p className="text-xs text-blue-600 dark:text-blue-400">
-                                    {updateStatus.remote_version ? (
+                                    {updateStatus.release_url ? (
                                         <a
                                             href={updateStatus.release_url}
                                             target="_blank"
@@ -155,6 +155,8 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }) {
                                         >
                                             v{updateStatus.remote_version}
                                         </a>
+                                    ) : updateStatus.remote_version ? (
+                                        <>New version: <span className="font-mono bg-blue-100 dark:bg-blue-800 px-1 rounded">dev-{updateStatus.remote_version}</span></>
                                     ) : (
                                         <>New version available for tag <span className="font-mono bg-blue-100 dark:bg-blue-800 px-1 rounded">{updateStatus.tag}</span></>
                                     )}

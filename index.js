@@ -785,7 +785,7 @@ async function checkForUpdates() {
     let result;
 
     if (currentBranch === 'dev') {
-      // Dev: compare commit hashes via workflow runs API
+      // Dev: compare build numbers via workflow runs API
       const runsUrl = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/dev-build.yml/runs?branch=dev&status=success&per_page=1`;
 
       const response = await fetch(runsUrl, {
@@ -803,17 +803,29 @@ async function checkForUpdates() {
         return { update_available: false, reason: 'no_runs_found' };
       }
 
-      const latestHash = data.workflow_runs[0].head_sha;
+      const latestRun = data.workflow_runs[0];
+      const latestHash = latestRun.head_sha;
       if (!latestHash) throw new Error('No head_sha in workflow run data');
 
-      const updateAvailable = currentHash
-        ? !latestHash.startsWith(currentHash) && !currentHash.startsWith(latestHash)
-        : false;
+      // Derive build number from workflow run's creation timestamp (YYYYMMDDHHmm)
+      const runDate = new Date(latestRun.created_at);
+      const remoteBuildNumber = `${runDate.getUTCFullYear()}${String(runDate.getUTCMonth() + 1).padStart(2, '0')}${String(runDate.getUTCDate()).padStart(2, '0')}${String(runDate.getUTCHours()).padStart(2, '0')}${String(runDate.getUTCMinutes()).padStart(2, '0')}`;
+
+      // Compare build numbers if available, fall back to hash comparison
+      let updateAvailable;
+      if (currentVersion) {
+        // Build numbers are timestamps, lexicographic comparison works
+        updateAvailable = remoteBuildNumber > currentVersion;
+      } else if (currentHash) {
+        updateAvailable = !latestHash.startsWith(currentHash) && !currentHash.startsWith(latestHash);
+      } else {
+        updateAvailable = false;
+      }
 
       result = {
         update_available: updateAvailable,
-        local_hash: currentHash,
-        remote_hash: latestHash,
+        local_version: currentVersion || currentHash,
+        remote_version: remoteBuildNumber,
         tag: tag
       };
     } else {
