@@ -15,7 +15,7 @@
         "react-dom": "^19.2.4",
         "react-is": "^19.2.4",
         "react-router-dom": "^7.13.0",
-        "react-window": "^2.2.6",
+        "react-window": "^2.2.7",
         "react-zoom-pan-pinch": "^3.7.0",
         "recharts": "3.7.0",
         "tailwind-merge": "^3.4.0",
@@ -578,7 +578,7 @@
 
     "react-virtualized-auto-sizer": ["react-virtualized-auto-sizer@1.0.26", "", { "peerDependencies": { "react": "^15.3.0 || ^16.0.0-alpha || ^17.0.0 || ^18.0.0 || ^19.0.0", "react-dom": "^15.3.0 || ^16.0.0-alpha || ^17.0.0 || ^18.0.0 || ^19.0.0" } }, "sha512-CblNyiNVw2o+hsa5/49NH2ogGxZ+t+3aweRvNSq7TVjDIlwk7ir4lencEg5HxHeSzwNarSkNkiu0qJSOXtxm5A=="],
 
-    "react-window": ["react-window@2.2.6", "", { "peerDependencies": { "react": "^18.0.0 || ^19.0.0", "react-dom": "^18.0.0 || ^19.0.0" } }, "sha512-v89O08xRdpCaEuf380B39D1C/0KgUDZA59xft6SVAjzjz/xQxSyXrgDWHymIsYI6TMrqE8WO+G0/PB9AGE8VNA=="],
+    "react-window": ["react-window@2.2.7", "", { "peerDependencies": { "react": "^18.0.0 || ^19.0.0", "react-dom": "^18.0.0 || ^19.0.0" } }, "sha512-SH5nvfUQwGHYyriDUAOt7wfPsfG9Qxd6OdzQxl5oQ4dsSsUicqQvjV7dR+NqZ4coY0fUn3w1jnC5PwzIUWEg5w=="],
 
     "react-zoom-pan-pinch": ["react-zoom-pan-pinch@3.7.0", "", { "peerDependencies": { "react": "*", "react-dom": "*" } }, "sha512-UmReVZ0TxlKzxSbYiAj+LeGRW8s8LraAFTXRAxzMYnNRgGPsxCudwZKVkjvGmjtx7SW/hZamt69NUmGf4xrkXA=="],
 
