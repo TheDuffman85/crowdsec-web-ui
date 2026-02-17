@@ -34,24 +34,11 @@ jobs:
       - name: Calculate dev version
         id: version
         run: |
-          YEAR=$(date -u +%Y)
-          MONTH=$(date -u +%-m)
-          PREFIX="dev-${YEAR}.${MONTH}."
-
-          git fetch --tags
-          LATEST_N=$(git tag -l "${PREFIX}*" --sort=-v:refname | head -1 | sed "s/^${PREFIX}//")
-
-          if [ -z "$LATEST_N" ]; then
-            NEXT_N=1
-          else
-            NEXT_N=$((LATEST_N + 1))
-          fi
-
-          VERSION="${YEAR}.${MONTH}.${NEXT_N}"
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          BUILD_NUMBER=$(date -u +'%Y%m%d%H%M')
+          echo "build_number=${BUILD_NUMBER}" >> $GITHUB_OUTPUT
           echo "date=$(date -u +'%Y-%m-%d')" >> $GITHUB_OUTPUT
           echo "sha8=$(echo ${GITHUB_SHA} | cut -c1-8)" >> $GITHUB_OUTPUT
-          echo "Calculated dev version: ${VERSION}"
+          echo "Dev build: dev-${BUILD_NUMBER}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -70,6 +57,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=dev
+            type=raw,value=dev-${{ steps.version.outputs.build_number }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -84,12 +72,15 @@ jobs:
             VITE_BUILD_DATE=${{ steps.version.outputs.date }}
             VITE_REPO_URL=${{ github.server_url }}/${{ github.repository }}
             VITE_BRANCH=dev
-            VITE_VERSION=${{ steps.version.outputs.version }}
+            VITE_VERSION=${{ steps.version.outputs.build_number }}
             DOCKER_IMAGE_REF=${{ github.repository }}
 
-      - name: Delete untagged images
+      - name: Cleanup old dev images
         uses: dataaxiom/ghcr-cleanup-action@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           package: ${{ github.event.repository.name }}
+          delete-tags: dev-*
+          exclude-tags: dev,latest,20*
+          keep-n-tagged: 3
           delete-untagged: true
