@@ -17,7 +17,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }) {
     useEffect(() => {
         const checkUpdates = async () => {
             try {
-                const response = await fetch(apiUrl('/api/update-check'));
+                const response = await fetch(apiUrl('/api/update-check'), { cache: 'no-store' });
                 if (response.ok) {
                     setUpdateStatus(await response.json());
                 }
