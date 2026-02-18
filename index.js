@@ -785,39 +785,71 @@ async function checkForUpdates() {
     let result;
 
     if (currentBranch === 'dev') {
-      // Dev: compare build numbers via workflow runs API
-      const runsUrl = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/dev-build.yml/runs?branch=dev&status=success&per_page=1`;
+      // Dev: get exact build number from GHCR container tags
+      let remoteBuildNumber = null;
 
-      const response = await fetch(runsUrl, {
-        headers: {
-          'Accept': 'application/vnd.github.v3+json',
-          'User-Agent': 'crowdsec-web-ui-update-check'
-        },
-        signal: AbortSignal.timeout(10000)
-      });
+      try {
+        // Get anonymous token for public GHCR package
+        const tokenUrl = `https://ghcr.io/token?scope=repository:${owner}/${repo}:pull`;
+        const tokenResp = await fetch(tokenUrl, {
+          headers: { 'User-Agent': 'crowdsec-web-ui-update-check' },
+          signal: AbortSignal.timeout(10000)
+        });
 
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
+        if (tokenResp.ok) {
+          const { token } = await tokenResp.json();
 
-      if (!data.workflow_runs || data.workflow_runs.length === 0) {
-        return { update_available: false, reason: 'no_runs_found' };
+          const tagsUrl = `https://ghcr.io/v2/${owner}/${repo}/tags/list`;
+          const tagsResp = await fetch(tagsUrl, {
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'User-Agent': 'crowdsec-web-ui-update-check'
+            },
+            signal: AbortSignal.timeout(10000)
+          });
+
+          if (tagsResp.ok) {
+            const { tags } = await tagsResp.json();
+            // Find latest dev-YYYYMMDDHHMM tag (matches the VITE_VERSION format exactly)
+            const devTags = (tags || [])
+              .filter(t => /^dev-\d{12}$/.test(t))
+              .sort();
+            if (devTags.length > 0) {
+              remoteBuildNumber = devTags[devTags.length - 1].replace('dev-', '');
+            }
+          }
+        }
+      } catch (ghcrError) {
+        console.warn('GHCR tag lookup failed, falling back to workflow API:', ghcrError.message);
       }
 
-      const latestRun = data.workflow_runs[0];
-      const latestHash = latestRun.head_sha;
-      if (!latestHash) throw new Error('No head_sha in workflow run data');
+      // Fallback: derive build number from workflow run's creation timestamp
+      if (!remoteBuildNumber) {
+        const runsUrl = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/dev-build.yml/runs?branch=dev&status=success&per_page=1`;
+        const response = await fetch(runsUrl, {
+          headers: {
+            'Accept': 'application/vnd.github.v3+json',
+            'User-Agent': 'crowdsec-web-ui-update-check'
+          },
+          signal: AbortSignal.timeout(10000)
+        });
 
-      // Derive build number from workflow run's creation timestamp (YYYYMMDDHHmm)
-      const runDate = new Date(latestRun.created_at);
-      const remoteBuildNumber = `${runDate.getUTCFullYear()}${String(runDate.getUTCMonth() + 1).padStart(2, '0')}${String(runDate.getUTCDate()).padStart(2, '0')}${String(runDate.getUTCHours()).padStart(2, '0')}${String(runDate.getUTCMinutes()).padStart(2, '0')}`;
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
 
-      // Compare build numbers if available, fall back to hash comparison
+        if (!data.workflow_runs || data.workflow_runs.length === 0) {
+          return { update_available: false, reason: 'no_runs_found' };
+        }
+
+        const latestRun = data.workflow_runs[0];
+        const runDate = new Date(latestRun.run_started_at || latestRun.created_at);
+        remoteBuildNumber = `${runDate.getUTCFullYear()}${String(runDate.getUTCMonth() + 1).padStart(2, '0')}${String(runDate.getUTCDate()).padStart(2, '0')}${String(runDate.getUTCHours()).padStart(2, '0')}${String(runDate.getUTCMinutes()).padStart(2, '0')}`;
+      }
+
+      // Compare build numbers (timestamps: lexicographic comparison works)
       let updateAvailable;
       if (currentVersion) {
-        // Build numbers are timestamps, lexicographic comparison works
         updateAvailable = remoteBuildNumber > currentVersion;
-      } else if (currentHash) {
-        updateAvailable = !latestHash.startsWith(currentHash) && !currentHash.startsWith(latestHash);
       } else {
         updateAvailable = false;
       }
@@ -843,8 +875,9 @@ async function checkForUpdates() {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const release = await response.json();
 
-      const latestVersion = release.tag_name;
-      const updateAvailable = currentVersion ? (latestVersion !== currentVersion) : false;
+      const latestVersion = release.tag_name.replace(/^v/i, '').trim();
+      const normalizedCurrent = currentVersion ? currentVersion.replace(/^v/i, '').trim() : null;
+      const updateAvailable = normalizedCurrent ? (latestVersion !== normalizedCurrent) : false;
 
       result = {
         update_available: updateAvailable,
@@ -1501,9 +1534,13 @@ app.delete(`${BASE_PATH}/api/decisions/:id`, ensureAuth, async (c) => {
 app.get(`${BASE_PATH}/api/update-check`, ensureAuth, async (c) => {
   try {
     const status = await checkForUpdates();
+    c.header('Cache-Control', 'no-store, no-cache, must-revalidate');
+    c.header('Pragma', 'no-cache');
     return c.json(status);
   } catch (error) {
     console.error('Error checking for updates:', error.message);
+    c.header('Cache-Control', 'no-store, no-cache, must-revalidate');
+    c.header('Pragma', 'no-cache');
     return c.json({ error: 'Update check failed' }, 500);
   }
 });
