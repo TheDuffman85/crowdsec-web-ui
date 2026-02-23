@@ -6,7 +6,8 @@ import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
-import { getHubUrl, getCountryName } from "../lib/utils";
+import { EventCard } from "../components/EventCard";
+import { getCountryName } from "../lib/utils";
 import { Search, Info, ExternalLink, Shield, Trash2, X, AlertCircle } from "lucide-react";
 import "flag-icons/css/flag-icons.min.css";
 
@@ -20,6 +21,7 @@ export function Alerts() {
     const [searchParams, setSearchParams] = useSearchParams();
     const [alertToDelete, setAlertToDelete] = useState(null);
     const [errorInfo, setErrorInfo] = useState(null); // { message, helpLink?, helpText? }
+    const [showAllEvents, setShowAllEvents] = useState(false);
 
     // Ref to track selected alert ID for auto-refresh (avoids stale closure issues)
     const selectedAlertIdRef = useRef(null);
@@ -99,6 +101,7 @@ export function Alerts() {
     // Keep ref in sync with selectedAlert for auto-refresh
     useEffect(() => {
         selectedAlertIdRef.current = selectedAlert?.id || null;
+        setShowAllEvents(false);
     }, [selectedAlert]);
 
     // Handler to fetch full alert data when clicking on a row
@@ -604,143 +607,25 @@ export function Alerts() {
                                 Events ({selectedAlert.events?.length || 0})
                             </h4>
                             <div className="space-y-2">
-                                {selectedAlert.events?.slice(0, 10).map((event, idx) => {
-                                    // Helper to extract meta value
-                                    const getMeta = (key) => event.meta?.find(m => m.key === key)?.value;
-
-                                    // Check if this is an AppSec event
-                                    const isAppSecEvent = event.meta?.some(m =>
-                                        m.key === 'matched_zones' || m.key === 'rule_name' || m.key === 'appsec_action'
-                                    );
-
-                                    // AppSec-specific fields
-                                    const ruleName = getMeta('rule_name');
-                                    const matchedZones = getMeta('matched_zones');
-                                    const ruleIds = getMeta('rule_ids');
-                                    const message = getMeta('msg') || getMeta('message');
-
-                                    // Common fields
-                                    const targetFqdn = getMeta('target_fqdn');
-                                    const targetHost = getMeta('target_host');
-                                    const targetUri = getMeta('target_uri') || getMeta('uri');
-                                    const traefikRouter = getMeta('traefik_router_name');
-                                    const httpVerb = getMeta('http_verb');
-                                    const httpPath = getMeta('http_path');
-                                    const httpStatus = getMeta('http_status');
-                                    const httpUserAgent = getMeta('http_user_agent');
-                                    const service = getMeta('service');
-
-                                    return (
-                                        <div key={idx} className={`p-3 rounded border text-sm ${isAppSecEvent
-                                            ? 'bg-red-50 dark:bg-red-900/10 border-red-100 dark:border-red-900/30'
-                                            : 'bg-gray-50 dark:bg-gray-900/30 border-gray-100 dark:border-gray-800'
-                                            }`}>
-                                            {/* AppSec Badge */}
-                                            {isAppSecEvent && (
-                                                <div className="mb-2 flex items-center gap-2">
-                                                    <Badge variant="danger" className="flex items-center gap-1">
-                                                        <Shield size={12} />
-                                                        AppSec / WAF
-                                                    </Badge>
-                                                </div>
-                                            )}
-
-                                            <div className="space-y-2">
-                                                {/* Timestamp and Service */}
-                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                                    <div>
-                                                        <span className="text-gray-500">Timestamp:</span> <span className="font-mono text-xs">{event.timestamp}</span>
-                                                    </div>
-                                                    {service && (
-                                                        <div>
-                                                            <span className="text-gray-500">Service:</span> {service}
-                                                        </div>
-                                                    )}
-                                                </div>
-
-                                                {/* Target FQDN/Host */}
-                                                {(targetFqdn || targetHost) && (
-                                                    <div>
-                                                        <span className="text-gray-500">Target:</span> <span className="font-mono text-xs">{targetFqdn || targetHost}</span>
-                                                    </div>
-                                                )}
-
-                                                {/* Traefik Router */}
-                                                {traefikRouter && (
-                                                    <div>
-                                                        <span className="text-gray-500">Router:</span> <span className="font-mono text-xs">{traefikRouter}</span>
-                                                    </div>
-                                                )}
-
-                                                {/* AppSec Rule Info */}
-                                                {isAppSecEvent && ruleName && (
-                                                    <div>
-                                                        <span className="text-gray-500">Rule:</span>{' '}
-                                                        {(() => {
-                                                            const hubUrl = getHubUrl(ruleName);
-                                                            return hubUrl ? (
-                                                                <a
-                                                                    href={hubUrl}
-                                                                    target="_blank"
-                                                                    rel="noopener noreferrer"
-                                                                    className="font-mono text-xs hover:text-primary-600 dark:hover:text-primary-400 transition-colors inline-flex items-center gap-1"
-                                                                >
-                                                                    {ruleName}
-                                                                    <ExternalLink size={10} />
-                                                                </a>
-                                                            ) : (
-                                                                <span className="font-mono text-xs">{ruleName}</span>
-                                                            );
-                                                        })()}
-                                                    </div>
-                                                )}
-
-                                                {/* AppSec Details */}
-                                                {isAppSecEvent && (
-                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                                        {matchedZones && (
-                                                            <div>
-                                                                <span className="text-gray-500">Matched Zone:</span> <Badge variant="outline" className="ml-1">{matchedZones}</Badge>
-                                                            </div>
-                                                        )}
-                                                        {ruleIds && (
-                                                            <div>
-                                                                <span className="text-gray-500">Rule ID:</span> <span className="font-mono text-xs">{ruleIds}</span>
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                )}
-
-                                                {/* Message/Description */}
-                                                {isAppSecEvent && message && (
-                                                    <div className="text-xs text-gray-600 dark:text-gray-300 italic">
-                                                        {message}
-                                                    </div>
-                                                )}
-
-                                                {/* HTTP Request Details */}
-                                                {(httpVerb || httpPath || targetUri) && (
-                                                    <div className="font-mono text-xs break-all bg-white dark:bg-gray-950 p-2 rounded border border-gray-200 dark:border-gray-800">
-                                                        <span className="text-blue-600 dark:text-blue-400 font-bold">{httpVerb || 'GET'}</span> {httpPath || targetUri || '/'}
-                                                        {(httpStatus || httpUserAgent) && (
-                                                            <div className="text-gray-400 mt-1">
-                                                                {httpStatus && `Status: ${httpStatus}`}
-                                                                {httpStatus && httpUserAgent && ' | '}
-                                                                {httpUserAgent && `UA: ${httpUserAgent}`}
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                                {selectedAlert.events?.length > 10 && (
-                                    <div className="text-center text-sm text-gray-500">
-                                        + {selectedAlert.events.length - 10} more events
-                                    </div>
-                                )}
+                                {(showAllEvents
+                                    ? selectedAlert.events
+                                    : selectedAlert.events?.slice(0, 10)
+                                )?.map((event, idx) => (
+                                    <EventCard
+                                        key={idx}
+                                        event={event}
+                                        index={idx}
+                                    />
+                                ))}
                             </div>
+                            {!showAllEvents && selectedAlert.events?.length > 10 && (
+                                <button
+                                    onClick={() => setShowAllEvents(true)}
+                                    className="mt-3 w-full py-2 text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 bg-gray-50 dark:bg-gray-900/30 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors cursor-pointer"
+                                >
+                                    Show all {selectedAlert.events.length} events ({selectedAlert.events.length - 10} more)
+                                </button>
+                            )}
                         </div>
 
                     </div>
