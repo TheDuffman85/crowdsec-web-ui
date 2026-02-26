@@ -210,14 +210,16 @@ export function Decisions() {
 
         const ip = (decision.value || "").toLowerCase();
         const reason = (decision.detail.reason || "").toLowerCase();
-        const country = (getCountryName(decision.detail.country) || "").toLowerCase();
+        const countryCode = (decision.detail.country || "").toLowerCase();
+        const countryName = (getCountryName(decision.detail.country) || "").toLowerCase();
         const as = (decision.detail.as || "").toLowerCase();
         const type = (decision.type || "").toLowerCase();
         const action = (decision.detail.action || "").toLowerCase();
 
         return ip.includes(search) ||
             reason.includes(search) ||
-            country.includes(search) ||
+            countryCode.includes(search) ||
+            countryName.includes(search) ||
             as.includes(search) ||
             type.includes(search) ||
             action.includes(search);
