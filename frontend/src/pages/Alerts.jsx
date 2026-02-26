@@ -207,12 +207,15 @@ export function Alerts() {
 
         // Check generic search
         if (search) {
+            const countryName = (getCountryName(alert.source?.cn) || "").toLowerCase();
             return scenario.includes(search) ||
                 message.includes(search) ||
                 ip.includes(search) ||
                 cn.includes(search) ||
+                countryName.includes(search) ||
                 asName.includes(search) ||
-                (alert.target || "").toLowerCase().includes(search);
+                (alert.target || "").toLowerCase().includes(search) ||
+                (alert.meta_search || "").toLowerCase().includes(search);
         }
 
         return true;

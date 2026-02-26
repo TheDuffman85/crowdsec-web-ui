@@ -1041,6 +1041,20 @@ const slimAlert = (alert) => {
     expired: d.expired
   }));
 
+  // Extract all unique metadata values from events for search
+  const metaValues = new Set();
+  if (alert.events && Array.isArray(alert.events)) {
+    for (const event of alert.events) {
+      if (event.meta && Array.isArray(event.meta)) {
+        for (const m of event.meta) {
+          if (m.key !== 'context' && m.value != null && m.value !== '') {
+            metaValues.add(String(m.value));
+          }
+        }
+      }
+    }
+  }
+
   return {
     id: alert.id,
     created_at: alert.created_at,
@@ -1058,6 +1072,8 @@ const slimAlert = (alert) => {
     } : null,
     // Use pre-computed target from database import
     target: alert.target,
+    // Concatenated metadata values for search filtering
+    meta_search: metaValues.size > 0 ? [...metaValues].join(' ') : '',
     decisions
   };
 };
