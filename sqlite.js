@@ -136,7 +136,7 @@ function initSchema() {
   console.log('Database schema initialized.');
 }
 
-// Clear alerts and decisions on startup (will be re-synced from CrowdSec)
+// Clear alerts and decisions (manual reset only - no longer called on startup)
 function clearSyncData() {
   console.log('Clearing alerts and decisions for fresh sync...');
   db.exec('DELETE FROM alerts');
@@ -147,9 +147,6 @@ function clearSyncData() {
 // Run schema init on load
 initSchema();
 
-// Clear data for fresh sync
-clearSyncData();
-
 // --- Prepared Statements ---
 
 // Alerts
@@ -159,10 +156,9 @@ const insertAlert = db.query(`
 `);
 
 const getAlerts = db.query(`
-  SELECT raw_data FROM alerts 
-  WHERE created_at >= $since 
+  SELECT raw_data FROM alerts
+  WHERE created_at >= $since
   ORDER BY created_at DESC
-  LIMIT $limit
 `);
 
 const countAlerts = db.query('SELECT COUNT(*) as count FROM alerts');
@@ -182,10 +178,9 @@ const updateDecision = db.query(`
 `);
 
 const getActiveDecisions = db.query(`
-  SELECT raw_data, created_at FROM decisions 
+  SELECT raw_data, created_at FROM decisions
   WHERE stop_at > $now
   ORDER BY stop_at DESC
-  LIMIT $limit
 `);
 
 // For "include_expired" view: get all active decisions PLUS expired ones within lookback
@@ -215,6 +210,7 @@ const transaction = (cb) => db.transaction(cb);
 
 export default {
   db,
+  clearSyncData,
   insertAlert,
   getAlerts,
   countAlerts,

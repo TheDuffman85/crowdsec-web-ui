@@ -84,5 +84,9 @@ RUN mkdir -p /app/data && chown bun:bun /app/data
 # Expose port
 EXPOSE 3000
 
+# Health check using bun to hit the health endpoint
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD bun -e "fetch('http://localhost:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["bun", "index.js"]

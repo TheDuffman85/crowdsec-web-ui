@@ -262,14 +262,33 @@ location /crowdsec/ {
 - When `BASE_PATH` is set, accessing the root URL (`/`) will redirect to the base path
 - All API calls, assets, and navigation will automatically use the configured base path
 
+### Health Check
+
+The Docker image includes a built-in `HEALTHCHECK` that verifies the web server is responding. Docker will automatically mark the container as `healthy` or `unhealthy`.
+
+**Endpoint:** `GET /api/health` (no authentication required)
+
+```bash
+curl http://localhost:3000/api/health
+# {"status":"ok"}
+```
+
+The health check runs every 30 seconds with a 10-second start period to allow for initialization. You can check the container's health status with:
+
+```bash
+docker inspect --format='{{.State.Health.Status}}' crowdsec_web_ui
+```
+
+If you use `BASE_PATH`, the health check still targets `localhost:3000/api/health` directly inside the container, so no additional configuration is needed.
+
 ### Run with Helm
 
 A Helm chart for deploying `crowdsec-web-ui` on Kubernetes is available (maintained by the zekker6):
 [https://github.com/zekker6/helm-charts/tree/main/charts/apps/crowdsec-web-ui](https://github.com/zekker6/helm-charts/tree/main/charts/apps/crowdsec-web-ui)
 
-## Persistence
+## Persistence & Alert History
 
-To persist alert history, decisions cache, and configuration across container restarts, mount the `/app/data` directory. All data is stored in a single SQLite database.
+All data is stored in a single SQLite database at `/app/data/crowdsec.db`. To persist data across container restarts, mount the `/app/data` directory.
 
 **Docker Run:**
 Add `-v $(pwd)/data:/app/data` to your command.
@@ -280,6 +299,14 @@ Add the volume mapping:
 volumes:
   - ./data:/app/data
 ```
+
+### How It Works
+
+The Web UI maintains its own local history of alerts and decisions. Data fetched from the CrowdSec LAPI is stored in the local database and **preserved across restarts and full refreshes**. This means the Web UI can retain more alerts than the LAPI itself keeps (LAPI has a configurable `max_items` limit, default 5000).
+
+- Alerts are kept for the duration of `CROWDSEC_LOOKBACK_PERIOD` (default: 7 days), then automatically cleaned up.
+- On restart, existing data is reused and new data from LAPI is merged in.
+- To force a full cache reset, use the `POST /api/cache/clear` endpoint.
 
 ## Local Development
 

@@ -107,7 +107,7 @@ const syncStatus = {
   completedAt: null
 };
 
-// Track first sync after startup - show modal only on first sync
+// Track first sync after startup - show overlay on every startup/restart
 let isFirstSync = true;
 
 function updateSyncStatus(updates) {
@@ -1063,6 +1063,14 @@ const slimAlert = (alert) => {
 };
 
 /**
+ * GET /api/health
+ * Unauthenticated health check for Docker/orchestrator liveness probes
+ */
+app.get(`${BASE_PATH}/api/health`, (c) => {
+  return c.json({ status: 'ok' });
+});
+
+/**
  * GET /api/alerts
  * Returns alerts from SQLite database (slim payload for list views)
  */
@@ -1082,7 +1090,7 @@ app.get(`${BASE_PATH}/api/alerts`, ensureAuth, async (c) => {
     const since = new Date(Date.now() - LOOKBACK_MS).toISOString();
 
     // Query alerts from SQLite
-    const rawAlerts = db.getAlerts.all({ $since: since, $limit: 10000 }); // Note $ prefix for bun
+    const rawAlerts = db.getAlerts.all({ $since: since });
 
     // Parse raw_data, hydrate with decision status, then slim for list view
     const alerts = rawAlerts.map(row => {
@@ -1208,7 +1216,7 @@ app.get(`${BASE_PATH}/api/decisions`, ensureAuth, async (c) => {
       });
     } else {
       // Get only active decisions (stop_at > now)
-      const rawDecisions = db.getActiveDecisions.all({ $now: now, $limit: 10000 }); // Note $ prefix
+      const rawDecisions = db.getActiveDecisions.all({ $now: now });
       decisions = rawDecisions.map(row => {
         const d = JSON.parse(row.raw_data);
         return {
@@ -1363,6 +1371,35 @@ app.put(`${BASE_PATH}/api/config/refresh-interval`, ensureAuth, async (c) => {
   }
 });
 
+/**
+ * POST /api/cache/clear
+ * Manually clears the local alert/decision cache and triggers a full re-sync from LAPI.
+ * Historical data will be re-fetched within CROWDSEC_LOOKBACK_PERIOD.
+ */
+app.post(`${BASE_PATH}/api/cache/clear`, ensureAuth, async (c) => {
+  try {
+    console.log('Manual cache clear requested');
+
+    db.clearSyncData();
+
+    cache.isInitialized = false;
+    cache.lastUpdate = null;
+    isFirstSync = true;
+
+    await initializeCache();
+    startRefreshScheduler();
+
+    return c.json({
+      success: true,
+      message: 'Cache cleared and re-synced',
+      alert_count: db.countAlerts.get().count
+    });
+  } catch (error) {
+    console.error('Error clearing cache:', error.message);
+    return c.json({ error: 'Failed to clear cache' }, 500);
+  }
+});
+
 
 /**
  * GET /api/stats/alerts
@@ -1384,7 +1421,7 @@ app.get(`${BASE_PATH}/api/stats/alerts`, ensureAuth, async (c) => {
     const since = new Date(Date.now() - LOOKBACK_MS).toISOString();
 
     // Query alerts from SQLite
-    const rawAlerts = db.getAlerts.all({ $since: since, $limit: 10000 }); // Note $ prefix
+    const rawAlerts = db.getAlerts.all({ $since: since });
 
     // Parse raw_data and extract only stats-relevant fields with pre-computed target
     const alerts = rawAlerts.map(row => {
