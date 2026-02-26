@@ -262,6 +262,25 @@ location /crowdsec/ {
 - When `BASE_PATH` is set, accessing the root URL (`/`) will redirect to the base path
 - All API calls, assets, and navigation will automatically use the configured base path
 
+### Health Check
+
+The Docker image includes a built-in `HEALTHCHECK` that verifies the web server is responding. Docker will automatically mark the container as `healthy` or `unhealthy`.
+
+**Endpoint:** `GET /api/health` (no authentication required)
+
+```bash
+curl http://localhost:3000/api/health
+# {"status":"ok"}
+```
+
+The health check runs every 30 seconds with a 10-second start period to allow for initialization. You can check the container's health status with:
+
+```bash
+docker inspect --format='{{.State.Health.Status}}' crowdsec_web_ui
+```
+
+If you use `BASE_PATH`, the health check still targets `localhost:3000/api/health` directly inside the container, so no additional configuration is needed.
+
 ### Run with Helm
 
 A Helm chart for deploying `crowdsec-web-ui` on Kubernetes is available (maintained by the zekker6):

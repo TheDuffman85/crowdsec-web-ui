@@ -1063,6 +1063,14 @@ const slimAlert = (alert) => {
 };
 
 /**
+ * GET /api/health
+ * Unauthenticated health check for Docker/orchestrator liveness probes
+ */
+app.get(`${BASE_PATH}/api/health`, (c) => {
+  return c.json({ status: 'ok' });
+});
+
+/**
  * GET /api/alerts
  * Returns alerts from SQLite database (slim payload for list views)
  */
