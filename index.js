@@ -1082,9 +1082,14 @@ const slimAlert = (alert) => {
  * GET /api/health
  * Unauthenticated health check for Docker/orchestrator liveness probes
  */
-app.get(`${BASE_PATH}/api/health`, (c) => {
-  return c.json({ status: 'ok' });
-});
+const healthHandler = (c) => c.json({ status: 'ok' });
+
+// Keep a root health endpoint so container healthchecks remain valid
+// even when BASE_PATH is configured for reverse proxy routing.
+app.get('/api/health', healthHandler);
+if (BASE_PATH) {
+  app.get(`${BASE_PATH}/api/health`, healthHandler);
+}
 
 /**
  * GET /api/alerts
