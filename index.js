@@ -1671,11 +1671,14 @@ if (BASE_PATH) {
   // First, ensure we're logged in
   if (hasCredentials()) {
     console.log('Ensuring authentication before cache initialization...');
-    const loginSuccess = await loginToLAPI();
 
-    if (!loginSuccess) {
-      console.error('Failed to login - cache initialization aborted');
-      return;
+    let loginSuccess = false;
+    while (!loginSuccess) {
+      loginSuccess = await loginToLAPI();
+      if (!loginSuccess) {
+        console.error('Failed to login - retrying in 30s...');
+        await new Promise(r => setTimeout(r, 30000));
+      }
     }
 
     console.log('Starting cache initialization...');
