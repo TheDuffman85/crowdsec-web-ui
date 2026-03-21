@@ -172,6 +172,16 @@ function parseRefreshInterval(intervalStr) {
   }
 }
 
+function parseBooleanEnv(value, defaultValue = false) {
+  if (value === undefined) return defaultValue;
+
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+
+  return defaultValue;
+}
+
 const LOOKBACK_MS = parseLookbackToMs(CROWDSEC_LOOKBACK_PERIOD);
 
 // Load persisted config (overrides env var if previously changed by user)
@@ -180,10 +190,13 @@ let REFRESH_INTERVAL_MS = persistedConfig.refresh_interval_ms !== undefined
   ? persistedConfig.refresh_interval_ms
   : parseRefreshInterval(process.env.CROWDSEC_REFRESH_INTERVAL || '30s');
 let refreshTimer = null; // Track the background refresh interval timer
+const BOOTSTRAP_RETRY_DELAY_MS = parseRefreshInterval(process.env.CROWDSEC_BOOTSTRAP_RETRY_DELAY || '30s');
+const BOOTSTRAP_RETRY_ENABLED = parseBooleanEnv(process.env.CROWDSEC_BOOTSTRAP_RETRY_ENABLED, true);
 
 console.log(`Cache Configuration:
   Lookback Period: ${CROWDSEC_LOOKBACK_PERIOD} (${LOOKBACK_MS}ms)
   Refresh Interval: ${getIntervalName(REFRESH_INTERVAL_MS)} (${persistedConfig.refresh_interval_ms !== undefined ? 'from saved config' : 'from env'})
+  Bootstrap Retry: ${BOOTSTRAP_RETRY_ENABLED ? getIntervalName(BOOTSTRAP_RETRY_DELAY_MS) : 'Disabled'}
 `);
 
 // Helper to parse Go duration strings (e.g. "1h2m3s") to milliseconds
@@ -477,6 +490,7 @@ async function initializeCache() {
   - Last update: ${cache.lastUpdate}
 `);
       updateLapiStatus(true);
+      return true;
 
     } catch (error) {
       console.error('Failed to initialize cache:', error.message);
@@ -488,6 +502,7 @@ async function initializeCache() {
         message: `Sync failed: ${error.message}`,
         completedAt: new Date().toISOString()
       });
+      return false;
     } finally {
       // Clear the promise so future calls can initialize again if needed
       initializationPromise = null;
@@ -501,7 +516,7 @@ async function initializeCache() {
 async function updateCacheDelta() {
   if (!cache.isInitialized || !cache.lastUpdate) {
     console.log('Cache not initialized, performing full load...');
-    await initializeCache();
+    await ensureBootstrapReady('delta update full load');
     return;
   }
 
@@ -636,6 +651,85 @@ let lastFullRefreshTime = Date.now();
 // Scheduler management functions
 let schedulerTimeout = null;
 let isSchedulerRunning = false;
+let bootstrapRetryTimeout = null;
+let bootstrapPromise = null;
+let bootstrapWaitLogged = false;
+
+function clearBootstrapRetryTimeout() {
+  if (bootstrapRetryTimeout) {
+    clearTimeout(bootstrapRetryTimeout);
+    bootstrapRetryTimeout = null;
+  }
+}
+
+function finalizeBootstrapRecovery() {
+  clearBootstrapRetryTimeout();
+  bootstrapWaitLogged = false;
+
+  if (REFRESH_INTERVAL_MS > 0 && !isSchedulerRunning) {
+    console.log('Bootstrap recovery completed. Starting background refresh scheduler.');
+    startRefreshScheduler();
+  }
+}
+
+function scheduleBootstrapRetry(reason = 'retry requested') {
+  if (!hasCredentials() || !BOOTSTRAP_RETRY_ENABLED || cache.isInitialized || bootstrapRetryTimeout) {
+    return;
+  }
+
+  const delayName = getIntervalName(BOOTSTRAP_RETRY_DELAY_MS);
+  console.log(`Bootstrap recovery will retry in ${delayName}: ${reason}.`);
+
+  bootstrapRetryTimeout = setTimeout(() => {
+    bootstrapRetryTimeout = null;
+    void ensureBootstrapReady('bootstrap retry');
+  }, BOOTSTRAP_RETRY_DELAY_MS);
+}
+
+async function ensureBootstrapReady(source = 'bootstrap') {
+  if (!hasCredentials()) {
+    return false;
+  }
+
+  if (cache.isInitialized) {
+    finalizeBootstrapRecovery();
+    return true;
+  }
+
+  if (bootstrapPromise) {
+    console.log(`Bootstrap recovery already in progress, waiting (${source})...`);
+    return bootstrapPromise;
+  }
+
+  bootstrapPromise = (async () => {
+    console.log(`Starting bootstrap recovery (${source})...`);
+
+    if (!hasToken()) {
+      const loginSuccess = await loginToLAPI(`bootstrap: ${source}`);
+      if (!loginSuccess) {
+        scheduleBootstrapRetry(`authentication failed during ${source}`);
+        return false;
+      }
+    }
+
+    const initialized = await initializeCache();
+    if (initialized) {
+      console.log(`Bootstrap recovery completed successfully (${source}).`);
+      finalizeBootstrapRecovery();
+      return true;
+    }
+
+    console.error(`Bootstrap recovery could not initialize the cache (${source}).`);
+    scheduleBootstrapRetry(`cache initialization failed during ${source}`);
+    return false;
+  })();
+
+  try {
+    return await bootstrapPromise;
+  } finally {
+    bootstrapPromise = null;
+  }
+}
 
 async function runSchedulerLoop() {
   if (!isSchedulerRunning) return;
@@ -654,9 +748,18 @@ async function runSchedulerLoop() {
   let doFullRefresh = !isIdle && (FULL_REFRESH_INTERVAL_MS > 0 && timeSinceLastFull > FULL_REFRESH_INTERVAL_MS);
 
   try {
-    if (doFullRefresh) {
+    if (!cache.isInitialized) {
+      if (!bootstrapWaitLogged) {
+        console.log('Background refresh is waiting for bootstrap recovery to complete.');
+        bootstrapWaitLogged = true;
+      }
+      scheduleBootstrapRetry('scheduler waiting for bootstrap');
+    } else if (doFullRefresh) {
       console.log(`Triggering FULL refresh (last full: ${Math.round(timeSinceLastFull / 1000)}s ago)...`);
       await initializeCache();
+      if (cache.isInitialized) {
+        finalizeBootstrapRecovery();
+      }
       lastFullRefreshTime = Date.now();
       console.log('Full refresh completed.');
     } else {
@@ -932,9 +1035,13 @@ async function activityTrackerMiddleware(c, next) {
  */
 const ensureAuth = async (c, next) => {
   if (!hasToken()) {
-    const success = await loginToLAPI();
+    const success = await loginToLAPI('request authentication');
     if (!success) {
       return c.json({ error: 'Failed to authenticate with CrowdSec LAPI' }, 502);
+    }
+
+    if (!cache.isInitialized) {
+      void ensureBootstrapReady('post-auth recovery');
     }
   }
   await next();
@@ -947,7 +1054,7 @@ const ensureAuth = async (c, next) => {
 const handleApiError = async (error, c, action, replayCallback) => {
   if (error.response && error.response.status === 401) {
     console.log(`Received 401 during ${action}, attempting re-login...`);
-    const success = await loginToLAPI();
+    const success = await loginToLAPI(`401 recovery: ${action}`);
     if (success && replayCallback) {
       try {
         return await replayCallback();
@@ -1104,7 +1211,7 @@ app.get(`${BASE_PATH}/api/alerts`, ensureAuth, async (c) => {
 
     // Ensure cache is initialized
     if (!cache.isInitialized) {
-      await initializeCache();
+      await ensureBootstrapReady('alerts request');
     }
 
     // Get lookback cutoff
@@ -1199,7 +1306,7 @@ app.get(`${BASE_PATH}/api/decisions`, ensureAuth, async (c) => {
 
     // Ensure cache is initialized
     if (!cache.isInitialized) {
-      await initializeCache();
+      await ensureBootstrapReady('decisions request');
     }
 
     const includeExpired = c.req.query('include_expired') === 'true';
@@ -1407,8 +1514,7 @@ app.post(`${BASE_PATH}/api/cache/clear`, ensureAuth, async (c) => {
     cache.lastUpdate = null;
     isFirstSync = true;
 
-    await initializeCache();
-    startRefreshScheduler();
+    await ensureBootstrapReady('manual cache clear');
 
     return c.json({
       success: true,
@@ -1435,7 +1541,7 @@ app.get(`${BASE_PATH}/api/stats/alerts`, ensureAuth, async (c) => {
 
     // Ensure cache is initialized
     if (!cache.isInitialized) {
-      await initializeCache();
+      await ensureBootstrapReady('stats alerts request');
     }
 
     // Get lookback cutoff
@@ -1481,7 +1587,7 @@ app.get(`${BASE_PATH}/api/stats/decisions`, ensureAuth, async (c) => {
 
     // Ensure cache is initialized
     if (!cache.isInitialized) {
-      await initializeCache();
+      await ensureBootstrapReady('stats decisions request');
     }
 
     // Get all decisions within lookback period (plus any still active)
@@ -1668,21 +1774,9 @@ if (BASE_PATH) {
 
 // Initialize cache on startup
 (async () => {
-  // First, ensure we're logged in
   if (hasCredentials()) {
-    console.log('Ensuring authentication before cache initialization...');
-    const loginSuccess = await loginToLAPI();
-
-    if (!loginSuccess) {
-      console.error('Failed to login - cache initialization aborted');
-      return;
-    }
-
-    console.log('Starting cache initialization...');
-    await initializeCache();
-
-    // Start background refresh scheduler
     startRefreshScheduler();
+    void ensureBootstrapReady('startup');
   } else {
     console.warn('Cache initialization skipped - credentials not configured');
   }
