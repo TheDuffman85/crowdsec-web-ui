@@ -13,6 +13,7 @@ const CROWDSEC_LOOKBACK_PERIOD = process.env.CROWDSEC_LOOKBACK_PERIOD || '168h';
 
 // Token state (module-level)
 let requestToken = null;
+let loginPromise = null;
 
 // LAPI connection status
 const lapiStatus = {
@@ -144,42 +145,53 @@ async function fetchLAPI(endpoint, options = {}, isRetry = false) {
  * Login to CrowdSec LAPI and obtain authentication token
  * @returns {Promise<boolean>} True if login successful
  */
-async function login() {
-    try {
-        console.log(`Attempting login to CrowdSec LAPI at ${CROWDSEC_URL}...`);
-        const response = await fetchLAPI('/v1/watchers/login', {
-            method: 'POST',
-            body: {
-                machine_id: CROWDSEC_USER,
-                password: CROWDSEC_PASSWORD,
-                scenarios: ["manual/web-ui"]
-            }
-        });
+async function login(context = 'general') {
+    const contextLabel = context ? ` (${context})` : '';
 
-        if (response.data && response.data.code === 200 && response.data.token) {
-            requestToken = response.data.token;
-            console.log('Successfully logged in to CrowdSec LAPI');
-            updateLapiStatus(true);
-            return true;
-        } else if (response.data && response.data.token) {
-            // Some versions might just return the token object directly
-            requestToken = response.data.token;
-            console.log('Successfully logged in to CrowdSec LAPI');
-            updateLapiStatus(true);
-            return true;
-        } else {
-            console.error('Login response did not contain expected token');
-            updateLapiStatus(false, { message: 'Login response invalid' });
-            return false;
-        }
-    } catch (error) {
-        console.error(`Login failed: ${error.message}`);
-        updateLapiStatus(false, error);
-        if (error.response) {
-            console.error('Response status:', error.response.status);
-        }
-        return false;
+    if (loginPromise) {
+        return loginPromise;
     }
+
+    loginPromise = (async () => {
+        try {
+            console.log(`Authenticating with CrowdSec LAPI${contextLabel} at ${CROWDSEC_URL}...`);
+            const response = await fetchLAPI('/v1/watchers/login', {
+                method: 'POST',
+                body: {
+                    machine_id: CROWDSEC_USER,
+                    password: CROWDSEC_PASSWORD,
+                    scenarios: ["manual/web-ui"]
+                }
+            });
+
+            if (response.data && response.data.code === 200 && response.data.token) {
+                requestToken = response.data.token;
+                console.log(`Authentication succeeded${contextLabel}.`);
+                updateLapiStatus(true);
+                return true;
+            } else if (response.data && response.data.token) {
+                // Some versions might just return the token object directly
+                requestToken = response.data.token;
+                console.log(`Authentication succeeded${contextLabel}.`);
+                updateLapiStatus(true);
+                return true;
+            } else {
+                console.error(`Authentication failed${contextLabel}: login response did not contain a token.`);
+                updateLapiStatus(false, { message: 'Login response invalid' });
+                return false;
+            }
+        } catch (error) {
+            requestToken = null;
+            const statusSuffix = error.response?.status ? ` [status ${error.response.status}]` : '';
+            console.error(`Authentication failed${contextLabel}: ${error.message}${statusSuffix}`);
+            updateLapiStatus(false, error);
+            return false;
+        } finally {
+            loginPromise = null;
+        }
+    })();
+
+    return loginPromise;
 }
 
 // ============================================================================

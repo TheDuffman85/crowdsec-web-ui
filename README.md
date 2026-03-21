@@ -173,6 +173,10 @@ services:
       # Optional: Interval for full cache refresh (default: 5m)
       # Forces a complete data reload when active, skipped when idle.
       - CROWDSEC_FULL_REFRESH_INTERVAL=5m
+      # Optional: Background retry delay for initial LAPI/bootstrap recovery (default: 30s)
+      - CROWDSEC_BOOTSTRAP_RETRY_DELAY=30s
+      # Optional: Enable automatic bootstrap retry after startup/login failure (default: true)
+      - CROWDSEC_BOOTSTRAP_RETRY_ENABLED=true
       # Optional: Base path for reverse proxy deployments (e.g., /crowdsec)
       # - BASE_PATH=/crowdsec
     volumes:
@@ -266,6 +270,8 @@ location /crowdsec/ {
 
 The Docker image includes a built-in `HEALTHCHECK` that verifies the web server is responding. Docker will automatically mark the container as `healthy` or `unhealthy`.
 
+Startup is non-blocking: if CrowdSec LAPI is temporarily unavailable, the Web UI stays up and continues retrying cache/bootstrap initialization in the background. This means the container can become `healthy` before the initial CrowdSec sync has completed.
+
 **Endpoint:** `GET /api/health` (no authentication required)
 
 ```bash
@@ -306,6 +312,7 @@ The Web UI maintains its own local history of alerts and decisions. Data fetched
 
 - Alerts are kept for the duration of `CROWDSEC_LOOKBACK_PERIOD` (default: 7 days), then automatically cleaned up.
 - On restart, existing data is reused and new data from LAPI is merged in.
+- If LAPI is unavailable during startup, the Web UI keeps retrying bootstrap in the background using `CROWDSEC_BOOTSTRAP_RETRY_DELAY` until it can initialize automatically.
 - To force a full cache reset, use the `POST /api/cache/clear` endpoint.
 
 ## Local Development
@@ -323,6 +330,8 @@ The Web UI maintains its own local history of alerts and decisions. Data fetched
     CROWDSEC_USER=crowdsec-web-ui
     CROWDSEC_PASSWORD=<your-secure-password>
     CROWDSEC_REFRESH_INTERVAL=30s
+    CROWDSEC_BOOTSTRAP_RETRY_DELAY=30s
+    CROWDSEC_BOOTSTRAP_RETRY_ENABLED=true
     # Optional: Base path for reverse proxy deployments
     # BASE_PATH=/crowdsec
     ```
