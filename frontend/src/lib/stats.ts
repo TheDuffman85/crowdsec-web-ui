@@ -2,20 +2,20 @@
  * Statistics utility functions for dashboard analytics
  */
 
-import type { AggregatedChartPoint, DateRangeSelection, StatsAlert, StatsDecision } from '../types';
+import type {
+    AggregatedChartPoint,
+    DateRangeSelection,
+    StatListItem,
+    StatsAlert,
+    StatsDecision,
+    WorldMapDatum,
+} from '../types';
 import { getCountryName } from './utils';
 
 type CountrySummary = {
     count: number;
     label: string;
     code: string;
-};
-
-type CounterSummary = {
-    label: string;
-    count: number;
-    value?: string;
-    countryCode?: string;
 };
 
 type TimestampedItem = {
@@ -41,7 +41,7 @@ export function filterLastNDays<T extends TimestampedItem>(items: T[], days = 7)
 /**
  * Get top IPs by alert count
  */
-export function getTopIPs(alerts: StatsAlert[], limit = 10): CounterSummary[] {
+export function getTopIPs(alerts: StatsAlert[], limit = 10): StatListItem[] {
     const ipCounts: Record<string, number> = {};
 
     alerts.forEach(alert => {
@@ -60,7 +60,7 @@ export function getTopIPs(alerts: StatsAlert[], limit = 10): CounterSummary[] {
 /**
  * Get top countries by alert count
  */
-export function getTopCountries(alerts: StatsAlert[], limit = 10): CounterSummary[] {
+export function getTopCountries(alerts: StatsAlert[], limit = 10): StatListItem[] {
     const countryStats: Record<string, CountrySummary> = {};
 
     alerts.forEach(alert => {
@@ -91,7 +91,7 @@ export function getTopCountries(alerts: StatsAlert[], limit = 10): CounterSummar
 /**
  * Get ALL countries with alert counts (not limited)
  */
-export function getAllCountries(alerts: StatsAlert[]): CounterSummary[] {
+export function getAllCountries(alerts: StatsAlert[]): WorldMapDatum[] {
     const countryStats: Record<string, CountrySummary> = {};
 
     alerts.forEach(alert => {
@@ -117,7 +117,7 @@ export function getAllCountries(alerts: StatsAlert[]): CounterSummary[] {
 /**
  * Get top scenarios by alert count
  */
-export function getTopScenarios(alerts: StatsAlert[], limit = 10): CounterSummary[] {
+export function getTopScenarios(alerts: StatsAlert[], limit = 10): StatListItem[] {
     const scenarioCounts: Record<string, number> = {};
 
     alerts.forEach(alert => {
@@ -136,7 +136,7 @@ export function getTopScenarios(alerts: StatsAlert[], limit = 10): CounterSummar
 /**
  * Get top Autonomous Systems by alert count
  */
-export function getTopAS(alerts: StatsAlert[], limit = 10): CounterSummary[] {
+export function getTopAS(alerts: StatsAlert[], limit = 10): StatListItem[] {
     const asCounts: Record<string, number> = {};
 
     alerts.forEach(alert => {
@@ -156,7 +156,7 @@ export function getTopAS(alerts: StatsAlert[], limit = 10): CounterSummary[] {
  * Get top Targets by alert count
  * Uses pre-computed target field from backend (set during database import)
  */
-export function getTopTargets(alerts: Array<StatsAlert | StatsDecision>, limit = 10): CounterSummary[] {
+export function getTopTargets(alerts: Array<StatsAlert | StatsDecision>, limit = 10): StatListItem[] {
     const targetCounts: Record<string, number> = {};
 
     alerts.forEach(alert => {

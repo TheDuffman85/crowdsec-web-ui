@@ -1,11 +1,18 @@
+import { lazy, Suspense } from 'react';
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import { Layout } from "./components/Layout";
-import { Dashboard } from "./pages/Dashboard";
-import { Alerts } from "./pages/Alerts";
-import { Decisions } from "./pages/Decisions";
-import { RefreshProvider, useRefresh } from "./contexts/RefreshContext";
+import { RefreshProvider } from "./contexts/RefreshContext";
+import { useRefresh } from "./contexts/useRefresh";
 import { SyncOverlay } from "./components/SyncOverlay";
 import { getBasePath } from "./lib/basePath";
+
+const Dashboard = lazy(async () => ({ default: (await import('./pages/Dashboard')).Dashboard }));
+const Alerts = lazy(async () => ({ default: (await import('./pages/Alerts')).Alerts }));
+const Decisions = lazy(async () => ({ default: (await import('./pages/Decisions')).Decisions }));
+
+function RouteFallback() {
+  return <div className="text-center p-8 text-gray-500">Loading...</div>;
+}
 
 // Inner component to access refresh context
 function AppContent() {
@@ -17,9 +24,30 @@ function AppContent() {
       <BrowserRouter basename={getBasePath() || '/'}>
         <Routes>
           <Route path="/" element={<Layout />}>
-            <Route index element={<Dashboard />} />
-            <Route path="alerts" element={<Alerts />} />
-            <Route path="decisions" element={<Decisions />} />
+            <Route
+              index
+              element={(
+                <Suspense fallback={<RouteFallback />}>
+                  <Dashboard />
+                </Suspense>
+              )}
+            />
+            <Route
+              path="alerts"
+              element={(
+                <Suspense fallback={<RouteFallback />}>
+                  <Alerts />
+                </Suspense>
+              )}
+            />
+            <Route
+              path="decisions"
+              element={(
+                <Suspense fallback={<RouteFallback />}>
+                  <Decisions />
+                </Suspense>
+              )}
+            />
           </Route>
         </Routes>
       </BrowserRouter>

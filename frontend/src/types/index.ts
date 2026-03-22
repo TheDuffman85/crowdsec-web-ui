@@ -6,6 +6,7 @@ export type {
   AlertDecision,
   AlertEvent,
   AlertMeta,
+  AlertMetaValue,
   AlertRecord,
   AlertSource,
   ConfigResponse,
@@ -39,6 +40,21 @@ export interface AggregatedChartPoint {
   label: string;
   fullDate: string;
 }
+
+export interface StatListItem {
+  label: string;
+  count: number;
+  value?: string;
+  countryCode?: string;
+}
+
+export interface WorldMapDatum {
+  label: string;
+  count: number;
+  countryCode: string;
+}
+
+export type ActivityChartSeriesPoint = AggregatedChartPoint;
 
 export interface RefreshContextValue {
   lastUpdated: Date | null;

@@ -124,6 +124,16 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   let bootstrapPromise: Promise<boolean> | null = null;
   let bootstrapWaitLogged = false;
 
+  console.log(`Cache Configuration:
+  Lookback Period: ${config.lookbackPeriod} (${config.lookbackMs}ms)
+  Refresh Interval: ${getIntervalName(refreshIntervalMs)} (${persistedConfig.refresh_interval_ms !== undefined ? 'from saved config' : 'from env'})
+  Bootstrap Retry: ${config.bootstrapRetryEnabled ? getIntervalName(config.bootstrapRetryDelayMs) : 'Disabled'}
+`);
+
+  if (!lapiClient.hasCredentials()) {
+    console.warn('WARNING: CROWDSEC_USER and CROWDSEC_PASSWORD must be set for full functionality.');
+  }
+
   app.use('*', compress());
   app.use('*', async (context, next) => {
     await next();
@@ -165,16 +175,19 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   });
 
   app.get(`${config.basePath}/api/alerts/:id`, ensureAuth, async (context) => {
-      const alertId = String(context.req.param('id'));
+    const alertId = String(context.req.param('id'));
     if (!/^\d+$/.test(alertId)) {
       return context.json({ error: 'Invalid alert ID' }, 400);
     }
 
     const doRequest = async () => {
       const alertData = await lapiClient.getAlertById(alertId);
-      const payload = Array.isArray(alertData)
-        ? alertData.map((item) => hydrateAlertWithDecisions(item as AlertRecord))
-        : hydrateAlertWithDecisions(alertData as AlertRecord);
+      const normalizedAlert = normalizeAlertDetail(alertData, alertId);
+      if (!normalizedAlert) {
+        return context.json({ error: 'Alert not found' }, 404);
+      }
+
+      const payload = hydrateAlertWithDecisions(normalizedAlert);
       return context.json(payload);
     };
 
@@ -267,6 +280,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       refreshIntervalMs = nextInterval;
       savePersistedConfig(database, { refresh_interval_ms: nextInterval });
       startRefreshScheduler();
+      console.log(`Refresh interval changed: ${previous} -> ${interval} (${nextInterval}ms)`);
 
       return context.json({
         success: true,
@@ -283,6 +297,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
   app.post(`${config.basePath}/api/cache/clear`, ensureAuth, async (context) => {
     try {
+      console.log('Manual cache clear requested');
       database.clearSyncData();
       cache.isInitialized = false;
       cache.lastUpdate = null;
@@ -402,6 +417,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       }
 
       const result = await lapiClient.addDecision(ip, type, duration, reason.slice(0, 256));
+      console.log('Refreshing cache after adding decision...');
       await updateCacheDelta();
       return context.json({ message: 'Decision added (via Alert)', result });
     };
@@ -421,6 +437,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
     const doRequest = async () => {
       const result = await lapiClient.deleteDecision(decisionId);
+      console.log(`Removing decision ${decisionId} from local cache...`);
       database.deleteDecision(decisionId);
       return context.json((result as object) || { message: 'Deleted' });
     };
@@ -455,7 +472,13 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   );
 
   staticFiles.forEach((file) => {
-    app.use(`${config.basePath}${file}`, serveStatic({ path: path.join(distRoot, file) }));
+    app.use(
+      `${config.basePath}${file}`,
+      serveStatic({
+        root: distRoot,
+        rewriteRequestPath: (requestPath) => (config.basePath ? requestPath.replace(config.basePath, '') : requestPath),
+      }),
+    );
   });
 
   app.get(`${config.basePath}/site.webmanifest`, (context) =>
@@ -575,6 +598,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   async function syncHistory(): Promise<number> {
     const showOverlay = isFirstSync;
     isFirstSync = false;
+    console.log('Starting historical data sync...');
 
     updateSyncStatus({
       isSyncing: showOverlay,
@@ -596,11 +620,13 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       const progress = Math.round(((currentEnd - lookbackStart) / totalDuration) * 100);
       const sinceDuration = toDuration(currentStart);
       const untilDuration = toDuration(currentEnd);
+      const progressMessage = `Syncing: ${sinceDuration} -> ${untilDuration} ago (${totalAlerts} alerts)`;
 
       updateSyncStatus({
         progress: Math.min(progress, 90),
-        message: `Syncing: ${sinceDuration} → ${untilDuration} ago (${totalAlerts} alerts)`,
+        message: `Syncing: ${sinceDuration} -> ${untilDuration} ago (${totalAlerts} alerts)`,
       });
+      console.log(progressMessage);
 
       try {
         const alerts = await lapiClient.fetchAlerts(sinceDuration, untilDuration);
@@ -612,6 +638,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
           });
           insertTransaction(alerts);
           totalAlerts += alerts.length;
+          console.log(`  -> Imported ${alerts.length} alerts.`);
         }
       } catch (error: any) {
         console.error('Failed to sync chunk:', error.message);
@@ -631,6 +658,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
           }
         });
         refreshTransaction(activeDecisionAlerts);
+        console.log(`  -> Synced ${activeDecisionAlerts.length} alerts with active decisions.`);
       }
     } catch (error: any) {
       console.error('Failed to sync active decisions:', error.message);
@@ -642,25 +670,33 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       message: `Sync complete. ${totalAlerts} alerts imported.`,
       completedAt: new Date().toISOString(),
     });
+    console.log(`Historical sync complete. Total imported: ${totalAlerts}`);
 
     return totalAlerts;
   }
 
   async function initializeCache(): Promise<boolean> {
     if (initializationPromise) {
+      console.log('Cache initialization already in progress, waiting...');
       return initializationPromise;
     }
 
     initializationPromise = (async () => {
       try {
+        console.log('Initializing cache with chunked data load...');
         await syncHistory();
         cache.lastUpdate = new Date().toISOString();
         cache.isInitialized = true;
         lapiClient.updateStatus(true);
+        console.log(`Cache initialized successfully:
+  Alerts: ${database.countAlerts()}
+  Refresh Interval: ${getIntervalName(refreshIntervalMs)}
+`);
         return true;
       } catch (error: any) {
         cache.isInitialized = false;
         lapiClient.updateStatus(false, error);
+        console.error('Failed to initialize cache:', error.message);
         updateSyncStatus({
           isSyncing: false,
           progress: 0,
@@ -678,6 +714,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
   async function updateCacheDelta(): Promise<void> {
     if (!cache.isInitialized || !cache.lastUpdate) {
+      console.log('Cache not initialized, performing full load...');
       await ensureBootstrapReady('delta update full load');
       return;
     }
@@ -685,6 +722,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     try {
       const diffSeconds = Math.ceil((Date.now() - new Date(cache.lastUpdate).getTime()) / 1_000) + 10;
       const sinceDuration = `${diffSeconds}s`;
+      console.log(`Fetching delta updates (since: ${sinceDuration})...`);
       const [newAlerts, activeDecisionAlerts] = await Promise.all([
         lapiClient.fetchAlerts(sinceDuration, null),
         lapiClient.fetchAlerts(null, null, true),
@@ -697,6 +735,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
           }
         });
         insertTransaction(newAlerts);
+        console.log(`Delta update: ${newAlerts.length} new alerts`);
       }
 
       if (activeDecisionAlerts.length > 0) {
@@ -738,6 +777,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
       cache.lastUpdate = new Date().toISOString();
       lapiClient.updateStatus(true);
+      console.log(`Delta update complete: ${newAlerts.length} alerts, ${activeDecisionAlerts.length} active decision alerts refreshed`);
     } catch (error: any) {
       console.error('Failed to update cache delta:', error.message);
       lapiClient.updateStatus(false, error);
@@ -747,8 +787,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   function cleanupOldData(): void {
     const cutoff = new Date(Date.now() - config.lookbackMs).toISOString();
     try {
-      database.deleteOldAlerts(cutoff);
-      database.deleteOldDecisions(cutoff);
+      const removedAlerts = database.deleteOldAlerts(cutoff);
+      const removedDecisions = database.deleteOldDecisions(cutoff);
+      console.log(`Cleanup: Removed ${removedAlerts} old alerts, ${removedDecisions} old decisions`);
     } catch (error: any) {
       console.error('Cleanup failed:', error.message);
     }
@@ -770,6 +811,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     clearBootstrapRetryTimeout();
     bootstrapWaitLogged = false;
     if (refreshIntervalMs > 0 && !isSchedulerRunning) {
+      console.log('Bootstrap recovery completed. Starting background refresh scheduler.');
       startRefreshScheduler();
     }
   }
@@ -797,10 +839,12 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
 
     if (bootstrapPromise) {
+      console.log(`Bootstrap recovery already in progress, waiting (${source})...`);
       return bootstrapPromise;
     }
 
     bootstrapPromise = (async () => {
+      console.log(`Starting bootstrap recovery (${source})...`);
       if (!lapiClient.hasToken()) {
         const loginSuccess = await lapiClient.login(`bootstrap: ${source}`);
         if (!loginSuccess) {
@@ -812,9 +856,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       const initialized = await initializeCache();
       if (initialized) {
         finalizeBootstrapRecovery();
+        console.log(`Bootstrap recovery completed successfully (${source}).`);
         return true;
       }
 
+      console.error(`Bootstrap recovery could not initialize the cache (${source}).`);
       scheduleBootstrapRetry(`cache initialization failed during ${source}`);
       return false;
     })();
@@ -840,15 +886,19 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       if (!cache.isInitialized) {
         if (!bootstrapWaitLogged) {
           bootstrapWaitLogged = true;
+          console.log('Background refresh is waiting for bootstrap recovery to complete.');
         }
         scheduleBootstrapRetry('scheduler waiting for bootstrap');
       } else if (doFullRefresh) {
+        console.log(`Triggering FULL refresh (last full: ${Math.round((now - lastFullRefreshTime) / 1000)}s ago)...`);
         await initializeCache();
         if (cache.isInitialized) {
           finalizeBootstrapRecovery();
+          console.log('Full refresh completed.');
         }
         lastFullRefreshTime = Date.now();
       } else {
+        console.log(`Background refresh triggered (${isIdle ? 'IDLE' : 'ACTIVE'})...`);
         await updateCache();
       }
     } catch (error) {
@@ -862,9 +912,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
     if (nextInterval > 0 && currentIdle && nextInterval < config.idleRefreshIntervalMs) {
       nextInterval = config.idleRefreshIntervalMs;
+      console.log(`Idle mode active. Next refresh in ${getIntervalName(nextInterval)}.`);
     }
 
     if (nextInterval <= 0) {
+      console.log('Scheduler in manual mode. Stopping loop.');
       isSchedulerRunning = false;
       return;
     }
@@ -875,16 +927,23 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   }
 
   function startRefreshScheduler(): void {
-    stopRefreshScheduler();
-    if (refreshIntervalMs > 0) {
-      isSchedulerRunning = true;
-      schedulerTimeout = setTimeout(() => {
-        void runSchedulerLoop();
-      }, refreshIntervalMs);
+    stopRefreshScheduler(false);
+    if (refreshIntervalMs <= 0) {
+      console.log('Manual refresh mode - cache will update on each request');
+      return;
     }
+
+    console.log(`Starting smart scheduler (active: ${getIntervalName(refreshIntervalMs)}, idle: ${getIntervalName(config.idleRefreshIntervalMs)})...`);
+    isSchedulerRunning = true;
+    schedulerTimeout = setTimeout(() => {
+      void runSchedulerLoop();
+    }, refreshIntervalMs);
   }
 
-  function stopRefreshScheduler(): void {
+  function stopRefreshScheduler(logStop = true): void {
+    if (logStop && (isSchedulerRunning || schedulerTimeout || bootstrapRetryTimeout)) {
+      console.log('Stopping refresh scheduler...');
+    }
     isSchedulerRunning = false;
     if (schedulerTimeout) {
       clearTimeout(schedulerTimeout);
@@ -902,6 +961,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     lastRequestTime = now;
 
     if (wasIdle && isSchedulerRunning) {
+      console.log('System waking up from idle mode. Triggering immediate refresh...');
       if (schedulerTimeout) {
         clearTimeout(schedulerTimeout);
       }
@@ -933,22 +993,27 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     replayCallback: (() => Promise<Response>) | null,
   ): Promise<Response> {
     if (error.response?.status === 401) {
+      console.log(`Received 401 during ${action}, attempting re-login...`);
       const success = await lapiClient.login(`401 recovery: ${action}`);
       if (success && replayCallback) {
         try {
           return await replayCallback();
         } catch (retryError) {
+          console.error(`Retry failed for ${action}: ${(retryError as AnyError).message}`);
           error = retryError as AnyError;
         }
       }
     }
 
     if (error.response) {
+      console.error(`Error ${action}: ${error.response.status}`);
       return context.json({ error: `Request failed with status ${error.response.status}` }, error.response.status);
     }
     if (error.request) {
+      console.error(`Error ${action}: No response received`);
       return context.json({ error: 'Bad Gateway: No response from CrowdSec LAPI' }, 502);
     }
+    console.error(`Error ${action}: ${error.message}`);
     return context.json({ error: 'Internal server error' }, 500);
   }
 
@@ -988,6 +1053,20 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     return clone;
   }
 
+  function normalizeAlertDetail(input: unknown, alertId: string): AlertRecord | null {
+    if (Array.isArray(input)) {
+      const matchingAlert = input.find((candidate) => String((candidate as AlertRecord | undefined)?.id) === alertId);
+      const alert = matchingAlert ?? input[0];
+      return alert ? (alert as AlertRecord) : null;
+    }
+
+    if (input && typeof input === 'object') {
+      return input as AlertRecord;
+    }
+
+    return null;
+  }
+
   if (options.startBackgroundTasks) {
     startBackgroundTasks();
   }
@@ -999,7 +1078,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     database,
     lapiClient,
     startBackgroundTasks,
-    stopBackgroundTasks: stopRefreshScheduler,
+    stopBackgroundTasks: () => stopRefreshScheduler(),
     getSyncStatus: () => ({ ...syncStatus }),
     getLapiStatus: () => lapiClient.getStatus(),
   };
@@ -1018,7 +1097,9 @@ function loadPersistedConfig(database: CrowdsecDatabase): PersistedConfig {
   try {
     const row = database.getMeta('refresh_interval_ms');
     if (row?.value !== undefined) {
-      return { refresh_interval_ms: Number.parseInt(row.value, 10) };
+      const config = { refresh_interval_ms: Number.parseInt(row.value, 10) };
+      console.log('Loaded persisted config from database:', config);
+      return config;
     }
   } catch (error) {
     console.error('Error loading config from database:', error);
@@ -1032,6 +1113,7 @@ function savePersistedConfig(database: CrowdsecDatabase, config: PersistedConfig
     if (config.refresh_interval_ms !== undefined) {
       database.setMeta('refresh_interval_ms', String(config.refresh_interval_ms));
     }
+    console.log('Saved config to database:', config);
   } catch (error) {
     console.error('Error saving config to database:', error);
   }

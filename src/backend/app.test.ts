@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
 import type { AlertRecord } from '../../shared/contracts';
@@ -48,7 +48,16 @@ function destroyTempDir(): void {
   rmSync(tempDir, { recursive: true, force: true });
 }
 
-function createController() {
+function createTestDistRoot(): string {
+  const distRoot = path.join(tempDir, 'dist');
+  mkdirSync(path.join(distRoot, 'assets'), { recursive: true });
+  writeFileSync(path.join(distRoot, 'index.html'), '<!doctype html><html><head></head><body><div id="root"></div></body></html>');
+  writeFileSync(path.join(distRoot, 'world-50m.json'), '{"type":"Topology"}');
+  writeFileSync(path.join(distRoot, 'logo.svg'), '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+  return distRoot;
+}
+
+function createController(options: { alertDetailPayload?: unknown } = {}) {
   const config = createRuntimeConfig({
     PORT: '3000',
     BASE_PATH: '/crowdsec',
@@ -73,7 +82,7 @@ function createController() {
       return Response.json([]);
     }
     if (url.endsWith('/v1/alerts/1') && (!init?.method || init.method === 'GET')) {
-      return Response.json(sampleAlert());
+      return Response.json(options.alertDetailPayload ?? sampleAlert());
     }
     if (url.endsWith('/v1/alerts/1') && init?.method === 'DELETE') {
       return Response.json({ message: 'Deleted' });
@@ -100,6 +109,7 @@ function createController() {
     config,
     database,
     lapiClient,
+    distRoot: createTestDistRoot(),
     updateChecker: async () => ({ update_available: true, remote_version: '2.0.0' }),
   });
 
@@ -209,6 +219,14 @@ describe('createApp', () => {
     expect(manifest.status).toBe(200);
     expect(((await manifest.json()) as { start_url: string }).start_url).toBe('/crowdsec');
 
+    const worldMap = await controller.fetch(new Request('http://localhost/crowdsec/world-50m.json'));
+    expect(worldMap.status).toBe(200);
+    expect((await worldMap.text()).startsWith('{"type"')).toBe(true);
+
+    const logo = await controller.fetch(new Request('http://localhost/crowdsec/logo.svg'));
+    expect(logo.status).toBe(200);
+    expect((await logo.text()).includes('<svg')).toBe(true);
+
     const redirect = await controller.fetch(new Request('http://localhost/'));
     expect(redirect.status).toBe(302);
     expect(redirect.headers.get('location')).toBe('/crowdsec/');
@@ -245,6 +263,21 @@ describe('createApp', () => {
       }),
     );
     expect(badDecision.status).toBe(400);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('normalizes array-shaped alert detail payloads to a single alert', async () => {
+    const { controller, database, lapiClient } = createController({
+      alertDetailPayload: [sampleAlert()],
+    });
+    await lapiClient.login();
+
+    const alertDetails = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts/1'));
+    expect(alertDetails.status).toBe(200);
+    expect(((await alertDetails.json()) as { id: number }).id).toBe(1);
 
     controller.stopBackgroundTasks();
     database.close();

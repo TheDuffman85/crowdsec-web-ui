@@ -1,8 +1,25 @@
-// @ts-nocheck
 import { Badge } from "./ui/Badge";
 import { Collapsible } from "./ui/Collapsible";
 import { getHubUrl } from "../lib/utils";
 import { ExternalLink, Shield } from "lucide-react";
+import type { AlertEvent, AlertMetaValue } from '../types';
+
+interface EventCardProps {
+    event: AlertEvent;
+    index: number;
+}
+
+function formatMetaValue(value: AlertMetaValue | undefined): string | undefined {
+    if (value == null || value === '') {
+        return undefined;
+    }
+
+    if (typeof value === 'object') {
+        return JSON.stringify(value);
+    }
+
+    return String(value);
+}
 
 // Meta keys that get special styled rendering in the summary section
 const STYLED_META_KEYS = new Set([
@@ -16,32 +33,32 @@ const STYLED_META_KEYS = new Set([
 // Excluded from display due to PII/GDPR concerns (per CrowdSec developer guidance)
 const EXCLUDED_META_KEYS = new Set(['context']);
 
-export function EventCard({ event, index }) {
-    const getMeta = (key) => event.meta?.find(m => m.key === key)?.value;
+export function EventCard({ event, index }: EventCardProps) {
+    const getMeta = (key: string): AlertMetaValue | undefined => event.meta?.find((meta) => meta.key === key)?.value;
 
-    const isAppSecEvent = event.meta?.some(m =>
-        m.key === 'matched_zones' || m.key === 'rule_name' || m.key === 'appsec_action'
+    const isAppSecEvent = event.meta?.some((meta) =>
+        meta.key === 'matched_zones' || meta.key === 'rule_name' || meta.key === 'appsec_action'
     );
 
     // Known fields
-    const ruleName = getMeta('rule_name');
-    const matchedZones = getMeta('matched_zones');
-    const ruleIds = getMeta('rule_ids');
-    const message = getMeta('msg') || getMeta('message');
-    const targetFqdn = getMeta('target_fqdn');
-    const targetHost = getMeta('target_host');
-    const targetUri = getMeta('target_uri') || getMeta('uri');
-    const traefikRouter = getMeta('traefik_router_name');
-    const httpVerb = getMeta('http_verb');
-    const httpPath = getMeta('http_path');
-    const httpStatus = getMeta('http_status');
-    const httpUserAgent = getMeta('http_user_agent');
-    const service = getMeta('service');
+    const ruleName = formatMetaValue(getMeta('rule_name'));
+    const matchedZones = formatMetaValue(getMeta('matched_zones'));
+    const ruleIds = formatMetaValue(getMeta('rule_ids'));
+    const message = formatMetaValue(getMeta('msg')) || formatMetaValue(getMeta('message'));
+    const targetFqdn = formatMetaValue(getMeta('target_fqdn'));
+    const targetHost = formatMetaValue(getMeta('target_host'));
+    const targetUri = formatMetaValue(getMeta('target_uri')) || formatMetaValue(getMeta('uri'));
+    const traefikRouter = formatMetaValue(getMeta('traefik_router_name'));
+    const httpVerb = formatMetaValue(getMeta('http_verb'));
+    const httpPath = formatMetaValue(getMeta('http_path'));
+    const httpStatus = formatMetaValue(getMeta('http_status'));
+    const httpUserAgent = formatMetaValue(getMeta('http_user_agent'));
+    const service = formatMetaValue(getMeta('service'));
 
     // Additional meta fields not covered by styled rendering
     // Filter out entries with empty/null/undefined values
-    const additionalMeta = event.meta?.filter(m =>
-        !STYLED_META_KEYS.has(m.key) && !EXCLUDED_META_KEYS.has(m.key) && m.value != null && m.value !== ''
+    const additionalMeta = event.meta?.filter((meta) =>
+        !STYLED_META_KEYS.has(meta.key) && !EXCLUDED_META_KEYS.has(meta.key) && meta.value != null && meta.value !== ''
     ) || [];
 
     return (
@@ -66,7 +83,7 @@ export function EventCard({ event, index }) {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                     <div>
                         <span className="text-gray-500">Timestamp:</span>{' '}
-                        <span className="font-mono text-xs">{event.timestamp}</span>
+                        <span className="font-mono text-xs">{event.timestamp || '-'}</span>
                     </div>
                     {service && (
                         <div>
@@ -165,11 +182,11 @@ export function EventCard({ event, index }) {
                         defaultOpen={false}
                     >
                         <div className="mt-1 bg-white dark:bg-gray-950 rounded border border-gray-200 dark:border-gray-800 divide-y divide-gray-100 dark:divide-gray-800">
-                            {additionalMeta.map((m, i) => (
+                            {additionalMeta.map((meta, i) => (
                                 <div key={i} className="grid grid-cols-[minmax(100px,auto)_1fr] gap-3 px-3 py-1.5 text-xs">
-                                    <span className="text-gray-500 font-medium">{m.key}</span>
+                                    <span className="text-gray-500 font-medium">{meta.key}</span>
                                     <span className="font-mono break-all text-gray-700 dark:text-gray-300">
-                                        {typeof m.value === 'object' ? JSON.stringify(m.value) : String(m.value)}
+                                        {formatMetaValue(meta.value)}
                                     </span>
                                 </div>
                             ))}

@@ -1,8 +1,7 @@
-// @ts-nocheck
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, type MouseEvent as ReactMouseEvent } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { fetchAlerts, fetchAlert, deleteAlert } from "../lib/api";
-import { useRefresh } from "../contexts/RefreshContext";
+import { useRefresh } from "../contexts/useRefresh";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
 import { ScenarioName } from "../components/ScenarioName";
@@ -10,31 +9,68 @@ import { TimeDisplay } from "../components/TimeDisplay";
 import { EventCard } from "../components/EventCard";
 import { getCountryName } from "../lib/utils";
 import { Search, Info, ExternalLink, Shield, Trash2, X, AlertCircle } from "lucide-react";
-import "flag-icons/css/flag-icons.min.css";
+import type { AlertRecord, ApiPermissionError, SlimAlert } from '../types';
+
+type AlertListItem = SlimAlert;
+type AlertSelection = AlertListItem | AlertRecord;
+
+interface ErrorInfo {
+    message: string;
+    helpLink?: string;
+    helpText?: string;
+}
+
+function getDateFilterKey(isoString: string, includeHour: boolean): string {
+    const date = new Date(isoString);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+
+    if (includeHour) {
+        const hour = String(date.getHours()).padStart(2, '0');
+        return `${year}-${month}-${day}T${hour}`;
+    }
+
+    return `${year}-${month}-${day}`;
+}
+
+function toErrorInfo(error: unknown, fallbackMessage: string): ErrorInfo {
+    const apiError = error as Partial<ApiPermissionError> | undefined;
+
+    return {
+        message: typeof apiError?.message === 'string' ? apiError.message : fallbackMessage,
+        helpLink: typeof apiError?.helpLink === 'string' ? apiError.helpLink : undefined,
+        helpText: typeof apiError?.helpText === 'string' ? apiError.helpText : undefined,
+    };
+}
+
+function hasAlertEvents(alert: AlertSelection): alert is AlertRecord {
+    return 'events' in alert;
+}
 
 export function Alerts() {
     const { refreshSignal, setLastUpdated } = useRefresh();
-    const [alerts, setAlerts] = useState([]);
+    const [alerts, setAlerts] = useState<AlertListItem[]>([]);
     const [filter, setFilter] = useState("");
     const [loading, setLoading] = useState(true);
-    const [selectedAlert, setSelectedAlert] = useState(null);
+    const [selectedAlert, setSelectedAlert] = useState<AlertSelection | null>(null);
     const [displayedCount, setDisplayedCount] = useState(50);
     const [searchParams, setSearchParams] = useSearchParams();
-    const [alertToDelete, setAlertToDelete] = useState(null);
-    const [errorInfo, setErrorInfo] = useState(null); // { message, helpLink?, helpText? }
+    const [alertToDelete, setAlertToDelete] = useState<string | number | null>(null);
+    const [errorInfo, setErrorInfo] = useState<ErrorInfo | null>(null);
     const [showAllEvents, setShowAllEvents] = useState(false);
 
     // Ref to track selected alert ID for auto-refresh (avoids stale closure issues)
-    const selectedAlertIdRef = useRef(null);
+    const selectedAlertIdRef = useRef<string | number | null>(null);
 
     // Intersection Observer for infinite scroll
-    const observer = useRef();
-    const lastAlertElementRef = useCallback(node => {
+    const observer = useRef<IntersectionObserver | null>(null);
+    const lastAlertElementRef = useCallback((node: HTMLTableRowElement | null) => {
         if (loading) return;
         if (observer.current) observer.current.disconnect();
-        observer.current = new IntersectionObserver(entries => {
+        observer.current = new IntersectionObserver((entries) => {
             if (entries[0].isIntersecting) {
-                setDisplayedCount(prev => prev + 50);
+                setDisplayedCount((prev) => prev + 50);
             }
         });
         if (node) observer.current.observe(node);
@@ -56,7 +92,7 @@ export function Alerts() {
                 } catch (err) {
                     console.error("Alert not found", err);
                     // Fallback to slim data from list if fetch fails
-                    const existingAlert = alertsData.find(a => String(a.id) === alertIdParam);
+                    const existingAlert = alertsData.find((alert) => String(alert.id) === alertIdParam);
                     if (existingAlert) {
                         setSelectedAlert(existingAlert);
                     }
@@ -107,7 +143,7 @@ export function Alerts() {
 
     // Handler to fetch full alert data when clicking on a row
     // Since list view now returns slim alerts, we need to fetch full data for the modal
-    const handleAlertClick = async (alert) => {
+    const handleAlertClick = async (alert: AlertListItem) => {
         // Show slim data immediately while loading
         setSelectedAlert(alert);
         selectedAlertIdRef.current = alert.id;
@@ -122,7 +158,7 @@ export function Alerts() {
     };
 
     // Delete handlers
-    const requestDelete = (id, event) => {
+    const requestDelete = (id: string | number, event: ReactMouseEvent<HTMLButtonElement>) => {
         event.stopPropagation();
         setAlertToDelete(id);
     };
@@ -142,15 +178,11 @@ export function Alerts() {
             setDisplayedCount(50);
         } catch (error) {
             console.error("Failed to delete alert", error);
-            setErrorInfo({
-                message: error.message || "Failed to delete alert. Please try again.",
-                helpLink: error.helpLink,
-                helpText: error.helpText
-            });
+            setErrorInfo(toErrorInfo(error, "Failed to delete alert. Please try again."));
         }
     };
 
-    const filteredAlerts = alerts.filter(alert => {
+    const filteredAlerts = alerts.filter((alert) => {
         const search = filter.toLowerCase();
 
         // Specific query params
@@ -186,21 +218,7 @@ export function Alerts() {
             if (!alert.created_at) return false;
 
             // Helper to extract date/time key from ISO timestamp
-            const getItemKey = (isoString) => {
-                const date = new Date(isoString);
-                const year = date.getFullYear();
-                const month = String(date.getMonth() + 1).padStart(2, '0');
-                const day = String(date.getDate()).padStart(2, '0');
-
-                // If filter includes time (has 'T'), use hourly precision
-                if (paramDateStart.includes('T') || paramDateEnd.includes('T')) {
-                    const hour = String(date.getHours()).padStart(2, '0');
-                    return `${year}-${month}-${day}T${hour}`;
-                }
-                return `${year}-${month}-${day}`;
-            };
-
-            const itemKey = getItemKey(alert.created_at);
+            const itemKey = getDateFilterKey(alert.created_at, paramDateStart.includes('T') || paramDateEnd.includes('T'));
 
             if (paramDateStart && itemKey < paramDateStart) return false;
             if (paramDateEnd && itemKey > paramDateEnd) return false;
@@ -223,6 +241,8 @@ export function Alerts() {
     });
 
     const visibleAlerts = filteredAlerts.slice(0, displayedCount);
+    const selectedAlertDecisions = selectedAlert?.decisions ?? [];
+    const selectedAlertEvents = selectedAlert && hasAlertEvents(selectedAlert) ? selectedAlert.events ?? [] : [];
 
     return (
         <div className="space-y-6">
@@ -324,9 +344,9 @@ export function Alerts() {
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                             {loading ? (
-                                <tr><td colSpan="7" className="px-6 py-4 text-center text-sm text-gray-500">Loading alerts...</td></tr>
+                                <tr><td colSpan={7} className="px-6 py-4 text-center text-sm text-gray-500">Loading alerts...</td></tr>
                             ) : visibleAlerts.length === 0 ? (
-                                <tr><td colSpan="7" className="px-6 py-4 text-center text-sm text-gray-500">No alerts found</td></tr>
+                                <tr><td colSpan={7} className="px-6 py-4 text-center text-sm text-gray-500">No alerts found</td></tr>
                             ) : (
                                 visibleAlerts.map((alert, index) => {
                                     const isLastElement = index === visibleAlerts.length - 1;
@@ -360,7 +380,7 @@ export function Alerts() {
                                                 {alert.source?.ip || alert.source?.value || "N/A"}
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
-                                                {alert.decisions && alert.decisions.length > 0 ? (() => {
+                                                {alert.decisions.length > 0 ? (() => {
                                                     // Check if there are any active (non-expired) decisions
                                                     const activeDecisions = alert.decisions.filter(d => {
                                                         // If we have explicit status from backend (hydrated), trust it
@@ -463,7 +483,7 @@ export function Alerts() {
                                 {selectedAlert.source?.latitude && selectedAlert.source?.longitude && (
                                     <div className="text-xs text-gray-400 font-mono mt-1">
                                         <a
-                                            href={`https://www.google.com/maps?q=${encodeURIComponent(selectedAlert.source.latitude)},${encodeURIComponent(selectedAlert.source.longitude)}`}
+                                            href={`https://www.google.com/maps?q=${encodeURIComponent(String(selectedAlert.source.latitude))},${encodeURIComponent(String(selectedAlert.source.longitude))}`}
                                             target="_blank"
                                             rel="noopener noreferrer"
                                             className="hover:text-primary-600 dark:hover:text-primary-400 transition-colors inline-flex items-center gap-1"
@@ -480,7 +500,7 @@ export function Alerts() {
                                 <div className="flex items-center gap-2">
                                     {(selectedAlert.source?.ip || selectedAlert.source?.value) ? (
                                         <a
-                                            href={`https://app.crowdsec.net/cti/${encodeURIComponent(selectedAlert.source?.ip || selectedAlert.source?.value)}`}
+                                            href={`https://app.crowdsec.net/cti/${encodeURIComponent(String(selectedAlert.source?.ip || selectedAlert.source?.value))}`}
                                             target="_blank"
                                             rel="noopener noreferrer"
                                             className="font-mono text-lg font-bold text-gray-900 dark:text-white hover:text-primary-600 dark:hover:text-primary-400 transition-colors inline-flex items-center gap-1"
@@ -531,7 +551,7 @@ export function Alerts() {
                         )}
 
                         {/* Decisions */}
-                        {selectedAlert.decisions && selectedAlert.decisions.length > 0 && (
+                        {selectedAlertDecisions.length > 0 && (
                             <div>
                                 <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">Decisions Taken</h4>
                                 <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
@@ -547,7 +567,7 @@ export function Alerts() {
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-800">
-                                            {selectedAlert.decisions.map((decision, idx) => {
+                                            {selectedAlertDecisions.map((decision, idx) => {
                                                 // Check if this specific decision is active or expired
                                                 const isActive = (() => {
                                                     if (decision.expired !== undefined) {
@@ -608,12 +628,12 @@ export function Alerts() {
                         {/* Events Breakdown */}
                         <div>
                             <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">
-                                Events ({selectedAlert.events?.length || 0})
+                                Events ({selectedAlertEvents.length})
                             </h4>
                             <div className="space-y-2">
                                 {(showAllEvents
-                                    ? selectedAlert.events
-                                    : selectedAlert.events?.slice(0, 10)
+                                    ? selectedAlertEvents
+                                    : selectedAlertEvents.slice(0, 10)
                                 )?.map((event, idx) => (
                                     <EventCard
                                         key={idx}
@@ -622,12 +642,12 @@ export function Alerts() {
                                     />
                                 ))}
                             </div>
-                            {!showAllEvents && selectedAlert.events?.length > 10 && (
+                            {!showAllEvents && selectedAlertEvents.length > 10 && (
                                 <button
                                     onClick={() => setShowAllEvents(true)}
                                     className="mt-3 w-full py-2 text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 bg-gray-50 dark:bg-gray-900/30 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors cursor-pointer"
                                 >
-                                    Show all {selectedAlert.events.length} events ({selectedAlert.events.length - 10} more)
+                                    Show all {selectedAlertEvents.length} events ({selectedAlertEvents.length - 10} more)
                                 </button>
                             )}
                         </div>

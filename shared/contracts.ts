@@ -2,6 +2,14 @@ export interface ApiErrorResponse {
   error: string;
 }
 
+export type AlertMetaValue =
+  | string
+  | number
+  | boolean
+  | null
+  | Record<string, unknown>
+  | unknown[];
+
 export interface LapiStatus {
   isConnected: boolean;
   lastCheck: string | null;
@@ -18,11 +26,12 @@ export interface SyncStatus {
 
 export interface AlertMeta {
   key: string;
-  value: string;
+  value: AlertMetaValue;
 }
 
 export interface AlertEvent {
   meta?: AlertMeta[];
+  timestamp?: string;
   [key: string]: unknown;
 }
 
@@ -33,6 +42,9 @@ export interface AlertSource {
   as_name?: string;
   as_number?: string | number;
   scope?: string;
+  latitude?: string | number;
+  longitude?: string | number;
+  range?: string;
   [key: string]: unknown;
 }
 

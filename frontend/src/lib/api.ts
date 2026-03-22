@@ -4,6 +4,7 @@ import type {
   ApiPermissionError,
   ConfigResponse,
   DecisionListItem,
+  SlimAlert,
   StatsAlert,
   StatsDecision,
 } from '../types';
@@ -17,12 +18,20 @@ async function fetchJson<T>(input: string, init?: RequestInit, defaultMsg?: stri
     return response.json() as Promise<T>;
 }
 
-export async function fetchAlerts(): Promise<AlertRecord[]> {
-    return fetchJson<AlertRecord[]>('/api/alerts', undefined, 'Failed to fetch alerts');
+export async function fetchAlerts(): Promise<SlimAlert[]> {
+    return fetchJson<SlimAlert[]>('/api/alerts', undefined, 'Failed to fetch alerts');
 }
 
-export async function fetchAlert(id: string | number): Promise<AlertRecord | AlertRecord[]> {
-    return fetchJson<AlertRecord | AlertRecord[]>(`/api/alerts/${id}`, undefined, 'Failed to fetch alert');
+export async function fetchAlert(id: string | number): Promise<AlertRecord> {
+    const payload = await fetchJson<AlertRecord | AlertRecord[]>(`/api/alerts/${id}`, undefined, 'Failed to fetch alert');
+    if (Array.isArray(payload)) {
+        const alert = payload[0];
+        if (!alert) {
+            throw new Error('Failed to fetch alert');
+        }
+        return alert;
+    }
+    return payload;
 }
 
 export async function fetchDecisions(): Promise<DecisionListItem[]> {

@@ -1,13 +1,10 @@
-// @ts-nocheck
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { lazy, Suspense, useEffect, useState, useMemo, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { fetchAlertsForStats, fetchDecisionsForStats, fetchConfig } from "../lib/api";
-import { useRefresh } from "../contexts/RefreshContext";
+import { useRefresh } from "../contexts/useRefresh";
 import { Card, CardContent } from "../components/ui/Card";
 import { StatCard } from "../components/StatCard";
-import { ActivityBarChart } from "../components/DashboardCharts";
-import { WorldMapCard } from "../components/WorldMapCard";
 import { ScenarioName } from "../components/ScenarioName";
 import {
     filterLastNDays,
@@ -22,64 +19,119 @@ import {
     ShieldAlert,
     Gavel,
     Activity,
-    Network,
     TrendingUp,
-    AlertTriangle,
     FilterX,
-    Globe,
 
     Filter,
     Percent
 } from "lucide-react";
 import { Switch } from "../components/ui/Switch";
+import type {
+    ConfigResponse,
+    DashboardFilters,
+    StatsAlert,
+    StatsDecision,
+} from '../types';
+
+type Granularity = 'day' | 'hour';
+type PercentageBasis = 'filtered' | 'global';
+type FilterKey = 'country' | 'scenario' | 'as' | 'ip' | 'target';
+
+interface DashboardCountState {
+    alerts: number;
+    decisions: number;
+}
+
+interface RawDataState {
+    alertsForStats: StatsAlert[];
+    decisionsForStats: StatsDecision[];
+}
+
+interface FilteredDashboardData {
+    alerts: StatsAlert[];
+    decisions: StatsDecision[];
+    chartAlerts: StatsAlert[];
+    chartDecisions: StatsDecision[];
+    sliderAlerts: StatsAlert[];
+    sliderDecisions: StatsDecision[];
+    globalTotal: number;
+}
+
+const ActivityBarChart = lazy(async () => ({ default: (await import('../components/DashboardCharts')).ActivityBarChart }));
+const WorldMapCard = lazy(async () => ({ default: (await import('../components/WorldMapCard')).WorldMapCard }));
+
+const EMPTY_FILTERS: DashboardFilters = {
+    dateRange: null,
+    dateRangeSticky: false,
+    country: null,
+    scenario: null,
+    as: null,
+    ip: null,
+    target: null,
+};
+
+function parseStoredGranularity(value: string | null): Granularity {
+    return value === 'hour' ? 'hour' : 'day';
+}
+
+function parseStoredPercentageBasis(value: string | null): PercentageBasis {
+    return value === 'filtered' ? 'filtered' : 'global';
+}
+
+function parseStoredFilters(value: string | null): DashboardFilters {
+    if (!value) {
+        return EMPTY_FILTERS;
+    }
+
+    try {
+        return {
+            ...EMPTY_FILTERS,
+            ...(JSON.parse(value) as Partial<DashboardFilters>),
+        };
+    } catch (error) {
+        console.error("Failed to parse saved filters", error);
+        return EMPTY_FILTERS;
+    }
+}
+
+function getDateRangeItemKey(isoString: string, includeHour: boolean): string {
+    const date = new Date(isoString);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+
+    if (includeHour) {
+        const hour = String(date.getHours()).padStart(2, '0');
+        return `${year}-${month}-${day}T${hour}`;
+    }
+
+    return `${year}-${month}-${day}`;
+}
 
 export function Dashboard() {
     const navigate = useNavigate();
     const { refreshSignal, setLastUpdated } = useRefresh();
-    const [stats, setStats] = useState({ alerts: 0, decisions: 0 });
+    const [stats, setStats] = useState<DashboardCountState>({ alerts: 0, decisions: 0 });
     const [loading, setLoading] = useState(true);
     const [statsLoading, setStatsLoading] = useState(true);
-    const [config, setConfig] = useState({ lookback_days: 7 });
+    const [config, setConfig] = useState<ConfigResponse | null>(null);
 
     // Initialize state from local storage or defaults
-    const [granularity, setGranularity] = useState(() => {
-        return localStorage.getItem('dashboard_granularity') || 'day';
-    });
+    const [granularity, setGranularity] = useState<Granularity>(() => parseStoredGranularity(localStorage.getItem('dashboard_granularity')));
 
     // Percentage Basis: 'filtered' or 'global'
-    const [percentageBasis, setPercentageBasis] = useState(() => {
-        return localStorage.getItem('dashboard_percentage_basis') || 'global';
-    });
+    const [percentageBasis, setPercentageBasis] = useState<PercentageBasis>(() => parseStoredPercentageBasis(localStorage.getItem('dashboard_percentage_basis')));
 
     const [isOnline, setIsOnline] = useState(true);
 
     // Raw data (stats endpoints only)
-    const [rawData, setRawData] = useState({
+    const [rawData, setRawData] = useState<RawDataState>({
         alertsForStats: [],
         decisionsForStats: []
     });
 
     // Active filters
-    // Active filters
-    const [filters, setFilters] = useState(() => {
-        const saved = localStorage.getItem('dashboard_filters');
-        if (saved) {
-            try {
-                return JSON.parse(saved);
-            } catch (e) {
-                console.error("Failed to parse saved filters", e);
-            }
-        }
-        return {
-            dateRange: null,
-            dateRangeSticky: false,
-            country: null,
-            scenario: null,
-            as: null,
-            ip: null,
-            target: null
-        };
-    });
+    const [filters, setFilters] = useState<DashboardFilters>(() => parseStoredFilters(localStorage.getItem('dashboard_filters')));
 
     // Clear dateRange filter when granularity changes
     // Persist filters and granularity
@@ -96,7 +148,7 @@ export function Dashboard() {
     }, [percentageBasis]);
 
     // Handler to change granularity and clear date range simultaneously (explicit user action)
-    const handleGranularityChange = (newGranularity) => {
+    const handleGranularityChange = (newGranularity: Granularity) => {
         setGranularity(newGranularity);
         setFilters(prev => ({ ...prev, dateRange: null }));
     };
@@ -159,8 +211,8 @@ export function Dashboard() {
     }, [refreshSignal, loadData]);
 
     // Filter Logic
-    const filteredData = useMemo(() => {
-        const lookbackDays = config.lookback_days || 7;
+    const filteredData = useMemo<FilteredDashboardData>(() => {
+        const lookbackDays = config?.lookback_days || 7;
         const now = new Date();
 
         // Use alertsForStats for all alert-related filtering and stats
@@ -184,44 +236,28 @@ export function Dashboard() {
 
         // Apply Cross-Filtering to cards and lists (including dateRange)
         if (filters.dateRange) {
+            const dateRange = filters.dateRange;
             // Helper function to extract date/time key from ISO timestamp
-            const getItemKey = (isoString) => {
-                if (!isoString) return null;
-                const date = new Date(isoString);
-                const year = date.getFullYear();
-                const month = String(date.getMonth() + 1).padStart(2, '0');
-                const day = String(date.getDate()).padStart(2, '0');
-
-                // If filter range includes time (has 'T' separator), use hourly precision
-                if (filters.dateRange.start.includes('T')) {
-                    const hour = String(date.getHours()).padStart(2, '0');
-                    return `${year}-${month}-${day}T${hour}`;
-                }
-                return `${year}-${month}-${day}`;
-            };
+            const includeHour = dateRange.start.includes('T');
 
             // Filter by date range
             filteredAlerts = filteredAlerts.filter(a => {
-                const itemKey = getItemKey(a.created_at);
-                if (!itemKey) return false;
-                return itemKey >= filters.dateRange.start && itemKey <= filters.dateRange.end;
+                const itemKey = getDateRangeItemKey(a.created_at, includeHour);
+                return itemKey >= dateRange.start && itemKey <= dateRange.end;
             });
             activeDecisions = activeDecisions.filter(d => {
-                const itemKey = getItemKey(d.created_at);
-                if (!itemKey) return false;
-                return itemKey >= filters.dateRange.start && itemKey <= filters.dateRange.end;
+                const itemKey = getDateRangeItemKey(d.created_at, includeHour);
+                return itemKey >= dateRange.start && itemKey <= dateRange.end;
             });
 
             // ALSO filter chart data by date range so the main chart reflects the selection
             chartAlerts = chartAlerts.filter(a => {
-                const itemKey = getItemKey(a.created_at);
-                if (!itemKey) return false;
-                return itemKey >= filters.dateRange.start && itemKey <= filters.dateRange.end;
+                const itemKey = getDateRangeItemKey(a.created_at, includeHour);
+                return itemKey >= dateRange.start && itemKey <= dateRange.end;
             });
             chartDecisionsData = chartDecisionsData.filter(d => {
-                const itemKey = getItemKey(d.created_at);
-                if (!itemKey) return false;
-                return itemKey >= filters.dateRange.start && itemKey <= filters.dateRange.end;
+                const itemKey = getDateRangeItemKey(d.created_at, includeHour);
+                return itemKey >= dateRange.start && itemKey <= dateRange.end;
             });
         }
 
@@ -346,13 +382,13 @@ export function Dashboard() {
             // Global total (filtered by Lookback ONLY, ignoring sidebar filters)
             globalTotal: filterLastNDays(rawData.alertsForStats, lookbackDays).length
         };
-    }, [rawData, config.lookback_days, filters]);
+    }, [rawData, config?.lookback_days, filters]);
 
 
 
     // Derived Statistics
     const statistics = useMemo(() => {
-        const lookbackDays = config.lookback_days || 7;
+        const lookbackDays = config?.lookback_days || 7;
 
         // For lists, we use the filtered data
         // For charts, we effectively want to show the context of the WHOLE dataset (or subset) 
@@ -375,10 +411,15 @@ export function Dashboard() {
             unfilteredAlertsHistory: getAggregatedData(filteredData.sliderAlerts, lookbackDays, granularity),
             unfilteredDecisionsHistory: getAggregatedData(filteredData.sliderDecisions, lookbackDays, granularity)
         };
-    }, [filteredData, config.lookback_days, granularity, filters.dateRange]);
+    }, [filteredData, config?.lookback_days, granularity, filters.dateRange]);
+    
 
     // Handle Filters
-    const toggleFilter = (type, value) => {
+    const toggleFilter = (type: FilterKey, value: string | null | undefined) => {
+        if (!value) {
+            return;
+        }
+
         setFilters(prev => ({
             ...prev,
             [type]: prev[type] === value ? null : value
@@ -386,15 +427,7 @@ export function Dashboard() {
     };
 
     const clearFilters = () => {
-        setFilters({
-            dateRange: null,
-            dateRangeSticky: false,
-            country: null,
-            scenario: null,
-            as: null,
-            ip: null,
-            target: null
-        });
+        setFilters(EMPTY_FILTERS);
     };
 
     const hasActiveFilters = filters.dateRange !== null ||
@@ -482,7 +515,7 @@ export function Dashboard() {
                     <div className="flex items-center gap-2">
                         <TrendingUp className="w-6 h-6 text-primary-600 dark:text-primary-400" />
                         <h3 className="text-2xl font-bold text-gray-900 dark:text-white">
-                            Last {config.lookback_days} Days Statistics
+                            Last {config?.lookback_days ?? 7} Days Statistics
                         </h3>
                     </div>
 
@@ -574,30 +607,34 @@ export function Dashboard() {
                         <div className="grid gap-8 md:grid-cols-2">
                             {/* Activity Chart - Left */}
                             <div className="h-[450px]">
-                                <ActivityBarChart
-                                    alertsData={statistics.alertsHistory}
-                                    decisionsData={statistics.decisionsHistory}
-                                    unfilteredAlertsData={statistics.unfilteredAlertsHistory}
-                                    unfilteredDecisionsData={statistics.unfilteredDecisionsHistory}
-                                    onDateRangeSelect={(dateRange, isAtEnd) => setFilters(prev => ({
-                                        ...prev,
-                                        dateRange,
-                                        dateRangeSticky: isAtEnd && dateRange !== null
-                                    }))}
-                                    selectedDateRange={filters.dateRange}
-                                    isSticky={filters.dateRangeSticky}
-                                    granularity={granularity}
-                                    setGranularity={handleGranularityChange}
-                                />
+                                <Suspense fallback={<div className="text-center p-8 text-gray-500">Loading chart...</div>}>
+                                    <ActivityBarChart
+                                        alertsData={statistics.alertsHistory}
+                                        decisionsData={statistics.decisionsHistory}
+                                        unfilteredAlertsData={statistics.unfilteredAlertsHistory}
+                                        unfilteredDecisionsData={statistics.unfilteredDecisionsHistory}
+                                        onDateRangeSelect={(dateRange, isAtEnd) => setFilters(prev => ({
+                                            ...prev,
+                                            dateRange,
+                                            dateRangeSticky: isAtEnd && dateRange !== null
+                                        }))}
+                                        selectedDateRange={filters.dateRange}
+                                        isSticky={filters.dateRangeSticky}
+                                        granularity={granularity}
+                                        setGranularity={handleGranularityChange}
+                                    />
+                                </Suspense>
                             </div>
 
                             {/* World Map - Right */}
                             <div className="h-[450px]">
-                                <WorldMapCard
-                                    data={statistics.allCountries}
-                                    onCountrySelect={(code) => toggleFilter('country', code)}
-                                    selectedCountry={filters.country}
-                                />
+                                <Suspense fallback={<div className="text-center p-8 text-gray-500">Loading map...</div>}>
+                                    <WorldMapCard
+                                        data={statistics.allCountries}
+                                        onCountrySelect={(code) => toggleFilter('country', code)}
+                                        selectedCountry={filters.country}
+                                    />
+                                </Suspense>
                             </div>
                         </div>
 

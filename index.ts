@@ -1,15 +1,22 @@
 import { createApp } from './src/backend/app';
 
-const originalLog = console.log;
-const originalError = console.error;
+const originalLog = console.log.bind(console);
+const originalInfo = console.info.bind(console);
+const originalWarn = console.warn.bind(console);
+const originalError = console.error.bind(console);
+const originalDebug = console.debug.bind(console);
 
-console.log = (...args: unknown[]) => {
-  originalLog(`[${new Date().toISOString()}]`, ...args);
-};
+function withTimestamp(writer: (...args: unknown[]) => void) {
+  return (...args: unknown[]) => {
+    writer(`[${new Date().toISOString()}]`, ...args);
+  };
+}
 
-console.error = (...args: unknown[]) => {
-  originalError(`[${new Date().toISOString()}]`, ...args);
-};
+console.log = withTimestamp(originalLog);
+console.info = withTimestamp(originalInfo);
+console.warn = withTimestamp(originalWarn);
+console.error = withTimestamp(originalError);
+console.debug = withTimestamp(originalDebug);
 
 const controller = createApp({ startBackgroundTasks: true });
 

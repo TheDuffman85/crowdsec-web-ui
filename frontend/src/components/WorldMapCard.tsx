@@ -1,35 +1,77 @@
-// @ts-nocheck
 import { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Choropleth } from '@nivo/geo';
-import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
+import { Choropleth, type ChoroplethBoundFeature } from '@nivo/geo';
+import {
+    TransformWrapper,
+    TransformComponent,
+    type ReactZoomPanPinchContentRef,
+    type ReactZoomPanPinchRef,
+} from 'react-zoom-pan-pinch';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { Globe, ZoomIn, ZoomOut, RotateCcw, ShieldAlert } from 'lucide-react';
 import { assetUrl } from '../lib/basePath';
+import type { WorldMapDatum } from '../types';
 
 // Using local Natural Earth data which has proper ISO properties
 const geoUrl = assetUrl("/world-50m.json");
+
+interface GeoFeatureProperties {
+    NAME?: string;
+    ISO_A2?: string;
+    iso_a2?: string;
+    ISO_A2_EH?: string;
+    WB_A2?: string;
+    [key: string]: unknown;
+}
+
+interface GeoFeature {
+    id: string;
+    label?: string;
+    properties: GeoFeatureProperties;
+    [key: string]: unknown;
+}
+
+interface GeoJsonResponse {
+    features?: Array<{
+        id?: string;
+        properties?: GeoFeatureProperties;
+        [key: string]: unknown;
+    }>;
+}
+
+interface TooltipPosition {
+    x: number;
+    y: number;
+    clientX: number;
+    clientY: number;
+}
+
+interface WorldMapCardProps {
+    data: WorldMapDatum[];
+    onCountrySelect: (countryCode: string) => void;
+    selectedCountry: string | null;
+}
 
 /**
  * World Map Component for Dashboard
  * Shows all countries with alerts colored in red gradient based on intensity
  */
-export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
-    const [geoFeatures, setGeoFeatures] = useState([]);
+export function WorldMapCard({ data, onCountrySelect, selectedCountry }: WorldMapCardProps) {
+    const [geoFeatures, setGeoFeatures] = useState<GeoFeature[]>([]);
     const [isLoadingStats, setIsLoadingStats] = useState(true);
-    const containerRef = useRef(null);
+    const containerRef = useRef<HTMLDivElement | null>(null);
     const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
-    const [initialScale, setInitialScale] = useState(window.innerWidth < 800 ? 0.7 : 1.0);
+    const [initialScale, setInitialScale] = useState(() => window.innerWidth < 800 ? 0.7 : 1.0);
     const [tooltipEnabled, setTooltipEnabled] = useState(true);
 
 
     // Refs for tooltip positioning
-    const tooltipRef = useRef(null);
-    const mousePosRef = useRef({ x: 0, y: 0, clientX: 0, clientY: 0 });
+    const tooltipRef = useRef<HTMLDivElement | null>(null);
+    const mousePosRef = useRef<TooltipPosition>({ x: 0, y: 0, clientX: 0, clientY: 0 });
 
     // Track mouse position GLOBALLY to ensure we always have coordinates
     useEffect(() => {
-        const handleMouseMove = (e) => {
+        const handleMouseMove = (e: MouseEvent) => {
             // Update ref for initial position of new tooltips
             mousePosRef.current = {
                 x: e.pageX,
@@ -90,7 +132,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
         };
     }, []);
     // Tooltip Component to be rendered by Nivo
-    const PortalTooltip = ({ feature }) => {
+    const PortalTooltip = ({ feature }: { feature: ChoroplethBoundFeature }) => {
         // useLayoutEffect ensures position is set BEFORE paint
         useLayoutEffect(() => {
             if (tooltipRef.current) {
@@ -103,8 +145,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
         if (!feature) return null;
 
         // Find alert data locally since Nivo only passes the feature props
-        const alertData = data.find(d => d.countryCode?.toUpperCase() === feature.id);
-        const value = alertData?.count || 0;
+        const featureId = typeof feature.data?.id === 'string' ? feature.data.id : '';
 
         return createPortal(
             <div
@@ -119,12 +160,12 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                 }}
             >
                 <div className="font-medium mb-2">
-                    {feature.properties?.NAME || feature.label || feature.id}
+                    {feature.label || featureId}
                 </div>
                 <div className="flex items-center gap-2">
                     <ShieldAlert className="w-4 h-4 text-red-600 dark:text-red-400" />
                     <span className="text-red-600 dark:text-red-400">
-                        Alerts: {value > 0 ? value.toLocaleString() : 0}
+                        Alerts: {feature.value > 0 ? feature.value.toLocaleString() : 0}
                     </span>
                 </div>
             </div>,
@@ -147,7 +188,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
         return () => resizeObserver.disconnect();
     }, []);
 
-    const transformComponentRef = useRef(null);
+    const transformComponentRef = useRef<ReactZoomPanPinchRef | null>(null);
 
     // Add viewport resize handler to reset zoom
     useEffect(() => {
@@ -163,7 +204,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
             }
         };
 
-        let resizeTimer;
+        let resizeTimer: ReturnType<typeof setTimeout> | undefined;
         const debouncedResize = () => {
             clearTimeout(resizeTimer);
             resizeTimer = setTimeout(handleResize, 300);
@@ -227,12 +268,12 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
     // Fetch and process map data
     useEffect(() => {
         fetch(geoUrl)
-            .then(response => response.json())
-            .then(data => {
-                if (data.features) {
-                    const seenCodes = new Set();
-                    const processedFeatures = data.features
-                        .filter(f => f.properties.ISO_A2 !== 'AQ' && f.properties.NAME !== 'Antarctica')
+            .then((response) => response.json() as Promise<GeoJsonResponse>)
+            .then((payload) => {
+                if (payload.features) {
+                    const seenCodes = new Set<string>();
+                    const processedFeatures = payload.features
+                        .filter((feature) => feature.properties?.ISO_A2 !== 'AQ' && feature.properties?.NAME !== 'Antarctica')
                         .map(feature => {
                             const properties = feature.properties || {};
                             // POSTAL removed - it can conflict with ISO codes
@@ -244,7 +285,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                                 properties.WB_A2
                             ];
 
-                            let validCode = null;
+                            let validCode: string | null = null;
                             for (const code of candidates) {
                                 if (code && code !== '-99' && /^[A-Z]{2}$/i.test(String(code))) {
                                     validCode = String(code).toUpperCase();
@@ -257,7 +298,8 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                                 id: validCode || feature.id || properties.NAME
                             };
                         })
-                        .filter(feature => {
+                        .filter((feature): feature is GeoFeature => typeof feature.id === 'string' && feature.id.length > 0)
+                        .filter((feature) => {
                             if (seenCodes.has(feature.id)) {
                                 return false;
                             }
@@ -268,7 +310,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                 }
                 setIsLoadingStats(false);
             })
-            .catch(err => {
+            .catch((err: unknown) => {
                 console.error("Failed to load map data", err);
                 setIsLoadingStats(false);
             });
@@ -299,9 +341,12 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
             // Nivo graticules usually have fill="none".
             // Features have a color fill.
             // Using Array.from to filter ensures we target the right elements.
-            const allPaths = Array.from(containerRef.current.querySelectorAll('path'));
-            const featurePaths = allPaths.filter(p => {
-                const fill = p.getAttribute('fill');
+            const containerElement = containerRef.current;
+            if (!containerElement) return;
+
+            const allPaths = Array.from(containerElement.querySelectorAll<SVGPathElement>('path'));
+            const featurePaths = allPaths.filter((path) => {
+                const fill = path.getAttribute('fill');
                 return fill && fill !== 'none';
             });
 
@@ -361,7 +406,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                                 filter: brightness(0.85);
                                 opacity: 1 !important;
                             }
-                            // Fallback styles if JS fails
+                            /* Fallback styles if JS fails */
                             .world-map-container.country-filtered path {
                                 opacity: 0.3;
                             }
@@ -389,7 +434,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                                 // Hide tooltip only when actual panning occurs
                                 setTooltipEnabled(false);
                             }}
-                            onPanningStop={(ref) => {
+                            onPanningStop={(ref: ReactZoomPanPinchRef) => {
                                 // Re-enable tooltip after panning stops
                                 setTimeout(() => setTooltipEnabled(true), 100);
                                 // Rubberband effect: check if map is panned outside visible area
@@ -423,17 +468,17 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                                 }
                             }}
                         >
-                            {({ zoomIn, zoomOut, centerView }) => (
+                            {(controls: ReactZoomPanPinchContentRef) => (
                                 <>
                                     <div className="absolute top-2 right-2 z-10 flex flex-col gap-1">
-                                        <button onClick={() => zoomIn()} className="p-1.5 bg-white dark:bg-gray-800 rounded shadow-md border dark:border-gray-600">
+                                        <button onClick={() => controls.zoomIn()} className="p-1.5 bg-white dark:bg-gray-800 rounded shadow-md border dark:border-gray-600">
                                             <ZoomIn className="w-4 h-4 text-gray-600 dark:text-gray-300" />
                                         </button>
-                                        <button onClick={() => zoomOut()} className="p-1.5 bg-white dark:bg-gray-800 rounded shadow-md border dark:border-gray-600">
+                                        <button onClick={() => controls.zoomOut()} className="p-1.5 bg-white dark:bg-gray-800 rounded shadow-md border dark:border-gray-600">
                                             <ZoomOut className="w-4 h-4 text-gray-600 dark:text-gray-300" />
                                         </button>
                                         <button
-                                            onClick={() => centerView(initialScale, 300)}
+                                            onClick={() => controls.centerView(initialScale, 300)}
                                             className="p-1.5 bg-white dark:bg-gray-800 rounded shadow-md border dark:border-gray-600"
                                         >
                                             <RotateCcw className="w-4 h-4 text-gray-600 dark:text-gray-300" />
@@ -460,8 +505,12 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }) {
                                                 enableGraticule={false}
                                                 borderWidth={0.5}
                                                 borderColor="#ffffff"
-                                                onClick={(feature) => { if (feature && feature.id) onCountrySelect(feature.id); }}
-                                                layers={['graticule', 'features', 'legends']}
+                                                onClick={(feature) => {
+                                                    const featureId = typeof feature.data?.id === 'string' ? feature.data.id : null;
+                                                    if (featureId) {
+                                                        onCountrySelect(featureId);
+                                                    }
+                                                }}
                                                 tooltip={PortalTooltip}
                                             />
                                         </div>
