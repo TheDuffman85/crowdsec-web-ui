@@ -23,7 +23,7 @@
     "verify": "bun run test && bun run coverage && bun run typecheck && bun run lint && bun run build-ui"
   },
   "dependencies": {
-    "hono": "^4.11.9"
+    "hono": "^4.12.8"
   },
   "devDependencies": {
     "@types/node": "^24.6.1",
