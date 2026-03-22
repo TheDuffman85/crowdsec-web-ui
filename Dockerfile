@@ -69,9 +69,9 @@ COPY --from=builder /app/frontend/dist ./frontend/dist
 
 # Copy backend source files
 COPY package.json ./
-COPY index.js ./
-COPY lapi.js ./
-COPY sqlite.js ./
+COPY index.ts ./
+COPY shared ./shared
+COPY src ./src
 COPY docker-entrypoint.sh /usr/local/bin/
 
 # Set permissions
@@ -89,4 +89,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD bun -e "fetch('http://localhost:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 
 ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["bun", "index.js"]
+CMD ["bun", "index.ts"]

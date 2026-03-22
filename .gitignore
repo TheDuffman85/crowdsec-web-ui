@@ -9,3 +9,5 @@ agent/certs
 crowdsec.db
 crowdsec.db-shm
 crowdsec.db-wal
+coverage
+frontend/coverage

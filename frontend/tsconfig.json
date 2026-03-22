@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowJs": false,
+    "checkJs": false,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "verbatimModuleSyntax": true,
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["../shared/*"]
+    },
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "types": ["vite/client", "vitest/globals"]
+  },
+  "include": [
+    "src",
+    "../shared/**/*.ts",
+    "vite.config.ts",
+    "vitest.config.ts"
+  ]
+}

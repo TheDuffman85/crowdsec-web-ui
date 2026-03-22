@@ -1,0 +1,1114 @@
+import fs from 'fs';
+import path from 'path';
+import { Hono } from 'hono';
+import { compress } from 'hono/compress';
+import { serveStatic } from 'hono/bun';
+import type {
+  AddDecisionRequest,
+  AlertDecision,
+  AlertRecord,
+  ConfigResponse,
+  DecisionListItem,
+  LapiStatus,
+  SlimAlert,
+  StatsAlert,
+  StatsDecision,
+  SyncStatus,
+  UpdateCheckResponse,
+} from '../../shared/contracts';
+import { createRuntimeConfig, getIntervalName, parseRefreshInterval, type RuntimeConfig } from './config';
+import { CrowdsecDatabase, type AlertInsertParams, type DecisionInsertParams } from './database';
+import { LapiClient } from './lapi';
+import { createUpdateChecker } from './update-check';
+import { getAlertTarget, toSlimAlert } from './utils/alerts';
+import { parseGoDuration, toDuration } from './utils/duration';
+
+type HonoContext = any;
+type HonoNext = any;
+type AnyError = Error & {
+  code?: string;
+  response?: { status: number };
+  request?: unknown;
+  helpLink?: string;
+  helpText?: string;
+};
+
+export interface CreateAppOptions {
+  config?: RuntimeConfig;
+  database?: CrowdsecDatabase;
+  lapiClient?: LapiClient;
+  distRoot?: string;
+  startBackgroundTasks?: boolean;
+  updateChecker?: () => Promise<UpdateCheckResponse>;
+}
+
+export interface AppController {
+  app: Hono;
+  fetch: Hono['fetch'];
+  config: RuntimeConfig;
+  database: CrowdsecDatabase;
+  lapiClient: LapiClient;
+  startBackgroundTasks: () => void;
+  stopBackgroundTasks: () => void;
+  getSyncStatus: () => SyncStatus;
+  getLapiStatus: () => LapiStatus;
+}
+
+interface PersistedConfig {
+  refresh_interval_ms?: number;
+}
+
+interface CacheState {
+  isInitialized: boolean;
+  lastUpdate: string | null;
+}
+
+interface UpdateCache {
+  lastCheck: number;
+  data: UpdateCheckResponse | null;
+}
+
+export function createApp(options: CreateAppOptions = {}): AppController {
+  const config = options.config || createRuntimeConfig();
+  const database = options.database || new CrowdsecDatabase({ dbDir: config.dbDir });
+  const lapiClient = options.lapiClient || new LapiClient({
+    crowdsecUrl: config.crowdsecUrl,
+    user: config.crowdsecUser,
+    password: config.crowdsecPassword,
+    lookbackPeriod: config.lookbackPeriod,
+    version: config.version,
+  });
+  const checkForUpdates = options.updateChecker || createUpdateChecker({
+    dockerImageRef: config.dockerImageRef,
+    branch: config.branch,
+    commitHash: config.commitHash,
+    version: config.version,
+    enabled: config.updateCheckEnabled,
+  });
+
+  const app = new Hono();
+  const distRoot = options.distRoot || path.resolve(process.cwd(), 'frontend/dist');
+  const staticFiles = [
+    '/logo.svg',
+    '/favicon.ico',
+    '/robots.txt',
+    '/world-50m.json',
+    '/favicon-96x96.png',
+    '/apple-touch-icon.png',
+    '/android-chrome-192x192.png',
+    '/android-chrome-512x512.png',
+  ];
+
+  const syncStatus: SyncStatus = {
+    isSyncing: false,
+    progress: 0,
+    message: '',
+    startedAt: null,
+    completedAt: null,
+  };
+
+  const cache: CacheState = {
+    isInitialized: false,
+    lastUpdate: null,
+  };
+
+  const persistedConfig = loadPersistedConfig(database);
+  let refreshIntervalMs = persistedConfig.refresh_interval_ms ?? config.refreshIntervalMs;
+  let initializationPromise: Promise<boolean> | null = null;
+  let isFirstSync = true;
+  let lastRequestTime = Date.now();
+  let lastFullRefreshTime = Date.now();
+  let schedulerTimeout: ReturnType<typeof setTimeout> | null = null;
+  let isSchedulerRunning = false;
+  let bootstrapRetryTimeout: ReturnType<typeof setTimeout> | null = null;
+  let bootstrapPromise: Promise<boolean> | null = null;
+  let bootstrapWaitLogged = false;
+
+  app.use('*', compress());
+  app.use('*', async (context, next) => {
+    await next();
+    context.header('X-Content-Type-Options', 'nosniff');
+    context.header('X-Frame-Options', 'DENY');
+    context.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+    context.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  });
+
+  app.use('*', activityTrackerMiddleware);
+
+  const healthHandler = (context: HonoContext) => context.json({ status: 'ok' });
+  app.get('/api/health', healthHandler);
+  if (config.basePath) {
+    app.get(`${config.basePath}/api/health`, healthHandler);
+  }
+
+  app.get(`${config.basePath}/api/alerts`, ensureAuth, async (context) => {
+    try {
+      if (refreshIntervalMs === 0) {
+        await updateCache();
+      }
+
+      if (!cache.isInitialized) {
+        await ensureBootstrapReady('alerts request');
+      }
+
+      const since = new Date(Date.now() - config.lookbackMs).toISOString();
+      const alerts = database
+        .getAlertsSince(since)
+        .map((row) => toSlimAlert(hydrateAlertWithDecisions(JSON.parse(row.raw_data) as AlertRecord)))
+        .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
+
+      return context.json(alerts);
+    } catch (error: any) {
+      console.error('Error serving alerts from database:', error.message);
+      return context.json({ error: 'Failed to retrieve alerts' }, 500);
+    }
+  });
+
+  app.get(`${config.basePath}/api/alerts/:id`, ensureAuth, async (context) => {
+      const alertId = String(context.req.param('id'));
+    if (!/^\d+$/.test(alertId)) {
+      return context.json({ error: 'Invalid alert ID' }, 400);
+    }
+
+    const doRequest = async () => {
+      const alertData = await lapiClient.getAlertById(alertId);
+      const payload = Array.isArray(alertData)
+        ? alertData.map((item) => hydrateAlertWithDecisions(item as AlertRecord))
+        : hydrateAlertWithDecisions(alertData as AlertRecord);
+      return context.json(payload);
+    };
+
+    try {
+      return await doRequest();
+    } catch (error) {
+      return handleApiError(error as AnyError, context, 'fetching alert details', doRequest);
+    }
+  });
+
+  app.delete(`${config.basePath}/api/alerts/:id`, ensureAuth, async (context) => {
+    const alertId = String(context.req.param('id'));
+    if (!/^\d+$/.test(alertId)) {
+      return context.json({ error: 'Invalid alert ID' }, 400);
+    }
+
+    const doRequest = async () => {
+      const result = await lapiClient.deleteAlert(alertId);
+      database.deleteAlert(alertId);
+      database.deleteDecisionsByAlertId(alertId);
+      return context.json((result as object) || { message: 'Deleted' });
+    };
+
+    try {
+      return await doRequest();
+    } catch (error) {
+      return handleApiError(error as AnyError, context, 'deleting alert', doRequest);
+    }
+  });
+
+  app.get(`${config.basePath}/api/decisions`, ensureAuth, async (context) => {
+    try {
+      if (refreshIntervalMs === 0) {
+        await updateCache();
+      }
+
+      if (!cache.isInitialized) {
+        await ensureBootstrapReady('decisions request');
+      }
+
+      const includeExpired = context.req.query('include_expired') === 'true';
+      const now = new Date().toISOString();
+      const since = new Date(Date.now() - config.lookbackMs).toISOString();
+      const rows = includeExpired
+        ? database.getDecisionsSince(since, now)
+        : database.getActiveDecisions(now);
+
+      let decisions = rows.map((row) => toDecisionListItem(JSON.parse(row.raw_data) as AlertDecision & Record<string, unknown>, includeExpired));
+      decisions = markDuplicateDecisions(decisions);
+      decisions.sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
+
+      return context.json(decisions);
+    } catch (error: any) {
+      console.error('Error serving decisions from database:', error.message);
+      return context.json({ error: 'Failed to retrieve decisions' }, 500);
+    }
+  });
+
+  app.get(`${config.basePath}/api/config`, ensureAuth, (context) => {
+    const hours = lookbackHours(config.lookbackPeriod);
+    const payload: ConfigResponse = {
+      lookback_period: config.lookbackPeriod,
+      lookback_hours: hours,
+      lookback_days: Math.max(1, Math.round(hours / 24)),
+      refresh_interval: refreshIntervalMs,
+      current_interval_name: getIntervalName(refreshIntervalMs),
+      lapi_status: lapiClient.getStatus(),
+      sync_status: syncStatus,
+    };
+
+    return context.json(payload);
+  });
+
+  app.put(`${config.basePath}/api/config/refresh-interval`, ensureAuth, async (context) => {
+    try {
+      const body = await context.req.json<{ interval?: string }>();
+      const interval = body.interval;
+
+      if (!interval) {
+        return context.json({ error: 'interval is required' }, 400);
+      }
+
+      const validIntervals = ['manual', '0', '5s', '30s', '1m', '5m'];
+      if (!validIntervals.includes(interval)) {
+        return context.json({ error: `Invalid interval. Must be one of: ${validIntervals.join(', ')}` }, 400);
+      }
+
+      const nextInterval = parseRefreshInterval(interval);
+      const previous = getIntervalName(refreshIntervalMs);
+      refreshIntervalMs = nextInterval;
+      savePersistedConfig(database, { refresh_interval_ms: nextInterval });
+      startRefreshScheduler();
+
+      return context.json({
+        success: true,
+        old_interval: previous,
+        new_interval: interval,
+        new_interval_ms: nextInterval,
+        message: `Refresh interval updated to ${interval}`,
+      });
+    } catch (error: any) {
+      console.error('Error updating refresh interval:', error.message);
+      return context.json({ error: 'Failed to update refresh interval' }, 500);
+    }
+  });
+
+  app.post(`${config.basePath}/api/cache/clear`, ensureAuth, async (context) => {
+    try {
+      database.clearSyncData();
+      cache.isInitialized = false;
+      cache.lastUpdate = null;
+      isFirstSync = true;
+      await ensureBootstrapReady('manual cache clear');
+
+      return context.json({
+        success: true,
+        message: 'Cache cleared and re-synced',
+        alert_count: database.countAlerts(),
+      });
+    } catch (error: any) {
+      console.error('Error clearing cache:', error.message);
+      return context.json({ error: 'Failed to clear cache' }, 500);
+    }
+  });
+
+  app.get(`${config.basePath}/api/stats/alerts`, ensureAuth, async (context) => {
+    try {
+      if (refreshIntervalMs === 0) {
+        await updateCache();
+      }
+
+      if (!cache.isInitialized) {
+        await ensureBootstrapReady('stats alerts request');
+      }
+
+      const since = new Date(Date.now() - config.lookbackMs).toISOString();
+      const alerts = database
+        .getAlertsSince(since)
+        .map((row) => {
+          const alert = JSON.parse(row.raw_data) as AlertRecord;
+          const payload: StatsAlert = {
+            created_at: alert.created_at,
+            scenario: alert.scenario,
+            source: alert.source
+              ? {
+                  ip: alert.source.ip,
+                  value: alert.source.value,
+                  cn: alert.source.cn,
+                  as_name: alert.source.as_name,
+                }
+              : null,
+            target: alert.target,
+          };
+          return payload;
+        })
+        .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
+
+      return context.json(alerts);
+    } catch (error: any) {
+      console.error('Error serving stats alerts from database:', error.message);
+      return context.json({ error: 'Failed to retrieve alert statistics' }, 500);
+    }
+  });
+
+  app.get(`${config.basePath}/api/stats/decisions`, ensureAuth, async (context) => {
+    try {
+      if (refreshIntervalMs === 0) {
+        await updateCache();
+      }
+
+      if (!cache.isInitialized) {
+        await ensureBootstrapReady('stats decisions request');
+      }
+
+      const since = new Date(Date.now() - config.lookbackMs).toISOString();
+      const now = new Date().toISOString();
+      const decisions = database
+        .getDecisionsSince(since, now)
+        .map((row) => {
+          const decision = JSON.parse(row.raw_data) as Record<string, unknown>;
+          const payload: StatsDecision = {
+            id: decision.id as string | number,
+            created_at: String(decision.created_at || ''),
+            scenario: typeof decision.scenario === 'string' ? decision.scenario : undefined,
+            value: typeof decision.value === 'string' ? decision.value : undefined,
+            stop_at: typeof decision.stop_at === 'string' ? decision.stop_at : undefined,
+            target: typeof decision.target === 'string' ? decision.target : undefined,
+          };
+          return payload;
+        })
+        .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
+
+      return context.json(decisions);
+    } catch (error: any) {
+      console.error('Error serving stats decisions from database:', error.message);
+      return context.json({ error: 'Failed to retrieve decision statistics' }, 500);
+    }
+  });
+
+  app.post(`${config.basePath}/api/decisions`, ensureAuth, async (context) => {
+    const doRequest = async () => {
+      const body = await context.req.json<AddDecisionRequest>();
+      const ip = body.ip;
+      const duration = body.duration || '4h';
+      const reason = body.reason || 'manual';
+      const type = body.type || 'ban';
+
+      if (!ip) {
+        return context.json({ error: 'IP address is required' }, 400);
+      }
+
+      const ipv4Re = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/;
+      const ipv6Re = /^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}(\/\d{1,3})?$/;
+      if (!ipv4Re.test(ip) && !ipv6Re.test(ip)) {
+        return context.json({ error: 'Invalid IP address format' }, 400);
+      }
+
+      const validTypes = ['ban', 'captcha'];
+      if (!validTypes.includes(type)) {
+        return context.json({ error: `Invalid type. Must be one of: ${validTypes.join(', ')}` }, 400);
+      }
+
+      if (!/^\d+[smhd]$/.test(duration)) {
+        return context.json({ error: 'Invalid duration format. Use e.g. "4h", "30m", "1d"' }, 400);
+      }
+
+      const result = await lapiClient.addDecision(ip, type, duration, reason.slice(0, 256));
+      await updateCacheDelta();
+      return context.json({ message: 'Decision added (via Alert)', result });
+    };
+
+    try {
+      return await doRequest();
+    } catch (error) {
+      return handleApiError(error as AnyError, context, 'adding decision', doRequest);
+    }
+  });
+
+  app.delete(`${config.basePath}/api/decisions/:id`, ensureAuth, async (context) => {
+    const decisionId = String(context.req.param('id'));
+    if (!/^\d+$/.test(decisionId)) {
+      return context.json({ error: 'Invalid decision ID' }, 400);
+    }
+
+    const doRequest = async () => {
+      const result = await lapiClient.deleteDecision(decisionId);
+      database.deleteDecision(decisionId);
+      return context.json((result as object) || { message: 'Deleted' });
+    };
+
+    try {
+      return await doRequest();
+    } catch (error) {
+      return handleApiError(error as AnyError, context, 'deleting decision', doRequest);
+    }
+  });
+
+  app.get(`${config.basePath}/api/update-check`, ensureAuth, async (context) => {
+    try {
+      const status = await checkForUpdates();
+      context.header('Cache-Control', 'no-store, no-cache, must-revalidate');
+      context.header('Pragma', 'no-cache');
+      return context.json(status);
+    } catch (error: any) {
+      console.error('Error checking for updates:', error.message);
+      context.header('Cache-Control', 'no-store, no-cache, must-revalidate');
+      context.header('Pragma', 'no-cache');
+      return context.json({ error: 'Update check failed' }, 500);
+    }
+  });
+
+  app.use(
+    `${config.basePath}/assets/*`,
+    serveStatic({
+      root: distRoot,
+      rewriteRequestPath: (requestPath) => (config.basePath ? requestPath.replace(config.basePath, '') : requestPath),
+    }),
+  );
+
+  staticFiles.forEach((file) => {
+    app.use(`${config.basePath}${file}`, serveStatic({ path: path.join(distRoot, file) }));
+  });
+
+  app.get(`${config.basePath}/site.webmanifest`, (context) =>
+    context.json({
+      name: 'CrowdSec Web UI',
+      short_name: 'CrowdSec',
+      icons: [
+        { src: `${config.basePath}/android-chrome-192x192.png`, sizes: '192x192', type: 'image/png' },
+        { src: `${config.basePath}/android-chrome-512x512.png`, sizes: '512x512', type: 'image/png' },
+      ],
+      theme_color: '#ffffff',
+      background_color: '#ffffff',
+      display: 'standalone',
+      start_url: config.basePath || '/',
+    }),
+  );
+
+  app.get(`${config.basePath}/*`, (context) => {
+    try {
+      const indexPath = path.join(distRoot, 'index.html');
+      let html = fs.readFileSync(indexPath, 'utf-8');
+      const safePath = config.basePath.replace(/[^a-zA-Z0-9/_-]/g, '');
+      const configScript = `<script>window.__BASE_PATH__="${safePath}";</script>`;
+      html = html.replace('</head>', `${configScript}\n</head>`);
+
+      if (config.basePath) {
+        html = html.replace(/href="\.\//g, `href="${config.basePath}/`);
+        html = html.replace(/src="\.\//g, `src="${config.basePath}/`);
+      }
+
+      return context.html(html);
+    } catch {
+      return context.text('Not Found', 404);
+    }
+  });
+
+  if (config.basePath) {
+    app.get('/', (context) => context.redirect(`${config.basePath}/`));
+  }
+
+  function updateSyncStatus(updates: Partial<SyncStatus>): void {
+    Object.assign(syncStatus, updates);
+  }
+
+  function processAlertForDatabase(alert: AlertRecord): void {
+    if (!alert || !alert.id) return;
+    const decisions = alert.decisions || [];
+    const alertSource = alert.source || {};
+    const target = getAlertTarget(alert);
+    const enrichedAlert: AlertRecord = {
+      ...alert,
+      target,
+    };
+
+    const alertData: AlertInsertParams = {
+      $id: alert.id,
+      $uuid: alert.uuid || String(alert.id),
+      $created_at: alert.created_at,
+      $scenario: alert.scenario,
+      $source_ip: alertSource.ip || alertSource.value,
+      $message: alert.message || '',
+      $raw_data: JSON.stringify(enrichedAlert),
+    };
+
+    try {
+      database.insertAlert(alertData);
+    } catch (error: any) {
+      if (!String(error.message).includes('UNIQUE constraint')) {
+        console.error(`Failed to insert alert ${alert.id}:`, error.message);
+      }
+    }
+
+    for (const decision of decisions) {
+      if (decision.origin === 'CAPI') continue;
+
+      const createdAt = decision.created_at || alert.created_at;
+      const stopAt = decision.duration
+        ? new Date(Date.now() + parseGoDuration(decision.duration)).toISOString()
+        : decision.stop_at || createdAt;
+
+      const enrichedDecision = {
+        ...decision,
+        created_at: createdAt,
+        stop_at: stopAt,
+        scenario: decision.scenario || alert.scenario || 'unknown',
+        origin: decision.origin || decision.scenario || alert.scenario || 'unknown',
+        alert_id: alert.id,
+        value: decision.value || alertSource.ip,
+        type: decision.type || 'ban',
+        country: alertSource.cn,
+        as: alertSource.as_name,
+        target,
+        is_duplicate: false,
+      };
+
+      const decisionData: DecisionInsertParams = {
+        $id: String(decision.id),
+        $uuid: String(decision.id),
+        $alert_id: alert.id,
+        $created_at: createdAt,
+        $stop_at: stopAt,
+        $value: decision.value,
+        $type: decision.type,
+        $origin: enrichedDecision.origin,
+        $scenario: enrichedDecision.scenario,
+        $raw_data: JSON.stringify(enrichedDecision),
+      };
+
+      try {
+        database.insertDecision(decisionData);
+      } catch (error: any) {
+        console.error(`Failed to insert decision ${decision.id}:`, error.message);
+      }
+    }
+  }
+
+  async function syncHistory(): Promise<number> {
+    const showOverlay = isFirstSync;
+    isFirstSync = false;
+
+    updateSyncStatus({
+      isSyncing: showOverlay,
+      progress: 0,
+      message: 'Starting historical data sync...',
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+    });
+
+    const now = Date.now();
+    const lookbackStart = now - config.lookbackMs;
+    const chunkSizeMs = 6 * 60 * 60 * 1_000;
+    const totalDuration = now - lookbackStart;
+    let currentStart = lookbackStart;
+    let totalAlerts = 0;
+
+    while (currentStart < now) {
+      const currentEnd = Math.min(currentStart + chunkSizeMs, now);
+      const progress = Math.round(((currentEnd - lookbackStart) / totalDuration) * 100);
+      const sinceDuration = toDuration(currentStart);
+      const untilDuration = toDuration(currentEnd);
+
+      updateSyncStatus({
+        progress: Math.min(progress, 90),
+        message: `Syncing: ${sinceDuration} → ${untilDuration} ago (${totalAlerts} alerts)`,
+      });
+
+      try {
+        const alerts = await lapiClient.fetchAlerts(sinceDuration, untilDuration);
+        if (alerts.length > 0) {
+          const insertTransaction = database.transaction<unknown[]>((items) => {
+            for (const alert of items) {
+              processAlertForDatabase(alert as AlertRecord);
+            }
+          });
+          insertTransaction(alerts);
+          totalAlerts += alerts.length;
+        }
+      } catch (error: any) {
+        console.error('Failed to sync chunk:', error.message);
+      }
+
+      currentStart = currentEnd;
+      await Bun.sleep(100);
+    }
+
+    updateSyncStatus({ progress: 95, message: 'Syncing active decisions...' });
+    try {
+      const activeDecisionAlerts = await lapiClient.fetchAlerts(null, null, true);
+      if (activeDecisionAlerts.length > 0) {
+        const refreshTransaction = database.transaction<unknown[]>((alerts) => {
+          for (const alert of alerts) {
+            processAlertForDatabase(alert as AlertRecord);
+          }
+        });
+        refreshTransaction(activeDecisionAlerts);
+      }
+    } catch (error: any) {
+      console.error('Failed to sync active decisions:', error.message);
+    }
+
+    updateSyncStatus({
+      isSyncing: false,
+      progress: 100,
+      message: `Sync complete. ${totalAlerts} alerts imported.`,
+      completedAt: new Date().toISOString(),
+    });
+
+    return totalAlerts;
+  }
+
+  async function initializeCache(): Promise<boolean> {
+    if (initializationPromise) {
+      return initializationPromise;
+    }
+
+    initializationPromise = (async () => {
+      try {
+        await syncHistory();
+        cache.lastUpdate = new Date().toISOString();
+        cache.isInitialized = true;
+        lapiClient.updateStatus(true);
+        return true;
+      } catch (error: any) {
+        cache.isInitialized = false;
+        lapiClient.updateStatus(false, error);
+        updateSyncStatus({
+          isSyncing: false,
+          progress: 0,
+          message: `Sync failed: ${error.message}`,
+          completedAt: new Date().toISOString(),
+        });
+        return false;
+      } finally {
+        initializationPromise = null;
+      }
+    })();
+
+    return initializationPromise;
+  }
+
+  async function updateCacheDelta(): Promise<void> {
+    if (!cache.isInitialized || !cache.lastUpdate) {
+      await ensureBootstrapReady('delta update full load');
+      return;
+    }
+
+    try {
+      const diffSeconds = Math.ceil((Date.now() - new Date(cache.lastUpdate).getTime()) / 1_000) + 10;
+      const sinceDuration = `${diffSeconds}s`;
+      const [newAlerts, activeDecisionAlerts] = await Promise.all([
+        lapiClient.fetchAlerts(sinceDuration, null),
+        lapiClient.fetchAlerts(null, null, true),
+      ]);
+
+      if (newAlerts.length > 0) {
+        const insertTransaction = database.transaction<unknown[]>((alerts) => {
+          for (const alert of alerts) {
+            processAlertForDatabase(alert as AlertRecord);
+          }
+        });
+        insertTransaction(newAlerts);
+      }
+
+      if (activeDecisionAlerts.length > 0) {
+        const refreshTransaction = database.transaction<unknown[]>((alerts) => {
+          for (const alert of alerts) {
+            const typedAlert = alert as AlertRecord;
+            for (const decision of typedAlert.decisions || []) {
+              if (decision.origin === 'CAPI') continue;
+
+              const createdAt = decision.created_at || typedAlert.created_at;
+              const stopAt = decision.duration
+                ? new Date(Date.now() + parseGoDuration(decision.duration)).toISOString()
+                : decision.stop_at || createdAt;
+
+              const alertSource = typedAlert.source || {};
+              const enrichedDecision = {
+                ...decision,
+                created_at: createdAt,
+                stop_at: stopAt,
+                scenario: decision.scenario || typedAlert.scenario || 'unknown',
+                origin: decision.origin || decision.scenario || typedAlert.scenario || 'unknown',
+                alert_id: typedAlert.id,
+                value: decision.value || alertSource.ip,
+                type: decision.type || 'ban',
+                country: alertSource.cn,
+                as: alertSource.as_name,
+              };
+
+              database.updateDecision({
+                $id: String(decision.id),
+                $stop_at: stopAt,
+                $raw_data: JSON.stringify(enrichedDecision),
+              });
+            }
+          }
+        });
+        refreshTransaction(activeDecisionAlerts);
+      }
+
+      cache.lastUpdate = new Date().toISOString();
+      lapiClient.updateStatus(true);
+    } catch (error: any) {
+      console.error('Failed to update cache delta:', error.message);
+      lapiClient.updateStatus(false, error);
+    }
+  }
+
+  function cleanupOldData(): void {
+    const cutoff = new Date(Date.now() - config.lookbackMs).toISOString();
+    try {
+      database.deleteOldAlerts(cutoff);
+      database.deleteOldDecisions(cutoff);
+    } catch (error: any) {
+      console.error('Cleanup failed:', error.message);
+    }
+  }
+
+  async function updateCache(): Promise<void> {
+    await updateCacheDelta();
+    cleanupOldData();
+  }
+
+  function clearBootstrapRetryTimeout(): void {
+    if (bootstrapRetryTimeout) {
+      clearTimeout(bootstrapRetryTimeout);
+      bootstrapRetryTimeout = null;
+    }
+  }
+
+  function finalizeBootstrapRecovery(): void {
+    clearBootstrapRetryTimeout();
+    bootstrapWaitLogged = false;
+    if (refreshIntervalMs > 0 && !isSchedulerRunning) {
+      startRefreshScheduler();
+    }
+  }
+
+  function scheduleBootstrapRetry(reason = 'retry requested'): void {
+    if (!lapiClient.hasCredentials() || !config.bootstrapRetryEnabled || cache.isInitialized || bootstrapRetryTimeout) {
+      return;
+    }
+
+    console.log(`Bootstrap recovery will retry in ${getIntervalName(config.bootstrapRetryDelayMs)}: ${reason}.`);
+    bootstrapRetryTimeout = setTimeout(() => {
+      bootstrapRetryTimeout = null;
+      void ensureBootstrapReady('bootstrap retry');
+    }, config.bootstrapRetryDelayMs);
+  }
+
+  async function ensureBootstrapReady(source = 'bootstrap'): Promise<boolean> {
+    if (!lapiClient.hasCredentials()) {
+      return false;
+    }
+
+    if (cache.isInitialized) {
+      finalizeBootstrapRecovery();
+      return true;
+    }
+
+    if (bootstrapPromise) {
+      return bootstrapPromise;
+    }
+
+    bootstrapPromise = (async () => {
+      if (!lapiClient.hasToken()) {
+        const loginSuccess = await lapiClient.login(`bootstrap: ${source}`);
+        if (!loginSuccess) {
+          scheduleBootstrapRetry(`authentication failed during ${source}`);
+          return false;
+        }
+      }
+
+      const initialized = await initializeCache();
+      if (initialized) {
+        finalizeBootstrapRecovery();
+        return true;
+      }
+
+      scheduleBootstrapRetry(`cache initialization failed during ${source}`);
+      return false;
+    })();
+
+    try {
+      return await bootstrapPromise;
+    } finally {
+      bootstrapPromise = null;
+    }
+  }
+
+  async function runSchedulerLoop(): Promise<void> {
+    if (!isSchedulerRunning) return;
+
+    const now = Date.now();
+    const isIdle = now - lastRequestTime > config.idleThresholdMs;
+    const doFullRefresh =
+      !isIdle &&
+      config.fullRefreshIntervalMs > 0 &&
+      now - lastFullRefreshTime > config.fullRefreshIntervalMs;
+
+    try {
+      if (!cache.isInitialized) {
+        if (!bootstrapWaitLogged) {
+          bootstrapWaitLogged = true;
+        }
+        scheduleBootstrapRetry('scheduler waiting for bootstrap');
+      } else if (doFullRefresh) {
+        await initializeCache();
+        if (cache.isInitialized) {
+          finalizeBootstrapRecovery();
+        }
+        lastFullRefreshTime = Date.now();
+      } else {
+        await updateCache();
+      }
+    } catch (error) {
+      console.error('Scheduler update failed:', error);
+    }
+
+    if (!isSchedulerRunning) return;
+
+    const currentIdle = Date.now() - lastRequestTime > config.idleThresholdMs;
+    let nextInterval = refreshIntervalMs;
+
+    if (nextInterval > 0 && currentIdle && nextInterval < config.idleRefreshIntervalMs) {
+      nextInterval = config.idleRefreshIntervalMs;
+    }
+
+    if (nextInterval <= 0) {
+      isSchedulerRunning = false;
+      return;
+    }
+
+    schedulerTimeout = setTimeout(() => {
+      void runSchedulerLoop();
+    }, nextInterval);
+  }
+
+  function startRefreshScheduler(): void {
+    stopRefreshScheduler();
+    if (refreshIntervalMs > 0) {
+      isSchedulerRunning = true;
+      schedulerTimeout = setTimeout(() => {
+        void runSchedulerLoop();
+      }, refreshIntervalMs);
+    }
+  }
+
+  function stopRefreshScheduler(): void {
+    isSchedulerRunning = false;
+    if (schedulerTimeout) {
+      clearTimeout(schedulerTimeout);
+      schedulerTimeout = null;
+    }
+    if (bootstrapRetryTimeout) {
+      clearTimeout(bootstrapRetryTimeout);
+      bootstrapRetryTimeout = null;
+    }
+  }
+
+  async function activityTrackerMiddleware(context: HonoContext, next: HonoNext): Promise<void> {
+    const now = Date.now();
+    const wasIdle = now - lastRequestTime > config.idleThresholdMs;
+    lastRequestTime = now;
+
+    if (wasIdle && isSchedulerRunning) {
+      if (schedulerTimeout) {
+        clearTimeout(schedulerTimeout);
+      }
+      void runSchedulerLoop();
+    }
+
+    await next();
+  }
+
+  async function ensureAuth(context: HonoContext, next: HonoNext): Promise<Response | void> {
+    if (!lapiClient.hasToken()) {
+      const success = await lapiClient.login('request authentication');
+      if (!success) {
+        return context.json({ error: 'Failed to authenticate with CrowdSec LAPI' }, 502);
+      }
+
+      if (!cache.isInitialized) {
+        void ensureBootstrapReady('post-auth recovery');
+      }
+    }
+
+    await next();
+  }
+
+  async function handleApiError(
+    error: AnyError,
+    context: HonoContext,
+    action: string,
+    replayCallback: (() => Promise<Response>) | null,
+  ): Promise<Response> {
+    if (error.response?.status === 401) {
+      const success = await lapiClient.login(`401 recovery: ${action}`);
+      if (success && replayCallback) {
+        try {
+          return await replayCallback();
+        } catch (retryError) {
+          error = retryError as AnyError;
+        }
+      }
+    }
+
+    if (error.response) {
+      return context.json({ error: `Request failed with status ${error.response.status}` }, error.response.status);
+    }
+    if (error.request) {
+      return context.json({ error: 'Bad Gateway: No response from CrowdSec LAPI' }, 502);
+    }
+    return context.json({ error: 'Internal server error' }, 500);
+  }
+
+  function hydrateAlertWithDecisions(alert: AlertRecord): AlertRecord {
+    const clone: AlertRecord = { ...alert };
+    const decisions = Array.isArray(clone.decisions) ? clone.decisions : [];
+
+    clone.decisions = decisions.map((decision) => {
+      const databaseDecision = database.getDecisionById(decision.id);
+      const now = new Date();
+      const stopAt = databaseDecision?.stop_at
+        ? new Date(databaseDecision.stop_at)
+        : decision.stop_at
+          ? new Date(decision.stop_at)
+          : null;
+      const isExpired = !stopAt || stopAt < now;
+
+      let duration = decision.duration;
+      if (stopAt && !isExpired) {
+        const remainingMs = stopAt.getTime() - now.getTime();
+        const hours = Math.floor(remainingMs / 3_600_000);
+        const minutes = Math.floor((remainingMs % 3_600_000) / 60_000);
+        const seconds = Math.floor((remainingMs % 60_000) / 1_000);
+        duration = `${hours > 0 ? `${hours}h` : ''}${minutes > 0 || hours > 0 ? `${minutes}m` : ''}${seconds}s`;
+      } else if (isExpired) {
+        duration = '0s';
+      }
+
+      return {
+        ...decision,
+        stop_at: stopAt ? stopAt.toISOString() : decision.stop_at,
+        duration,
+        expired: isExpired,
+      };
+    });
+
+    return clone;
+  }
+
+  if (options.startBackgroundTasks) {
+    startBackgroundTasks();
+  }
+
+  return {
+    app,
+    fetch: app.fetch,
+    config,
+    database,
+    lapiClient,
+    startBackgroundTasks,
+    stopBackgroundTasks: stopRefreshScheduler,
+    getSyncStatus: () => ({ ...syncStatus }),
+    getLapiStatus: () => lapiClient.getStatus(),
+  };
+
+  function startBackgroundTasks(): void {
+    if (!lapiClient.hasCredentials()) {
+      console.warn('Cache initialization skipped - credentials not configured');
+      return;
+    }
+    startRefreshScheduler();
+    void ensureBootstrapReady('startup');
+  }
+}
+
+function loadPersistedConfig(database: CrowdsecDatabase): PersistedConfig {
+  try {
+    const row = database.getMeta('refresh_interval_ms');
+    if (row?.value !== undefined) {
+      return { refresh_interval_ms: Number.parseInt(row.value, 10) };
+    }
+  } catch (error) {
+    console.error('Error loading config from database:', error);
+  }
+
+  return {};
+}
+
+function savePersistedConfig(database: CrowdsecDatabase, config: PersistedConfig): void {
+  try {
+    if (config.refresh_interval_ms !== undefined) {
+      database.setMeta('refresh_interval_ms', String(config.refresh_interval_ms));
+    }
+  } catch (error) {
+    console.error('Error saving config to database:', error);
+  }
+}
+
+function lookbackHours(duration: string): number {
+  const match = duration.match(/^(\d+)([hmd])$/);
+  if (!match) return 168;
+  const value = Number.parseInt(match[1], 10);
+  const unit = match[2];
+  if (unit === 'h') return value;
+  if (unit === 'd') return value * 24;
+  return value / 60;
+}
+
+function toDecisionListItem(
+  decision: AlertDecision & Record<string, unknown>,
+  includeExpired: boolean,
+): DecisionListItem {
+  const expired = includeExpired
+    ? Boolean(decision.stop_at && new Date(String(decision.stop_at)) < new Date())
+    : false;
+
+  return {
+    id: decision.id,
+    created_at: String(decision.created_at || ''),
+    scenario: typeof decision.scenario === 'string' ? decision.scenario : undefined,
+    value: typeof decision.value === 'string' ? decision.value : undefined,
+    expired,
+    is_duplicate: decision.is_duplicate === true,
+    detail: {
+      origin: typeof decision.origin === 'string' ? decision.origin : 'manual',
+      type: typeof decision.type === 'string' ? decision.type : undefined,
+      reason: typeof decision.scenario === 'string' ? decision.scenario : undefined,
+      action: typeof decision.type === 'string' ? decision.type : undefined,
+      country: typeof decision.country === 'string' ? decision.country : 'Unknown',
+      as: typeof decision.as === 'string' ? decision.as : 'Unknown',
+      events_count: typeof decision.events_count === 'number' ? decision.events_count : 0,
+      duration: typeof decision.duration === 'string' ? decision.duration : 'N/A',
+      expiration: typeof decision.stop_at === 'string' ? decision.stop_at : undefined,
+      alert_id: decision.alert_id as string | number | undefined,
+      target: typeof decision.target === 'string' ? decision.target : null,
+    },
+  };
+}
+
+function markDuplicateDecisions(decisions: DecisionListItem[]): DecisionListItem[] {
+  const primaryMap = new Map<string | undefined, number>();
+
+  for (const decision of decisions) {
+    if (decision.expired) continue;
+    const key = decision.value;
+    const numericId = getNumericDecisionId(decision.id);
+    const current = primaryMap.get(key);
+    if (current === undefined || numericId < current) {
+      primaryMap.set(key, numericId);
+    }
+  }
+
+  return decisions.map((decision) => {
+    if (decision.expired) {
+      return { ...decision, is_duplicate: false };
+    }
+
+    const primaryId = primaryMap.get(decision.value);
+    return {
+      ...decision,
+      is_duplicate: getNumericDecisionId(decision.id) !== primaryId,
+    };
+  });
+}
+
+function getNumericDecisionId(id: string | number): number {
+  const value = String(id);
+  if (value.startsWith('dup_')) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const numeric = Number.parseInt(value, 10);
+  return Number.isNaN(numeric) ? Number.POSITIVE_INFINITY : numeric;
+}
