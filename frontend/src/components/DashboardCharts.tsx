@@ -1,5 +1,4 @@
-// @ts-nocheck
-import { useMemo, useRef, useState, useEffect } from 'react';
+import { useMemo, useRef, useState, useEffect, useCallback, type PointerEvent as ReactPointerEvent } from 'react';
 import {
     BarChart,
     Bar,
@@ -8,29 +7,70 @@ import {
     CartesianGrid,
     Tooltip,
     Legend,
-    Brush,
     ResponsiveContainer
 } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
-import { BarChart3, Clock, ShieldAlert, Gavel } from 'lucide-react';
+import { BarChart3, ShieldAlert, Gavel } from 'lucide-react';
+import type { ActivityChartSeriesPoint, DateRangeSelection } from '../types';
+import {
+    type BrushWindow,
+    getBrushSelectionPayload,
+    getDraggedBrushWindow,
+    type SliderDragMode,
+    type SliderDragState,
+} from './DashboardCharts.helpers';
 
+type Granularity = 'day' | 'hour';
+
+interface ChartDatum {
+    date: string;
+    bucketKey: string;
+    label: string;
+    alerts: number;
+    decisions: number;
+}
+
+interface CustomTooltipEntry {
+    name?: string;
+    value?: string | number;
+    color?: string;
+}
+
+interface CustomTooltipProps {
+    active?: boolean;
+    payload?: CustomTooltipEntry[];
+    label?: string;
+}
+
+
+interface ActivityBarChartProps {
+    alertsData: ActivityChartSeriesPoint[];
+    decisionsData: ActivityChartSeriesPoint[];
+    unfilteredAlertsData: ActivityChartSeriesPoint[];
+    unfilteredDecisionsData: ActivityChartSeriesPoint[];
+    granularity: Granularity;
+    setGranularity: (value: Granularity) => void;
+    onDateRangeSelect?: (dateRange: DateRangeSelection | null, isAtEnd: boolean) => void;
+    selectedDateRange: DateRangeSelection | null;
+    isSticky: boolean;
+}
 
 /**
  * Custom Tooltip Component for better dark mode support
  */
-const CustomTooltip = ({ active, payload, label }) => {
+const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
     if (active && payload && payload.length) {
         return (
             <div className="bg-white dark:bg-gray-800 p-3 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg">
                 <p className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">{label}</p>
                 {payload.map((entry, index) => {
-                    const isAlert = entry.name.toLowerCase().includes('alert');
+                    const isAlert = entry.name?.toLowerCase().includes('alert');
                     const Icon = isAlert ? ShieldAlert : Gavel;
                     return (
                         <div key={index} className="flex items-center gap-2 mb-1 last:mb-0">
                             <Icon className="w-4 h-4" style={{ color: entry.color }} />
                             <span className="text-sm" style={{ color: entry.color }}>
-                                {entry.name}: {entry.value}
+                                {entry.name || 'Value'}: {entry.value ?? 0}
                             </span>
                         </div>
                     );
@@ -44,12 +84,22 @@ const CustomTooltip = ({ active, payload, label }) => {
 /**
  * Combined Bar Chart for Alerts and Decisions
  */
-export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsData, unfilteredDecisionsData, granularity, setGranularity, onDateRangeSelect, selectedDateRange, isSticky }) {
+export function ActivityBarChart({
+    alertsData,
+    decisionsData,
+    unfilteredAlertsData,
+    unfilteredDecisionsData,
+    granularity,
+    setGranularity,
+    onDateRangeSelect,
+    selectedDateRange,
+    isSticky,
+}: ActivityBarChartProps) {
     // -------------------------------------------------------------------------
     // 1. Process Filtered Data (Main Chart)
     // -------------------------------------------------------------------------
-    const filteredData = useMemo(() => {
-        const merged = {};
+    const filteredData = useMemo<ChartDatum[]>(() => {
+        const merged: Record<string, ChartDatum> = {};
 
         // Process alerts
         alertsData.forEach(item => {
@@ -74,15 +124,15 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
             merged[item.date].decisions = item.count;
         });
 
-        return Object.values(merged).sort((a, b) => a.date.localeCompare(b.date));
+        return Object.values(merged).sort((left, right) => left.date.localeCompare(right.date));
     }, [alertsData, decisionsData]);
 
 
     // -------------------------------------------------------------------------
     // 2. Process Unfiltered Data (Slider)
     // -------------------------------------------------------------------------
-    const sliderData = useMemo(() => {
-        const merged = {};
+    const sliderData = useMemo<ChartDatum[]>(() => {
+        const merged: Record<string, ChartDatum> = {};
         if (unfilteredAlertsData) {
             unfilteredAlertsData.forEach(item => {
                 merged[item.date] = {
@@ -106,27 +156,24 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
                 merged[item.date].decisions = item.count; // Include counts
             });
         }
-        return Object.values(merged).sort((a, b) => a.date.localeCompare(b.date));
+        return Object.values(merged).sort((left, right) => left.date.localeCompare(right.date));
     }, [unfilteredAlertsData, unfilteredDecisionsData]);
 
     // Slider Brush Logic
-    const [localBrushState, setLocalBrushState] = useState({ startIndex: 0, endIndex: 0 });
-    const localBrushStateRef = useRef({ startIndex: 0, endIndex: 0 });
-    const isDragging = useRef(false);
-    const dragStartWindowSize = useRef(0); // Track window size at drag start
-    const dragSource = useRef(null); // 'slide' or 'handle'
+    const [localBrushState, setLocalBrushState] = useState<BrushWindow>({ startIndex: 0, endIndex: 0 });
+    const [isDraggingState, setIsDraggingState] = useState(false);
+    const [isSliderHovered, setIsSliderHovered] = useState(false);
+    const [sliderLabelOffsets, setSliderLabelOffsets] = useState({ start: 0, end: 0 });
+    const localBrushStateRef = useRef<BrushWindow>({ startIndex: 0, endIndex: 0 });
+    const sliderTrackRef = useRef<HTMLDivElement | null>(null);
+    const sliderDragRef = useRef<SliderDragState | null>(null);
+    const sliderStartLabelRef = useRef<HTMLSpanElement | null>(null);
+    const sliderEndLabelRef = useRef<HTMLSpanElement | null>(null);
 
     // Keep ref in sync
     useEffect(() => {
         localBrushStateRef.current = localBrushState;
     }, [localBrushState]);
-
-    const brushKeyRef = useRef(0);
-    const brushKey = useMemo(() => {
-        brushKeyRef.current += 1;
-        return `brush-${brushKeyRef.current}`;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [sliderData]);
 
     // Calculate the 'target' indices based on props
     const { startIndex: targetStartIndex, endIndex: targetEndIndex } = useMemo(() => {
@@ -146,11 +193,141 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
         return { startIndex: start, endIndex: end };
     }, [sliderData, selectedDateRange]);
 
-
-    // Sync local state with target when NOT dragging
     // Use target indices when not dragging to prevent "collapse" during data updates
-    const startIndex = isDragging.current ? localBrushState.startIndex : targetStartIndex;
-    const endIndex = isDragging.current ? localBrushState.endIndex : targetEndIndex;
+    const startIndex = isDraggingState ? localBrushState.startIndex : targetStartIndex;
+    const endIndex = isDraggingState ? localBrushState.endIndex : targetEndIndex;
+
+    const sliderBucketCount = sliderData.length;
+    const sliderSelectionWidthPercent = sliderBucketCount > 0
+        ? ((endIndex - startIndex + 1) / sliderBucketCount) * 100
+        : 0;
+    const sliderSelectionLeftPercent = sliderBucketCount > 0
+        ? (startIndex / sliderBucketCount) * 100
+        : 0;
+    const sliderSelectionRightPercent = sliderSelectionLeftPercent + sliderSelectionWidthPercent;
+    const sliderStartLabel = sliderData[startIndex]?.label ?? '';
+    const sliderEndLabel = sliderData[endIndex]?.label ?? '';
+    const showSliderLabels = (isSliderHovered || isDraggingState) && sliderBucketCount > 0;
+    const sliderLabelMinGapPx = 4;
+
+    useEffect(() => {
+        if (!showSliderLabels) {
+            return;
+        }
+
+        const trackElement = sliderTrackRef.current;
+        const startLabelElement = sliderStartLabelRef.current;
+        const endLabelElement = sliderEndLabelRef.current;
+        if (!trackElement || !startLabelElement || !endLabelElement) {
+            return;
+        }
+
+        const animationFrameId = window.requestAnimationFrame(() => {
+            const trackWidth = trackElement.getBoundingClientRect().width;
+            const startLabelWidth = startLabelElement.getBoundingClientRect().width;
+            const endLabelWidth = endLabelElement.getBoundingClientRect().width;
+            if (trackWidth <= 0 || startLabelWidth <= 0 || endLabelWidth <= 0) {
+                setSliderLabelOffsets({ start: 0, end: 0 });
+                return;
+            }
+
+            const startCenterPx = (sliderSelectionLeftPercent / 100) * trackWidth;
+            const endCenterPx = (sliderSelectionRightPercent / 100) * trackWidth;
+            const startLeft = startCenterPx - (startLabelWidth / 2);
+            const endLeft = endCenterPx - (endLabelWidth / 2);
+            const overlapAmount = (startLeft + startLabelWidth + sliderLabelMinGapPx) - endLeft;
+
+            if (overlapAmount <= 0) {
+                setSliderLabelOffsets({ start: 0, end: 0 });
+                return;
+            }
+
+            setSliderLabelOffsets({
+                start: -(overlapAmount / 2),
+                end: overlapAmount / 2,
+            });
+        });
+
+        return () => {
+            window.cancelAnimationFrame(animationFrameId);
+        };
+    }, [
+        showSliderLabels,
+        sliderSelectionLeftPercent,
+        sliderSelectionRightPercent,
+        sliderStartLabel,
+        sliderEndLabel,
+    ]);
+
+    const commitBrushSelection = useCallback((nextRange: BrushWindow) => {
+        const payload = getBrushSelectionPayload(sliderData, nextRange);
+        if (payload && onDateRangeSelect) {
+            onDateRangeSelect(payload.dateRange, payload.isAtEnd);
+        }
+    }, [onDateRangeSelect, sliderData]);
+
+    const updateSliderDrag = useCallback((clientX: number) => {
+        const dragState = sliderDragRef.current;
+        if (!dragState) {
+            return;
+        }
+
+        const nextRange = getDraggedBrushWindow(dragState, clientX, localBrushStateRef.current);
+        if (!nextRange) {
+            return;
+        }
+
+        setLocalBrushState(nextRange);
+    }, []);
+
+    const startSliderDrag = (mode: SliderDragMode, event: ReactPointerEvent<HTMLDivElement>) => {
+        if (sliderData.length === 0) {
+            return;
+        }
+
+        const trackWidth = sliderTrackRef.current?.getBoundingClientRect().width ?? 0;
+        if (trackWidth <= 0) {
+            return;
+        }
+
+        sliderDragRef.current = {
+            mode,
+            pointerStartX: event.clientX,
+            initialStartIndex: targetStartIndex,
+            initialEndIndex: targetEndIndex,
+            bucketWidth: trackWidth / sliderData.length,
+            bucketCount: sliderData.length,
+        };
+
+        sliderTrackRef.current?.setPointerCapture(event.pointerId);
+        setLocalBrushState({ startIndex: targetStartIndex, endIndex: targetEndIndex });
+        setIsDraggingState(true);
+        event.preventDefault();
+        event.stopPropagation();
+    };
+
+    const handleSliderPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+        if (!isDraggingState) {
+            return;
+        }
+
+        updateSliderDrag(event.clientX);
+        event.preventDefault();
+    };
+
+    const handleSliderPointerEnd = (event: ReactPointerEvent<HTMLDivElement>) => {
+        if (!isDraggingState) {
+            return;
+        }
+
+        sliderTrackRef.current?.releasePointerCapture(event.pointerId);
+        sliderDragRef.current = null;
+        commitBrushSelection(localBrushStateRef.current);
+        window.setTimeout(() => {
+            setIsDraggingState(false);
+        }, 0);
+        event.preventDefault();
+    };
 
     // Sticky Brush Logic: Auto-follow time
     useEffect(() => {
@@ -192,7 +369,7 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
     // -------------------------------------------------------------------------
     // 4. Dynamic Bar Size Calculation
     // -------------------------------------------------------------------------
-    const containerRef = useRef(null);
+    const containerRef = useRef<HTMLDivElement | null>(null);
     const [containerWidth, setContainerWidth] = useState(0);
 
     useEffect(() => {
@@ -225,7 +402,7 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
         return Math.max(4, Math.min(40, calculatedBarSize));
     }, [containerWidth, filteredData.length]);
 
-    const granularities = ['day', 'hour'];
+    const granularities: Granularity[] = ['day', 'hour'];
 
     return (
         <Card className="h-full outline-none flex flex-col">
@@ -246,7 +423,7 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
                                 key={g}
                                 onClick={(e) => {
                                     e.stopPropagation();
-                                    if (setGranularity) setGranularity(g);
+                                    setGranularity(g);
                                 }}
                                 className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${granularity === g
                                     ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
@@ -296,146 +473,76 @@ export function ActivityBarChart({ alertsData, decisionsData, unfilteredAlertsDa
                 </div>
 
                 {/* Slider Section */}
-                <div
-                    className="h-[60px] outline-none relative"
-                    onMouseDownCapture={(e) => {
-                        const target = e.target;
-                        // Check if hitting the slide or handles
-                        // We check classList or closest element with the class
-                        // Note: Recharts renders SVG, so standard DOM traversal works
-                        if (target.closest('.recharts-brush-slide')) {
-                            dragSource.current = 'slide';
-                        } else if (target.closest('.recharts-brush-traveller')) {
-                            dragSource.current = 'handle';
-                        } else {
-                            // If clicking background/track, might be a jump. 
-                            // Usually dragSource should be null.
-                            dragSource.current = null;
-                        }
-                    }}
-                    onTouchStartCapture={(e) => {
-                        const target = e.target;
-                        if (target.closest('.recharts-brush-slide')) {
-                            dragSource.current = 'slide';
-                        } else if (target.closest('.recharts-brush-traveller')) {
-                            dragSource.current = 'handle';
-                        } else {
-                            dragSource.current = null;
-                        }
-                    }}
-                >
-                    <ResponsiveContainer width="100%" height="100%">
-                        <BarChart
-                            data={sliderData}
-                            margin={{ top: 0, right: 30, left: 60, bottom: 0 }}
+                <div className="mt-4 h-[60px] outline-none relative px-[60px] pr-[30px]">
+                    <div
+                        ref={sliderTrackRef}
+                        data-testid="activity-slider-track"
+                        data-label-layout={showSliderLabels ? 'below' : 'hidden'}
+                        data-label-offset-active={showSliderLabels && (sliderLabelOffsets.start !== 0 || sliderLabelOffsets.end !== 0) ? 'true' : 'false'}
+                        className="relative h-10 rounded-md border border-slate-300/80 bg-slate-100/70 shadow-inner dark:border-gray-600/40 dark:bg-gray-700/25 select-none touch-none overflow-visible"
+                        onPointerEnter={() => setIsSliderHovered(true)}
+                        onPointerLeave={() => {
+                            if (!isDraggingState) {
+                                setIsSliderHovered(false);
+                            }
+                        }}
+                        onPointerMove={handleSliderPointerMove}
+                        onPointerUp={handleSliderPointerEnd}
+                        onPointerCancel={handleSliderPointerEnd}
+                    >
+                        {showSliderLabels && (
+                            <>
+                                <span
+                                    ref={sliderStartLabelRef}
+                                    data-testid="activity-range-start-label"
+                                    className="absolute left-0 top-full mt-2 text-xs text-slate-600 pointer-events-none whitespace-nowrap dark:text-gray-200/90"
+                                    style={{
+                                        left: `${sliderSelectionLeftPercent}%`,
+                                        transform: `translateX(calc(-50% + ${sliderLabelOffsets.start}px))`,
+                                    }}
+                                >
+                                    {sliderStartLabel}
+                                </span>
+                                <span
+                                    ref={sliderEndLabelRef}
+                                    data-testid="activity-range-end-label"
+                                    className="absolute left-0 top-full mt-2 text-xs text-slate-600 pointer-events-none whitespace-nowrap dark:text-gray-200/90"
+                                    style={{
+                                        left: `${sliderSelectionRightPercent}%`,
+                                        transform: `translateX(calc(-50% + ${sliderLabelOffsets.end}px))`,
+                                    }}
+                                >
+                                    {sliderEndLabel}
+                                </span>
+                            </>
+                        )}
+                        <div
+                            data-testid="activity-range-selection"
+                            data-start-index={startIndex}
+                            data-end-index={endIndex}
+                            className={`absolute top-0 bottom-0 border border-slate-500/90 bg-slate-500/20 dark:border-gray-300/80 dark:bg-gray-300/25 ${isDraggingState ? 'cursor-grabbing' : 'cursor-grab'}`}
+                            style={{
+                                left: `${sliderSelectionLeftPercent}%`,
+                                width: `${sliderSelectionWidthPercent}%`,
+                            }}
+                            onPointerDown={(event) => startSliderDrag('move', event)}
                         >
-                            <Brush
-                                key={`${granularity}-${brushKey}`}
-                                dataKey="date"
-                                height={40}
-                                stroke="#888888"
-                                fill="transparent"
-                                startIndex={startIndex}
-                                endIndex={endIndex}
-                                onChange={(e) => {
-                                    if (!e || e.startIndex === undefined || e.endIndex === undefined) return;
-
-                                    let newStart = e.startIndex;
-                                    let newEnd = e.endIndex;
-
-                                    // Start tracking drag if not already
-                                    if (!isDragging.current) {
-                                        isDragging.current = true;
-                                        // Capture initial window size at drag start
-                                        dragStartWindowSize.current = localBrushStateRef.current.endIndex - localBrushStateRef.current.startIndex;
-
-                                        const handleDragEnd = () => {
-                                            window.removeEventListener('mouseup', handleDragEnd);
-                                            window.removeEventListener('touchend', handleDragEnd);
-
-                                            // Reset drag source
-                                            dragSource.current = null;
-
-                                            // Commit the value
-                                            // We need to use the ref to get the LATEST state inside the callback
-                                            const currentStart = localBrushStateRef.current?.startIndex ?? e.startIndex;
-                                            const currentEnd = localBrushStateRef.current?.endIndex ?? e.endIndex;
-
-                                            const isStartReset = currentStart === 0;
-                                            const isEndReset = currentEnd >= sliderData.length - 1;
-                                            const isFullRange = isStartReset && isEndReset;
-
-                                            const startItem = sliderData[currentStart];
-                                            const endItem = sliderData[currentEnd];
-
-                                            if (startItem && endItem && onDateRangeSelect) {
-                                                const dateRange = isFullRange ? null : {
-                                                    start: startItem.bucketKey,
-                                                    end: endItem.bucketKey
-                                                };
-                                                // Pass isAtEnd to indicate if brush is at the rightmost position
-                                                onDateRangeSelect(dateRange, isEndReset);
-                                            }
-                                            // Defer the isDragging reset to allow state update to propagate first
-                                            requestAnimationFrame(() => {
-                                                isDragging.current = false;
-                                            });
-                                        };
-                                        window.addEventListener('mouseup', handleDragEnd);
-                                        window.addEventListener('touchend', handleDragEnd);
-                                    } else {
-                                        // During drag: Check if we are dragging the SLIDE
-                                        if (dragSource.current === 'slide') {
-                                            const currentWindowSize = newEnd - newStart;
-                                            const expectedWindowSize = dragStartWindowSize.current;
-
-                                            // If dragging slide, window size MUST match expected size
-                                            // We fix both shrinking AND expansion here
-                                            if (expectedWindowSize > 0 && currentWindowSize !== expectedWindowSize) {
-
-                                                // Priority: Adjust the side that is NOT at the edge first, 
-                                                // or if at edge, ensure the other side respects size.
-
-                                                if (newStart <= 0) {
-                                                    // Hit left edge: Force end to match size
-                                                    newEnd = Math.min(sliderData.length - 1, newStart + expectedWindowSize);
-                                                } else if (newEnd >= sliderData.length - 1) {
-                                                    // Hit right edge: Force start to match size
-                                                    newStart = Math.max(0, newEnd - expectedWindowSize);
-                                                } else {
-                                                    // Middle but size changed? 
-                                                    // This can happen due to snapping. 
-                                                    // We default to preserving the START index if dragging right? 
-                                                    // Hard to know direction here easily without prev state.
-                                                    // But generally, sticking to size is safer.
-                                                    // If we expanded, we likely want to shrink back.
-                                                    // If we assume standard drag, let's defer to Recharts in middle unless critical?
-                                                    // Actually, user compliant was specifically about EDGE behavior.
-                                                    // So let's stick to edge enforcement for now.
-                                                }
-
-                                                // Double Check: If we STILL have a mismatch (e.g. at right edge, calculated start < 0?)
-                                                // Ideally strictly enforce at edges.
-                                                // The above logic handles edges. 
-                                                // If we are floating in middle with wrong size, it's weird but less annoying than edge expansion.
-                                            }
-                                        }
-                                    }
-
-                                    // Update local UI immediately
-                                    setLocalBrushState({ startIndex: newStart, endIndex: newEnd });
-                                }}
-                                tickFormatter={(date) => {
-                                    if (!date) return '';
-                                    const d = new Date(date);
-                                    if (granularity === 'hour') {
-                                        return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ', ' + d.getHours().toString().padStart(2, '0') + ':00';
-                                    }
-                                    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
-                                }}
-                            />
-                        </BarChart>
-                    </ResponsiveContainer>
+                            <div
+                                data-testid="activity-range-start-handle"
+                                className="absolute left-0 top-0 bottom-0 w-[6px] bg-slate-500 cursor-ew-resize dark:bg-gray-200/90"
+                                onPointerDown={(event) => startSliderDrag('start', event)}
+                            >
+                                <span className="absolute left-1/2 top-1/2 h-4 w-px -translate-x-1/2 -translate-y-1/2 bg-slate-100/90 dark:bg-gray-600/80 pointer-events-none" />
+                            </div>
+                            <div
+                                data-testid="activity-range-end-handle"
+                                className="absolute right-0 top-0 bottom-0 w-[6px] bg-slate-500 cursor-ew-resize dark:bg-gray-200/90"
+                                onPointerDown={(event) => startSliderDrag('end', event)}
+                            >
+                                <span className="absolute left-1/2 top-1/2 h-4 w-px -translate-x-1/2 -translate-y-1/2 bg-slate-100/90 dark:bg-gray-600/80 pointer-events-none" />
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </CardContent>
         </Card >

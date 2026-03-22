@@ -1,4 +1,4 @@
-import type { AlertDecision, AlertEvent, AlertRecord, SlimAlert, SlimDecision } from '../../../shared/contracts';
+import type { AlertDecision, AlertEvent, AlertMeta, AlertRecord, SlimAlert, SlimDecision } from '../../../shared/contracts';
 
 export function getAlertTarget(alert: Pick<AlertRecord, 'events' | 'scenario' | 'machine_alias' | 'machine_id'> | null | undefined): string {
   if (!alert) return 'Unknown';
@@ -71,6 +71,7 @@ export function toSlimAlert(alert: AlertRecord): SlimAlert {
   };
 }
 
-function findMetaValue(metas: Array<{ key?: string; value?: string }>, key: string): string | undefined {
-  return metas.find((meta) => meta.key === key)?.value;
+function findMetaValue(metas: AlertMeta[], key: string): string | undefined {
+  const value = metas.find((meta) => meta.key === key)?.value;
+  return typeof value === 'string' ? value : undefined;
 }

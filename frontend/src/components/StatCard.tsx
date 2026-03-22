@@ -1,13 +1,26 @@
-// @ts-nocheck
-import { Link } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/Card";
 import { ExternalLink } from "lucide-react";
 import { useMemo } from "react";
+import type { ComponentType, ReactNode } from 'react';
+import type { LucideProps } from 'lucide-react';
+import type { StatListItem } from '../types';
+
+interface StatCardProps<TItem extends StatListItem> {
+    title: string;
+    icon?: ComponentType<LucideProps>;
+    items: TItem[];
+    emptyMessage?: string;
+    onSelect?: (item: TItem) => void;
+    selectedValue?: string | null;
+    renderLabel?: (item: TItem) => ReactNode;
+    getExternalLink?: (item: TItem) => string | null;
+    total?: number;
+}
 
 /**
  * StatCard component for displaying top statistics
  */
-export function StatCard({
+export function StatCard<TItem extends StatListItem>({
     title,
     icon: Icon,
     items,
@@ -17,7 +30,7 @@ export function StatCard({
     renderLabel, // Optional function to render custom label content
     getExternalLink,
     total // Optional total count to calculate percentages against global total instead of visible items
-}) {
+}: StatCardProps<TItem>) {
     // Calculate total for percentages
     const denominator = useMemo(() => {
         if (total !== undefined) return total;

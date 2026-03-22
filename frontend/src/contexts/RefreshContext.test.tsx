@@ -1,7 +1,8 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { RefreshProvider, useRefresh } from './RefreshContext';
+import { RefreshProvider } from './RefreshContext';
+import { useRefresh } from './useRefresh';
 import { fetchConfig } from '../lib/api';
 
 vi.mock('../lib/api', () => ({

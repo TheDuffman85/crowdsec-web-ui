@@ -165,16 +165,19 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   });
 
   app.get(`${config.basePath}/api/alerts/:id`, ensureAuth, async (context) => {
-      const alertId = String(context.req.param('id'));
+    const alertId = String(context.req.param('id'));
     if (!/^\d+$/.test(alertId)) {
       return context.json({ error: 'Invalid alert ID' }, 400);
     }
 
     const doRequest = async () => {
       const alertData = await lapiClient.getAlertById(alertId);
-      const payload = Array.isArray(alertData)
-        ? alertData.map((item) => hydrateAlertWithDecisions(item as AlertRecord))
-        : hydrateAlertWithDecisions(alertData as AlertRecord);
+      const normalizedAlert = normalizeAlertDetail(alertData, alertId);
+      if (!normalizedAlert) {
+        return context.json({ error: 'Alert not found' }, 404);
+      }
+
+      const payload = hydrateAlertWithDecisions(normalizedAlert);
       return context.json(payload);
     };
 
@@ -455,7 +458,13 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   );
 
   staticFiles.forEach((file) => {
-    app.use(`${config.basePath}${file}`, serveStatic({ path: path.join(distRoot, file) }));
+    app.use(
+      `${config.basePath}${file}`,
+      serveStatic({
+        root: distRoot,
+        rewriteRequestPath: (requestPath) => (config.basePath ? requestPath.replace(config.basePath, '') : requestPath),
+      }),
+    );
   });
 
   app.get(`${config.basePath}/site.webmanifest`, (context) =>
@@ -986,6 +995,20 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     });
 
     return clone;
+  }
+
+  function normalizeAlertDetail(input: unknown, alertId: string): AlertRecord | null {
+    if (Array.isArray(input)) {
+      const matchingAlert = input.find((candidate) => String((candidate as AlertRecord | undefined)?.id) === alertId);
+      const alert = matchingAlert ?? input[0];
+      return alert ? (alert as AlertRecord) : null;
+    }
+
+    if (input && typeof input === 'object') {
+      return input as AlertRecord;
+    }
+
+    return null;
   }
 
   if (options.startBackgroundTasks) {

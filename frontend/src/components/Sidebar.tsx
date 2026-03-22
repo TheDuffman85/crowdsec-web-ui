@@ -1,13 +1,23 @@
-// @ts-nocheck
 import { NavLink } from "react-router-dom";
 import { LayoutDashboard, ShieldAlert, Gavel, X, Sun, Moon, ArrowUpCircle, Menu, PanelLeftClose } from "lucide-react";
-import { useRefresh } from "../contexts/RefreshContext";
+import { useRefresh } from "../contexts/useRefresh";
 import { useState, useEffect } from "react";
 import { apiUrl, assetUrl } from "../lib/basePath";
+import type { UpdateCheckResponse } from '../types';
 
-export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }) {
+type ThemeMode = 'light' | 'dark';
+
+interface SidebarProps {
+    isOpen: boolean;
+    onClose: () => void;
+    onToggle: () => void;
+    theme: ThemeMode;
+    toggleTheme: () => void;
+}
+
+export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: SidebarProps) {
     const { intervalMs, setIntervalMs, lastUpdated, refreshSignal } = useRefresh();
-    const [updateStatus, setUpdateStatus] = useState(null);
+    const [updateStatus, setUpdateStatus] = useState<UpdateCheckResponse | null>(null);
 
     const links = [
         { to: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -31,7 +41,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }) {
         // Check on mount and when refresh signal triggers
     }, [refreshSignal]);
 
-    const formatTime = (date) => {
+    const formatTime = (date: Date | null) => {
         if (!date) return "";
         return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     };

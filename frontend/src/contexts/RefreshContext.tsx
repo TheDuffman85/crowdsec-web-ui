@@ -1,9 +1,8 @@
-import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { fetchConfig } from '../lib/api';
 import { apiUrl } from '../lib/basePath';
 import type { RefreshContextValue, SyncStatus, WithChildren } from '../types';
-
-const RefreshContext = createContext<RefreshContextValue | undefined>(undefined);
+import { RefreshContext } from './refresh-context';
 
 export function RefreshProvider({ children }: WithChildren) {
     const [intervalMs, setIntervalMsState] = useState(0);
@@ -115,13 +114,4 @@ export function RefreshProvider({ children }: WithChildren) {
             {children}
         </RefreshContext.Provider>
     );
-}
-
-// eslint-disable-next-line react-refresh/only-export-components
-export function useRefresh(): RefreshContextValue {
-    const context = useContext(RefreshContext);
-    if (!context) {
-        throw new Error('useRefresh must be used within RefreshProvider');
-    }
-    return context;
 }

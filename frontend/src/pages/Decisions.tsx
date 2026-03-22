@@ -1,26 +1,55 @@
-// @ts-nocheck
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, type FormEvent } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { deleteDecision, addDecision } from "../lib/api";
 import { apiUrl } from "../lib/basePath";
-import { useRefresh } from "../contexts/RefreshContext";
+import { useRefresh } from "../contexts/useRefresh";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { getCountryName } from "../lib/utils";
 import { Trash2, Gavel, X, ExternalLink, Shield, Search, AlertCircle } from "lucide-react";
-import "flag-icons/css/flag-icons.min.css";
+import type { AddDecisionRequest, ApiPermissionError, DecisionListItem } from '../types';
+
+interface ErrorInfo {
+    message: string;
+    helpLink?: string;
+    helpText?: string;
+}
+
+function getDecisionDateFilterKey(isoString: string, includeHour: boolean): string {
+    const date = new Date(isoString);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+
+    if (includeHour) {
+        const hour = String(date.getHours()).padStart(2, '0');
+        return `${year}-${month}-${day}T${hour}`;
+    }
+
+    return `${year}-${month}-${day}`;
+}
+
+function toErrorInfo(error: unknown, fallbackMessage: string): ErrorInfo {
+    const apiError = error as Partial<ApiPermissionError> | undefined;
+
+    return {
+        message: typeof apiError?.message === 'string' ? apiError.message : fallbackMessage,
+        helpLink: typeof apiError?.helpLink === 'string' ? apiError.helpLink : undefined,
+        helpText: typeof apiError?.helpText === 'string' ? apiError.helpText : undefined,
+    };
+}
 
 export function Decisions() {
     const { refreshSignal, setLastUpdated } = useRefresh();
-    const [decisions, setDecisions] = useState([]);
+    const [decisions, setDecisions] = useState<DecisionListItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [showAddModal, setShowAddModal] = useState(false);
     const [filter, setFilter] = useState("");
-    const [decisionToDelete, setDecisionToDelete] = useState(null);
-    const [newDecision, setNewDecision] = useState({ ip: "", duration: "4h", reason: "manual" });
-    const [errorInfo, setErrorInfo] = useState(null);
+    const [decisionToDelete, setDecisionToDelete] = useState<string | number | null>(null);
+    const [newDecision, setNewDecision] = useState<AddDecisionRequest>({ ip: "", duration: "4h", reason: "manual" });
+    const [errorInfo, setErrorInfo] = useState<ErrorInfo | null>(null);
     const [searchParams, setSearchParams] = useSearchParams();
     const alertIdFilter = searchParams.get("alert_id");
     const includeExpiredParam = searchParams.get("include_expired") === "true";
@@ -39,13 +68,13 @@ export function Decisions() {
     const [displayedCount, setDisplayedCount] = useState(50);
 
     // Intersection Observer for infinite scroll
-    const observer = useRef();
-    const lastDecisionElementRef = useCallback(node => {
+    const observer = useRef<IntersectionObserver | null>(null);
+    const lastDecisionElementRef = useCallback((node: HTMLTableRowElement | null) => {
         if (loading) return;
         if (observer.current) observer.current.disconnect();
-        observer.current = new IntersectionObserver(entries => {
+        observer.current = new IntersectionObserver((entries) => {
             if (entries[0].isIntersecting) {
-                setDisplayedCount(prev => prev + 50);
+                setDisplayedCount((prev) => prev + 50);
             }
         });
         if (node) observer.current.observe(node);
@@ -58,7 +87,7 @@ export function Decisions() {
 
             const res = await fetch(url, { cache: "no-store" });
             if (!res.ok) throw new Error('Failed to fetch decisions');
-            const data = await res.json();
+            const data = await res.json() as DecisionListItem[];
 
             setDecisions(data);
 
@@ -86,7 +115,7 @@ export function Decisions() {
         if (refreshSignal > 0) loadDecisions(true);
     }, [refreshSignal, loadDecisions]);
 
-    const handleAddDecision = async (e) => {
+    const handleAddDecision = async (e: FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         const decisionData = { ...newDecision };
         setShowAddModal(false);
@@ -98,17 +127,13 @@ export function Decisions() {
             setDisplayedCount(50); // Reset to show new decision at top
         } catch (error) {
             console.error("Failed to add decision", error);
-            setErrorInfo({
-                message: error.message || "Failed to add decision. Please try again.",
-                helpLink: error.helpLink,
-                helpText: error.helpText
-            });
+            setErrorInfo(toErrorInfo(error, "Failed to add decision. Please try again."));
         }
     };
 
 
     // Trigger modal instead of window.confirm
-    const requestDelete = (id) => {
+    const requestDelete = (id: string | number) => {
         setDecisionToDelete(id);
     };
 
@@ -123,11 +148,7 @@ export function Decisions() {
             setDisplayedCount(50); // Reset scroll position
         } catch (error) {
             console.error("Failed to delete decision", error);
-            setErrorInfo({
-                message: error.message || "Failed to delete decision. Please try again.",
-                helpLink: error.helpLink,
-                helpText: error.helpText
-            });
+            setErrorInfo(toErrorInfo(error, "Failed to delete decision. Please try again."));
         }
     };
 
@@ -135,7 +156,7 @@ export function Decisions() {
         setSearchParams({});
     };
 
-    const removeParam = (key) => {
+    const removeParam = (key: string) => {
         const newParams = new URLSearchParams(searchParams);
         newParams.delete(key);
         setSearchParams(newParams);
@@ -154,7 +175,7 @@ export function Decisions() {
         setSearchParams(newParams);
     };
 
-    const filteredDecisions = decisions.filter(decision => {
+    const filteredDecisions = decisions.filter((decision) => {
         // 0. Duplicate Filter (applied first, default: hide duplicates)
         if (!showDuplicates && decision.is_duplicate) return false;
 
@@ -183,21 +204,10 @@ export function Decisions() {
 
             // Helper to extract date/time key from ISO timestamp (Matches Alerts.jsx logic)
             // This ensures we compare "apples to apples" with the dashboard local-time based filters
-            const getItemKey = (isoString) => {
-                const date = new Date(isoString);
-                const year = date.getFullYear();
-                const month = String(date.getMonth() + 1).padStart(2, '0');
-                const day = String(date.getDate()).padStart(2, '0');
-
-                // If filter includes time (has 'T'), use hourly precision
-                if ((dateStartFilter && dateStartFilter.includes('T')) || (dateEndFilter && dateEndFilter.includes('T'))) {
-                    const hour = String(date.getHours()).padStart(2, '0');
-                    return `${year}-${month}-${day}T${hour}`;
-                }
-                return `${year}-${month}-${day}`;
-            };
-
-            const itemKey = getItemKey(decision.created_at);
+            const itemKey = getDecisionDateFilterKey(
+                decision.created_at,
+                Boolean((dateStartFilter && dateStartFilter.includes('T')) || (dateEndFilter && dateEndFilter.includes('T'))),
+            );
 
             if (dateStartFilter && itemKey < dateStartFilter) return false;
             if (dateEndFilter && itemKey > dateEndFilter) return false;
@@ -214,7 +224,7 @@ export function Decisions() {
         const countryCode = (decision.detail.country || "").toLowerCase();
         const countryName = (getCountryName(decision.detail.country) || "").toLowerCase();
         const as = (decision.detail.as || "").toLowerCase();
-        const type = (decision.type || "").toLowerCase();
+        const type = (decision.detail.type || "").toLowerCase();
         const action = (decision.detail.action || "").toLowerCase();
 
         return ip.includes(search) ||
@@ -331,26 +341,30 @@ export function Decisions() {
                         </Badge>
                     )}
                     {searchParams.get("scenario") && (
-                        <Badge variant="secondary" className="flex items-center gap-1 max-w-[300px] truncate" title={scenarioFilter}>
-                            <span className="font-semibold">Scenario:</span> {scenarioFilter}
-                            <button
-                                onClick={() => removeParam("scenario")}
-                                className="ml-1 hover:text-red-500"
-                            >
-                                &times;
-                            </button>
-                        </Badge>
+                        <div title={scenarioFilter || undefined}>
+                            <Badge variant="secondary" className="flex items-center gap-1 max-w-[300px] truncate">
+                                <span className="font-semibold">Scenario:</span> {scenarioFilter}
+                                <button
+                                    onClick={() => removeParam("scenario")}
+                                    className="ml-1 hover:text-red-500"
+                                >
+                                    &times;
+                                </button>
+                            </Badge>
+                        </div>
                     )}
                     {searchParams.get("as") && (
-                        <Badge variant="secondary" className="flex items-center gap-1 max-w-[300px] truncate" title={asFilter}>
-                            <span className="font-semibold">AS:</span> {asFilter}
-                            <button
-                                onClick={() => removeParam("as")}
-                                className="ml-1 hover:text-red-500"
-                            >
-                                &times;
-                            </button>
-                        </Badge>
+                        <div title={asFilter || undefined}>
+                            <Badge variant="secondary" className="flex items-center gap-1 max-w-[300px] truncate">
+                                <span className="font-semibold">AS:</span> {asFilter}
+                                <button
+                                    onClick={() => removeParam("as")}
+                                    className="ml-1 hover:text-red-500"
+                                >
+                                    &times;
+                                </button>
+                            </Badge>
+                        </div>
                     )}
                     {searchParams.get("ip") && (
                         <Badge variant="secondary" className="flex items-center gap-1">
@@ -444,12 +458,13 @@ export function Decisions() {
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                             {loading ? (
-                                <tr><td colSpan="9" className="px-6 py-4 text-center text-sm text-gray-500">Loading decisions...</td></tr>
+                                <tr><td colSpan={9} className="px-6 py-4 text-center text-sm text-gray-500">Loading decisions...</td></tr>
                             ) : visibleDecisions.length === 0 ? (
-                                <tr><td colSpan="9" className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? "No decisions for this alert" : "No decisions found"}</td></tr>
+                                <tr><td colSpan={9} className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? "No decisions for this alert" : "No decisions found"}</td></tr>
                             ) : (
                                 visibleDecisions.map((decision, index) => {
-                                    const isExpired = decision.expired || (decision.detail.duration && decision.detail.duration.startsWith("-"));
+                                    const decisionDuration = decision.detail.duration ?? '';
+                                    const isExpired = Boolean(decision.expired || decisionDuration.startsWith("-"));
                                     const rowClasses = isExpired
                                         ? "hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors opacity-60 bg-gray-50 dark:bg-gray-900/20"
                                         : "hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors";
@@ -488,7 +503,7 @@ export function Decisions() {
                                                 <Badge variant="danger">{decision.detail.action || "ban"}</Badge>
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 whitespace-nowrap">
-                                                {decision.detail.duration.startsWith("-") ? "0s" : decision.detail.duration}
+                                                {decisionDuration.startsWith("-") ? "0s" : decisionDuration}
                                                 {isExpired && <span className="ml-2 text-xs text-red-500 dark:text-red-400">(Expired)</span>}
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm">

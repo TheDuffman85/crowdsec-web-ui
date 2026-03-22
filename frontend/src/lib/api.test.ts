@@ -17,10 +17,19 @@ afterEach(() => {
 
 describe('api helpers', () => {
   test('fetch helpers return parsed JSON', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => Response.json([{ id: 1 }])));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input) => {
+        if (String(input).endsWith('/api/alerts/1')) {
+          return Response.json([{ id: 1 }]);
+        }
+
+        return Response.json([{ id: 1 }]);
+      }),
+    );
 
     await expect(fetchAlerts()).resolves.toEqual([{ id: 1 }]);
-    await expect(fetchAlert(1)).resolves.toEqual([{ id: 1 }]);
+    await expect(fetchAlert(1)).resolves.toEqual({ id: 1 });
     await expect(fetchDecisions()).resolves.toEqual([{ id: 1 }]);
     await expect(fetchAlertsForStats()).resolves.toEqual([{ id: 1 }]);
     await expect(fetchDecisionsForStats()).resolves.toEqual([{ id: 1 }]);
