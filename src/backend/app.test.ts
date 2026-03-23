@@ -75,6 +75,37 @@ function sampleSimulatedAlert(): AlertRecord {
   };
 }
 
+function sampleImplicitSimulatedAlert(): AlertRecord {
+  const createdAt = new Date().toISOString();
+  const stopAt = new Date(Date.now() + 45 * 60 * 1_000).toISOString();
+  return {
+    id: 5,
+    uuid: 'alert-5',
+    created_at: createdAt,
+    scenario: 'crowdsecurity/http-probing',
+    message: 'Implicitly simulated http probing alert',
+    source: {
+      ip: '93.238.58.10',
+      value: '93.238.58.10',
+      cn: 'DE',
+      as_name: 'Deutsche Telekom AG',
+    },
+    target: 'http',
+    events: [{ meta: [{ key: 'service', value: 'http' }] }],
+    decisions: [
+      {
+        id: 50,
+        type: '(simul)ban',
+        value: '93.238.58.10',
+        duration: '45m',
+        stop_at: stopAt,
+        origin: 'crowdsec',
+        scenario: 'crowdsecurity/http-probing',
+      },
+    ],
+  };
+}
+
 function sampleManualWebUiAlert(overrides: Partial<AlertRecord> = {}): AlertRecord {
   const createdAt = new Date().toISOString();
   const stopAt = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
@@ -443,6 +474,54 @@ describe('createApp', () => {
     const alertDetails = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts/1'));
     expect(alertDetails.status).toBe(200);
     expect(((await alertDetails.json()) as { id: number }).id).toBe(1);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('detects simulated decisions from CrowdSec markers when boolean flags are omitted', async () => {
+    const implicitSimulatedAlert = sampleImplicitSimulatedAlert();
+    const { controller, database, fetchCalls } = createController({
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (url.includes('/v1/alerts?')) {
+          return Response.json([implicitSimulatedAlert]);
+        }
+        return undefined;
+      },
+    });
+
+    const alerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alerts.status).toBe(200);
+    expect((await alerts.json()) as Array<{ id: number; simulated?: boolean }>).toEqual([
+      expect.objectContaining({ id: 5, simulated: true }),
+    ]);
+
+    const decisions = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions'));
+    expect(decisions.status).toBe(200);
+    expect((await decisions.json()) as Array<{ id: number; simulated?: boolean; detail: { simulated?: boolean } }>).toEqual([
+      expect.objectContaining({
+        id: 50,
+        simulated: true,
+        detail: expect.objectContaining({ simulated: true }),
+      }),
+    ]);
+
+    const statsAlerts = await controller.fetch(new Request('http://localhost/crowdsec/api/stats/alerts'));
+    expect((await statsAlerts.json()) as Array<{ simulated?: boolean }>).toEqual([
+      expect.objectContaining({ simulated: true }),
+    ]);
+
+    const statsDecisions = await controller.fetch(new Request('http://localhost/crowdsec/api/stats/decisions'));
+    expect((await statsDecisions.json()) as Array<{ simulated?: boolean }>).toEqual([
+      expect.objectContaining({ simulated: true }),
+    ]);
+
+    const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
+    expect(alertRequests.length).toBeGreaterThan(0);
 
     controller.stopBackgroundTasks();
     database.close();

@@ -589,10 +589,18 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     const decisions = alert.decisions || [];
     const alertSource = alert.source || {};
     const target = getAlertTarget(alert);
+    const normalizedDecisions = decisions.map((decision) => ({
+      ...decision,
+      simulated: normalizeDecisionSimulated(decision, alert),
+    }));
     const enrichedAlert: AlertRecord = {
       ...alert,
+      decisions: normalizedDecisions,
       target,
-      simulated: normalizeAlertSimulated(alert),
+      simulated: isAlertSimulated({
+        ...alert,
+        decisions: normalizedDecisions,
+      }),
     };
 
     const alertData: AlertInsertParams = {
@@ -613,7 +621,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       }
     }
 
-    for (const decision of decisions) {
+    for (const decision of normalizedDecisions) {
       if (decision.origin === 'CAPI') continue;
 
       const createdAt = decision.created_at || alert.created_at;
@@ -633,7 +641,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         country: alertSource.cn,
         as: alertSource.as_name,
         target,
-        simulated: normalizeDecisionSimulated(decision, alert),
+        simulated: decision.simulated === true,
         is_duplicate: false,
       };
 
@@ -1115,7 +1123,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       };
     });
 
-    clone.simulated = normalizeAlertSimulated(clone);
+    clone.simulated = isAlertSimulated(clone);
 
     return clone;
   }
@@ -1196,20 +1204,60 @@ function lookbackHours(duration: string): number {
   return value / 60;
 }
 
+function parseSimulationBoolean(value: unknown): boolean | null {
+  if (value === true || value === false) {
+    return value;
+  }
+
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+
+  return null;
+}
+
+function hasSimulationMarker(value: unknown): boolean {
+  if (typeof value !== 'string') {
+    return false;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return normalized.startsWith('(simul)') || normalized.includes('simulated');
+}
+
 function normalizeAlertSimulated(alert: Pick<AlertRecord, 'simulated'> | null | undefined): boolean {
-  return alert?.simulated === true;
+  const explicit = parseSimulationBoolean(alert?.simulated);
+  if (explicit !== null) {
+    return explicit;
+  }
+
+  return false;
 }
 
 function normalizeDecisionSimulated(
   decision: Pick<AlertDecision, 'simulated'> | (AlertDecision & Record<string, unknown>),
   alert?: Pick<AlertRecord, 'simulated'> | null,
 ): boolean {
-  if (decision.simulated === true) {
-    return true;
+  const explicit = parseSimulationBoolean(decision.simulated);
+  if (explicit !== null) {
+    return explicit;
   }
 
-  if (decision.simulated === false) {
-    return false;
+  if (
+    hasSimulationMarker((decision as Record<string, unknown>).type) ||
+    hasSimulationMarker((decision as Record<string, unknown>).action) ||
+    hasSimulationMarker((decision as Record<string, unknown>).decisions)
+  ) {
+    return true;
   }
 
   return normalizeAlertSimulated(alert);
