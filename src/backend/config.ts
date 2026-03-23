@@ -4,6 +4,8 @@ export interface RuntimeConfig {
   crowdsecUrl: string;
   crowdsecUser?: string;
   crowdsecPassword?: string;
+  alertOrigins: string[];
+  alertExtraScenarios: string[];
   simulationsEnabled: boolean;
   lookbackPeriod: string;
   lookbackMs: number;
@@ -62,6 +64,14 @@ export function parseBooleanEnv(value: string | undefined, defaultValue = false)
   return defaultValue;
 }
 
+export function parseCsvEnv(value: string | undefined): string[] {
+  if (!value) return [];
+  return value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
 export function getIntervalName(intervalMs: number): string {
   if (intervalMs === 0) return 'Off';
   if (intervalMs === 5_000) return '5s';
@@ -81,6 +91,8 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
     crowdsecUrl: env.CROWDSEC_URL || 'http://crowdsec:8080',
     crowdsecUser: env.CROWDSEC_USER,
     crowdsecPassword: env.CROWDSEC_PASSWORD,
+    alertOrigins: parseCsvEnv(env.CROWDSEC_ALERT_ORIGINS),
+    alertExtraScenarios: parseCsvEnv(env.CROWDSEC_ALERT_EXTRA_SCENARIOS),
     simulationsEnabled: parseBooleanEnv(env.CROWDSEC_SIMULATIONS_ENABLED, false),
     lookbackPeriod,
     lookbackMs: parseLookbackToMs(lookbackPeriod),

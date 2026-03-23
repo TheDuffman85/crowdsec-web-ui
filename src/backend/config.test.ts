@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { createRuntimeConfig, getIntervalName, parseBooleanEnv, parseLookbackToMs, parseRefreshInterval } from './config';
+import { createRuntimeConfig, getIntervalName, parseBooleanEnv, parseCsvEnv, parseLookbackToMs, parseRefreshInterval } from './config';
 
 describe('config helpers', () => {
   test('parseRefreshInterval handles supported inputs', () => {
@@ -29,6 +29,11 @@ describe('config helpers', () => {
     expect(parseBooleanEnv('maybe', true)).toBe(true);
   });
 
+  test('parseCsvEnv splits, trims, and drops empty entries', () => {
+    expect(parseCsvEnv(undefined)).toEqual([]);
+    expect(parseCsvEnv(' crowdsec , manual/web-ui ,, cscli ')).toEqual(['crowdsec', 'manual/web-ui', 'cscli']);
+  });
+
   test('getIntervalName formats known intervals', () => {
     expect(getIntervalName(0)).toBe('Off');
     expect(getIntervalName(30_000)).toBe('30s');
@@ -42,6 +47,8 @@ describe('config helpers', () => {
       CROWDSEC_URL: 'http://localhost:8080',
       CROWDSEC_USER: 'watcher',
       CROWDSEC_PASSWORD: 'secret',
+      CROWDSEC_ALERT_ORIGINS: 'crowdsec, cscli',
+      CROWDSEC_ALERT_EXTRA_SCENARIOS: 'manual/web-ui',
       CROWDSEC_SIMULATIONS_ENABLED: 'false',
       CROWDSEC_LOOKBACK_PERIOD: '2d',
       CROWDSEC_REFRESH_INTERVAL: '5s',
@@ -59,6 +66,8 @@ describe('config helpers', () => {
 
     expect(config.port).toBe(4000);
     expect(config.basePath).toBe('/crowdsec');
+    expect(config.alertOrigins).toEqual(['crowdsec', 'cscli']);
+    expect(config.alertExtraScenarios).toEqual(['manual/web-ui']);
     expect(config.simulationsEnabled).toBe(false);
     expect(config.lookbackMs).toBe(172_800_000);
     expect(config.refreshIntervalMs).toBe(5_000);
@@ -70,6 +79,8 @@ describe('config helpers', () => {
 
   test('createRuntimeConfig disables simulations by default', () => {
     const config = createRuntimeConfig({});
+    expect(config.alertOrigins).toEqual([]);
+    expect(config.alertExtraScenarios).toEqual([]);
     expect(config.simulationsEnabled).toBe(false);
   });
 });

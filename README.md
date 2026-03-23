@@ -126,6 +126,34 @@ CrowdSec can run scenarios in **simulation mode**, where alerts and decisions ar
 - When enabled, the UI shows simulation badges, simulation filters, and separate simulation counts on the dashboard.
 - When left unset or set to `false`, the UI hides simulated alerts/decisions and the backend stops requesting simulated data from the CrowdSec LAPI.
 
+### Alert Allowlist Filtering
+
+Some CrowdSec setups ingest very large volumes of alerts and decisions from external automation, third-party importers, bulk list sync jobs, or other custom workflows. In those cases, you may want the Web UI to focus on selected alert sources instead of caching everything exposed by the LAPI.
+
+You can do that with these optional environment variables:
+
+- `CROWDSEC_ALERT_ORIGINS`: comma-separated list of LAPI alert origins
+- `CROWDSEC_ALERT_EXTRA_SCENARIOS`: comma-separated list of exact LAPI scenarios
+
+```yaml
+environment:
+  - CROWDSEC_ALERT_ORIGINS=crowdsec
+  - CROWDSEC_ALERT_EXTRA_SCENARIOS=manual/web-ui
+```
+
+This makes the backend fetch the union of:
+
+- alerts whose LAPI `origin` is `crowdsec`
+- alerts whose LAPI `scenario` is exactly `manual/web-ui`
+
+You can adapt those values to match your own CrowdSec setup. For example:
+
+- use `CROWDSEC_ALERT_ORIGINS` to keep only selected upstream origins
+- use `CROWDSEC_ALERT_EXTRA_SCENARIOS` to include specific scenarios that should remain visible even if they come from a different origin
+- multiple values can be provided as CSV, for example `CROWDSEC_ALERT_ORIGINS=crowdsec,cscli` or `CROWDSEC_ALERT_EXTRA_SCENARIOS=manual/web-ui,my/custom-scenario`
+
+These are upstream LAPI filters, so excluded alerts are skipped before they are cached locally. This is usually more effective than relying on UI-side limits when you have very large external data sets.
+
 ## Run with Docker (Recommended)
 
 1.  **Build the image**:

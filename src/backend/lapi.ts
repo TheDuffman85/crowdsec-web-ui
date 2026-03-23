@@ -25,6 +25,11 @@ export interface LapiClientOptions {
   fetchImpl?: FetchLike;
 }
 
+export interface FetchAlertsFilters {
+  origin?: string;
+  scenario?: string;
+}
+
 export class LapiClient {
   private readonly crowdsecUrl: string;
   private readonly user?: string;
@@ -180,7 +185,12 @@ export class LapiClient {
     return this.loginPromise;
   }
 
-  async fetchAlerts(since: string | null = null, until: string | null = null, hasActiveDecision = false): Promise<unknown[]> {
+  async fetchAlerts(
+    since: string | null = null,
+    until: string | null = null,
+    hasActiveDecision = false,
+    filters: FetchAlertsFilters = {},
+  ): Promise<unknown[]> {
     const sinceParam = since || this.lookbackPeriod;
     const params = new URLSearchParams();
     params.append('since', sinceParam);
@@ -188,6 +198,8 @@ export class LapiClient {
     if (until) params.append('until', until);
     if (this.simulationsEnabled) params.append('simulated', 'true');
     if (hasActiveDecision) params.append('has_active_decision', 'true');
+    if (filters.origin) params.append('origin', filters.origin);
+    if (filters.scenario) params.append('scenario', filters.scenario);
     ['Ip', 'Range'].forEach((scope) => params.append('scope', scope));
 
     try {

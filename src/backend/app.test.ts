@@ -10,7 +10,7 @@ import { createApp } from './app';
 
 let tempDir: string;
 
-function sampleAlert(): AlertRecord {
+function sampleAlert(overrides: Partial<AlertRecord> = {}): AlertRecord {
   const createdAt = new Date().toISOString();
   const stopAt = new Date(Date.now() + 30 * 60 * 1_000).toISOString();
   return {
@@ -39,6 +39,7 @@ function sampleAlert(): AlertRecord {
       },
     ],
     simulated: false,
+    ...overrides,
   };
 }
 
@@ -74,6 +75,74 @@ function sampleSimulatedAlert(): AlertRecord {
   };
 }
 
+function sampleManualWebUiAlert(overrides: Partial<AlertRecord> = {}): AlertRecord {
+  const createdAt = new Date().toISOString();
+  const stopAt = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
+  return {
+    id: 3,
+    uuid: 'alert-3',
+    created_at: createdAt,
+    scenario: 'manual/web-ui',
+    message: 'Manual decision from Web UI',
+    source: {
+      ip: '9.9.9.9',
+      value: '9.9.9.9',
+      cn: 'FR',
+      as_name: 'OVH',
+    },
+    target: 'manual',
+    events: [],
+    decisions: [
+      {
+        id: 30,
+        type: 'ban',
+        value: '9.9.9.9',
+        duration: '1h',
+        stop_at: stopAt,
+        origin: 'cscli',
+        scenario: 'manual/web-ui',
+        simulated: false,
+      },
+    ],
+    simulated: false,
+    ...overrides,
+  };
+}
+
+function sampleBlocklistImportAlert(overrides: Partial<AlertRecord> = {}): AlertRecord {
+  const createdAt = new Date().toISOString();
+  const stopAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
+  return {
+    id: 4,
+    uuid: 'alert-4',
+    created_at: createdAt,
+    scenario: 'crowdsec-blocklist-import/external_blocklist',
+    message: 'External blocklist import batch 1',
+    source: {
+      ip: '127.0.0.1',
+      value: '127.0.0.1',
+      cn: 'Unknown',
+      as_name: 'Unknown',
+    },
+    target: 'blocklist',
+    events: [],
+    decisions: [
+      {
+        id: 40,
+        type: 'ban',
+        value: '8.8.8.8',
+        duration: '24h',
+        stop_at: stopAt,
+        origin: 'cscli',
+        scenario: 'crowdsec-blocklist-import/external_blocklist',
+        simulated: false,
+      },
+    ],
+    simulated: false,
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   tempDir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-app-'));
 });
@@ -91,7 +160,12 @@ function createTestDistRoot(): string {
   return distRoot;
 }
 
-function createController(options: { alertDetailPayload?: unknown; simulationsEnabled?: boolean } = {}) {
+function createController(options: {
+  alertDetailPayload?: unknown;
+  simulationsEnabled?: boolean;
+  env?: Record<string, string>;
+  fetchResolver?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
+} = {}) {
   const config = createRuntimeConfig({
     PORT: '3000',
     BASE_PATH: '/crowdsec',
@@ -105,11 +179,18 @@ function createController(options: { alertDetailPayload?: unknown; simulationsEn
     VITE_BRANCH: 'main',
     VITE_COMMIT_HASH: 'abc123',
     DB_DIR: tempDir,
+    ...options.env,
   });
 
   const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+  const fetchCalls: Array<{ url: string; method: string }> = [];
   const fetchImpl = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = String(input);
+    fetchCalls.push({ url, method: init?.method || 'GET' });
+    const resolved = await options.fetchResolver?.(url, init);
+    if (resolved) {
+      return resolved;
+    }
     if (url.endsWith('/v1/watchers/login')) {
       return Response.json({ code: 200, token: 'token' });
     }
@@ -152,7 +233,7 @@ function createController(options: { alertDetailPayload?: unknown; simulationsEn
     updateChecker: async () => ({ update_available: true, remote_version: '2.0.0' }),
   });
 
-  return { controller, database, lapiClient };
+  return { controller, database, lapiClient, fetchCalls };
 }
 
 describe('createApp', () => {
@@ -459,6 +540,138 @@ describe('createApp', () => {
 
     const configResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
     expect(((await configResponse.json()) as { simulations_enabled: boolean }).simulations_enabled).toBe(false);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('uses unfiltered alert queries by default during bootstrap', async () => {
+    const crowdsecAlert = sampleAlert();
+    const manualAlert = sampleManualWebUiAlert();
+    const { controller, database, fetchCalls } = createController({
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (url.includes('/v1/alerts?') && url.includes('has_active_decision=true')) {
+          return Response.json([crowdsecAlert]);
+        }
+        if (url.includes('/v1/alerts?')) {
+          return Response.json([crowdsecAlert, manualAlert]);
+        }
+        return undefined;
+      },
+    });
+
+    const alerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alerts.status).toBe(200);
+
+    const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
+    expect(alertRequests).toHaveLength(2);
+    expect(alertRequests.every((call) => !call.url.includes('origin='))).toBe(true);
+    expect(alertRequests.every((call) => !call.url.includes('scenario='))).toBe(true);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('allowlist sync excludes blocklist-import alerts while keeping manual web-ui alerts and deduping overlaps', async () => {
+    const crowdsecAlert = sampleAlert({
+      id: 11,
+      uuid: 'alert-11',
+      decisions: [
+        {
+          id: 110,
+          type: 'ban',
+          value: '1.2.3.4',
+          duration: '30m',
+          origin: 'crowdsec',
+          scenario: 'crowdsecurity/ssh-bf',
+          simulated: false,
+        },
+      ],
+    });
+    const manualAlert = sampleManualWebUiAlert({
+      id: 12,
+      uuid: 'alert-12',
+      decisions: [
+        {
+          id: 120,
+          type: 'ban',
+          value: '9.9.9.9',
+          duration: '1h',
+          origin: 'cscli',
+          scenario: 'manual/web-ui',
+          simulated: false,
+        },
+      ],
+    });
+    const blocklistAlert = sampleBlocklistImportAlert();
+    const overlappingAlert = sampleManualWebUiAlert({
+      id: 13,
+      uuid: 'alert-13',
+      decisions: [
+        {
+          id: 130,
+          type: 'ban',
+          value: '7.7.7.7',
+          duration: '2h',
+          origin: 'crowdsec',
+          scenario: 'manual/web-ui',
+          simulated: false,
+        },
+      ],
+    });
+
+    const { controller, database, fetchCalls } = createController({
+      env: {
+        CROWDSEC_ALERT_ORIGINS: 'crowdsec',
+        CROWDSEC_ALERT_EXTRA_SCENARIOS: 'manual/web-ui',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (!url.includes('/v1/alerts?')) {
+          return undefined;
+        }
+        if (url.includes('origin=crowdsec')) {
+          return Response.json([crowdsecAlert, overlappingAlert]);
+        }
+        if (url.includes('scenario=manual%2Fweb-ui')) {
+          return Response.json([manualAlert, overlappingAlert]);
+        }
+        return Response.json([crowdsecAlert, manualAlert, overlappingAlert, blocklistAlert]);
+      },
+    });
+
+    const alerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alerts.status).toBe(200);
+    expect((await alerts.json()) as Array<{ id: number }>).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 11 }),
+        expect.objectContaining({ id: 12 }),
+        expect.objectContaining({ id: 13 }),
+      ]),
+    );
+
+    const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
+    expect(alertRequests.some((call) => call.url.includes('origin=crowdsec'))).toBe(true);
+    expect(alertRequests.some((call) => call.url.includes('scenario=manual%2Fweb-ui'))).toBe(true);
+    expect(alertRequests.every((call) => call.url.includes('origin=') || call.url.includes('scenario='))).toBe(true);
+
+    const alertCount = (database.db.query('SELECT COUNT(*) AS count FROM alerts').get() as { count: number }).count;
+    const decisionCount = (database.db.query('SELECT COUNT(*) AS count FROM decisions').get() as { count: number }).count;
+    expect(alertCount).toBe(3);
+    expect(decisionCount).toBe(3);
+    expect(controller.getSyncStatus().message).toContain('3 alerts imported');
+
+    const storedAlerts = database.db.query('SELECT raw_data FROM alerts').all() as Array<{ raw_data: string }>;
+    expect(
+      storedAlerts.some((row) => String((JSON.parse(row.raw_data) as AlertRecord).scenario) === 'crowdsec-blocklist-import/external_blocklist'),
+    ).toBe(false);
 
     controller.stopBackgroundTasks();
     database.close();

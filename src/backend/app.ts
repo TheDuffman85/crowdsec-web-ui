@@ -68,6 +68,11 @@ interface UpdateCache {
   data: UpdateCheckResponse | null;
 }
 
+interface AlertSyncQuery {
+  origin?: string;
+  scenario?: string;
+}
+
 export function createApp(options: CreateAppOptions = {}): AppController {
   const config = options.config || createRuntimeConfig();
   const database = options.database || new CrowdsecDatabase({ dbDir: config.dbDir });
@@ -129,6 +134,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   Lookback Period: ${config.lookbackPeriod} (${config.lookbackMs}ms)
   Refresh Interval: ${getIntervalName(refreshIntervalMs)} (${persistedConfig.refresh_interval_ms !== undefined ? 'from saved config' : 'from env'})
   Simulations: ${config.simulationsEnabled ? 'Enabled' : 'Disabled'}
+  Alert Origin Allowlist: ${config.alertOrigins.length > 0 ? config.alertOrigins.join(', ') : 'Disabled'}
+  Alert Scenario Allowlist: ${config.alertExtraScenarios.length > 0 ? config.alertExtraScenarios.join(', ') : 'Disabled'}
   Bootstrap Retry: ${config.bootstrapRetryEnabled ? getIntervalName(config.bootstrapRetryDelayMs) : 'Disabled'}
 `);
 
@@ -541,6 +548,42 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     Object.assign(syncStatus, updates);
   }
 
+  function getAlertSyncQueries(): AlertSyncQuery[] {
+    const queries: AlertSyncQuery[] = [];
+
+    for (const origin of config.alertOrigins) {
+      queries.push({ origin });
+    }
+
+    for (const scenario of config.alertExtraScenarios) {
+      queries.push({ scenario });
+    }
+
+    return queries;
+  }
+
+  async function fetchAlertsForSync(
+    since: string | null = null,
+    until: string | null = null,
+    hasActiveDecision = false,
+  ): Promise<AlertRecord[]> {
+    const queries = getAlertSyncQueries();
+    const resultSets = queries.length === 0
+      ? [await lapiClient.fetchAlerts(since, until, hasActiveDecision)]
+      : await Promise.all(queries.map((query) => lapiClient.fetchAlerts(since, until, hasActiveDecision, query)));
+
+    const merged = new Map<string, AlertRecord>();
+    for (const resultSet of resultSets) {
+      for (const alert of resultSet) {
+        const typedAlert = alert as AlertRecord;
+        if (!typedAlert?.id) continue;
+        merged.set(String(typedAlert.id), typedAlert);
+      }
+    }
+
+    return Array.from(merged.values());
+  }
+
   function processAlertForDatabase(alert: AlertRecord): void {
     if (!alert || !alert.id) return;
     const decisions = alert.decisions || [];
@@ -649,11 +692,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       console.log(progressMessage);
 
       try {
-        const alerts = await lapiClient.fetchAlerts(sinceDuration, untilDuration);
+        const alerts = await fetchAlertsForSync(sinceDuration, untilDuration);
         if (alerts.length > 0) {
-          const insertTransaction = database.transaction<unknown[]>((items) => {
+          const insertTransaction = database.transaction<AlertRecord[]>((items) => {
             for (const alert of items) {
-              processAlertForDatabase(alert as AlertRecord);
+              processAlertForDatabase(alert);
             }
           });
           insertTransaction(alerts);
@@ -670,11 +713,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
     updateSyncStatus({ progress: 95, message: 'Syncing active decisions...' });
     try {
-      const activeDecisionAlerts = await lapiClient.fetchAlerts(null, null, true);
+      const activeDecisionAlerts = await fetchAlertsForSync(null, null, true);
       if (activeDecisionAlerts.length > 0) {
-        const refreshTransaction = database.transaction<unknown[]>((alerts) => {
+        const refreshTransaction = database.transaction<AlertRecord[]>((alerts) => {
           for (const alert of alerts) {
-            processAlertForDatabase(alert as AlertRecord);
+            processAlertForDatabase(alert);
           }
         });
         refreshTransaction(activeDecisionAlerts);
@@ -744,14 +787,14 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       const sinceDuration = `${diffSeconds}s`;
       console.log(`Fetching delta updates (since: ${sinceDuration})...`);
       const [newAlerts, activeDecisionAlerts] = await Promise.all([
-        lapiClient.fetchAlerts(sinceDuration, null),
-        lapiClient.fetchAlerts(null, null, true),
+        fetchAlertsForSync(sinceDuration, null),
+        fetchAlertsForSync(null, null, true),
       ]);
 
       if (newAlerts.length > 0) {
-        const insertTransaction = database.transaction<unknown[]>((alerts) => {
+        const insertTransaction = database.transaction<AlertRecord[]>((alerts) => {
           for (const alert of alerts) {
-            processAlertForDatabase(alert as AlertRecord);
+            processAlertForDatabase(alert);
           }
         });
         insertTransaction(newAlerts);
@@ -759,31 +802,30 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       }
 
       if (activeDecisionAlerts.length > 0) {
-        const refreshTransaction = database.transaction<unknown[]>((alerts) => {
+        const refreshTransaction = database.transaction<AlertRecord[]>((alerts) => {
           for (const alert of alerts) {
-            const typedAlert = alert as AlertRecord;
-            for (const decision of typedAlert.decisions || []) {
+            for (const decision of alert.decisions || []) {
               if (decision.origin === 'CAPI') continue;
 
-              const createdAt = decision.created_at || typedAlert.created_at;
+              const createdAt = decision.created_at || alert.created_at;
               const stopAt = decision.duration
                 ? new Date(Date.now() + parseGoDuration(decision.duration)).toISOString()
                 : decision.stop_at || createdAt;
 
-              const alertSource = typedAlert.source || {};
+              const alertSource = alert.source || {};
               const enrichedDecision = {
                 ...decision,
                 created_at: createdAt,
                 stop_at: stopAt,
-                scenario: decision.scenario || typedAlert.scenario || 'unknown',
-                origin: decision.origin || decision.scenario || typedAlert.scenario || 'unknown',
-                alert_id: typedAlert.id,
+                scenario: decision.scenario || alert.scenario || 'unknown',
+                origin: decision.origin || decision.scenario || alert.scenario || 'unknown',
+                alert_id: alert.id,
                 value: decision.value || alertSource.ip,
                 type: decision.type || 'ban',
                 country: alertSource.cn,
                 as: alertSource.as_name,
-                target: getAlertTarget(typedAlert),
-                simulated: normalizeDecisionSimulated(decision, typedAlert),
+                target: getAlertTarget(alert),
+                simulated: normalizeDecisionSimulated(decision, alert),
               };
 
               database.updateDecision({

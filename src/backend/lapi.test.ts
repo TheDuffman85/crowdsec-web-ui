@@ -147,4 +147,31 @@ describe('LapiClient', () => {
     expect(calls[0]).toContain('/v1/alerts?since=1h&limit=0');
     expect(calls[0]).not.toContain('simulated=true');
   });
+
+  test('appends origin, scenario, and active-decision filters to alert queries', async () => {
+    const calls: string[] = [];
+    const client = new LapiClient({
+      crowdsecUrl: 'http://crowdsec:8080',
+      user: 'watcher',
+      password: 'secret',
+      simulationsEnabled: true,
+      lookbackPeriod: '1h',
+      version: '1.0.0',
+      fetchImpl: async (input) => {
+        calls.push(String(input));
+        return Response.json([]);
+      },
+    });
+
+    await expect(
+      client.fetchAlerts('30m', '10m', true, {
+        origin: 'crowdsec',
+        scenario: 'manual/web-ui',
+      }),
+    ).resolves.toEqual([]);
+
+    expect(calls[0]).toContain('/v1/alerts?since=30m&limit=0&until=10m&simulated=true&has_active_decision=true&origin=crowdsec&scenario=manual%2Fweb-ui');
+    expect(calls[0]).toContain('scope=Ip');
+    expect(calls[0]).toContain('scope=Range');
+  });
 });
