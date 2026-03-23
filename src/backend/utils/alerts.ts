@@ -52,6 +52,7 @@ export function toSlimDecision(decision: AlertDecision): SlimDecision {
     stop_at: typeof decision.stop_at === 'string' ? decision.stop_at : undefined,
     origin: typeof decision.origin === 'string' ? decision.origin : undefined,
     expired: Boolean(decision.expired),
+    simulated: decision.simulated === true,
   };
 }
 
@@ -68,6 +69,7 @@ export function toSlimAlert(alert: AlertRecord): SlimAlert {
     target: alert.target,
     meta_search: buildMetaSearch(alert.events),
     decisions: (alert.decisions || []).map(toSlimDecision),
+    simulated: alert.simulated === true,
   };
 }
 

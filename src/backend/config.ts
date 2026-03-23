@@ -4,6 +4,7 @@ export interface RuntimeConfig {
   crowdsecUrl: string;
   crowdsecUser?: string;
   crowdsecPassword?: string;
+  simulationsEnabled: boolean;
   lookbackPeriod: string;
   lookbackMs: number;
   refreshIntervalMs: number;
@@ -80,6 +81,7 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
     crowdsecUrl: env.CROWDSEC_URL || 'http://crowdsec:8080',
     crowdsecUser: env.CROWDSEC_USER,
     crowdsecPassword: env.CROWDSEC_PASSWORD,
+    simulationsEnabled: parseBooleanEnv(env.CROWDSEC_SIMULATIONS_ENABLED, false),
     lookbackPeriod,
     lookbackMs: parseLookbackToMs(lookbackPeriod),
     refreshIntervalMs,

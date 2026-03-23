@@ -35,8 +35,42 @@ function sampleAlert(): AlertRecord {
         duration: '30m',
         stop_at: stopAt,
         origin: 'manual',
+        simulated: false,
       },
     ],
+    simulated: false,
+  };
+}
+
+function sampleSimulatedAlert(): AlertRecord {
+  const createdAt = new Date().toISOString();
+  const stopAt = new Date(Date.now() + 45 * 60 * 1_000).toISOString();
+  return {
+    id: 2,
+    uuid: 'alert-2',
+    created_at: createdAt,
+    scenario: 'crowdsecurity/nginx-bf',
+    message: 'Simulated nginx bruteforce',
+    source: {
+      ip: '5.6.7.8',
+      value: '5.6.7.8',
+      cn: 'US',
+      as_name: 'AWS',
+    },
+    target: 'nginx',
+    events: [{ meta: [{ key: 'service', value: 'nginx' }] }],
+    decisions: [
+      {
+        id: 20,
+        type: 'ban',
+        value: '5.6.7.8',
+        duration: '45m',
+        stop_at: stopAt,
+        origin: 'crowdsec',
+        simulated: true,
+      },
+    ],
+    simulated: true,
   };
 }
 
@@ -57,13 +91,14 @@ function createTestDistRoot(): string {
   return distRoot;
 }
 
-function createController(options: { alertDetailPayload?: unknown } = {}) {
+function createController(options: { alertDetailPayload?: unknown; simulationsEnabled?: boolean } = {}) {
   const config = createRuntimeConfig({
     PORT: '3000',
     BASE_PATH: '/crowdsec',
     CROWDSEC_URL: 'http://crowdsec:8080',
     CROWDSEC_USER: 'watcher',
     CROWDSEC_PASSWORD: 'secret',
+    CROWDSEC_SIMULATIONS_ENABLED: options.simulationsEnabled === false ? 'false' : 'true',
     CROWDSEC_LOOKBACK_PERIOD: '1m',
     CROWDSEC_REFRESH_INTERVAL: '30s',
     VITE_VERSION: '1.0.0',
@@ -84,6 +119,9 @@ function createController(options: { alertDetailPayload?: unknown } = {}) {
     if (url.endsWith('/v1/alerts/1') && (!init?.method || init.method === 'GET')) {
       return Response.json(options.alertDetailPayload ?? sampleAlert());
     }
+    if (url.endsWith('/v1/alerts/2') && (!init?.method || init.method === 'GET')) {
+      return Response.json(sampleSimulatedAlert());
+    }
     if (url.endsWith('/v1/alerts/1') && init?.method === 'DELETE') {
       return Response.json({ message: 'Deleted' });
     }
@@ -100,6 +138,7 @@ function createController(options: { alertDetailPayload?: unknown } = {}) {
     crowdsecUrl: config.crowdsecUrl,
     user: config.crowdsecUser,
     password: config.crowdsecPassword,
+    simulationsEnabled: config.simulationsEnabled,
     lookbackPeriod: config.lookbackPeriod,
     version: config.version,
     fetchImpl,
@@ -120,6 +159,7 @@ describe('createApp', () => {
   test('serves health, config, alerts, decisions, stats, update-check, and mutations', async () => {
     const { controller, database, lapiClient } = createController();
     const alert = sampleAlert();
+    const simulatedAlert = sampleSimulatedAlert();
 
     database.insertAlert({
       $id: alert.id,
@@ -151,6 +191,40 @@ describe('createApp', () => {
         country: 'DE',
         as: 'Hetzner',
         target: 'ssh',
+        simulated: false,
+      }),
+    });
+    database.insertAlert({
+      $id: simulatedAlert.id,
+      $uuid: simulatedAlert.uuid || String(simulatedAlert.id),
+      $created_at: simulatedAlert.created_at,
+      $scenario: simulatedAlert.scenario,
+      $source_ip: simulatedAlert.source?.ip || '',
+      $message: simulatedAlert.message || '',
+      $raw_data: JSON.stringify(simulatedAlert),
+    });
+    database.insertDecision({
+      $id: '20',
+      $uuid: '20',
+      $alert_id: 2,
+      $created_at: simulatedAlert.created_at,
+      $stop_at: new Date(Date.now() + 45 * 60 * 1_000).toISOString(),
+      $value: '5.6.7.8',
+      $type: 'ban',
+      $origin: 'crowdsec',
+      $scenario: simulatedAlert.scenario,
+      $raw_data: JSON.stringify({
+        id: 20,
+        created_at: simulatedAlert.created_at,
+        scenario: simulatedAlert.scenario,
+        value: '5.6.7.8',
+        stop_at: new Date(Date.now() + 45 * 60 * 1_000).toISOString(),
+        type: 'ban',
+        origin: 'crowdsec',
+        country: 'US',
+        as: 'AWS',
+        target: 'nginx',
+        simulated: true,
       }),
     });
 
@@ -161,27 +235,37 @@ describe('createApp', () => {
 
     const configResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
     expect(configResponse.status).toBe(200);
-    expect(((await configResponse.json()) as { lookback_period: string }).lookback_period).toBe('1m');
+    expect(((await configResponse.json()) as { lookback_period: string; simulations_enabled: boolean })).toEqual(
+      expect.objectContaining({ lookback_period: '1m', simulations_enabled: true }),
+    );
 
     const alerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
     expect(alerts.status).toBe(200);
-    expect(((await alerts.json()) as Array<unknown>)).toHaveLength(1);
+    expect(((await alerts.json()) as Array<{ simulated?: boolean }>)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ simulated: true })]),
+    );
 
     const alertDetails = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts/1'));
     expect(alertDetails.status).toBe(200);
-    expect(((await alertDetails.json()) as { id: number }).id).toBe(1);
+    expect(((await alertDetails.json()) as { id: number; simulated?: boolean }).id).toBe(1);
 
     const decisions = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions'));
     expect(decisions.status).toBe(200);
-    expect(((await decisions.json()) as Array<unknown>)).toHaveLength(1);
+    expect(((await decisions.json()) as Array<{ simulated?: boolean }>)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ simulated: true })]),
+    );
 
     const statsAlerts = await controller.fetch(new Request('http://localhost/crowdsec/api/stats/alerts'));
     expect(statsAlerts.status).toBe(200);
-    expect((((await statsAlerts.json()) as Array<{ target?: string }>)[0]).target).toBe('ssh');
+    expect((await statsAlerts.json()) as Array<{ target?: string; simulated?: boolean }>).toEqual(
+      expect.arrayContaining([expect.objectContaining({ target: 'nginx', simulated: true })]),
+    );
 
     const statsDecisions = await controller.fetch(new Request('http://localhost/crowdsec/api/stats/decisions'));
     expect(statsDecisions.status).toBe(200);
-    expect((((await statsDecisions.json()) as Array<{ value?: string }>)[0]).value).toBe('1.2.3.4');
+    expect((await statsDecisions.json()) as Array<{ value?: string; simulated?: boolean }>).toEqual(
+      expect.arrayContaining([expect.objectContaining({ value: '5.6.7.8', simulated: true })]),
+    );
 
     const updateCheck = await controller.fetch(new Request('http://localhost/crowdsec/api/update-check'));
     expect(updateCheck.status).toBe(200);
@@ -278,6 +362,103 @@ describe('createApp', () => {
     const alertDetails = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts/1'));
     expect(alertDetails.status).toBe(200);
     expect(((await alertDetails.json()) as { id: number }).id).toBe(1);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('filters simulated alerts and decisions when simulations are disabled', async () => {
+    const { controller, database, lapiClient } = createController({ simulationsEnabled: false });
+    const liveAlert = sampleAlert();
+    const simulatedAlert = sampleSimulatedAlert();
+
+    database.insertAlert({
+      $id: liveAlert.id,
+      $uuid: liveAlert.uuid || String(liveAlert.id),
+      $created_at: liveAlert.created_at,
+      $scenario: liveAlert.scenario,
+      $source_ip: liveAlert.source?.ip || '',
+      $message: liveAlert.message || '',
+      $raw_data: JSON.stringify(liveAlert),
+    });
+    database.insertAlert({
+      $id: simulatedAlert.id,
+      $uuid: simulatedAlert.uuid || String(simulatedAlert.id),
+      $created_at: simulatedAlert.created_at,
+      $scenario: simulatedAlert.scenario,
+      $source_ip: simulatedAlert.source?.ip || '',
+      $message: simulatedAlert.message || '',
+      $raw_data: JSON.stringify(simulatedAlert),
+    });
+    database.insertDecision({
+      $id: '10',
+      $uuid: '10',
+      $alert_id: 1,
+      $created_at: liveAlert.created_at,
+      $stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(),
+      $value: '1.2.3.4',
+      $type: 'ban',
+      $origin: 'manual',
+      $scenario: liveAlert.scenario,
+      $raw_data: JSON.stringify({
+        id: 10,
+        created_at: liveAlert.created_at,
+        scenario: liveAlert.scenario,
+        value: '1.2.3.4',
+        stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(),
+        type: 'ban',
+        origin: 'manual',
+        target: 'ssh',
+        simulated: false,
+      }),
+    });
+    database.insertDecision({
+      $id: '20',
+      $uuid: '20',
+      $alert_id: 2,
+      $created_at: simulatedAlert.created_at,
+      $stop_at: new Date(Date.now() + 45 * 60 * 1_000).toISOString(),
+      $value: '5.6.7.8',
+      $type: 'ban',
+      $origin: 'crowdsec',
+      $scenario: simulatedAlert.scenario,
+      $raw_data: JSON.stringify({
+        id: 20,
+        created_at: simulatedAlert.created_at,
+        scenario: simulatedAlert.scenario,
+        value: '5.6.7.8',
+        stop_at: new Date(Date.now() + 45 * 60 * 1_000).toISOString(),
+        type: 'ban',
+        origin: 'crowdsec',
+        target: 'nginx',
+        simulated: true,
+      }),
+    });
+
+    await lapiClient.login();
+
+    const alerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    const alertsJson = await alerts.json() as Array<{ id: number }>;
+    expect(alertsJson).toHaveLength(1);
+    expect(alertsJson[0]?.id).toBe(1);
+
+    const decisions = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions'));
+    const decisionsJson = await decisions.json() as Array<{ id: number }>;
+    expect(decisionsJson).toHaveLength(1);
+    expect(decisionsJson[0]?.id).toBe(10);
+
+    const statsAlerts = await controller.fetch(new Request('http://localhost/crowdsec/api/stats/alerts'));
+    expect(((await statsAlerts.json()) as Array<{ simulated?: boolean }>).every((alert) => alert.simulated !== true)).toBe(true);
+
+    const statsDecisions = await controller.fetch(new Request('http://localhost/crowdsec/api/stats/decisions'));
+    expect(((await statsDecisions.json()) as Array<{ simulated?: boolean }>).every((decision) => decision.simulated !== true)).toBe(true);
+
+    const simulatedDetails = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts/2'));
+    expect(simulatedDetails.status).toBe(404);
+
+    const configResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
+    expect(((await configResponse.json()) as { simulations_enabled: boolean }).simulations_enabled).toBe(false);
 
     controller.stopBackgroundTasks();
     database.close();

@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback, type MouseEvent as ReactMouseEvent } from "react";
 import { useSearchParams, Link } from "react-router-dom";
-import { fetchAlerts, fetchAlert, deleteAlert } from "../lib/api";
+import { fetchAlerts, fetchAlert, deleteAlert, fetchConfig } from "../lib/api";
+import { isSimulatedAlert, isSimulatedDecision, matchesSimulationFilter, parseSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
@@ -51,6 +52,7 @@ function hasAlertEvents(alert: AlertSelection): alert is AlertRecord {
 export function Alerts() {
     const { refreshSignal, setLastUpdated } = useRefresh();
     const [alerts, setAlerts] = useState<AlertListItem[]>([]);
+    const [simulationsEnabled, setSimulationsEnabled] = useState(false);
     const [filter, setFilter] = useState("");
     const [loading, setLoading] = useState(true);
     const [selectedAlert, setSelectedAlert] = useState<AlertSelection | null>(null);
@@ -79,8 +81,12 @@ export function Alerts() {
     const loadAlerts = useCallback(async (isBackground = false) => {
         try {
             if (!isBackground) setLoading(true);
-            const alertsData = await fetchAlerts();
+            const [alertsData, configData] = await Promise.all([
+                fetchAlerts(),
+                fetchConfig(),
+            ]);
             setAlerts(alertsData);
+            setSimulationsEnabled(configData.simulations_enabled === true);
 
             // Check if there's an alert ID in the URL
             const alertIdParam = searchParams.get("id");
@@ -184,6 +190,7 @@ export function Alerts() {
 
     const filteredAlerts = alerts.filter((alert) => {
         const search = filter.toLowerCase();
+        const simulationFilter = simulationsEnabled ? parseSimulationFilter(searchParams.get("simulation")) : 'all';
 
         // Specific query params
         const paramIp = (searchParams.get("ip") || "").toLowerCase();
@@ -195,6 +202,8 @@ export function Alerts() {
 
         const paramDateEnd = searchParams.get("dateEnd") || "";
         const paramTarget = (searchParams.get("target") || "").toLowerCase();
+
+        if (!matchesSimulationFilter({ simulated: isSimulatedAlert(alert) }, simulationFilter)) return false;
 
         const scenario = (alert.scenario || "").toLowerCase();
         const message = (alert.message || "").toLowerCase();
@@ -234,7 +243,8 @@ export function Alerts() {
                 countryName.includes(search) ||
                 asName.includes(search) ||
                 (alert.target || "").toLowerCase().includes(search) ||
-                (alert.meta_search || "").toLowerCase().includes(search);
+                (alert.meta_search || "").toLowerCase().includes(search) ||
+                (isSimulatedAlert(alert) ? 'simulation simulated' : 'live').includes(search);
         }
 
         return true;
@@ -243,6 +253,8 @@ export function Alerts() {
     const visibleAlerts = filteredAlerts.slice(0, displayedCount);
     const selectedAlertDecisions = selectedAlert?.decisions ?? [];
     const selectedAlertEvents = selectedAlert && hasAlertEvents(selectedAlert) ? selectedAlert.events ?? [] : [];
+    const selectedAlertSimulationFilter = simulationsEnabled ? parseSimulationFilter(searchParams.get("simulation")) : 'all';
+    const selectedAlertIsSimulated = selectedAlert ? isSimulatedAlert(selectedAlert) : false;
 
     return (
         <div className="space-y-6">
@@ -284,9 +296,19 @@ export function Alerts() {
             )}
 
             {/* Show active filters */}
-            {(searchParams.get("ip") || searchParams.get("country") || searchParams.get("scenario") || searchParams.get("as") || searchParams.get("target") || searchParams.get("date") || searchParams.get("dateStart") || searchParams.get("dateEnd")) && (
+            {(searchParams.get("ip") || searchParams.get("country") || searchParams.get("scenario") || searchParams.get("as") || searchParams.get("target") || searchParams.get("date") || searchParams.get("dateStart") || searchParams.get("dateEnd") || (simulationsEnabled && searchParams.get("simulation"))) && (
                 <div className="flex flex-wrap gap-2">
-                    {["ip", "country", "scenario", "as", "target", "date", "dateStart", "dateEnd"].map(key => {
+                    {[
+                        "ip",
+                        "country",
+                        "scenario",
+                        "as",
+                        "target",
+                        "date",
+                        "dateStart",
+                        "dateEnd",
+                        ...(simulationsEnabled ? ["simulation"] : []),
+                    ].map(key => {
                         const val = searchParams.get(key);
                         if (!val) return null;
                         return (
@@ -314,6 +336,35 @@ export function Alerts() {
                 </div>
             )
             }
+
+            {simulationsEnabled && (
+                <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 shadow-sm dark:border-gray-700 dark:bg-gray-800 w-fit">
+                    <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Mode</span>
+                    {(['all', 'live', 'simulated'] as const).map((value) => {
+                        const currentValue = parseSimulationFilter(searchParams.get("simulation"));
+                        return (
+                            <button
+                                key={value}
+                                onClick={() => {
+                                    const newParams = new URLSearchParams(searchParams);
+                                    if (value === 'all') {
+                                        newParams.delete('simulation');
+                                    } else {
+                                        newParams.set('simulation', value);
+                                    }
+                                    setSearchParams(newParams);
+                                }}
+                                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${currentValue === value
+                                    ? 'bg-primary-600 text-white'
+                                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600'
+                                    }`}
+                            >
+                                {value === 'all' ? 'All' : value === 'live' ? 'Live' : 'Simulation'}
+                            </button>
+                        );
+                    })}
+                </div>
+            )}
 
             <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -381,51 +432,81 @@ export function Alerts() {
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
                                                 {alert.decisions.length > 0 ? (() => {
-                                                    // Check if there are any active (non-expired) decisions
-                                                    const activeDecisions = alert.decisions.filter(d => {
-                                                        // If we have explicit status from backend (hydrated), trust it
-                                                        if (d.expired !== undefined) {
-                                                            return !d.expired;
-                                                        }
+                                                    const liveActiveDecisions = alert.decisions.filter(d => !isSimulatedDecision(d) && d.expired !== true);
+                                                    const liveExpiredDecisions = alert.decisions.filter(d => !isSimulatedDecision(d) && d.expired === true);
+                                                    const simulatedDecisions = alert.decisions.filter(d => isSimulatedDecision(d));
 
-                                                        if (d.stop_at) {
-                                                            return new Date(d.stop_at) > new Date();
-                                                        }
-                                                        // If stop_at is missing, check if duration implies expiration
-                                                        if (d.duration && d.duration.startsWith('-')) {
-                                                            return false;
-                                                        }
-                                                        return true; // Assume active if no stop_at and not definitely expired
-                                                    });
-
-                                                    const hasActiveDecisions = activeDecisions.length > 0;
-
-                                                    if (hasActiveDecisions) {
+                                                    if (liveActiveDecisions.length > 0) {
                                                         return (
-                                                            <Link
-                                                                to={`/decisions?alert_id=${alert.id}`}
-                                                                className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors border border-primary-200 dark:border-primary-800"
-                                                                title={`View ${activeDecisions.length} active decisions`}
-                                                            >
-                                                                <Shield size={14} className="fill-current" />
-                                                                <span className="text-xs font-semibold">Active: {activeDecisions.length}</span>
-                                                                <ExternalLink size={12} className="ml-0.5" />
-                                                            </Link>
+                                                            <div className="flex flex-wrap gap-2">
+                                                                <Link
+                                                                    to={`/decisions?alert_id=${alert.id}`}
+                                                                    className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors border border-primary-200 dark:border-primary-800"
+                                                                    title={`View ${liveActiveDecisions.length} active live decisions`}
+                                                                >
+                                                                    <Shield size={14} className="fill-current" />
+                                                                    <span className="text-xs font-semibold">Active: {liveActiveDecisions.length}</span>
+                                                                    <ExternalLink size={12} className="ml-0.5" />
+                                                                </Link>
+                                                                {simulatedDecisions.length > 0 && simulationsEnabled && (
+                                                                    <Link
+                                                                        to={`/decisions?alert_id=${alert.id}&simulation=simulated&include_expired=true`}
+                                                                        className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-yellow-50 text-yellow-700 hover:bg-yellow-100 transition-colors border border-yellow-200 dark:bg-yellow-900/20 dark:text-yellow-300 dark:hover:bg-yellow-900/30 dark:border-yellow-800"
+                                                                        title={`View ${simulatedDecisions.length} simulated decisions`}
+                                                                    >
+                                                                        <span className="text-xs font-semibold">Simulation: {simulatedDecisions.length}</span>
+                                                                        <ExternalLink size={12} className="ml-0.5" />
+                                                                    </Link>
+                                                                )}
+                                                            </div>
                                                         );
-                                                    } else {
+                                                    }
+
+                                                    if (simulatedDecisions.length > 0 && simulationsEnabled) {
+                                                        return (
+                                                            <div className="flex flex-wrap gap-2">
+                                                                <Link
+                                                                    to={`/decisions?alert_id=${alert.id}&simulation=simulated&include_expired=true`}
+                                                                    className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-yellow-50 text-yellow-700 hover:bg-yellow-100 transition-colors border border-yellow-200 dark:bg-yellow-900/20 dark:text-yellow-300 dark:hover:bg-yellow-900/30 dark:border-yellow-800"
+                                                                    title={`View ${simulatedDecisions.length} simulated decisions`}
+                                                                >
+                                                                    <span className="text-xs font-semibold">Simulation: {simulatedDecisions.length}</span>
+                                                                    <ExternalLink size={12} className="ml-0.5" />
+                                                                </Link>
+                                                                {liveExpiredDecisions.length > 0 && (
+                                                                    <Link
+                                                                        to={`/decisions?alert_id=${alert.id}&include_expired=true`}
+                                                                        className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                                                                        title={`View ${liveExpiredDecisions.length} expired live decisions`}
+                                                                    >
+                                                                        <Shield size={14} className="opacity-50" />
+                                                                        <span className="text-xs font-medium">Inactive: {liveExpiredDecisions.length}</span>
+                                                                    </Link>
+                                                                )}
+                                                            </div>
+                                                        );
+                                                    }
+
+                                                    if (liveExpiredDecisions.length > 0) {
                                                         return (
                                                             <Link
                                                                 to={`/decisions?alert_id=${alert.id}&include_expired=true`}
                                                                 className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-                                                                title={`View ${alert.decisions.length} expired decisions`}
+                                                                title={`View ${liveExpiredDecisions.length} expired live decisions`}
                                                             >
                                                                 <Shield size={14} className="opacity-50" />
-                                                                <span className="text-xs font-medium">Inactive: {alert.decisions.length}</span>
+                                                                <span className="text-xs font-medium">Inactive: {liveExpiredDecisions.length}</span>
                                                             </Link>
                                                         );
                                                     }
+
+                                                    return <span className="text-gray-400">-</span>;
                                                 })() : (
-                                                    <span className="text-gray-400">-</span>
+                                                    simulationsEnabled && isSimulatedAlert(alert) ? (
+                                                        <Badge variant="warning">Simulation Mode</Badge>
+                                                    ) : (
+                                                        <span className="text-gray-400">-</span>
+                                                    )
                                                 )}
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
@@ -550,6 +631,12 @@ export function Alerts() {
                             </div>
                         )}
 
+                        {simulationsEnabled && selectedAlertIsSimulated && (
+                            <div className="p-4 bg-yellow-50 dark:bg-yellow-900/10 rounded-lg border border-yellow-100 dark:border-yellow-900/30">
+                                <Badge variant="warning">Simulation Mode</Badge>
+                            </div>
+                        )}
+
                         {/* Decisions */}
                         {selectedAlertDecisions.length > 0 && (
                             <div>
@@ -560,6 +647,9 @@ export function Alerts() {
                                             <tr>
                                                 <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
                                                 <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+                                                {simulationsEnabled && (
+                                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Mode</th>
+                                                )}
                                                 <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Value</th>
                                                 <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Expiration</th>
                                                 <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Origin</th>
@@ -588,6 +678,13 @@ export function Alerts() {
                                                     <tr key={idx}>
                                                         <td className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400">#{decision.id}</td>
                                                         <td className="px-4 py-2 text-sm"><Badge variant="danger">{decision.type}</Badge></td>
+                                                        {simulationsEnabled && (
+                                                            <td className="px-4 py-2 text-sm">
+                                                                <Badge variant={isSimulatedDecision(decision) ? "warning" : "info"}>
+                                                                    {isSimulatedDecision(decision) ? "Simulation" : "Live"}
+                                                                </Badge>
+                                                            </td>
+                                                        )}
                                                         <td className="px-4 py-2 text-sm font-mono">{decision.value}</td>
                                                         <td className="px-4 py-2 text-sm">
                                                             {decision.duration && decision.duration.startsWith('-') ? "0s" : decision.duration}
@@ -595,9 +692,18 @@ export function Alerts() {
                                                         </td>
                                                         <td className="px-4 py-2 text-sm">{decision.origin}</td>
                                                         <td className="px-4 py-2 text-sm">
-                                                            {isActive ? (
+                                                            {isSimulatedDecision(decision) && simulationsEnabled ? (
                                                                 <Link
-                                                                    to={`/decisions?alert_id=${selectedAlert.id}`}
+                                                                    to={`/decisions?alert_id=${selectedAlert.id}&simulation=simulated&include_expired=true`}
+                                                                    className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-yellow-50 text-yellow-700 hover:bg-yellow-100 transition-colors border border-yellow-200 dark:bg-yellow-900/20 dark:text-yellow-300 dark:hover:bg-yellow-900/30 dark:border-yellow-800"
+                                                                    title="View simulated decision"
+                                                                >
+                                                                    <span className="text-xs font-semibold">Simulation</span>
+                                                                    <ExternalLink size={12} className="ml-0.5" />
+                                                                </Link>
+                                                            ) : isActive ? (
+                                                                <Link
+                                                                    to={`/decisions?alert_id=${selectedAlert.id}${selectedAlertSimulationFilter !== 'all' ? `&simulation=${selectedAlertSimulationFilter}` : ''}`}
                                                                     className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors border border-primary-200 dark:border-primary-800"
                                                                     title="View active decision"
                                                                 >

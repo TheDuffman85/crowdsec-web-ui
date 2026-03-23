@@ -27,14 +27,14 @@ A modern, responsive web interface for managing [CrowdSec](https://crowdsec.net/
 ## Features
 
 ### Dashboard
-High-level overview of total alerts and active decisions. Statistics and top lists with dynamic filtering. 
+High-level overview of total alerts and live active decisions. Statistics and top lists with dynamic filtering, including simulation-mode visibility when enabled.
 
 <a href="screenshots/dashboard.png">
   <img src="screenshots/dashboard.png" alt="Dashboard" width="50%">
 </a>
 
 ### Alerts Management
-View detailed logs of security events.
+View detailed logs of security events, including clear simulation-mode labeling.
 
 <a href="screenshots/alerts.png">
   <img src="screenshots/alerts.png" alt="Alerts" width="50%">
@@ -48,7 +48,7 @@ Detailed modal view showing attacker IP, AS information, location with map, and 
 </a>
 
 ### Decisions Management
-View and manage active bans/decisions. Supports filtering by status (active/expired) and hiding duplicate decisions.
+View and manage active bans/decisions. Supports filtering by status (active/expired), simulation mode, and hiding duplicate decisions.
 
 <a href="screenshots/decisions.png">
   <img src="screenshots/decisions.png" alt="Decisions" width="50%">
@@ -118,6 +118,14 @@ TRUSTED_IPS="127.0.0.1,::1,172.16.0.0/12"
 
 See the [CrowdSec documentation](https://docs.crowdsec.net/docs/local_api/intro/) for more details on LAPI configuration.
 
+### Simulation Mode Visibility
+
+CrowdSec can run scenarios in **simulation mode**, where alerts and decisions are generated but no live remediation is applied. The Web UI can display those entries separately from real remediations.
+
+- `CROWDSEC_SIMULATIONS_ENABLED=false` by default.
+- When enabled, the UI shows simulation badges, simulation filters, and separate simulation counts on the dashboard.
+- When left unset or set to `false`, the UI hides simulated alerts/decisions and the backend stops requesting simulated data from the CrowdSec LAPI.
+
 ## Run with Docker (Recommended)
 
 1.  **Build the image**:
@@ -139,6 +147,7 @@ See the [CrowdSec documentation](https://docs.crowdsec.net/docs/local_api/intro/
       -e CROWDSEC_URL=http://crowdsec-container-name:8080 \
       -e CROWDSEC_USER=crowdsec-web-ui \
       -e CROWDSEC_PASSWORD=<your-secure-password> \
+      -e CROWDSEC_SIMULATIONS_ENABLED=true \
       -e CROWDSEC_LOOKBACK_PERIOD=5d \
       -e CROWDSEC_REFRESH_INTERVAL=0 \
       -v $(pwd)/data:/app/data \
@@ -161,6 +170,8 @@ services:
       - CROWDSEC_URL=http://crowdsec:8080
       - CROWDSEC_USER=crowdsec-web-ui
       - CROWDSEC_PASSWORD=<generated_password>
+      # Optional: Include simulation-mode alerts/decisions from CrowdSec (default: false)
+      - CROWDSEC_SIMULATIONS_ENABLED=true
       # Optional: Lookback period for alerts/stats (default: 168h/7d)
       - CROWDSEC_LOOKBACK_PERIOD=5d
       # Optional: Backend auto-refresh interval. Values: 0 (Off), 5s, 30s (default), 1m, 5m
@@ -209,6 +220,7 @@ services:
       - CROWDSEC_URL=https://crowdsec:8080
       - CROWDSEC_USER=crowdsec-web-ui
       - CROWDSEC_PASSWORD=<YOUR_API_KEY>
+      - CROWDSEC_SIMULATIONS_ENABLED=true
       - NODE_EXTRA_CA_CERTS=/certs/root_ca.crt
     volumes:
       - ./data:/app/data
@@ -240,6 +252,7 @@ services:
       - CROWDSEC_URL=http://crowdsec:8080
       - CROWDSEC_USER=crowdsec-web-ui
       - CROWDSEC_PASSWORD=<generated_password>
+      - CROWDSEC_SIMULATIONS_ENABLED=true
       - BASE_PATH=/crowdsec
     volumes:
       - ./data:/app/data
@@ -329,6 +342,7 @@ The Web UI maintains its own local history of alerts and decisions. Data fetched
     CROWDSEC_URL=http://localhost:8080
     CROWDSEC_USER=crowdsec-web-ui
     CROWDSEC_PASSWORD=<your-secure-password>
+    CROWDSEC_SIMULATIONS_ENABLED=true
     CROWDSEC_REFRESH_INTERVAL=30s
     CROWDSEC_BOOTSTRAP_RETRY_DELAY=30s
     CROWDSEC_BOOTSTRAP_RETRY_ENABLED=true

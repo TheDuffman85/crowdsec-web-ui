@@ -15,6 +15,7 @@ vi.mock('../lib/api', () => ({
       startedAt: null,
       completedAt: null,
     },
+    simulations_enabled: true,
   })),
 }));
 
@@ -90,6 +91,7 @@ describe('RefreshContext', () => {
       lookback_days: 1,
       current_interval_name: '5s',
       lapi_status: { isConnected: true, lastCheck: null, lastError: null },
+      simulations_enabled: true,
     }).mockResolvedValueOnce({
       refresh_interval: 1000,
       sync_status: {
@@ -104,6 +106,7 @@ describe('RefreshContext', () => {
       lookback_days: 1,
       current_interval_name: '5s',
       lapi_status: { isConnected: true, lastCheck: null, lastError: null },
+      simulations_enabled: true,
     });
 
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});

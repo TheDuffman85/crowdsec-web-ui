@@ -42,6 +42,7 @@ describe('config helpers', () => {
       CROWDSEC_URL: 'http://localhost:8080',
       CROWDSEC_USER: 'watcher',
       CROWDSEC_PASSWORD: 'secret',
+      CROWDSEC_SIMULATIONS_ENABLED: 'false',
       CROWDSEC_LOOKBACK_PERIOD: '2d',
       CROWDSEC_REFRESH_INTERVAL: '5s',
       CROWDSEC_IDLE_REFRESH_INTERVAL: '1m',
@@ -58,11 +59,17 @@ describe('config helpers', () => {
 
     expect(config.port).toBe(4000);
     expect(config.basePath).toBe('/crowdsec');
+    expect(config.simulationsEnabled).toBe(false);
     expect(config.lookbackMs).toBe(172_800_000);
     expect(config.refreshIntervalMs).toBe(5_000);
     expect(config.bootstrapRetryEnabled).toBe(false);
     expect(config.dockerImageRef).toBe('example/repo');
     expect(config.updateCheckEnabled).toBe(true);
     expect(config.dbDir).toBe('/tmp/app');
+  });
+
+  test('createRuntimeConfig disables simulations by default', () => {
+    const config = createRuntimeConfig({});
+    expect(config.simulationsEnabled).toBe(false);
   });
 });

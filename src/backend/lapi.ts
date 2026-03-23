@@ -19,6 +19,7 @@ export interface LapiClientOptions {
   crowdsecUrl: string;
   user?: string;
   password?: string;
+  simulationsEnabled?: boolean;
   lookbackPeriod: string;
   version: string;
   fetchImpl?: FetchLike;
@@ -28,6 +29,7 @@ export class LapiClient {
   private readonly crowdsecUrl: string;
   private readonly user?: string;
   private readonly password?: string;
+  private readonly simulationsEnabled: boolean;
   private readonly version: string;
   private readonly fetchImpl: FetchLike;
 
@@ -44,6 +46,7 @@ export class LapiClient {
     this.crowdsecUrl = options.crowdsecUrl;
     this.user = options.user;
     this.password = options.password;
+    this.simulationsEnabled = options.simulationsEnabled ?? false;
     this.lookbackPeriod = options.lookbackPeriod;
     this.version = options.version;
     this.fetchImpl = options.fetchImpl || fetch;
@@ -183,6 +186,7 @@ export class LapiClient {
     params.append('since', sinceParam);
     params.append('limit', '0');
     if (until) params.append('until', until);
+    if (this.simulationsEnabled) params.append('simulated', 'true');
     if (hasActiveDecision) params.append('has_active_decision', 'true');
     ['Ip', 'Range'].forEach((scope) => params.append('scope', scope));
 

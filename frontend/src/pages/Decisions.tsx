@@ -1,7 +1,8 @@
 import { useEffect, useState, useRef, useCallback, type FormEvent } from "react";
 import { useSearchParams, Link } from "react-router-dom";
-import { deleteDecision, addDecision } from "../lib/api";
+import { deleteDecision, addDecision, fetchConfig } from "../lib/api";
 import { apiUrl } from "../lib/basePath";
+import { isSimulatedDecision, matchesSimulationFilter, parseSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
@@ -44,6 +45,7 @@ function toErrorInfo(error: unknown, fallbackMessage: string): ErrorInfo {
 export function Decisions() {
     const { refreshSignal, setLastUpdated } = useRefresh();
     const [decisions, setDecisions] = useState<DecisionListItem[]>([]);
+    const [simulationsEnabled, setSimulationsEnabled] = useState(false);
     const [loading, setLoading] = useState(true);
     const [showAddModal, setShowAddModal] = useState(false);
     const [filter, setFilter] = useState("");
@@ -62,6 +64,7 @@ export function Decisions() {
     const targetFilter = searchParams.get("target");
     const dateStartFilter = searchParams.get("dateStart");
     const dateEndFilter = searchParams.get("dateEnd");
+    const simulationFilter = simulationsEnabled ? parseSimulationFilter(searchParams.get("simulation")) : 'all';
     // Default: hide duplicates unless explicitly set to false OR viewing a specific alert's decisions
     const showDuplicates = searchParams.get("hide_duplicates") === "false" || !!alertIdFilter;
 
@@ -85,11 +88,15 @@ export function Decisions() {
         try {
             const url = includeExpiredParam ? apiUrl('/api/decisions?include_expired=true') : apiUrl('/api/decisions');
 
-            const res = await fetch(url, { cache: "no-store" });
+            const [res, configData] = await Promise.all([
+                fetch(url, { cache: "no-store" }),
+                fetchConfig(),
+            ]);
             if (!res.ok) throw new Error('Failed to fetch decisions');
             const data = await res.json() as DecisionListItem[];
 
             setDecisions(data);
+            setSimulationsEnabled(configData.simulations_enabled === true);
 
             setLastUpdated(new Date());
         } catch (error) {
@@ -181,6 +188,7 @@ export function Decisions() {
 
         // 1. Alert ID Filter
         if (alertIdFilter && String(decision.detail.alert_id) !== alertIdFilter) return false;
+        if (!matchesSimulationFilter({ simulated: isSimulatedDecision(decision) }, simulationFilter)) return false;
 
         // 2. Exact Field Filters (from Dashboard)
         if (countryFilter && decision.detail.country !== countryFilter) return false;
@@ -226,6 +234,7 @@ export function Decisions() {
         const as = (decision.detail.as || "").toLowerCase();
         const type = (decision.detail.type || "").toLowerCase();
         const action = (decision.detail.action || "").toLowerCase();
+        const simulationSearch = isSimulatedDecision(decision) ? 'simulation simulated' : 'live';
 
         return ip.includes(search) ||
             reason.includes(search) ||
@@ -233,7 +242,8 @@ export function Decisions() {
             countryName.includes(search) ||
             as.includes(search) ||
             type.includes(search) ||
-            action.includes(search);
+            action.includes(search) ||
+            simulationSearch.includes(search);
     });
 
     const visibleDecisions = filteredDecisions.slice(0, displayedCount);
@@ -241,7 +251,7 @@ export function Decisions() {
     return (
         <div className="space-y-6">
             {/* Only show count when non-default filters are applied */}
-            {(alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter || includeExpiredParam || showDuplicates) && filteredDecisions.length !== decisions.length && (
+            {(alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter || includeExpiredParam || showDuplicates || (simulationsEnabled && simulationFilter !== 'all')) && filteredDecisions.length !== decisions.length && (
                 <div className="text-sm text-gray-500">
                     Showing {filteredDecisions.length} of {decisions.length} decisions
                 </div>
@@ -255,6 +265,31 @@ export function Decisions() {
                     <Gavel size={16} />
                     Add Decision
                 </button>
+                {simulationsEnabled && (
+                    <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+                        <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Mode</span>
+                        {(['all', 'live', 'simulated'] as const).map((value) => (
+                            <button
+                                key={value}
+                                onClick={() => {
+                                    const newParams = new URLSearchParams(searchParams);
+                                    if (value === 'all') {
+                                        newParams.delete('simulation');
+                                    } else {
+                                        newParams.set('simulation', value);
+                                    }
+                                    setSearchParams(newParams);
+                                }}
+                                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${simulationFilter === value
+                                    ? 'bg-primary-600 text-white'
+                                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600'
+                                    }`}
+                            >
+                                {value === 'all' ? 'All' : value === 'live' ? 'Live' : 'Simulation'}
+                            </button>
+                        ))}
+                    </div>
+                )}
             </div>
 
             {/* Error Message */}
@@ -289,7 +324,7 @@ export function Decisions() {
             )}
 
             {/* Show active filters */}
-            {(includeExpiredParam || !includeExpiredParam || alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter) && (
+            {(includeExpiredParam || !includeExpiredParam || alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter || (simulationsEnabled && simulationFilter !== 'all')) && (
                 <div className="flex flex-wrap gap-2">
                     {!includeExpiredParam && (
                         <Badge variant="secondary" className="flex items-center gap-1">
@@ -410,9 +445,20 @@ export function Decisions() {
                             </button>
                         </Badge>
                     )}
+                    {simulationsEnabled && simulationFilter !== 'all' && (
+                        <Badge variant="secondary" className="flex items-center gap-1">
+                            <span className="font-semibold">Simulation:</span> {simulationFilter}
+                            <button
+                                onClick={() => removeParam("simulation")}
+                                className="ml-1 hover:text-red-500"
+                            >
+                                &times;
+                            </button>
+                        </Badge>
+                    )}
 
                     {/* Show Reset button if we have any active filters OR if we are showing expired/duplicates (non-default state) */}
-                    {(alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter || includeExpiredParam || showDuplicates) && (
+                    {(alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter || includeExpiredParam || showDuplicates || (simulationsEnabled && simulationFilter !== 'all')) && (
                         <button
                             onClick={clearFilter}
                             className="text-xs text-gray-500 hover:text-gray-900 dark:hover:text-gray-300 underline"
@@ -450,6 +496,9 @@ export function Decisions() {
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Country</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">AS</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">IP</th>
+                                {simulationsEnabled && (
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Mode</th>
+                                )}
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Action</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Expiration</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Alert</th>
@@ -458,9 +507,9 @@ export function Decisions() {
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                             {loading ? (
-                                <tr><td colSpan={9} className="px-6 py-4 text-center text-sm text-gray-500">Loading decisions...</td></tr>
+                                <tr><td colSpan={simulationsEnabled ? 10 : 9} className="px-6 py-4 text-center text-sm text-gray-500">Loading decisions...</td></tr>
                             ) : visibleDecisions.length === 0 ? (
-                                <tr><td colSpan={9} className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? "No decisions for this alert" : "No decisions found"}</td></tr>
+                                <tr><td colSpan={simulationsEnabled ? 10 : 9} className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? "No decisions for this alert" : "No decisions found"}</td></tr>
                             ) : (
                                 visibleDecisions.map((decision, index) => {
                                     const decisionDuration = decision.detail.duration ?? '';
@@ -499,6 +548,13 @@ export function Decisions() {
                                             <td className="px-6 py-4 text-sm font-mono text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={decision.value}>
                                                 {decision.value}
                                             </td>
+                                            {simulationsEnabled && (
+                                                <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100">
+                                                    <Badge variant={isSimulatedDecision(decision) ? "warning" : "info"}>
+                                                        {isSimulatedDecision(decision) ? "Simulation" : "Live"}
+                                                    </Badge>
+                                                </td>
+                                            )}
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100">
                                                 <Badge variant="danger">{decision.detail.action || "ban"}</Badge>
                                             </td>

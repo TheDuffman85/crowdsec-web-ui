@@ -80,6 +80,7 @@ describe('alert helpers', () => {
       stop_at: '2025-01-01T00:00:00.000Z',
       origin: 'crowdsec',
       expired: true,
+      simulated: false,
     });
 
     const slim = toSlimAlert({
@@ -96,5 +97,6 @@ describe('alert helpers', () => {
     expect(slim.meta_search).toBe('ssh');
     expect(slim.decisions).toHaveLength(1);
     expect(slim.source?.ip).toBe('1.2.3.4');
+    expect(slim.simulated).toBe(false);
   });
 });

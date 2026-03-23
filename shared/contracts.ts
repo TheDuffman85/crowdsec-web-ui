@@ -58,6 +58,7 @@ export interface AlertDecision {
   origin?: string;
   scenario?: string;
   expired?: boolean;
+  simulated?: boolean;
   [key: string]: unknown;
 }
 
@@ -75,6 +76,7 @@ export interface AlertRecord {
   decisions?: AlertDecision[];
   target?: string;
   meta_search?: string;
+  simulated?: boolean;
   [key: string]: unknown;
 }
 
@@ -86,6 +88,7 @@ export interface SlimDecision {
   stop_at?: string;
   origin?: string;
   expired?: boolean;
+  simulated?: boolean;
 }
 
 export interface SlimAlert {
@@ -100,6 +103,7 @@ export interface SlimAlert {
   target?: string;
   meta_search: string;
   decisions: SlimDecision[];
+  simulated?: boolean;
 }
 
 export interface DecisionListDetail {
@@ -114,6 +118,7 @@ export interface DecisionListDetail {
   expiration?: string;
   alert_id?: string | number;
   target?: string | null;
+  simulated?: boolean;
 }
 
 export interface DecisionListItem {
@@ -123,6 +128,7 @@ export interface DecisionListItem {
   value?: string;
   expired: boolean;
   is_duplicate: boolean;
+  simulated?: boolean;
   detail: DecisionListDetail;
 }
 
@@ -131,6 +137,7 @@ export interface StatsAlert {
   scenario?: string;
   source: Pick<AlertSource, 'ip' | 'value' | 'cn' | 'as_name'> | null;
   target?: string;
+  simulated?: boolean;
 }
 
 export interface StatsDecision {
@@ -140,6 +147,7 @@ export interface StatsDecision {
   value?: string;
   stop_at?: string;
   target?: string;
+  simulated?: boolean;
 }
 
 export interface UpdateCheckResponse {
@@ -160,6 +168,7 @@ export interface ConfigResponse {
   current_interval_name: string;
   lapi_status: LapiStatus;
   sync_status: SyncStatus;
+  simulations_enabled: boolean;
 }
 
 export interface AddDecisionRequest {

@@ -75,6 +75,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     crowdsecUrl: config.crowdsecUrl,
     user: config.crowdsecUser,
     password: config.crowdsecPassword,
+    simulationsEnabled: config.simulationsEnabled,
     lookbackPeriod: config.lookbackPeriod,
     version: config.version,
   });
@@ -127,6 +128,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   console.log(`Cache Configuration:
   Lookback Period: ${config.lookbackPeriod} (${config.lookbackMs}ms)
   Refresh Interval: ${getIntervalName(refreshIntervalMs)} (${persistedConfig.refresh_interval_ms !== undefined ? 'from saved config' : 'from env'})
+  Simulations: ${config.simulationsEnabled ? 'Enabled' : 'Disabled'}
   Bootstrap Retry: ${config.bootstrapRetryEnabled ? getIntervalName(config.bootstrapRetryDelayMs) : 'Disabled'}
 `);
 
@@ -164,7 +166,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       const since = new Date(Date.now() - config.lookbackMs).toISOString();
       const alerts = database
         .getAlertsSince(since)
-        .map((row) => toSlimAlert(hydrateAlertWithDecisions(JSON.parse(row.raw_data) as AlertRecord)))
+        .map((row) => applySimulationModeToAlert(hydrateAlertWithDecisions(JSON.parse(row.raw_data) as AlertRecord), config.simulationsEnabled))
+        .filter((alert): alert is AlertRecord => alert !== null)
+        .map((alert) => toSlimAlert(alert))
         .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
 
       return context.json(alerts);
@@ -187,7 +191,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         return context.json({ error: 'Alert not found' }, 404);
       }
 
-      const payload = hydrateAlertWithDecisions(normalizedAlert);
+      const payload = applySimulationModeToAlert(hydrateAlertWithDecisions(normalizedAlert), config.simulationsEnabled);
+      if (!payload) {
+        return context.json({ error: 'Alert not found' }, 404);
+      }
       return context.json(payload);
     };
 
@@ -236,6 +243,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         : database.getActiveDecisions(now);
 
       let decisions = rows.map((row) => toDecisionListItem(JSON.parse(row.raw_data) as AlertDecision & Record<string, unknown>, includeExpired));
+      if (!config.simulationsEnabled) {
+        decisions = decisions.filter((decision) => !decision.simulated);
+      }
       decisions = markDuplicateDecisions(decisions);
       decisions.sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
 
@@ -256,6 +266,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       current_interval_name: getIntervalName(refreshIntervalMs),
       lapi_status: lapiClient.getStatus(),
       sync_status: syncStatus,
+      simulations_enabled: config.simulationsEnabled,
     };
 
     return context.json(payload);
@@ -329,7 +340,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       const alerts = database
         .getAlertsSince(since)
         .map((row) => {
-          const alert = JSON.parse(row.raw_data) as AlertRecord;
+          const alert = applySimulationModeToAlert(JSON.parse(row.raw_data) as AlertRecord, config.simulationsEnabled);
+          if (!alert) {
+            return null;
+          }
           const payload: StatsAlert = {
             created_at: alert.created_at,
             scenario: alert.scenario,
@@ -342,9 +356,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
                 }
               : null,
             target: alert.target,
+            simulated: isAlertSimulated(alert),
           };
           return payload;
         })
+        .filter((alert): alert is StatsAlert => alert !== null)
         .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
 
       return context.json(alerts);
@@ -377,9 +393,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
             value: typeof decision.value === 'string' ? decision.value : undefined,
             stop_at: typeof decision.stop_at === 'string' ? decision.stop_at : undefined,
             target: typeof decision.target === 'string' ? decision.target : undefined,
+            simulated: normalizeDecisionSimulated(decision),
           };
           return payload;
         })
+        .filter((decision) => config.simulationsEnabled || !decision.simulated)
         .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
 
       return context.json(decisions);
@@ -531,6 +549,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     const enrichedAlert: AlertRecord = {
       ...alert,
       target,
+      simulated: normalizeAlertSimulated(alert),
     };
 
     const alertData: AlertInsertParams = {
@@ -571,6 +590,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         country: alertSource.cn,
         as: alertSource.as_name,
         target,
+        simulated: normalizeDecisionSimulated(decision, alert),
         is_duplicate: false,
       };
 
@@ -762,6 +782,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
                 type: decision.type || 'ban',
                 country: alertSource.cn,
                 as: alertSource.as_name,
+                target: getAlertTarget(typedAlert),
+                simulated: normalizeDecisionSimulated(decision, typedAlert),
               };
 
               database.updateDecision({
@@ -1047,8 +1069,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         stop_at: stopAt ? stopAt.toISOString() : decision.stop_at,
         duration,
         expired: isExpired,
+        simulated: normalizeDecisionSimulated(decision, clone),
       };
     });
+
+    clone.simulated = normalizeAlertSimulated(clone);
 
     return clone;
   }
@@ -1129,6 +1154,58 @@ function lookbackHours(duration: string): number {
   return value / 60;
 }
 
+function normalizeAlertSimulated(alert: Pick<AlertRecord, 'simulated'> | null | undefined): boolean {
+  return alert?.simulated === true;
+}
+
+function normalizeDecisionSimulated(
+  decision: Pick<AlertDecision, 'simulated'> | (AlertDecision & Record<string, unknown>),
+  alert?: Pick<AlertRecord, 'simulated'> | null,
+): boolean {
+  if (decision.simulated === true) {
+    return true;
+  }
+
+  if (decision.simulated === false) {
+    return false;
+  }
+
+  return normalizeAlertSimulated(alert);
+}
+
+function isAlertSimulated(alert: AlertRecord): boolean {
+  if (normalizeAlertSimulated(alert)) {
+    return true;
+  }
+
+  return Array.isArray(alert.decisions) &&
+    alert.decisions.length > 0 &&
+    alert.decisions.every((decision) => normalizeDecisionSimulated(decision, alert));
+}
+
+function applySimulationModeToAlert(alert: AlertRecord, simulationsEnabled: boolean): AlertRecord | null {
+  const alertWithSimulation: AlertRecord = {
+    ...alert,
+    decisions: Array.isArray(alert.decisions)
+      ? alert.decisions.map((decision) => ({
+          ...decision,
+          simulated: normalizeDecisionSimulated(decision, alert),
+        }))
+      : [],
+    simulated: isAlertSimulated(alert),
+  };
+
+  if (!simulationsEnabled && alertWithSimulation.simulated) {
+    return null;
+  }
+
+  if (!simulationsEnabled) {
+    alertWithSimulation.decisions = (alertWithSimulation.decisions || []).filter((decision) => !decision.simulated);
+  }
+
+  return alertWithSimulation;
+}
+
 function toDecisionListItem(
   decision: AlertDecision & Record<string, unknown>,
   includeExpired: boolean,
@@ -1144,6 +1221,7 @@ function toDecisionListItem(
     value: typeof decision.value === 'string' ? decision.value : undefined,
     expired,
     is_duplicate: decision.is_duplicate === true,
+    simulated: normalizeDecisionSimulated(decision),
     detail: {
       origin: typeof decision.origin === 'string' ? decision.origin : 'manual',
       type: typeof decision.type === 'string' ? decision.type : undefined,
@@ -1156,6 +1234,7 @@ function toDecisionListItem(
       expiration: typeof decision.stop_at === 'string' ? decision.stop_at : undefined,
       alert_id: decision.alert_id as string | number | undefined,
       target: typeof decision.target === 'string' ? decision.target : null,
+      simulated: normalizeDecisionSimulated(decision),
     },
   };
 }
@@ -1165,7 +1244,7 @@ function markDuplicateDecisions(decisions: DecisionListItem[]): DecisionListItem
 
   for (const decision of decisions) {
     if (decision.expired) continue;
-    const key = decision.value;
+    const key = `${decision.value ?? ''}|${decision.simulated === true ? 'simulated' : 'live'}`;
     const numericId = getNumericDecisionId(decision.id);
     const current = primaryMap.get(key);
     if (current === undefined || numericId < current) {
@@ -1178,7 +1257,7 @@ function markDuplicateDecisions(decisions: DecisionListItem[]): DecisionListItem
       return { ...decision, is_duplicate: false };
     }
 
-    const primaryId = primaryMap.get(decision.value);
+    const primaryId = primaryMap.get(`${decision.value ?? ''}|${decision.simulated === true ? 'simulated' : 'live'}`);
     return {
       ...decision,
       is_duplicate: getNumericDecisionId(decision.id) !== primaryId,

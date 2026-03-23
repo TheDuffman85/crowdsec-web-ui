@@ -7,6 +7,7 @@ describe('LapiClient', () => {
       crowdsecUrl: 'http://crowdsec:8080',
       user: 'watcher',
       password: 'secret',
+      simulationsEnabled: true,
       lookbackPeriod: '1h',
       version: '1.0.0',
       fetchImpl: async () =>
@@ -27,6 +28,7 @@ describe('LapiClient', () => {
       crowdsecUrl: 'http://crowdsec:8080',
       user: 'watcher',
       password: 'secret',
+      simulationsEnabled: true,
       lookbackPeriod: '1h',
       version: '1.0.0',
       fetchImpl: async (input, init) => {
@@ -59,6 +61,7 @@ describe('LapiClient', () => {
       crowdsecUrl: 'http://crowdsec:8080',
       user: 'watcher',
       password: 'secret',
+      simulationsEnabled: true,
       lookbackPeriod: '1h',
       version: '1.0.0',
       fetchImpl: async (_input, init) =>
@@ -81,6 +84,7 @@ describe('LapiClient', () => {
       crowdsecUrl: 'http://crowdsec:8080',
       user: 'watcher',
       password: 'secret',
+      simulationsEnabled: true,
       lookbackPeriod: '1h',
       version: '1.0.0',
       fetchImpl: async (input, init) => {
@@ -118,9 +122,29 @@ describe('LapiClient', () => {
     await expect(client.deleteDecision(10)).resolves.toEqual({ ok: true });
     await expect(client.deleteAlert(42)).resolves.toEqual({ id: 42 });
 
-    expect(calls.some((call) => call.url.includes('/v1/alerts?since=1h'))).toBe(true);
+    expect(calls.some((call) => call.url.includes('/v1/alerts?since=1h&limit=0&simulated=true'))).toBe(true);
     expect(calls.some((call) => call.url.endsWith('/v1/alerts/42') && call.method === 'GET')).toBe(true);
     expect(calls.some((call) => call.url.endsWith('/v1/alerts') && call.method === 'POST')).toBe(true);
     expect(calls.some((call) => call.url.endsWith('/v1/decisions/10') && call.method === 'DELETE')).toBe(true);
+  });
+
+  test('does not request simulated alerts when simulations are disabled', async () => {
+    const calls: string[] = [];
+    const client = new LapiClient({
+      crowdsecUrl: 'http://crowdsec:8080',
+      user: 'watcher',
+      password: 'secret',
+      simulationsEnabled: false,
+      lookbackPeriod: '1h',
+      version: '1.0.0',
+      fetchImpl: async (input) => {
+        calls.push(String(input));
+        return Response.json([]);
+      },
+    });
+
+    await expect(client.fetchAlerts()).resolves.toEqual([]);
+    expect(calls[0]).toContain('/v1/alerts?since=1h&limit=0');
+    expect(calls[0]).not.toContain('simulated=true');
   });
 });

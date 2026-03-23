@@ -24,6 +24,8 @@ export interface DateRangeSelection {
   end: string;
 }
 
+export type SimulationFilter = 'all' | 'live' | 'simulated';
+
 export interface DashboardFilters {
   dateRange: DateRangeSelection | null;
   dateRangeSticky: boolean;
@@ -32,6 +34,7 @@ export interface DashboardFilters {
   as: string | null;
   ip: string | null;
   target: string | null;
+  simulation: SimulationFilter;
 }
 
 export interface AggregatedChartPoint {

@@ -2,7 +2,9 @@ import { lazy, Suspense, useEffect, useState, useMemo, useCallback } from "react
 import { Link, useNavigate } from "react-router-dom";
 
 import { fetchAlertsForStats, fetchDecisionsForStats, fetchConfig } from "../lib/api";
+import { matchesSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
+import { Badge } from "../components/ui/Badge";
 import { Card, CardContent } from "../components/ui/Card";
 import { StatCard } from "../components/StatCard";
 import { ScenarioName } from "../components/ScenarioName";
@@ -29,17 +31,20 @@ import { Switch } from "../components/ui/Switch";
 import type {
     ConfigResponse,
     DashboardFilters,
+    SimulationFilter,
     StatsAlert,
     StatsDecision,
 } from '../types';
 
 type Granularity = 'day' | 'hour';
 type PercentageBasis = 'filtered' | 'global';
-type FilterKey = 'country' | 'scenario' | 'as' | 'ip' | 'target';
+type FilterKey = 'country' | 'scenario' | 'as' | 'ip' | 'target' | 'simulation';
 
 interface DashboardCountState {
     alerts: number;
     decisions: number;
+    simulatedAlerts: number;
+    simulatedDecisions: number;
 }
 
 interface RawDataState {
@@ -50,6 +55,7 @@ interface RawDataState {
 interface FilteredDashboardData {
     alerts: StatsAlert[];
     decisions: StatsDecision[];
+    simulatedDecisions: StatsDecision[];
     chartAlerts: StatsAlert[];
     chartDecisions: StatsDecision[];
     sliderAlerts: StatsAlert[];
@@ -68,6 +74,7 @@ const EMPTY_FILTERS: DashboardFilters = {
     as: null,
     ip: null,
     target: null,
+    simulation: 'all',
 };
 
 function parseStoredGranularity(value: string | null): Granularity {
@@ -111,7 +118,7 @@ function getDateRangeItemKey(isoString: string, includeHour: boolean): string {
 export function Dashboard() {
     const navigate = useNavigate();
     const { refreshSignal, setLastUpdated } = useRefresh();
-    const [stats, setStats] = useState<DashboardCountState>({ alerts: 0, decisions: 0 });
+    const [stats, setStats] = useState<DashboardCountState>({ alerts: 0, decisions: 0, simulatedAlerts: 0, simulatedDecisions: 0 });
     const [loading, setLoading] = useState(true);
     const [statsLoading, setStatsLoading] = useState(true);
     const [config, setConfig] = useState<ConfigResponse | null>(null);
@@ -172,10 +179,19 @@ export function Dashboard() {
             // Calculate active decisions count (stop_at > now)
             const now = new Date();
             const activeDecisionsCount = decisionsForStats.filter(d =>
-                d.stop_at && new Date(d.stop_at) > now
+                d.simulated !== true && d.stop_at && new Date(d.stop_at) > now
+            ).length;
+            const simulatedAlertsCount = alertsForStats.filter(a => a.simulated === true).length;
+            const simulatedDecisionsCount = decisionsForStats.filter(d =>
+                d.simulated === true && d.stop_at && new Date(d.stop_at) > now
             ).length;
 
-            setStats({ alerts: alertsForStats.length, decisions: activeDecisionsCount });
+            setStats({
+                alerts: alertsForStats.length,
+                decisions: activeDecisionsCount,
+                simulatedAlerts: simulatedAlertsCount,
+                simulatedDecisions: simulatedDecisionsCount,
+            });
 
             // Check LAPI status from config
             if (configData.lapi_status) {
@@ -214,16 +230,22 @@ export function Dashboard() {
     const filteredData = useMemo<FilteredDashboardData>(() => {
         const lookbackDays = config?.lookback_days || 7;
         const now = new Date();
+        const simulationFilter = filters.simulation;
 
         // Use alertsForStats for all alert-related filtering and stats
-        let filteredAlerts = filterLastNDays(rawData.alertsForStats, lookbackDays);
+        let filteredAlerts = filterLastNDays(rawData.alertsForStats, lookbackDays)
+            .filter(a => matchesSimulationFilter({ simulated: a.simulated }, simulationFilter));
 
         // Calculate active decisions (stop_at > now) for card display and filtering
         let activeDecisions = filterLastNDays(rawData.decisionsForStats, lookbackDays)
-            .filter(d => d.stop_at && new Date(d.stop_at) > now);
+            .filter(d => d.simulated !== true && d.stop_at && new Date(d.stop_at) > now);
+
+        let simulatedDecisions = filterLastNDays(rawData.decisionsForStats, lookbackDays)
+            .filter(d => d.simulated === true && d.stop_at && new Date(d.stop_at) > now);
 
         // Filter ALL decisions (including expired) for historical charts
-        const chartDecisions = filterLastNDays(rawData.decisionsForStats, lookbackDays);
+        const chartDecisions = filterLastNDays(rawData.decisionsForStats, lookbackDays)
+            .filter(d => matchesSimulationFilter({ simulated: d.simulated }, simulationFilter));
 
         // Create separate datasets for charts (no date range filter to avoid zoom feedback loop)
         let chartAlerts = [...filteredAlerts];
@@ -231,8 +253,10 @@ export function Dashboard() {
 
         // Create datasets for the Slider/Brush (Context-aware but Time-ignorant)
         // We start with the lookback-filtered data (Global scope)
-        let sliderAlerts = filterLastNDays(rawData.alertsForStats, lookbackDays);
-        let sliderDecisions = filterLastNDays(rawData.decisionsForStats, lookbackDays);
+        let sliderAlerts = filterLastNDays(rawData.alertsForStats, lookbackDays)
+            .filter(a => matchesSimulationFilter({ simulated: a.simulated }, simulationFilter));
+        let sliderDecisions = filterLastNDays(rawData.decisionsForStats, lookbackDays)
+            .filter(d => matchesSimulationFilter({ simulated: d.simulated }, simulationFilter));
 
         // Apply Cross-Filtering to cards and lists (including dateRange)
         if (filters.dateRange) {
@@ -246,6 +270,10 @@ export function Dashboard() {
                 return itemKey >= dateRange.start && itemKey <= dateRange.end;
             });
             activeDecisions = activeDecisions.filter(d => {
+                const itemKey = getDateRangeItemKey(d.created_at, includeHour);
+                return itemKey >= dateRange.start && itemKey <= dateRange.end;
+            });
+            simulatedDecisions = simulatedDecisions.filter(d => {
                 const itemKey = getDateRangeItemKey(d.created_at, includeHour);
                 return itemKey >= dateRange.start && itemKey <= dateRange.end;
             });
@@ -272,6 +300,7 @@ export function Dashboard() {
                 filteredAlerts.map(a => a.source?.ip).filter(ip => ip)
             );
             activeDecisions = activeDecisions.filter(d => ipsInCountry.has(d.value));
+            simulatedDecisions = simulatedDecisions.filter(d => ipsInCountry.has(d.value));
 
             // Also filter chart data by country
             chartAlerts = chartAlerts.filter(a => a.source?.cn === filters.country);
@@ -295,6 +324,7 @@ export function Dashboard() {
                 filteredAlerts.map(a => a.source?.ip).filter(ip => ip)
             );
             activeDecisions = activeDecisions.filter(d => ipsInScenario.has(d.value));
+            simulatedDecisions = simulatedDecisions.filter(d => ipsInScenario.has(d.value));
 
             // Also filter chart data
             chartAlerts = chartAlerts.filter(a => a.scenario === filters.scenario);
@@ -318,6 +348,7 @@ export function Dashboard() {
                 filteredAlerts.map(a => a.source?.ip).filter(ip => ip)
             );
             activeDecisions = activeDecisions.filter(d => ipsInAS.has(d.value));
+            simulatedDecisions = simulatedDecisions.filter(d => ipsInAS.has(d.value));
 
             // Also filter chart data
             chartAlerts = chartAlerts.filter(a => a.source?.as_name === filters.as);
@@ -338,6 +369,7 @@ export function Dashboard() {
             filteredAlerts = filteredAlerts.filter(a => a.source?.ip === filters.ip);
             // Filter decisions by IP - direct match on the value field
             activeDecisions = activeDecisions.filter(d => d.value === filters.ip);
+            simulatedDecisions = simulatedDecisions.filter(d => d.value === filters.ip);
 
             // Also filter chart data
             chartAlerts = chartAlerts.filter(a => a.source?.ip === filters.ip);
@@ -356,6 +388,7 @@ export function Dashboard() {
                 filteredAlerts.map(a => a.source?.ip).filter(ip => ip)
             );
             activeDecisions = activeDecisions.filter(d => ipsOnTarget.has(d.value));
+            simulatedDecisions = simulatedDecisions.filter(d => ipsOnTarget.has(d.value));
 
             // Charts - use pre-computed target
             chartAlerts = chartAlerts.filter(a => a.target === filters.target);
@@ -375,12 +408,14 @@ export function Dashboard() {
         return {
             alerts: filteredAlerts,
             decisions: activeDecisions,  // Active decisions for card/lists
+            simulatedDecisions,
             chartAlerts: chartAlerts,  // Alerts for charts (no dateRange filter)
             chartDecisions: chartDecisionsData,  // All decisions for charts (no dateRange filter)
             sliderAlerts: sliderAlerts, // Alerts for slider (context filtered, time unfiltered)
             sliderDecisions: sliderDecisions, // Decisions for slider (context filtered, time unfiltered)
             // Global total (filtered by Lookback ONLY, ignoring sidebar filters)
-            globalTotal: filterLastNDays(rawData.alertsForStats, lookbackDays).length
+            globalTotal: filterLastNDays(rawData.alertsForStats, lookbackDays)
+                .filter(a => matchesSimulationFilter({ simulated: a.simulated }, simulationFilter)).length
         };
     }, [rawData, config?.lookback_days, filters]);
 
@@ -420,6 +455,14 @@ export function Dashboard() {
             return;
         }
 
+        if (type === 'simulation') {
+            setFilters(prev => ({
+                ...prev,
+                simulation: prev.simulation === value ? 'all' : value as SimulationFilter,
+            }));
+            return;
+        }
+
         setFilters(prev => ({
             ...prev,
             [type]: prev[type] === value ? null : value
@@ -430,12 +473,37 @@ export function Dashboard() {
         setFilters(EMPTY_FILTERS);
     };
 
+    const buildDrilldownParams = (includeExpired = false) => {
+        const params = new URLSearchParams();
+        if (filters.country) params.set('country', filters.country);
+        if (filters.scenario) params.set('scenario', filters.scenario);
+        if (filters.as) params.set('as', filters.as);
+        if (filters.ip) params.set('ip', filters.ip);
+        if (filters.target) params.set('target', filters.target);
+        if (filters.dateRange) {
+            params.set('dateStart', filters.dateRange.start);
+            params.set('dateEnd', filters.dateRange.end);
+        }
+        if ((config?.simulations_enabled ?? false) && filters.simulation !== 'all') {
+            params.set('simulation', filters.simulation);
+        }
+        if (includeExpired) {
+            params.set('include_expired', 'true');
+        }
+        return params.toString();
+    };
+
+    const alertsLink = `/alerts${buildDrilldownParams() ? `?${buildDrilldownParams()}` : ''}`;
+    const decisionsLink = `/decisions${buildDrilldownParams(true) ? `?${buildDrilldownParams(true)}` : ''}`;
+    const simulationsEnabled = config?.simulations_enabled === true;
+
     const hasActiveFilters = filters.dateRange !== null ||
         filters.country !== null ||
         filters.scenario !== null ||
         filters.as !== null ||
         filters.ip !== null ||
-        filters.target !== null;
+        filters.target !== null ||
+        filters.simulation !== 'all';
 
     if (loading) {
         return <div className="text-center p-8 text-gray-500">Loading dashboard...</div>;
@@ -445,7 +513,7 @@ export function Dashboard() {
         <div className="space-y-8">
             {/* Summary Cards */}
             <div className="grid gap-8 md:grid-cols-3">
-                <Link to="/alerts" className="block transition-transform hover:scale-105">
+                <Link to={alertsLink} className="block transition-transform hover:scale-105">
                     <Card className="h-full cursor-pointer hover:shadow-lg transition-shadow">
                         <CardContent className="flex items-center p-6">
                             <div className="p-4 bg-red-100 dark:bg-red-900/20 rounded-full mr-4">
@@ -461,12 +529,17 @@ export function Dashboard() {
                                         </span>
                                     )}
                                 </div>
+                                {simulationsEnabled && stats.simulatedAlerts > 0 && (
+                                    <div className="mt-2">
+                                        <Badge variant="warning">Simulation: {stats.simulatedAlerts}</Badge>
+                                    </div>
+                                )}
                             </div>
                         </CardContent>
                     </Card>
                 </Link>
 
-                <Link to="/decisions" className="block transition-transform hover:scale-105">
+                <Link to={decisionsLink} className="block transition-transform hover:scale-105">
                     <Card className="h-full cursor-pointer hover:shadow-lg transition-shadow">
                         <CardContent className="flex items-center p-6">
                             <div className="p-4 bg-blue-100 dark:bg-blue-900/20 rounded-full mr-4">
@@ -482,6 +555,11 @@ export function Dashboard() {
                                         </span>
                                     )}
                                 </div>
+                                {simulationsEnabled && stats.simulatedDecisions > 0 && (
+                                    <div className="mt-2">
+                                        <Badge variant="warning">Simulation: {stats.simulatedDecisions}</Badge>
+                                    </div>
+                                )}
                             </div>
                         </CardContent>
                     </Card>
@@ -521,80 +599,66 @@ export function Dashboard() {
 
                     <div className="flex flex-col md:flex-row items-center gap-4">
                         {hasActiveFilters && (
-                            <>
-                                <div className="flex flex-row items-center gap-2">
-                                    <button
-                                        onClick={() => {
-                                            // Build query parameters from active filters
-                                            const params = new URLSearchParams();
-                                            if (filters.country) params.set('country', filters.country);
-                                            if (filters.scenario) params.set('scenario', filters.scenario);
-                                            if (filters.as) params.set('as', filters.as);
-                                            if (filters.ip) params.set('ip', filters.ip);
-                                            if (filters.target) params.set('target', filters.target);
-                                            if (filters.dateRange) {
-                                                params.set('dateStart', filters.dateRange.start);
-                                                params.set('dateEnd', filters.dateRange.end);
-                                            }
-                                            navigate(`/alerts?${params.toString()}`);
-                                        }}
-                                        className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
-                                    >
-                                        <Filter className="w-4 h-4" />
-                                        <span className="hidden sm:inline">View Alerts</span>
-                                        <span className="sm:hidden">Alerts</span>
-                                    </button>
-                                    <button
-                                        onClick={() => {
-                                            // Build query parameters from active filters
-                                            const params = new URLSearchParams();
-                                            if (filters.country) params.set('country', filters.country);
-                                            // Decisions uses 'reason' but mapped from scenario usually, let's pass scenario and handle it in Decisions
-                                            if (filters.scenario) params.set('scenario', filters.scenario);
-                                            if (filters.as) params.set('as', filters.as);
-                                            if (filters.ip) params.set('ip', filters.ip);
-                                            // No direct target support in decisions yet, but let's pass it
-                                            if (filters.target) params.set('target', filters.target);
-                                            if (filters.dateRange) {
-                                                params.set('dateStart', filters.dateRange.start);
-                                                params.set('dateEnd', filters.dateRange.end);
-                                            }
-                                            // Ensure we include expired decisions when navigating from Dashboard
-                                            params.set('include_expired', 'true');
-                                            navigate(`/decisions?${params.toString()}`);
-                                        }}
-                                        className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
-                                    >
-                                        <Filter className="w-4 h-4" />
-                                        <span className="hidden sm:inline">View Decisions</span>
-                                        <span className="sm:hidden">Decisions</span>
-                                    </button>
-                                    <button
-                                        onClick={clearFilters}
-                                        className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
-                                    >
-                                        <FilterX className="w-4 h-4" />
-                                        <span className="hidden sm:inline">Reset Filters</span>
-                                        <span className="sm:hidden">Reset</span>
-                                    </button>
-                                </div>
+                            <div className="flex flex-row items-center gap-2">
+                                <button
+                                    onClick={() => navigate(alertsLink)}
+                                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
+                                >
+                                    <Filter className="w-4 h-4" />
+                                    <span className="hidden sm:inline">View Alerts</span>
+                                    <span className="sm:hidden">Alerts</span>
+                                </button>
+                                <button
+                                    onClick={() => navigate(decisionsLink)}
+                                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
+                                >
+                                    <Filter className="w-4 h-4" />
+                                    <span className="hidden sm:inline">View Decisions</span>
+                                    <span className="sm:hidden">Decisions</span>
+                                </button>
+                                <button
+                                    onClick={clearFilters}
+                                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
+                                >
+                                    <FilterX className="w-4 h-4" />
+                                    <span className="hidden sm:inline">Reset Filters</span>
+                                    <span className="sm:hidden">Reset</span>
+                                </button>
+                            </div>
+                        )}
 
-                                <div className="flex items-center gap-3 bg-white dark:bg-gray-800 px-3 py-1.5 rounded-lg border border-gray-100 dark:border-gray-700 shadow-sm h-[38px] box-border">
-                                    <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
-                                        <Percent className="w-4 h-4" />
-                                    </div>
+                        <div className="flex items-center gap-3 bg-white dark:bg-gray-800 px-3 py-1.5 rounded-lg border border-gray-100 dark:border-gray-700 shadow-sm h-[38px] box-border">
+                            <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+                                <Percent className="w-4 h-4" />
+                            </div>
 
-                                    <div className="flex items-center gap-2">
-                                        <span className={`text-xs font-medium ${percentageBasis === 'filtered' ? 'text-primary-600' : 'text-gray-500'}`}>Filtered</span>
-                                        <Switch
-                                            id="percentage-basis"
-                                            checked={percentageBasis === 'global'}
-                                            onCheckedChange={(checked) => setPercentageBasis(checked ? 'global' : 'filtered')}
-                                        />
-                                        <span className={`text-xs font-medium ${percentageBasis === 'global' ? 'text-primary-600' : 'text-gray-500'}`}>Global</span>
-                                    </div>
-                                </div>
-                            </>
+                            <div className="flex items-center gap-2">
+                                <span className={`text-xs font-medium ${percentageBasis === 'filtered' ? 'text-primary-600' : 'text-gray-500'}`}>Filtered</span>
+                                <Switch
+                                    id="percentage-basis"
+                                    checked={percentageBasis === 'global'}
+                                    onCheckedChange={(checked) => setPercentageBasis(checked ? 'global' : 'filtered')}
+                                />
+                                <span className={`text-xs font-medium ${percentageBasis === 'global' ? 'text-primary-600' : 'text-gray-500'}`}>Global</span>
+                            </div>
+                        </div>
+
+                        {simulationsEnabled && (
+                            <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+                                <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Mode</span>
+                                {(['all', 'live', 'simulated'] as SimulationFilter[]).map((value) => (
+                                    <button
+                                        key={value}
+                                        onClick={() => toggleFilter('simulation', value)}
+                                        className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${filters.simulation === value
+                                            ? 'bg-primary-600 text-white'
+                                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600'
+                                            }`}
+                                    >
+                                        {value === 'all' ? 'All' : value === 'live' ? 'Live' : 'Simulation'}
+                                    </button>
+                                ))}
+                            </div>
                         )}
                     </div>
                 </div>
