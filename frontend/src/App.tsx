@@ -9,6 +9,7 @@ import { getBasePath } from "./lib/basePath";
 const Dashboard = lazy(async () => ({ default: (await import('./pages/Dashboard')).Dashboard }));
 const Alerts = lazy(async () => ({ default: (await import('./pages/Alerts')).Alerts }));
 const Decisions = lazy(async () => ({ default: (await import('./pages/Decisions')).Decisions }));
+const Notifications = lazy(async () => ({ default: (await import('./pages/Notifications')).Notifications }));
 
 function RouteFallback() {
   return <div className="text-center p-8 text-gray-500">Loading...</div>;
@@ -45,6 +46,14 @@ function AppContent() {
               element={(
                 <Suspense fallback={<RouteFallback />}>
                   <Decisions />
+                </Suspense>
+              )}
+            />
+            <Route
+              path="notifications"
+              element={(
+                <Suspense fallback={<RouteFallback />}>
+                  <Notifications />
                 </Suspense>
               )}
             />

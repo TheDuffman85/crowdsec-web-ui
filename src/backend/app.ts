@@ -14,11 +14,14 @@ import type {
   StatsAlert,
   StatsDecision,
   SyncStatus,
+  UpsertNotificationChannelRequest,
+  UpsertNotificationRuleRequest,
   UpdateCheckResponse,
 } from '../../shared/contracts';
 import { createRuntimeConfig, getIntervalName, parseRefreshInterval, type RuntimeConfig } from './config';
 import { CrowdsecDatabase, type AlertInsertParams, type DecisionInsertParams } from './database';
 import { LapiClient } from './lapi';
+import { createNotificationService } from './notifications';
 import { createUpdateChecker } from './update-check';
 import { getAlertSourceValue, getAlertTarget, toSlimAlert } from './utils/alerts';
 import { parseGoDuration, toDuration } from './utils/duration';
@@ -40,6 +43,7 @@ export interface CreateAppOptions {
   distRoot?: string;
   startBackgroundTasks?: boolean;
   updateChecker?: () => Promise<UpdateCheckResponse>;
+  notificationFetchImpl?: typeof fetch;
 }
 
 export interface AppController {
@@ -89,6 +93,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     commitHash: config.commitHash,
     version: config.version,
     enabled: config.updateCheckEnabled,
+  });
+  const notificationService = createNotificationService({
+    database,
+    fetchImpl: options.notificationFetchImpl,
   });
 
   const app = new Hono();
@@ -313,6 +321,89 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       console.error('Error updating refresh interval:', error.message);
       return context.json({ error: 'Failed to update refresh interval' }, 500);
     }
+  });
+
+  app.get(`${config.basePath}/api/notifications`, ensureAuth, (context) => {
+    const limit = Number.parseInt(context.req.query('limit') || '100', 10);
+    return context.json(notificationService.listNotifications(Number.isFinite(limit) ? limit : 100));
+  });
+
+  app.post(`${config.basePath}/api/notifications/read-all`, ensureAuth, () =>
+    Response.json({ updated: notificationService.markAllNotificationsRead() }),
+  );
+
+  app.post(`${config.basePath}/api/notifications/:id/read`, ensureAuth, (context) => {
+    const id = String(context.req.param('id'));
+    const updated = notificationService.markNotificationRead(id);
+    if (!updated) {
+      return context.json({ error: 'Notification not found' }, 404);
+    }
+    return context.json({ success: true });
+  });
+
+  app.get(`${config.basePath}/api/notifications/settings`, ensureAuth, () => Response.json(notificationService.listSettings()));
+
+  app.post(`${config.basePath}/api/notification-channels`, ensureAuth, async (context) => {
+    try {
+      const body = await context.req.json<UpsertNotificationChannelRequest>();
+      return context.json(notificationService.createChannel(body), 201);
+    } catch (error: any) {
+      return context.json({ error: error.message || 'Failed to create notification channel' }, 400);
+    }
+  });
+
+  app.put(`${config.basePath}/api/notification-channels/:id`, ensureAuth, async (context) => {
+    try {
+      const id = String(context.req.param('id'));
+      const body = await context.req.json<UpsertNotificationChannelRequest>();
+      return context.json(notificationService.updateChannel(id, body));
+    } catch (error: any) {
+      const status = error.message === 'Notification channel not found' ? 404 : 400;
+      return context.json({ error: error.message || 'Failed to update notification channel' }, status);
+    }
+  });
+
+  app.delete(`${config.basePath}/api/notification-channels/:id`, ensureAuth, (context) => {
+    const id = String(context.req.param('id'));
+    notificationService.deleteChannel(id);
+    return context.json({ success: true });
+  });
+
+  app.post(`${config.basePath}/api/notification-channels/:id/test`, ensureAuth, async (context) => {
+    try {
+      const id = String(context.req.param('id'));
+      await notificationService.testChannel(id);
+      return context.json({ success: true });
+    } catch (error: any) {
+      const status = error.message === 'Notification channel not found' ? 404 : 400;
+      return context.json({ error: error.message || 'Failed to send test notification' }, status);
+    }
+  });
+
+  app.post(`${config.basePath}/api/notification-rules`, ensureAuth, async (context) => {
+    try {
+      const body = await context.req.json<UpsertNotificationRuleRequest>();
+      return context.json(notificationService.createRule(body), 201);
+    } catch (error: any) {
+      return context.json({ error: error.message || 'Failed to create notification rule' }, 400);
+    }
+  });
+
+  app.put(`${config.basePath}/api/notification-rules/:id`, ensureAuth, async (context) => {
+    try {
+      const id = String(context.req.param('id'));
+      const body = await context.req.json<UpsertNotificationRuleRequest>();
+      return context.json(notificationService.updateRule(id, body));
+    } catch (error: any) {
+      const status = error.message === 'Notification rule not found' ? 404 : 400;
+      return context.json({ error: error.message || 'Failed to update notification rule' }, status);
+    }
+  });
+
+  app.delete(`${config.basePath}/api/notification-rules/:id`, ensureAuth, (context) => {
+    const id = String(context.req.param('id'));
+    notificationService.deleteRule(id);
+    return context.json({ success: true });
   });
 
   app.post(`${config.basePath}/api/cache/clear`, ensureAuth, async (context) => {
@@ -551,6 +642,14 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     Object.assign(syncStatus, updates);
   }
 
+  async function runNotificationEvaluation(source: string): Promise<void> {
+    try {
+      await notificationService.evaluateRules();
+    } catch (error: any) {
+      console.error(`Notification evaluation failed during ${source}:`, error.message);
+    }
+  }
+
   function getAlertSyncQueries(): AlertSyncQuery[] {
     const queries: AlertSyncQuery[] = [];
 
@@ -762,6 +861,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         cache.lastUpdate = new Date().toISOString();
         cache.isInitialized = true;
         lapiClient.updateStatus(true);
+        await runNotificationEvaluation('cache initialization');
         console.log(`Cache initialized successfully:
   Alerts: ${database.countAlerts()}
   Refresh Interval: ${getIntervalName(refreshIntervalMs)}
@@ -874,6 +974,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   async function updateCache(): Promise<void> {
     await updateCacheDelta();
     cleanupOldData();
+    await runNotificationEvaluation('cache update');
   }
 
   function clearBootstrapRetryTimeout(): void {

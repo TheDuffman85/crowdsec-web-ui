@@ -57,6 +57,8 @@ export function Layout() {
                 return 'Alerts';
             case '/decisions':
                 return 'Decisions';
+            case '/notifications':
+                return 'Notifications';
             default:
                 return 'Dashboard';
         }

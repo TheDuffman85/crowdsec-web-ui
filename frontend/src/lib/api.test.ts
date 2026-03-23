@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
   addDecision,
+  createNotificationChannel,
+  createNotificationRule,
+  deleteNotificationChannel,
+  deleteNotificationRule,
   deleteAlert,
   deleteDecision,
   fetchAlert,
@@ -9,6 +13,13 @@ import {
   fetchConfig,
   fetchDecisions,
   fetchDecisionsForStats,
+  fetchNotifications,
+  fetchNotificationSettings,
+  markAllNotificationsRead,
+  markNotificationRead,
+  testNotificationChannel,
+  updateNotificationChannel,
+  updateNotificationRule,
 } from './api';
 
 afterEach(() => {
@@ -34,6 +45,8 @@ describe('api helpers', () => {
     await expect(fetchAlertsForStats()).resolves.toEqual([{ id: 1 }]);
     await expect(fetchDecisionsForStats()).resolves.toEqual([{ id: 1 }]);
     await expect(fetchConfig()).resolves.toEqual([{ id: 1 }]);
+    await expect(fetchNotificationSettings()).resolves.toEqual([{ id: 1 }]);
+    await expect(fetchNotifications()).resolves.toEqual([{ id: 1 }]);
   });
 
   test('fetchAlert handles direct payloads and empty array payloads', async () => {
@@ -101,10 +114,33 @@ describe('api helpers', () => {
     await expect(deleteAlert(1)).resolves.toEqual({ message: 'Deleted' });
     await expect(deleteDecision(1)).resolves.toEqual({ message: 'Deleted' });
     await expect(addDecision({ ip: '1.2.3.4' })).resolves.toEqual({ message: 'Created' });
+    await expect(createNotificationChannel({ name: 'ntfy', type: 'ntfy', enabled: true, config: {} })).resolves.toEqual({ message: 'Created' });
+    await expect(updateNotificationChannel('1', { name: 'ntfy', type: 'ntfy', enabled: true, config: {} })).resolves.toEqual({ message: 'Created' });
+    await expect(createNotificationRule({ name: 'rule', type: 'alert-threshold', enabled: true, severity: 'warning', cooldown_minutes: 60, channel_ids: [], config: { window_minutes: 60, alert_threshold: 10 } })).resolves.toEqual({ message: 'Created' });
+    await expect(updateNotificationRule('1', { name: 'rule', type: 'alert-threshold', enabled: true, severity: 'warning', cooldown_minutes: 60, channel_ids: [], config: { window_minutes: 60, alert_threshold: 10 } })).resolves.toEqual({ message: 'Created' });
   });
 
   test('throws the provided message for non-403 mutation failures', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 500 })));
     await expect(deleteAlert(1)).rejects.toThrow('Failed to delete alert');
+  });
+
+  test('notification mutations handle void responses and API errors', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input) => {
+        if (String(input).includes('/api/notification-channels/boom')) {
+          return Response.json({ error: 'boom' }, { status: 400 });
+        }
+        return Response.json({ success: true });
+      }),
+    );
+
+    await expect(testNotificationChannel('1')).resolves.toBeUndefined();
+    await expect(deleteNotificationChannel('1')).resolves.toBeUndefined();
+    await expect(deleteNotificationRule('1')).resolves.toBeUndefined();
+    await expect(markNotificationRead('1')).resolves.toBeUndefined();
+    await expect(markAllNotificationsRead()).resolves.toBeUndefined();
+    await expect(testNotificationChannel('boom')).rejects.toThrow('boom');
   });
 });
