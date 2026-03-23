@@ -36,6 +36,22 @@ describe('api helpers', () => {
     await expect(fetchConfig()).resolves.toEqual([{ id: 1 }]);
   });
 
+  test('fetchAlert handles direct payloads and empty array payloads', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input) => {
+        if (String(input).endsWith('/api/alerts/direct')) {
+          return Response.json({ id: 'direct' });
+        }
+
+        return Response.json([]);
+      }),
+    );
+
+    await expect(fetchAlert('direct')).resolves.toEqual({ id: 'direct' });
+    await expect(fetchAlert('empty')).rejects.toThrow('Failed to fetch alert');
+  });
+
   test('delete and add helpers surface permission metadata on 403', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 403 })));
 

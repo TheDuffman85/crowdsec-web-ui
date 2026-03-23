@@ -41,6 +41,16 @@ function Consumer() {
   );
 }
 
+function IntervalConsumer({ value }: { value: number }) {
+  const { setIntervalMs } = useRefresh();
+
+  return (
+    <button type="button" onClick={() => void setIntervalMs(value)}>
+      set-{value}
+    </button>
+  );
+}
+
 describe('RefreshContext', () => {
   test('loads config and updates interval via API', async () => {
     vi.stubGlobal(
@@ -111,6 +121,27 @@ describe('RefreshContext', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'update' }));
     await waitFor(() => expect(errorSpy).toHaveBeenCalled());
+  });
+
+  test('logs config load failures and supports 5m interval updates', async () => {
+    vi.mocked(fetchConfig).mockRejectedValueOnce(new Error('boom'));
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const fetchSpy = vi.fn(async (_input, init) => {
+      expect(init?.body).toBe(JSON.stringify({ interval: '5m' }));
+      return Response.json({ new_interval_ms: 300000 });
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    render(
+      <RefreshProvider>
+        <IntervalConsumer value={300000} />
+      </RefreshProvider>,
+    );
+
+    await waitFor(() => expect(errorSpy).toHaveBeenCalledWith('Failed to load config', expect.any(Error)));
+    await userEvent.click(screen.getByRole('button', { name: 'set-300000' }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
   });
 
   test('throws when used outside the provider', () => {

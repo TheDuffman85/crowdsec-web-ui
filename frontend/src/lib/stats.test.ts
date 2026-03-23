@@ -74,6 +74,29 @@ describe('stats helpers', () => {
     ]);
   });
 
+  test('ignores unknown or missing values in summary helpers', () => {
+    const noisyAlerts: StatsAlert[] = [
+      ...alerts,
+      {
+        created_at: new Date(now).toISOString(),
+        scenario: 'crowdsecurity/ssh-bf',
+        source: { ip: '9.9.9.9', value: '9.9.9.9', cn: 'Unknown', as_name: 'Unknown' },
+        target: 'Unknown',
+      },
+      {
+        created_at: new Date(now).toISOString(),
+        scenario: 'crowdsecurity/ssh-bf',
+        source: null,
+        target: undefined,
+      } as unknown as StatsAlert,
+    ];
+
+    expect(getTopCountries(noisyAlerts, 5).every((item) => item.value !== 'Unknown')).toBe(true);
+    expect(getAllCountries(noisyAlerts).every((item) => item.countryCode !== 'Unknown')).toBe(true);
+    expect(getTopAS(noisyAlerts, 5).some((item) => item.label === 'Unknown')).toBe(false);
+    expect(getTopTargets(noisyAlerts, 5).some((item) => item.label === 'Unknown')).toBe(false);
+  });
+
   test('aggregates daily and hourly data with explicit ranges', () => {
     const daily = getAggregatedData(alerts, 3, 'day');
     expect(daily.at(-1)?.count).toBeGreaterThan(0);
@@ -105,5 +128,23 @@ describe('stats helpers', () => {
       'hour',
     );
     expect(implicitHourly.length).toBeGreaterThan(0);
+  });
+
+  test('skips items outside the requested aggregation range', () => {
+    const range = getAggregatedData(
+      [
+        {
+          created_at: new Date(now - 20 * 24 * 60 * 60 * 1000).toISOString(),
+        },
+        {
+          created_at: new Date(now).toISOString(),
+        },
+      ],
+      2,
+      'day',
+    );
+
+    expect(range.at(-1)?.count).toBe(1);
+    expect(range.every((item) => item.count >= 0)).toBe(true);
   });
 });
