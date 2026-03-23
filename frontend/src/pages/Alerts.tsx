@@ -337,35 +337,6 @@ export function Alerts() {
             )
             }
 
-            {simulationsEnabled && (
-                <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 shadow-sm dark:border-gray-700 dark:bg-gray-800 w-fit">
-                    <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Mode</span>
-                    {(['all', 'live', 'simulated'] as const).map((value) => {
-                        const currentValue = parseSimulationFilter(searchParams.get("simulation"));
-                        return (
-                            <button
-                                key={value}
-                                onClick={() => {
-                                    const newParams = new URLSearchParams(searchParams);
-                                    if (value === 'all') {
-                                        newParams.delete('simulation');
-                                    } else {
-                                        newParams.set('simulation', value);
-                                    }
-                                    setSearchParams(newParams);
-                                }}
-                                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${currentValue === value
-                                    ? 'bg-primary-600 text-white'
-                                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600'
-                                    }`}
-                            >
-                                {value === 'all' ? 'All' : value === 'live' ? 'Live' : 'Simulation'}
-                            </button>
-                        );
-                    })}
-                </div>
-            )}
-
             <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                     <Search className="h-5 w-5 text-gray-400" />

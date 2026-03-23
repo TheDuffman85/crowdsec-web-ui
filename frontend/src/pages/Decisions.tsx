@@ -265,31 +265,6 @@ export function Decisions() {
                     <Gavel size={16} />
                     Add Decision
                 </button>
-                {simulationsEnabled && (
-                    <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-                        <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Mode</span>
-                        {(['all', 'live', 'simulated'] as const).map((value) => (
-                            <button
-                                key={value}
-                                onClick={() => {
-                                    const newParams = new URLSearchParams(searchParams);
-                                    if (value === 'all') {
-                                        newParams.delete('simulation');
-                                    } else {
-                                        newParams.set('simulation', value);
-                                    }
-                                    setSearchParams(newParams);
-                                }}
-                                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${simulationFilter === value
-                                    ? 'bg-primary-600 text-white'
-                                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600'
-                                    }`}
-                            >
-                                {value === 'all' ? 'All' : value === 'live' ? 'Live' : 'Simulation'}
-                            </button>
-                        ))}
-                    </div>
-                )}
             </div>
 
             {/* Error Message */}

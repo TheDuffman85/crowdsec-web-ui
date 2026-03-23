@@ -70,6 +70,6 @@ describe('Alerts page', () => {
 
     await waitFor(() => expect(screen.getByText('Simulation: 1')).toBeInTheDocument());
     expect(screen.queryByText('Active: 1')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Simulation' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Simulation' })).not.toBeInTheDocument();
   });
 });

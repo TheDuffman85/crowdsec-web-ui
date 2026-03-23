@@ -80,5 +80,6 @@ describe('Decisions page', () => {
     await waitFor(() => expect(screen.getByText('5.6.7.8')).toBeInTheDocument());
     expect(screen.queryByText('1.2.3.4')).not.toBeInTheDocument();
     expect(screen.getAllByText('Simulation').length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: 'Simulation' })).not.toBeInTheDocument();
   });
 });
