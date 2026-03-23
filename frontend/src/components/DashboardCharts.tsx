@@ -12,6 +12,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { BarChart3, ShieldAlert, Gavel } from 'lucide-react';
 import type { ActivityChartSeriesPoint, DateRangeSelection } from '../types';
+import { DASHBOARD_COLORS } from '../lib/dashboardColors';
 import {
     type BrushWindow,
     getBrushSelectionPayload,
@@ -27,7 +28,9 @@ interface ChartDatum {
     bucketKey: string;
     label: string;
     alerts: number;
+    simulatedAlerts: number;
     decisions: number;
+    simulatedDecisions: number;
 }
 
 interface CustomTooltipEntry {
@@ -46,8 +49,13 @@ interface CustomTooltipProps {
 interface ActivityBarChartProps {
     alertsData: ActivityChartSeriesPoint[];
     decisionsData: ActivityChartSeriesPoint[];
+    simulatedAlertsData?: ActivityChartSeriesPoint[];
+    simulatedDecisionsData?: ActivityChartSeriesPoint[];
     unfilteredAlertsData: ActivityChartSeriesPoint[];
     unfilteredDecisionsData: ActivityChartSeriesPoint[];
+    unfilteredSimulatedAlertsData?: ActivityChartSeriesPoint[];
+    unfilteredSimulatedDecisionsData?: ActivityChartSeriesPoint[];
+    simulationsEnabled?: boolean;
     granularity: Granularity;
     setGranularity: (value: Granularity) => void;
     onDateRangeSelect?: (dateRange: DateRangeSelection | null, isAtEnd: boolean) => void;
@@ -60,10 +68,17 @@ interface ActivityBarChartProps {
  */
 const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
     if (active && payload && payload.length) {
+        const tooltipOrder = ['Alerts', 'Decisions', 'Simulation Alerts', 'Simulation Decisions'];
+        const sortedPayload = [...payload].sort((left, right) => {
+            const leftIndex = tooltipOrder.indexOf(left.name || '');
+            const rightIndex = tooltipOrder.indexOf(right.name || '');
+            return (leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex) - (rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex);
+        });
+
         return (
             <div className="bg-white dark:bg-gray-800 p-3 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg">
                 <p className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">{label}</p>
-                {payload.map((entry, index) => {
+                {sortedPayload.map((entry, index) => {
                     const isAlert = entry.name?.toLowerCase().includes('alert');
                     const Icon = isAlert ? ShieldAlert : Gavel;
                     return (
@@ -87,8 +102,13 @@ const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
 export function ActivityBarChart({
     alertsData,
     decisionsData,
+    simulatedAlertsData = [],
+    simulatedDecisionsData = [],
     unfilteredAlertsData,
     unfilteredDecisionsData,
+    unfilteredSimulatedAlertsData = [],
+    unfilteredSimulatedDecisionsData = [],
+    simulationsEnabled = false,
     granularity,
     setGranularity,
     onDateRangeSelect,
@@ -107,7 +127,9 @@ export function ActivityBarChart({
                 date: item.fullDate || item.date,
                 bucketKey: item.date, // Store the bucket key for filtering
                 alerts: item.count,
+                simulatedAlerts: 0,
                 decisions: 0,
+                simulatedDecisions: 0,
                 label: item.label
             };
         });
@@ -118,14 +140,46 @@ export function ActivityBarChart({
                 date: item.fullDate || item.date,
                 bucketKey: item.date, // Store the bucket key for filtering
                 alerts: 0,
+                simulatedAlerts: 0,
                 decisions: 0,
+                simulatedDecisions: 0,
                 label: item.label
             };
             merged[item.date].decisions = item.count;
         });
 
+        simulatedAlertsData.forEach(item => {
+            if (!merged[item.date]) {
+                merged[item.date] = {
+                    date: item.fullDate || item.date,
+                    bucketKey: item.date,
+                    alerts: 0,
+                    simulatedAlerts: 0,
+                    decisions: 0,
+                    simulatedDecisions: 0,
+                    label: item.label,
+                };
+            }
+            merged[item.date].simulatedAlerts = item.count;
+        });
+
+        simulatedDecisionsData.forEach(item => {
+            if (!merged[item.date]) {
+                merged[item.date] = {
+                    date: item.fullDate || item.date,
+                    bucketKey: item.date,
+                    alerts: 0,
+                    simulatedAlerts: 0,
+                    decisions: 0,
+                    simulatedDecisions: 0,
+                    label: item.label,
+                };
+            }
+            merged[item.date].simulatedDecisions = item.count;
+        });
+
         return Object.values(merged).sort((left, right) => left.date.localeCompare(right.date));
-    }, [alertsData, decisionsData]);
+    }, [alertsData, decisionsData, simulatedAlertsData, simulatedDecisionsData]);
 
 
     // -------------------------------------------------------------------------
@@ -140,7 +194,9 @@ export function ActivityBarChart({
                     bucketKey: item.date,
                     label: item.label,
                     alerts: item.count, // Include counts
-                    decisions: 0
+                    simulatedAlerts: 0,
+                    decisions: 0,
+                    simulatedDecisions: 0,
                 };
             });
         }
@@ -151,13 +207,47 @@ export function ActivityBarChart({
                     bucketKey: item.date,
                     label: item.label,
                     alerts: 0,
-                    decisions: 0
+                    simulatedAlerts: 0,
+                    decisions: 0,
+                    simulatedDecisions: 0,
                 };
                 merged[item.date].decisions = item.count; // Include counts
             });
         }
+        if (unfilteredSimulatedAlertsData) {
+            unfilteredSimulatedAlertsData.forEach(item => {
+                if (!merged[item.date]) {
+                    merged[item.date] = {
+                        date: item.fullDate || item.date,
+                        bucketKey: item.date,
+                        label: item.label,
+                        alerts: 0,
+                        simulatedAlerts: 0,
+                        decisions: 0,
+                        simulatedDecisions: 0,
+                    };
+                }
+                merged[item.date].simulatedAlerts = item.count;
+            });
+        }
+        if (unfilteredSimulatedDecisionsData) {
+            unfilteredSimulatedDecisionsData.forEach(item => {
+                if (!merged[item.date]) {
+                    merged[item.date] = {
+                        date: item.fullDate || item.date,
+                        bucketKey: item.date,
+                        label: item.label,
+                        alerts: 0,
+                        simulatedAlerts: 0,
+                        decisions: 0,
+                        simulatedDecisions: 0,
+                    };
+                }
+                merged[item.date].simulatedDecisions = item.count;
+            });
+        }
         return Object.values(merged).sort((left, right) => left.date.localeCompare(right.date));
-    }, [unfilteredAlertsData, unfilteredDecisionsData]);
+    }, [unfilteredAlertsData, unfilteredDecisionsData, unfilteredSimulatedAlertsData, unfilteredSimulatedDecisionsData]);
 
     // Slider Brush Logic
     const [localBrushState, setLocalBrushState] = useState<BrushWindow>({ startIndex: 0, endIndex: 0 });
@@ -391,11 +481,8 @@ export function ActivityBarChart({
 
         // Available width for bars (subtract margins: 20 left + 30 right + 40 yAxis)
         const availableWidth = containerWidth - 90;
-        // Each data point has 2 bars (alerts + decisions) + gap between them
         const numBarGroups = filteredData.length;
-        // Calculate width per bar group, accounting for category gap (typically ~30% of bar group)
         const barGroupWidth = availableWidth / numBarGroups;
-        // Each bar is about 35% of the bar group width (leaving room for gaps)
         const calculatedBarSize = barGroupWidth * 0.35;
 
         // Clamp between 4 and 40
@@ -454,20 +541,46 @@ export function ActivityBarChart({
                                 isAnimationActive={false}
                                 dataKey="alerts"
                                 name="Alerts"
-                                fill="#dc2626"
+                                fill={DASHBOARD_COLORS.liveAlerts}
                                 stroke="none"
                                 radius={[4, 4, 0, 0]}
                                 barSize={dynamicBarSize}
+                                stackId="alerts"
                             />
+                            {simulationsEnabled && (
+                                <Bar
+                                    isAnimationActive={false}
+                                    dataKey="simulatedAlerts"
+                                    name="Simulation Alerts"
+                                    fill={DASHBOARD_COLORS.simulatedAlerts}
+                                    stroke="none"
+                                    radius={[4, 4, 0, 0]}
+                                    barSize={dynamicBarSize}
+                                    stackId="alerts"
+                                />
+                            )}
                             <Bar
                                 isAnimationActive={false}
                                 dataKey="decisions"
                                 name="Decisions"
-                                fill="#2563eb"
+                                fill={DASHBOARD_COLORS.liveDecisions}
                                 stroke="none"
                                 radius={[4, 4, 0, 0]}
                                 barSize={dynamicBarSize}
+                                stackId="decisions"
                             />
+                            {simulationsEnabled && (
+                                <Bar
+                                    isAnimationActive={false}
+                                    dataKey="simulatedDecisions"
+                                    name="Simulation Decisions"
+                                    fill={DASHBOARD_COLORS.simulatedDecisions}
+                                    stroke="none"
+                                    radius={[4, 4, 0, 0]}
+                                    barSize={dynamicBarSize}
+                                    stackId="decisions"
+                                />
+                            )}
                         </BarChart>
                     </ResponsiveContainer>
                 </div>

@@ -70,7 +70,7 @@ afterEach(() => {
 });
 
 describe('Decisions page', () => {
-  test('filters to simulated decisions and shows simulation badges', async () => {
+  test('filters to simulated decisions and shows the simulation badge inline in the scenario column', async () => {
     render(
       <MemoryRouter initialEntries={['/decisions?simulation=simulated']}>
         <Decisions />
@@ -80,6 +80,6 @@ describe('Decisions page', () => {
     await waitFor(() => expect(screen.getByText('5.6.7.8')).toBeInTheDocument());
     expect(screen.queryByText('1.2.3.4')).not.toBeInTheDocument();
     expect(screen.getAllByText('Simulation').length).toBeGreaterThan(0);
-    expect(screen.queryByRole('button', { name: 'Simulation' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Mode')).not.toBeInTheDocument();
   });
 });

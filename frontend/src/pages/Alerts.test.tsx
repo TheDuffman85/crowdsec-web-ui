@@ -61,15 +61,15 @@ afterEach(() => {
 });
 
 describe('Alerts page', () => {
-  test('shows simulated alerts as simulation mode instead of active remediation', async () => {
+  test('shows simulated alerts with an inline scenario badge and standard decision actions', async () => {
     render(
       <MemoryRouter initialEntries={['/alerts?simulation=simulated']}>
         <Alerts />
       </MemoryRouter>,
     );
 
-    await waitFor(() => expect(screen.getByText('Simulation: 1')).toBeInTheDocument());
-    expect(screen.queryByText('Active: 1')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Simulation' })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Active: 1')).toBeInTheDocument());
+    expect(screen.getByText('Simulation')).toBeInTheDocument();
+    expect(screen.queryByText('Simulation Mode')).not.toBeInTheDocument();
   });
 });

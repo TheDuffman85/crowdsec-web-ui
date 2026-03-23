@@ -14,6 +14,8 @@ import { getCountryName } from './utils';
 
 type CountrySummary = {
     count: number;
+    liveCount: number;
+    simulatedCount: number;
     label: string;
     code: string;
 };
@@ -71,9 +73,14 @@ export function getTopCountries(alerts: StatsAlert[], limit = 10): StatListItem[
         if (name !== "Unknown" && code) {
             // Use code as key
             if (!countryStats[code]) {
-                countryStats[code] = { count: 0, label: code.toUpperCase(), code: code };
+                countryStats[code] = { count: 0, liveCount: 0, simulatedCount: 0, label: code.toUpperCase(), code: code };
             }
             countryStats[code].count++;
+            if (alert.simulated === true) {
+                countryStats[code].simulatedCount++;
+            } else {
+                countryStats[code].liveCount++;
+            }
         }
     });
 
@@ -100,9 +107,14 @@ export function getAllCountries(alerts: StatsAlert[]): WorldMapDatum[] {
 
         if (name !== "Unknown" && code) {
             if (!countryStats[code]) {
-                countryStats[code] = { count: 0, label: code.toUpperCase(), code: code };
+                countryStats[code] = { count: 0, liveCount: 0, simulatedCount: 0, label: code.toUpperCase(), code: code };
             }
             countryStats[code].count++;
+            if (alert.simulated === true) {
+                countryStats[code].simulatedCount++;
+            } else {
+                countryStats[code].liveCount++;
+            }
         }
     });
 
@@ -110,7 +122,9 @@ export function getAllCountries(alerts: StatsAlert[]): WorldMapDatum[] {
         .map(item => ({
             label: getCountryName(item.code) || item.code, // Use full name
             count: item.count,
-            countryCode: item.code
+            countryCode: item.code,
+            simulatedCount: item.simulatedCount,
+            liveCount: item.liveCount,
         }));
 }
 

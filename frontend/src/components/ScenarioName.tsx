@@ -1,13 +1,15 @@
 import { getHubUrl } from "../lib/utils";
 import { ExternalLink } from "lucide-react";
+import { Badge } from "./ui/Badge";
 
 interface ScenarioNameProps {
     name?: string | null;
     showLink?: boolean;
     className?: string;
+    simulated?: boolean;
 }
 
-export function ScenarioName({ name, showLink = false, className = "" }: ScenarioNameProps) {
+export function ScenarioName({ name, showLink = false, className = "", simulated = false }: ScenarioNameProps) {
     if (!name) return null;
 
     // Split by first slash
@@ -27,6 +29,11 @@ export function ScenarioName({ name, showLink = false, className = "" }: Scenari
             {namespace && <span className="text-xs text-gray-500 font-normal leading-none">{namespace}</span>}
             <div className="flex items-center gap-1 min-w-0 w-full">
                 <span className="font-medium truncate text-gray-900 dark:text-gray-200 text-sm leading-tight min-w-0">{shortName}</span>
+                {simulated && (
+                    <Badge variant="warning" className="flex-shrink-0">
+                        Simulation
+                    </Badge>
+                )}
                 {showLink && hubUrl && (
                     <a
                         href={hubUrl}

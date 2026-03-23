@@ -11,6 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { Globe, ZoomIn, ZoomOut, RotateCcw, ShieldAlert } from 'lucide-react';
 import { assetUrl } from '../lib/basePath';
 import type { WorldMapDatum } from '../types';
+import { DASHBOARD_COLORS } from '../lib/dashboardColors';
 
 // Using local Natural Earth data which has proper ISO properties
 const geoUrl = assetUrl("/world-50m.json");
@@ -50,13 +51,14 @@ interface WorldMapCardProps {
     data: WorldMapDatum[];
     onCountrySelect: (countryCode: string) => void;
     selectedCountry: string | null;
+    simulationsEnabled?: boolean;
 }
 
 /**
  * World Map Component for Dashboard
  * Shows all countries with alerts colored in red gradient based on intensity
  */
-export function WorldMapCard({ data, onCountrySelect, selectedCountry }: WorldMapCardProps) {
+export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulationsEnabled = false }: WorldMapCardProps) {
     const [geoFeatures, setGeoFeatures] = useState<GeoFeature[]>([]);
     const [isLoadingStats, setIsLoadingStats] = useState(true);
     const containerRef = useRef<HTMLDivElement | null>(null);
@@ -163,11 +165,19 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }: WorldMa
                     {feature.label || featureId}
                 </div>
                 <div className="flex items-center gap-2">
-                    <ShieldAlert className="w-4 h-4 text-red-600 dark:text-red-400" />
-                    <span className="text-red-600 dark:text-red-400">
-                        Alerts: {feature.value > 0 ? feature.value.toLocaleString() : 0}
+                    <ShieldAlert className="w-4 h-4" style={{ color: DASHBOARD_COLORS.liveAlerts }} />
+                    <span style={{ color: DASHBOARD_COLORS.liveAlerts }}>
+                        Alerts: {Number(feature.data?.liveCount || 0).toLocaleString()}
                     </span>
                 </div>
+                {simulationsEnabled && Number(feature.data?.simulatedCount || 0) > 0 && (
+                    <div className="mt-1 flex items-center gap-2">
+                        <ShieldAlert className="w-4 h-4" style={{ color: DASHBOARD_COLORS.simulatedAlerts }} />
+                        <span style={{ color: DASHBOARD_COLORS.simulatedAlerts }}>
+                            Simulation Alerts: {Number(feature.data?.simulatedCount || 0).toLocaleString()}
+                        </span>
+                    </div>
+                )}
             </div>,
             document.body
         );
@@ -320,7 +330,9 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry }: WorldMa
     const nivoData = useMemo(() => {
         return data.map(item => ({
             id: item.countryCode ? item.countryCode.toUpperCase() : 'UNKNOWN',
-            value: item.count || 0
+            value: item.count || 0,
+            liveCount: item.liveCount ?? Math.max((item.count || 0) - (item.simulatedCount || 0), 0),
+            simulatedCount: item.simulatedCount || 0,
         }));
     }, [data]);
 

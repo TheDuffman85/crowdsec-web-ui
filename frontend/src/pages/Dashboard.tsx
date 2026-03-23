@@ -4,7 +4,6 @@ import { Link, useNavigate } from "react-router-dom";
 import { fetchAlertsForStats, fetchDecisionsForStats, fetchConfig } from "../lib/api";
 import { matchesSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
-import { Badge } from "../components/ui/Badge";
 import { Card, CardContent } from "../components/ui/Card";
 import { StatCard } from "../components/StatCard";
 import { ScenarioName } from "../components/ScenarioName";
@@ -28,6 +27,7 @@ import {
     Percent
 } from "lucide-react";
 import { Switch } from "../components/ui/Switch";
+import { DASHBOARD_COLORS } from "../lib/dashboardColors";
 import type {
     ConfigResponse,
     DashboardFilters,
@@ -54,10 +54,20 @@ interface RawDataState {
 
 interface FilteredDashboardData {
     alerts: StatsAlert[];
+    liveAlerts: StatsAlert[];
+    simulatedAlerts: StatsAlert[];
     decisions: StatsDecision[];
     simulatedDecisions: StatsDecision[];
+    chartLiveAlerts: StatsAlert[];
+    chartSimulatedAlerts: StatsAlert[];
+    chartLiveDecisions: StatsDecision[];
+    chartSimulatedDecisions: StatsDecision[];
     chartAlerts: StatsAlert[];
     chartDecisions: StatsDecision[];
+    sliderLiveAlerts: StatsAlert[];
+    sliderSimulatedAlerts: StatsAlert[];
+    sliderLiveDecisions: StatsDecision[];
+    sliderSimulatedDecisions: StatsDecision[];
     sliderAlerts: StatsAlert[];
     sliderDecisions: StatsDecision[];
     globalTotal: number;
@@ -405,14 +415,35 @@ export function Dashboard() {
             sliderDecisions = sliderDecisions.filter(d => sliderIpsOnTarget.has(d.value));
         }
 
+        const liveAlerts = filteredAlerts.filter((alert) => alert.simulated !== true);
+        const simulatedAlerts = filteredAlerts.filter((alert) => alert.simulated === true);
+        const chartLiveAlerts = chartAlerts.filter((alert) => alert.simulated !== true);
+        const chartSimulatedAlerts = chartAlerts.filter((alert) => alert.simulated === true);
+        const chartLiveDecisions = chartDecisionsData.filter((decision) => decision.simulated !== true);
+        const chartSimulatedDecisions = chartDecisionsData.filter((decision) => decision.simulated === true);
+        const sliderLiveAlerts = sliderAlerts.filter((alert) => alert.simulated !== true);
+        const sliderSimulatedAlerts = sliderAlerts.filter((alert) => alert.simulated === true);
+        const sliderLiveDecisions = sliderDecisions.filter((decision) => decision.simulated !== true);
+        const sliderSimulatedDecisions = sliderDecisions.filter((decision) => decision.simulated === true);
+
         return {
+            liveAlerts,
+            simulatedAlerts,
             alerts: filteredAlerts,
-            decisions: activeDecisions,  // Active decisions for card/lists
+            decisions: activeDecisions,
             simulatedDecisions,
-            chartAlerts: chartAlerts,  // Alerts for charts (no dateRange filter)
-            chartDecisions: chartDecisionsData,  // All decisions for charts (no dateRange filter)
-            sliderAlerts: sliderAlerts, // Alerts for slider (context filtered, time unfiltered)
-            sliderDecisions: sliderDecisions, // Decisions for slider (context filtered, time unfiltered)
+            chartLiveAlerts,
+            chartSimulatedAlerts,
+            chartLiveDecisions,
+            chartSimulatedDecisions,
+            chartAlerts: chartAlerts,
+            chartDecisions: chartDecisionsData,
+            sliderLiveAlerts,
+            sliderSimulatedAlerts,
+            sliderLiveDecisions,
+            sliderSimulatedDecisions,
+            sliderAlerts: sliderAlerts,
+            sliderDecisions: sliderDecisions,
             // Global total (filtered by Lookback ONLY, ignoring sidebar filters)
             globalTotal: filterLastNDays(rawData.alertsForStats, lookbackDays)
                 .filter(a => matchesSimulationFilter({ simulated: a.simulated }, simulationFilter)).length
@@ -440,11 +471,15 @@ export function Dashboard() {
             allCountries: getAllCountries(filteredData.alerts),  // For map display
             topScenarios: getTopScenarios(filteredData.alerts, 10),
             topAS: getTopAS(filteredData.alerts, 10),
-            alertsHistory: getAggregatedData(filteredData.chartAlerts, lookbackDays, granularity, filters.dateRange), // Match zoomed range
-            decisionsHistory: getAggregatedData(filteredData.chartDecisions, lookbackDays, granularity, filters.dateRange), // Match zoomed range
+            alertsHistory: getAggregatedData(filteredData.chartLiveAlerts, lookbackDays, granularity, filters.dateRange),
+            simulatedAlertsHistory: getAggregatedData(filteredData.chartSimulatedAlerts, lookbackDays, granularity, filters.dateRange),
+            decisionsHistory: getAggregatedData(filteredData.chartLiveDecisions, lookbackDays, granularity, filters.dateRange),
+            simulatedDecisionsHistory: getAggregatedData(filteredData.chartSimulatedDecisions, lookbackDays, granularity, filters.dateRange),
             // Unfiltered history for the TimeRangeSlider (Global context + Sidebar Filters)
-            unfilteredAlertsHistory: getAggregatedData(filteredData.sliderAlerts, lookbackDays, granularity),
-            unfilteredDecisionsHistory: getAggregatedData(filteredData.sliderDecisions, lookbackDays, granularity)
+            unfilteredAlertsHistory: getAggregatedData(filteredData.sliderLiveAlerts, lookbackDays, granularity),
+            unfilteredSimulatedAlertsHistory: getAggregatedData(filteredData.sliderSimulatedAlerts, lookbackDays, granularity),
+            unfilteredDecisionsHistory: getAggregatedData(filteredData.sliderLiveDecisions, lookbackDays, granularity),
+            unfilteredSimulatedDecisionsHistory: getAggregatedData(filteredData.sliderSimulatedDecisions, lookbackDays, granularity),
         };
     }, [filteredData, config?.lookback_days, granularity, filters.dateRange]);
     
@@ -496,6 +531,32 @@ export function Dashboard() {
     const alertsLink = `/alerts${buildDrilldownParams() ? `?${buildDrilldownParams()}` : ''}`;
     const decisionsLink = `/decisions${buildDrilldownParams(true) ? `?${buildDrilldownParams(true)}` : ''}`;
     const simulationsEnabled = config?.simulations_enabled === true;
+    const filteredSimulationAlertsCount = filteredData.simulatedAlerts.length;
+    const filteredSimulationDecisionsCount = filteredData.simulatedDecisions.length;
+    const totalLiveAlerts = stats.alerts - stats.simulatedAlerts;
+    const totalAllDecisions = stats.decisions + stats.simulatedDecisions;
+    const filteredAllDecisions = filteredData.decisions.length + filteredSimulationDecisionsCount;
+    const modeAwareAlertsTotal = filters.simulation === 'simulated'
+        ? stats.simulatedAlerts
+        : filters.simulation === 'live'
+            ? totalLiveAlerts
+            : stats.alerts;
+    const modeAwareAlertsFiltered = filters.simulation === 'simulated'
+        ? filteredSimulationAlertsCount
+        : filters.simulation === 'live'
+            ? filteredData.liveAlerts.length
+            : filteredData.alerts.length;
+    const modeAwareDecisionsTotal = filters.simulation === 'simulated'
+        ? stats.simulatedDecisions
+        : filters.simulation === 'live'
+            ? stats.decisions
+            : totalAllDecisions;
+    const modeAwareDecisionsFiltered = filters.simulation === 'simulated'
+        ? filteredSimulationDecisionsCount
+        : filters.simulation === 'live'
+            ? filteredData.decisions.length
+            : filteredAllDecisions;
+    const showSimulationBreakout = simulationsEnabled && filters.simulation === 'all';
 
     const hasActiveFilters = filters.dateRange !== null ||
         filters.country !== null ||
@@ -522,16 +583,28 @@ export function Dashboard() {
                             <div>
                                 <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Total Alerts</p>
                                 <div className="flex items-baseline gap-2">
-                                    <h3 className="text-2xl font-bold text-gray-900 dark:text-white">{stats.alerts}</h3>
+                                    <h3 className="text-2xl font-bold text-gray-900 dark:text-white">{modeAwareAlertsTotal}</h3>
                                     {hasActiveFilters && (
                                         <span className="text-sm text-gray-500 dark:text-gray-400">
-                                            {filteredData.alerts.length}
+                                            {modeAwareAlertsFiltered}
                                         </span>
                                     )}
                                 </div>
-                                {simulationsEnabled && stats.simulatedAlerts > 0 && (
-                                    <div className="mt-2">
-                                        <Badge variant="warning">Simulation: {stats.simulatedAlerts}</Badge>
+                                {showSimulationBreakout && stats.simulatedAlerts > 0 && (
+                                    <div className="mt-3">
+                                        <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400">
+                                            Simulation
+                                        </p>
+                                        <div className="flex items-baseline gap-2">
+                                            <span className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                                                {stats.simulatedAlerts}
+                                            </span>
+                                            {hasActiveFilters && (
+                                                <span className="text-xs text-gray-500 dark:text-gray-400">
+                                                    {filteredSimulationAlertsCount}
+                                                </span>
+                                            )}
+                                        </div>
                                     </div>
                                 )}
                             </div>
@@ -548,16 +621,28 @@ export function Dashboard() {
                             <div>
                                 <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Active Decisions</p>
                                 <div className="flex items-baseline gap-2">
-                                    <h3 className="text-2xl font-bold text-gray-900 dark:text-white">{stats.decisions}</h3>
+                                    <h3 className="text-2xl font-bold text-gray-900 dark:text-white">{modeAwareDecisionsTotal}</h3>
                                     {hasActiveFilters && (
                                         <span className="text-sm text-gray-500 dark:text-gray-400">
-                                            {filteredData.decisions.length}
+                                            {modeAwareDecisionsFiltered}
                                         </span>
                                     )}
                                 </div>
-                                {simulationsEnabled && stats.simulatedDecisions > 0 && (
-                                    <div className="mt-2">
-                                        <Badge variant="warning">Simulation: {stats.simulatedDecisions}</Badge>
+                                {showSimulationBreakout && stats.simulatedDecisions > 0 && (
+                                    <div className="mt-3">
+                                        <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400">
+                                            Simulation
+                                        </p>
+                                        <div className="flex items-baseline gap-2">
+                                            <span className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                                                {stats.simulatedDecisions}
+                                            </span>
+                                            {hasActiveFilters && (
+                                                <span className="text-xs text-gray-500 dark:text-gray-400">
+                                                    {filteredSimulationDecisionsCount}
+                                                </span>
+                                            )}
+                                        </div>
                                     </div>
                                 )}
                             </div>
@@ -675,8 +760,13 @@ export function Dashboard() {
                                     <ActivityBarChart
                                         alertsData={statistics.alertsHistory}
                                         decisionsData={statistics.decisionsHistory}
+                                        simulatedAlertsData={statistics.simulatedAlertsHistory}
+                                        simulatedDecisionsData={statistics.simulatedDecisionsHistory}
                                         unfilteredAlertsData={statistics.unfilteredAlertsHistory}
                                         unfilteredDecisionsData={statistics.unfilteredDecisionsHistory}
+                                        unfilteredSimulatedAlertsData={statistics.unfilteredSimulatedAlertsHistory}
+                                        unfilteredSimulatedDecisionsData={statistics.unfilteredSimulatedDecisionsHistory}
+                                        simulationsEnabled={simulationsEnabled}
                                         onDateRangeSelect={(dateRange, isAtEnd) => setFilters(prev => ({
                                             ...prev,
                                             dateRange,
@@ -697,6 +787,7 @@ export function Dashboard() {
                                         data={statistics.allCountries}
                                         onCountrySelect={(code) => toggleFilter('country', code)}
                                         selectedCountry={filters.country}
+                                        simulationsEnabled={simulationsEnabled}
                                     />
                                 </Suspense>
                             </div>

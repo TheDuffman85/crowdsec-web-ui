@@ -471,9 +471,6 @@ export function Decisions() {
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Country</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">AS</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">IP</th>
-                                {simulationsEnabled && (
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Mode</th>
-                                )}
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Action</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Expiration</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Alert</th>
@@ -482,9 +479,9 @@ export function Decisions() {
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                             {loading ? (
-                                <tr><td colSpan={simulationsEnabled ? 10 : 9} className="px-6 py-4 text-center text-sm text-gray-500">Loading decisions...</td></tr>
+                                <tr><td colSpan={9} className="px-6 py-4 text-center text-sm text-gray-500">Loading decisions...</td></tr>
                             ) : visibleDecisions.length === 0 ? (
-                                <tr><td colSpan={simulationsEnabled ? 10 : 9} className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? "No decisions for this alert" : "No decisions found"}</td></tr>
+                                <tr><td colSpan={9} className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? "No decisions for this alert" : "No decisions found"}</td></tr>
                             ) : (
                                 visibleDecisions.map((decision, index) => {
                                     const decisionDuration = decision.detail.duration ?? '';
@@ -505,7 +502,11 @@ export function Decisions() {
                                                 <TimeDisplay timestamp={decision.created_at} />
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={decision.detail.reason}>
-                                                <ScenarioName name={decision.detail.reason} showLink={true} />
+                                                <ScenarioName
+                                                    name={decision.detail.reason}
+                                                    showLink={true}
+                                                    simulated={simulationsEnabled && isSimulatedDecision(decision)}
+                                                />
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 align-middle">
                                                 {decision.detail.country && decision.detail.country !== "Unknown" ? (
@@ -523,13 +524,6 @@ export function Decisions() {
                                             <td className="px-6 py-4 text-sm font-mono text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={decision.value}>
                                                 {decision.value}
                                             </td>
-                                            {simulationsEnabled && (
-                                                <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100">
-                                                    <Badge variant={isSimulatedDecision(decision) ? "warning" : "info"}>
-                                                        {isSimulatedDecision(decision) ? "Simulation" : "Live"}
-                                                    </Badge>
-                                                </td>
-                                            )}
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100">
                                                 <Badge variant="danger">{decision.detail.action || "ban"}</Badge>
                                             </td>

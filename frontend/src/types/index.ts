@@ -55,6 +55,8 @@ export interface WorldMapDatum {
   label: string;
   count: number;
   countryCode: string;
+  simulatedCount?: number;
+  liveCount?: number;
 }
 
 export type ActivityChartSeriesPoint = AggregatedChartPoint;
