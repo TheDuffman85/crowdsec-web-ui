@@ -4,9 +4,15 @@ import type {
   ApiPermissionError,
   ConfigResponse,
   DecisionListItem,
+  NotificationChannel,
+  NotificationListResponse,
+  NotificationRule,
+  NotificationSettingsResponse,
   SlimAlert,
   StatsAlert,
   StatsDecision,
+  UpsertNotificationChannelRequest,
+  UpsertNotificationRuleRequest,
 } from '../types';
 import { apiUrl } from './basePath';
 
@@ -86,4 +92,86 @@ export async function addDecision(data: AddDecisionRequest): Promise<unknown> {
 
 export async function fetchConfig(): Promise<ConfigResponse> {
     return fetchJson<ConfigResponse>('/api/config', undefined, 'Failed to fetch config');
+}
+
+async function sendJson<T>(input: string, init: RequestInit, defaultMsg: string): Promise<T> {
+    const response = await fetch(apiUrl(input), init);
+    if (!response.ok) {
+        let errorMessage = defaultMsg;
+        try {
+            const payload = await response.json() as { error?: string };
+            if (typeof payload.error === 'string' && payload.error) {
+                errorMessage = payload.error;
+            }
+        } catch {
+            // Ignore JSON parse issues and use the default message.
+        }
+        throw new Error(errorMessage);
+    }
+
+    if (response.status === 204) {
+        return null as T;
+    }
+
+    return response.json() as Promise<T>;
+}
+
+export async function fetchNotificationSettings(): Promise<NotificationSettingsResponse> {
+    return fetchJson<NotificationSettingsResponse>('/api/notifications/settings', undefined, 'Failed to fetch notification settings');
+}
+
+export async function fetchNotifications(limit = 100): Promise<NotificationListResponse> {
+    return fetchJson<NotificationListResponse>(`/api/notifications?limit=${limit}`, undefined, 'Failed to fetch notifications');
+}
+
+export async function createNotificationChannel(data: UpsertNotificationChannelRequest): Promise<NotificationChannel> {
+    return sendJson<NotificationChannel>('/api/notification-channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    }, 'Failed to create notification channel');
+}
+
+export async function updateNotificationChannel(id: string, data: UpsertNotificationChannelRequest): Promise<NotificationChannel> {
+    return sendJson<NotificationChannel>(`/api/notification-channels/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    }, 'Failed to update notification channel');
+}
+
+export async function deleteNotificationChannel(id: string): Promise<void> {
+    await sendJson(`/api/notification-channels/${id}`, { method: 'DELETE' }, 'Failed to delete notification channel');
+}
+
+export async function testNotificationChannel(id: string): Promise<void> {
+    await sendJson(`/api/notification-channels/${id}/test`, { method: 'POST' }, 'Failed to send test notification');
+}
+
+export async function createNotificationRule(data: UpsertNotificationRuleRequest): Promise<NotificationRule> {
+    return sendJson<NotificationRule>('/api/notification-rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    }, 'Failed to create notification rule');
+}
+
+export async function updateNotificationRule(id: string, data: UpsertNotificationRuleRequest): Promise<NotificationRule> {
+    return sendJson<NotificationRule>(`/api/notification-rules/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    }, 'Failed to update notification rule');
+}
+
+export async function deleteNotificationRule(id: string): Promise<void> {
+    await sendJson(`/api/notification-rules/${id}`, { method: 'DELETE' }, 'Failed to delete notification rule');
+}
+
+export async function markNotificationRead(id: string): Promise<void> {
+    await sendJson(`/api/notifications/${id}/read`, { method: 'POST' }, 'Failed to mark notification as read');
+}
+
+export async function markAllNotificationsRead(): Promise<void> {
+    await sendJson('/api/notifications/read-all', { method: 'POST' }, 'Failed to mark notifications as read');
 }

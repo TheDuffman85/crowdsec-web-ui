@@ -229,6 +229,7 @@ function createController(options: {
   simulationsEnabled?: boolean;
   env?: Record<string, string>;
   fetchResolver?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
+  notificationFetchResolver?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
 } = {}) {
   const config = createRuntimeConfig({
     PORT: '3000',
@@ -295,6 +296,14 @@ function createController(options: {
     lapiClient,
     distRoot: createTestDistRoot(),
     updateChecker: async () => ({ update_available: true, remote_version: '2.0.0' }),
+    notificationFetchImpl: async (input, init) => {
+      const url = String(input);
+      const resolved = await options.notificationFetchResolver?.(url, init);
+      if (resolved) {
+        return resolved;
+      }
+      return Response.json({});
+    },
   });
 
   return { controller, database, lapiClient, fetchCalls };
@@ -694,6 +703,106 @@ describe('createApp', () => {
 
     const configResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
     expect(((await configResponse.json()) as { simulations_enabled: boolean }).simulations_enabled).toBe(false);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('supports notification settings APIs and records fired notifications', async () => {
+    const liveAlert = sampleAlert({
+      id: 99,
+      uuid: 'alert-99',
+      created_at: new Date().toISOString(),
+    });
+
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '0',
+        CROWDSEC_LOOKBACK_PERIOD: '168h',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (url.includes('/v1/alerts?')) {
+          return Response.json([liveAlert]);
+        }
+        return undefined;
+      },
+      notificationFetchResolver: (url) => {
+        if (url.includes('ntfy.sh')) {
+          return Response.json({ id: 'msg' });
+        }
+        return undefined;
+      },
+    });
+
+    const createChannel = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Main ntfy',
+          type: 'ntfy',
+          enabled: true,
+          config: { topic: 'crowdsec-test' },
+        }),
+      }),
+    );
+    expect(createChannel.status).toBe(201);
+    const channelPayload = await createChannel.json() as { id: string };
+
+    const createRule = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'High volume',
+          type: 'alert-threshold',
+          enabled: true,
+          severity: 'warning',
+          cooldown_minutes: 60,
+          channel_ids: [channelPayload.id],
+          config: {
+            window_minutes: 60,
+            alert_threshold: 1,
+            filters: {},
+          },
+        }),
+      }),
+    );
+    expect(createRule.status).toBe(201);
+
+    const alerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alerts.status).toBe(200);
+
+    const notifications = await controller.fetch(new Request('http://localhost/crowdsec/api/notifications'));
+    expect(notifications.status).toBe(200);
+    const notificationsPayload = await notifications.json() as { unread_count: number; notifications: Array<{ id: string; deliveries: Array<{ status: string }> }> };
+    expect(notificationsPayload.unread_count).toBe(1);
+    expect(notificationsPayload.notifications[0]?.deliveries[0]?.status).toBe('delivered');
+
+    const settings = await controller.fetch(new Request('http://localhost/crowdsec/api/notifications/settings'));
+    expect(settings.status).toBe(200);
+    expect((await settings.json()) as { channels: Array<{ name: string }>; rules: Array<{ name: string }> }).toEqual(
+      expect.objectContaining({
+        channels: [expect.objectContaining({ name: 'Main ntfy' })],
+        rules: [expect.objectContaining({ name: 'High volume' })],
+      }),
+    );
+
+    const testChannel = await controller.fetch(new Request(`http://localhost/crowdsec/api/notification-channels/${channelPayload.id}/test`, { method: 'POST' }));
+    expect(testChannel.status).toBe(200);
+
+    const markRead = await controller.fetch(new Request(`http://localhost/crowdsec/api/notifications/${notificationsPayload.notifications[0]?.id}/read`, { method: 'POST' }));
+    expect(markRead.status).toBe(200);
+
+    const markAllRead = await controller.fetch(new Request('http://localhost/crowdsec/api/notifications/read-all', { method: 'POST' }));
+    expect(markAllRead.status).toBe(200);
+
+    const deleteRule = await controller.fetch(new Request('http://localhost/crowdsec/api/notification-rules/not-real', { method: 'DELETE' }));
+    expect(deleteRule.status).toBe(200);
 
     controller.stopBackgroundTasks();
     database.close();

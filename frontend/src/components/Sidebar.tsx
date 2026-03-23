@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, ShieldAlert, Gavel, X, Sun, Moon, ArrowUpCircle, Menu, PanelLeftClose } from "lucide-react";
+import { LayoutDashboard, ShieldAlert, Gavel, Bell, X, Sun, Moon, ArrowUpCircle, Menu, PanelLeftClose } from "lucide-react";
 import { useRefresh } from "../contexts/useRefresh";
 import { useState, useEffect } from "react";
 import { apiUrl, assetUrl } from "../lib/basePath";
@@ -23,6 +23,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
         { to: "/", label: "Dashboard", icon: LayoutDashboard },
         { to: "/alerts", label: "Alerts", icon: ShieldAlert },
         { to: "/decisions", label: "Decisions", icon: Gavel },
+        { to: "/notifications", label: "Notifications", icon: Bell },
     ];
 
     useEffect(() => {

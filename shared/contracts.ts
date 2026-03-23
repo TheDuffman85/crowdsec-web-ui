@@ -160,6 +160,111 @@ export interface UpdateCheckResponse {
   error?: string;
 }
 
+export type NotificationChannelType = 'ntfy' | 'gotify' | 'email' | 'webhook';
+export type NotificationRuleType = 'alert-spike' | 'alert-threshold' | 'new-cve';
+export type NotificationSeverity = 'info' | 'warning' | 'critical';
+export type NotificationDeliveryStatus = 'delivered' | 'failed' | 'skipped';
+
+export interface NotificationFilter {
+  scenario?: string;
+  target?: string;
+  include_simulated?: boolean;
+}
+
+export interface AlertSpikeRuleConfig {
+  window_minutes: number;
+  percent_increase: number;
+  minimum_current_alerts: number;
+  filters?: NotificationFilter;
+}
+
+export interface AlertThresholdRuleConfig {
+  window_minutes: number;
+  alert_threshold: number;
+  filters?: NotificationFilter;
+}
+
+export interface NewCveRuleConfig {
+  max_cve_age_days: number;
+  filters?: NotificationFilter;
+}
+
+export type NotificationRuleConfig = AlertSpikeRuleConfig | AlertThresholdRuleConfig | NewCveRuleConfig;
+
+export interface NotificationChannel {
+  id: string;
+  name: string;
+  type: NotificationChannelType;
+  enabled: boolean;
+  config: Record<string, AlertMetaValue>;
+  configured_secrets: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NotificationRule {
+  id: string;
+  name: string;
+  type: NotificationRuleType;
+  enabled: boolean;
+  severity: NotificationSeverity;
+  cooldown_minutes: number;
+  channel_ids: string[];
+  config: NotificationRuleConfig;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NotificationDeliveryResult {
+  channel_id: string;
+  channel_name: string;
+  channel_type: NotificationChannelType;
+  status: NotificationDeliveryStatus;
+  attempted_at: string;
+  error?: string;
+}
+
+export interface NotificationItem {
+  id: string;
+  rule_id: string;
+  rule_name: string;
+  rule_type: NotificationRuleType;
+  severity: NotificationSeverity;
+  title: string;
+  message: string;
+  created_at: string;
+  read_at: string | null;
+  metadata: Record<string, AlertMetaValue>;
+  deliveries: NotificationDeliveryResult[];
+}
+
+export interface NotificationListResponse {
+  notifications: NotificationItem[];
+  unread_count: number;
+}
+
+export interface NotificationSettingsResponse {
+  channels: NotificationChannel[];
+  rules: NotificationRule[];
+}
+
+export interface UpsertNotificationChannelRequest {
+  name: string;
+  type: NotificationChannelType;
+  enabled: boolean;
+  config: Record<string, AlertMetaValue>;
+}
+
+export interface UpsertNotificationRuleRequest {
+  name: string;
+  type: NotificationRuleType;
+  enabled: boolean;
+  severity: NotificationSeverity;
+  cooldown_minutes: number;
+  channel_ids: string[];
+  config: NotificationRuleConfig;
+}
+
 export interface ConfigResponse {
   lookback_period: string;
   lookback_hours: number;
