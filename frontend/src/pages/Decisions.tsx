@@ -378,7 +378,7 @@ export function Decisions() {
                     )}
                     {searchParams.get("ip") && (
                         <Badge variant="secondary" className="flex items-center gap-1">
-                            <span className="font-semibold">IP:</span> {ipFilter}
+                            <span className="font-semibold">IP / Range:</span> {ipFilter}
                             <button
                                 onClick={() => removeParam("ip")}
                                 className="ml-1 hover:text-red-500"
@@ -470,7 +470,7 @@ export function Decisions() {
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Scenario</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Country</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">AS</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">IP</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">IP / Range</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Action</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Expiration</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Alert</th>
@@ -604,7 +604,7 @@ export function Decisions() {
             >
                 <form onSubmit={handleAddDecision} className="space-y-4">
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">IP Address</label>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">IP / Range</label>
                         <input
                             type="text"
                             required

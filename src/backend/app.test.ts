@@ -174,6 +174,39 @@ function sampleBlocklistImportAlert(overrides: Partial<AlertRecord> = {}): Alert
   };
 }
 
+function sampleRangeAlert(overrides: Partial<AlertRecord> = {}): AlertRecord {
+  const createdAt = new Date().toISOString();
+  const stopAt = new Date(Date.now() + 30 * 60 * 1_000).toISOString();
+  return {
+    id: 14302,
+    uuid: 'alert-14302',
+    created_at: createdAt,
+    scenario: 'manual/web-ui',
+    message: "manual 'ban' from 'localhost'",
+    source: {
+      range: '192.168.5.0/24',
+      scope: 'Range',
+      cn: 'Unknown',
+      as_name: 'Unknown',
+    },
+    target: 'manual',
+    events: [],
+    decisions: [
+      {
+        id: 14302,
+        type: 'ban',
+        duration: '30m',
+        stop_at: stopAt,
+        origin: 'cscli',
+        scenario: 'manual/web-ui',
+        simulated: false,
+      },
+    ],
+    simulated: false,
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   tempDir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-app-'));
 });
@@ -480,6 +513,48 @@ describe('createApp', () => {
     destroyTempDir();
   });
 
+  test('keeps range-only alerts visible in alerts and decision payloads', async () => {
+    const rangeAlert = sampleRangeAlert();
+    const { controller, database } = createController({
+      fetchResolver: (url) => {
+        if (url.includes('/v1/alerts?') && url.includes('scope=range')) {
+          return Response.json([rangeAlert]);
+        }
+        if (url.includes('/v1/alerts?')) {
+          return Response.json([]);
+        }
+        return undefined;
+      },
+    });
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alertsResponse.status).toBe(200);
+    expect((await alertsResponse.json()) as Array<{ id: number; source: { range?: string } | null }>).toEqual([
+      expect.objectContaining({
+        id: 14302,
+        source: expect.objectContaining({ range: '192.168.5.0/24' }),
+      }),
+    ]);
+
+    const decisionsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions'));
+    expect(decisionsResponse.status).toBe(200);
+    expect((await decisionsResponse.json()) as Array<{ id: number; value?: string }>).toEqual([
+      expect.objectContaining({ id: 14302, value: '192.168.5.0/24' }),
+    ]);
+
+    const statsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/stats/alerts'));
+    expect(statsResponse.status).toBe(200);
+    expect((await statsResponse.json()) as Array<{ source: { range?: string } | null }>).toEqual([
+      expect.objectContaining({
+        source: expect.objectContaining({ range: '192.168.5.0/24' }),
+      }),
+    ]);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
   test('detects simulated decisions from CrowdSec markers when boolean flags are omitted', async () => {
     const implicitSimulatedAlert = sampleImplicitSimulatedAlert();
     const { controller, database, fetchCalls } = createController({
@@ -627,17 +702,20 @@ describe('createApp', () => {
 
   test('uses unfiltered alert queries by default during bootstrap', async () => {
     const crowdsecAlert = sampleAlert();
-    const manualAlert = sampleManualWebUiAlert();
+    const rangeAlert = sampleRangeAlert();
     const { controller, database, fetchCalls } = createController({
       fetchResolver: (url) => {
         if (url.endsWith('/v1/watchers/login')) {
           return Response.json({ code: 200, token: 'token' });
         }
-        if (url.includes('/v1/alerts?') && url.includes('has_active_decision=true')) {
+        if (url.includes('/v1/alerts?') && url.includes('scope=range')) {
+          return Response.json([rangeAlert]);
+        }
+        if (url.includes('/v1/alerts?') && url.includes('scope=ip') && url.includes('has_active_decision=true')) {
           return Response.json([crowdsecAlert]);
         }
-        if (url.includes('/v1/alerts?')) {
-          return Response.json([crowdsecAlert, manualAlert]);
+        if (url.includes('/v1/alerts?') && url.includes('scope=ip')) {
+          return Response.json([crowdsecAlert]);
         }
         return undefined;
       },
@@ -647,7 +725,9 @@ describe('createApp', () => {
     expect(alerts.status).toBe(200);
 
     const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
-    expect(alertRequests).toHaveLength(2);
+    expect(alertRequests).toHaveLength(4);
+    expect(alertRequests.some((call) => call.url.includes('scope=ip'))).toBe(true);
+    expect(alertRequests.some((call) => call.url.includes('scope=range'))).toBe(true);
     expect(alertRequests.every((call) => !call.url.includes('origin='))).toBe(true);
     expect(alertRequests.every((call) => !call.url.includes('scenario='))).toBe(true);
 
@@ -737,9 +817,15 @@ describe('createApp', () => {
     );
 
     const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
+    expect(alertRequests).toHaveLength(8);
     expect(alertRequests.some((call) => call.url.includes('origin=crowdsec'))).toBe(true);
     expect(alertRequests.some((call) => call.url.includes('scenario=manual%2Fweb-ui'))).toBe(true);
     expect(alertRequests.every((call) => call.url.includes('origin=') || call.url.includes('scenario='))).toBe(true);
+    expect(alertRequests.some((call) => call.url.includes('origin=crowdsec') && call.url.includes('scope=ip'))).toBe(true);
+    expect(alertRequests.some((call) => call.url.includes('origin=crowdsec') && call.url.includes('scope=range'))).toBe(true);
+    expect(alertRequests.some((call) => call.url.includes('scenario=manual%2Fweb-ui') && call.url.includes('scope=ip'))).toBe(true);
+    expect(alertRequests.some((call) => call.url.includes('scenario=manual%2Fweb-ui') && call.url.includes('scope=range'))).toBe(true);
+    expect(alertRequests.every((call) => !call.url.match(/[?&]scope=ip&scope=range/))).toBe(true);
 
     const alertCount = (database.db.query('SELECT COUNT(*) AS count FROM alerts').get() as { count: number }).count;
     const decisionCount = (database.db.query('SELECT COUNT(*) AS count FROM decisions').get() as { count: number }).count;

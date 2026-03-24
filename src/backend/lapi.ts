@@ -192,23 +192,39 @@ export class LapiClient {
     filters: FetchAlertsFilters = {},
   ): Promise<unknown[]> {
     const sinceParam = since || this.lookbackPeriod;
-    const params = new URLSearchParams();
-    params.append('since', sinceParam);
-    params.append('limit', '0');
-    if (until) params.append('until', until);
-    if (this.simulationsEnabled) params.append('simulated', 'true');
-    if (hasActiveDecision) params.append('has_active_decision', 'true');
-    if (filters.origin) params.append('origin', filters.origin);
-    if (filters.scenario) params.append('scenario', filters.scenario);
-    ['Ip', 'Range'].forEach((scope) => params.append('scope', scope));
+    const buildParams = (scope: 'ip' | 'range'): URLSearchParams => {
+      const params = new URLSearchParams();
+      params.append('since', sinceParam);
+      params.append('limit', '0');
+      if (until) params.append('until', until);
+      if (this.simulationsEnabled) params.append('simulated', 'true');
+      if (hasActiveDecision) params.append('has_active_decision', 'true');
+      if (filters.origin) params.append('origin', filters.origin);
+      if (filters.scenario) params.append('scenario', filters.scenario);
+      params.append('scope', scope);
+      return params;
+    };
 
-    try {
-      const response = await this.fetchLapi<unknown[]>(`/v1/alerts?${params.toString()}`);
-      return Array.isArray(response.data) ? response.data : [];
-    } catch (error: any) {
-      console.error(`Failed to fetch alerts: ${error.message}`);
-      return [];
+    const resultSets = await Promise.all(['ip', 'range'].map(async (scope) => {
+      try {
+        const response = await this.fetchLapi<unknown[]>(`/v1/alerts?${buildParams(scope).toString()}`);
+        return Array.isArray(response.data) ? response.data : [];
+      } catch (error: any) {
+        console.error(`Failed to fetch ${scope} alerts: ${error.message}`);
+        return [];
+      }
+    }));
+
+    const merged = new Map<string, unknown>();
+    for (const resultSet of resultSets) {
+      for (const alert of resultSet) {
+        const id = typeof alert === 'object' && alert !== null && 'id' in alert ? String(alert.id) : null;
+        if (!id) continue;
+        merged.set(id, alert);
+      }
     }
+
+    return Array.from(merged.values());
   }
 
   async getAlertById(alertId: string | number): Promise<unknown> {

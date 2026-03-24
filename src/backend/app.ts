@@ -20,7 +20,7 @@ import { createRuntimeConfig, getIntervalName, parseRefreshInterval, type Runtim
 import { CrowdsecDatabase, type AlertInsertParams, type DecisionInsertParams } from './database';
 import { LapiClient } from './lapi';
 import { createUpdateChecker } from './update-check';
-import { getAlertTarget, toSlimAlert } from './utils/alerts';
+import { getAlertSourceValue, getAlertTarget, toSlimAlert } from './utils/alerts';
 import { parseGoDuration, toDuration } from './utils/duration';
 
 type HonoContext = any;
@@ -358,6 +358,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
               ? {
                   ip: alert.source.ip,
                   value: alert.source.value,
+                  range: alert.source.range,
                   cn: alert.source.cn,
                   as_name: alert.source.as_name,
                 }
@@ -567,10 +568,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     until: string | null = null,
     hasActiveDecision = false,
   ): Promise<AlertRecord[]> {
-    const queries = getAlertSyncQueries();
-    const resultSets = queries.length === 0
-      ? [await lapiClient.fetchAlerts(since, until, hasActiveDecision)]
-      : await Promise.all(queries.map((query) => lapiClient.fetchAlerts(since, until, hasActiveDecision, query)));
+    const configuredQueries = getAlertSyncQueries();
+    const queries = configuredQueries.length === 0 ? [{}] : configuredQueries;
+    const resultSets = await Promise.all(queries.map((query) => lapiClient.fetchAlerts(since, until, hasActiveDecision, query)));
 
     const merged = new Map<string, AlertRecord>();
     for (const resultSet of resultSets) {
@@ -587,7 +587,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   function processAlertForDatabase(alert: AlertRecord): void {
     if (!alert || !alert.id) return;
     const decisions = alert.decisions || [];
-    const alertSource = alert.source || {};
+    const alertSource = alert.source || null;
+    const sourceValue = getAlertSourceValue(alertSource);
     const target = getAlertTarget(alert);
     const normalizedDecisions = decisions.map((decision) => ({
       ...decision,
@@ -608,7 +609,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       $uuid: alert.uuid || String(alert.id),
       $created_at: alert.created_at,
       $scenario: alert.scenario,
-      $source_ip: alertSource.ip || alertSource.value,
+      $source_ip: sourceValue,
       $message: alert.message || '',
       $raw_data: JSON.stringify(enrichedAlert),
     };
@@ -636,10 +637,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         scenario: decision.scenario || alert.scenario || 'unknown',
         origin: decision.origin || decision.scenario || alert.scenario || 'unknown',
         alert_id: alert.id,
-        value: decision.value || alertSource.ip,
+        value: decision.value || sourceValue,
         type: decision.type || 'ban',
-        country: alertSource.cn,
-        as: alertSource.as_name,
+        country: alertSource?.cn,
+        as: alertSource?.as_name,
         target,
         simulated: decision.simulated === true,
         is_duplicate: false,
@@ -651,7 +652,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         $alert_id: alert.id,
         $created_at: createdAt,
         $stop_at: stopAt,
-        $value: decision.value,
+        $value: enrichedDecision.value,
         $type: decision.type,
         $origin: enrichedDecision.origin,
         $scenario: enrichedDecision.scenario,
@@ -820,7 +821,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
                 ? new Date(Date.now() + parseGoDuration(decision.duration)).toISOString()
                 : decision.stop_at || createdAt;
 
-              const alertSource = alert.source || {};
+              const alertSource = alert.source || null;
+              const sourceValue = getAlertSourceValue(alertSource);
               const enrichedDecision = {
                 ...decision,
                 created_at: createdAt,
@@ -828,10 +830,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
                 scenario: decision.scenario || alert.scenario || 'unknown',
                 origin: decision.origin || decision.scenario || alert.scenario || 'unknown',
                 alert_id: alert.id,
-                value: decision.value || alertSource.ip,
+                value: decision.value || sourceValue,
                 type: decision.type || 'ban',
-                country: alertSource.cn,
-                as: alertSource.as_name,
+                country: alertSource?.cn,
+                as: alertSource?.as_name,
                 target: getAlertTarget(alert),
                 simulated: normalizeDecisionSimulated(decision, alert),
               };

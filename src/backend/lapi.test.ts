@@ -122,7 +122,8 @@ describe('LapiClient', () => {
     await expect(client.deleteDecision(10)).resolves.toEqual({ ok: true });
     await expect(client.deleteAlert(42)).resolves.toEqual({ id: 42 });
 
-    expect(calls.some((call) => call.url.includes('/v1/alerts?since=1h&limit=0&simulated=true'))).toBe(true);
+    expect(calls.some((call) => call.url.includes('/v1/alerts?since=1h&limit=0&simulated=true&scope=ip'))).toBe(true);
+    expect(calls.some((call) => call.url.includes('/v1/alerts?since=1h&limit=0&simulated=true&scope=range'))).toBe(true);
     expect(calls.some((call) => call.url.endsWith('/v1/alerts/42') && call.method === 'GET')).toBe(true);
     expect(calls.some((call) => call.url.endsWith('/v1/alerts') && call.method === 'POST')).toBe(true);
     expect(calls.some((call) => call.url.endsWith('/v1/decisions/10') && call.method === 'DELETE')).toBe(true);
@@ -144,11 +145,13 @@ describe('LapiClient', () => {
     });
 
     await expect(client.fetchAlerts()).resolves.toEqual([]);
+    expect(calls).toHaveLength(2);
     expect(calls[0]).toContain('/v1/alerts?since=1h&limit=0');
-    expect(calls[0]).not.toContain('simulated=true');
+    expect(calls[1]).toContain('/v1/alerts?since=1h&limit=0');
+    expect(calls.every((call) => !call.includes('simulated=true'))).toBe(true);
   });
 
-  test('appends origin, scenario, and active-decision filters to alert queries', async () => {
+  test('queries ip and range scopes separately and appends filters to both alert queries', async () => {
     const calls: string[] = [];
     const client = new LapiClient({
       crowdsecUrl: 'http://crowdsec:8080',
@@ -170,8 +173,8 @@ describe('LapiClient', () => {
       }),
     ).resolves.toEqual([]);
 
-    expect(calls[0]).toContain('/v1/alerts?since=30m&limit=0&until=10m&simulated=true&has_active_decision=true&origin=crowdsec&scenario=manual%2Fweb-ui');
-    expect(calls[0]).toContain('scope=Ip');
-    expect(calls[0]).toContain('scope=Range');
+    expect(calls).toHaveLength(2);
+    expect(calls.some((call) => call.includes('/v1/alerts?since=30m&limit=0&until=10m&simulated=true&has_active_decision=true&origin=crowdsec&scenario=manual%2Fweb-ui&scope=ip'))).toBe(true);
+    expect(calls.some((call) => call.includes('/v1/alerts?since=30m&limit=0&until=10m&simulated=true&has_active_decision=true&origin=crowdsec&scenario=manual%2Fweb-ui&scope=range'))).toBe(true);
   });
 });

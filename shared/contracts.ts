@@ -135,7 +135,7 @@ export interface DecisionListItem {
 export interface StatsAlert {
   created_at: string;
   scenario?: string;
-  source: Pick<AlertSource, 'ip' | 'value' | 'cn' | 'as_name'> | null;
+  source: Pick<AlertSource, 'ip' | 'value' | 'range' | 'cn' | 'as_name'> | null;
   target?: string;
   simulated?: boolean;
 }

@@ -10,7 +10,7 @@ import { TimeDisplay } from "../components/TimeDisplay";
 import { EventCard } from "../components/EventCard";
 import { getCountryName } from "../lib/utils";
 import { Search, Info, ExternalLink, Shield, Trash2, X, AlertCircle } from "lucide-react";
-import type { AlertRecord, ApiPermissionError, SimulationFilter, SlimAlert } from '../types';
+import type { AlertRecord, AlertSource, ApiPermissionError, SimulationFilter, SlimAlert } from '../types';
 
 type AlertListItem = SlimAlert;
 type AlertSelection = AlertListItem | AlertRecord;
@@ -47,6 +47,11 @@ function toErrorInfo(error: unknown, fallbackMessage: string): ErrorInfo {
 
 function hasAlertEvents(alert: AlertSelection): alert is AlertRecord {
     return 'events' in alert;
+}
+
+function getAlertSourceValue(source: AlertSource | null | undefined): string | undefined {
+    const values = [source?.ip, source?.value, source?.range];
+    return values.find((value): value is string => typeof value === 'string' && value.length > 0);
 }
 
 function buildDecisionListHref(
@@ -224,12 +229,12 @@ export function Alerts() {
 
         const scenario = (alert.scenario || "").toLowerCase();
         const message = (alert.message || "").toLowerCase();
-        const ip = (alert.source?.ip || alert.source?.value || "").toLowerCase();
+        const sourceValue = (getAlertSourceValue(alert.source) || "").toLowerCase();
         const cn = (alert.source?.cn || "").toLowerCase();
         const asName = (alert.source?.as_name || "").toLowerCase();
 
         // Check specific filters if present
-        if (paramIp && !ip.includes(paramIp)) return false;
+        if (paramIp && !sourceValue.includes(paramIp)) return false;
         if (paramCountry && !cn.includes(paramCountry)) return false;
         if (paramScenario && !scenario.includes(paramScenario)) return false;
         if (paramScenario && !scenario.includes(paramScenario)) return false;
@@ -255,7 +260,7 @@ export function Alerts() {
             const countryName = (getCountryName(alert.source?.cn) || "").toLowerCase();
             return scenario.includes(search) ||
                 message.includes(search) ||
-                ip.includes(search) ||
+                sourceValue.includes(search) ||
                 cn.includes(search) ||
                 countryName.includes(search) ||
                 asName.includes(search) ||
@@ -271,6 +276,7 @@ export function Alerts() {
     const selectedAlertDecisions = selectedAlert?.decisions ?? [];
     const selectedAlertEvents = selectedAlert && hasAlertEvents(selectedAlert) ? selectedAlert.events ?? [] : [];
     const selectedAlertIsSimulated = selectedAlert ? isSimulatedAlert(selectedAlert) : false;
+    const selectedAlertSourceValue = getAlertSourceValue(selectedAlert?.source);
 
     return (
         <div className="space-y-6">
@@ -375,7 +381,7 @@ export function Alerts() {
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Scenario</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Country</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">AS</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">IP</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">IP / Range</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Decisions</th>
                                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
                             </tr>
@@ -388,6 +394,7 @@ export function Alerts() {
                             ) : (
                                 visibleAlerts.map((alert, index) => {
                                     const isLastElement = index === visibleAlerts.length - 1;
+                                    const sourceValue = getAlertSourceValue(alert.source);
                                     return (
                                         <tr
                                             key={alert.id}
@@ -418,8 +425,8 @@ export function Alerts() {
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[150px] truncate" title={alert.source?.as_name}>
                                                 {alert.source?.as_name || "-"}
                                             </td>
-                                            <td className="px-6 py-4 text-sm font-mono text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={alert.source?.ip || alert.source?.value}>
-                                                {alert.source?.ip || alert.source?.value || "N/A"}
+                                            <td className="px-6 py-4 text-sm font-mono text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={sourceValue}>
+                                                {sourceValue || "N/A"}
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
                                                 {(() => {
@@ -538,24 +545,24 @@ export function Alerts() {
                                 )}
                             </div>
                             <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
-                                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">IP</h4>
+                                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">IP / Range</h4>
                                 <div className="flex items-center gap-2">
-                                    {(selectedAlert.source?.ip || selectedAlert.source?.value) ? (
+                                    {selectedAlertSourceValue ? (
                                         <a
-                                            href={`https://app.crowdsec.net/cti/${encodeURIComponent(String(selectedAlert.source?.ip || selectedAlert.source?.value))}`}
+                                            href={`https://app.crowdsec.net/cti/${encodeURIComponent(String(selectedAlertSourceValue))}`}
                                             target="_blank"
                                             rel="noopener noreferrer"
                                             className="font-mono text-lg font-bold text-gray-900 dark:text-white hover:text-primary-600 dark:hover:text-primary-400 transition-colors inline-flex items-center gap-1"
                                             title="View on CrowdSec CTI"
                                         >
-                                            {selectedAlert.source?.ip || selectedAlert.source?.value}
+                                            {selectedAlertSourceValue}
                                             <ExternalLink size={14} />
                                         </a>
                                     ) : (
                                         <span className="font-mono text-lg font-bold text-gray-900 dark:text-white">N/A</span>
                                     )}
                                 </div>
-                                {selectedAlert.source?.range && (
+                                {selectedAlert.source?.range && selectedAlert.source.range !== selectedAlertSourceValue && (
                                     <div className="text-xs text-gray-400 font-mono mt-1">
                                         Range: {selectedAlert.source.range}
                                     </div>

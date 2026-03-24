@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { buildMetaSearch, getAlertTarget, toSlimAlert, toSlimDecision } from './alerts';
+import { buildMetaSearch, getAlertSourceValue, getAlertTarget, toSlimAlert, toSlimDecision } from './alerts';
 
 describe('alert helpers', () => {
   test('getAlertTarget prioritizes event metadata', () => {
@@ -59,6 +59,13 @@ describe('alert helpers', () => {
         },
       ]),
     ).toBe('ssh');
+  });
+
+  test('getAlertSourceValue falls back from ip to value to range', () => {
+    expect(getAlertSourceValue({ ip: '1.2.3.4', value: '9.9.9.9', range: '192.168.5.0/24' })).toBe('1.2.3.4');
+    expect(getAlertSourceValue({ value: '9.9.9.9', range: '192.168.5.0/24' })).toBe('9.9.9.9');
+    expect(getAlertSourceValue({ range: '192.168.5.0/24' })).toBe('192.168.5.0/24');
+    expect(getAlertSourceValue(null)).toBeUndefined();
   });
 
   test('toSlimDecision and toSlimAlert preserve display fields', () => {

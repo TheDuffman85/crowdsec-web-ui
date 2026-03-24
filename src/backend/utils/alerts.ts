@@ -1,4 +1,4 @@
-import type { AlertDecision, AlertEvent, AlertMeta, AlertRecord, SlimAlert, SlimDecision } from '../../../shared/contracts';
+import type { AlertDecision, AlertEvent, AlertMeta, AlertRecord, AlertSource, SlimAlert, SlimDecision } from '../../../shared/contracts';
 
 export function getAlertTarget(alert: Pick<AlertRecord, 'events' | 'scenario' | 'machine_alias' | 'machine_id'> | null | undefined): string {
   if (!alert) return 'Unknown';
@@ -54,6 +54,13 @@ export function toSlimDecision(decision: AlertDecision): SlimDecision {
     expired: Boolean(decision.expired),
     simulated: decision.simulated === true,
   };
+}
+
+export function getAlertSourceValue(source: Pick<AlertSource, 'ip' | 'value' | 'range'> | null | undefined): string | undefined {
+  if (!source) return undefined;
+
+  const values = [source.ip, source.value, source.range];
+  return values.find((value): value is string => typeof value === 'string' && value.length > 0);
 }
 
 export function toSlimAlert(alert: AlertRecord): SlimAlert {
