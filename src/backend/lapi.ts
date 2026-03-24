@@ -205,7 +205,8 @@ export class LapiClient {
       return params;
     };
 
-    const resultSets = await Promise.all(['ip', 'range'].map(async (scope) => {
+    const scopes = ['ip', 'range'] as const;
+    const resultSets = await Promise.all(scopes.map(async (scope) => {
       try {
         const response = await this.fetchLapi<unknown[]>(`/v1/alerts?${buildParams(scope).toString()}`);
         return Array.isArray(response.data) ? response.data : [];
