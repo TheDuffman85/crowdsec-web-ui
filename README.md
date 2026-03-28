@@ -177,6 +177,13 @@ These are upstream LAPI filters, so excluded alerts are skipped before they are 
     docker build --build-arg DOCKER_IMAGE_REF=my-registry/my-image -t crowdsec-web-ui .
     ```
 
+> [!CAUTION]
+> **Bun Runtime Compatibility**: Current Docker images are based on Bun. On some older x64 CPUs and VMs configured for broad compatibility, the guest may not expose the CPU features Bun expects, which can lead to immediate exits, `Illegal instruction` errors, or restart loops.
+>
+> On `x86_64` only, the container now performs a startup check for AVX2 support and exits with a clear error if it is missing. This check does not apply to ARM/`arm64`.
+>
+> This is most commonly seen on virtualized environments that hide AVX/AVX2 support. For example, Proxmox guests using the default `kvm64` CPU type may need to switch to `host` or another CPU type that exposes AVX/AVX2 before troubleshooting `/app/data` permissions or other startup issues.
+
 2.  **Run the container**:
     Provide the CrowdSec LAPI URL and one supported auth mode.
 
@@ -396,7 +403,7 @@ The Web UI maintains its own local history of alerts and decisions. Data fetched
 ## Local Development
 
 1.  **Install Dependencies**:
-    You need [Bun](https://bun.sh) installed.
+    You need [Bun](https://bun.sh) installed. On older x64 systems or VMs that do not expose AVX/AVX2 support, Bun itself may fail to start for the same CPU compatibility reasons described in the Docker section above. This limitation is specific to x64 and does not apply to ARM/`arm64`.
     ```bash
     bun run install-all
     ```
