@@ -77,24 +77,35 @@ Automatically detects new container images on GitHub Container Registry (GHCR). 
 -   **Frontend**: React (Vite) + Tailwind CSS. Located in `frontend/`.
 -   **Backend**: Bun (Hono). Acts as an intelligent caching layer for CrowdSec Local API (LAPI) with delta updates and optimized chunked historical data sync.
 -   **Database**: SQLite (native bun:sqlite). Persists alerts and decisions locally in `/app/data/crowdsec.db` to reduce memory usage and support historical data.
--   **Security**: The application runs as a non-root user (`bun`) inside the container and communicates with CrowdSec via HTTP/LAPI. It uses **Machine Authentication** (User/Password) to obtain a JWT for full access (read/write).
+-   **Security**: The application runs as a non-root user (`bun`) inside the container and communicates with CrowdSec via HTTP/LAPI. It uses **Machine Authentication** to obtain a JWT for full access (read/write), either via watcher `User/Password` or agent **mTLS**.
 
 ## Prerequisites
 
 -   **CrowdSec**: A running CrowdSec instance.
--   **Machine Account**: You must register a "Machine" (Watcher) for this web UI to allow it to push alerts (add decisions).
-    
-    1.  Generate a secure password:
+-   **Authentication**: Configure exactly one CrowdSec LAPI auth mode for this web UI:
+
+    1.  **Watcher password auth**
+        Generate a secure password:
         ```bash
         openssl rand -hex 32
         ```
-    2.  Create the machine:
+        Create the machine:
         ```bash
         docker exec crowdsec cscli machines add crowdsec-web-ui --password <generated_password> -f /dev/null
         ```
 
+    2.  **Agent mTLS auth**
+        Configure CrowdSec LAPI TLS auth and generate an agent client certificate/key pair for this Web UI as described in the [CrowdSec TLS authentication docs](https://docs.crowdsec.net/docs/local_api/tls_auth/).
+
 > [!NOTE]
 > The `-f /dev/null` flag is crucial. It tells `cscli` **not** to overwrite the existing credentials file of the CrowdSec container. We only want to register the machine in the database, not change the container's local config.
+
+> [!IMPORTANT]
+> Choose exactly one auth mode:
+> - Password auth: `CROWDSEC_USER` + `CROWDSEC_PASSWORD`
+> - mTLS auth: `CROWDSEC_TLS_CERT_PATH` + `CROWDSEC_TLS_KEY_PATH` with optional `CROWDSEC_TLS_CA_CERT_PATH`
+>
+> Do not set both modes at the same time. The container will fail fast on mixed or partial auth configuration.
 
 ### Trusted IPs for Delete Operations (Optional)
 
@@ -167,7 +178,7 @@ These are upstream LAPI filters, so excluded alerts are skipped before they are 
     ```
 
 2.  **Run the container**:
-    Provide the CrowdSec LAPI URL and your Machine Credentials.
+    Provide the CrowdSec LAPI URL and one supported auth mode.
 
     ```bash
     docker run -d \
@@ -223,6 +234,31 @@ services:
     restart: unless-stopped
 ```
 
+### Docker Compose Example (mTLS Authentication)
+
+```yaml
+services:
+  crowdsec-web-ui:
+    image: ghcr.io/theduffman85/crowdsec-web-ui:latest
+    container_name: crowdsec_web_ui
+    ports:
+      - "3000:3000"
+    environment:
+      - CROWDSEC_URL=https://crowdsec:8080
+      - CROWDSEC_TLS_CERT_PATH=/certs/agent.pem
+      - CROWDSEC_TLS_KEY_PATH=/certs/agent-key.pem
+      # Optional: Custom CA bundle used to verify the CrowdSec LAPI server certificate
+      - CROWDSEC_TLS_CA_CERT_PATH=/certs/ca.pem
+      - CROWDSEC_SIMULATIONS_ENABLED=true
+      - CROWDSEC_LOOKBACK_PERIOD=5d
+    volumes:
+      - ./data:/app/data
+      - /path/on/host/agent.pem:/certs/agent.pem:ro
+      - /path/on/host/agent-key.pem:/certs/agent-key.pem:ro
+      - /path/on/host/ca.pem:/certs/ca.pem:ro
+    restart: unless-stopped
+```
+
 ### Using CrowdSec Web UI with a Local or Custom Certificate
 
 If your CrowdSec Local API (LAPI) uses HTTPS with a self-signed certificate or an internal Certificate Authority (CA), the Web UI container may not trust it by default. This can result in errors like:
@@ -247,7 +283,7 @@ services:
     environment:
       - CROWDSEC_URL=https://crowdsec:8080
       - CROWDSEC_USER=crowdsec-web-ui
-      - CROWDSEC_PASSWORD=<YOUR_API_KEY>
+      - CROWDSEC_PASSWORD=<generated_password>
       - CROWDSEC_SIMULATIONS_ENABLED=true
       - NODE_EXTRA_CA_CERTS=/certs/root_ca.crt
     volumes:
@@ -262,6 +298,7 @@ services:
 - The `:ro` ensures the certificate is mounted read-only.
 - This method avoids rebuilding the container image.
 - Works for self-signed certificates as well as private CA certificates.
+- `NODE_EXTRA_CA_CERTS` is a general runtime trust mechanism. When using the new mTLS auth mode, prefer `CROWDSEC_TLS_CA_CERT_PATH` as the explicit CrowdSec LAPI trust input for the Web UI client connection.
 
 ### Reverse Proxy with Base Path
 
@@ -376,6 +413,17 @@ The Web UI maintains its own local history of alerts and decisions. Data fetched
     CROWDSEC_BOOTSTRAP_RETRY_ENABLED=true
     # Optional: Base path for reverse proxy deployments
     # BASE_PATH=/crowdsec
+    ```
+
+    Or use mTLS instead of `CROWDSEC_USER`/`CROWDSEC_PASSWORD`:
+    ```bash
+    CROWDSEC_URL=https://localhost:8080
+    CROWDSEC_TLS_CERT_PATH=/path/to/agent.pem
+    CROWDSEC_TLS_KEY_PATH=/path/to/agent-key.pem
+    # Optional when using a private CA or self-signed CrowdSec LAPI certificate
+    CROWDSEC_TLS_CA_CERT_PATH=/path/to/ca.pem
+    CROWDSEC_SIMULATIONS_ENABLED=true
+    CROWDSEC_REFRESH_INTERVAL=30s
     ```
 
 3.  **Start the Application**:

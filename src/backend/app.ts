@@ -78,8 +78,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   const database = options.database || new CrowdsecDatabase({ dbDir: config.dbDir });
   const lapiClient = options.lapiClient || new LapiClient({
     crowdsecUrl: config.crowdsecUrl,
-    user: config.crowdsecUser,
-    password: config.crowdsecPassword,
+    auth: config.crowdsecAuth,
     simulationsEnabled: config.simulationsEnabled,
     lookbackPeriod: config.lookbackPeriod,
     version: config.version,
@@ -133,14 +132,17 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   console.log(`Cache Configuration:
   Lookback Period: ${config.lookbackPeriod} (${config.lookbackMs}ms)
   Refresh Interval: ${getIntervalName(refreshIntervalMs)} (${persistedConfig.refresh_interval_ms !== undefined ? 'from saved config' : 'from env'})
+  Auth Mode: ${config.crowdsecAuthMode}
   Simulations: ${config.simulationsEnabled ? 'Enabled' : 'Disabled'}
   Alert Origin Allowlist: ${config.alertOrigins.length > 0 ? config.alertOrigins.join(', ') : 'Disabled'}
   Alert Scenario Allowlist: ${config.alertExtraScenarios.length > 0 ? config.alertExtraScenarios.join(', ') : 'Disabled'}
   Bootstrap Retry: ${config.bootstrapRetryEnabled ? getIntervalName(config.bootstrapRetryDelayMs) : 'Disabled'}
 `);
 
-  if (!lapiClient.hasCredentials()) {
-    console.warn('WARNING: CROWDSEC_USER and CROWDSEC_PASSWORD must be set for full functionality.');
+  if (!lapiClient.hasAuthConfig()) {
+    console.warn(
+      'WARNING: CrowdSec LAPI authentication is not configured. Set CROWDSEC_USER/CROWDSEC_PASSWORD or CROWDSEC_TLS_CERT_PATH/CROWDSEC_TLS_KEY_PATH for full functionality.',
+    );
   }
 
   app.use('*', compress());
@@ -891,7 +893,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   }
 
   function scheduleBootstrapRetry(reason = 'retry requested'): void {
-    if (!lapiClient.hasCredentials() || !config.bootstrapRetryEnabled || cache.isInitialized || bootstrapRetryTimeout) {
+    if (!lapiClient.hasAuthConfig() || !config.bootstrapRetryEnabled || cache.isInitialized || bootstrapRetryTimeout) {
       return;
     }
 
@@ -903,7 +905,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   }
 
   async function ensureBootstrapReady(source = 'bootstrap'): Promise<boolean> {
-    if (!lapiClient.hasCredentials()) {
+    if (!lapiClient.hasAuthConfig()) {
       return false;
     }
 
@@ -1161,8 +1163,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   };
 
   function startBackgroundTasks(): void {
-    if (!lapiClient.hasCredentials()) {
-      console.warn('Cache initialization skipped - credentials not configured');
+    if (!lapiClient.hasAuthConfig()) {
+      console.warn('Cache initialization skipped - CrowdSec LAPI authentication not configured');
       return;
     }
     startRefreshScheduler();

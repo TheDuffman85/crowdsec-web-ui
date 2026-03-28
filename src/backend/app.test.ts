@@ -227,15 +227,31 @@ function createTestDistRoot(): string {
 function createController(options: {
   alertDetailPayload?: unknown;
   simulationsEnabled?: boolean;
+  authMode?: 'password' | 'mtls' | 'none';
   env?: Record<string, string>;
   fetchResolver?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
 } = {}) {
+  const authMode = options.authMode || 'password';
+  const mtlsCertPath = path.join(tempDir, 'agent.pem');
+  const mtlsKeyPath = path.join(tempDir, 'agent-key.pem');
+  const mtlsCaPath = path.join(tempDir, 'ca.pem');
+  const authEnv = authMode === 'password'
+    ? {
+        CROWDSEC_USER: 'watcher',
+        CROWDSEC_PASSWORD: 'secret',
+      }
+    : authMode === 'mtls'
+      ? {
+          CROWDSEC_TLS_CERT_PATH: mtlsCertPath,
+          CROWDSEC_TLS_KEY_PATH: mtlsKeyPath,
+          CROWDSEC_TLS_CA_CERT_PATH: mtlsCaPath,
+        }
+      : {};
+
   const config = createRuntimeConfig({
     PORT: '3000',
     BASE_PATH: '/crowdsec',
     CROWDSEC_URL: 'http://crowdsec:8080',
-    CROWDSEC_USER: 'watcher',
-    CROWDSEC_PASSWORD: 'secret',
     CROWDSEC_SIMULATIONS_ENABLED: options.simulationsEnabled === false ? 'false' : 'true',
     CROWDSEC_LOOKBACK_PERIOD: '1m',
     CROWDSEC_REFRESH_INTERVAL: '30s',
@@ -243,14 +259,22 @@ function createController(options: {
     VITE_BRANCH: 'main',
     VITE_COMMIT_HASH: 'abc123',
     DB_DIR: tempDir,
+    ...authEnv,
     ...options.env,
   });
 
   const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
-  const fetchCalls: Array<{ url: string; method: string }> = [];
+  const fetchCalls: Array<{ url: string; method: string; body?: unknown; headers?: RequestInit['headers']; tls?: BunFetchRequestInitTLS }> = [];
   const fetchImpl = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const requestInit = init as BunFetchRequestInit | undefined;
     const url = String(input);
-    fetchCalls.push({ url, method: init?.method || 'GET' });
+    fetchCalls.push({
+      url,
+      method: requestInit?.method || 'GET',
+      body: requestInit?.body ? JSON.parse(String(requestInit.body)) : undefined,
+      headers: requestInit?.headers,
+      tls: requestInit?.tls,
+    });
     const resolved = await options.fetchResolver?.(url, init);
     if (resolved) {
       return resolved;
@@ -281,8 +305,7 @@ function createController(options: {
 
   const lapiClient = new LapiClient({
     crowdsecUrl: config.crowdsecUrl,
-    user: config.crowdsecUser,
-    password: config.crowdsecPassword,
+    auth: config.crowdsecAuth,
     simulationsEnabled: config.simulationsEnabled,
     lookbackPeriod: config.lookbackPeriod,
     version: config.version,
@@ -493,6 +516,53 @@ describe('createApp', () => {
     );
     expect(badDecision.status).toBe(400);
 
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('bootstraps successfully with mTLS authentication', async () => {
+    const { controller, database, fetchCalls } = createController({ authMode: 'mtls' });
+
+    const alerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alerts.status).toBe(200);
+
+    const loginRequest = fetchCalls.find((call) => call.url.endsWith('/v1/watchers/login'));
+    expect(loginRequest).toBeDefined();
+    expect(loginRequest?.body).toEqual({ scenarios: ['manual/web-ui'] });
+    expect(loginRequest?.tls).toEqual(expect.objectContaining({
+      cert: expect.anything(),
+      key: expect.anything(),
+      ca: expect.anything(),
+    }));
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('fails fast on mixed password and mTLS configuration', () => {
+    expect(() => createController({
+      env: {
+        CROWDSEC_TLS_CERT_PATH: '/certs/agent.pem',
+        CROWDSEC_TLS_KEY_PATH: '/certs/agent-key.pem',
+      },
+    })).toThrow(/choose either CROWDSEC_USER\/CROWDSEC_PASSWORD or CROWDSEC_TLS_CERT_PATH\/CROWDSEC_TLS_KEY_PATH/i);
+
+    destroyTempDir();
+  });
+
+  test('starts without LAPI auth configured but rejects protected API access', async () => {
+    const { controller, database } = createController({ authMode: 'none' });
+
+    const health = await controller.fetch(new Request('http://localhost/api/health'));
+    expect(health.status).toBe(200);
+
+    const alerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alerts.status).toBe(502);
+    expect(await alerts.json()).toEqual({ error: 'Failed to authenticate with CrowdSec LAPI' });
+
+    controller.startBackgroundTasks();
     controller.stopBackgroundTasks();
     database.close();
     destroyTempDir();
