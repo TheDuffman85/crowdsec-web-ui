@@ -28,6 +28,7 @@ import { parseGoDuration, toDuration } from './utils/duration';
 
 type HonoContext = any;
 type HonoNext = any;
+type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 type AnyError = Error & {
   code?: string;
   response?: { status: number };
@@ -43,7 +44,7 @@ export interface CreateAppOptions {
   distRoot?: string;
   startBackgroundTasks?: boolean;
   updateChecker?: () => Promise<UpdateCheckResponse>;
-  notificationFetchImpl?: typeof fetch;
+  notificationFetchImpl?: FetchLike;
 }
 
 export interface AppController {

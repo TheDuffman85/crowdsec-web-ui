@@ -1,5 +1,5 @@
 import type { Dispatch, ReactNode, SetStateAction } from 'react';
-import type { SyncStatus } from '@shared/contracts';
+import type { SyncStatus } from '../../../shared/contracts';
 
 export type {
   AddDecisionRequest,
@@ -30,7 +30,7 @@ export type {
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
   UpdateCheckResponse,
-} from '@shared/contracts';
+} from '../../../shared/contracts';
 
 export interface DateRangeSelection {
   start: string;

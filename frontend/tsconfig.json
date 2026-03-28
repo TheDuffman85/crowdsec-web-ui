@@ -13,11 +13,6 @@
     "resolveJsonModule": true,
     "esModuleInterop": true,
     "verbatimModuleSyntax": true,
-    "ignoreDeprecations": "6.0",
-    "baseUrl": ".",
-    "paths": {
-      "@shared/*": ["../shared/*"]
-    },
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "types": ["vite/client", "vitest/globals"]

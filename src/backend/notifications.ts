@@ -1,6 +1,9 @@
 import type {
   AlertMetaValue,
+  AlertSpikeRuleConfig,
   AlertRecord,
+  AlertThresholdRuleConfig,
+  NewCveRuleConfig,
   NotificationChannel,
   NotificationChannelType,
   NotificationDeliveryResult,
@@ -17,7 +20,8 @@ import type {
 import { CrowdsecDatabase } from './database';
 import { sendSmtpMail } from './smtp';
 
-type FetchLike = typeof fetch;
+type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+type RuleConfigInput = NotificationRuleConfig | Record<string, AlertMetaValue>;
 
 export interface NotificationServiceOptions {
   database: CrowdsecDatabase;
@@ -424,7 +428,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
       severity: normalizeSeverity(input.severity),
       cooldown_minutes: normalizePositiveNumber(input.cooldown_minutes, existing?.cooldown_minutes ?? 60),
       channel_ids: channelIds,
-      config: normalizeRuleConfig(type, input.config as Record<string, AlertMetaValue>),
+      config: normalizeRuleConfig(type, input.config),
       created_at: createdAt,
       updated_at: new Date().toISOString(),
     };
@@ -441,7 +445,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
   }
 
   async function evaluateAlertSpikeRule(rule: NotificationRule, now: Date): Promise<NotificationCandidate[]> {
-    const config = normalizeRuleConfig('alert-spike', rule.config as Record<string, AlertMetaValue>);
+    const config = normalizeRuleConfig('alert-spike', rule.config);
     const windowMs = config.window_minutes * 60_000;
     const currentStart = now.getTime() - windowMs;
     const previousStart = currentStart - windowMs;
@@ -467,13 +471,13 @@ export function createNotificationService(options: NotificationServiceOptions): 
         previous_count: previousAlerts.length,
         increase_percent: Math.round(increasePercent),
         window_minutes: config.window_minutes,
-        filters: config.filters || {},
+        filters: toMetaRecord(config.filters),
       },
     }];
   }
 
   async function evaluateAlertThresholdRule(rule: NotificationRule, now: Date): Promise<NotificationCandidate[]> {
-    const config = normalizeRuleConfig('alert-threshold', rule.config as Record<string, AlertMetaValue>);
+    const config = normalizeRuleConfig('alert-threshold', rule.config);
     const windowMs = config.window_minutes * 60_000;
     const alerts = getAlertsBetween(new Date(now.getTime() - windowMs), now, config.filters);
 
@@ -489,13 +493,13 @@ export function createNotificationService(options: NotificationServiceOptions): 
         matched_alerts: alerts.length,
         threshold: config.alert_threshold,
         window_minutes: config.window_minutes,
-        filters: config.filters || {},
+        filters: toMetaRecord(config.filters),
       },
     }];
   }
 
   async function evaluateNewCveRule(rule: NotificationRule, now: Date): Promise<NotificationCandidate[]> {
-    const config = normalizeRuleConfig('new-cve', rule.config as Record<string, AlertMetaValue>);
+    const config = normalizeRuleConfig('new-cve', rule.config);
     const alerts = getAlertsBetween(new Date(now.getTime() - 7 * 86_400_000), now, config.filters);
     const matches = new Map<string, AlertRecord[]>();
 
@@ -528,7 +532,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
           age_days: ageDays,
           published_at: publishedAt.toISOString(),
           matched_alerts: matchedAlerts.length,
-          filters: config.filters || {},
+          filters: toMetaRecord(config.filters),
         },
       });
     }
@@ -642,8 +646,14 @@ function validateChannelConfig(type: NotificationChannelType, config: Record<str
   }
 }
 
-function normalizeRuleConfig(type: NotificationRuleType, config: Record<string, AlertMetaValue>): NotificationRuleConfig {
-  const safeConfig = config && typeof config === 'object' && !Array.isArray(config) ? config : {};
+function normalizeRuleConfig(type: 'alert-spike', config: RuleConfigInput): AlertSpikeRuleConfig;
+function normalizeRuleConfig(type: 'alert-threshold', config: RuleConfigInput): AlertThresholdRuleConfig;
+function normalizeRuleConfig(type: 'new-cve', config: RuleConfigInput): NewCveRuleConfig;
+function normalizeRuleConfig(type: NotificationRuleType, config: RuleConfigInput): NotificationRuleConfig;
+function normalizeRuleConfig(type: NotificationRuleType, config: RuleConfigInput): NotificationRuleConfig {
+  const safeConfig = config && typeof config === 'object' && !Array.isArray(config)
+    ? config as Record<string, unknown>
+    : {};
   const filters = normalizeFilters(safeConfig.filters as NotificationFilter | undefined);
 
   if (type === 'alert-spike') {
@@ -667,6 +677,10 @@ function normalizeRuleConfig(type: NotificationRuleType, config: Record<string, 
     max_cve_age_days: normalizePositiveNumber(safeConfig.max_cve_age_days, 14),
     filters,
   };
+}
+
+function toMetaRecord(filters?: NotificationFilter): Record<string, unknown> {
+  return filters ? { ...filters } : {};
 }
 
 function normalizeFilters(filters: NotificationFilter | undefined): NotificationFilter | undefined {

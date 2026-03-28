@@ -18,7 +18,7 @@ import { Badge } from '../components/ui/Badge';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
 import { Modal } from '../components/ui/Modal';
 import { Switch } from '../components/ui/Switch';
-import type { NotificationChannel, NotificationChannelType, NotificationItem, NotificationRule, NotificationRuleType, NotificationSeverity } from '../types';
+import type { NotificationChannel, NotificationChannelType, NotificationItem, NotificationRule, NotificationRuleType, NotificationSeverity, UpsertNotificationRuleRequest } from '../types';
 
 type ChannelFormState = { name: string; type: NotificationChannelType; enabled: boolean; config: Record<string, string | boolean>; };
 type RuleFormState = {
@@ -49,6 +49,56 @@ const defaultChannelForm = (type: NotificationChannelType = 'ntfy'): ChannelForm
 const defaultRuleForm = (type: NotificationRuleType = 'alert-spike'): RuleFormState => ({
     name: '', type, enabled: true, severity: 'warning', cooldown_minutes: '60', channel_ids: [], filters: { scenario: '', target: '', include_simulated: false }, config: { ...RULE_DEFAULTS[type] },
 });
+
+function buildRulePayload(ruleForm: RuleFormState): UpsertNotificationRuleRequest {
+    const basePayload = {
+        name: ruleForm.name,
+        type: ruleForm.type,
+        enabled: ruleForm.enabled,
+        severity: ruleForm.severity,
+        cooldown_minutes: Number(ruleForm.cooldown_minutes || '0'),
+        channel_ids: ruleForm.channel_ids,
+    } as const;
+    const filters = {
+        scenario: ruleForm.filters.scenario.trim(),
+        target: ruleForm.filters.target.trim(),
+        include_simulated: ruleForm.filters.include_simulated,
+    };
+
+    if (ruleForm.type === 'alert-spike') {
+        return {
+            ...basePayload,
+            type: 'alert-spike',
+            config: {
+                window_minutes: Number(ruleForm.config.window_minutes || '0'),
+                percent_increase: Number(ruleForm.config.percent_increase || '0'),
+                minimum_current_alerts: Number(ruleForm.config.minimum_current_alerts || '0'),
+                filters,
+            },
+        };
+    }
+
+    if (ruleForm.type === 'alert-threshold') {
+        return {
+            ...basePayload,
+            type: 'alert-threshold',
+            config: {
+                window_minutes: Number(ruleForm.config.window_minutes || '0'),
+                alert_threshold: Number(ruleForm.config.alert_threshold || '0'),
+                filters,
+            },
+        };
+    }
+
+    return {
+        ...basePayload,
+        type: 'new-cve',
+        config: {
+            max_cve_age_days: Number(ruleForm.config.max_cve_age_days || '0'),
+            filters,
+        },
+    };
+}
 
 export function Notifications() {
     const { refreshSignal } = useRefresh();
@@ -126,18 +176,7 @@ export function Notifications() {
     const saveRule = async () => {
         try {
             setSaving(true);
-            const payload = {
-                name: ruleForm.name,
-                type: ruleForm.type,
-                enabled: ruleForm.enabled,
-                severity: ruleForm.severity,
-                cooldown_minutes: Number(ruleForm.cooldown_minutes || '0'),
-                channel_ids: ruleForm.channel_ids,
-                config: {
-                    ...Object.fromEntries(Object.entries(ruleForm.config).map(([k, v]) => [k, Number.isNaN(Number(v)) || v.trim() === '' ? v : Number(v)])),
-                    filters: { scenario: ruleForm.filters.scenario.trim(), target: ruleForm.filters.target.trim(), include_simulated: ruleForm.filters.include_simulated },
-                },
-            };
+            const payload = buildRulePayload(ruleForm);
             if (editingRule) await updateNotificationRule(editingRule.id, payload); else await createNotificationRule(payload);
             setRuleModalOpen(false);
             await loadData();
