@@ -64,6 +64,9 @@ Ban IPs directly from the UI with custom duration and reason.
 ### Update Notifications
 Automatically detects new container images on GitHub Container Registry (GHCR). A badge appears in the sidebar when an update is available for your current tag.
 
+### Notification Center
+Create notification rules for alert spikes, alert thresholds, recent CVE activity, and application updates, then deliver them to one or more outbound destinations such as Email, Gotify, MQTT, ntfy, or Webhooks.
+
 ### Modern UI
 -   **Dark/Light Mode**: Full support for both themes.
 -   **Responsive**: Optimized for mobile and desktop.
@@ -371,6 +374,163 @@ docker inspect --format='{{.State.Health.Status}}' crowdsec_web_ui
 ```
 
 If you use `BASE_PATH`, the health check still targets `localhost:3000/api/health` directly inside the container, so no additional configuration is needed.
+
+## Notifications
+
+The **Notifications** page lets you define rules that watch the locally cached CrowdSec data and create notification events when a condition matches. Every notification is also stored in-app, where you can review delivery status and mark items as read.
+
+### Rules
+
+Each rule has:
+
+-   a name
+-   a severity: `info`, `warning`, or `critical`
+-   a cooldown in minutes to suppress repeated notifications
+-   one or more destination channels
+
+Alert-based rules can also use optional filters for scenario text, target text, and whether simulated alerts should be included.
+
+Available rule types:
+
+-   `Alert Spike`: compares the current window with the previous window and triggers when the percentage increase and minimum alert count are exceeded
+-   `Alert Threshold`: triggers when the number of matching alerts in the configured time window reaches the threshold
+-   `Recent CVE`: extracts CVE IDs from matching alerts and checks publication age before notifying
+-   `Application Update`: uses the built-in update check and triggers when a newer CrowdSec Web UI version is available
+
+> [!NOTE]
+> The `Recent CVE` rule queries the NVD API to determine when a CVE was published. If outbound access to `services.nvd.nist.gov` is blocked, recent-CVE notifications may be skipped.
+
+### Destinations
+
+You can create multiple destinations and attach the same rule to several of them.
+
+Shared behavior:
+
+-   destinations can be enabled or disabled independently
+-   secrets are masked when you reopen a saved destination
+-   **Send Test** validates a saved destination without waiting for a real rule to fire
+-   delivery results are stored with each notification as `delivered` or `failed`
+
+Supported destination types:
+
+#### Email
+
+SMTP delivery with:
+
+-   `SMTP Host`
+-   `SMTP Port`
+-   `SMTP Security`: `Plain SMTP`, `STARTTLS`, or `SMTPS / Implicit TLS`
+-   optional `SMTP User` and `SMTP Password`
+-   `From Address`
+-   one or more comma-separated `To Address(es)`
+-   `Importance`: `auto`, `normal`, or `important`
+-   optional `Allow insecure TLS` for trusted self-signed SMTP endpoints
+
+When email importance is set to `auto`, it follows the rule severity:
+
+-   `info` -> `normal`
+-   `warning` -> `important`
+-   `critical` -> `important`
+
+#### Gotify
+
+Gotify delivery with:
+
+-   `Gotify URL`
+-   `App Token`
+-   `Priority`: `auto` or an explicit integer
+
+When Gotify priority is set to `auto`, it follows the rule severity:
+
+-   `info` -> `5`
+-   `warning` -> `7`
+-   `critical` -> `10`
+
+#### ntfy
+
+ntfy delivery with:
+
+-   `Server URL`
+-   `Topic`
+-   optional `Access Token`
+-   `Priority`: `auto`, `min`, `low`, `default`, `high`, or `urgent`
+
+When ntfy priority is set to `auto`, it follows the rule severity:
+
+-   `info` -> `default`
+-   `warning` -> `high`
+-   `critical` -> `urgent`
+
+#### MQTT
+
+MQTT delivery is generic publish-only notification output. It does **not** include Home Assistant discovery, entity sync, or command handling.
+
+MQTT settings:
+
+-   `Broker URL`
+-   optional `Username` and `Password`
+-   optional `Client ID`
+-   `QoS`: `0` or `1`
+-   `Keepalive`
+-   `Connect Timeout`
+-   `Topic`
+-   `Retain MQTT payloads`
+
+Each notification publishes a JSON payload to the configured topic containing:
+
+-   `title`
+-   `message`
+-   `severity`
+-   `metadata`
+-   `sent_at`
+-   `channel_id`
+-   `channel_name`
+-   `channel_type`
+-   `rule_id`
+-   `rule_name`
+-   `rule_type`
+
+For test sends, the rule fields are `null`.
+
+#### Webhook
+
+Webhook delivery supports custom integrations such as automation tools, internal APIs, chat bridges, and other HTTP endpoints.
+
+Webhook settings:
+
+-   HTTP method: `POST`, `PUT`, or `PATCH`
+-   target `URL`
+-   optional query parameters
+-   optional custom headers
+-   authentication: none, bearer token, or basic auth
+-   body mode: `JSON`, `Text`, or `Form`
+-   request timeout
+-   retry attempts and retry delay
+-   optional `Allow insecure TLS` for trusted self-signed HTTPS endpoints
+
+Webhook templates support simple dotted variables rooted at `event.*`. The body and templated fields can reference values such as:
+
+-   `{{event.title}}`
+-   `{{event.message}}`
+-   `{{event.severity}}`
+-   `{{event.metadata}}`
+-   `{{event.sent_at}}`
+-   `{{event.channel_name}}`
+-   `{{event.rule_name}}`
+
+### Current Scope
+
+The notification system currently supports:
+
+-   in-app notification history
+-   rule-based outbound delivery
+-   Email, Gotify, MQTT, ntfy, and Webhook destinations
+
+It currently does **not** include:
+
+-   Telegram destinations
+-   Home Assistant MQTT discovery
+-   MQTT entity state publishing or inbound commands
 
 ### Run with Helm
 

@@ -7,6 +7,7 @@ import { createRuntimeConfig } from './config';
 import { CrowdsecDatabase } from './database';
 import { LapiClient } from './lapi';
 import { createApp } from './app';
+import type { MqttPublishConfig } from './notifications/mqtt-client';
 
 let tempDir: string;
 
@@ -231,6 +232,7 @@ function createController(options: {
   env?: Record<string, string>;
   fetchResolver?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
   notificationFetchResolver?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
+  mqttPublishResolver?: (config: MqttPublishConfig, payload: string) => void | Promise<void>;
 } = {}) {
   const authMode = options.authMode || 'password';
   const mtlsCertPath = path.join(tempDir, 'agent.pem');
@@ -326,6 +328,9 @@ function createController(options: {
         return resolved;
       }
       return Response.json({});
+    },
+    mqttPublishImpl: async (config, payload) => {
+      await options.mqttPublishResolver?.(config, payload);
     },
   });
 
@@ -873,6 +878,183 @@ describe('createApp', () => {
 
     const deleteRule = await controller.fetch(new Request('http://localhost/crowdsec/api/notification-rules/not-real', { method: 'DELETE' }));
     expect(deleteRule.status).toBe(200);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('delivers rule notifications to MQTT destinations', async () => {
+    const liveAlert = sampleAlert({
+      id: 100,
+      uuid: 'alert-100',
+      created_at: new Date().toISOString(),
+    });
+
+    const mqttPublishes: Array<{ config: MqttPublishConfig; payload: string }> = [];
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '0',
+        CROWDSEC_LOOKBACK_PERIOD: '168h',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (url.includes('/v1/alerts?')) {
+          return Response.json([liveAlert]);
+        }
+        return undefined;
+      },
+      mqttPublishResolver: (config, payload) => {
+        mqttPublishes.push({ config, payload });
+      },
+    });
+
+    const createChannel = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Primary MQTT',
+          type: 'mqtt',
+          enabled: true,
+          config: {
+            brokerUrl: 'mqtt://broker.example.com:1883',
+            topic: 'crowdsec/notifications',
+            keepaliveSeconds: 45,
+            connectTimeoutMs: 5000,
+            qos: 1,
+            retainEvents: true,
+          },
+        }),
+      }),
+    );
+    expect(createChannel.status).toBe(201);
+    const channelPayload = await createChannel.json() as { id: string };
+
+    const createRule = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'MQTT threshold',
+          type: 'alert-threshold',
+          enabled: true,
+          severity: 'critical',
+          cooldown_minutes: 60,
+          channel_ids: [channelPayload.id],
+          config: {
+            window_minutes: 60,
+            alert_threshold: 1,
+            filters: {},
+          },
+        }),
+      }),
+    );
+    expect(createRule.status).toBe(201);
+
+    const alerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alerts.status).toBe(200);
+
+    expect(mqttPublishes).toHaveLength(1);
+    expect(mqttPublishes[0]?.config).toEqual(expect.objectContaining({
+      brokerUrl: 'mqtt://broker.example.com:1883',
+      topic: 'crowdsec/notifications',
+      qos: 1,
+      retainEvents: true,
+    }));
+    expect(JSON.parse(mqttPublishes[0]?.payload || '{}')).toEqual(expect.objectContaining({
+      title: 'MQTT threshold: threshold exceeded',
+      severity: 'critical',
+      channel_name: 'Primary MQTT',
+      rule_name: 'MQTT threshold',
+    }));
+
+    const testChannel = await controller.fetch(new Request(`http://localhost/crowdsec/api/notification-channels/${channelPayload.id}/test`, { method: 'POST' }));
+    expect(testChannel.status).toBe(200);
+    expect(mqttPublishes).toHaveLength(2);
+    expect(JSON.parse(mqttPublishes[1]?.payload || '{}')).toEqual(expect.objectContaining({
+      rule_name: null,
+      severity: 'info',
+    }));
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('fires application update rules when a newer version is available', async () => {
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '0',
+        CROWDSEC_LOOKBACK_PERIOD: '168h',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (url.includes('/v1/alerts?')) {
+          return Response.json([]);
+        }
+        return undefined;
+      },
+      notificationFetchResolver: (url) => {
+        if (url.includes('ntfy.sh')) {
+          return Response.json({ id: 'msg' });
+        }
+        return undefined;
+      },
+    });
+
+    const createChannel = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Update ntfy',
+          type: 'ntfy',
+          enabled: true,
+          config: { topic: 'crowdsec-updates' },
+        }),
+      }),
+    );
+    expect(createChannel.status).toBe(201);
+    const channelPayload = await createChannel.json() as { id: string };
+
+    const createRule = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'App updates',
+          type: 'application-update',
+          enabled: true,
+          severity: 'info',
+          cooldown_minutes: 60,
+          channel_ids: [channelPayload.id],
+          config: {},
+        }),
+      }),
+    );
+    expect(createRule.status).toBe(201);
+
+    const alerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alerts.status).toBe(200);
+
+    const notifications = await controller.fetch(new Request('http://localhost/crowdsec/api/notifications'));
+    expect(notifications.status).toBe(200);
+    expect((await notifications.json()) as {
+      notifications: Array<{ rule_type: string; title: string; metadata: { remote_version?: string | null } }>;
+    }).toEqual(expect.objectContaining({
+      notifications: [
+        expect.objectContaining({
+          rule_type: 'application-update',
+          title: 'App updates: application update available',
+          metadata: expect.objectContaining({ remote_version: '2.0.0' }),
+        }),
+      ],
+    }));
 
     controller.stopBackgroundTasks();
     database.close();

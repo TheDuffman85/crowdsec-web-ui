@@ -1,6 +1,7 @@
 import type {
   AlertMetaValue,
   AlertSpikeRuleConfig,
+  ApplicationUpdateRuleConfig,
   AlertRecord,
   AlertThresholdRuleConfig,
   NewCveRuleConfig,
@@ -13,12 +14,18 @@ import type {
   NotificationRule,
   NotificationRuleConfig,
   NotificationRuleType,
+  NotificationSeverity,
   NotificationSettingsResponse,
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
+  UpdateCheckResponse,
 } from '../../shared/contracts';
 import { CrowdsecDatabase } from './database';
-import { sendSmtpMail } from './smtp';
+import type { MqttPublishConfig } from './notifications/mqtt-client';
+import {
+  getNotificationProvider,
+  type NotificationProviderPayload,
+} from './notifications/providers';
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 type RuleConfigInput = NotificationRuleConfig | Record<string, AlertMetaValue>;
@@ -26,6 +33,8 @@ type RuleConfigInput = NotificationRuleConfig | Record<string, AlertMetaValue>;
 export interface NotificationServiceOptions {
   database: CrowdsecDatabase;
   fetchImpl?: FetchLike;
+  mqttPublishImpl?: (config: MqttPublishConfig, payload: string) => Promise<void>;
+  updateChecker?: () => Promise<UpdateCheckResponse>;
 }
 
 interface NotificationCandidate {
@@ -34,46 +43,6 @@ interface NotificationCandidate {
   message: string;
   metadata: Record<string, AlertMetaValue>;
 }
-
-const SECRET_FIELDS: Record<NotificationChannelType, string[]> = {
-  ntfy: ['token', 'password'],
-  gotify: ['token'],
-  email: ['password'],
-  webhook: ['authorization_header'],
-};
-
-const DEFAULT_CHANNEL_CONFIG: Record<NotificationChannelType, Record<string, AlertMetaValue>> = {
-  ntfy: {
-    server_url: 'https://ntfy.sh',
-    topic: '',
-    priority: 'default',
-    tags: 'warning,shield',
-    title_prefix: 'CrowdSec',
-    username: '',
-    password: '',
-    token: '',
-  },
-  gotify: {
-    server_url: '',
-    token: '',
-    priority: 5,
-  },
-  email: {
-    host: '',
-    port: 587,
-    secure: false,
-    username: '',
-    password: '',
-    from: '',
-    to: '',
-    subject_prefix: '[CrowdSec]',
-  },
-  webhook: {
-    url: '',
-    method: 'POST',
-    authorization_header: '',
-  },
-};
 
 export interface NotificationService {
   listSettings: () => NotificationSettingsResponse;
@@ -93,6 +62,8 @@ export interface NotificationService {
 export function createNotificationService(options: NotificationServiceOptions): NotificationService {
   const database = options.database;
   const fetchImpl = options.fetchImpl || fetch;
+  const mqttPublishImpl = options.mqttPublishImpl;
+  const updateChecker = options.updateChecker;
 
   return {
     listSettings,
@@ -211,7 +182,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
       message: `Test sent at ${new Date().toLocaleString()}.`,
       metadata: { kind: 'test' },
       dedupeKey: `test:${Date.now()}`,
-    });
+    }, 'info');
     if (result.status !== 'delivered') {
       throw new Error(result.error || 'Test notification failed');
     }
@@ -238,7 +209,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
 
         const deliveries: NotificationDeliveryResult[] = [];
         for (const channel of activeChannels.filter((item) => rule.channel_ids.includes(item.id))) {
-          deliveries.push(await sendToChannel(channel, candidate));
+          deliveries.push(await sendToChannel(channel, candidate, rule.severity, rule));
         }
 
         const timestamp = now.toISOString();
@@ -292,17 +263,15 @@ export function createNotificationService(options: NotificationServiceOptions): 
     config_json?: string;
   }): NotificationChannel {
     const type = normalizeChannelType(row.type);
-    const config = {
-      ...DEFAULT_CHANNEL_CONFIG[type],
-      ...parseJsonRecord(row.config_json),
-    };
+    const provider = getNotificationProvider(type);
+    const config = provider.normalizeConfig(parseJsonRecord(row.config_json));
     return {
       id: String(row.id),
       name: String(row.name),
       type,
       enabled: row.enabled === 1,
       config,
-      configured_secrets: SECRET_FIELDS[type].filter((field) => Boolean(config[field])),
+      configured_secrets: provider.getConfiguredSecrets(config),
       created_at: String(row.created_at),
       updated_at: String(row.updated_at),
     };
@@ -363,11 +332,8 @@ export function createNotificationService(options: NotificationServiceOptions): 
   }
 
   function sanitizeChannel(channel: NotificationChannel): NotificationChannel {
-    const config = { ...channel.config };
-    for (const field of SECRET_FIELDS[channel.type]) {
-      config[field] = '';
-    }
-    return { ...channel, config };
+    const provider = getNotificationProvider(channel.type);
+    return { ...channel, config: provider.maskConfig(channel.config) };
   }
 
   function normalizeChannelInput(
@@ -377,13 +343,17 @@ export function createNotificationService(options: NotificationServiceOptions): 
     createdAt: string,
   ): NotificationChannel {
     const type = normalizeChannelType(input.type);
+    const provider = getNotificationProvider(type);
     const name = String(input.name || '').trim();
     if (!name) {
       throw new Error('Channel name is required');
     }
 
-    const config = mergeChannelConfig(type, input.config, existing?.config);
-    validateChannelConfig(type, config);
+    const config = provider.normalizeConfig(input.config, existing?.config);
+    const validationError = provider.validateConfig(config);
+    if (validationError) {
+      throw new Error(validationError);
+    }
 
     return {
       id,
@@ -391,7 +361,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
       type,
       enabled: input.enabled !== false,
       config,
-      configured_secrets: SECRET_FIELDS[type].filter((field) => Boolean(config[field])),
+      configured_secrets: provider.getConfiguredSecrets(config),
       created_at: createdAt,
       updated_at: new Date().toISOString(),
     };
@@ -440,6 +410,9 @@ export function createNotificationService(options: NotificationServiceOptions): 
     }
     if (rule.type === 'alert-threshold') {
       return evaluateAlertThresholdRule(rule, now);
+    }
+    if (rule.type === 'application-update') {
+      return evaluateApplicationUpdateRule(rule);
     }
     return evaluateNewCveRule(rule, now);
   }
@@ -540,6 +513,33 @@ export function createNotificationService(options: NotificationServiceOptions): 
     return candidates;
   }
 
+  async function evaluateApplicationUpdateRule(rule: NotificationRule): Promise<NotificationCandidate[]> {
+    if (!updateChecker) {
+      return [];
+    }
+
+    const status = await updateChecker();
+    if (!status.update_available || !status.remote_version) {
+      return [];
+    }
+
+    const targetVersion = status.tag === 'dev' ? `dev-${status.remote_version}` : status.remote_version;
+    const currentVersion = status.local_version || 'current version';
+
+    return [{
+      dedupeKey: `application-update:${targetVersion}`,
+      title: `${rule.name}: application update available`,
+      message: `A newer CrowdSec Web UI version is available: ${currentVersion} -> ${targetVersion}.`,
+      metadata: {
+        update_available: true,
+        local_version: status.local_version || null,
+        remote_version: status.remote_version,
+        release_url: status.release_url || null,
+        tag: status.tag || null,
+      },
+    }];
+  }
+
   function getAlertsBetween(start: Date, end: Date, filters?: NotificationFilter): AlertRecord[] {
     return database
       .getAlertsBetween(start.toISOString(), end.toISOString())
@@ -578,18 +578,29 @@ export function createNotificationService(options: NotificationServiceOptions): 
     }
   }
 
-  async function sendToChannel(channel: NotificationChannel, candidate: NotificationCandidate): Promise<NotificationDeliveryResult> {
+  async function sendToChannel(
+    channel: NotificationChannel,
+    candidate: NotificationCandidate,
+    severity: NotificationSeverity,
+    rule?: Pick<NotificationRule, 'id' | 'name' | 'type'>,
+  ): Promise<NotificationDeliveryResult> {
     const attemptedAt = new Date().toISOString();
     try {
-      if (channel.type === 'ntfy') {
-        await sendNtfyNotification(fetchImpl, channel, candidate.title, candidate.message);
-      } else if (channel.type === 'gotify') {
-        await sendGotifyNotification(fetchImpl, channel, candidate.title, candidate.message);
-      } else if (channel.type === 'webhook') {
-        await sendWebhookNotification(fetchImpl, channel, candidate.title, candidate.message, candidate.metadata);
-      } else {
-        await sendEmailNotification(channel, candidate.title, candidate.message);
-      }
+      const provider = getNotificationProvider(channel.type);
+      const payload: NotificationProviderPayload = {
+        title: candidate.title,
+        message: candidate.message,
+        severity,
+        metadata: candidate.metadata,
+        sent_at: attemptedAt,
+        channel_id: channel.id,
+        channel_name: channel.name,
+        channel_type: channel.type,
+        rule_id: rule?.id || null,
+        rule_name: rule?.name || null,
+        rule_type: rule?.type || null,
+      };
+      await provider.send(channel, payload, { fetchImpl, mqttPublishImpl });
 
       return {
         channel_id: channel.id,
@@ -611,44 +622,10 @@ export function createNotificationService(options: NotificationServiceOptions): 
   }
 }
 
-function mergeChannelConfig(
-  type: NotificationChannelType,
-  inputConfig: Record<string, AlertMetaValue>,
-  existingConfig?: Record<string, AlertMetaValue>,
-): Record<string, AlertMetaValue> {
-  const config = { ...DEFAULT_CHANNEL_CONFIG[type], ...(existingConfig || {}) };
-  const safeInput = inputConfig && typeof inputConfig === 'object' && !Array.isArray(inputConfig) ? inputConfig : {};
-  for (const [key, value] of Object.entries(safeInput)) {
-    if (SECRET_FIELDS[type].includes(key) && (value === '' || value === null || value === undefined)) {
-      continue;
-    }
-    config[key] = value;
-  }
-  return config;
-}
-
-function validateChannelConfig(type: NotificationChannelType, config: Record<string, AlertMetaValue>): void {
-  if (type === 'ntfy' && !getConfigString(config, 'topic')) {
-    throw new Error('ntfy topic is required');
-  }
-  if (type === 'gotify' && (!getConfigString(config, 'server_url') || !getConfigString(config, 'token'))) {
-    throw new Error('Gotify server URL and token are required');
-  }
-  if (type === 'webhook' && !getConfigString(config, 'url')) {
-    throw new Error('Webhook URL is required');
-  }
-  if (type === 'email') {
-    for (const field of ['host', 'from', 'to']) {
-      if (!getConfigString(config, field)) {
-        throw new Error(`Email ${field} is required`);
-      }
-    }
-  }
-}
-
 function normalizeRuleConfig(type: 'alert-spike', config: RuleConfigInput): AlertSpikeRuleConfig;
 function normalizeRuleConfig(type: 'alert-threshold', config: RuleConfigInput): AlertThresholdRuleConfig;
 function normalizeRuleConfig(type: 'new-cve', config: RuleConfigInput): NewCveRuleConfig;
+function normalizeRuleConfig(type: 'application-update', config: RuleConfigInput): ApplicationUpdateRuleConfig;
 function normalizeRuleConfig(type: NotificationRuleType, config: RuleConfigInput): NotificationRuleConfig;
 function normalizeRuleConfig(type: NotificationRuleType, config: RuleConfigInput): NotificationRuleConfig {
   const safeConfig = config && typeof config === 'object' && !Array.isArray(config)
@@ -671,6 +648,10 @@ function normalizeRuleConfig(type: NotificationRuleType, config: RuleConfigInput
       alert_threshold: normalizePositiveNumber(safeConfig.alert_threshold, 25),
       filters,
     };
+  }
+
+  if (type === 'application-update') {
+    return {};
   }
 
   return {
@@ -732,105 +713,13 @@ function extractCveIds(alert: AlertRecord): string[] {
   return [...values];
 }
 
-async function sendNtfyNotification(fetchImpl: FetchLike, channel: NotificationChannel, title: string, message: string): Promise<void> {
-  const serverUrl = normalizeUrl(getConfigString(channel.config, 'server_url') || 'https://ntfy.sh');
-  const topic = getConfigString(channel.config, 'topic');
-  if (!topic) {
-    throw new Error('ntfy topic is required');
-  }
-
-  const headers: Record<string, string> = {
-    Title: appendPrefix(getConfigString(channel.config, 'title_prefix'), title),
-  };
-  const priority = getConfigString(channel.config, 'priority');
-  const tags = getConfigString(channel.config, 'tags');
-  if (priority) headers.Priority = priority;
-  if (tags) headers.Tags = tags;
-  applyAuthHeaders(headers, getConfigString(channel.config, 'token'), getConfigString(channel.config, 'username'), getConfigString(channel.config, 'password'));
-
-  const response = await fetchImpl(`${serverUrl}/${encodeURIComponent(topic)}`, {
-    method: 'POST',
-    headers,
-    body: message,
-  });
-  if (!response.ok) {
-    throw new Error(`ntfy request failed with status ${response.status}`);
-  }
-}
-
-async function sendGotifyNotification(fetchImpl: FetchLike, channel: NotificationChannel, title: string, message: string): Promise<void> {
-  const serverUrl = normalizeUrl(getConfigString(channel.config, 'server_url'));
-  const token = getConfigString(channel.config, 'token');
-  if (!serverUrl || !token) {
-    throw new Error('Gotify server URL and token are required');
-  }
-
-  const response = await fetchImpl(`${serverUrl}/message?token=${encodeURIComponent(token)}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title, message, priority: Number(channel.config.priority) || 5 }),
-  });
-  if (!response.ok) {
-    throw new Error(`Gotify request failed with status ${response.status}`);
-  }
-}
-
-async function sendWebhookNotification(
-  fetchImpl: FetchLike,
-  channel: NotificationChannel,
-  title: string,
-  message: string,
-  metadata: Record<string, AlertMetaValue>,
-): Promise<void> {
-  const url = getConfigString(channel.config, 'url');
-  if (!url) {
-    throw new Error('Webhook URL is required');
-  }
-
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-  const authorization = getConfigString(channel.config, 'authorization_header');
-  if (authorization) {
-    headers.Authorization = authorization;
-  }
-
-  const response = await fetchImpl(url, {
-    method: getConfigString(channel.config, 'method') || 'POST',
-    headers,
-    body: JSON.stringify({ title, message, metadata, sent_at: new Date().toISOString() }),
-  });
-  if (!response.ok) {
-    throw new Error(`Webhook request failed with status ${response.status}`);
-  }
-}
-
-async function sendEmailNotification(channel: NotificationChannel, title: string, message: string): Promise<void> {
-  const to = getConfigString(channel.config, 'to')
-    .split(',')
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
-
-  await sendSmtpMail({
-    host: getConfigString(channel.config, 'host'),
-    port: Number(channel.config.port) || 587,
-    secure: channel.config.secure === true || String(channel.config.secure).toLowerCase() === 'true',
-    username: getConfigString(channel.config, 'username') || undefined,
-    password: getConfigString(channel.config, 'password') || undefined,
-    from: getConfigString(channel.config, 'from'),
-    to,
-    subject: appendPrefix(getConfigString(channel.config, 'subject_prefix'), title),
-    text: message,
-  });
-}
-
 function normalizeChannelType(value: unknown): NotificationChannelType {
-  if (value === 'ntfy' || value === 'gotify' || value === 'email' || value === 'webhook') return value;
+  if (value === 'ntfy' || value === 'gotify' || value === 'email' || value === 'mqtt' || value === 'webhook') return value;
   throw new Error('Invalid notification channel type');
 }
 
 function normalizeRuleType(value: unknown): NotificationRuleType {
-  if (value === 'alert-spike' || value === 'alert-threshold' || value === 'new-cve') return value;
+  if (value === 'alert-spike' || value === 'alert-threshold' || value === 'new-cve' || value === 'application-update') return value;
   throw new Error('Invalid notification rule type');
 }
 
@@ -861,29 +750,6 @@ function parseJsonArray<T>(value: string | undefined): T[] {
   } catch {
     return [];
   }
-}
-
-function getConfigString(config: Record<string, AlertMetaValue>, key: string): string {
-  const value = config[key];
-  return typeof value === 'string' ? value.trim() : typeof value === 'number' ? String(value) : '';
-}
-
-function normalizeUrl(value: string): string {
-  return value.replace(/\/$/, '');
-}
-
-function applyAuthHeaders(headers: Record<string, string>, token: string, username: string, password: string): void {
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-    return;
-  }
-  if (username && password) {
-    headers.Authorization = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
-  }
-}
-
-function appendPrefix(prefix: string, value: string): string {
-  return prefix ? `${prefix}: ${value}` : value;
 }
 
 function floorToBucket(timestampMs: number, bucketMs: number): number {

@@ -22,6 +22,7 @@ import { createRuntimeConfig, getIntervalName, parseRefreshInterval, type Runtim
 import { CrowdsecDatabase, type AlertInsertParams, type DecisionInsertParams } from './database';
 import { LapiClient } from './lapi';
 import { createNotificationService } from './notifications';
+import type { MqttPublishConfig } from './notifications/mqtt-client';
 import { createUpdateChecker } from './update-check';
 import { getAlertSourceValue, getAlertTarget, toSlimAlert } from './utils/alerts';
 import { parseGoDuration, toDuration } from './utils/duration';
@@ -45,6 +46,7 @@ export interface CreateAppOptions {
   startBackgroundTasks?: boolean;
   updateChecker?: () => Promise<UpdateCheckResponse>;
   notificationFetchImpl?: FetchLike;
+  mqttPublishImpl?: (config: MqttPublishConfig, payload: string) => Promise<void>;
 }
 
 export interface AppController {
@@ -98,6 +100,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   const notificationService = createNotificationService({
     database,
     fetchImpl: options.notificationFetchImpl,
+    mqttPublishImpl: options.mqttPublishImpl,
+    updateChecker: checkForUpdates,
   });
 
   const app = new Hono();

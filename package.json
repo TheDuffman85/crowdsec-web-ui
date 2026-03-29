@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "hono": "^4.12.8",
+    "mqtt": "^5.15.1",
     "vite": "^8.0.2"
   },
   "devDependencies": {

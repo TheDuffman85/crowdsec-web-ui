@@ -160,8 +160,8 @@ export interface UpdateCheckResponse {
   error?: string;
 }
 
-export type NotificationChannelType = 'ntfy' | 'gotify' | 'email' | 'webhook';
-export type NotificationRuleType = 'alert-spike' | 'alert-threshold' | 'new-cve';
+export type NotificationChannelType = 'ntfy' | 'gotify' | 'email' | 'mqtt' | 'webhook';
+export type NotificationRuleType = 'alert-spike' | 'alert-threshold' | 'new-cve' | 'application-update';
 export type NotificationSeverity = 'info' | 'warning' | 'critical';
 export type NotificationDeliveryStatus = 'delivered' | 'failed' | 'skipped';
 
@@ -189,7 +189,13 @@ export interface NewCveRuleConfig {
   filters?: NotificationFilter;
 }
 
-export type NotificationRuleConfig = AlertSpikeRuleConfig | AlertThresholdRuleConfig | NewCveRuleConfig;
+export interface ApplicationUpdateRuleConfig {}
+
+export type NotificationRuleConfig =
+  | AlertSpikeRuleConfig
+  | AlertThresholdRuleConfig
+  | NewCveRuleConfig
+  | ApplicationUpdateRuleConfig;
 
 export interface NotificationChannel {
   id: string;

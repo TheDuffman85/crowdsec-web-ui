@@ -4,7 +4,8 @@ import tls from 'node:tls';
 export interface SmtpMessage {
   host: string;
   port: number;
-  secure: boolean;
+  tlsMode: SmtpTlsMode;
+  allowInsecureTls?: boolean;
   username?: string;
   password?: string;
   from: string;
@@ -13,13 +14,22 @@ export interface SmtpMessage {
   text: string;
 }
 
+export type SmtpTlsMode = 'plain' | 'starttls' | 'tls';
+
 export async function sendSmtpMail(message: SmtpMessage): Promise<void> {
-  const socket = await connectSmtp(message.host, message.port, message.secure);
-  const reader = createSmtpResponseReader(socket);
+  let socket = await connectSmtp(message.host, message.port, message.tlsMode, message.allowInsecureTls === true);
+  let reader = createSmtpResponseReader(socket);
 
   try {
     await readExpectedResponse(reader, [220]);
     await smtpCommand(socket, reader, 'EHLO localhost', [250]);
+
+    if (message.tlsMode === 'starttls') {
+      await smtpCommand(socket, reader, 'STARTTLS', [220]);
+      socket = await upgradeToTls(socket, message.host, message.allowInsecureTls === true);
+      reader = createSmtpResponseReader(socket);
+      await smtpCommand(socket, reader, 'EHLO localhost', [250]);
+    }
 
     if (message.username && message.password) {
       try {
@@ -57,13 +67,30 @@ export async function sendSmtpMail(message: SmtpMessage): Promise<void> {
   }
 }
 
-function connectSmtp(host: string, port: number, secure: boolean): Promise<net.Socket | tls.TLSSocket> {
+function connectSmtp(
+  host: string,
+  port: number,
+  tlsMode: SmtpTlsMode,
+  allowInsecureTls: boolean,
+): Promise<net.Socket | tls.TLSSocket> {
   return new Promise((resolve, reject) => {
-    const socket = secure
-      ? tls.connect({ host, port, servername: host }, () => resolve(socket))
+    const socket = tlsMode === 'tls'
+      ? tls.connect({ host, port, servername: host, rejectUnauthorized: !allowInsecureTls }, () => resolve(socket))
       : net.createConnection({ host, port }, () => resolve(socket));
 
     socket.once('error', reject);
+  });
+}
+
+function upgradeToTls(socket: net.Socket, host: string, allowInsecureTls: boolean): Promise<tls.TLSSocket> {
+  return new Promise((resolve, reject) => {
+    const secureSocket = tls.connect({
+      socket,
+      servername: host,
+      rejectUnauthorized: !allowInsecureTls,
+    }, () => resolve(secureSocket));
+
+    secureSocket.once('error', reject);
   });
 }
 
