@@ -62,6 +62,8 @@ describe('config helpers', () => {
       VITE_BRANCH: 'dev',
       VITE_COMMIT_HASH: 'abc123',
       DB_DIR: '/tmp/app',
+      NOTIFICATION_SECRET_KEY: 'notif-secret',
+      NOTIFICATION_ALLOW_PRIVATE_ADDRESSES: 'true',
     });
 
     expect(config.port).toBe(4000);
@@ -77,6 +79,8 @@ describe('config helpers', () => {
     expect(config.dockerImageRef).toBe('example/repo');
     expect(config.updateCheckEnabled).toBe(true);
     expect(config.dbDir).toBe('/tmp/app');
+    expect(config.notificationSecretKey).toBe('notif-secret');
+    expect(config.notificationAllowPrivateAddresses).toBe(true);
   });
 
   test('createRuntimeConfig disables simulations by default', () => {
@@ -86,6 +90,8 @@ describe('config helpers', () => {
     expect(config.alertOrigins).toEqual([]);
     expect(config.alertExtraScenarios).toEqual([]);
     expect(config.simulationsEnabled).toBe(false);
+    expect(config.notificationSecretKey).toBeUndefined();
+    expect(config.notificationAllowPrivateAddresses).toBe(true);
   });
 
   test('createRuntimeConfig supports mTLS authentication', () => {

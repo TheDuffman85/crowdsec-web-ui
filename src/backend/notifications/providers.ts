@@ -31,6 +31,8 @@ export interface NotificationProviderPayload {
 export interface NotificationProviderContext {
   fetchImpl: FetchLike;
   mqttPublishImpl?: (config: MqttPublishConfig, payload: string) => Promise<void>;
+  assertHostAllowed: (host: string, label: string) => Promise<void>;
+  assertUrlAllowed: (value: string, label: string) => Promise<void>;
 }
 
 export interface NotificationProvider {
@@ -55,6 +57,10 @@ interface WebhookHeader {
   name: string;
   value: string;
   sensitive: boolean;
+}
+
+interface NotificationSendError extends Error {
+  retriable?: boolean;
 }
 
 interface WebhookQuery {
@@ -458,11 +464,22 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function createNotificationSendError(message: string, retriable = false): NotificationSendError {
+  const error = new Error(message) as NotificationSendError;
+  error.retriable = retriable;
+  return error;
+}
+
 async function sendWebhookRequest(
   config: WebhookConfig,
   payload: NotificationProviderPayload,
-  fetchImpl: FetchLike,
+  context: NotificationProviderContext,
 ): Promise<void> {
+  try {
+    await context.assertUrlAllowed(config.url, 'Webhook URL');
+  } catch (error) {
+    throw createNotificationSendError(error instanceof Error ? error.message : 'Webhook URL is not allowed');
+  }
   const requestUrl = new URL(config.url);
   for (const query of config.query) {
     requestUrl.searchParams.append(query.name, renderTemplate(query.value, payload));
@@ -485,10 +502,9 @@ async function sendWebhookRequest(
     tls: config.allowInsecureTls ? { rejectUnauthorized: false } : undefined,
   } as RequestInit & { tls?: { rejectUnauthorized: boolean } };
 
-  const response = await fetchImpl(requestUrl.toString(), init);
+  const response = await context.fetchImpl(requestUrl.toString(), init);
   if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new Error(`Webhook request failed with status ${response.status}${text ? `: ${text}` : ''}`);
+    throw createNotificationSendError(`Webhook request failed with status ${response.status}`, response.status >= 500 || response.status === 429);
   }
 }
 
@@ -569,7 +585,7 @@ const providers: Record<NotificationChannelType, NotificationProvider> = {
       }
       return null;
     },
-    async send(channel, payload) {
+    async send(channel, payload, context) {
       const config = this.normalizeConfig(channel.config);
       const recipients = stringValue(config.emailTo)
         .split(',')
@@ -580,6 +596,7 @@ const providers: Record<NotificationChannelType, NotificationProvider> = {
         : stringValue(config.emailImportanceOverride) as 'normal' | 'important';
       const subject = appendPrefix(rawStringValue(config.subjectPrefix), payload.title);
       const prefix = importance === 'important' && payload.severity !== 'info' ? '[Important]' : '';
+      await context.assertHostAllowed(stringValue(config.smtpHost), 'SMTP host');
 
       await sendSmtpMail({
         host: stringValue(config.smtpHost),
@@ -645,6 +662,7 @@ const providers: Record<NotificationChannelType, NotificationProvider> = {
     async send(channel, payload, context) {
       const config = this.normalizeConfig(channel.config);
       const baseUrl = stringValue(config.gotifyUrl).replace(/\/+$/, '');
+      await context.assertUrlAllowed(baseUrl, 'Gotify URL');
       const url = new URL(`${baseUrl}/message`);
       url.searchParams.set('token', stringValue(config.gotifyToken));
 
@@ -662,8 +680,7 @@ const providers: Record<NotificationChannelType, NotificationProvider> = {
         }),
       });
       if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        throw new Error(`Gotify request failed with status ${response.status}${text ? `: ${text}` : ''}`);
+        throw new Error(`Gotify request failed with status ${response.status}`);
       }
     },
     getConfiguredSecrets(config) {
@@ -731,6 +748,7 @@ const providers: Record<NotificationChannelType, NotificationProvider> = {
     },
     async send(channel, payload, context) {
       const config = this.normalizeConfig(channel.config);
+      await context.assertUrlAllowed(stringValue(config.brokerUrl), 'MQTT broker URL');
       const publisher = context.mqttPublishImpl || publishMqttNotification;
       await publisher({
         brokerUrl: stringValue(config.brokerUrl),
@@ -808,6 +826,7 @@ const providers: Record<NotificationChannelType, NotificationProvider> = {
     async send(channel, payload, context) {
       const config = this.normalizeConfig(channel.config);
       const baseUrl = stringValue(config.ntfyUrl).replace(/\/+$/, '');
+      await context.assertUrlAllowed(baseUrl, 'ntfy URL');
       const headers: Record<string, string> = {
         Title: appendPrefix(rawStringValue(config.titlePrefix), payload.title),
         Priority: rawStringValue(config.ntfyPriorityOverride) === 'auto'
@@ -830,8 +849,7 @@ const providers: Record<NotificationChannelType, NotificationProvider> = {
         body: payload.message,
       });
       if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        throw new Error(`ntfy request failed with status ${response.status}${text ? `: ${text}` : ''}`);
+        throw new Error(`ntfy request failed with status ${response.status}`);
       }
     },
     getConfiguredSecrets(config) {
@@ -897,11 +915,12 @@ const providers: Record<NotificationChannelType, NotificationProvider> = {
 
       for (let attempt = 0; attempt <= config.retryAttempts; attempt += 1) {
         try {
-          await sendWebhookRequest(config, payload, context.fetchImpl);
+          await sendWebhookRequest(config, payload, context);
           return;
         } catch (error) {
           lastError = error instanceof Error ? error : new Error(String(error));
-          if (attempt >= config.retryAttempts) {
+          const retriable = (lastError as NotificationSendError).retriable !== false;
+          if (attempt >= config.retryAttempts || !retriable) {
             throw lastError;
           }
           await delay(config.retryDelayMs);

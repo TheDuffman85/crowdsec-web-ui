@@ -26,6 +26,8 @@ export interface RuntimeConfig {
   commitHash: string;
   updateCheckEnabled: boolean;
   dbDir: string;
+  notificationSecretKey?: string;
+  notificationAllowPrivateAddresses: boolean;
 }
 
 export function parseRefreshInterval(intervalStr: string | undefined | null): number {
@@ -90,6 +92,7 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
   const lookbackPeriod = env.CROWDSEC_LOOKBACK_PERIOD || '168h';
   const refreshIntervalMs = parseRefreshInterval(env.CROWDSEC_REFRESH_INTERVAL || '30s');
   const crowdsecAuth = createCrowdsecAuthConfig(env);
+  const notificationSecretKey = env.NOTIFICATION_SECRET_KEY?.trim() || undefined;
 
   return {
     port: Number(env.PORT || 3000),
@@ -117,5 +120,7 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
     commitHash: env.VITE_COMMIT_HASH || '',
     updateCheckEnabled: Boolean(env.VITE_COMMIT_HASH || env.VITE_VERSION),
     dbDir: env.DB_DIR || '/app/data',
+    notificationSecretKey,
+    notificationAllowPrivateAddresses: parseBooleanEnv(env.NOTIFICATION_ALLOW_PRIVATE_ADDRESSES, true),
   };
 }

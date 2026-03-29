@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'node:crypto';
 import { Hono } from 'hono';
 import { compress } from 'hono/compress';
 import { serveStatic } from 'hono/bun';
@@ -23,6 +24,8 @@ import { CrowdsecDatabase, type AlertInsertParams, type DecisionInsertParams } f
 import { LapiClient } from './lapi';
 import { createNotificationService } from './notifications';
 import type { MqttPublishConfig } from './notifications/mqtt-client';
+import { createNotificationOutboundGuard } from './notifications/outbound-guard';
+import { createNotificationSecretStore } from './notifications/secret-store';
 import { createUpdateChecker } from './update-check';
 import { getAlertSourceValue, getAlertTarget, toSlimAlert } from './utils/alerts';
 import { parseGoDuration, toDuration } from './utils/duration';
@@ -80,6 +83,8 @@ interface AlertSyncQuery {
   scenario?: string;
 }
 
+const NOTIFICATION_SECRET_KEY_META_KEY = 'notification_secret_key';
+
 export function createApp(options: CreateAppOptions = {}): AppController {
   const config = options.config || createRuntimeConfig();
   const database = options.database || new CrowdsecDatabase({ dbDir: config.dbDir });
@@ -97,11 +102,18 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     version: config.version,
     enabled: config.updateCheckEnabled,
   });
+  const notificationSecretKey = resolveNotificationSecretKey(database, config.notificationSecretKey);
+  const notificationSecretStore = createNotificationSecretStore(notificationSecretKey);
+  const notificationOutboundGuard = createNotificationOutboundGuard({
+    allowPrivateAddresses: config.notificationAllowPrivateAddresses,
+  });
   const notificationService = createNotificationService({
     database,
     fetchImpl: options.notificationFetchImpl,
     mqttPublishImpl: options.mqttPublishImpl,
     updateChecker: checkForUpdates,
+    outboundGuard: notificationOutboundGuard,
+    secretStore: notificationSecretStore,
   });
 
   const app = new Hono();
@@ -150,6 +162,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   Alert Origin Allowlist: ${config.alertOrigins.length > 0 ? config.alertOrigins.join(', ') : 'Disabled'}
   Alert Scenario Allowlist: ${config.alertExtraScenarios.length > 0 ? config.alertExtraScenarios.join(', ') : 'Disabled'}
   Bootstrap Retry: ${config.bootstrapRetryEnabled ? getIntervalName(config.bootstrapRetryDelayMs) : 'Disabled'}
+  Notification Secret Storage: Encrypted (${config.notificationSecretKey ? 'configured key' : 'auto-generated key'})
+  Notification Private Destinations: ${config.notificationAllowPrivateAddresses ? 'Allowed' : 'Blocked'}
 `);
 
   if (!lapiClient.hasAuthConfig()) {
@@ -1302,6 +1316,23 @@ function savePersistedConfig(database: CrowdsecDatabase, config: PersistedConfig
   } catch (error) {
     console.error('Error saving config to database:', error);
   }
+}
+
+function resolveNotificationSecretKey(database: CrowdsecDatabase, configuredKey?: string): string {
+  const trimmedConfiguredKey = configuredKey?.trim();
+  if (trimmedConfiguredKey) {
+    return trimmedConfiguredKey;
+  }
+
+  const persisted = database.getMeta(NOTIFICATION_SECRET_KEY_META_KEY)?.value?.trim();
+  if (persisted) {
+    return persisted;
+  }
+
+  const generated = crypto.randomBytes(32).toString('base64url');
+  database.setMeta(NOTIFICATION_SECRET_KEY_META_KEY, generated);
+  console.log('Generated a notification encryption key and stored it in application metadata.');
+  return generated;
 }
 
 function lookbackHours(duration: string): number {

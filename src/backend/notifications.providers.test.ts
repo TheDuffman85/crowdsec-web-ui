@@ -108,6 +108,8 @@ describe('notification providers', () => {
     const published: Array<{ config: unknown; payload: string }> = [];
     await provider.send(createChannel('mqtt', config), basePayload, {
       fetchImpl: async () => Response.json({}),
+      assertHostAllowed: async () => {},
+      assertUrlAllowed: async () => {},
       mqttPublishImpl: async (publishConfig, payload) => {
         published.push({ config: publishConfig, payload });
       },

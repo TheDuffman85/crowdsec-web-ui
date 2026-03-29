@@ -237,6 +237,10 @@ services:
       - CROWDSEC_BOOTSTRAP_RETRY_DELAY=30s
       # Optional: Enable automatic bootstrap retry after startup/login failure (default: true)
       - CROWDSEC_BOOTSTRAP_RETRY_ENABLED=true
+      # Optional: Encryption key for notification destinations with saved secrets
+      # - NOTIFICATION_SECRET_KEY=<long-random-secret>
+      # Optional: Block notifications to private/internal destinations (default: true)
+      # - NOTIFICATION_ALLOW_PRIVATE_ADDRESSES=false
       # Optional: Base path for reverse proxy deployments (e.g., /crowdsec)
       # - BASE_PATH=/crowdsec
     volumes:
@@ -408,8 +412,10 @@ Shared behavior:
 
 -   destinations can be enabled or disabled independently
 -   secrets are masked when you reopen a saved destination
+-   destinations with saved secrets are encrypted at rest using `NOTIFICATION_SECRET_KEY`, or an auto-generated key persisted in app metadata when the env var is unset
 -   **Send Test** validates a saved destination without waiting for a real rule to fire
 -   delivery results are stored with each notification as `delivered` or `failed`
+-   private, loopback, and link-local outbound destinations are allowed by default and can be blocked explicitly
 
 Supported destination types:
 
@@ -517,6 +523,11 @@ Webhook templates support simple dotted variables rooted at `event.*`. The body 
 -   `{{event.sent_at}}`
 -   `{{event.channel_name}}`
 -   `{{event.rule_name}}`
+
+### Notification Security Controls
+
+-   `NOTIFICATION_SECRET_KEY`: optional override for the notification encryption key. If unset, the backend auto-generates one on first start and persists it in application metadata so encrypted destinations continue working across restarts.
+-   `NOTIFICATION_ALLOW_PRIVATE_ADDRESSES=true` by default. Set it to `false` if you want to block private, loopback, and link-local destinations.
 
 ### Current Scope
 

@@ -262,6 +262,7 @@ function createController(options: {
     VITE_BRANCH: 'main',
     VITE_COMMIT_HASH: 'abc123',
     DB_DIR: tempDir,
+    NOTIFICATION_ALLOW_PRIVATE_ADDRESSES: 'true',
     ...authEnv,
     ...options.env,
   });
@@ -878,6 +879,210 @@ describe('createApp', () => {
 
     const deleteRule = await controller.fetch(new Request('http://localhost/crowdsec/api/notification-rules/not-real', { method: 'DELETE' }));
     expect(deleteRule.status).toBe(200);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('stores notification channel secrets encrypted at rest', async () => {
+    const { controller, database } = createController();
+
+    const createChannel = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'SMTP main',
+          type: 'email',
+          enabled: true,
+          config: {
+            smtpHost: 'smtp.example.com',
+            smtpPort: 587,
+            smtpTlsMode: 'starttls',
+            smtpUser: 'ops',
+            smtpPassword: 'super-secret-password',
+            smtpFrom: 'ops@example.com',
+            emailTo: 'team@example.com',
+          },
+        }),
+      }),
+    );
+    expect(createChannel.status).toBe(201);
+    const channelPayload = await createChannel.json() as { id: string; config: { smtpPassword: string } };
+    expect(channelPayload.config.smtpPassword).toBe('(stored)');
+
+    const stored = database.getNotificationChannelById(channelPayload.id);
+    if (!stored?.config_json) {
+      throw new Error('Expected stored notification channel config to be persisted');
+    }
+    expect(stored.config_json.startsWith('enc:v1:')).toBe(true);
+    expect(stored.config_json.includes('super-secret-password')).toBe(false);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('auto-generates and persists the notification secret key when not configured', async () => {
+    const first = createController();
+    const generatedKey = first.database.getMeta('notification_secret_key')?.value;
+    expect(generatedKey).toBeTruthy();
+
+    const createChannel = await first.controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'SMTP main',
+          type: 'email',
+          enabled: true,
+          config: {
+            smtpHost: 'smtp.example.com',
+            smtpPort: 587,
+            smtpTlsMode: 'starttls',
+            smtpUser: 'ops',
+            smtpPassword: 'super-secret-password',
+            smtpFrom: 'ops@example.com',
+            emailTo: 'team@example.com',
+          },
+        }),
+      }),
+    );
+    expect(createChannel.status).toBe(201);
+    first.controller.stopBackgroundTasks();
+    first.database.close();
+
+    const second = createController();
+    expect(second.database.getMeta('notification_secret_key')?.value).toBe(generatedKey);
+
+    const settings = await second.controller.fetch(new Request('http://localhost/crowdsec/api/notifications/settings'));
+    expect(settings.status).toBe(200);
+    expect((await settings.json()) as { channels: Array<{ name: string; configured_secrets: string[] }> }).toEqual(
+      expect.objectContaining({
+        channels: [expect.objectContaining({ name: 'SMTP main', configured_secrets: ['smtpPassword'] })],
+      }),
+    );
+
+    second.controller.stopBackgroundTasks();
+    second.database.close();
+    destroyTempDir();
+  });
+
+  test('blocks private notification destinations unless explicitly allowed', async () => {
+    const { controller, database } = createController({
+      env: {
+        NOTIFICATION_ALLOW_PRIVATE_ADDRESSES: 'false',
+      },
+    });
+
+    const createChannel = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Local webhook',
+          type: 'webhook',
+          enabled: true,
+          config: {
+            url: 'http://127.0.0.1/hooks/notify',
+            method: 'POST',
+            body: { mode: 'json', template: '{"ok":true}' },
+            retryAttempts: 0,
+          },
+        }),
+      }),
+    );
+    expect(createChannel.status).toBe(201);
+    const channelPayload = database.listNotificationChannels()[0] as { id?: string };
+
+    const testChannel = await controller.fetch(new Request(`http://localhost/crowdsec/api/notification-channels/${channelPayload.id}/test`, { method: 'POST' }));
+    expect(testChannel.status).toBe(400);
+    expect((await testChannel.json()) as { error: string }).toEqual({
+      error: 'Webhook URL points to a restricted address (127.0.0.1)',
+    });
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('allows private notification destinations when explicitly enabled', async () => {
+    const { controller, database } = createController({
+      env: {
+        NOTIFICATION_ALLOW_PRIVATE_ADDRESSES: 'true',
+      },
+      notificationFetchResolver: (url) => {
+        if (url.includes('127.0.0.1')) {
+          return Response.json({ ok: true });
+        }
+        return undefined;
+      },
+    });
+
+    const createChannel = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Local webhook',
+          type: 'webhook',
+          enabled: true,
+          config: {
+            url: 'http://127.0.0.1/hooks/notify',
+            method: 'POST',
+            body: { mode: 'json', template: '{"ok":true}' },
+            retryAttempts: 0,
+          },
+        }),
+      }),
+    );
+    expect(createChannel.status).toBe(201);
+    const channelPayload = database.listNotificationChannels()[0] as { id?: string };
+
+    const testChannel = await controller.fetch(new Request(`http://localhost/crowdsec/api/notification-channels/${channelPayload.id}/test`, { method: 'POST' }));
+    expect(testChannel.status).toBe(200);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('does not expose remote notification response bodies to clients', async () => {
+    const { controller, database } = createController({
+      notificationFetchResolver: (url) => {
+        if (url.includes('198.51.100.10')) {
+          return new Response('internal token leaked', { status: 500 });
+        }
+        return undefined;
+      },
+    });
+
+    const createChannel = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Webhook prod',
+          type: 'webhook',
+          enabled: true,
+          config: {
+            url: 'https://198.51.100.10/hooks/notify',
+            method: 'POST',
+            body: { mode: 'json', template: '{"ok":true}' },
+            retryAttempts: 0,
+          },
+        }),
+      }),
+    );
+    expect(createChannel.status).toBe(201);
+    const channelPayload = database.listNotificationChannels()[0] as { id?: string };
+
+    const testChannel = await controller.fetch(new Request(`http://localhost/crowdsec/api/notification-channels/${channelPayload.id}/test`, { method: 'POST' }));
+    expect(testChannel.status).toBe(400);
+    expect((await testChannel.json()) as { error: string }).toEqual({
+      error: 'Webhook request failed with status 500',
+    });
 
     controller.stopBackgroundTasks();
     database.close();

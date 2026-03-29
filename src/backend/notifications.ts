@@ -26,6 +26,8 @@ import {
   getNotificationProvider,
   type NotificationProviderPayload,
 } from './notifications/providers';
+import type { NotificationOutboundGuard } from './notifications/outbound-guard';
+import type { NotificationSecretStore } from './notifications/secret-store';
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 type RuleConfigInput = NotificationRuleConfig | Record<string, AlertMetaValue>;
@@ -35,6 +37,8 @@ export interface NotificationServiceOptions {
   fetchImpl?: FetchLike;
   mqttPublishImpl?: (config: MqttPublishConfig, payload: string) => Promise<void>;
   updateChecker?: () => Promise<UpdateCheckResponse>;
+  outboundGuard: NotificationOutboundGuard;
+  secretStore: NotificationSecretStore;
 }
 
 interface NotificationCandidate {
@@ -64,6 +68,8 @@ export function createNotificationService(options: NotificationServiceOptions): 
   const fetchImpl = options.fetchImpl || fetch;
   const mqttPublishImpl = options.mqttPublishImpl;
   const updateChecker = options.updateChecker;
+  const outboundGuard = options.outboundGuard;
+  const secretStore = options.secretStore;
 
   return {
     listSettings,
@@ -264,14 +270,19 @@ export function createNotificationService(options: NotificationServiceOptions): 
   }): NotificationChannel {
     const type = normalizeChannelType(row.type);
     const provider = getNotificationProvider(type);
-    const config = provider.normalizeConfig(parseJsonRecord(row.config_json));
+    const parsedConfig = secretStore.parseConfig(String(row.config_json || '{}'));
+    const config = provider.normalizeConfig(parsedConfig.config as Record<string, AlertMetaValue>);
+    const configuredSecrets = provider.getConfiguredSecrets(config);
+    if (configuredSecrets.length > 0 && !parsedConfig.isEncrypted && !secretStore.hasKey()) {
+      throw new Error('NOTIFICATION_SECRET_KEY is required to load notification destinations with saved secrets');
+    }
     return {
       id: String(row.id),
       name: String(row.name),
       type,
       enabled: row.enabled === 1,
       config,
-      configured_secrets: provider.getConfiguredSecrets(config),
+      configured_secrets: configuredSecrets,
       created_at: String(row.created_at),
       updated_at: String(row.updated_at),
     };
@@ -305,6 +316,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
   }
 
   function saveChannel(channel: NotificationChannel): void {
+    const provider = getNotificationProvider(channel.type);
     database.upsertNotificationChannel({
       $id: channel.id,
       $created_at: channel.created_at,
@@ -312,7 +324,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
       $name: channel.name,
       $type: channel.type,
       $enabled: channel.enabled ? 1 : 0,
-      $config_json: JSON.stringify(channel.config),
+      $config_json: secretStore.serializeConfig(channel.config, provider.getConfiguredSecrets(channel.config).length > 0),
     });
   }
 
@@ -600,7 +612,12 @@ export function createNotificationService(options: NotificationServiceOptions): 
         rule_name: rule?.name || null,
         rule_type: rule?.type || null,
       };
-      await provider.send(channel, payload, { fetchImpl, mqttPublishImpl });
+      await provider.send(channel, payload, {
+        fetchImpl,
+        mqttPublishImpl,
+        assertHostAllowed: outboundGuard.assertHostAllowed,
+        assertUrlAllowed: outboundGuard.assertUrlAllowed,
+      });
 
       return {
         channel_id: channel.id,
