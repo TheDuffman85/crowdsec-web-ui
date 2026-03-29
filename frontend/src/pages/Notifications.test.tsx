@@ -10,6 +10,10 @@ vi.mock('../contexts/useRefresh', () => ({
   }),
 }));
 
+vi.mock('../contexts/useNotificationUnreadCount', () => ({
+  useNotificationUnreadCount: vi.fn(),
+}));
+
 vi.mock('../lib/api', () => ({
   fetchNotificationSettings: vi.fn(),
   fetchNotifications: vi.fn(),
@@ -29,6 +33,7 @@ import {
   fetchNotifications,
   testNotificationChannel,
 } from '../lib/api';
+import { useNotificationUnreadCount } from '../contexts/useNotificationUnreadCount';
 
 const buildSettings = (overrides?: {
   channels?: NotificationChannel[];
@@ -74,6 +79,12 @@ function mockMatchMedia(): void {
 describe('Notifications page', () => {
   beforeEach(() => {
     mockMatchMedia();
+
+    vi.mocked(useNotificationUnreadCount).mockReturnValue({
+      unreadCount: 0,
+      setUnreadCount: vi.fn(),
+      refreshUnreadCount: vi.fn(),
+    });
 
     vi.mocked(fetchNotificationSettings).mockResolvedValue(buildSettings());
 

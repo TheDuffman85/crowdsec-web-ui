@@ -83,6 +83,12 @@ export interface RefreshContextValue {
   syncStatus: SyncStatus | null;
 }
 
+export interface NotificationUnreadContextValue {
+  unreadCount: number;
+  setUnreadCount: Dispatch<SetStateAction<number>>;
+  refreshUnreadCount: () => Promise<void>;
+}
+
 export interface ApiPermissionError extends Error {
   helpLink?: string;
   helpText?: string;

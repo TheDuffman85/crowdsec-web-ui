@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import { Layout } from "./components/Layout";
+import { NotificationUnreadProvider } from "./contexts/NotificationUnreadContext";
 import { RefreshProvider } from "./contexts/RefreshContext";
 import { useRefresh } from "./contexts/useRefresh";
 import { SyncOverlay } from "./components/SyncOverlay";
@@ -67,7 +68,9 @@ function AppContent() {
 function App() {
   return (
     <RefreshProvider>
-      <AppContent />
+      <NotificationUnreadProvider>
+        <AppContent />
+      </NotificationUnreadProvider>
     </RefreshProvider>
   );
 }

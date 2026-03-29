@@ -33,6 +33,7 @@ import {
   type WebhookConfig,
   type WebhookField,
 } from '../lib/notification-config';
+import { useNotificationUnreadCount } from '../contexts/useNotificationUnreadCount';
 import { useRefresh } from '../contexts/useRefresh';
 import { Badge } from '../components/ui/Badge';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
@@ -158,10 +159,10 @@ function buildRulePayload(ruleForm: RuleFormState): UpsertNotificationRuleReques
 
 export function Notifications() {
   const { refreshSignal } = useRefresh();
+  const { unreadCount, setUnreadCount } = useNotificationUnreadCount();
   const [channels, setChannels] = useState<NotificationChannel[]>([]);
   const [rules, setRules] = useState<NotificationRule[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [channelModalOpen, setChannelModalOpen] = useState(false);
@@ -204,7 +205,7 @@ export function Notifications() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [setUnreadCount]);
 
   useEffect(() => {
     void loadData();
