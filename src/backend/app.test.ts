@@ -838,7 +838,6 @@ describe('createApp', () => {
           type: 'alert-threshold',
           enabled: true,
           severity: 'warning',
-          cooldown_minutes: 60,
           channel_ids: [channelPayload.id],
           config: {
             window_minutes: 60,
@@ -1147,7 +1146,6 @@ describe('createApp', () => {
           type: 'alert-threshold',
           enabled: true,
           severity: 'critical',
-          cooldown_minutes: 60,
           channel_ids: [channelPayload.id],
           config: {
             window_minutes: 60,
@@ -1236,7 +1234,6 @@ describe('createApp', () => {
           type: 'application-update',
           enabled: true,
           severity: 'info',
-          cooldown_minutes: 60,
           channel_ids: [channelPayload.id],
           config: {},
         }),

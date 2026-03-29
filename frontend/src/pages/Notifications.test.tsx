@@ -59,16 +59,21 @@ const buildSettings = (overrides?: {
   rules: overrides?.rules ?? [],
 });
 
+function mockMatchMedia(): void {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    writable: true,
+    value: vi.fn().mockImplementation(() => ({
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  });
+}
+
 describe('Notifications page', () => {
   beforeEach(() => {
-    vi.stubGlobal(
-      'matchMedia',
-      vi.fn().mockImplementation(() => ({
-        matches: false,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-      })),
-    );
+    mockMatchMedia();
 
     vi.mocked(fetchNotificationSettings).mockResolvedValue(buildSettings());
 
@@ -197,7 +202,6 @@ describe('Notifications page', () => {
           type: 'new-cve',
           enabled: true,
           severity: 'warning',
-          cooldown_minutes: 60,
           channel_ids: [],
           config: {
             max_cve_age_days: 14,
@@ -238,5 +242,35 @@ describe('Notifications page', () => {
     await user.click(screen.getByRole('button', { name: 'Send test notification' }));
 
     expect(await screen.findByText('MQTT broker unavailable')).toBeInTheDocument();
+  });
+
+  test('does not render cooldown fields or text for rules', async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchNotificationSettings).mockResolvedValueOnce(buildSettings({
+      rules: [
+        {
+          id: 'rule-1',
+          name: 'Threshold Rule',
+          type: 'alert-threshold',
+          enabled: true,
+          severity: 'warning',
+          channel_ids: ['channel-1'],
+          config: {
+            window_minutes: 60,
+            alert_threshold: 10,
+            filters: {},
+          },
+          created_at: '2026-03-28T12:00:00.000Z',
+          updated_at: '2026-03-28T12:00:00.000Z',
+        },
+      ],
+    }));
+    render(<Notifications />);
+
+    await waitFor(() => expect(screen.getByText('Threshold Rule')).toBeInTheDocument());
+    expect(screen.queryByText(/cooldown:/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /edit rule/i }));
+    expect(screen.queryByLabelText(/cooldown/i)).not.toBeInTheDocument();
   });
 });

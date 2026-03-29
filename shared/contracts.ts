@@ -214,7 +214,6 @@ export interface NotificationRule {
   type: NotificationRuleType;
   enabled: boolean;
   severity: NotificationSeverity;
-  cooldown_minutes: number;
   channel_ids: string[];
   config: NotificationRuleConfig;
   created_at: string;
@@ -266,7 +265,6 @@ export interface UpsertNotificationRuleRequest {
   type: NotificationRuleType;
   enabled: boolean;
   severity: NotificationSeverity;
-  cooldown_minutes: number;
   channel_ids: string[];
   config: NotificationRuleConfig;
 }

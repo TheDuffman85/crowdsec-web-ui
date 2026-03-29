@@ -48,6 +48,13 @@ interface NotificationCandidate {
   metadata: Record<string, AlertMetaValue>;
 }
 
+interface NotificationIncidentState {
+  incidentKey: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  resolvedAt: string | null;
+}
+
 export interface NotificationService {
   listSettings: () => NotificationSettingsResponse;
   listNotifications: (limit?: number) => NotificationListResponse;
@@ -159,10 +166,14 @@ export function createNotificationService(options: NotificationServiceOptions): 
 
     const rule = normalizeRuleInput(input, existing, id, existing.created_at);
     saveRule(rule);
+    if (shouldResetIncidentState(existing, rule)) {
+      database.deleteNotificationIncidentsByRule(id);
+    }
     return rule;
   }
 
   function deleteRule(id: string): void {
+    database.deleteNotificationIncidentsByRule(id);
     database.deleteNotificationRule(id);
   }
 
@@ -201,15 +212,28 @@ export function createNotificationService(options: NotificationServiceOptions): 
     }
 
     const activeChannels = loadChannels(false).filter((channel) => channel.enabled);
+    const timestamp = now.toISOString();
     for (const rule of rules) {
       const candidates = await evaluateRule(rule, now);
-      if (candidates.length === 0) {
-        continue;
+      const activeIncidents = loadActiveIncidents(rule.id);
+      const candidateKeys = new Set(candidates.map((candidate) => candidate.dedupeKey));
+
+      for (const incident of activeIncidents.values()) {
+        if (!candidateKeys.has(incident.incidentKey)) {
+          database.resolveNotificationIncident(rule.id, incident.incidentKey, timestamp);
+        }
       }
 
       for (const candidate of candidates) {
-        const latest = database.getLatestNotificationForRule(rule.id);
-        if (latest && isWithinCooldown(latest.created_at, rule.cooldown_minutes, now)) {
+        const existingIncident = activeIncidents.get(candidate.dedupeKey);
+        if (existingIncident) {
+          database.upsertNotificationIncident({
+            $rule_id: rule.id,
+            $incident_key: existingIncident.incidentKey,
+            $first_seen_at: existingIncident.firstSeenAt,
+            $last_seen_at: timestamp,
+            $resolved_at: null,
+          });
           continue;
         }
 
@@ -218,7 +242,6 @@ export function createNotificationService(options: NotificationServiceOptions): 
           deliveries.push(await sendToChannel(channel, candidate, rule.severity, rule));
         }
 
-        const timestamp = now.toISOString();
         database.insertNotification({
           $id: crypto.randomUUID(),
           $created_at: timestamp,
@@ -232,7 +255,14 @@ export function createNotificationService(options: NotificationServiceOptions): 
           $read_at: null,
           $metadata_json: JSON.stringify(candidate.metadata),
           $deliveries_json: JSON.stringify(deliveries),
-          $dedupe_key: `${rule.id}:${candidate.dedupeKey}`,
+          $dedupe_key: candidate.dedupeKey,
+        });
+        database.upsertNotificationIncident({
+          $rule_id: rule.id,
+          $incident_key: candidate.dedupeKey,
+          $first_seen_at: timestamp,
+          $last_seen_at: timestamp,
+          $resolved_at: null,
         });
       }
     }
@@ -257,6 +287,23 @@ export function createNotificationService(options: NotificationServiceOptions): 
 
   function loadRules(): NotificationRule[] {
     return database.listNotificationRules().map(hydrateRule);
+  }
+
+  function loadActiveIncidents(ruleId: string): Map<string, NotificationIncidentState> {
+    return new Map(
+      database
+        .listNotificationIncidentsByRule(ruleId)
+        .filter((row) => row.resolved_at == null)
+        .map((row) => [
+          String(row.incident_key),
+          {
+            incidentKey: String(row.incident_key),
+            firstSeenAt: String(row.first_seen_at),
+            lastSeenAt: String(row.last_seen_at),
+            resolvedAt: row.resolved_at == null ? null : String(row.resolved_at),
+          } satisfies NotificationIncidentState,
+        ]),
+    );
   }
 
   function hydrateChannel(row: {
@@ -296,7 +343,6 @@ export function createNotificationService(options: NotificationServiceOptions): 
     type?: string;
     enabled?: number;
     severity?: string;
-    cooldown_minutes?: number;
     channel_ids_json?: string;
     config_json?: string;
   }): NotificationRule {
@@ -307,7 +353,6 @@ export function createNotificationService(options: NotificationServiceOptions): 
       type,
       enabled: row.enabled === 1,
       severity: normalizeSeverity(row.severity),
-      cooldown_minutes: Math.max(0, Number(row.cooldown_minutes) || 0),
       channel_ids: parseJsonArray<string>(row.channel_ids_json).filter((value): value is string => typeof value === 'string'),
       config: normalizeRuleConfig(type, parseJsonRecord(row.config_json)),
       created_at: String(row.created_at),
@@ -337,7 +382,6 @@ export function createNotificationService(options: NotificationServiceOptions): 
       $type: rule.type,
       $enabled: rule.enabled ? 1 : 0,
       $severity: rule.severity,
-      $cooldown_minutes: rule.cooldown_minutes,
       $channel_ids_json: JSON.stringify(rule.channel_ids),
       $config_json: JSON.stringify(rule.config),
     });
@@ -408,7 +452,6 @@ export function createNotificationService(options: NotificationServiceOptions): 
       type,
       enabled: input.enabled !== false,
       severity: normalizeSeverity(input.severity),
-      cooldown_minutes: normalizePositiveNumber(input.cooldown_minutes, existing?.cooldown_minutes ?? 60),
       channel_ids: channelIds,
       config: normalizeRuleConfig(type, input.config),
       created_at: createdAt,
@@ -448,7 +491,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
     }
 
     return [{
-      dedupeKey: `spike:${floorToBucket(now.getTime(), windowMs)}`,
+      dedupeKey: 'spike:active',
       title: `${rule.name}: alert spike detected`,
       message: `${currentAlerts.length} alerts in the last ${config.window_minutes} minutes, up ${Math.round(increasePercent)}% from the previous window (${previousAlerts.length}).`,
       metadata: {
@@ -471,7 +514,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
     }
 
     return [{
-      dedupeKey: `threshold:${floorToBucket(now.getTime(), windowMs)}`,
+      dedupeKey: 'threshold:active',
       title: `${rule.name}: threshold exceeded`,
       message: `${alerts.length} alerts matched in the last ${config.window_minutes} minutes, crossing the threshold of ${config.alert_threshold}.`,
       metadata: {
@@ -749,6 +792,16 @@ function normalizePositiveNumber(value: unknown, fallback: number): number {
   return Number.isFinite(numeric) && numeric > 0 ? Math.round(numeric) : fallback;
 }
 
+function shouldResetIncidentState(existing: NotificationRule, next: NotificationRule): boolean {
+  if (!next.enabled) {
+    return true;
+  }
+  if (existing.type !== next.type) {
+    return true;
+  }
+  return JSON.stringify(existing.config) !== JSON.stringify(next.config);
+}
+
 function parseJsonRecord(value: string | undefined): Record<string, AlertMetaValue> {
   if (!value) return {};
   try {
@@ -767,13 +820,4 @@ function parseJsonArray<T>(value: string | undefined): T[] {
   } catch {
     return [];
   }
-}
-
-function floorToBucket(timestampMs: number, bucketMs: number): number {
-  return Math.floor(timestampMs / bucketMs) * bucketMs;
-}
-
-function isWithinCooldown(createdAt: string | undefined, cooldownMinutes: number, now: Date): boolean {
-  if (!createdAt || cooldownMinutes <= 0) return false;
-  return now.getTime() - new Date(createdAt).getTime() < cooldownMinutes * 60_000;
 }

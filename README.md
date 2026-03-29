@@ -389,7 +389,7 @@ Each rule has:
 
 -   a name
 -   a severity: `info`, `warning`, or `critical`
--   a cooldown in minutes to suppress repeated notifications
+-   incident-based deduplication so the same condition only fires once until it clears and reappears
 -   one or more destination channels
 
 Alert-based rules can also use optional filters for scenario text, target text, and whether simulated alerts should be included.

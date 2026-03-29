@@ -61,7 +61,6 @@ type RuleFormState = {
   type: NotificationRuleType;
   enabled: boolean;
   severity: NotificationSeverity;
-  cooldown_minutes: string;
   channel_ids: string[];
   filters: { scenario: string; target: string; include_simulated: boolean };
   config: Record<string, string>;
@@ -91,7 +90,6 @@ const defaultRuleForm = (type: NotificationRuleType = 'alert-spike'): RuleFormSt
   type,
   enabled: true,
   severity: 'warning',
-  cooldown_minutes: '60',
   channel_ids: [],
   filters: { scenario: '', target: '', include_simulated: false },
   config: { ...RULE_DEFAULTS[type] },
@@ -107,7 +105,6 @@ function buildRulePayload(ruleForm: RuleFormState): UpsertNotificationRuleReques
     type: ruleForm.type,
     enabled: ruleForm.enabled,
     severity: ruleForm.severity,
-    cooldown_minutes: Number(ruleForm.cooldown_minutes || '0'),
     channel_ids: ruleForm.channel_ids,
   } as const;
   const filters = {
@@ -250,7 +247,6 @@ export function Notifications() {
       type: rule.type,
       enabled: rule.enabled,
       severity: rule.severity,
-      cooldown_minutes: String(rule.cooldown_minutes),
       channel_ids: [...rule.channel_ids],
       filters: {
         scenario: filters?.scenario || '',
@@ -550,7 +546,6 @@ function RuleRow({
             <Badge variant={rule.severity === 'critical' ? 'danger' : rule.severity === 'warning' ? 'warning' : 'info'}>{rule.severity}</Badge>
             {!hasDestinations && <Badge variant="warning">No destinations</Badge>}
           </div>
-          <p className="text-sm text-gray-600 dark:text-gray-300">Cooldown: {rule.cooldown_minutes} minutes</p>
           <p className="text-xs text-gray-500 dark:text-gray-400">
             Channels: {rule.channel_ids.map((id) => channels.find((channel) => channel.id === id)?.name || id).join(', ') || 'In-app only'}
           </p>
@@ -708,7 +703,7 @@ function RuleModal({
             </select>
           </label>
         </div>
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2">
           <label className="space-y-2 text-sm">
             <span className="font-medium">Severity</span>
             <select value={form.severity} onChange={(event) => onSetForm((current) => ({ ...current, severity: event.target.value as NotificationSeverity }))} className="w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-900">
@@ -717,7 +712,6 @@ function RuleModal({
               <option value="critical">Critical</option>
             </select>
           </label>
-          <LabeledInput label="Cooldown (minutes)" value={form.cooldown_minutes} onChange={(value) => onSetForm((current) => ({ ...current, cooldown_minutes: value }))} />
           <div className="flex items-center gap-3 pt-7">
             <Switch id="rule-enabled" checked={form.enabled} onCheckedChange={(checked) => onSetForm((current) => ({ ...current, enabled: checked }))} />
             <label htmlFor="rule-enabled" className="text-sm font-medium">Enabled</label>
