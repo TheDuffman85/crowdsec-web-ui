@@ -30,6 +30,9 @@ export function Modal({ isOpen, onClose, title, children, maxWidth = "max-w-md",
             <div
                 className={`bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full ${maxWidth} flex flex-col max-h-[90vh]`}
                 onClick={(event) => event.stopPropagation()}
+                role="dialog"
+                aria-modal="true"
+                aria-label={title || 'Dialog'}
             >
                 {/* Header */}
                 {(title || showCloseButton) && (
@@ -51,7 +54,7 @@ export function Modal({ isOpen, onClose, title, children, maxWidth = "max-w-md",
                 )}
 
                 {/* Content */}
-                <div className="overflow-y-auto p-6">
+                <div className="overflow-y-auto p-6 [scrollbar-gutter:stable]">
                     {children}
                 </div>
             </div>

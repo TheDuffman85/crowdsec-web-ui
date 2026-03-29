@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'node:crypto';
 import { Hono } from 'hono';
 import { compress } from 'hono/compress';
 import { serveStatic } from 'hono/bun';
@@ -14,17 +15,24 @@ import type {
   StatsAlert,
   StatsDecision,
   SyncStatus,
+  UpsertNotificationChannelRequest,
+  UpsertNotificationRuleRequest,
   UpdateCheckResponse,
 } from '../../shared/contracts';
 import { createRuntimeConfig, getIntervalName, parseRefreshInterval, type RuntimeConfig } from './config';
 import { CrowdsecDatabase, type AlertInsertParams, type DecisionInsertParams } from './database';
 import { LapiClient } from './lapi';
+import { createNotificationService } from './notifications';
+import type { MqttPublishConfig } from './notifications/mqtt-client';
+import { createNotificationOutboundGuard } from './notifications/outbound-guard';
+import { createNotificationSecretStore } from './notifications/secret-store';
 import { createUpdateChecker } from './update-check';
 import { getAlertSourceValue, getAlertTarget, toSlimAlert } from './utils/alerts';
 import { parseGoDuration, toDuration } from './utils/duration';
 
 type HonoContext = any;
 type HonoNext = any;
+type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 type AnyError = Error & {
   code?: string;
   response?: { status: number };
@@ -40,6 +48,8 @@ export interface CreateAppOptions {
   distRoot?: string;
   startBackgroundTasks?: boolean;
   updateChecker?: () => Promise<UpdateCheckResponse>;
+  notificationFetchImpl?: FetchLike;
+  mqttPublishImpl?: (config: MqttPublishConfig, payload: string) => Promise<void>;
 }
 
 export interface AppController {
@@ -73,13 +83,14 @@ interface AlertSyncQuery {
   scenario?: string;
 }
 
+const NOTIFICATION_SECRET_KEY_META_KEY = 'notification_secret_key';
+
 export function createApp(options: CreateAppOptions = {}): AppController {
   const config = options.config || createRuntimeConfig();
   const database = options.database || new CrowdsecDatabase({ dbDir: config.dbDir });
   const lapiClient = options.lapiClient || new LapiClient({
     crowdsecUrl: config.crowdsecUrl,
-    user: config.crowdsecUser,
-    password: config.crowdsecPassword,
+    auth: config.crowdsecAuth,
     simulationsEnabled: config.simulationsEnabled,
     lookbackPeriod: config.lookbackPeriod,
     version: config.version,
@@ -90,6 +101,19 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     commitHash: config.commitHash,
     version: config.version,
     enabled: config.updateCheckEnabled,
+  });
+  const notificationSecretKey = resolveNotificationSecretKey(database, config.notificationSecretKey);
+  const notificationSecretStore = createNotificationSecretStore(notificationSecretKey);
+  const notificationOutboundGuard = createNotificationOutboundGuard({
+    allowPrivateAddresses: config.notificationAllowPrivateAddresses,
+  });
+  const notificationService = createNotificationService({
+    database,
+    fetchImpl: options.notificationFetchImpl,
+    mqttPublishImpl: options.mqttPublishImpl,
+    updateChecker: checkForUpdates,
+    outboundGuard: notificationOutboundGuard,
+    secretStore: notificationSecretStore,
   });
 
   const app = new Hono();
@@ -133,14 +157,19 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   console.log(`Cache Configuration:
   Lookback Period: ${config.lookbackPeriod} (${config.lookbackMs}ms)
   Refresh Interval: ${getIntervalName(refreshIntervalMs)} (${persistedConfig.refresh_interval_ms !== undefined ? 'from saved config' : 'from env'})
+  Auth Mode: ${config.crowdsecAuthMode}
   Simulations: ${config.simulationsEnabled ? 'Enabled' : 'Disabled'}
   Alert Origin Allowlist: ${config.alertOrigins.length > 0 ? config.alertOrigins.join(', ') : 'Disabled'}
   Alert Scenario Allowlist: ${config.alertExtraScenarios.length > 0 ? config.alertExtraScenarios.join(', ') : 'Disabled'}
   Bootstrap Retry: ${config.bootstrapRetryEnabled ? getIntervalName(config.bootstrapRetryDelayMs) : 'Disabled'}
+  Notification Secret Storage: Encrypted (${config.notificationSecretKey ? 'configured key' : 'auto-generated key'})
+  Notification Private Destinations: ${config.notificationAllowPrivateAddresses ? 'Allowed' : 'Blocked'}
 `);
 
-  if (!lapiClient.hasCredentials()) {
-    console.warn('WARNING: CROWDSEC_USER and CROWDSEC_PASSWORD must be set for full functionality.');
+  if (!lapiClient.hasAuthConfig()) {
+    console.warn(
+      'WARNING: CrowdSec LAPI authentication is not configured. Set CROWDSEC_USER/CROWDSEC_PASSWORD or CROWDSEC_TLS_CERT_PATH/CROWDSEC_TLS_KEY_PATH for full functionality.',
+    );
   }
 
   app.use('*', compress());
@@ -311,6 +340,89 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       console.error('Error updating refresh interval:', error.message);
       return context.json({ error: 'Failed to update refresh interval' }, 500);
     }
+  });
+
+  app.get(`${config.basePath}/api/notifications`, ensureAuth, (context) => {
+    const limit = Number.parseInt(context.req.query('limit') || '100', 10);
+    return context.json(notificationService.listNotifications(Number.isFinite(limit) ? limit : 100));
+  });
+
+  app.post(`${config.basePath}/api/notifications/read-all`, ensureAuth, () =>
+    Response.json({ updated: notificationService.markAllNotificationsRead() }),
+  );
+
+  app.post(`${config.basePath}/api/notifications/:id/read`, ensureAuth, (context) => {
+    const id = String(context.req.param('id'));
+    const updated = notificationService.markNotificationRead(id);
+    if (!updated) {
+      return context.json({ error: 'Notification not found' }, 404);
+    }
+    return context.json({ success: true });
+  });
+
+  app.get(`${config.basePath}/api/notifications/settings`, ensureAuth, () => Response.json(notificationService.listSettings()));
+
+  app.post(`${config.basePath}/api/notification-channels`, ensureAuth, async (context) => {
+    try {
+      const body = await context.req.json<UpsertNotificationChannelRequest>();
+      return context.json(notificationService.createChannel(body), 201);
+    } catch (error: any) {
+      return context.json({ error: error.message || 'Failed to create notification channel' }, 400);
+    }
+  });
+
+  app.put(`${config.basePath}/api/notification-channels/:id`, ensureAuth, async (context) => {
+    try {
+      const id = String(context.req.param('id'));
+      const body = await context.req.json<UpsertNotificationChannelRequest>();
+      return context.json(notificationService.updateChannel(id, body));
+    } catch (error: any) {
+      const status = error.message === 'Notification channel not found' ? 404 : 400;
+      return context.json({ error: error.message || 'Failed to update notification channel' }, status);
+    }
+  });
+
+  app.delete(`${config.basePath}/api/notification-channels/:id`, ensureAuth, (context) => {
+    const id = String(context.req.param('id'));
+    notificationService.deleteChannel(id);
+    return context.json({ success: true });
+  });
+
+  app.post(`${config.basePath}/api/notification-channels/:id/test`, ensureAuth, async (context) => {
+    try {
+      const id = String(context.req.param('id'));
+      await notificationService.testChannel(id);
+      return context.json({ success: true });
+    } catch (error: any) {
+      const status = error.message === 'Notification channel not found' ? 404 : 400;
+      return context.json({ error: error.message || 'Failed to send test notification' }, status);
+    }
+  });
+
+  app.post(`${config.basePath}/api/notification-rules`, ensureAuth, async (context) => {
+    try {
+      const body = await context.req.json<UpsertNotificationRuleRequest>();
+      return context.json(notificationService.createRule(body), 201);
+    } catch (error: any) {
+      return context.json({ error: error.message || 'Failed to create notification rule' }, 400);
+    }
+  });
+
+  app.put(`${config.basePath}/api/notification-rules/:id`, ensureAuth, async (context) => {
+    try {
+      const id = String(context.req.param('id'));
+      const body = await context.req.json<UpsertNotificationRuleRequest>();
+      return context.json(notificationService.updateRule(id, body));
+    } catch (error: any) {
+      const status = error.message === 'Notification rule not found' ? 404 : 400;
+      return context.json({ error: error.message || 'Failed to update notification rule' }, status);
+    }
+  });
+
+  app.delete(`${config.basePath}/api/notification-rules/:id`, ensureAuth, (context) => {
+    const id = String(context.req.param('id'));
+    notificationService.deleteRule(id);
+    return context.json({ success: true });
   });
 
   app.post(`${config.basePath}/api/cache/clear`, ensureAuth, async (context) => {
@@ -549,6 +661,14 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     Object.assign(syncStatus, updates);
   }
 
+  async function runNotificationEvaluation(source: string): Promise<void> {
+    try {
+      await notificationService.evaluateRules();
+    } catch (error: any) {
+      console.error(`Notification evaluation failed during ${source}:`, error.message);
+    }
+  }
+
   function getAlertSyncQueries(): AlertSyncQuery[] {
     const queries: AlertSyncQuery[] = [];
 
@@ -760,6 +880,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         cache.lastUpdate = new Date().toISOString();
         cache.isInitialized = true;
         lapiClient.updateStatus(true);
+        await runNotificationEvaluation('cache initialization');
         console.log(`Cache initialized successfully:
   Alerts: ${database.countAlerts()}
   Refresh Interval: ${getIntervalName(refreshIntervalMs)}
@@ -872,6 +993,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   async function updateCache(): Promise<void> {
     await updateCacheDelta();
     cleanupOldData();
+    await runNotificationEvaluation('cache update');
   }
 
   function clearBootstrapRetryTimeout(): void {
@@ -891,7 +1013,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   }
 
   function scheduleBootstrapRetry(reason = 'retry requested'): void {
-    if (!lapiClient.hasCredentials() || !config.bootstrapRetryEnabled || cache.isInitialized || bootstrapRetryTimeout) {
+    if (!lapiClient.hasAuthConfig() || !config.bootstrapRetryEnabled || cache.isInitialized || bootstrapRetryTimeout) {
       return;
     }
 
@@ -903,7 +1025,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   }
 
   async function ensureBootstrapReady(source = 'bootstrap'): Promise<boolean> {
-    if (!lapiClient.hasCredentials()) {
+    if (!lapiClient.hasAuthConfig()) {
       return false;
     }
 
@@ -1161,8 +1283,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   };
 
   function startBackgroundTasks(): void {
-    if (!lapiClient.hasCredentials()) {
-      console.warn('Cache initialization skipped - credentials not configured');
+    if (!lapiClient.hasAuthConfig()) {
+      console.warn('Cache initialization skipped - CrowdSec LAPI authentication not configured');
       return;
     }
     startRefreshScheduler();
@@ -1194,6 +1316,23 @@ function savePersistedConfig(database: CrowdsecDatabase, config: PersistedConfig
   } catch (error) {
     console.error('Error saving config to database:', error);
   }
+}
+
+function resolveNotificationSecretKey(database: CrowdsecDatabase, configuredKey?: string): string {
+  const trimmedConfiguredKey = configuredKey?.trim();
+  if (trimmedConfiguredKey) {
+    return trimmedConfiguredKey;
+  }
+
+  const persisted = database.getMeta(NOTIFICATION_SECRET_KEY_META_KEY)?.value?.trim();
+  if (persisted) {
+    return persisted;
+  }
+
+  const generated = crypto.randomBytes(32).toString('base64url');
+  database.setMeta(NOTIFICATION_SECRET_KEY_META_KEY, generated);
+  console.log('Generated a notification encryption key and stored it in application metadata.');
+  return generated;
 }
 
 function lookbackHours(duration: string): number {

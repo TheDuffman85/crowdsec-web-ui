@@ -25,6 +25,10 @@ vi.mock('./pages/Decisions', () => ({
   Decisions: () => <div>Decisions Page</div>,
 }));
 
+vi.mock('./pages/Notifications', () => ({
+  Notifications: () => <div>Notifications Page</div>,
+}));
+
 describe('App lazy routes', () => {
   beforeEach(() => {
     vi.stubGlobal(
@@ -52,5 +56,11 @@ describe('App lazy routes', () => {
     window.history.pushState({}, '', '/alerts');
     render(<App />);
     await waitFor(() => expect(screen.getByText('Alerts Page')).toBeInTheDocument());
+  });
+
+  test('renders the lazy notifications route', async () => {
+    window.history.pushState({}, '', '/notifications');
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Notifications Page')).toBeInTheDocument());
   });
 });

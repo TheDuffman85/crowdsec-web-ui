@@ -23,7 +23,9 @@
     "verify": "bun run test && bun run coverage && bun run typecheck && bun run lint && bun run build-ui"
   },
   "dependencies": {
-    "hono": "^4.12.8"
+    "hono": "^4.12.8",
+    "mqtt": "^5.15.1",
+    "vite": "^8.0.2"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",

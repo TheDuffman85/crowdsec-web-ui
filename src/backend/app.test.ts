@@ -7,6 +7,7 @@ import { createRuntimeConfig } from './config';
 import { CrowdsecDatabase } from './database';
 import { LapiClient } from './lapi';
 import { createApp } from './app';
+import type { MqttPublishConfig } from './notifications/mqtt-client';
 
 let tempDir: string;
 
@@ -227,15 +228,33 @@ function createTestDistRoot(): string {
 function createController(options: {
   alertDetailPayload?: unknown;
   simulationsEnabled?: boolean;
+  authMode?: 'password' | 'mtls' | 'none';
   env?: Record<string, string>;
   fetchResolver?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
+  notificationFetchResolver?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
+  mqttPublishResolver?: (config: MqttPublishConfig, payload: string) => void | Promise<void>;
 } = {}) {
+  const authMode = options.authMode || 'password';
+  const mtlsCertPath = path.join(tempDir, 'agent.pem');
+  const mtlsKeyPath = path.join(tempDir, 'agent-key.pem');
+  const mtlsCaPath = path.join(tempDir, 'ca.pem');
+  const authEnv = authMode === 'password'
+    ? {
+        CROWDSEC_USER: 'watcher',
+        CROWDSEC_PASSWORD: 'secret',
+      }
+    : authMode === 'mtls'
+      ? {
+          CROWDSEC_TLS_CERT_PATH: mtlsCertPath,
+          CROWDSEC_TLS_KEY_PATH: mtlsKeyPath,
+          CROWDSEC_TLS_CA_CERT_PATH: mtlsCaPath,
+        }
+      : {};
+
   const config = createRuntimeConfig({
     PORT: '3000',
     BASE_PATH: '/crowdsec',
     CROWDSEC_URL: 'http://crowdsec:8080',
-    CROWDSEC_USER: 'watcher',
-    CROWDSEC_PASSWORD: 'secret',
     CROWDSEC_SIMULATIONS_ENABLED: options.simulationsEnabled === false ? 'false' : 'true',
     CROWDSEC_LOOKBACK_PERIOD: '1m',
     CROWDSEC_REFRESH_INTERVAL: '30s',
@@ -243,14 +262,23 @@ function createController(options: {
     VITE_BRANCH: 'main',
     VITE_COMMIT_HASH: 'abc123',
     DB_DIR: tempDir,
+    NOTIFICATION_ALLOW_PRIVATE_ADDRESSES: 'true',
+    ...authEnv,
     ...options.env,
   });
 
   const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
-  const fetchCalls: Array<{ url: string; method: string }> = [];
+  const fetchCalls: Array<{ url: string; method: string; body?: unknown; headers?: RequestInit['headers']; tls?: BunFetchRequestInitTLS }> = [];
   const fetchImpl = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const requestInit = init as BunFetchRequestInit | undefined;
     const url = String(input);
-    fetchCalls.push({ url, method: init?.method || 'GET' });
+    fetchCalls.push({
+      url,
+      method: requestInit?.method || 'GET',
+      body: requestInit?.body ? JSON.parse(String(requestInit.body)) : undefined,
+      headers: requestInit?.headers,
+      tls: requestInit?.tls,
+    });
     const resolved = await options.fetchResolver?.(url, init);
     if (resolved) {
       return resolved;
@@ -281,8 +309,7 @@ function createController(options: {
 
   const lapiClient = new LapiClient({
     crowdsecUrl: config.crowdsecUrl,
-    user: config.crowdsecUser,
-    password: config.crowdsecPassword,
+    auth: config.crowdsecAuth,
     simulationsEnabled: config.simulationsEnabled,
     lookbackPeriod: config.lookbackPeriod,
     version: config.version,
@@ -295,6 +322,17 @@ function createController(options: {
     lapiClient,
     distRoot: createTestDistRoot(),
     updateChecker: async () => ({ update_available: true, remote_version: '2.0.0' }),
+    notificationFetchImpl: async (input, init) => {
+      const url = String(input);
+      const resolved = await options.notificationFetchResolver?.(url, init);
+      if (resolved) {
+        return resolved;
+      }
+      return Response.json({});
+    },
+    mqttPublishImpl: async (config, payload) => {
+      await options.mqttPublishResolver?.(config, payload);
+    },
   });
 
   return { controller, database, lapiClient, fetchCalls };
@@ -498,6 +536,53 @@ describe('createApp', () => {
     destroyTempDir();
   });
 
+  test('bootstraps successfully with mTLS authentication', async () => {
+    const { controller, database, fetchCalls } = createController({ authMode: 'mtls' });
+
+    const alerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alerts.status).toBe(200);
+
+    const loginRequest = fetchCalls.find((call) => call.url.endsWith('/v1/watchers/login'));
+    expect(loginRequest).toBeDefined();
+    expect(loginRequest?.body).toEqual({ scenarios: ['manual/web-ui'] });
+    expect(loginRequest?.tls).toEqual(expect.objectContaining({
+      cert: expect.anything(),
+      key: expect.anything(),
+      ca: expect.anything(),
+    }));
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('fails fast on mixed password and mTLS configuration', () => {
+    expect(() => createController({
+      env: {
+        CROWDSEC_TLS_CERT_PATH: '/certs/agent.pem',
+        CROWDSEC_TLS_KEY_PATH: '/certs/agent-key.pem',
+      },
+    })).toThrow(/choose either CROWDSEC_USER\/CROWDSEC_PASSWORD or CROWDSEC_TLS_CERT_PATH\/CROWDSEC_TLS_KEY_PATH/i);
+
+    destroyTempDir();
+  });
+
+  test('starts without LAPI auth configured but rejects protected API access', async () => {
+    const { controller, database } = createController({ authMode: 'none' });
+
+    const health = await controller.fetch(new Request('http://localhost/api/health'));
+    expect(health.status).toBe(200);
+
+    const alerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alerts.status).toBe(502);
+    expect(await alerts.json()).toEqual({ error: 'Failed to authenticate with CrowdSec LAPI' });
+
+    controller.startBackgroundTasks();
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
   test('normalizes array-shaped alert detail payloads to a single alert', async () => {
     const { controller, database, lapiClient } = createController({
       alertDetailPayload: [sampleAlert()],
@@ -694,6 +779,484 @@ describe('createApp', () => {
 
     const configResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
     expect(((await configResponse.json()) as { simulations_enabled: boolean }).simulations_enabled).toBe(false);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('supports notification settings APIs and records fired notifications', async () => {
+    const liveAlert = sampleAlert({
+      id: 99,
+      uuid: 'alert-99',
+      created_at: new Date().toISOString(),
+    });
+
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '0',
+        CROWDSEC_LOOKBACK_PERIOD: '168h',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (url.includes('/v1/alerts?')) {
+          return Response.json([liveAlert]);
+        }
+        return undefined;
+      },
+      notificationFetchResolver: (url) => {
+        if (url.includes('ntfy.sh')) {
+          return Response.json({ id: 'msg' });
+        }
+        return undefined;
+      },
+    });
+
+    const createChannel = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Main ntfy',
+          type: 'ntfy',
+          enabled: true,
+          config: { topic: 'crowdsec-test' },
+        }),
+      }),
+    );
+    expect(createChannel.status).toBe(201);
+    const channelPayload = await createChannel.json() as { id: string };
+
+    const createRule = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'High volume',
+          type: 'alert-threshold',
+          enabled: true,
+          severity: 'warning',
+          channel_ids: [channelPayload.id],
+          config: {
+            window_minutes: 60,
+            alert_threshold: 1,
+            filters: {},
+          },
+        }),
+      }),
+    );
+    expect(createRule.status).toBe(201);
+
+    const alerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alerts.status).toBe(200);
+
+    const notifications = await controller.fetch(new Request('http://localhost/crowdsec/api/notifications'));
+    expect(notifications.status).toBe(200);
+    const notificationsPayload = await notifications.json() as { unread_count: number; notifications: Array<{ id: string; deliveries: Array<{ status: string }> }> };
+    expect(notificationsPayload.unread_count).toBe(1);
+    expect(notificationsPayload.notifications[0]?.deliveries[0]?.status).toBe('delivered');
+
+    const settings = await controller.fetch(new Request('http://localhost/crowdsec/api/notifications/settings'));
+    expect(settings.status).toBe(200);
+    expect((await settings.json()) as { channels: Array<{ name: string }>; rules: Array<{ name: string }> }).toEqual(
+      expect.objectContaining({
+        channels: [expect.objectContaining({ name: 'Main ntfy' })],
+        rules: [expect.objectContaining({ name: 'High volume' })],
+      }),
+    );
+
+    const testChannel = await controller.fetch(new Request(`http://localhost/crowdsec/api/notification-channels/${channelPayload.id}/test`, { method: 'POST' }));
+    expect(testChannel.status).toBe(200);
+
+    const markRead = await controller.fetch(new Request(`http://localhost/crowdsec/api/notifications/${notificationsPayload.notifications[0]?.id}/read`, { method: 'POST' }));
+    expect(markRead.status).toBe(200);
+
+    const markAllRead = await controller.fetch(new Request('http://localhost/crowdsec/api/notifications/read-all', { method: 'POST' }));
+    expect(markAllRead.status).toBe(200);
+
+    const deleteRule = await controller.fetch(new Request('http://localhost/crowdsec/api/notification-rules/not-real', { method: 'DELETE' }));
+    expect(deleteRule.status).toBe(200);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('stores notification channel secrets encrypted at rest', async () => {
+    const { controller, database } = createController();
+
+    const createChannel = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'SMTP main',
+          type: 'email',
+          enabled: true,
+          config: {
+            smtpHost: 'smtp.example.com',
+            smtpPort: 587,
+            smtpTlsMode: 'starttls',
+            smtpUser: 'ops',
+            smtpPassword: 'super-secret-password',
+            smtpFrom: 'ops@example.com',
+            emailTo: 'team@example.com',
+          },
+        }),
+      }),
+    );
+    expect(createChannel.status).toBe(201);
+    const channelPayload = await createChannel.json() as { id: string; config: { smtpPassword: string } };
+    expect(channelPayload.config.smtpPassword).toBe('(stored)');
+
+    const stored = database.getNotificationChannelById(channelPayload.id);
+    if (!stored?.config_json) {
+      throw new Error('Expected stored notification channel config to be persisted');
+    }
+    expect(stored.config_json.startsWith('enc:v1:')).toBe(true);
+    expect(stored.config_json.includes('super-secret-password')).toBe(false);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('auto-generates and persists the notification secret key when not configured', async () => {
+    const first = createController();
+    const generatedKey = first.database.getMeta('notification_secret_key')?.value;
+    expect(generatedKey).toBeTruthy();
+
+    const createChannel = await first.controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'SMTP main',
+          type: 'email',
+          enabled: true,
+          config: {
+            smtpHost: 'smtp.example.com',
+            smtpPort: 587,
+            smtpTlsMode: 'starttls',
+            smtpUser: 'ops',
+            smtpPassword: 'super-secret-password',
+            smtpFrom: 'ops@example.com',
+            emailTo: 'team@example.com',
+          },
+        }),
+      }),
+    );
+    expect(createChannel.status).toBe(201);
+    first.controller.stopBackgroundTasks();
+    first.database.close();
+
+    const second = createController();
+    expect(second.database.getMeta('notification_secret_key')?.value).toBe(generatedKey);
+
+    const settings = await second.controller.fetch(new Request('http://localhost/crowdsec/api/notifications/settings'));
+    expect(settings.status).toBe(200);
+    expect((await settings.json()) as { channels: Array<{ name: string; configured_secrets: string[] }> }).toEqual(
+      expect.objectContaining({
+        channels: [expect.objectContaining({ name: 'SMTP main', configured_secrets: ['smtpPassword'] })],
+      }),
+    );
+
+    second.controller.stopBackgroundTasks();
+    second.database.close();
+    destroyTempDir();
+  });
+
+  test('blocks private notification destinations unless explicitly allowed', async () => {
+    const { controller, database } = createController({
+      env: {
+        NOTIFICATION_ALLOW_PRIVATE_ADDRESSES: 'false',
+      },
+    });
+
+    const createChannel = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Local webhook',
+          type: 'webhook',
+          enabled: true,
+          config: {
+            url: 'http://127.0.0.1/hooks/notify',
+            method: 'POST',
+            body: { mode: 'json', template: '{"ok":true}' },
+            retryAttempts: 0,
+          },
+        }),
+      }),
+    );
+    expect(createChannel.status).toBe(201);
+    const channelPayload = database.listNotificationChannels()[0] as { id?: string };
+
+    const testChannel = await controller.fetch(new Request(`http://localhost/crowdsec/api/notification-channels/${channelPayload.id}/test`, { method: 'POST' }));
+    expect(testChannel.status).toBe(400);
+    expect((await testChannel.json()) as { error: string }).toEqual({
+      error: 'Webhook URL points to a restricted address (127.0.0.1)',
+    });
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('allows private notification destinations when explicitly enabled', async () => {
+    const { controller, database } = createController({
+      env: {
+        NOTIFICATION_ALLOW_PRIVATE_ADDRESSES: 'true',
+      },
+      notificationFetchResolver: (url) => {
+        if (url.includes('127.0.0.1')) {
+          return Response.json({ ok: true });
+        }
+        return undefined;
+      },
+    });
+
+    const createChannel = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Local webhook',
+          type: 'webhook',
+          enabled: true,
+          config: {
+            url: 'http://127.0.0.1/hooks/notify',
+            method: 'POST',
+            body: { mode: 'json', template: '{"ok":true}' },
+            retryAttempts: 0,
+          },
+        }),
+      }),
+    );
+    expect(createChannel.status).toBe(201);
+    const channelPayload = database.listNotificationChannels()[0] as { id?: string };
+
+    const testChannel = await controller.fetch(new Request(`http://localhost/crowdsec/api/notification-channels/${channelPayload.id}/test`, { method: 'POST' }));
+    expect(testChannel.status).toBe(200);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('does not expose remote notification response bodies to clients', async () => {
+    const { controller, database } = createController({
+      notificationFetchResolver: (url) => {
+        if (url.includes('198.51.100.10')) {
+          return new Response('internal token leaked', { status: 500 });
+        }
+        return undefined;
+      },
+    });
+
+    const createChannel = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Webhook prod',
+          type: 'webhook',
+          enabled: true,
+          config: {
+            url: 'https://198.51.100.10/hooks/notify',
+            method: 'POST',
+            body: { mode: 'json', template: '{"ok":true}' },
+            retryAttempts: 0,
+          },
+        }),
+      }),
+    );
+    expect(createChannel.status).toBe(201);
+    const channelPayload = database.listNotificationChannels()[0] as { id?: string };
+
+    const testChannel = await controller.fetch(new Request(`http://localhost/crowdsec/api/notification-channels/${channelPayload.id}/test`, { method: 'POST' }));
+    expect(testChannel.status).toBe(400);
+    expect((await testChannel.json()) as { error: string }).toEqual({
+      error: 'Webhook request failed with status 500',
+    });
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('delivers rule notifications to MQTT destinations', async () => {
+    const liveAlert = sampleAlert({
+      id: 100,
+      uuid: 'alert-100',
+      created_at: new Date().toISOString(),
+    });
+
+    const mqttPublishes: Array<{ config: MqttPublishConfig; payload: string }> = [];
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '0',
+        CROWDSEC_LOOKBACK_PERIOD: '168h',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (url.includes('/v1/alerts?')) {
+          return Response.json([liveAlert]);
+        }
+        return undefined;
+      },
+      mqttPublishResolver: (config, payload) => {
+        mqttPublishes.push({ config, payload });
+      },
+    });
+
+    const createChannel = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Primary MQTT',
+          type: 'mqtt',
+          enabled: true,
+          config: {
+            brokerUrl: 'mqtt://broker.example.com:1883',
+            topic: 'crowdsec/notifications',
+            keepaliveSeconds: 45,
+            connectTimeoutMs: 5000,
+            qos: 1,
+            retainEvents: true,
+          },
+        }),
+      }),
+    );
+    expect(createChannel.status).toBe(201);
+    const channelPayload = await createChannel.json() as { id: string };
+
+    const createRule = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'MQTT threshold',
+          type: 'alert-threshold',
+          enabled: true,
+          severity: 'critical',
+          channel_ids: [channelPayload.id],
+          config: {
+            window_minutes: 60,
+            alert_threshold: 1,
+            filters: {},
+          },
+        }),
+      }),
+    );
+    expect(createRule.status).toBe(201);
+
+    const alerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alerts.status).toBe(200);
+
+    expect(mqttPublishes).toHaveLength(1);
+    expect(mqttPublishes[0]?.config).toEqual(expect.objectContaining({
+      brokerUrl: 'mqtt://broker.example.com:1883',
+      topic: 'crowdsec/notifications',
+      qos: 1,
+      retainEvents: true,
+    }));
+    expect(JSON.parse(mqttPublishes[0]?.payload || '{}')).toEqual(expect.objectContaining({
+      title: 'MQTT threshold: threshold exceeded',
+      severity: 'critical',
+      channel_name: 'Primary MQTT',
+      rule_name: 'MQTT threshold',
+    }));
+
+    const testChannel = await controller.fetch(new Request(`http://localhost/crowdsec/api/notification-channels/${channelPayload.id}/test`, { method: 'POST' }));
+    expect(testChannel.status).toBe(200);
+    expect(mqttPublishes).toHaveLength(2);
+    expect(JSON.parse(mqttPublishes[1]?.payload || '{}')).toEqual(expect.objectContaining({
+      rule_name: null,
+      severity: 'info',
+    }));
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('fires application update rules when a newer version is available', async () => {
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '0',
+        CROWDSEC_LOOKBACK_PERIOD: '168h',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (url.includes('/v1/alerts?')) {
+          return Response.json([]);
+        }
+        return undefined;
+      },
+      notificationFetchResolver: (url) => {
+        if (url.includes('ntfy.sh')) {
+          return Response.json({ id: 'msg' });
+        }
+        return undefined;
+      },
+    });
+
+    const createChannel = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Update ntfy',
+          type: 'ntfy',
+          enabled: true,
+          config: { topic: 'crowdsec-updates' },
+        }),
+      }),
+    );
+    expect(createChannel.status).toBe(201);
+    const channelPayload = await createChannel.json() as { id: string };
+
+    const createRule = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'App updates',
+          type: 'application-update',
+          enabled: true,
+          severity: 'info',
+          channel_ids: [channelPayload.id],
+          config: {},
+        }),
+      }),
+    );
+    expect(createRule.status).toBe(201);
+
+    const alerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alerts.status).toBe(200);
+
+    const notifications = await controller.fetch(new Request('http://localhost/crowdsec/api/notifications'));
+    expect(notifications.status).toBe(200);
+    expect((await notifications.json()) as {
+      notifications: Array<{ rule_type: string; title: string; metadata: { remote_version?: string | null } }>;
+    }).toEqual(expect.objectContaining({
+      notifications: [
+        expect.objectContaining({
+          rule_type: 'application-update',
+          title: 'App updates: application update available',
+          metadata: expect.objectContaining({ remote_version: '2.0.0' }),
+        }),
+      ],
+    }));
 
     controller.stopBackgroundTasks();
     database.close();

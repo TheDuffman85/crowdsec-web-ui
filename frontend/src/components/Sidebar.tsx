@@ -1,5 +1,7 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, ShieldAlert, Gavel, X, Sun, Moon, ArrowUpCircle, Menu, PanelLeftClose } from "lucide-react";
+import { LayoutDashboard, ShieldAlert, Gavel, Bell, X, Sun, Moon, ArrowUpCircle, Menu, PanelLeftClose } from "lucide-react";
+import { Badge } from "./ui/Badge";
+import { useNotificationUnreadCount } from "../contexts/useNotificationUnreadCount";
 import { useRefresh } from "../contexts/useRefresh";
 import { useState, useEffect } from "react";
 import { apiUrl, assetUrl } from "../lib/basePath";
@@ -17,12 +19,14 @@ interface SidebarProps {
 
 export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: SidebarProps) {
     const { intervalMs, setIntervalMs, lastUpdated, refreshSignal } = useRefresh();
+    const { unreadCount } = useNotificationUnreadCount();
     const [updateStatus, setUpdateStatus] = useState<UpdateCheckResponse | null>(null);
 
     const links = [
         { to: "/", label: "Dashboard", icon: LayoutDashboard },
         { to: "/alerts", label: "Alerts", icon: ShieldAlert },
         { to: "/decisions", label: "Decisions", icon: Gavel },
+        { to: "/notifications", label: "Notifications", icon: Bell },
     ];
 
     useEffect(() => {
@@ -44,6 +48,24 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
     const formatTime = (date: Date | null) => {
         if (!date) return "";
         return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    };
+
+    const renderUnreadBadge = (compact = false) => {
+        if (unreadCount <= 0) {
+            return null;
+        }
+
+        return (
+            <Badge
+                aria-label={`${unreadCount} unread notifications`}
+                className={compact
+                    ? "absolute right-1.5 top-1.5 min-h-5 min-w-5 justify-center rounded-full bg-primary-500 px-1.5 text-white dark:bg-primary-500 dark:text-white"
+                    : "ml-auto min-w-6 justify-center rounded-full bg-primary-500 text-white dark:bg-primary-500 dark:text-white"
+                }
+            >
+                {unreadCount}
+            </Badge>
+        );
     };
 
     return (
@@ -102,14 +124,17 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                             }
                         }}
                         className={({ isActive }) =>
-                            `flex items-center px-4 py-3 rounded-lg transition-all duration-200 group ${isActive
+                            `flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 group ${isActive
                                 ? "bg-primary-50 dark:bg-primary-900/20 text-primary-600 dark:text-primary-400"
                                 : "text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50 hover:text-gray-900 dark:hover:text-gray-200"
                             }`
                         }
                     >
-                        <link.icon className="w-5 h-5 mr-3" />
-                        <span className="font-medium">{link.label}</span>
+                        <div className="flex min-w-0 items-center gap-3">
+                            <link.icon className="w-5 h-5" />
+                            <span className="font-medium">{link.label}</span>
+                        </div>
+                        {link.to === "/notifications" ? renderUnreadBadge() : null}
                     </NavLink>
                 ))}
             </nav>
@@ -253,7 +278,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                         key={link.to}
                         to={link.to}
                         className={({ isActive }) =>
-                            `flex items-center justify-center p-3 rounded-lg transition-all duration-200 group ${isActive
+                            `relative flex items-center justify-center p-3 rounded-lg transition-all duration-200 group ${isActive
                                 ? "bg-primary-50 dark:bg-primary-900/20 text-primary-600 dark:text-primary-400"
                                 : "text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50 hover:text-gray-900 dark:hover:text-gray-200"
                             }`
@@ -261,6 +286,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                         title={link.label}
                     >
                         <link.icon className="w-5 h-5" />
+                        {link.to === "/notifications" ? renderUnreadBadge(true) : null}
                     </NavLink>
                 ))}
             </nav>

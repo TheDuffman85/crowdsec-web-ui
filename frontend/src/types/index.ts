@@ -1,5 +1,5 @@
 import type { Dispatch, ReactNode, SetStateAction } from 'react';
-import type { SyncStatus } from '@shared/contracts';
+import type { SyncStatus } from '../../../shared/contracts';
 
 export type {
   AddDecisionRequest,
@@ -10,14 +10,27 @@ export type {
   AlertRecord,
   AlertSource,
   ConfigResponse,
+  NotificationChannel,
+  NotificationChannelType,
+  NotificationDeliveryResult,
+  NotificationFilter,
+  NotificationItem,
+  NotificationListResponse,
+  NotificationRule,
+  NotificationRuleConfig,
+  NotificationRuleType,
+  NotificationSeverity,
+  NotificationSettingsResponse,
   DecisionListItem,
   SlimAlert,
   SlimDecision,
   StatsAlert,
   StatsDecision,
   SyncStatus,
+  UpsertNotificationChannelRequest,
+  UpsertNotificationRuleRequest,
   UpdateCheckResponse,
-} from '@shared/contracts';
+} from '../../../shared/contracts';
 
 export interface DateRangeSelection {
   start: string;
@@ -68,6 +81,12 @@ export interface RefreshContextValue {
   setIntervalMs: (newIntervalMs: number) => Promise<void>;
   refreshSignal: number;
   syncStatus: SyncStatus | null;
+}
+
+export interface NotificationUnreadContextValue {
+  unreadCount: number;
+  setUnreadCount: Dispatch<SetStateAction<number>>;
+  refreshUnreadCount: () => Promise<void>;
 }
 
 export interface ApiPermissionError extends Error {

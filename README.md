@@ -64,6 +64,9 @@ Ban IPs directly from the UI with custom duration and reason.
 ### Update Notifications
 Automatically detects new container images on GitHub Container Registry (GHCR). A badge appears in the sidebar when an update is available for your current tag.
 
+### Notification Center
+Create notification rules for alert spikes, alert thresholds, recent CVE activity, and application updates, then deliver them to one or more outbound destinations such as Email, Gotify, MQTT, ntfy, or Webhooks.
+
 ### Modern UI
 -   **Dark/Light Mode**: Full support for both themes.
 -   **Responsive**: Optimized for mobile and desktop.
@@ -77,24 +80,35 @@ Automatically detects new container images on GitHub Container Registry (GHCR). 
 -   **Frontend**: React (Vite) + Tailwind CSS. Located in `frontend/`.
 -   **Backend**: Bun (Hono). Acts as an intelligent caching layer for CrowdSec Local API (LAPI) with delta updates and optimized chunked historical data sync.
 -   **Database**: SQLite (native bun:sqlite). Persists alerts and decisions locally in `/app/data/crowdsec.db` to reduce memory usage and support historical data.
--   **Security**: The application runs as a non-root user (`bun`) inside the container and communicates with CrowdSec via HTTP/LAPI. It uses **Machine Authentication** (User/Password) to obtain a JWT for full access (read/write).
+-   **Security**: The application runs as a non-root user (`bun`) inside the container and communicates with CrowdSec via HTTP/LAPI. It uses **Machine Authentication** to obtain a JWT for full access (read/write), either via watcher `User/Password` or agent **mTLS**.
 
 ## Prerequisites
 
 -   **CrowdSec**: A running CrowdSec instance.
--   **Machine Account**: You must register a "Machine" (Watcher) for this web UI to allow it to push alerts (add decisions).
-    
-    1.  Generate a secure password:
+-   **Authentication**: Configure exactly one CrowdSec LAPI auth mode for this web UI:
+
+    1.  **Watcher password auth**
+        Generate a secure password:
         ```bash
         openssl rand -hex 32
         ```
-    2.  Create the machine:
+        Create the machine:
         ```bash
         docker exec crowdsec cscli machines add crowdsec-web-ui --password <generated_password> -f /dev/null
         ```
 
+    2.  **Agent mTLS auth**
+        Configure CrowdSec LAPI TLS auth and generate an agent client certificate/key pair for this Web UI as described in the [CrowdSec TLS authentication docs](https://docs.crowdsec.net/docs/local_api/tls_auth/).
+
 > [!NOTE]
 > The `-f /dev/null` flag is crucial. It tells `cscli` **not** to overwrite the existing credentials file of the CrowdSec container. We only want to register the machine in the database, not change the container's local config.
+
+> [!IMPORTANT]
+> Choose exactly one auth mode:
+> - Password auth: `CROWDSEC_USER` + `CROWDSEC_PASSWORD`
+> - mTLS auth: `CROWDSEC_TLS_CERT_PATH` + `CROWDSEC_TLS_KEY_PATH` with optional `CROWDSEC_TLS_CA_CERT_PATH`
+>
+> Do not set both modes at the same time. The container will fail fast on mixed or partial auth configuration.
 
 ### Trusted IPs for Delete Operations (Optional)
 
@@ -166,8 +180,15 @@ These are upstream LAPI filters, so excluded alerts are skipped before they are 
     docker build --build-arg DOCKER_IMAGE_REF=my-registry/my-image -t crowdsec-web-ui .
     ```
 
+> [!CAUTION]
+> **Bun Runtime Compatibility**: Current Docker images are based on Bun. On some older x64 CPUs and VMs configured for broad compatibility, the guest may not expose the CPU features Bun expects, which can lead to immediate exits, `Illegal instruction` errors, or restart loops.
+>
+> On `x86_64` only, the container now performs a startup check for AVX2 support and exits with a clear error if it is missing. This check does not apply to ARM/`arm64`.
+>
+> This is most commonly seen on virtualized environments that hide AVX/AVX2 support. For example, Proxmox guests using the default `kvm64` CPU type may need to switch to `host` or another CPU type that exposes AVX/AVX2 before troubleshooting `/app/data` permissions or other startup issues.
+
 2.  **Run the container**:
-    Provide the CrowdSec LAPI URL and your Machine Credentials.
+    Provide the CrowdSec LAPI URL and one supported auth mode.
 
     ```bash
     docker run -d \
@@ -216,10 +237,39 @@ services:
       - CROWDSEC_BOOTSTRAP_RETRY_DELAY=30s
       # Optional: Enable automatic bootstrap retry after startup/login failure (default: true)
       - CROWDSEC_BOOTSTRAP_RETRY_ENABLED=true
+      # Optional: Encryption key for notification destinations with saved secrets
+      # - NOTIFICATION_SECRET_KEY=<long-random-secret>
+      # Optional: Block notifications to private/internal destinations (default: true)
+      # - NOTIFICATION_ALLOW_PRIVATE_ADDRESSES=false
       # Optional: Base path for reverse proxy deployments (e.g., /crowdsec)
       # - BASE_PATH=/crowdsec
     volumes:
       - ./data:/app/data
+    restart: unless-stopped
+```
+
+### Docker Compose Example (mTLS Authentication)
+
+```yaml
+services:
+  crowdsec-web-ui:
+    image: ghcr.io/theduffman85/crowdsec-web-ui:latest
+    container_name: crowdsec_web_ui
+    ports:
+      - "3000:3000"
+    environment:
+      - CROWDSEC_URL=https://crowdsec:8080
+      - CROWDSEC_TLS_CERT_PATH=/certs/agent.pem
+      - CROWDSEC_TLS_KEY_PATH=/certs/agent-key.pem
+      # Optional: Custom CA bundle used to verify the CrowdSec LAPI server certificate
+      - CROWDSEC_TLS_CA_CERT_PATH=/certs/ca.pem
+      - CROWDSEC_SIMULATIONS_ENABLED=true
+      - CROWDSEC_LOOKBACK_PERIOD=5d
+    volumes:
+      - ./data:/app/data
+      - /path/on/host/agent.pem:/certs/agent.pem:ro
+      - /path/on/host/agent-key.pem:/certs/agent-key.pem:ro
+      - /path/on/host/ca.pem:/certs/ca.pem:ro
     restart: unless-stopped
 ```
 
@@ -247,7 +297,7 @@ services:
     environment:
       - CROWDSEC_URL=https://crowdsec:8080
       - CROWDSEC_USER=crowdsec-web-ui
-      - CROWDSEC_PASSWORD=<YOUR_API_KEY>
+      - CROWDSEC_PASSWORD=<generated_password>
       - CROWDSEC_SIMULATIONS_ENABLED=true
       - NODE_EXTRA_CA_CERTS=/certs/root_ca.crt
     volumes:
@@ -262,6 +312,7 @@ services:
 - The `:ro` ensures the certificate is mounted read-only.
 - This method avoids rebuilding the container image.
 - Works for self-signed certificates as well as private CA certificates.
+- `NODE_EXTRA_CA_CERTS` is a general runtime trust mechanism. When using the new mTLS auth mode, prefer `CROWDSEC_TLS_CA_CERT_PATH` as the explicit CrowdSec LAPI trust input for the Web UI client connection.
 
 ### Reverse Proxy with Base Path
 
@@ -328,6 +379,170 @@ docker inspect --format='{{.State.Health.Status}}' crowdsec_web_ui
 
 If you use `BASE_PATH`, the health check still targets `localhost:3000/api/health` directly inside the container, so no additional configuration is needed.
 
+## Notifications
+
+The **Notifications** page lets you define rules that watch the locally cached CrowdSec data and create notification events when a condition matches. Every notification is also stored in-app, where you can review delivery status and mark items as read.
+
+### Rules
+
+Each rule has:
+
+-   a name
+-   a severity: `info`, `warning`, or `critical`
+-   incident-based deduplication so the same condition only fires once until it clears and reappears
+-   one or more destination channels
+
+Alert-based rules can also use optional filters for scenario text, target text, and whether simulated alerts should be included.
+
+Available rule types:
+
+-   `Alert Spike`: compares the current window with the previous window and triggers when the percentage increase and minimum alert count are exceeded
+-   `Alert Threshold`: triggers when the number of matching alerts in the configured time window reaches the threshold
+-   `Recent CVE`: extracts CVE IDs from matching alerts and checks publication age before notifying
+-   `Application Update`: uses the built-in update check and triggers when a newer CrowdSec Web UI version is available
+
+> [!NOTE]
+> The `Recent CVE` rule queries the NVD API to determine when a CVE was published. If outbound access to `services.nvd.nist.gov` is blocked, recent-CVE notifications may be skipped.
+
+### Destinations
+
+You can create multiple destinations and attach the same rule to several of them.
+
+Shared behavior:
+
+-   destinations can be enabled or disabled independently
+-   secrets are masked when you reopen a saved destination
+-   destinations with saved secrets are encrypted at rest using `NOTIFICATION_SECRET_KEY`, or an auto-generated key persisted in app metadata when the env var is unset
+-   **Send Test** validates a saved destination without waiting for a real rule to fire
+-   delivery results are stored with each notification as `delivered` or `failed`
+-   private, loopback, and link-local outbound destinations are allowed by default and can be blocked explicitly
+
+Supported destination types:
+
+#### Email
+
+SMTP delivery with:
+
+-   `SMTP Host`
+-   `SMTP Port`
+-   `SMTP Security`: `Plain SMTP`, `STARTTLS`, or `SMTPS / Implicit TLS`
+-   optional `SMTP User` and `SMTP Password`
+-   `From Address`
+-   one or more comma-separated `To Address(es)`
+-   `Importance`: `auto`, `normal`, or `important`
+-   optional `Allow insecure TLS` for trusted self-signed SMTP endpoints
+
+When email importance is set to `auto`, it follows the rule severity:
+
+-   `info` -> `normal`
+-   `warning` -> `important`
+-   `critical` -> `important`
+
+#### Gotify
+
+Gotify delivery with:
+
+-   `Gotify URL`
+-   `App Token`
+-   `Priority`: `auto` or an explicit integer
+
+When Gotify priority is set to `auto`, it follows the rule severity:
+
+-   `info` -> `5`
+-   `warning` -> `7`
+-   `critical` -> `10`
+
+#### ntfy
+
+ntfy delivery with:
+
+-   `Server URL`
+-   `Topic`
+-   optional `Access Token`
+-   `Priority`: `auto`, `min`, `low`, `default`, `high`, or `urgent`
+
+When ntfy priority is set to `auto`, it follows the rule severity:
+
+-   `info` -> `default`
+-   `warning` -> `high`
+-   `critical` -> `urgent`
+
+#### MQTT
+
+MQTT delivery is generic publish-only notification output. It does **not** include Home Assistant discovery, entity sync, or command handling.
+
+MQTT settings:
+
+-   `Broker URL`
+-   optional `Username` and `Password`
+-   optional `Client ID`
+-   `QoS`: `0` or `1`
+-   `Keepalive`
+-   `Connect Timeout`
+-   `Topic`
+-   `Retain MQTT payloads`
+
+Each notification publishes a JSON payload to the configured topic containing:
+
+-   `title`
+-   `message`
+-   `severity`
+-   `metadata`
+-   `sent_at`
+-   `channel_id`
+-   `channel_name`
+-   `channel_type`
+-   `rule_id`
+-   `rule_name`
+-   `rule_type`
+
+For test sends, the rule fields are `null`.
+
+#### Webhook
+
+Webhook delivery supports custom integrations such as automation tools, internal APIs, chat bridges, and other HTTP endpoints.
+
+Webhook settings:
+
+-   HTTP method: `POST`, `PUT`, or `PATCH`
+-   target `URL`
+-   optional query parameters
+-   optional custom headers
+-   authentication: none, bearer token, or basic auth
+-   body mode: `JSON`, `Text`, or `Form`
+-   request timeout
+-   retry attempts and retry delay
+-   optional `Allow insecure TLS` for trusted self-signed HTTPS endpoints
+
+Webhook templates support simple dotted variables rooted at `event.*`. The body and templated fields can reference values such as:
+
+-   `{{event.title}}`
+-   `{{event.message}}`
+-   `{{event.severity}}`
+-   `{{event.metadata}}`
+-   `{{event.sent_at}}`
+-   `{{event.channel_name}}`
+-   `{{event.rule_name}}`
+
+### Notification Security Controls
+
+-   `NOTIFICATION_SECRET_KEY`: optional override for the notification encryption key. If unset, the backend auto-generates one on first start and persists it in application metadata so encrypted destinations continue working across restarts.
+-   `NOTIFICATION_ALLOW_PRIVATE_ADDRESSES=true` by default. Set it to `false` if you want to block private, loopback, and link-local destinations.
+
+### Current Scope
+
+The notification system currently supports:
+
+-   in-app notification history
+-   rule-based outbound delivery
+-   Email, Gotify, MQTT, ntfy, and Webhook destinations
+
+It currently does **not** include:
+
+-   Telegram destinations
+-   Home Assistant MQTT discovery
+-   MQTT entity state publishing or inbound commands
+
 ### Run with Helm
 
 A Helm chart for deploying `crowdsec-web-ui` on Kubernetes is available (maintained by the zekker6):
@@ -359,7 +574,7 @@ The Web UI maintains its own local history of alerts and decisions. Data fetched
 ## Local Development
 
 1.  **Install Dependencies**:
-    You need [Bun](https://bun.sh) installed.
+    You need [Bun](https://bun.sh) installed. On older x64 systems or VMs that do not expose AVX/AVX2 support, Bun itself may fail to start for the same CPU compatibility reasons described in the Docker section above. This limitation is specific to x64 and does not apply to ARM/`arm64`.
     ```bash
     bun run install-all
     ```
@@ -376,6 +591,17 @@ The Web UI maintains its own local history of alerts and decisions. Data fetched
     CROWDSEC_BOOTSTRAP_RETRY_ENABLED=true
     # Optional: Base path for reverse proxy deployments
     # BASE_PATH=/crowdsec
+    ```
+
+    Or use mTLS instead of `CROWDSEC_USER`/`CROWDSEC_PASSWORD`:
+    ```bash
+    CROWDSEC_URL=https://localhost:8080
+    CROWDSEC_TLS_CERT_PATH=/path/to/agent.pem
+    CROWDSEC_TLS_KEY_PATH=/path/to/agent-key.pem
+    # Optional when using a private CA or self-signed CrowdSec LAPI certificate
+    CROWDSEC_TLS_CA_CERT_PATH=/path/to/ca.pem
+    CROWDSEC_SIMULATIONS_ENABLED=true
+    CROWDSEC_REFRESH_INTERVAL=30s
     ```
 
 3.  **Start the Application**:

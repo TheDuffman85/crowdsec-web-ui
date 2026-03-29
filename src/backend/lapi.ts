@@ -1,4 +1,5 @@
 import type { LapiStatus } from '../../shared/contracts';
+import type { CrowdsecAuthConfig } from './auth';
 
 export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -17,8 +18,7 @@ export interface FetchLapiResult<TData = unknown> {
 
 export interface LapiClientOptions {
   crowdsecUrl: string;
-  user?: string;
-  password?: string;
+  auth: CrowdsecAuthConfig;
   simulationsEnabled?: boolean;
   lookbackPeriod: string;
   version: string;
@@ -32,11 +32,11 @@ export interface FetchAlertsFilters {
 
 export class LapiClient {
   private readonly crowdsecUrl: string;
-  private readonly user?: string;
-  private readonly password?: string;
+  private readonly auth: CrowdsecAuthConfig;
   private readonly simulationsEnabled: boolean;
   private readonly version: string;
   private readonly fetchImpl: FetchLike;
+  private readonly tlsOptions?: BunFetchRequestInitTLS;
 
   public readonly lookbackPeriod: string;
   private requestToken: string | null = null;
@@ -49,12 +49,18 @@ export class LapiClient {
 
   constructor(options: LapiClientOptions) {
     this.crowdsecUrl = options.crowdsecUrl;
-    this.user = options.user;
-    this.password = options.password;
+    this.auth = options.auth;
     this.simulationsEnabled = options.simulationsEnabled ?? false;
     this.lookbackPeriod = options.lookbackPeriod;
     this.version = options.version;
     this.fetchImpl = options.fetchImpl || fetch;
+    this.tlsOptions = this.auth.mode === 'mtls'
+      ? {
+          key: Bun.file(this.auth.keyPath),
+          cert: Bun.file(this.auth.certPath),
+          ...(this.auth.caCertPath ? { ca: Bun.file(this.auth.caCertPath) } : {}),
+        }
+      : undefined;
   }
 
   updateStatus(isConnected: boolean, error: { message?: string } | null = null): void {
@@ -67,8 +73,8 @@ export class LapiClient {
     return { ...this.lapiStatus };
   }
 
-  hasCredentials(): boolean {
-    return Boolean(this.user && this.password);
+  hasAuthConfig(): boolean {
+    return this.auth.mode !== 'none';
   }
 
   hasToken(): boolean {
@@ -103,6 +109,7 @@ export class LapiClient {
         headers,
         body: options.body ? JSON.stringify(options.body) : undefined,
         signal: controller.signal,
+        ...(this.tlsOptions ? { tls: this.tlsOptions } : {}),
       });
 
       clearTimeout(timeoutId);
@@ -153,14 +160,24 @@ export class LapiClient {
     }
 
     this.loginPromise = (async () => {
+      if (this.auth.mode === 'none') {
+        console.error(`Authentication failed${contextLabel}: CrowdSec LAPI authentication is not configured.`);
+        this.updateStatus(false, { message: 'Authentication not configured' });
+        return false;
+      }
+
       try {
+        const body: Record<string, unknown> = {
+          scenarios: ['manual/web-ui'],
+        };
+        if (this.auth.mode === 'password') {
+          body.machine_id = this.auth.user;
+          body.password = this.auth.password;
+        }
+
         const response = await this.fetchLapi<{ code?: number; token?: string }>('/v1/watchers/login', {
           method: 'POST',
-          body: {
-            machine_id: this.user,
-            password: this.password,
-            scenarios: ['manual/web-ui'],
-          },
+          body,
         });
 
         if (response.data?.token) {

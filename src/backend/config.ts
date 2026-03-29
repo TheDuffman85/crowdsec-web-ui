@@ -1,9 +1,14 @@
+import { createCrowdsecAuthConfig, type CrowdsecAuthConfig } from './auth';
+
 export interface RuntimeConfig {
   port: number;
   basePath: string;
   crowdsecUrl: string;
-  crowdsecUser?: string;
-  crowdsecPassword?: string;
+  crowdsecAuth: CrowdsecAuthConfig;
+  crowdsecAuthMode: CrowdsecAuthConfig['mode'];
+  crowdsecTlsCertPath?: string;
+  crowdsecTlsKeyPath?: string;
+  crowdsecTlsCaCertPath?: string;
   alertOrigins: string[];
   alertExtraScenarios: string[];
   simulationsEnabled: boolean;
@@ -21,6 +26,8 @@ export interface RuntimeConfig {
   commitHash: string;
   updateCheckEnabled: boolean;
   dbDir: string;
+  notificationSecretKey?: string;
+  notificationAllowPrivateAddresses: boolean;
 }
 
 export function parseRefreshInterval(intervalStr: string | undefined | null): number {
@@ -84,13 +91,18 @@ export function getIntervalName(intervalMs: number): string {
 export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig {
   const lookbackPeriod = env.CROWDSEC_LOOKBACK_PERIOD || '168h';
   const refreshIntervalMs = parseRefreshInterval(env.CROWDSEC_REFRESH_INTERVAL || '30s');
+  const crowdsecAuth = createCrowdsecAuthConfig(env);
+  const notificationSecretKey = env.NOTIFICATION_SECRET_KEY?.trim() || undefined;
 
   return {
     port: Number(env.PORT || 3000),
     basePath: (env.BASE_PATH || '').replace(/\/$/, ''),
     crowdsecUrl: env.CROWDSEC_URL || 'http://crowdsec:8080',
-    crowdsecUser: env.CROWDSEC_USER,
-    crowdsecPassword: env.CROWDSEC_PASSWORD,
+    crowdsecAuth,
+    crowdsecAuthMode: crowdsecAuth.mode,
+    crowdsecTlsCertPath: crowdsecAuth.mode === 'mtls' ? crowdsecAuth.certPath : undefined,
+    crowdsecTlsKeyPath: crowdsecAuth.mode === 'mtls' ? crowdsecAuth.keyPath : undefined,
+    crowdsecTlsCaCertPath: crowdsecAuth.mode === 'mtls' ? crowdsecAuth.caCertPath : undefined,
     alertOrigins: parseCsvEnv(env.CROWDSEC_ALERT_ORIGINS),
     alertExtraScenarios: parseCsvEnv(env.CROWDSEC_ALERT_EXTRA_SCENARIOS),
     simulationsEnabled: parseBooleanEnv(env.CROWDSEC_SIMULATIONS_ENABLED, false),
@@ -108,5 +120,7 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
     commitHash: env.VITE_COMMIT_HASH || '',
     updateCheckEnabled: Boolean(env.VITE_COMMIT_HASH || env.VITE_VERSION),
     dbDir: env.DB_DIR || '/app/data',
+    notificationSecretKey,
+    notificationAllowPrivateAddresses: parseBooleanEnv(env.NOTIFICATION_ALLOW_PRIVATE_ADDRESSES, true),
   };
 }

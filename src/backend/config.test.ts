@@ -62,10 +62,14 @@ describe('config helpers', () => {
       VITE_BRANCH: 'dev',
       VITE_COMMIT_HASH: 'abc123',
       DB_DIR: '/tmp/app',
+      NOTIFICATION_SECRET_KEY: 'notif-secret',
+      NOTIFICATION_ALLOW_PRIVATE_ADDRESSES: 'true',
     });
 
     expect(config.port).toBe(4000);
     expect(config.basePath).toBe('/crowdsec');
+    expect(config.crowdsecAuthMode).toBe('password');
+    expect(config.crowdsecAuth).toEqual({ mode: 'password', user: 'watcher', password: 'secret' });
     expect(config.alertOrigins).toEqual(['crowdsec', 'cscli']);
     expect(config.alertExtraScenarios).toEqual(['manual/web-ui']);
     expect(config.simulationsEnabled).toBe(false);
@@ -75,12 +79,57 @@ describe('config helpers', () => {
     expect(config.dockerImageRef).toBe('example/repo');
     expect(config.updateCheckEnabled).toBe(true);
     expect(config.dbDir).toBe('/tmp/app');
+    expect(config.notificationSecretKey).toBe('notif-secret');
+    expect(config.notificationAllowPrivateAddresses).toBe(true);
   });
 
   test('createRuntimeConfig disables simulations by default', () => {
     const config = createRuntimeConfig({});
+    expect(config.crowdsecAuthMode).toBe('none');
+    expect(config.crowdsecAuth).toEqual({ mode: 'none' });
     expect(config.alertOrigins).toEqual([]);
     expect(config.alertExtraScenarios).toEqual([]);
     expect(config.simulationsEnabled).toBe(false);
+    expect(config.notificationSecretKey).toBeUndefined();
+    expect(config.notificationAllowPrivateAddresses).toBe(true);
+  });
+
+  test('createRuntimeConfig supports mTLS authentication', () => {
+    const config = createRuntimeConfig({
+      CROWDSEC_URL: 'https://localhost:8080',
+      CROWDSEC_TLS_CERT_PATH: '/certs/agent.pem',
+      CROWDSEC_TLS_KEY_PATH: '/certs/agent-key.pem',
+      CROWDSEC_TLS_CA_CERT_PATH: '/certs/ca.pem',
+    });
+
+    expect(config.crowdsecAuthMode).toBe('mtls');
+    expect(config.crowdsecAuth).toEqual({
+      mode: 'mtls',
+      certPath: '/certs/agent.pem',
+      keyPath: '/certs/agent-key.pem',
+      caCertPath: '/certs/ca.pem',
+    });
+    expect(config.crowdsecTlsCertPath).toBe('/certs/agent.pem');
+    expect(config.crowdsecTlsKeyPath).toBe('/certs/agent-key.pem');
+    expect(config.crowdsecTlsCaCertPath).toBe('/certs/ca.pem');
+  });
+
+  test('createRuntimeConfig rejects mixed password and mTLS authentication', () => {
+    expect(() => createRuntimeConfig({
+      CROWDSEC_USER: 'watcher',
+      CROWDSEC_PASSWORD: 'secret',
+      CROWDSEC_TLS_CERT_PATH: '/certs/agent.pem',
+      CROWDSEC_TLS_KEY_PATH: '/certs/agent-key.pem',
+    })).toThrow(/choose either CROWDSEC_USER\/CROWDSEC_PASSWORD or CROWDSEC_TLS_CERT_PATH\/CROWDSEC_TLS_KEY_PATH/i);
+  });
+
+  test('createRuntimeConfig rejects partial mTLS authentication', () => {
+    expect(() => createRuntimeConfig({
+      CROWDSEC_TLS_CERT_PATH: '/certs/agent.pem',
+    })).toThrow(/CrowdSec mTLS authentication requires both CROWDSEC_TLS_CERT_PATH and CROWDSEC_TLS_KEY_PATH/i);
+
+    expect(() => createRuntimeConfig({
+      CROWDSEC_TLS_CA_CERT_PATH: '/certs/ca.pem',
+    })).toThrow(/CrowdSec mTLS authentication requires both CROWDSEC_TLS_CERT_PATH and CROWDSEC_TLS_KEY_PATH/i);
   });
 });
