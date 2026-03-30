@@ -7,6 +7,9 @@ ENV_FILE="$SCRIPT_DIR/.env"
 BACKEND_PORT=3000
 FRONTEND_PORT=5173
 
+# Keep corepack-managed pnpm non-interactive on first use.
+export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+
 # Helper functions
 log() {
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1"
@@ -47,13 +50,25 @@ else
     log "No .env file found at $ENV_FILE. Proceeding with default environment."
 fi
 
-# Check for Bun
-if ! command -v bun &> /dev/null; then
-    log "Error: 'bun' run-time is not installed."
-    log "Please install Bun to run this application locally: https://bun.sh"
-    log "Example: curl -fsSL https://bun.sh/install | bash"
+# Check for Node.js and pnpm
+if ! command -v node &> /dev/null; then
+    log "Error: 'node' is not installed."
+    log "Please install Node.js 24.14.1 to run this application locally."
     log "Alternatively, use Docker to run the containerized application."
     exit 1
+fi
+
+if ! command -v pnpm &> /dev/null; then
+    log "Error: 'pnpm' is not installed."
+    log "Please install pnpm 10.33.0 (for example via corepack)."
+    log "Example: corepack enable && corepack prepare pnpm@10.33.0 --activate"
+    log "Alternatively, use Docker to run the containerized application."
+    exit 1
+fi
+
+# Use a writable fallback cache when corepack shims are active.
+if [ -z "${COREPACK_HOME:-}" ]; then
+    export COREPACK_HOME="${TMPDIR:-/tmp}/corepack"
 fi
 
 # 3. Determine mode
@@ -65,14 +80,13 @@ if [ "$MODE" == "dev" ]; then
     log "Starting in DEVELOPMENT mode..."
     
     # Start Backend in background
-    log "Starting backend (bun --watch)..."
-    bun run dev &
+    log "Starting backend (tsx watch)..."
+    pnpm run dev &
     BACKEND_PID=$!
     
     # Start Frontend in background
     log "Starting frontend (vite)..."
-    cd frontend
-    bun run dev &
+    pnpm --dir frontend run dev &
     FRONTEND_PID=$!
     
     log "Services started. Backend PID: $BACKEND_PID, Frontend PID: $FRONTEND_PID"
@@ -97,12 +111,12 @@ else
     
     # Build Frontend
     log "Building frontend..."
-    bun run build-ui
+    pnpm run build-ui
     
     if [ $? -eq 0 ]; then
         log "Frontend build successful."
         log "Starting backend..."
-        bun start
+        pnpm start
     else
         log "Frontend build failed. Aborting."
         exit 1

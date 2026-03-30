@@ -11,7 +11,7 @@ export interface UpdateCheckOptions {
 }
 
 export function createUpdateChecker(options: UpdateCheckOptions) {
-  const fetchImpl = options.fetchImpl || fetch;
+  const fetchImpl: FetchLike = options.fetchImpl || ((input, init) => fetch(input, init as RequestInit));
   const cacheDurationMs = 6 * 60 * 60 * 1_000;
   let cached: { lastCheck: number; data: UpdateCheckResponse | null } = {
     lastCheck: 0,

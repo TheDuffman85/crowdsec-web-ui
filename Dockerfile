@@ -3,18 +3,20 @@
 # ==========================================
 # Stage 1: Builder
 # ==========================================
-FROM oven/bun:1.3.11 AS builder
+FROM node:24.14.1-trixie-slim AS builder
 
 WORKDIR /app
 
-# 1. Install backend dependencies (for production)
-COPY package.json bun.lock* ./
-RUN bun install --production
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    make \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+RUN npm install -g pnpm@10.33.0
 
-# 2. Build Frontend
-# We need to install frontend deps (including devDeps) to build it
-COPY frontend/package*.json ./frontend/
-RUN cd frontend && bun install
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY frontend/package.json ./frontend/package.json
+RUN pnpm install --frozen-lockfile
 
 # Copy source code
 COPY . .
@@ -28,13 +30,13 @@ ARG VITE_BRANCH
 ARG VITE_VERSION
 
 # Build the frontend with VITE_* variables available
-RUN bun run build-ui
+RUN pnpm run build-ui
 
 
 # ==========================================
 # Stage 2: Runner
 # ==========================================
-FROM oven/bun:1.3.11-slim
+FROM node:24.14.1-trixie-slim
 
 WORKDIR /app
 
@@ -56,6 +58,8 @@ ENV DOCKER_IMAGE_REF=$DOCKER_IMAGE_REF
 ENV DB_DIR="/app/data"
 ENV NODE_ENV=production
 
+RUN npm install -g pnpm@10.33.0
+
 # Install gosu (for entrypoint) and apply security updates
 RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     gosu \
@@ -69,7 +73,9 @@ COPY --from=builder /app/frontend/dist ./frontend/dist
 
 # Copy backend source files
 COPY package.json ./
+COPY pnpm-workspace.yaml ./
 COPY index.ts ./
+COPY scripts ./scripts
 COPY shared ./shared
 COPY src ./src
 COPY docker-entrypoint.sh /usr/local/bin/
@@ -79,14 +85,14 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # Pre-create data directory with correct ownership
 # This ensures Docker named volumes inherit the right permissions
-RUN mkdir -p /app/data && chown bun:bun /app/data
+RUN mkdir -p /app/data && chown node:node /app/data
 
 # Expose port
 EXPOSE 3000
 
-# Health check using bun to hit the health endpoint
+# Health check using Node to hit the health endpoint
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD bun -e "fetch('http://localhost:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://localhost:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 
 ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["bun", "index.ts"]
+CMD ["pnpm", "start"]

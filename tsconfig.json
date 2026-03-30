@@ -13,11 +13,12 @@
     "verbatimModuleSyntax": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
-    "types": ["bun-types", "node"]
+    "types": ["node"]
   },
   "include": [
     "index.ts",
     "src/**/*.ts",
+    "src/**/*.d.ts",
     "shared/**/*.ts",
     "scripts/**/*.ts"
   ]

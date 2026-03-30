@@ -3,7 +3,7 @@ import path from 'path';
 import crypto from 'node:crypto';
 import { Hono } from 'hono';
 import { compress } from 'hono/compress';
-import { serveStatic } from 'hono/bun';
+import { serveStatic } from '@hono/node-server/serve-static';
 import type {
   AddDecisionRequest,
   AlertDecision,
@@ -84,6 +84,7 @@ interface AlertSyncQuery {
 }
 
 const NOTIFICATION_SECRET_KEY_META_KEY = 'notification_secret_key';
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function createApp(options: CreateAppOptions = {}): AppController {
   const config = options.config || createRuntimeConfig();
@@ -837,7 +838,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       }
 
       currentStart = currentEnd;
-      await Bun.sleep(100);
+      await delay(100);
     }
 
     updateSyncStatus({ progress: 95, message: 'Syncing active decisions...' });

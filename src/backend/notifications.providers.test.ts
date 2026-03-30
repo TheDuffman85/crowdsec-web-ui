@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import type { NotificationChannel } from '../../shared/contracts';
 import { getNotificationProvider, STORED_SECRET_SENTINEL, type NotificationProviderPayload } from './notifications/providers';
 

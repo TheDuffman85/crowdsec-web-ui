@@ -4,32 +4,46 @@
   "description": "A web UI for CrowdSec alerts and decisions",
   "main": "index.ts",
   "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": "24.14.1",
+    "pnpm": "10.33.0"
+  },
   "scripts": {
-    "start": "bun index.ts",
-    "dev": "bun --watch index.ts",
-    "install-all": "bun install && cd frontend && bun install",
-    "build-ui": "cd frontend && bun run build",
-    "test": "bun run test:backend && bun run test:frontend",
-    "test:backend": "bun test src/backend",
-    "test:frontend": "cd frontend && bun run test",
-    "coverage": "bun run coverage:backend && bun run coverage:frontend && bun run coverage:check",
-    "coverage:backend": "bun test src/backend/config.test.ts src/backend/lapi.test.ts src/backend/update-check.test.ts src/backend/utils --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir=coverage/backend",
-    "coverage:frontend": "cd frontend && bun run coverage",
-    "coverage:check": "bun run scripts/check-coverage.ts",
-    "typecheck": "bun run typecheck:backend && bun run typecheck:frontend",
-    "typecheck:backend": "bunx tsc --noEmit -p tsconfig.json",
-    "typecheck:frontend": "cd frontend && bun run typecheck",
-    "lint": "cd frontend && bun run lint",
-    "verify": "bun run test && bun run coverage && bun run typecheck && bun run lint && bun run build-ui"
+    "ensure:native-deps": "node scripts/ensure-native-deps.mjs",
+    "prestart": "pnpm run ensure:native-deps",
+    "start": "tsx index.ts",
+    "predev": "pnpm run ensure:native-deps",
+    "dev": "tsx watch index.ts",
+    "install-all": "pnpm install",
+    "build-ui": "pnpm --dir frontend build",
+    "test": "pnpm run test:backend && pnpm run test:frontend",
+    "pretest:backend": "pnpm run ensure:native-deps",
+    "test:backend": "vitest run --config vitest.config.ts",
+    "test:frontend": "pnpm --dir frontend test",
+    "coverage": "pnpm run coverage:backend && pnpm run coverage:frontend && pnpm run coverage:check",
+    "precoverage:backend": "pnpm run ensure:native-deps",
+    "coverage:backend": "vitest run --config vitest.config.ts --coverage",
+    "coverage:frontend": "pnpm --dir frontend coverage",
+    "coverage:check": "node --experimental-strip-types scripts/check-coverage.ts",
+    "typecheck": "pnpm run typecheck:backend && pnpm run typecheck:frontend",
+    "typecheck:backend": "tsc --noEmit -p tsconfig.json",
+    "typecheck:frontend": "pnpm --dir frontend typecheck",
+    "lint": "pnpm --dir frontend lint",
+    "verify": "pnpm run test && pnpm run coverage && pnpm run typecheck && pnpm run lint && pnpm run build-ui"
   },
   "dependencies": {
-    "hono": "^4.12.8",
+    "@hono/node-server": "1.19.11",
+    "better-sqlite3": "12.8.0",
+    "hono": "4.12.9",
     "mqtt": "^5.15.1",
-    "vite": "^8.0.2"
+    "tsx": "4.21.0",
+    "undici": "7.24.6"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
-    "bun-types": "1.3.11",
-    "typescript": "^6.0.2"
+    "@vitest/coverage-v8": "4.1.2",
+    "typescript": "^6.0.2",
+    "vitest": "4.1.2"
   }
 }

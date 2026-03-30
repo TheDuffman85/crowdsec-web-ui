@@ -1,5 +1,5 @@
-import { Database } from 'bun:sqlite';
-import { afterEach, describe, expect, test } from 'bun:test';
+import Database from 'better-sqlite3';
+import { afterEach, describe, expect, test } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
@@ -26,6 +26,29 @@ function createTestDatabasePath(): string {
   const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-'));
   tempDirs.push(dir);
   return path.join(dir, 'test.db');
+}
+
+function createLegacyDatabase(dbPath: string): { exec: (sql: string) => unknown; close: () => void; query: (sql: string) => { run: (...params: any[]) => unknown }; prepare: (sql: string) => { run: (...params: any[]) => unknown } } {
+  const database = new Database(dbPath) as {
+    exec: (sql: string) => unknown;
+    close: () => void;
+    prepare: (sql: string) => { run: (...params: any[]) => unknown };
+    query: (sql: string) => { run: (...params: any[]) => unknown };
+  };
+  database.query = (sql: string) => {
+    const statement = database.prepare(sql);
+    return {
+      run: (...params: any[]) => statement.run(...params.map((value) => {
+        if (!value || Array.isArray(value) || typeof value !== 'object') {
+          return value;
+        }
+        return Object.fromEntries(
+          Object.entries(value).map(([key, entry]) => [key.replace(/^[$:@]/, ''), entry]),
+        );
+      })),
+    };
+  };
+  return database;
 }
 
 describe('CrowdsecDatabase', () => {
@@ -194,7 +217,7 @@ describe('CrowdsecDatabase', () => {
 
   test('migrates legacy notification rules, notifications, and seeds incidents from history', () => {
     const dbPath = createTestDatabasePath();
-    const legacy = new Database(dbPath);
+    const legacy = createLegacyDatabase(dbPath);
 
     legacy.exec(`
       CREATE TABLE notification_rules (

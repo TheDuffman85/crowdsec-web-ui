@@ -1,5 +1,9 @@
+import fs from 'node:fs';
+import { Agent } from 'undici';
 import type { LapiStatus } from '../../shared/contracts';
 import type { CrowdsecAuthConfig } from './auth';
+
+export type LapiRequestInit = RequestInit;
 
 export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -36,7 +40,7 @@ export class LapiClient {
   private readonly simulationsEnabled: boolean;
   private readonly version: string;
   private readonly fetchImpl: FetchLike;
-  private readonly tlsOptions?: BunFetchRequestInitTLS;
+  private readonly dispatcher?: RequestInit['dispatcher'];
 
   public readonly lookbackPeriod: string;
   private requestToken: string | null = null;
@@ -53,13 +57,15 @@ export class LapiClient {
     this.simulationsEnabled = options.simulationsEnabled ?? false;
     this.lookbackPeriod = options.lookbackPeriod;
     this.version = options.version;
-    this.fetchImpl = options.fetchImpl || fetch;
-    this.tlsOptions = this.auth.mode === 'mtls'
-      ? {
-          key: Bun.file(this.auth.keyPath),
-          cert: Bun.file(this.auth.certPath),
-          ...(this.auth.caCertPath ? { ca: Bun.file(this.auth.caCertPath) } : {}),
-        }
+    this.fetchImpl = options.fetchImpl || ((input, init) => fetch(input, init as RequestInit));
+    this.dispatcher = this.auth.mode === 'mtls'
+      ? new Agent({
+          connect: {
+            key: fs.readFileSync(this.auth.keyPath),
+            cert: fs.readFileSync(this.auth.certPath),
+            ...(this.auth.caCertPath ? { ca: fs.readFileSync(this.auth.caCertPath) } : {}),
+          },
+        }) as unknown as RequestInit['dispatcher']
       : undefined;
   }
 
@@ -109,7 +115,7 @@ export class LapiClient {
         headers,
         body: options.body ? JSON.stringify(options.body) : undefined,
         signal: controller.signal,
-        ...(this.tlsOptions ? { tls: this.tlsOptions } : {}),
+        ...(this.dispatcher ? { dispatcher: this.dispatcher } : {}),
       });
 
       clearTimeout(timeoutId);

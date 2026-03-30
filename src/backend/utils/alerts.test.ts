@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import { buildMetaSearch, getAlertSourceValue, getAlertTarget, toSlimAlert, toSlimDecision } from './alerts';
 
 describe('alert helpers', () => {

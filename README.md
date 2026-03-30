@@ -14,13 +14,13 @@
 
 # CrowdSec Web UI
 
-A modern, responsive web interface for managing [CrowdSec](https://crowdsec.net/) alerts and decisions. Built with **React**, **Vite**, **Bun**, and **Tailwind CSS**.
+A modern, responsive web interface for managing [CrowdSec](https://crowdsec.net/) alerts and decisions. Built with **React**, **Vite**, **Node.js**, and **Tailwind CSS**.
 
 <div align="center">
   <a href="https://react.dev/"><img src="https://img.shields.io/badge/react-%2320232a.svg?style=for-the-badge&logo=react&logoColor=%2361DAFB" alt="React" /></a>
   <a href="https://vite.dev/"><img src="https://img.shields.io/badge/vite-%23646CFF.svg?style=for-the-badge&logo=vite&logoColor=white" alt="Vite" /></a>
   <a href="https://tailwindcss.com/"><img src="https://img.shields.io/badge/tailwindcss-%2338B2AC.svg?style=for-the-badge&logo=tailwind-css&logoColor=white" alt="Tailwind CSS" /></a>
-  <a href="https://bun.sh/"><img src="https://img.shields.io/badge/Bun-%23000000.svg?style=for-the-badge&logo=bun&logoColor=white" alt="Bun" /></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node.js-%23339933.svg?style=for-the-badge&logo=node.js&logoColor=white" alt="Node.js" /></a>
   <a href="https://www.docker.com/"><img src="https://img.shields.io/badge/docker-%230db7ed.svg?style=for-the-badge&logo=docker&logoColor=white" alt="Docker" /></a>
 </div>
 
@@ -78,9 +78,9 @@ Create notification rules for alert spikes, alert thresholds, recent CVE activit
 ## Architecture
 
 -   **Frontend**: React (Vite) + Tailwind CSS. Located in `frontend/`.
--   **Backend**: Bun (Hono). Acts as an intelligent caching layer for CrowdSec Local API (LAPI) with delta updates and optimized chunked historical data sync.
--   **Database**: SQLite (native bun:sqlite). Persists alerts and decisions locally in `/app/data/crowdsec.db` to reduce memory usage and support historical data.
--   **Security**: The application runs as a non-root user (`bun`) inside the container and communicates with CrowdSec via HTTP/LAPI. It uses **Machine Authentication** to obtain a JWT for full access (read/write), either via watcher `User/Password` or agent **mTLS**.
+-   **Backend**: Node.js (Hono). Acts as an intelligent caching layer for CrowdSec Local API (LAPI) with delta updates and optimized chunked historical data sync.
+-   **Database**: SQLite (`better-sqlite3`). Persists alerts and decisions locally in `/app/data/crowdsec.db` to reduce memory usage and support historical data.
+-   **Security**: The application runs as a non-root user (`node`) inside the container and communicates with CrowdSec via HTTP/LAPI. It uses **Machine Authentication** to obtain a JWT for full access (read/write), either via watcher `User/Password` or agent **mTLS**.
 
 ## Prerequisites
 
@@ -180,12 +180,8 @@ These are upstream LAPI filters, so excluded alerts are skipped before they are 
     docker build --build-arg DOCKER_IMAGE_REF=my-registry/my-image -t crowdsec-web-ui .
     ```
 
-> [!CAUTION]
-> **Bun Runtime Compatibility**: Current Docker images are based on Bun. On some older x64 CPUs and VMs configured for broad compatibility, the guest may not expose the CPU features Bun expects, which can lead to immediate exits, `Illegal instruction` errors, or restart loops.
->
-> On `x86_64` only, the container now performs a startup check for AVX2 support and exits with a clear error if it is missing. This check does not apply to ARM/`arm64`.
->
-> This is most commonly seen on virtualized environments that hide AVX/AVX2 support. For example, Proxmox guests using the default `kvm64` CPU type may need to switch to `host` or another CPU type that exposes AVX/AVX2 before troubleshooting `/app/data` permissions or other startup issues.
+> [!NOTE]
+> Current Docker images are based on Node.js rather than Bun, so the previous Bun/AVX-specific x64 runtime limitation no longer applies.
 
 2.  **Run the container**:
     Provide the CrowdSec LAPI URL and one supported auth mode.
@@ -574,9 +570,9 @@ The Web UI maintains its own local history of alerts and decisions. Data fetched
 ## Local Development
 
 1.  **Install Dependencies**:
-    You need [Bun](https://bun.sh) installed. On older x64 systems or VMs that do not expose AVX/AVX2 support, Bun itself may fail to start for the same CPU compatibility reasons described in the Docker section above. This limitation is specific to x64 and does not apply to ARM/`arm64`.
+    You need Node.js `24.14.1` and pnpm `10.33.0` installed locally.
     ```bash
-    bun run install-all
+    pnpm install
     ```
 
 2.  **Configuration**:

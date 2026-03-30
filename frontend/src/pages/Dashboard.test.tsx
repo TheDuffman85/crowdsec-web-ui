@@ -46,6 +46,12 @@ vi.mock('../lib/api', () => ({
 }));
 
 beforeEach(() => {
+  const now = Date.now();
+  const liveCreatedAt = new Date(now - 2 * 60 * 60 * 1000).toISOString();
+  const simulatedCreatedAt = new Date(now - 60 * 60 * 1000).toISOString();
+  const liveStopAt = new Date(now + 2 * 60 * 60 * 1000).toISOString();
+  const simulatedStopAt = new Date(now + 3 * 60 * 60 * 1000).toISOString();
+
   vi.stubGlobal(
     'matchMedia',
     vi.fn().mockImplementation(() => ({
@@ -69,14 +75,14 @@ beforeEach(() => {
   });
   fetchAlertsForStatsMock.mockResolvedValue([
     {
-      created_at: '2026-03-23T10:00:00.000Z',
+      created_at: liveCreatedAt,
       scenario: 'crowdsecurity/ssh-bf',
       source: { ip: '1.2.3.4', value: '1.2.3.4', cn: 'DE', as_name: 'Hetzner' },
       target: 'ssh',
       simulated: false,
     },
     {
-      created_at: '2026-03-23T11:00:00.000Z',
+      created_at: simulatedCreatedAt,
       scenario: 'crowdsecurity/nginx-bf',
       source: { ip: '5.6.7.8', value: '5.6.7.8', cn: 'US', as_name: 'AWS' },
       target: 'nginx',
@@ -86,19 +92,19 @@ beforeEach(() => {
   fetchDecisionsForStatsMock.mockResolvedValue([
     {
       id: 10,
-      created_at: '2026-03-23T10:00:00.000Z',
+      created_at: liveCreatedAt,
       scenario: 'crowdsecurity/ssh-bf',
       value: '1.2.3.4',
-      stop_at: '2099-03-23T12:00:00.000Z',
+      stop_at: liveStopAt,
       target: 'ssh',
       simulated: false,
     },
     {
       id: 20,
-      created_at: '2026-03-23T11:00:00.000Z',
+      created_at: simulatedCreatedAt,
       scenario: 'crowdsecurity/nginx-bf',
       value: '5.6.7.8',
-      stop_at: '2099-03-23T13:00:00.000Z',
+      stop_at: simulatedStopAt,
       target: 'nginx',
       simulated: true,
     },

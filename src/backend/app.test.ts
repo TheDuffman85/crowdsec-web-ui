@@ -1,11 +1,11 @@
-import { beforeEach, describe, expect, test } from 'bun:test';
+import { beforeEach, describe, expect, test } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
 import type { AlertRecord } from '../../shared/contracts';
 import { createRuntimeConfig } from './config';
 import { CrowdsecDatabase } from './database';
-import { LapiClient } from './lapi';
+import { LapiClient, type LapiRequestInit } from './lapi';
 import { createApp } from './app';
 import type { MqttPublishConfig } from './notifications/mqtt-client';
 
@@ -230,7 +230,7 @@ function createController(options: {
   simulationsEnabled?: boolean;
   authMode?: 'password' | 'mtls' | 'none';
   env?: Record<string, string>;
-  fetchResolver?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
+  fetchResolver?: (url: string, init?: LapiRequestInit) => Response | Promise<Response> | undefined;
   notificationFetchResolver?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
   mqttPublishResolver?: (config: MqttPublishConfig, payload: string) => void | Promise<void>;
 } = {}) {
@@ -251,6 +251,12 @@ function createController(options: {
         }
       : {};
 
+  if (authMode === 'mtls') {
+    writeFileSync(mtlsCertPath, 'test-cert');
+    writeFileSync(mtlsKeyPath, 'test-key');
+    writeFileSync(mtlsCaPath, 'test-ca');
+  }
+
   const config = createRuntimeConfig({
     PORT: '3000',
     BASE_PATH: '/crowdsec',
@@ -268,16 +274,16 @@ function createController(options: {
   });
 
   const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
-  const fetchCalls: Array<{ url: string; method: string; body?: unknown; headers?: RequestInit['headers']; tls?: BunFetchRequestInitTLS }> = [];
-  const fetchImpl = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-    const requestInit = init as BunFetchRequestInit | undefined;
+  const fetchCalls: Array<{ url: string; method: string; body?: unknown; headers?: RequestInit['headers']; dispatcher?: unknown }> = [];
+  const fetchImpl = async (input: string | URL | Request, init?: LapiRequestInit): Promise<Response> => {
+    const requestInit = init;
     const url = String(input);
     fetchCalls.push({
       url,
       method: requestInit?.method || 'GET',
       body: requestInit?.body ? JSON.parse(String(requestInit.body)) : undefined,
       headers: requestInit?.headers,
-      tls: requestInit?.tls,
+      dispatcher: requestInit?.dispatcher,
     });
     const resolved = await options.fetchResolver?.(url, init);
     if (resolved) {
@@ -545,11 +551,7 @@ describe('createApp', () => {
     const loginRequest = fetchCalls.find((call) => call.url.endsWith('/v1/watchers/login'));
     expect(loginRequest).toBeDefined();
     expect(loginRequest?.body).toEqual({ scenarios: ['manual/web-ui'] });
-    expect(loginRequest?.tls).toEqual(expect.objectContaining({
-      cert: expect.anything(),
-      key: expect.anything(),
-      ca: expect.anything(),
-    }));
+    expect(loginRequest?.dispatcher).toBeTruthy();
 
     controller.stopBackgroundTasks();
     database.close();

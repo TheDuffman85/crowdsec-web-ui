@@ -1,5 +1,8 @@
-import { describe, expect, test } from 'bun:test';
-import { LapiClient } from './lapi';
+import { afterEach, describe, expect, test } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { LapiClient, type LapiRequestInit } from './lapi';
 
 const passwordAuth = {
   mode: 'password',
@@ -7,12 +10,33 @@ const passwordAuth = {
   password: 'secret',
 } as const;
 
-const mtlsAuth = {
-  mode: 'mtls',
-  certPath: '/certs/agent.pem',
-  keyPath: '/certs/agent-key.pem',
-  caCertPath: '/certs/ca.pem',
-} as const;
+const tempDirs: string[] = [];
+
+function createMtlsAuth() {
+  const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-lapi-'));
+  tempDirs.push(dir);
+  const certPath = path.join(dir, 'agent.pem');
+  const keyPath = path.join(dir, 'agent-key.pem');
+  const caCertPath = path.join(dir, 'ca.pem');
+  writeFileSync(certPath, 'test-cert');
+  writeFileSync(keyPath, 'test-key');
+  writeFileSync(caCertPath, 'test-ca');
+  return {
+    mode: 'mtls',
+    certPath,
+    keyPath,
+    caCertPath,
+  } as const;
+}
+
+afterEach(() => {
+  while (tempDirs.length > 0) {
+    const dir = tempDirs.pop();
+    if (dir) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
 
 describe('LapiClient', () => {
   test('logs in and stores a token', async () => {
@@ -186,12 +210,13 @@ describe('LapiClient', () => {
   });
 
   test('logs in with mTLS and attaches TLS options to login and subsequent requests', async () => {
+    const mtlsAuth = createMtlsAuth();
     const calls: Array<{
       url: string;
       method: string;
       body?: unknown;
       headers?: RequestInit['headers'];
-      tls?: BunFetchRequestInitTLS;
+      dispatcher?: unknown;
     }> = [];
     const client = new LapiClient({
       crowdsecUrl: 'https://crowdsec:8080',
@@ -200,14 +225,14 @@ describe('LapiClient', () => {
       lookbackPeriod: '1h',
       version: '1.0.0',
       fetchImpl: async (input, init) => {
-        const requestInit = init as BunFetchRequestInit | undefined;
+        const requestInit = init as LapiRequestInit | undefined;
         const url = String(input);
         calls.push({
           url,
           method: requestInit?.method || 'GET',
           body: requestInit?.body ? JSON.parse(String(requestInit.body)) : undefined,
           headers: requestInit?.headers,
-          tls: requestInit?.tls,
+          dispatcher: requestInit?.dispatcher,
         });
 
         if (url.endsWith('/v1/watchers/login')) {
@@ -226,24 +251,17 @@ describe('LapiClient', () => {
       url: 'https://crowdsec:8080/v1/watchers/login',
       method: 'POST',
       body: { scenarios: ['manual/web-ui'] },
-      tls: expect.objectContaining({
-        cert: expect.anything(),
-        key: expect.anything(),
-        ca: expect.anything(),
-      }),
+      dispatcher: expect.anything(),
     });
-    expect(calls[1]?.tls).toEqual(expect.objectContaining({
-      cert: expect.anything(),
-      key: expect.anything(),
-      ca: expect.anything(),
-    }));
+    expect(calls[1]?.dispatcher).toBeTruthy();
 
     const authHeaders = new Headers(calls[1]?.headers);
     expect(authHeaders.get('authorization')).toBe('Bearer token-mtls');
   });
 
   test('retries with mTLS auth after a 401 and keeps TLS settings on both requests', async () => {
-    const calls: Array<{ url: string; tls?: BunFetchRequestInitTLS }> = [];
+    const mtlsAuth = createMtlsAuth();
+    const calls: Array<{ url: string; dispatcher?: unknown }> = [];
     const client = new LapiClient({
       crowdsecUrl: 'https://crowdsec:8080',
       auth: mtlsAuth,
@@ -251,9 +269,9 @@ describe('LapiClient', () => {
       lookbackPeriod: '1h',
       version: '1.0.0',
       fetchImpl: async (input, init) => {
-        const requestInit = init as BunFetchRequestInit | undefined;
+        const requestInit = init as LapiRequestInit | undefined;
         const url = String(input);
-        calls.push({ url, tls: requestInit?.tls });
+        calls.push({ url, dispatcher: requestInit?.dispatcher });
 
         if (url.endsWith('/v1/alerts') && calls.length === 1) {
           return new Response('{}', { status: 401, headers: { 'content-type': 'application/json' } });
@@ -270,6 +288,6 @@ describe('LapiClient', () => {
     const result = await client.fetchLapi('/v1/alerts');
     expect(result.data).toEqual({ ok: true });
     expect(calls).toHaveLength(3);
-    expect(calls.every((call) => call.tls?.cert && call.tls?.key)).toBe(true);
+    expect(calls.every((call) => call.dispatcher)).toBe(true);
   });
 });

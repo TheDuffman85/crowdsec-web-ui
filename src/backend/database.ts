@@ -1,6 +1,23 @@
-import { Database } from 'bun:sqlite';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'node:url';
+import BetterSqlite3 from 'better-sqlite3';
+
+type SqliteStatement = {
+  run: (...params: any[]) => { changes: number };
+  get: (...params: any[]) => unknown;
+  all: (...params: any[]) => unknown[];
+};
+
+type Database = {
+  exec: (sql: string) => void;
+  close: () => void;
+  prepare: (sql: string) => SqliteStatement;
+  transaction: <T extends (...args: any[]) => any>(callback: T) => T;
+  query: (sql: string) => SqliteStatement;
+};
+
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 export interface AlertInsertParams {
   $id: string | number;
@@ -459,7 +476,7 @@ function resolveDatabasePath(options: DatabaseOptions): string {
     try {
       fs.mkdirSync(dbDir, { recursive: true });
     } catch (error) {
-      dbPath = path.join(import.meta.dir, '../../crowdsec.db');
+      dbPath = path.join(MODULE_DIR, '../../crowdsec.db');
     }
   }
 
@@ -474,15 +491,40 @@ function ensureDirectory(dirPath: string): void {
 
 function openDatabase(dbPath: string): Database {
   try {
-    const database = new Database(dbPath);
+    const database = createDatabase(dbPath);
     database.exec('PRAGMA journal_mode = WAL');
     return database;
   } catch (error: any) {
     if (dbPath.startsWith('/app/data') && error?.code === 'EACCES') {
-      return new Database('crowdsec.db');
+      return createDatabase('crowdsec.db');
     }
     throw error;
   }
+}
+
+function createDatabase(dbPath: string): Database {
+  const database = new BetterSqlite3(dbPath) as Database;
+  database.query = (sql: string) => {
+    const statement = database.prepare(sql);
+    return {
+      run: (...params: any[]) => (statement.run as any)(...params.map(normalizeBindingValue)),
+      get: (...params: any[]) => (statement.get as any)(...params.map(normalizeBindingValue)),
+      all: (...params: any[]) => (statement.all as any)(...params.map(normalizeBindingValue)),
+    };
+  };
+  return database;
+}
+
+function normalizeBindingValue(value: unknown): unknown {
+  if (!value || Array.isArray(value) || Buffer.isBuffer(value) || value instanceof Date || typeof value !== 'object') {
+    return value;
+  }
+
+  const normalized: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    normalized[key.replace(/^[$:@]/, '')] = entry;
+  }
+  return normalized;
 }
 
 function initSchema(db: Database): void {
