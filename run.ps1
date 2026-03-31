@@ -144,10 +144,10 @@ Set-Location $ProjectRoot
 if ($Mode -eq 'dev') {
     Write-Log 'Starting in DEVELOPMENT mode...'
     Write-Log 'Starting backend (tsx watch)...'
-    $backend = Start-Process -FilePath 'pnpm' -ArgumentList 'run', 'dev' -WorkingDirectory $ProjectRoot -PassThru
+    $backend = Start-Process -FilePath 'pnpm' -ArgumentList 'run', 'dev:server' -WorkingDirectory $ProjectRoot -PassThru
 
-    Write-Log 'Starting frontend (vite)...'
-    $frontend = Start-Process -FilePath 'pnpm' -ArgumentList '--dir', 'frontend', 'run', 'dev' -WorkingDirectory $ProjectRoot -PassThru
+    Write-Log 'Starting client (vite)...'
+    $frontend = Start-Process -FilePath 'pnpm' -ArgumentList 'run', 'dev:client' -WorkingDirectory $ProjectRoot -PassThru
 
     Write-Log "Services started. Backend PID: $($backend.Id), Frontend PID: $($frontend.Id)"
 
@@ -159,15 +159,15 @@ if ($Mode -eq 'dev') {
     }
 } else {
     Write-Log 'Starting in PRODUCTION mode...'
-    Write-Log 'Building frontend...'
-    & pnpm run build-ui
+    Write-Log 'Building application...'
+    & pnpm run build
 
     if ($LASTEXITCODE -ne 0) {
-        Write-Log 'Frontend build failed. Aborting.'
+        Write-Log 'Application build failed. Aborting.'
         exit $LASTEXITCODE
     }
 
-    Write-Log 'Frontend build successful.'
+    Write-Log 'Application build successful.'
     Write-Log 'Starting backend...'
     & pnpm start
     exit $LASTEXITCODE

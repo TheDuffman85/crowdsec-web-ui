@@ -4,7 +4,7 @@ import type {
   NotificationChannelType,
   NotificationRuleType,
   NotificationSeverity,
-} from '../../../shared/contracts';
+} from '../../shared/contracts';
 import { sendSmtpMail } from '../smtp';
 import type { SmtpTlsMode } from '../smtp';
 import { publishMqttNotification, type MqttPublishConfig } from './mqtt-client';

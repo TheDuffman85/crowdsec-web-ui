@@ -1,11 +1,13 @@
 import fs from 'node:fs';
-import { Agent } from 'undici';
-import type { LapiStatus } from '../../shared/contracts';
+import { Agent, type Dispatcher } from 'undici';
+import type { LapiStatus } from '../shared/contracts';
 import type { CrowdsecAuthConfig } from './auth';
 
-export type LapiRequestInit = RequestInit;
+export type LapiRequestInit = RequestInit & {
+  dispatcher?: Dispatcher;
+};
 
-export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+export type FetchLike = (input: string | URL | Request, init?: LapiRequestInit) => Promise<Response>;
 
 export interface FetchLapiOptions {
   method?: string;
@@ -40,7 +42,7 @@ export class LapiClient {
   private readonly simulationsEnabled: boolean;
   private readonly version: string;
   private readonly fetchImpl: FetchLike;
-  private readonly dispatcher?: RequestInit['dispatcher'];
+  private readonly dispatcher?: Dispatcher;
 
   public readonly lookbackPeriod: string;
   private requestToken: string | null = null;
@@ -65,7 +67,7 @@ export class LapiClient {
             cert: fs.readFileSync(this.auth.certPath),
             ...(this.auth.caCertPath ? { ca: fs.readFileSync(this.auth.caCertPath) } : {}),
           },
-        }) as unknown as RequestInit['dispatcher']
+        })
       : undefined;
   }
 

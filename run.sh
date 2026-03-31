@@ -81,12 +81,12 @@ if [ "$MODE" == "dev" ]; then
     
     # Start Backend in background
     log "Starting backend (tsx watch)..."
-    pnpm run dev &
+    pnpm run dev:server &
     BACKEND_PID=$!
-    
-    # Start Frontend in background
-    log "Starting frontend (vite)..."
-    pnpm --dir frontend run dev &
+
+    # Start Client in background
+    log "Starting client (vite)..."
+    pnpm run dev:client &
     FRONTEND_PID=$!
     
     log "Services started. Backend PID: $BACKEND_PID, Frontend PID: $FRONTEND_PID"
@@ -109,16 +109,16 @@ if [ "$MODE" == "dev" ]; then
 else
     log "Starting in PRODUCTION mode..."
     
-    # Build Frontend
-    log "Building frontend..."
-    pnpm run build-ui
-    
+    # Build application
+    log "Building application..."
+    pnpm run build
+
     if [ $? -eq 0 ]; then
-        log "Frontend build successful."
+        log "Application build successful."
         log "Starting backend..."
         pnpm start
     else
-        log "Frontend build failed. Aborting."
+        log "Application build failed. Aborting."
         exit 1
     fi
 fi

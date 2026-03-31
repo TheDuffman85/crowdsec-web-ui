@@ -1,4 +1,4 @@
-import type { UpdateCheckResponse } from '../../shared/contracts';
+import type { UpdateCheckResponse } from '../shared/contracts';
 import type { FetchLike } from './lapi';
 
 export interface UpdateCheckOptions {

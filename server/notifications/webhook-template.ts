@@ -1,4 +1,4 @@
-import type { AlertMetaValue } from '../../../shared/contracts';
+import type { AlertMetaValue } from '../../shared/contracts';
 
 const TAG_RE = /\{\{\s*([^{}]+?)\s*\}\}/g;
 const ALLOWED_TAG_RE = /^event(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;

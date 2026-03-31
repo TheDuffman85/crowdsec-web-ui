@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import type { NotificationChannel } from '../../shared/contracts';
+import type { NotificationChannel } from '../shared/contracts';
 import { getNotificationProvider, STORED_SECRET_SENTINEL, type NotificationProviderPayload } from './notifications/providers';
 
 const basePayload: NotificationProviderPayload = {

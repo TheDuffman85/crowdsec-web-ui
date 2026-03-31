@@ -18,7 +18,7 @@ import type {
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
   UpdateCheckResponse,
-} from '../../shared/contracts';
+} from '../shared/contracts';
 import { createRuntimeConfig, getIntervalName, parseRefreshInterval, type RuntimeConfig } from './config';
 import { CrowdsecDatabase, type AlertInsertParams, type DecisionInsertParams } from './database';
 import { LapiClient } from './lapi';
@@ -118,7 +118,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   });
 
   const app = new Hono();
-  const distRoot = options.distRoot || path.resolve(process.cwd(), 'frontend/dist');
+  const distRoot = options.distRoot || path.resolve(process.cwd(), 'dist/client');
   const staticFiles = [
     '/logo.svg',
     '/favicon.ico',

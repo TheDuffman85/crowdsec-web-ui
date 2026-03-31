@@ -1,5 +1,5 @@
 import { serve } from '@hono/node-server';
-import { createApp } from './src/backend/app';
+import { createApp } from './app';
 
 const originalLog = console.log.bind(console);
 const originalInfo = console.info.bind(console);

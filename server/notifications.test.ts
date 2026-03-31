@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
-import type { AlertRecord, UpdateCheckResponse } from '../../shared/contracts';
+import type { AlertRecord, UpdateCheckResponse } from '../shared/contracts';
 import { CrowdsecDatabase } from './database';
 import { createNotificationService } from './notifications';
 import { createNotificationSecretStore } from './notifications/secret-store';

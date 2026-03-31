@@ -19,7 +19,7 @@ import type {
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
   UpdateCheckResponse,
-} from '../../shared/contracts';
+} from '../shared/contracts';
 import { CrowdsecDatabase } from './database';
 import type { MqttPublishConfig } from './notifications/mqtt-client';
 import {

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
-import type { AlertRecord } from '../../shared/contracts';
+import type { AlertRecord } from '../shared/contracts';
 import { createRuntimeConfig } from './config';
 import { CrowdsecDatabase } from './database';
 import { LapiClient, type LapiRequestInit } from './lapi';

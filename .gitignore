@@ -1,6 +1,8 @@
 node_modules
 frontend/node_modules
 frontend/dist
+client/node_modules
+client/dist
 .DS_Store
 *.log
 .env
@@ -11,3 +13,5 @@ crowdsec.db-shm
 crowdsec.db-wal
 coverage
 frontend/coverage
+client/coverage
+/dist

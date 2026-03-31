@@ -1,6 +1,11 @@
 node_modules/
-frontend/node_modules/
-frontend/dist/
+client/node_modules/
+client/dist/
+dist/
+coverage/
 .git/
+crowdsec.db
+crowdsec.db-shm
+crowdsec.db-wal
 *.md
 .env*
