@@ -3,7 +3,7 @@
 # ==========================================
 # Stage 1: Builder
 # ==========================================
-FROM node:24.14.1-trixie-slim AS builder
+FROM node:25.8.2-trixie-slim AS builder
 
 WORKDIR /app
 
@@ -36,7 +36,7 @@ RUN pnpm run build-ui
 # ==========================================
 # Stage 2: Runner
 # ==========================================
-FROM node:24.14.1-trixie-slim
+FROM node:25.8.2-trixie-slim
 
 WORKDIR /app
 
