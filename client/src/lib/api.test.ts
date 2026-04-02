@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
   addDecision,
+  bulkDeleteAlerts,
+  bulkDeleteDecisions,
+  cleanupByIp,
   createNotificationChannel,
   createNotificationRule,
   deleteNotificationChannel,
@@ -83,6 +86,18 @@ describe('api helpers', () => {
       message: 'Permission denied.',
     });
 
+    await expect(bulkDeleteAlerts([1, 2])).rejects.toMatchObject({
+      message: 'Permission denied.',
+    });
+
+    await expect(bulkDeleteDecisions([1, 2])).rejects.toMatchObject({
+      message: 'Permission denied.',
+    });
+
+    await expect(cleanupByIp('1.2.3.4')).rejects.toMatchObject({
+      message: 'Permission denied.',
+    });
+
     await expect(addDecision({ ip: '1.2.3.4' })).rejects.toMatchObject({
       message: 'Permission denied.',
       helpText: 'Trusted IPs for Write Operations',
@@ -117,6 +132,9 @@ describe('api helpers', () => {
 
     await expect(deleteAlert(1)).resolves.toEqual({ message: 'Deleted' });
     await expect(deleteDecision(1)).resolves.toEqual({ message: 'Deleted' });
+    await expect(bulkDeleteAlerts([1, 2])).resolves.toEqual({ message: 'Created' });
+    await expect(bulkDeleteDecisions([1, 2])).resolves.toEqual({ message: 'Created' });
+    await expect(cleanupByIp('1.2.3.4')).resolves.toEqual({ message: 'Created' });
     await expect(addDecision({ ip: '1.2.3.4' })).resolves.toEqual({ message: 'Created' });
     await expect(createNotificationChannel({ name: 'ntfy', type: 'ntfy', enabled: true, config: {} })).resolves.toEqual({ message: 'Created' });
     await expect(updateNotificationChannel('1', { name: 'ntfy', type: 'ntfy', enabled: true, config: {} })).resolves.toEqual({ message: 'Created' });

@@ -67,6 +67,20 @@ vi.mock('../lib/api', () => ({
     events: [],
   })),
   deleteAlert: vi.fn(),
+  bulkDeleteAlerts: vi.fn(async () => ({
+    requested_alerts: 0,
+    requested_decisions: 0,
+    deleted_alerts: 0,
+    deleted_decisions: 0,
+    failed: [],
+  })),
+  cleanupByIp: vi.fn(async () => ({
+    requested_alerts: 0,
+    requested_decisions: 0,
+    deleted_alerts: 0,
+    deleted_decisions: 0,
+    failed: [],
+  })),
   fetchConfig: vi.fn(async () => ({
     lookback_period: '1h',
     lookback_hours: 1,
@@ -135,5 +149,42 @@ describe('Alerts page', () => {
 
     await waitFor(() => expect(screen.getByText('#1074')).toBeInTheDocument());
     expect(screen.queryByRole('button', { name: /Load 50 more decisions/i })).not.toBeInTheDocument();
+  });
+
+  test('bulk delete selects all filtered alerts, not just the first rendered slice', async () => {
+    const bulkAlerts = Array.from({ length: 55 }, (_, index) => ({
+      id: index + 1,
+      created_at: `2026-03-24T${String(index % 24).padStart(2, '0')}:00:00.000Z`,
+      scenario: 'bulk/scenario',
+      source: { ip: `10.0.0.${index + 1}`, value: `10.0.0.${index + 1}`, cn: 'DE', as_name: 'Hetzner' },
+      target: 'ssh',
+      meta_search: 'bulk',
+      decisions: [],
+    }));
+    vi.mocked(api.fetchAlerts).mockResolvedValue(bulkAlerts);
+    const bulkDeleteAlertsMock = vi.mocked(api.bulkDeleteAlerts).mockResolvedValue({
+      requested_alerts: 55,
+      requested_decisions: 0,
+      deleted_alerts: 55,
+      deleted_decisions: 0,
+      failed: [],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/alerts?scenario=bulk/scenario']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('10.0.0.1')).toBeInTheDocument());
+    expect(screen.queryByText('10.0.0.55')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select all filtered alerts' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Delete selected' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(bulkDeleteAlertsMock).toHaveBeenCalledWith(
+      Array.from({ length: 55 }, (_, index) => String(index + 1)),
+    ));
   });
 });

@@ -2,6 +2,9 @@ import type {
   AddDecisionRequest,
   AlertRecord,
   ApiPermissionError,
+  BulkDeleteRequest,
+  BulkDeleteResult,
+  CleanupByIpRequest,
   ConfigResponse,
   DecisionListItem,
   NotificationChannel,
@@ -59,14 +62,32 @@ function handleApiError(res: Response, defaultMsg: string, operationName = 'Dele
 }
 
 export async function deleteAlert(id: string | number): Promise<unknown> {
-    const res = await fetch(apiUrl(`/api/alerts/${id}`), { method: 'DELETE' });
-    handleApiError(res, 'Failed to delete alert');
-    if (res.status === 204) return null;
-    return res.json();
+  const res = await fetch(apiUrl(`/api/alerts/${id}`), { method: 'DELETE' });
+  handleApiError(res, 'Failed to delete alert');
+  if (res.status === 204) return null;
+  return res.json();
+}
+
+async function postDestructiveJson<TResponse, TBody>(input: string, body: TBody, defaultMsg: string): Promise<TResponse> {
+  const res = await fetch(apiUrl(input), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  handleApiError(res, defaultMsg);
+  return res.json() as Promise<TResponse>;
+}
+
+export async function bulkDeleteAlerts(ids: BulkDeleteRequest['ids']): Promise<BulkDeleteResult> {
+  return postDestructiveJson<BulkDeleteResult, BulkDeleteRequest>(
+    '/api/alerts/bulk-delete',
+    { ids },
+    'Failed to delete selected alerts',
+  );
 }
 
 export async function fetchDecisionsForStats(): Promise<StatsDecision[]> {
-    return fetchJson<StatsDecision[]>('/api/stats/decisions', undefined, 'Failed to fetch decision statistics');
+  return fetchJson<StatsDecision[]>('/api/stats/decisions', undefined, 'Failed to fetch decision statistics');
 }
 
 export async function fetchAlertsForStats(): Promise<StatsAlert[]> {
@@ -74,10 +95,26 @@ export async function fetchAlertsForStats(): Promise<StatsAlert[]> {
 }
 
 export async function deleteDecision(id: string | number): Promise<unknown> {
-    const res = await fetch(apiUrl(`/api/decisions/${id}`), { method: 'DELETE' });
-    handleApiError(res, 'Failed to delete decision');
-    if (res.status === 204) return null;
-    return res.json();
+  const res = await fetch(apiUrl(`/api/decisions/${id}`), { method: 'DELETE' });
+  handleApiError(res, 'Failed to delete decision');
+  if (res.status === 204) return null;
+  return res.json();
+}
+
+export async function bulkDeleteDecisions(ids: BulkDeleteRequest['ids']): Promise<BulkDeleteResult> {
+  return postDestructiveJson<BulkDeleteResult, BulkDeleteRequest>(
+    '/api/decisions/bulk-delete',
+    { ids },
+    'Failed to delete selected decisions',
+  );
+}
+
+export async function cleanupByIp(ip: CleanupByIpRequest['ip']): Promise<BulkDeleteResult> {
+  return postDestructiveJson<BulkDeleteResult, CleanupByIpRequest>(
+    '/api/cleanup/by-ip',
+    { ip },
+    'Failed to delete entries for this IP',
+  );
 }
 
 export async function addDecision(data: AddDecisionRequest): Promise<unknown> {

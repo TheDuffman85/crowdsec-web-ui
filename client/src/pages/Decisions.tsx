@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback, type FormEvent } from "react";
 import { useSearchParams, Link } from "react-router-dom";
-import { deleteDecision, addDecision, fetchConfig } from "../lib/api";
+import { deleteDecision, bulkDeleteDecisions, cleanupByIp, addDecision, fetchConfig } from "../lib/api";
 import { apiUrl } from "../lib/basePath";
 import { isSimulatedDecision, matchesSimulationFilter, parseSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
@@ -9,8 +9,13 @@ import { Modal } from "../components/ui/Modal";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { getCountryName } from "../lib/utils";
-import { Trash2, Gavel, X, ExternalLink, Shield, Search, AlertCircle } from "lucide-react";
-import type { AddDecisionRequest, ApiPermissionError, DecisionListItem } from '../types';
+import { Trash2, Gavel, X, ExternalLink, Shield, ShieldBan, Search, AlertCircle } from "lucide-react";
+import type { AddDecisionRequest, ApiPermissionError, BulkDeleteResult, DecisionListItem } from '../types';
+
+type DecisionDeleteAction =
+    | { kind: "single"; decisionId: string | number }
+    | { kind: "selected"; ids: string[] }
+    | { kind: "ip"; ip: string };
 
 interface ErrorInfo {
     message: string;
@@ -42,6 +47,28 @@ function toErrorInfo(error: unknown, fallbackMessage: string): ErrorInfo {
     };
 }
 
+function isDecisionExpired(decision: DecisionListItem): boolean {
+    const decisionDuration = decision.detail.duration ?? '';
+    return Boolean(decision.expired || decisionDuration.startsWith("-"));
+}
+
+function summarizeDeleteResult(result: BulkDeleteResult): string | null {
+    if (result.failed.length === 0) {
+        return null;
+    }
+
+    const deletedParts: string[] = [];
+    if (result.deleted_alerts > 0) {
+        deletedParts.push(`${result.deleted_alerts} alert${result.deleted_alerts === 1 ? "" : "s"}`);
+    }
+    if (result.deleted_decisions > 0) {
+        deletedParts.push(`${result.deleted_decisions} decision${result.deleted_decisions === 1 ? "" : "s"}`);
+    }
+
+    const deletedText = deletedParts.length > 0 ? `Deleted ${deletedParts.join(" and ")}. ` : "";
+    return `${deletedText}${result.failed.length} item${result.failed.length === 1 ? "" : "s"} failed to delete.`;
+}
+
 export function Decisions() {
     const { refreshSignal, setLastUpdated } = useRefresh();
     const [decisions, setDecisions] = useState<DecisionListItem[]>([]);
@@ -49,7 +76,9 @@ export function Decisions() {
     const [loading, setLoading] = useState(true);
     const [showAddModal, setShowAddModal] = useState(false);
     const [filter, setFilter] = useState("");
-    const [decisionToDelete, setDecisionToDelete] = useState<string | number | null>(null);
+    const [pendingDeleteAction, setPendingDeleteAction] = useState<DecisionDeleteAction | null>(null);
+    const [selectedDecisionIds, setSelectedDecisionIds] = useState<string[]>([]);
+    const [deleteInProgress, setDeleteInProgress] = useState(false);
     const [newDecision, setNewDecision] = useState<AddDecisionRequest>({ ip: "", duration: "4h", reason: "manual" });
     const [errorInfo, setErrorInfo] = useState<ErrorInfo | null>(null);
     const [searchParams, setSearchParams] = useSearchParams();
@@ -72,6 +101,7 @@ export function Decisions() {
 
     // Intersection Observer for infinite scroll
     const observer = useRef<IntersectionObserver | null>(null);
+    const selectAllDecisionsRef = useRef<HTMLInputElement | null>(null);
     const lastDecisionElementRef = useCallback((node: HTMLTableRowElement | null) => {
         if (loading) return;
         if (observer.current) observer.current.disconnect();
@@ -141,22 +171,57 @@ export function Decisions() {
 
     // Trigger modal instead of window.confirm
     const requestDelete = (id: string | number) => {
-        setDecisionToDelete(id);
+        setPendingDeleteAction({ kind: "single", decisionId: id });
     };
 
     const confirmDelete = async () => {
-        if (!decisionToDelete) return;
-        const idToDelete = decisionToDelete;
-        setDecisionToDelete(null);
+        if (!pendingDeleteAction) return;
+        setDeleteInProgress(true);
         setErrorInfo(null);
         try {
-            await deleteDecision(idToDelete);
+            let resultMessage: string | null = null;
+
+            if (pendingDeleteAction.kind === "single") {
+                await deleteDecision(pendingDeleteAction.decisionId);
+                setSelectedDecisionIds((prev) => prev.filter((id) => id !== String(pendingDeleteAction.decisionId)));
+            } else if (pendingDeleteAction.kind === "selected") {
+                const result = await bulkDeleteDecisions(pendingDeleteAction.ids);
+                resultMessage = summarizeDeleteResult(result);
+                setSelectedDecisionIds([]);
+            } else {
+                const result = await cleanupByIp(pendingDeleteAction.ip);
+                resultMessage = summarizeDeleteResult(result);
+                setSelectedDecisionIds([]);
+                if (result.deleted_alerts === 0 && result.deleted_decisions === 0 && result.failed.length === 0) {
+                    resultMessage = `No alerts or decisions found for ${pendingDeleteAction.ip}.`;
+                }
+            }
+
+            setPendingDeleteAction(null);
             await loadDecisions();
-            setDisplayedCount(50); // Reset scroll position
+            setDisplayedCount(50);
+            if (resultMessage) {
+                setErrorInfo({ message: resultMessage });
+            }
         } catch (error) {
-            console.error("Failed to delete decision", error);
-            setErrorInfo(toErrorInfo(error, "Failed to delete decision. Please try again."));
+            const fallbackMessage = pendingDeleteAction.kind === "single"
+                ? "Failed to delete decision. Please try again."
+                : pendingDeleteAction.kind === "selected"
+                    ? "Failed to delete selected decisions. Please try again."
+                    : "Failed to delete alerts and decisions for this IP. Please try again.";
+            console.error("Failed to delete decision entries", error);
+            setErrorInfo(toErrorInfo(error, fallbackMessage));
+        } finally {
+            setDeleteInProgress(false);
         }
+    };
+
+    const toggleDecisionSelection = (decisionId: string) => {
+        setSelectedDecisionIds((prev) => (
+            prev.includes(decisionId)
+                ? prev.filter((id) => id !== decisionId)
+                : [...prev, decisionId]
+        ));
     };
 
     const clearFilter = () => {
@@ -246,7 +311,46 @@ export function Decisions() {
             simulationSearch.includes(search);
     });
 
+    const eligibleFilteredDecisionIds = filteredDecisions
+        .filter((decision) => !isDecisionExpired(decision))
+        .map((decision) => String(decision.id));
+    const eligibleFilteredDecisionIdsKey = eligibleFilteredDecisionIds.join("|");
+    const selectedFilteredDecisionIds = eligibleFilteredDecisionIds.filter((id) => selectedDecisionIds.includes(id));
+    const allFilteredDecisionsSelected = eligibleFilteredDecisionIds.length > 0 && selectedFilteredDecisionIds.length === eligibleFilteredDecisionIds.length;
+    const someFilteredDecisionsSelected = selectedFilteredDecisionIds.length > 0 && !allFilteredDecisionsSelected;
+
+    useEffect(() => {
+        const validIds = new Set(eligibleFilteredDecisionIdsKey ? eligibleFilteredDecisionIdsKey.split("|") : []);
+        setSelectedDecisionIds((prev) => prev.filter((id) => validIds.has(id)));
+    }, [eligibleFilteredDecisionIdsKey]);
+
+    useEffect(() => {
+        if (selectAllDecisionsRef.current) {
+            selectAllDecisionsRef.current.indeterminate = someFilteredDecisionsSelected;
+        }
+    }, [someFilteredDecisionsSelected]);
+
+    const toggleAllFilteredDecisions = () => {
+        setSelectedDecisionIds((prev) => {
+            if (allFilteredDecisionsSelected) {
+                return prev.filter((id) => !eligibleFilteredDecisionIds.includes(id));
+            }
+
+            return Array.from(new Set([...prev, ...eligibleFilteredDecisionIds]));
+        });
+    };
+
     const visibleDecisions = filteredDecisions.slice(0, displayedCount);
+    const selectedDecisionCount = selectedFilteredDecisionIds.length;
+    const deleteActionTitle = pendingDeleteAction?.kind === "single"
+        ? "Delete Decision?"
+        : pendingDeleteAction?.kind === "selected"
+            ? "Delete Selected Decisions?"
+            : pendingDeleteAction?.kind === "ip"
+                ? "Delete All for this IP?"
+                : "Delete";
+    const pendingDecisionId = pendingDeleteAction?.kind === "single" ? pendingDeleteAction.decisionId : null;
+    const pendingIp = pendingDeleteAction?.kind === "ip" ? pendingDeleteAction.ip : null;
 
     return (
         <div className="space-y-6">
@@ -264,6 +368,13 @@ export function Decisions() {
                 >
                     <Gavel size={16} />
                     Add Decision
+                </button>
+                <button
+                    onClick={() => setPendingDeleteAction({ kind: "selected", ids: selectedFilteredDecisionIds })}
+                    disabled={selectedDecisionCount === 0}
+                    className="rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                    Delete selected
                 </button>
             </div>
 
@@ -466,6 +577,17 @@ export function Decisions() {
                     <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                         <thead className="bg-gray-50 dark:bg-gray-900/50">
                             <tr>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                    <input
+                                        ref={selectAllDecisionsRef}
+                                        type="checkbox"
+                                        aria-label="Select all filtered decisions"
+                                        checked={allFilteredDecisionsSelected}
+                                        disabled={eligibleFilteredDecisionIds.length === 0}
+                                        onChange={toggleAllFilteredDecisions}
+                                        className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                                    />
+                                </th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Time</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Scenario</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Country</th>
@@ -479,18 +601,19 @@ export function Decisions() {
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                             {loading ? (
-                                <tr><td colSpan={9} className="px-6 py-4 text-center text-sm text-gray-500">Loading decisions...</td></tr>
+                                <tr><td colSpan={10} className="px-6 py-4 text-center text-sm text-gray-500">Loading decisions...</td></tr>
                             ) : visibleDecisions.length === 0 ? (
-                                <tr><td colSpan={9} className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? "No decisions for this alert" : "No decisions found"}</td></tr>
+                                <tr><td colSpan={10} className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? "No decisions for this alert" : "No decisions found"}</td></tr>
                             ) : (
                                 visibleDecisions.map((decision, index) => {
                                     const decisionDuration = decision.detail.duration ?? '';
-                                    const isExpired = Boolean(decision.expired || decisionDuration.startsWith("-"));
+                                    const isExpired = isDecisionExpired(decision);
                                     const rowClasses = isExpired
                                         ? "hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors opacity-60 bg-gray-50 dark:bg-gray-900/20"
                                         : "hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors";
 
                                     const isLastElement = index === visibleDecisions.length - 1;
+                                    const isSelected = selectedDecisionIds.includes(String(decision.id));
 
                                     return (
                                         <tr
@@ -498,6 +621,16 @@ export function Decisions() {
                                             className={rowClasses}
                                             ref={isLastElement ? lastDecisionElementRef : null}
                                         >
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                                <input
+                                                    type="checkbox"
+                                                    aria-label={`Select decision ${decision.id}`}
+                                                    checked={isSelected}
+                                                    disabled={isExpired}
+                                                    onChange={() => toggleDecisionSelection(String(decision.id))}
+                                                    className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
+                                                />
+                                            </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
                                                 <TimeDisplay timestamp={decision.created_at} />
                                             </td>
@@ -547,17 +680,29 @@ export function Decisions() {
                                                 )}
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                                <button
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        requestDelete(decision.id);
-                                                    }}
-                                                    disabled={isExpired}
-                                                    className={`transition-colors p-2 rounded-full relative z-10 cursor-pointer ${isExpired ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed bg-gray-100 dark:bg-gray-800' : 'text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20'}`}
-                                                    title={isExpired ? "Decision already expired" : "Delete Decision"}
-                                                >
-                                                    <Trash2 size={16} />
-                                                </button>
+                                                <div className="flex items-center justify-end gap-2">
+                                                    {decision.value && (
+                                                        <button
+                                                            onClick={() => setPendingDeleteAction({ kind: "ip", ip: decision.value || "" })}
+                                                            className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
+                                                            title={`Delete all alerts and decisions for ${decision.value}`}
+                                                            aria-label={`Delete all alerts and decisions for ${decision.value}`}
+                                                        >
+                                                            <ShieldBan size={16} aria-hidden="true" />
+                                                        </button>
+                                                    )}
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            requestDelete(decision.id);
+                                                        }}
+                                                        disabled={isExpired}
+                                                        className={`transition-colors p-2 rounded-full relative z-10 cursor-pointer ${isExpired ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed bg-gray-100 dark:bg-gray-800' : 'text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20'}`}
+                                                        title={isExpired ? "Decision already expired" : "Delete Decision"}
+                                                    >
+                                                        <Trash2 size={16} />
+                                                    </button>
+                                                </div>
                                             </td>
                                         </tr>
                                     );
@@ -570,27 +715,39 @@ export function Decisions() {
 
             {/* Delete Confirmation Modal */}
             <Modal
-                isOpen={!!decisionToDelete}
-                onClose={() => setDecisionToDelete(null)}
-                title="Delete Decision?"
+                isOpen={!!pendingDeleteAction}
+                onClose={() => !deleteInProgress && setPendingDeleteAction(null)}
+                title={deleteActionTitle}
                 maxWidth="max-w-sm"
                 showCloseButton={false}
             >
                 <p className="text-gray-600 dark:text-gray-300 mb-6">
-                    Are you sure you want to delete decision <span className="font-mono text-sm font-bold">#{decisionToDelete}</span>? This action cannot be undone.
+                    {pendingDecisionId ? (
+                        <>
+                            Are you sure you want to delete decision <span className="font-mono text-sm font-bold">#{pendingDecisionId}</span>? This action cannot be undone.
+                        </>
+                    ) : pendingIp ? (
+                        <>
+                            Are you sure you want to delete all alerts and decisions for <span className="font-mono text-sm font-bold">{pendingIp}</span>? This action cannot be undone.
+                        </>
+                    ) : (
+                        <>Are you sure you want to delete {selectedFilteredDecisionIds.length} selected decision{selectedFilteredDecisionIds.length === 1 ? "" : "s"}? This action cannot be undone.</>
+                    )}
                 </p>
                 <div className="flex justify-end gap-3">
                     <button
-                        onClick={() => setDecisionToDelete(null)}
-                        className="px-4 py-2 text-sm font-medium text-gray-700 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600"
+                        onClick={() => setPendingDeleteAction(null)}
+                        disabled={deleteInProgress}
+                        className="px-4 py-2 text-sm font-medium text-gray-700 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                         Cancel
                     </button>
                     <button
                         onClick={confirmDelete}
-                        className="px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                        disabled={deleteInProgress}
+                        className="px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                        Delete
+                        {deleteInProgress ? "Deleting..." : "Delete"}
                     </button>
                 </div>
             </Modal>

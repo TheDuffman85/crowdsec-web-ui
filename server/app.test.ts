@@ -383,10 +383,10 @@ function createController(options: {
     if (url.endsWith('/v1/alerts/2') && (!init?.method || init.method === 'GET')) {
       return Response.json(sampleSimulatedAlert());
     }
-    if (url.endsWith('/v1/alerts/1') && init?.method === 'DELETE') {
+    if (/\/v1\/alerts\/\d+$/.test(url) && init?.method === 'DELETE') {
       return Response.json({ message: 'Deleted' });
     }
-    if (url.endsWith('/v1/decisions/10') && init?.method === 'DELETE') {
+    if (/\/v1\/decisions\/\d+$/.test(url) && init?.method === 'DELETE') {
       return Response.json({ message: 'Deleted' });
     }
     if (url.endsWith('/v1/alerts') && init?.method === 'POST') {
@@ -424,6 +424,48 @@ function createController(options: {
   });
 
   return { controller, database, lapiClient, fetchCalls };
+}
+
+function seedAlert(database: CrowdsecDatabase, alert: AlertRecord): void {
+  database.insertAlert({
+    $id: alert.id,
+    $uuid: alert.uuid || String(alert.id),
+    $created_at: alert.created_at,
+    $scenario: alert.scenario,
+    $source_ip: alert.source?.ip || alert.source?.value || alert.source?.range || '',
+    $message: alert.message || '',
+    $raw_data: JSON.stringify(alert),
+  });
+
+  for (const decision of alert.decisions || []) {
+    const createdAt = decision.created_at || alert.created_at;
+    const stopAt = decision.stop_at || new Date(Date.now() + 30 * 60 * 1_000).toISOString();
+    database.insertDecision({
+      $id: String(decision.id),
+      $uuid: String(decision.id),
+      $alert_id: alert.id,
+      $created_at: createdAt,
+      $stop_at: stopAt,
+      $value: decision.value || alert.source?.ip || alert.source?.value || alert.source?.range || '',
+      $type: decision.type,
+      $origin: decision.origin,
+      $scenario: decision.scenario || alert.scenario,
+      $raw_data: JSON.stringify({
+        id: decision.id,
+        created_at: createdAt,
+        scenario: decision.scenario || alert.scenario,
+        value: decision.value || alert.source?.ip || alert.source?.value || alert.source?.range || '',
+        stop_at: stopAt,
+        type: decision.type || 'ban',
+        origin: decision.origin || 'manual',
+        country: alert.source?.cn,
+        as: alert.source?.as_name,
+        target: alert.target,
+        alert_id: alert.id,
+        simulated: decision.simulated === true,
+      }),
+    });
+  }
 }
 
 describe('createApp', () => {
@@ -601,6 +643,27 @@ describe('createApp', () => {
     const badDecisionId = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions/not-a-number', { method: 'DELETE' }));
     expect(badDecisionId.status).toBe(400);
 
+    const badBulkAlerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts/bulk-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: ['oops'] }),
+    }));
+    expect(badBulkAlerts.status).toBe(400);
+
+    const badBulkDecisions = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions/bulk-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: ['oops'] }),
+    }));
+    expect(badBulkDecisions.status).toBe(400);
+
+    const badCleanupIp = await controller.fetch(new Request('http://localhost/crowdsec/api/cleanup/by-ip', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip: 'bad-ip' }),
+    }));
+    expect(badCleanupIp.status).toBe(400);
+
     const badInterval = await controller.fetch(
       new Request('http://localhost/crowdsec/api/config/refresh-interval', {
         method: 'PUT',
@@ -618,6 +681,152 @@ describe('createApp', () => {
       }),
     );
     expect(badDecision.status).toBe(400);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('bulk alert delete removes alerts and cascaded decisions from the cache', async () => {
+    const { controller, database, lapiClient } = createController();
+    seedAlert(database, sampleAlert());
+    seedAlert(database, sampleManualWebUiAlert());
+    await lapiClient.login();
+
+    const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts/bulk-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [1, 3] }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(expect.objectContaining({
+      requested_alerts: 2,
+      deleted_alerts: 2,
+      deleted_decisions: 2,
+      failed: [],
+    }));
+    expect(database.countAlerts()).toBe(0);
+    expect(database.getActiveDecisions(new Date().toISOString())).toHaveLength(0);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('bulk decision delete removes only the selected decisions', async () => {
+    const { controller, database, lapiClient } = createController();
+    seedAlert(database, sampleAlert());
+    seedAlert(database, sampleSimulatedAlert());
+    await lapiClient.login();
+
+    const response = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions/bulk-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [10] }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(expect.objectContaining({
+      requested_decisions: 1,
+      deleted_alerts: 0,
+      deleted_decisions: 1,
+      failed: [],
+    }));
+    expect(database.getDecisionById('10')).toBeNull();
+    expect(database.getDecisionById('20')).not.toBeNull();
+    expect(database.countAlerts()).toBe(2);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('cleanup by IP removes matching alerts and standalone decisions across resources', async () => {
+    const { controller, database, lapiClient } = createController();
+    seedAlert(database, sampleAlert());
+    seedAlert(database, sampleSimulatedAlert());
+    database.insertDecision({
+      $id: '90',
+      $uuid: '90',
+      $alert_id: 999,
+      $created_at: '2026-03-23T12:00:00.000Z',
+      $stop_at: '2030-01-01T00:00:00.000Z',
+      $value: '1.2.3.4',
+      $type: 'ban',
+      $origin: 'manual',
+      $scenario: 'manual/web-ui',
+      $raw_data: JSON.stringify({
+        id: 90,
+        created_at: '2026-03-23T12:00:00.000Z',
+        scenario: 'manual/web-ui',
+        value: '1.2.3.4',
+        stop_at: '2030-01-01T00:00:00.000Z',
+        type: 'ban',
+        origin: 'manual',
+        country: 'DE',
+        as: 'Hetzner',
+        target: 'ssh',
+        alert_id: 999,
+        simulated: false,
+      }),
+    });
+    await lapiClient.login();
+
+    const response = await controller.fetch(new Request('http://localhost/crowdsec/api/cleanup/by-ip', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip: '1.2.3.4' }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(expect.objectContaining({
+      ip: '1.2.3.4',
+      requested_alerts: 1,
+      requested_decisions: 2,
+      deleted_alerts: 1,
+      deleted_decisions: 2,
+      failed: [],
+    }));
+    expect(database.countAlerts()).toBe(1);
+    expect(database.getDecisionById('10')).toBeNull();
+    expect(database.getDecisionById('90')).toBeNull();
+    expect(database.getDecisionById('20')).not.toBeNull();
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('bulk delete reports partial failures and only prunes successful items from the cache', async () => {
+    const { controller, database, lapiClient } = createController({
+      fetchResolver: (url, init) => {
+        if (url.endsWith('/v1/alerts/2') && init?.method === 'DELETE') {
+          return Response.json({ error: 'boom' }, { status: 500 });
+        }
+        return undefined;
+      },
+    });
+    seedAlert(database, sampleAlert());
+    seedAlert(database, sampleSimulatedAlert());
+    await lapiClient.login();
+
+    const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts/bulk-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [1, 2] }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(expect.objectContaining({
+      requested_alerts: 2,
+      deleted_alerts: 1,
+      deleted_decisions: 1,
+      failed: [expect.objectContaining({ kind: 'alert', id: '2' })],
+    }));
+    expect(database.countAlerts()).toBe(1);
+    expect(database.getDecisionById('10')).toBeNull();
+    expect(database.getDecisionById('20')).not.toBeNull();
 
     controller.stopBackgroundTasks();
     database.close();

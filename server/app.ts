@@ -8,6 +8,10 @@ import type {
   AddDecisionRequest,
   AlertDecision,
   AlertRecord,
+  BulkDeleteRequest,
+  BulkDeleteResult,
+  BulkDeleteFailure,
+  CleanupByIpRequest,
   ConfigResponse,
   DecisionListItem,
   LapiStatus,
@@ -83,9 +87,23 @@ interface AlertSyncQuery {
   scenario?: string;
 }
 
+interface CachedDecisionRecord {
+  id: string;
+  value?: string;
+  raw_data: string;
+}
+
+interface CachedAlertRecord {
+  id: string;
+  sourceValue?: string;
+  raw_data: string;
+}
+
 const NOTIFICATION_SECRET_KEY_META_KEY = 'notification_secret_key';
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const UNFILTERED_ALERT_ORIGIN_TOKENS = new Set(['none']);
+const IPV4_RE = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/;
+const IPV6_RE = /^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}(\/\d{1,3})?$/;
 
 export function createApp(options: CreateAppOptions = {}): AppController {
   const config = options.config || createRuntimeConfig();
@@ -213,6 +231,28 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     } catch (error: any) {
       console.error('Error serving alerts from database:', error.message);
       return context.json({ error: 'Failed to retrieve alerts' }, 500);
+    }
+  });
+
+  app.post(`${config.basePath}/api/alerts/bulk-delete`, ensureAuth, async (context) => {
+    const doRequest = async () => {
+      const body = await context.req.json<BulkDeleteRequest>();
+      if (!Array.isArray(body.ids) || body.ids.length === 0) {
+        return context.json({ error: 'At least one alert ID is required' }, 400);
+      }
+      const ids = normalizeDeleteIds(body.ids);
+      if (ids.length !== body.ids.length) {
+        return context.json({ error: 'Alert IDs must be numeric' }, 400);
+      }
+
+      const result = await deleteAlertsByIds(ids);
+      return context.json(result);
+    };
+
+    try {
+      return await doRequest();
+    } catch (error) {
+      return handleApiError(error as AnyError, context, 'bulk deleting alerts', doRequest);
     }
   });
 
@@ -352,6 +392,25 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   app.post(`${config.basePath}/api/notifications/read-all`, ensureAuth, () =>
     Response.json({ updated: notificationService.markAllNotificationsRead() }),
   );
+
+  app.post(`${config.basePath}/api/cleanup/by-ip`, ensureAuth, async (context) => {
+    const doRequest = async () => {
+      const body = await context.req.json<CleanupByIpRequest>();
+      const ip = String(body.ip || '').trim();
+      if (!isValidIpOrRange(ip)) {
+        return context.json({ error: 'Invalid IP address format' }, 400);
+      }
+
+      const result = await deleteEntriesByIp(ip);
+      return context.json(result);
+    };
+
+    try {
+      return await doRequest();
+    } catch (error) {
+      return handleApiError(error as AnyError, context, 'deleting entries by IP', doRequest);
+    }
+  });
 
   app.post(`${config.basePath}/api/notifications/:id/read`, ensureAuth, (context) => {
     const id = String(context.req.param('id'));
@@ -546,9 +605,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         return context.json({ error: 'IP address is required' }, 400);
       }
 
-      const ipv4Re = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/;
-      const ipv6Re = /^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}(\/\d{1,3})?$/;
-      if (!ipv4Re.test(ip) && !ipv6Re.test(ip)) {
+      if (!isValidIpOrRange(ip)) {
         return context.json({ error: 'Invalid IP address format' }, 400);
       }
 
@@ -571,6 +628,28 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       return await doRequest();
     } catch (error) {
       return handleApiError(error as AnyError, context, 'adding decision', doRequest);
+    }
+  });
+
+  app.post(`${config.basePath}/api/decisions/bulk-delete`, ensureAuth, async (context) => {
+    const doRequest = async () => {
+      const body = await context.req.json<BulkDeleteRequest>();
+      if (!Array.isArray(body.ids) || body.ids.length === 0) {
+        return context.json({ error: 'At least one decision ID is required' }, 400);
+      }
+      const ids = normalizeDeleteIds(body.ids);
+      if (ids.length !== body.ids.length) {
+        return context.json({ error: 'Decision IDs must be numeric' }, 400);
+      }
+
+      const result = await deleteDecisionsByIds(ids);
+      return context.json(result);
+    };
+
+    try {
+      return await doRequest();
+    } catch (error) {
+      return handleApiError(error as AnyError, context, 'bulk deleting decisions', doRequest);
     }
   });
 
@@ -1192,6 +1271,246 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
 
     await next();
+  }
+
+  function normalizeDeleteIds(ids: Array<string | number> | undefined): string[] {
+    if (!Array.isArray(ids)) {
+      return [];
+    }
+
+    return Array.from(
+      new Set(
+        ids
+          .map((id) => String(id).trim())
+          .filter((id) => /^\d+$/.test(id)),
+      ),
+    );
+  }
+
+  function isValidIpOrRange(value: string): boolean {
+    return IPV4_RE.test(value) || IPV6_RE.test(value);
+  }
+
+  function isPermissionError(error: AnyError): boolean {
+    return error.response?.status === 403;
+  }
+
+  function toFailure(kind: 'alert' | 'decision', id: string, error: AnyError): BulkDeleteFailure {
+    return {
+      kind,
+      id,
+      error: error.message || 'Delete failed',
+    };
+  }
+
+  function getCachedAlertsForDeletion(): CachedAlertRecord[] {
+    const since = new Date(Date.now() - config.lookbackMs).toISOString();
+    return database.getAlertsSince(since).flatMap((row) => {
+      try {
+        const alert = JSON.parse(row.raw_data) as AlertRecord;
+        if (!alert?.id) {
+          return [];
+        }
+
+        return [{
+          id: String(alert.id),
+          sourceValue: getAlertSourceValue(alert.source),
+          raw_data: row.raw_data,
+        }];
+      } catch {
+        return [];
+      }
+    });
+  }
+
+  function getCachedDecisionsForDeletion(): CachedDecisionRecord[] {
+    const since = new Date(Date.now() - config.lookbackMs).toISOString();
+    const now = new Date().toISOString();
+    return database.getDecisionsSince(since, now).flatMap((row) => {
+      try {
+        const decision = JSON.parse(row.raw_data) as { id?: string | number; value?: string };
+        if (decision.id === undefined || decision.id === null) {
+          return [];
+        }
+
+        return [{
+          id: String(decision.id),
+          value: typeof decision.value === 'string' ? decision.value : undefined,
+          raw_data: row.raw_data,
+        }];
+      } catch {
+        return [];
+      }
+    });
+  }
+
+  function createDeleteResult(overrides: Partial<BulkDeleteResult> = {}): BulkDeleteResult {
+    return {
+      requested_alerts: 0,
+      requested_decisions: 0,
+      deleted_alerts: 0,
+      deleted_decisions: 0,
+      failed: [],
+      ...overrides,
+    };
+  }
+
+  async function deleteAlertsByIds(ids: string[]): Promise<BulkDeleteResult> {
+    const result = createDeleteResult({ requested_alerts: ids.length });
+    const deletedAlertIds: string[] = [];
+    const deletedDecisionIds = new Set<string>();
+    const alertMap = new Map(getCachedAlertsForDeletion().map((alert) => [alert.id, alert]));
+
+    for (const id of ids) {
+      try {
+        await lapiClient.deleteAlert(id);
+        deletedAlertIds.push(id);
+
+        const alert = alertMap.get(id);
+        if (alert) {
+          try {
+            const parsedAlert = JSON.parse(alert.raw_data) as AlertRecord;
+            for (const decision of parsedAlert.decisions || []) {
+              if (decision?.id !== undefined && decision?.id !== null) {
+                deletedDecisionIds.add(String(decision.id));
+              }
+            }
+          } catch {
+            // Ignore cache parse issues and still remove the alert row itself.
+          }
+        }
+      } catch (error) {
+        const typedError = error as AnyError;
+        if (isPermissionError(typedError)) {
+          throw typedError;
+        }
+        result.failed.push(toFailure('alert', id, typedError));
+      }
+    }
+
+    if (deletedAlertIds.length > 0) {
+      const removeAlerts = database.transaction<string[]>((alertIds) => {
+        for (const id of alertIds) {
+          database.deleteAlert(id);
+          database.deleteDecisionsByAlertId(id);
+        }
+      });
+      removeAlerts(deletedAlertIds);
+    }
+
+    result.deleted_alerts = deletedAlertIds.length;
+    result.deleted_decisions = deletedDecisionIds.size;
+    return result;
+  }
+
+  async function deleteDecisionsByIds(ids: string[]): Promise<BulkDeleteResult> {
+    const result = createDeleteResult({ requested_decisions: ids.length });
+    const deletedDecisionIds: string[] = [];
+
+    for (const id of ids) {
+      try {
+        await lapiClient.deleteDecision(id);
+        deletedDecisionIds.push(id);
+      } catch (error) {
+        const typedError = error as AnyError;
+        if (isPermissionError(typedError)) {
+          throw typedError;
+        }
+        result.failed.push(toFailure('decision', id, typedError));
+      }
+    }
+
+    if (deletedDecisionIds.length > 0) {
+      const removeDecisions = database.transaction<string[]>((decisionIds) => {
+        for (const id of decisionIds) {
+          database.deleteDecision(id);
+        }
+      });
+      removeDecisions(deletedDecisionIds);
+    }
+
+    result.deleted_decisions = deletedDecisionIds.length;
+    return result;
+  }
+
+  async function deleteEntriesByIp(ip: string): Promise<BulkDeleteResult> {
+    const alerts = getCachedAlertsForDeletion().filter((alert) => alert.sourceValue === ip);
+    const decisions = getCachedDecisionsForDeletion().filter((decision) => decision.value === ip);
+    const result = createDeleteResult({
+      requested_alerts: alerts.length,
+      requested_decisions: decisions.length,
+      ip,
+    });
+    const deletedAlertIds: string[] = [];
+    const alertDecisionIds = new Set<string>();
+    const deletedDecisionIds = new Set<string>();
+
+    for (const alert of alerts) {
+      try {
+        await lapiClient.deleteAlert(alert.id);
+        deletedAlertIds.push(alert.id);
+
+        try {
+          const parsedAlert = JSON.parse(alert.raw_data) as AlertRecord;
+          for (const decision of parsedAlert.decisions || []) {
+            if (decision?.id !== undefined && decision?.id !== null) {
+              const decisionId = String(decision.id);
+              alertDecisionIds.add(decisionId);
+              deletedDecisionIds.add(decisionId);
+            }
+          }
+        } catch {
+          // Keep going even if cache payload is malformed.
+        }
+      } catch (error) {
+        const typedError = error as AnyError;
+        if (isPermissionError(typedError)) {
+          throw typedError;
+        }
+        result.failed.push(toFailure('alert', alert.id, typedError));
+      }
+    }
+
+    for (const decision of decisions) {
+      if (deletedDecisionIds.has(decision.id)) {
+        continue;
+      }
+
+      try {
+        await lapiClient.deleteDecision(decision.id);
+        deletedDecisionIds.add(decision.id);
+      } catch (error) {
+        const typedError = error as AnyError;
+        if (isPermissionError(typedError)) {
+          throw typedError;
+        }
+        result.failed.push(toFailure('decision', decision.id, typedError));
+      }
+    }
+
+    if (deletedAlertIds.length > 0) {
+      const removeAlerts = database.transaction<string[]>((alertIds) => {
+        for (const id of alertIds) {
+          database.deleteAlert(id);
+          database.deleteDecisionsByAlertId(id);
+        }
+      });
+      removeAlerts(deletedAlertIds);
+    }
+
+    const decisionIdsToDelete = Array.from(deletedDecisionIds).filter((id) => !alertDecisionIds.has(id));
+    if (decisionIdsToDelete.length > 0) {
+      const removeDecisions = database.transaction<string[]>((decisionIds) => {
+        for (const id of decisionIds) {
+          database.deleteDecision(id);
+        }
+      });
+      removeDecisions(decisionIdsToDelete);
+    }
+
+    result.deleted_alerts = deletedAlertIds.length;
+    result.deleted_decisions = deletedDecisionIds.size;
+    return result;
   }
 
   async function handleApiError(

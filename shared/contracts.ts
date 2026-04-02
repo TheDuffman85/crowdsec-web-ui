@@ -294,6 +294,31 @@ export interface RefreshIntervalRequest {
   interval: 'manual' | '0' | '5s' | '30s' | '1m' | '5m';
 }
 
+export interface BulkDeleteRequest {
+  ids: Array<string | number>;
+}
+
+export interface CleanupByIpRequest {
+  ip: string;
+}
+
+export type DeleteResourceKind = 'alert' | 'decision';
+
+export interface BulkDeleteFailure {
+  kind: DeleteResourceKind;
+  id: string;
+  error: string;
+}
+
+export interface BulkDeleteResult {
+  requested_alerts: number;
+  requested_decisions: number;
+  deleted_alerts: number;
+  deleted_decisions: number;
+  failed: BulkDeleteFailure[];
+  ip?: string;
+}
+
 export interface DeleteResult {
   message: string;
 }

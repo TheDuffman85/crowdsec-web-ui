@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback, type MouseEvent as ReactMouseEvent } from "react";
 import { useSearchParams, Link } from "react-router-dom";
-import { fetchAlerts, fetchAlert, deleteAlert, fetchConfig } from "../lib/api";
+import { fetchAlerts, fetchAlert, deleteAlert, bulkDeleteAlerts, cleanupByIp, fetchConfig } from "../lib/api";
 import { isSimulatedAlert, isSimulatedDecision, matchesSimulationFilter, parseSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
 import { Badge } from "../components/ui/Badge";
@@ -9,11 +9,15 @@ import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { EventCard } from "../components/EventCard";
 import { getCountryName } from "../lib/utils";
-import { Search, Info, ExternalLink, Shield, Trash2, X, AlertCircle } from "lucide-react";
-import type { AlertRecord, AlertSource, ApiPermissionError, SimulationFilter, SlimAlert } from '../types';
+import { Search, Info, ExternalLink, Shield, ShieldBan, Trash2, X, AlertCircle } from "lucide-react";
+import type { AlertRecord, AlertSource, ApiPermissionError, BulkDeleteResult, SimulationFilter, SlimAlert } from '../types';
 
 type AlertListItem = SlimAlert;
 type AlertSelection = AlertListItem | AlertRecord;
+type AlertDeleteAction =
+    | { kind: "single"; alertId: string | number }
+    | { kind: "selected"; ids: string[] }
+    | { kind: "ip"; ip: string };
 
 interface ErrorInfo {
     message: string;
@@ -71,6 +75,23 @@ function buildDecisionListHref(
     return `/decisions?${params.toString()}`;
 }
 
+function summarizeDeleteResult(result: BulkDeleteResult): string | null {
+    if (result.failed.length === 0) {
+        return null;
+    }
+
+    const deletedParts: string[] = [];
+    if (result.deleted_alerts > 0) {
+        deletedParts.push(`${result.deleted_alerts} alert${result.deleted_alerts === 1 ? "" : "s"}`);
+    }
+    if (result.deleted_decisions > 0) {
+        deletedParts.push(`${result.deleted_decisions} decision${result.deleted_decisions === 1 ? "" : "s"}`);
+    }
+
+    const deletedText = deletedParts.length > 0 ? `Deleted ${deletedParts.join(" and ")}. ` : "";
+    return `${deletedText}${result.failed.length} item${result.failed.length === 1 ? "" : "s"} failed to delete.`;
+}
+
 export function Alerts() {
     const { refreshSignal, setLastUpdated } = useRefresh();
     const [alerts, setAlerts] = useState<AlertListItem[]>([]);
@@ -81,11 +102,14 @@ export function Alerts() {
     const [displayedCount, setDisplayedCount] = useState(50);
     const [displayedDecisionCount, setDisplayedDecisionCount] = useState(50);
     const [searchParams, setSearchParams] = useSearchParams();
-    const [alertToDelete, setAlertToDelete] = useState<string | number | null>(null);
+    const [pendingDeleteAction, setPendingDeleteAction] = useState<AlertDeleteAction | null>(null);
+    const [selectedAlertIds, setSelectedAlertIds] = useState<string[]>([]);
+    const [deleteInProgress, setDeleteInProgress] = useState(false);
     const [errorInfo, setErrorInfo] = useState<ErrorInfo | null>(null);
     const [showAllEvents, setShowAllEvents] = useState(false);
     const currentSimulationFilter = simulationsEnabled ? parseSimulationFilter(searchParams.get("simulation")) : 'all';
-    const searchParamsKey = searchParams.toString();
+    const alertIdParam = searchParams.get("id");
+    const queryParam = searchParams.get("q");
 
     // Ref to track selected alert ID for auto-refresh (avoids stale closure issues)
     const selectedAlertIdRef = useRef<string | number | null>(null);
@@ -104,6 +128,7 @@ export function Alerts() {
     }, [loading]);
 
     const decisionContainerRef = useRef<HTMLDivElement | null>(null);
+    const selectAllAlertsRef = useRef<HTMLInputElement | null>(null);
 
     const loadAlerts = useCallback(async (isBackground = false) => {
         try {
@@ -116,7 +141,6 @@ export function Alerts() {
             setSimulationsEnabled(configData.simulations_enabled === true);
 
             // Check if there's an alert ID in the URL
-            const alertIdParam = searchParams.get("id");
             if (alertIdParam) {
                 // Always fetch full alert data since list now returns slim payloads
                 try {
@@ -145,7 +169,6 @@ export function Alerts() {
             }
 
             // Check for generic search query param
-            const queryParam = searchParams.get("q");
             if (queryParam) {
                 setFilter(queryParam);
             }
@@ -157,7 +180,7 @@ export function Alerts() {
         } finally {
             if (!isBackground) setLoading(false);
         }
-    }, [searchParamsKey, setLastUpdated]);
+    }, [alertIdParam, queryParam, setLastUpdated]);
 
     useEffect(() => {
         loadAlerts(false);
@@ -194,26 +217,66 @@ export function Alerts() {
     // Delete handlers
     const requestDelete = (id: string | number, event: ReactMouseEvent<HTMLButtonElement>) => {
         event.stopPropagation();
-        setAlertToDelete(id);
+        setPendingDeleteAction({ kind: "single", alertId: id });
     };
 
     const confirmDelete = async () => {
-        if (!alertToDelete) return;
-        const idToDelete = alertToDelete;
-        setAlertToDelete(null);
+        if (!pendingDeleteAction) return;
+        setDeleteInProgress(true);
         setErrorInfo(null);
         try {
-            await deleteAlert(idToDelete);
-            // Close modal if we deleted the currently viewed alert
-            if (selectedAlert && selectedAlert.id === idToDelete) {
-                setSelectedAlert(null);
+            let resultMessage: string | null = null;
+
+            if (pendingDeleteAction.kind === "single") {
+                await deleteAlert(pendingDeleteAction.alertId);
+                if (selectedAlert && selectedAlert.id === pendingDeleteAction.alertId) {
+                    setSelectedAlert(null);
+                }
+                setSelectedAlertIds((prev) => prev.filter((id) => id !== String(pendingDeleteAction.alertId)));
+            } else if (pendingDeleteAction.kind === "selected") {
+                const result = await bulkDeleteAlerts(pendingDeleteAction.ids);
+                resultMessage = summarizeDeleteResult(result);
+                if (selectedAlert && pendingDeleteAction.ids.includes(String(selectedAlert.id))) {
+                    setSelectedAlert(null);
+                }
+                setSelectedAlertIds([]);
+            } else {
+                const result = await cleanupByIp(pendingDeleteAction.ip);
+                resultMessage = summarizeDeleteResult(result);
+                if (selectedAlert && getAlertSourceValue(selectedAlert.source) === pendingDeleteAction.ip) {
+                    setSelectedAlert(null);
+                }
+                setSelectedAlertIds([]);
+                if (result.deleted_alerts === 0 && result.deleted_decisions === 0 && result.failed.length === 0) {
+                    resultMessage = `No alerts or decisions found for ${pendingDeleteAction.ip}.`;
+                }
             }
+
+            setPendingDeleteAction(null);
             await loadAlerts();
             setDisplayedCount(50);
+            if (resultMessage) {
+                setErrorInfo({ message: resultMessage });
+            }
         } catch (error) {
-            console.error("Failed to delete alert", error);
-            setErrorInfo(toErrorInfo(error, "Failed to delete alert. Please try again."));
+            const fallbackMessage = pendingDeleteAction.kind === "single"
+                ? "Failed to delete alert. Please try again."
+                : pendingDeleteAction.kind === "selected"
+                    ? "Failed to delete selected alerts. Please try again."
+                    : "Failed to delete alerts and decisions for this IP. Please try again.";
+            console.error("Failed to delete alert entries", error);
+            setErrorInfo(toErrorInfo(error, fallbackMessage));
+        } finally {
+            setDeleteInProgress(false);
         }
+    };
+
+    const toggleAlertSelection = (alertId: string) => {
+        setSelectedAlertIds((prev) => (
+            prev.includes(alertId)
+                ? prev.filter((id) => id !== alertId)
+                : [...prev, alertId]
+        ));
     };
 
     const filteredAlerts = alerts.filter((alert) => {
@@ -277,12 +340,49 @@ export function Alerts() {
         return true;
     });
 
+    const filteredAlertIds = filteredAlerts.map((alert) => String(alert.id));
+    const filteredAlertIdsKey = filteredAlertIds.join("|");
+    const selectedFilteredAlertIds = filteredAlertIds.filter((id) => selectedAlertIds.includes(id));
+    const allFilteredAlertsSelected = filteredAlertIds.length > 0 && selectedFilteredAlertIds.length === filteredAlertIds.length;
+    const someFilteredAlertsSelected = selectedFilteredAlertIds.length > 0 && !allFilteredAlertsSelected;
+
+    useEffect(() => {
+        const validIds = new Set(filteredAlertIdsKey ? filteredAlertIdsKey.split("|") : []);
+        setSelectedAlertIds((prev) => prev.filter((id) => validIds.has(id)));
+    }, [filteredAlertIdsKey]);
+
+    useEffect(() => {
+        if (selectAllAlertsRef.current) {
+            selectAllAlertsRef.current.indeterminate = someFilteredAlertsSelected;
+        }
+    }, [someFilteredAlertsSelected]);
+
+    const toggleAllFilteredAlerts = () => {
+        setSelectedAlertIds((prev) => {
+            if (allFilteredAlertsSelected) {
+                return prev.filter((id) => !filteredAlertIds.includes(id));
+            }
+
+            return Array.from(new Set([...prev, ...filteredAlertIds]));
+        });
+    };
+
     const visibleAlerts = filteredAlerts.slice(0, displayedCount);
     const selectedAlertDecisions = selectedAlert?.decisions ?? [];
     const visibleSelectedAlertDecisions = selectedAlertDecisions.slice(0, displayedDecisionCount);
     const selectedAlertEvents = selectedAlert && hasAlertEvents(selectedAlert) ? selectedAlert.events ?? [] : [];
     const selectedAlertIsSimulated = selectedAlert ? isSimulatedAlert(selectedAlert) : false;
     const selectedAlertSourceValue = getAlertSourceValue(selectedAlert?.source);
+    const deleteActionTitle = pendingDeleteAction?.kind === "single"
+        ? "Delete Alert?"
+        : pendingDeleteAction?.kind === "selected"
+            ? "Delete Selected Alerts?"
+            : pendingDeleteAction?.kind === "ip"
+                ? "Delete All for this IP?"
+                : "Delete";
+    const selectedAlertCount = selectedFilteredAlertIds.length;
+    const pendingSingleAlertId = pendingDeleteAction?.kind === "single" ? pendingDeleteAction.alertId : null;
+    const pendingIp = pendingDeleteAction?.kind === "ip" ? pendingDeleteAction.ip : null;
 
     return (
         <div className="space-y-6">
@@ -291,6 +391,16 @@ export function Alerts() {
                     Showing {filteredAlerts.length} of {alerts.length} alerts
                 </div>
             )}
+
+            <div className="flex items-center gap-3">
+                <button
+                    onClick={() => setPendingDeleteAction({ kind: "selected", ids: selectedFilteredAlertIds })}
+                    disabled={selectedAlertCount === 0}
+                    className="rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                    Delete selected
+                </button>
+            </div>
 
             {/* Error Message */}
             {errorInfo && (
@@ -383,6 +493,17 @@ export function Alerts() {
                     <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 transition-opacity duration-200">
                         <thead className="bg-gray-50 dark:bg-gray-900/50">
                             <tr>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                    <input
+                                        ref={selectAllAlertsRef}
+                                        type="checkbox"
+                                        aria-label="Select all filtered alerts"
+                                        checked={allFilteredAlertsSelected}
+                                        disabled={filteredAlertIds.length === 0}
+                                        onChange={toggleAllFilteredAlerts}
+                                        className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                                    />
+                                </th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Time</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Scenario</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Country</th>
@@ -394,13 +515,14 @@ export function Alerts() {
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                             {loading ? (
-                                <tr><td colSpan={7} className="px-6 py-4 text-center text-sm text-gray-500">Loading alerts...</td></tr>
+                                <tr><td colSpan={8} className="px-6 py-4 text-center text-sm text-gray-500">Loading alerts...</td></tr>
                             ) : visibleAlerts.length === 0 ? (
-                                <tr><td colSpan={7} className="px-6 py-4 text-center text-sm text-gray-500">No alerts found</td></tr>
+                                <tr><td colSpan={8} className="px-6 py-4 text-center text-sm text-gray-500">No alerts found</td></tr>
                             ) : (
                                 visibleAlerts.map((alert, index) => {
                                     const isLastElement = index === visibleAlerts.length - 1;
                                     const sourceValue = getAlertSourceValue(alert.source);
+                                    const isSelected = selectedAlertIds.includes(String(alert.id));
                                     return (
                                         <tr
                                             key={alert.id}
@@ -408,6 +530,15 @@ export function Alerts() {
                                             onClick={() => handleAlertClick(alert)}
                                             className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors cursor-pointer"
                                         >
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
+                                                <input
+                                                    type="checkbox"
+                                                    aria-label={`Select alert ${alert.id}`}
+                                                    checked={isSelected}
+                                                    onChange={() => toggleAlertSelection(String(alert.id))}
+                                                    className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                                                />
+                                            </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
                                                 <TimeDisplay timestamp={alert.created_at} />
                                             </td>
@@ -481,13 +612,28 @@ export function Alerts() {
                                                 })()}
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                                <button
-                                                    onClick={(e) => requestDelete(alert.id, e)}
-                                                    className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
-                                                    title="Delete Alert"
-                                                >
-                                                    <Trash2 size={16} />
-                                                </button>
+                                                <div className="flex items-center justify-end gap-2">
+                                                    {sourceValue && (
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                setPendingDeleteAction({ kind: "ip", ip: sourceValue });
+                                                            }}
+                                                            className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
+                                                            title={`Delete all alerts and decisions for ${sourceValue}`}
+                                                            aria-label={`Delete all alerts and decisions for ${sourceValue}`}
+                                                        >
+                                                            <ShieldBan size={16} aria-hidden="true" />
+                                                        </button>
+                                                    )}
+                                                    <button
+                                                        onClick={(e) => requestDelete(alert.id, e)}
+                                                        className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
+                                                        title="Delete Alert"
+                                                    >
+                                                        <Trash2 size={16} />
+                                                    </button>
+                                                </div>
                                             </td>
                                         </tr>
                                     );
@@ -742,27 +888,39 @@ export function Alerts() {
 
             {/* Delete Confirmation Modal */}
             <Modal
-                isOpen={!!alertToDelete}
-                onClose={() => setAlertToDelete(null)}
-                title="Delete Alert?"
+                isOpen={!!pendingDeleteAction}
+                onClose={() => !deleteInProgress && setPendingDeleteAction(null)}
+                title={deleteActionTitle}
                 maxWidth="max-w-sm"
                 showCloseButton={false}
             >
                 <p className="text-gray-600 dark:text-gray-300 mb-6">
-                    Are you sure you want to delete alert <span className="font-mono text-sm font-bold">#{alertToDelete}</span>? This will also delete all associated decisions. This action cannot be undone.
+                    {pendingSingleAlertId ? (
+                        <>
+                            Are you sure you want to delete alert <span className="font-mono text-sm font-bold">#{pendingSingleAlertId}</span>? This will also delete all associated decisions. This action cannot be undone.
+                        </>
+                    ) : pendingIp ? (
+                        <>
+                            Are you sure you want to delete all alerts and decisions for <span className="font-mono text-sm font-bold">{pendingIp}</span>? This action cannot be undone.
+                        </>
+                    ) : (
+                        <>Are you sure you want to delete {selectedFilteredAlertIds.length} selected alert{selectedFilteredAlertIds.length === 1 ? "" : "s"}? This will also remove associated decisions from the cache.</>
+                    )}
                 </p>
                 <div className="flex justify-end gap-3">
                     <button
-                        onClick={() => setAlertToDelete(null)}
-                        className="px-4 py-2 text-sm font-medium text-gray-700 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600"
+                        onClick={() => setPendingDeleteAction(null)}
+                        disabled={deleteInProgress}
+                        className="px-4 py-2 text-sm font-medium text-gray-700 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                         Cancel
                     </button>
                     <button
                         onClick={confirmDelete}
-                        className="px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                        disabled={deleteInProgress}
+                        className="px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                        Delete
+                        {deleteInProgress ? "Deleting..." : "Delete"}
                     </button>
                 </div>
             </Modal>
