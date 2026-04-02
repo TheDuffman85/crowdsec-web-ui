@@ -37,6 +37,7 @@ import type {
 } from '../types';
 
 type Granularity = 'day' | 'hour';
+type ScaleMode = 'linear' | 'symlog';
 type PercentageBasis = 'filtered' | 'global';
 type FilterKey = 'country' | 'scenario' | 'as' | 'ip' | 'target' | 'simulation';
 
@@ -91,6 +92,10 @@ function parseStoredGranularity(value: string | null): Granularity {
     return value === 'hour' ? 'hour' : 'day';
 }
 
+function parseStoredScaleMode(value: string | null): ScaleMode {
+    return value === 'symlog' ? 'symlog' : 'linear';
+}
+
 function parseStoredPercentageBasis(value: string | null): PercentageBasis {
     return value === 'filtered' ? 'filtered' : 'global';
 }
@@ -135,6 +140,7 @@ export function Dashboard() {
 
     // Initialize state from local storage or defaults
     const [granularity, setGranularity] = useState<Granularity>(() => parseStoredGranularity(localStorage.getItem('dashboard_granularity')));
+    const [scaleMode, setScaleMode] = useState<ScaleMode>(() => parseStoredScaleMode(localStorage.getItem('dashboard_scale_mode')));
 
     // Percentage Basis: 'filtered' or 'global'
     const [percentageBasis, setPercentageBasis] = useState<PercentageBasis>(() => parseStoredPercentageBasis(localStorage.getItem('dashboard_percentage_basis')));
@@ -159,6 +165,10 @@ export function Dashboard() {
     useEffect(() => {
         localStorage.setItem('dashboard_granularity', granularity);
     }, [granularity]);
+
+    useEffect(() => {
+        localStorage.setItem('dashboard_scale_mode', scaleMode);
+    }, [scaleMode]);
 
     useEffect(() => {
         localStorage.setItem('dashboard_percentage_basis', percentageBasis);
@@ -777,6 +787,8 @@ export function Dashboard() {
                                         isSticky={filters.dateRangeSticky}
                                         granularity={granularity}
                                         setGranularity={handleGranularityChange}
+                                        scaleMode={scaleMode}
+                                        setScaleMode={setScaleMode}
                                     />
                                 </Suspense>
                             </div>

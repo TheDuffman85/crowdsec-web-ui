@@ -7,12 +7,41 @@ import { getBrushSelectionPayload, getDraggedBrushWindow } from './DashboardChar
 
 vi.mock('recharts', () => {
   const Container = ({ children }: { children?: ReactNode }) => <div>{children}</div>;
+  const YAxis = ({
+    scale,
+    domain,
+    ticks,
+  }: {
+    scale?: string;
+    domain?: Array<number | string>;
+    ticks?: number[];
+  }) => (
+    <div
+      data-testid="mock-y-axis"
+      data-scale={scale}
+      data-domain={domain?.join(',')}
+      data-ticks={ticks?.join(',')}
+    />
+  );
+  const Bar = ({
+    dataKey,
+    minPointSize,
+  }: {
+    dataKey?: string;
+    minPointSize?: number | ((value: unknown, index: number) => number);
+  }) => (
+    <div
+      data-testid={`mock-bar-${dataKey ?? 'unknown'}`}
+      data-min-point-size-zero={typeof minPointSize === 'function' ? minPointSize(0, 0) : minPointSize}
+      data-min-point-size-positive={typeof minPointSize === 'function' ? minPointSize(3, 0) : minPointSize}
+    />
+  );
 
   return {
     BarChart: Container,
-    Bar: () => null,
+    Bar,
     XAxis: () => null,
-    YAxis: () => null,
+    YAxis,
     CartesianGrid: () => null,
     Tooltip: () => null,
     Legend: () => null,
@@ -77,6 +106,71 @@ describe('ActivityBarChart', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Hour' }));
     expect(setGranularity).toHaveBeenCalledWith('hour');
+  });
+
+  test('renders the activity chart with linear scaling by default', () => {
+    const mixedSeries = [
+      { date: '2025-01-01', label: 'Jan 1', count: 5, fullDate: '2025-01-01' },
+      { date: '2025-01-02', label: 'Jan 2', count: 50, fullDate: '2025-01-02' },
+      { date: '2025-01-03', label: 'Jan 3', count: 15000, fullDate: '2025-01-03' },
+    ];
+
+    render(
+      <ActivityBarChart
+        alertsData={mixedSeries}
+        decisionsData={mixedSeries}
+        unfilteredAlertsData={mixedSeries}
+        unfilteredDecisionsData={mixedSeries}
+        granularity="day"
+        setGranularity={vi.fn()}
+        onDateRangeSelect={vi.fn()}
+        selectedDateRange={null}
+        isSticky={false}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Symlog' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Linear' })).toBeInTheDocument();
+    expect(screen.getByTestId('mock-y-axis')).toHaveAttribute('data-scale', 'linear');
+    expect(screen.getByTestId('mock-y-axis')).toHaveAttribute('data-domain', '0,15000');
+    expect(screen.getByTestId('mock-y-axis')).not.toHaveAttribute('data-ticks');
+    expect(screen.getByTestId('mock-bar-alerts')).toHaveAttribute('data-min-point-size-zero', '0');
+    expect(screen.getByTestId('mock-bar-alerts')).toHaveAttribute('data-min-point-size-positive', '2');
+    expect(screen.getByTestId('mock-bar-decisions')).toHaveAttribute('data-min-point-size-zero', '0');
+    expect(screen.getByTestId('mock-bar-decisions')).toHaveAttribute('data-min-point-size-positive', '2');
+  });
+
+  test('switches the activity chart axis between symlog and linear scale', async () => {
+    const mixedSeries = [
+      { date: '2025-01-01', label: 'Jan 1', count: 5, fullDate: '2025-01-01' },
+      { date: '2025-01-02', label: 'Jan 2', count: 50, fullDate: '2025-01-02' },
+      { date: '2025-01-03', label: 'Jan 3', count: 15000, fullDate: '2025-01-03' },
+    ];
+
+    render(
+      <ActivityBarChart
+        alertsData={mixedSeries}
+        decisionsData={mixedSeries}
+        unfilteredAlertsData={mixedSeries}
+        unfilteredDecisionsData={mixedSeries}
+        granularity="day"
+        setGranularity={vi.fn()}
+        onDateRangeSelect={vi.fn()}
+        selectedDateRange={null}
+        isSticky={false}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Symlog' }));
+
+    expect(screen.getByTestId('mock-y-axis')).toHaveAttribute('data-scale', 'symlog');
+    expect(screen.getByTestId('mock-y-axis')).toHaveAttribute('data-ticks', '0,5,50,500,2000,15000');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Linear' }));
+
+    expect(screen.getByTestId('mock-y-axis')).toHaveAttribute('data-scale', 'linear');
+    expect(screen.getByTestId('mock-y-axis')).toHaveAttribute('data-domain', '0,15000');
+    expect(screen.getByTestId('mock-y-axis')).not.toHaveAttribute('data-ticks');
   });
 
   test('reinitializes the brush window when the selected range changes', () => {

@@ -22,6 +22,7 @@ import {
 } from './DashboardCharts.helpers';
 
 type Granularity = 'day' | 'hour';
+type ScaleMode = 'linear' | 'symlog';
 
 interface ChartDatum {
     date: string;
@@ -45,6 +46,91 @@ interface CustomTooltipProps {
     label?: string;
 }
 
+const formatCount = (value: number) => Math.round(value).toLocaleString();
+const getMinBarPointSize = (value: unknown) => {
+    if (typeof value !== 'number' || value <= 0) {
+        return 0;
+    }
+
+    return 2;
+};
+
+const SYMLOG_TICK_TARGET = 6;
+
+const getNiceTickCandidate = (value: number) => {
+    if (value <= 0) {
+        return 0;
+    }
+
+    const exponent = Math.floor(Math.log10(value));
+    const magnitude = 10 ** exponent;
+    const normalized = value / magnitude;
+
+    if (normalized <= 1) {
+        return magnitude;
+    }
+    if (normalized <= 2) {
+        return 2 * magnitude;
+    }
+    if (normalized <= 5) {
+        return 5 * magnitude;
+    }
+
+    return 10 * magnitude;
+};
+
+const buildNiceCountCandidates = (maxValue: number) => {
+    const candidates = new Set<number>([0]);
+
+    if (maxValue <= 0) {
+        return [0];
+    }
+
+    let magnitude = 1;
+    while (magnitude <= maxValue) {
+        candidates.add(magnitude);
+        candidates.add(2 * magnitude);
+        candidates.add(5 * magnitude);
+        magnitude *= 10;
+    }
+
+    candidates.add(getNiceTickCandidate(maxValue));
+    candidates.add(maxValue);
+
+    return Array.from(candidates)
+        .filter(value => value >= 0 && value <= maxValue)
+        .sort((left, right) => left - right);
+};
+
+const symlogTransform = (value: number) => Math.log1p(Math.max(0, value));
+
+const getSymlogTicks = (maxValue: number, targetTickCount = SYMLOG_TICK_TARGET) => {
+    if (maxValue <= 0) {
+        return [0];
+    }
+
+    const candidates = buildNiceCountCandidates(maxValue);
+    const maxTransformed = symlogTransform(maxValue);
+    const selectedTicks = new Set<number>([0, maxValue]);
+
+    for (let index = 1; index < targetTickCount - 1; index += 1) {
+        const targetPosition = (maxTransformed * index) / (targetTickCount - 1);
+        let nearestCandidate = candidates[0];
+        let nearestDistance = Number.POSITIVE_INFINITY;
+
+        for (const candidate of candidates) {
+            const distance = Math.abs(symlogTransform(candidate) - targetPosition);
+            if (distance < nearestDistance) {
+                nearestCandidate = candidate;
+                nearestDistance = distance;
+            }
+        }
+
+        selectedTicks.add(nearestCandidate);
+    }
+
+    return Array.from(selectedTicks).sort((left, right) => left - right);
+};
 
 interface ActivityBarChartProps {
     alertsData: ActivityChartSeriesPoint[];
@@ -58,6 +144,8 @@ interface ActivityBarChartProps {
     simulationsEnabled?: boolean;
     granularity: Granularity;
     setGranularity: (value: Granularity) => void;
+    scaleMode?: ScaleMode;
+    setScaleMode?: (value: ScaleMode) => void;
     onDateRangeSelect?: (dateRange: DateRangeSelection | null, isAtEnd: boolean) => void;
     selectedDateRange: DateRangeSelection | null;
     isSticky: boolean;
@@ -111,6 +199,8 @@ export function ActivityBarChart({
     simulationsEnabled = false,
     granularity,
     setGranularity,
+    scaleMode,
+    setScaleMode,
     onDateRangeSelect,
     selectedDateRange,
     isSticky,
@@ -254,6 +344,7 @@ export function ActivityBarChart({
     const [isDraggingState, setIsDraggingState] = useState(false);
     const [isSliderHovered, setIsSliderHovered] = useState(false);
     const [sliderLabelOffsets, setSliderLabelOffsets] = useState({ start: 0, end: 0 });
+    const [internalScaleMode, setInternalScaleMode] = useState<ScaleMode>('linear');
     const localBrushStateRef = useRef<BrushWindow>({ startIndex: 0, endIndex: 0 });
     const sliderTrackRef = useRef<HTMLDivElement | null>(null);
     const sliderDragRef = useRef<SliderDragState | null>(null);
@@ -489,7 +580,25 @@ export function ActivityBarChart({
         return Math.max(4, Math.min(40, calculatedBarSize));
     }, [containerWidth, filteredData.length]);
 
+    const yAxisMax = useMemo(() => {
+        if (!filteredData.length) {
+            return 0;
+        }
+
+        return filteredData.reduce((maxValue, item) => {
+            const alertsTotal = item.alerts + item.simulatedAlerts;
+            const decisionsTotal = item.decisions + item.simulatedDecisions;
+            return Math.max(maxValue, alertsTotal, decisionsTotal);
+        }, 0);
+    }, [filteredData]);
+
+    const symlogTicks = useMemo(() => getSymlogTicks(yAxisMax), [yAxisMax]);
+
     const granularities: Granularity[] = ['day', 'hour'];
+    const scaleModes: ScaleMode[] = ['linear', 'symlog'];
+    const resolvedScaleMode = scaleMode ?? internalScaleMode;
+    const handleScaleModeChange = setScaleMode ?? setInternalScaleMode;
+    const isSymlogScale = resolvedScaleMode === 'symlog';
 
     return (
         <Card className="h-full outline-none flex flex-col">
@@ -504,22 +613,41 @@ export function ActivityBarChart({
                             </span>
                         )}
                     </CardTitle>
-                    <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-lg">
-                        {granularities.map((g) => (
-                            <button
-                                key={g}
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    setGranularity(g);
-                                }}
-                                className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${granularity === g
-                                    ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
-                                    : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-300'
-                                    }`}
-                            >
-                                {g.charAt(0).toUpperCase() + g.slice(1)}
-                            </button>
-                        ))}
+                    <div className="flex items-center gap-3">
+                        <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-lg" role="group" aria-label="Activity chart scale">
+                            {scaleModes.map((mode) => (
+                                <button
+                                    key={mode}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleScaleModeChange(mode);
+                                    }}
+                                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${resolvedScaleMode === mode
+                                        ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
+                                        : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-300'
+                                        }`}
+                                >
+                                    {mode === 'linear' ? 'Linear' : 'Symlog'}
+                                </button>
+                            ))}
+                        </div>
+                        <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-lg">
+                            {granularities.map((g) => (
+                                <button
+                                    key={g}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setGranularity(g);
+                                    }}
+                                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${granularity === g
+                                        ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
+                                        : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-300'
+                                        }`}
+                                >
+                                    {g.charAt(0).toUpperCase() + g.slice(1)}
+                                </button>
+                            ))}
+                        </div>
                     </div>
                 </div>
             </CardHeader>
@@ -534,7 +662,17 @@ export function ActivityBarChart({
                         >
                             <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
                             <XAxis dataKey="label" stroke="#888888" fontSize={12} tickLine={false} axisLine={false} />
-                            <YAxis stroke="#888888" fontSize={12} tickLine={false} axisLine={false} width={40} />
+                            <YAxis
+                                stroke="#888888"
+                                fontSize={12}
+                                tickLine={false}
+                                axisLine={false}
+                                width={56}
+                                scale={resolvedScaleMode}
+                                domain={[0, yAxisMax]}
+                                ticks={isSymlogScale ? symlogTicks : undefined}
+                                tickFormatter={formatCount}
+                            />
                             <Tooltip content={<CustomTooltip />} cursor={{ fill: 'transparent' }} />
                             <Legend verticalAlign="top" height={36} />
                             <Bar
@@ -546,6 +684,7 @@ export function ActivityBarChart({
                                 radius={[4, 4, 0, 0]}
                                 barSize={dynamicBarSize}
                                 stackId="alerts"
+                                minPointSize={getMinBarPointSize}
                             />
                             {simulationsEnabled && (
                                 <Bar
@@ -557,6 +696,7 @@ export function ActivityBarChart({
                                     radius={[4, 4, 0, 0]}
                                     barSize={dynamicBarSize}
                                     stackId="alerts"
+                                    minPointSize={getMinBarPointSize}
                                 />
                             )}
                             <Bar
@@ -568,6 +708,7 @@ export function ActivityBarChart({
                                 radius={[4, 4, 0, 0]}
                                 barSize={dynamicBarSize}
                                 stackId="decisions"
+                                minPointSize={getMinBarPointSize}
                             />
                             {simulationsEnabled && (
                                 <Bar
@@ -579,6 +720,7 @@ export function ActivityBarChart({
                                     radius={[4, 4, 0, 0]}
                                     barSize={dynamicBarSize}
                                     stackId="decisions"
+                                    minPointSize={getMinBarPointSize}
                                 />
                             )}
                         </BarChart>

@@ -211,4 +211,38 @@ describe('Dashboard page', () => {
     expect(chartProps.simulationsEnabled).toBe(false);
     expect(mapProps.simulationsEnabled).toBe(false);
   });
+
+  test('restores the saved activity chart scale mode and defaults to linear', async () => {
+    localStorage.setItem('dashboard_scale_mode', 'symlog');
+
+    const { unmount } = render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(chartSpy).toHaveBeenCalled());
+
+    const savedScaleProps = chartSpy.mock.calls.at(-1)?.[0] as {
+      scaleMode?: 'linear' | 'symlog';
+    };
+    expect(savedScaleProps.scaleMode).toBe('symlog');
+
+    unmount();
+    chartSpy.mockClear();
+    localStorage.removeItem('dashboard_scale_mode');
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(chartSpy).toHaveBeenCalled());
+
+    const defaultScaleProps = chartSpy.mock.calls.at(-1)?.[0] as {
+      scaleMode?: 'linear' | 'symlog';
+    };
+    expect(defaultScaleProps.scaleMode).toBe('linear');
+  });
 });
