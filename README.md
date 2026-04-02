@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="frontend/public/logo.svg" alt="CrowdSec Web UI Logo" width="400" />
+  <img src="client/public/logo.svg" alt="CrowdSec Web UI Logo" width="400" />
 </div>
 
 <div align="center">
@@ -77,8 +77,9 @@ Create notification rules for alert spikes, alert thresholds, recent CVE activit
 
 ## Architecture
 
--   **Frontend**: React (Vite) + Tailwind CSS. Located in `frontend/`.
--   **Backend**: Node.js (Hono). Acts as an intelligent caching layer for CrowdSec Local API (LAPI) with delta updates and optimized chunked historical data sync.
+-   **Client**: React (Vite) + Tailwind CSS. Located in `client/`.
+-   **Server**: Node.js (Hono). Acts as an intelligent caching layer for CrowdSec Local API (LAPI) with delta updates and optimized chunked historical data sync.
+-   **Build Output**: The root build emits the frontend to `dist/client` and the compiled server to `dist/server`.
 -   **Database**: SQLite (`better-sqlite3`). Persists alerts and decisions locally in `/app/data/crowdsec.db` to reduce memory usage and support historical data.
 -   **Security**: The application runs as a non-root user (`node`) inside the container and communicates with CrowdSec via HTTP/LAPI. It uses **Machine Authentication** to obtain a JWT for full access (read/write), either via watcher `User/Password` or agent **mTLS**.
 
@@ -163,8 +164,14 @@ This makes the backend fetch the union of:
 You can adapt those values to match your own CrowdSec setup. For example:
 
 - use `CROWDSEC_ALERT_ORIGINS` to keep only selected upstream origins
+- use `none` inside `CROWDSEC_ALERT_ORIGINS` to also fetch the normal unfiltered alert feed
 - use `CROWDSEC_ALERT_EXTRA_SCENARIOS` to include specific scenarios that should remain visible even if they come from a different origin
 - multiple values can be provided as CSV, for example `CROWDSEC_ALERT_ORIGINS=crowdsec,cscli` or `CROWDSEC_ALERT_EXTRA_SCENARIOS=manual/web-ui,my/custom-scenario`
+
+Examples:
+
+- `CROWDSEC_ALERT_ORIGINS=CAPI` fetches only CAPI alerts
+- `CROWDSEC_ALERT_ORIGINS=none,CAPI` fetches the normal unfiltered alert feed plus CAPI alerts
 
 These are upstream LAPI filters, so excluded alerts are skipped before they are cached locally. This is usually more effective than relying on UI-side limits when you have very large external data sets.
 
@@ -601,16 +608,34 @@ The Web UI maintains its own local history of alerts and decisions. Data fetched
     ```
 
 3.  **Start the Application**:
-    The project includes a helper script `run.sh` to manage both services.
+    You can either use the root pnpm scripts directly or the helper script `run.sh`.
 
-    **Development Mode** (Hot Reload):
-    Starts both backend (port 3000) and frontend (port 5173).
+    **Development Mode with pnpm**:
+    Starts both server (port 3000) and client (port 5173).
+    ```bash
+    pnpm run dev
+    ```
+
+    **Production Build with pnpm**:
+    Builds the client and compiled server output.
+    ```bash
+    pnpm run build
+    ```
+
+    **Production Start with pnpm**:
+    Starts the compiled server from `dist/server`. This is the same startup contract used by the Docker image via `pnpm start`.
+    ```bash
+    pnpm start
+    ```
+
+    **Development Mode with helper script**:
+    Starts both server (port 3000) and client (port 5173).
     ```bash
     ./run.sh dev
     ```
 
-    **Production Mode** (Optimized Build):
-    Builds the frontend and starts the backend (port 3000).
+    **Production Mode with helper script**:
+    Builds the application and starts the server (port 3000).
     ```bash
     ./run.sh
     ```

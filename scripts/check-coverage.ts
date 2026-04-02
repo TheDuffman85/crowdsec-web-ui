@@ -30,23 +30,23 @@ type PackageRule = {
 
 const packages: PackageRule[] = [
   {
-    name: 'backend',
-    reportPath: 'coverage/backend/lcov.info',
+    name: 'server',
+    reportPath: 'coverage/server/lcov.info',
     minimums: { lines: 90, functions: 90, branches: 80 },
     exactFiles: [
-      'src/backend/config.ts',
-      'src/backend/utils/duration.ts',
-      'src/backend/utils/alerts.ts',
+      'server/config.ts',
+      'server/utils/duration.ts',
+      'server/utils/alerts.ts',
     ],
   },
   {
-    name: 'frontend',
-    reportPath: 'frontend/coverage/lcov.info',
+    name: 'client',
+    reportPath: 'coverage/client/lcov.info',
     minimums: { lines: 90, functions: 90, branches: 90 },
     exactFiles: [
-      'src/lib/basePath.ts',
-      'src/lib/utils.ts',
-      'src/lib/stats.ts',
+      'client/src/lib/basePath.ts',
+      'client/src/lib/utils.ts',
+      'client/src/lib/stats.ts',
     ],
   },
 ];
@@ -182,11 +182,11 @@ async function main(): Promise<void> {
         continue;
       }
 
-      failures.push(
+        failures.push(
         ...assertMinimums(`${pkg.name}:${exactFile}`, coverage, {
-          lines: pkg.name === 'backend' ? 97 : 100,
+          lines: pkg.name === 'server' ? 97 : 100,
           functions: 100,
-          branches: pkg.name === 'backend' ? 74 : pkg.minimums.branches,
+          branches: pkg.name === 'server' ? 74 : pkg.minimums.branches,
         }),
       );
     }

@@ -67,6 +67,7 @@ export interface AlertRecord {
   uuid?: string;
   created_at: string;
   scenario?: string;
+  reason?: string;
   source?: AlertSource | null;
   message?: string;
   machine_id?: string;
@@ -95,6 +96,7 @@ export interface SlimAlert {
   id: string | number;
   created_at: string;
   scenario?: string;
+  reason?: string;
   message?: string;
   events_count?: number;
   machine_id?: string;
@@ -134,8 +136,9 @@ export interface DecisionListItem {
 
 export interface StatsAlert {
   created_at: string;
+  kind?: string;
   scenario?: string;
-  source: Pick<AlertSource, 'ip' | 'value' | 'range' | 'cn' | 'as_name'> | null;
+  source: Pick<AlertSource, 'ip' | 'value' | 'range' | 'cn' | 'as_name' | 'scope'> | null;
   target?: string;
   simulated?: boolean;
 }
@@ -289,6 +292,31 @@ export interface AddDecisionRequest {
 
 export interface RefreshIntervalRequest {
   interval: 'manual' | '0' | '5s' | '30s' | '1m' | '5m';
+}
+
+export interface BulkDeleteRequest {
+  ids: Array<string | number>;
+}
+
+export interface CleanupByIpRequest {
+  ip: string;
+}
+
+export type DeleteResourceKind = 'alert' | 'decision';
+
+export interface BulkDeleteFailure {
+  kind: DeleteResourceKind;
+  id: string;
+  error: string;
+}
+
+export interface BulkDeleteResult {
+  requested_alerts: number;
+  requested_decisions: number;
+  deleted_alerts: number;
+  deleted_decisions: number;
+  failed: BulkDeleteFailure[];
+  ip?: string;
 }
 
 export interface DeleteResult {

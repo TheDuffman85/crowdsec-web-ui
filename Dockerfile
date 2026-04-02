@@ -6,6 +6,7 @@
 FROM node:24.14.1-trixie-slim AS builder
 
 WORKDIR /app
+ENV NODE_ENV=development
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
@@ -15,11 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN npm install -g pnpm@10.33.0
 
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
-COPY frontend/package.json ./frontend/package.json
-RUN pnpm install --frozen-lockfile
-
-# Copy source code
-COPY . .
+RUN pnpm install --frozen-lockfile --prod=false
 
 # Build Args need to be declared BEFORE the build step
 # Vite bakes VITE_* env vars into the static bundle at build time
@@ -29,8 +26,26 @@ ARG VITE_REPO_URL
 ARG VITE_BRANCH
 ARG VITE_VERSION
 
-# Build the frontend with VITE_* variables available
-RUN pnpm run build-ui
+# Copy source code
+COPY client ./client
+COPY server ./server
+COPY shared ./shared
+COPY scripts ./scripts
+COPY tsconfig.json ./
+COPY tsup.config.ts ./
+COPY vite.config.ts ./
+COPY vitest.config.ts ./
+COPY vitest.server.config.ts ./
+COPY vitest.client.config.ts ./
+COPY eslint.config.js ./
+COPY docker-entrypoint.sh ./
+COPY run.sh ./
+COPY run.ps1 ./
+
+# Build the application with VITE_* variables available
+RUN pnpm exec vite build \
+    && pnpm exec tsup \
+    && pnpm prune --prod
 
 
 # ==========================================
@@ -68,16 +83,13 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y \
 # Copy backend dependencies from builder
 COPY --from=builder /app/node_modules ./node_modules
 
-# Copy frontend build artifacts
-COPY --from=builder /app/frontend/dist ./frontend/dist
+# Copy built application artifacts
+COPY --from=builder /app/dist ./dist
 
-# Copy backend source files
+# Copy runtime files for the existing pnpm start contract
 COPY package.json ./
 COPY pnpm-workspace.yaml ./
-COPY index.ts ./
 COPY scripts ./scripts
-COPY shared ./shared
-COPY src ./src
 COPY docker-entrypoint.sh /usr/local/bin/
 
 # Set permissions
