@@ -217,7 +217,8 @@ export class LapiClient {
     filters: FetchAlertsFilters = {},
   ): Promise<unknown[]> {
     const sinceParam = since || this.lookbackPeriod;
-    const buildParams = (scope: 'ip' | 'range'): URLSearchParams => {
+    const isCapiOrigin = filters.origin?.trim().toUpperCase() === 'CAPI';
+    const buildParams = (scope?: 'ip' | 'range'): URLSearchParams => {
       const params = new URLSearchParams();
       params.append('since', sinceParam);
       params.append('limit', '0');
@@ -226,17 +227,20 @@ export class LapiClient {
       if (hasActiveDecision) params.append('has_active_decision', 'true');
       if (filters.origin) params.append('origin', filters.origin);
       if (filters.scenario) params.append('scenario', filters.scenario);
-      params.append('scope', scope);
+      if (scope) params.append('scope', scope);
       return params;
     };
 
-    const scopes = ['ip', 'range'] as const;
+    const scopes = isCapiOrigin
+      ? [undefined]
+      : ['ip', 'range'] as const;
     const resultSets = await Promise.all(scopes.map(async (scope) => {
+      const scopeLabel = scope || 'unscoped';
       try {
         const response = await this.fetchLapi<unknown[]>(`/v1/alerts?${buildParams(scope).toString()}`);
         return Array.isArray(response.data) ? response.data : [];
       } catch (error: any) {
-        console.error(`Failed to fetch ${scope} alerts: ${error.message}`);
+        console.error(`Failed to fetch ${scopeLabel} alerts: ${error.message}`);
         return [];
       }
     }));

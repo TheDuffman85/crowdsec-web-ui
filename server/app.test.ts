@@ -175,6 +175,88 @@ function sampleBlocklistImportAlert(overrides: Partial<AlertRecord> = {}): Alert
   };
 }
 
+function sampleCapiAlert(overrides: Partial<AlertRecord> = {}): AlertRecord {
+  const createdAt = new Date().toISOString();
+  const stopAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
+  return {
+    id: 5,
+    uuid: 'alert-5',
+    created_at: createdAt,
+    kind: 'capi',
+    scenario: 'update : +15000/-0 IPs',
+    message: '',
+    source: {
+      ip: '8.8.8.8',
+      value: '8.8.8.8',
+      cn: 'US',
+      as_name: 'Google',
+      scope: 'crowdsecurity/community-blocklist',
+    },
+    target: 'blocklist',
+    events: [],
+    decisions: [
+      {
+        id: 50,
+        type: 'ban',
+        value: '8.8.8.8',
+        duration: '24h',
+        stop_at: stopAt,
+        origin: 'CAPI',
+        scenario: 'http:scan',
+        simulated: false,
+      },
+    ],
+    simulated: false,
+    ...overrides,
+  };
+}
+
+function sampleAppSecAlert(overrides: Partial<AlertRecord> = {}): AlertRecord {
+  const createdAt = new Date().toISOString();
+  const stopAt = new Date(Date.now() + 3 * 60 * 60 * 1_000).toISOString();
+  return {
+    id: 6,
+    uuid: 'alert-6',
+    created_at: createdAt,
+    scenario: 'crowdsecurity/appsec-vpatch',
+    message: 'WAF block: crowdsecurity/vpatch-git-config from 159.65.167.144',
+    source: {
+      ip: '159.65.167.144',
+      value: '159.65.167.144',
+      cn: 'US',
+      as_name: 'DigitalOcean',
+      scope: 'Ip',
+    },
+    target: 'tausend.me',
+    events: [
+      {
+        timestamp: createdAt,
+        meta: [
+          { key: 'rule_name', value: 'crowdsecurity/vpatch-git-config' },
+          { key: 'matched_zones', value: 'REQUEST_FILENAME' },
+          { key: 'service', value: 'appsec' },
+          { key: 'target_host', value: 'tausend.me' },
+          { key: 'target_uri', value: '/.git/config' },
+        ],
+      },
+    ],
+    decisions: [
+      {
+        id: 60,
+        type: 'ban',
+        value: '159.65.167.144',
+        duration: '3h',
+        stop_at: stopAt,
+        origin: 'crowdsec',
+        scenario: 'crowdsecurity/appsec-vpatch',
+        simulated: false,
+      },
+    ],
+    simulated: false,
+    ...overrides,
+  };
+}
+
 function sampleRangeAlert(overrides: Partial<AlertRecord> = {}): AlertRecord {
   const createdAt = new Date().toISOString();
   const stopAt = new Date(Date.now() + 30 * 60 * 1_000).toISOString();
@@ -1402,6 +1484,205 @@ describe('createApp', () => {
     expect(
       storedAlerts.some((row) => String((JSON.parse(row.raw_data) as AlertRecord).scenario) === 'crowdsec-blocklist-import/external_blocklist'),
     ).toBe(false);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('origin allowlist can include CAPI alerts and persist their decisions', async () => {
+    const capiAlert = sampleCapiAlert();
+
+    const { controller, database, fetchCalls } = createController({
+      env: {
+        CROWDSEC_ALERT_ORIGINS: 'CAPI',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (!url.includes('/v1/alerts?')) {
+          return undefined;
+        }
+        if (url.includes('origin=CAPI') && !url.includes('scope=')) {
+          return Response.json([capiAlert]);
+        }
+        return Response.json([]);
+      },
+    });
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alertsResponse.status).toBe(200);
+
+    const alerts = await alertsResponse.json() as Array<{ id: number; decisions: Array<{ origin?: string }> }>;
+    expect(alerts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 5,
+        scenario: 'crowdsecurity/community-blocklist',
+        reason: 'update : +15000/-0 IPs',
+        decisions: expect.arrayContaining([expect.objectContaining({ origin: 'CAPI' })]),
+      }),
+    ]));
+
+    const statsAlertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/stats/alerts'));
+    expect(statsAlertsResponse.status).toBe(200);
+    expect((await statsAlertsResponse.json()) as Array<{ scenario?: string }>).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ scenario: 'crowdsecurity/community-blocklist' }),
+      ]),
+    );
+
+    const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
+    expect(alertRequests).toHaveLength(2);
+    expect(alertRequests.every((call) => call.url.includes('origin=CAPI'))).toBe(true);
+    expect(alertRequests.every((call) => !call.url.includes('scope='))).toBe(true);
+
+    const decisionCount = (database.db.query('SELECT COUNT(*) AS count FROM decisions').get() as { count: number }).count;
+    expect(decisionCount).toBe(1);
+
+    const storedDecision = database.db.query('SELECT raw_data FROM decisions').get() as { raw_data: string };
+    expect(JSON.parse(storedDecision.raw_data)).toEqual(expect.objectContaining({ origin: 'CAPI' }));
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('origin allowlist can combine the unfiltered feed with CAPI alerts', async () => {
+    const crowdsecAlert = sampleAlert({
+      id: 14,
+      uuid: 'alert-14',
+      decisions: [
+        {
+          id: 140,
+          type: 'ban',
+          value: '1.2.3.4',
+          duration: '30m',
+          origin: 'crowdsec',
+          scenario: 'crowdsecurity/ssh-bf',
+          simulated: false,
+        },
+      ],
+    });
+    const capiAlert = sampleCapiAlert({
+      id: 15,
+      uuid: 'alert-15',
+      decisions: [
+        {
+          id: 150,
+          type: 'ban',
+          value: '8.8.8.8',
+          duration: '24h',
+          stop_at: new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString(),
+          origin: 'CAPI',
+          scenario: 'http:scan',
+          simulated: false,
+        },
+      ],
+    });
+
+    const { controller, database, fetchCalls } = createController({
+      env: {
+        CROWDSEC_ALERT_ORIGINS: 'none,CAPI',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (!url.includes('/v1/alerts?')) {
+          return undefined;
+        }
+        if (url.includes('origin=CAPI') && !url.includes('scope=')) {
+          return Response.json([capiAlert]);
+        }
+        if (!url.includes('origin=') && url.includes('scope=ip')) {
+          return Response.json([crowdsecAlert]);
+        }
+        return Response.json([]);
+      },
+    });
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alertsResponse.status).toBe(200);
+
+    const alerts = await alertsResponse.json() as Array<{ id: number; scenario?: string }>;
+    expect(alerts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 14, scenario: 'crowdsecurity/ssh-bf' }),
+      expect.objectContaining({ id: 15, scenario: 'crowdsecurity/community-blocklist' }),
+    ]));
+
+    const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
+    expect(alertRequests.some((call) => !call.url.includes('origin=') && call.url.includes('scope=ip'))).toBe(true);
+    expect(alertRequests.some((call) => !call.url.includes('origin=') && call.url.includes('scope=range'))).toBe(true);
+    expect(alertRequests.some((call) => call.url.includes('origin=CAPI') && !call.url.includes('scope='))).toBe(true);
+
+    const alertCount = (database.db.query('SELECT COUNT(*) AS count FROM alerts').get() as { count: number }).count;
+    expect(alertCount).toBe(2);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('crowdsec AppSec alerts keep their raw scenario in the alerts list', async () => {
+    const appSecAlert = sampleAppSecAlert();
+    const crowdsecAlert = sampleAlert({
+      id: 7,
+      uuid: 'alert-7',
+      decisions: [
+        {
+          id: 70,
+          type: 'ban',
+          value: '1.2.3.4',
+          duration: '30m',
+          origin: 'crowdsec',
+          scenario: 'crowdsecurity/ssh-bf',
+          simulated: false,
+        },
+      ],
+    });
+
+    const { controller, database, fetchCalls } = createController({
+      env: {
+        CROWDSEC_ALERT_ORIGINS: 'crowdsec',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (!url.includes('/v1/alerts?')) {
+          return undefined;
+        }
+        if (url.includes('origin=crowdsec') && url.includes('scope=ip')) {
+          return Response.json([appSecAlert, crowdsecAlert]);
+        }
+        return Response.json([]);
+      },
+    });
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alertsResponse.status).toBe(200);
+
+    const alerts = await alertsResponse.json() as Array<{ id: number; scenario?: string; reason?: string }>;
+    expect(alerts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 6,
+        scenario: 'crowdsecurity/appsec-vpatch',
+      }),
+      expect.objectContaining({
+        id: 7,
+        scenario: 'crowdsecurity/ssh-bf',
+      }),
+    ]));
+
+    const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
+    expect(alertRequests.some((call) => call.url.includes('origin=crowdsec') && call.url.includes('scope=ip'))).toBe(true);
+    expect(alertRequests.some((call) => call.url.includes('origin=crowdsec') && call.url.includes('scope=range'))).toBe(true);
+
+    const storedAlert = database.db.query('SELECT raw_data FROM alerts WHERE id = 6').get() as { raw_data: string };
+    expect(JSON.parse(storedAlert.raw_data)).toEqual(expect.objectContaining({
+      scenario: 'crowdsecurity/appsec-vpatch',
+    }));
 
     controller.stopBackgroundTasks();
     database.close();

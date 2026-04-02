@@ -14,7 +14,7 @@ import {
     getAllCountries,
     getTopScenarios,
     getTopAS,
-    getAggregatedData
+    getAggregatedData,
 } from "../lib/stats";
 import {
     ShieldAlert,
@@ -179,10 +179,11 @@ export function Dashboard() {
             setConfig(configData);
 
             // Use optimized stats endpoints only
-            const [alertsForStats, decisionsForStats] = await Promise.all([
+            const [alertsForStatsResponse, decisionsForStats] = await Promise.all([
                 fetchAlertsForStats(),
                 fetchDecisionsForStats()
             ]);
+            const alertsForStats = alertsForStatsResponse;
 
             setRawData({ alertsForStats, decisionsForStats });
 

@@ -183,7 +183,7 @@ describe('LapiClient', () => {
     expect(calls.every((call) => !call.includes('simulated=true'))).toBe(true);
   });
 
-  test('queries ip and range scopes separately and appends filters to both alert queries', async () => {
+  test('queries ip and range scopes when explicit non-CAPI filters are provided', async () => {
     const calls: string[] = [];
     const client = new LapiClient({
       crowdsecUrl: 'http://crowdsec:8080',
@@ -193,7 +193,14 @@ describe('LapiClient', () => {
       version: '1.0.0',
       fetchImpl: async (input) => {
         calls.push(String(input));
-        return Response.json([]);
+        const url = String(input);
+        if (!url.includes('scope=')) {
+          return Response.json([{ id: 9 }]);
+        }
+        if (url.includes('scope=ip')) {
+          return Response.json([{ id: 9 }, { id: 10 }]);
+        }
+        return Response.json([{ id: 11 }]);
       },
     });
 
@@ -202,11 +209,32 @@ describe('LapiClient', () => {
         origin: 'crowdsec',
         scenario: 'manual/web-ui',
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual([{ id: 9 }, { id: 10 }, { id: 11 }]);
 
     expect(calls).toHaveLength(2);
     expect(calls.some((call) => call.includes('/v1/alerts?since=30m&limit=0&until=10m&simulated=true&has_active_decision=true&origin=crowdsec&scenario=manual%2Fweb-ui&scope=ip'))).toBe(true);
     expect(calls.some((call) => call.includes('/v1/alerts?since=30m&limit=0&until=10m&simulated=true&has_active_decision=true&origin=crowdsec&scenario=manual%2Fweb-ui&scope=range'))).toBe(true);
+  });
+
+  test('uses an unscoped alert query for CAPI origins', async () => {
+    const calls: string[] = [];
+    const client = new LapiClient({
+      crowdsecUrl: 'http://crowdsec:8080',
+      auth: passwordAuth,
+      simulationsEnabled: false,
+      lookbackPeriod: '1h',
+      version: '1.0.0',
+      fetchImpl: async (input) => {
+        calls.push(String(input));
+        return Response.json([{ id: 5 }]);
+      },
+    });
+
+    await expect(client.fetchAlerts('24h', null, false, { origin: 'CAPI' })).resolves.toEqual([{ id: 5 }]);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain('/v1/alerts?since=24h&limit=0&origin=CAPI');
+    expect(calls[0]).not.toContain('scope=');
   });
 
   test('logs in with mTLS and attaches TLS options to login and subsequent requests', async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { buildMetaSearch, getAlertSourceValue, getAlertTarget, toSlimAlert, toSlimDecision } from './alerts';
+import { buildMetaSearch, getAlertSourceValue, getAlertTarget, resolveAlertReason, resolveAlertScenario, toSlimAlert, toSlimDecision } from './alerts';
 
 describe('alert helpers', () => {
   test('getAlertTarget prioritizes event metadata', () => {
@@ -106,4 +106,72 @@ describe('alert helpers', () => {
     expect(slim.source?.ip).toBe('1.2.3.4');
     expect(slim.simulated).toBe(false);
   });
+
+  test('resolveAlertScenario prefers source scope for capi alerts', () => {
+    expect(resolveAlertScenario({
+      id: 1,
+      created_at: '2025-01-01T00:00:00.000Z',
+      kind: 'capi',
+      scenario: 'update : +15000/-0 IPs',
+      source: {
+        scope: 'crowdsecurity/community-blocklist',
+      },
+    })).toBe('crowdsecurity/community-blocklist');
+
+    expect(toSlimAlert({
+      id: 2,
+      created_at: '2025-01-01T00:00:00.000Z',
+      kind: 'capi',
+      scenario: 'update : +15000/-0 IPs',
+      source: {
+        scope: 'crowdsecurity/community-blocklist',
+      },
+      decisions: [],
+    }).scenario).toBe('crowdsecurity/community-blocklist');
+  });
+
+  test('resolveAlertScenario prefers source scope for update-style blocklist alerts even when kind is missing', () => {
+    expect(resolveAlertScenario({
+      id: 11,
+      created_at: '2025-01-01T00:00:00.000Z',
+      scenario: 'update : +15000/-0 IPs',
+      source: {
+        scope: 'crowdsecurity/community-blocklist',
+      },
+    })).toBe('crowdsecurity/community-blocklist');
+
+    expect(toSlimAlert({
+      id: 12,
+      created_at: '2025-01-01T00:00:00.000Z',
+      scenario: 'update : +15000/-0 IPs',
+      source: {
+        scope: 'crowdsecurity/community-blocklist',
+      },
+      decisions: [],
+    }).scenario).toBe('crowdsecurity/community-blocklist');
+  });
+
+  test('resolveAlertReason preserves raw scenario when display scenario is remapped', () => {
+    expect(resolveAlertReason({
+      id: 3,
+      created_at: '2025-01-01T00:00:00.000Z',
+      kind: 'capi',
+      scenario: 'update : +15000/-0 IPs',
+      source: {
+        scope: 'crowdsecurity/community-blocklist',
+      },
+    })).toBe('update : +15000/-0 IPs');
+
+    expect(toSlimAlert({
+      id: 4,
+      created_at: '2025-01-01T00:00:00.000Z',
+      kind: 'capi',
+      scenario: 'update : +15000/-0 IPs',
+      source: {
+        scope: 'crowdsecurity/community-blocklist',
+      },
+      decisions: [],
+    }).reason).toBe('update : +15000/-0 IPs');
+  });
+
 });

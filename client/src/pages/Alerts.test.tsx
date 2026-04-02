@@ -1,12 +1,26 @@
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import * as api from '../lib/api';
 import { Alerts } from './Alerts';
+
+const largeDecisionList = Array.from({ length: 75 }, (_, index) => ({
+  id: 1000 + index,
+  value: `203.0.113.${index}`,
+  type: 'ban',
+  duration: `${index + 1}h`,
+  simulated: false,
+  expired: false,
+  origin: 'CAPI',
+}));
+
+const setLastUpdatedMock = vi.fn();
 
 vi.mock('../contexts/useRefresh', () => ({
   useRefresh: () => ({
     refreshSignal: 0,
-    setLastUpdated: vi.fn(),
+    setLastUpdated: setLastUpdatedMock,
   }),
 }));
 
@@ -93,5 +107,33 @@ describe('Alerts page', () => {
     expect(screen.getByRole('columnheader', { name: 'IP / Range' })).toBeInTheDocument();
     expect(screen.getAllByText('192.168.5.0/24')).toHaveLength(2);
     expect(screen.queryByText('1.2.3.4')).not.toBeInTheDocument();
+  });
+
+  test('streams large decision lists inside alert details', async () => {
+    const fetchAlertMock = vi.mocked(api.fetchAlert);
+    fetchAlertMock.mockResolvedValueOnce({
+      id: 1,
+      created_at: '2026-03-23T11:00:00.000Z',
+      scenario: 'crowdsecurity/community-blocklist',
+      source: { value: 'community-blocklist' },
+      decisions: largeDecisionList,
+      events: [],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/alerts?id=1']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Alert Details #1')).toBeInTheDocument());
+    expect(screen.getByText('Showing 50 of 75')).toBeInTheDocument();
+    expect(screen.getByText('#1000')).toBeInTheDocument();
+    expect(screen.queryByText('#1074')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /Load 50 more decisions/i }));
+
+    await waitFor(() => expect(screen.getByText('#1074')).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: /Load 50 more decisions/i })).not.toBeInTheDocument();
   });
 });

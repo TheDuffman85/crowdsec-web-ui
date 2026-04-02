@@ -85,6 +85,12 @@ describe('stats helpers', () => {
       },
       {
         created_at: new Date(now).toISOString(),
+        scenario: 'crowdsecurity/community-blocklist',
+        source: null,
+        target: 'N/A',
+      },
+      {
+        created_at: new Date(now).toISOString(),
         scenario: 'crowdsecurity/ssh-bf',
         source: null,
         target: undefined,
@@ -95,6 +101,7 @@ describe('stats helpers', () => {
     expect(getAllCountries(noisyAlerts).every((item) => item.countryCode !== 'Unknown')).toBe(true);
     expect(getTopAS(noisyAlerts, 5).some((item) => item.label === 'Unknown')).toBe(false);
     expect(getTopTargets(noisyAlerts, 5).some((item) => item.label === 'Unknown')).toBe(false);
+    expect(getTopTargets(noisyAlerts, 5).some((item) => item.label === 'N/A')).toBe(false);
   });
 
   test('aggregates daily and hourly data with explicit ranges', () => {

@@ -27,7 +27,7 @@ import type { MqttPublishConfig } from './notifications/mqtt-client';
 import { createNotificationOutboundGuard } from './notifications/outbound-guard';
 import { createNotificationSecretStore } from './notifications/secret-store';
 import { createUpdateChecker } from './update-check';
-import { getAlertSourceValue, getAlertTarget, toSlimAlert } from './utils/alerts';
+import { getAlertSourceValue, getAlertTarget, resolveAlertReason, resolveAlertScenario, toSlimAlert } from './utils/alerts';
 import { parseGoDuration, toDuration } from './utils/duration';
 
 type HonoContext = any;
@@ -85,6 +85,7 @@ interface AlertSyncQuery {
 
 const NOTIFICATION_SECRET_KEY_META_KEY = 'notification_secret_key';
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const UNFILTERED_ALERT_ORIGIN_TOKENS = new Set(['none']);
 
 export function createApp(options: CreateAppOptions = {}): AppController {
   const config = options.config || createRuntimeConfig();
@@ -460,13 +461,17 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       const alerts = database
         .getAlertsSince(since)
         .map((row) => {
-          const alert = applySimulationModeToAlert(JSON.parse(row.raw_data) as AlertRecord, config.simulationsEnabled);
+          const alert = applySimulationModeToAlert(
+            hydrateAlertWithDecisions(JSON.parse(row.raw_data) as AlertRecord),
+            config.simulationsEnabled,
+          );
           if (!alert) {
             return null;
           }
           const payload: StatsAlert = {
             created_at: alert.created_at,
-            scenario: alert.scenario,
+            kind: typeof alert.kind === 'string' ? alert.kind : undefined,
+            scenario: resolveAlertScenario(alert),
             source: alert.source
               ? {
                   ip: alert.source.ip,
@@ -474,6 +479,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
                   range: alert.source.range,
                   cn: alert.source.cn,
                   as_name: alert.source.as_name,
+                  scope: alert.source.scope,
                 }
               : null,
             target: alert.target,
@@ -672,9 +678,18 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
   function getAlertSyncQueries(): AlertSyncQuery[] {
     const queries: AlertSyncQuery[] = [];
+    let includeUnfiltered = false;
 
     for (const origin of config.alertOrigins) {
+      if (UNFILTERED_ALERT_ORIGIN_TOKENS.has(origin.trim().toLowerCase())) {
+        includeUnfiltered = true;
+        continue;
+      }
       queries.push({ origin });
+    }
+
+    if (includeUnfiltered) {
+      queries.push({});
     }
 
     for (const scenario of config.alertExtraScenarios) {
@@ -744,8 +759,6 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
 
     for (const decision of normalizedDecisions) {
-      if (decision.origin === 'CAPI') continue;
-
       const createdAt = decision.created_at || alert.created_at;
       const stopAt = decision.duration
         ? new Date(Date.now() + parseGoDuration(decision.duration)).toISOString()
@@ -936,8 +949,6 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         const refreshTransaction = database.transaction<AlertRecord[]>((alerts) => {
           for (const alert of alerts) {
             for (const decision of alert.decisions || []) {
-              if (decision.origin === 'CAPI') continue;
-
               const createdAt = decision.created_at || alert.created_at;
               const stopAt = decision.duration
                 ? new Date(Date.now() + parseGoDuration(decision.duration)).toISOString()
@@ -1248,6 +1259,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       };
     });
 
+    clone.reason = resolveAlertReason(clone);
+    clone.scenario = resolveAlertScenario(clone);
     clone.simulated = isAlertSimulated(clone);
 
     return clone;

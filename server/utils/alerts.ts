@@ -63,11 +63,35 @@ export function getAlertSourceValue(source: Pick<AlertSource, 'ip' | 'value' | '
   return values.find((value): value is string => typeof value === 'string' && value.length > 0);
 }
 
+export function resolveAlertScenario(alert: AlertRecord): string | undefined {
+  const scenario = typeof alert.scenario === 'string' ? alert.scenario : undefined;
+  const sourceScope = typeof alert.source?.scope === 'string' ? alert.source.scope : undefined;
+  const kind = typeof alert.kind === 'string' ? alert.kind.toLowerCase() : undefined;
+
+  if (sourceScope && (kind === 'capi' || (scenario?.startsWith('update :') && sourceScope.includes('/')))) {
+    return sourceScope;
+  }
+
+  return scenario;
+}
+
+export function resolveAlertReason(alert: AlertRecord): string | undefined {
+  const scenario = typeof alert.scenario === 'string' ? alert.scenario : undefined;
+  const displayScenario = resolveAlertScenario(alert);
+
+  if (scenario && displayScenario && scenario !== displayScenario) {
+    return scenario;
+  }
+
+  return typeof alert.reason === 'string' ? alert.reason : undefined;
+}
+
 export function toSlimAlert(alert: AlertRecord): SlimAlert {
   return {
     id: alert.id,
     created_at: alert.created_at,
-    scenario: alert.scenario,
+    scenario: resolveAlertScenario(alert),
+    reason: resolveAlertReason(alert),
     message: typeof alert.message === 'string' ? alert.message : undefined,
     events_count: typeof alert.events_count === 'number' ? alert.events_count : undefined,
     machine_id: alert.machine_id,

@@ -176,7 +176,7 @@ export function getTopTargets(alerts: Array<StatsAlert | StatsDecision>, limit =
     alerts.forEach(alert => {
         // Use pre-computed target from backend
         const target = alert.target;
-        if (target && target !== "Unknown") {
+        if (target && target !== "Unknown" && target !== "N/A") {
             targetCounts[target] = (targetCounts[target] || 0) + 1;
         }
     });

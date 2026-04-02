@@ -4,12 +4,21 @@ import { Badge } from "./ui/Badge";
 
 interface ScenarioNameProps {
     name?: string | null;
+    reason?: string | null;
     showLink?: boolean;
+    showReason?: boolean;
     className?: string;
     simulated?: boolean;
 }
 
-export function ScenarioName({ name, showLink = false, className = "", simulated = false }: ScenarioNameProps) {
+export function ScenarioName({
+    name,
+    reason,
+    showLink = false,
+    showReason = false,
+    className = "",
+    simulated = false,
+}: ScenarioNameProps) {
     if (!name) return null;
 
     // Split by first slash
@@ -47,6 +56,11 @@ export function ScenarioName({ name, showLink = false, className = "", simulated
                     </a>
                 )}
             </div>
+            {showReason && reason && reason !== name && (
+                <span className="text-xs text-gray-500 dark:text-gray-400 truncate max-w-full mt-0.5" title={reason}>
+                    {reason}
+                </span>
+            )}
         </div>
     );
 }

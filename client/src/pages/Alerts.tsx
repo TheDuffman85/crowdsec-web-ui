@@ -79,11 +79,13 @@ export function Alerts() {
     const [loading, setLoading] = useState(true);
     const [selectedAlert, setSelectedAlert] = useState<AlertSelection | null>(null);
     const [displayedCount, setDisplayedCount] = useState(50);
+    const [displayedDecisionCount, setDisplayedDecisionCount] = useState(50);
     const [searchParams, setSearchParams] = useSearchParams();
     const [alertToDelete, setAlertToDelete] = useState<string | number | null>(null);
     const [errorInfo, setErrorInfo] = useState<ErrorInfo | null>(null);
     const [showAllEvents, setShowAllEvents] = useState(false);
     const currentSimulationFilter = simulationsEnabled ? parseSimulationFilter(searchParams.get("simulation")) : 'all';
+    const searchParamsKey = searchParams.toString();
 
     // Ref to track selected alert ID for auto-refresh (avoids stale closure issues)
     const selectedAlertIdRef = useRef<string | number | null>(null);
@@ -100,6 +102,8 @@ export function Alerts() {
         });
         if (node) observer.current.observe(node);
     }, [loading]);
+
+    const decisionContainerRef = useRef<HTMLDivElement | null>(null);
 
     const loadAlerts = useCallback(async (isBackground = false) => {
         try {
@@ -153,7 +157,7 @@ export function Alerts() {
         } finally {
             if (!isBackground) setLoading(false);
         }
-    }, [searchParams, setLastUpdated]);
+    }, [searchParamsKey, setLastUpdated]);
 
     useEffect(() => {
         loadAlerts(false);
@@ -168,6 +172,7 @@ export function Alerts() {
     useEffect(() => {
         selectedAlertIdRef.current = selectedAlert?.id || null;
         setShowAllEvents(false);
+        setDisplayedDecisionCount(50);
     }, [selectedAlert]);
 
     // Handler to fetch full alert data when clicking on a row
@@ -274,6 +279,7 @@ export function Alerts() {
 
     const visibleAlerts = filteredAlerts.slice(0, displayedCount);
     const selectedAlertDecisions = selectedAlert?.decisions ?? [];
+    const visibleSelectedAlertDecisions = selectedAlertDecisions.slice(0, displayedDecisionCount);
     const selectedAlertEvents = selectedAlert && hasAlertEvents(selectedAlert) ? selectedAlert.events ?? [] : [];
     const selectedAlertIsSimulated = selectedAlert ? isSimulatedAlert(selectedAlert) : false;
     const selectedAlertSourceValue = getAlertSourceValue(selectedAlert?.source);
@@ -408,6 +414,7 @@ export function Alerts() {
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={alert.scenario}>
                                                 <ScenarioName
                                                     name={alert.scenario}
+                                                    reason={alert.reason}
                                                     showLink={true}
                                                     simulated={simulationsEnabled && isSimulatedAlert(alert)}
                                                 />
@@ -426,7 +433,7 @@ export function Alerts() {
                                                 {alert.source?.as_name || "-"}
                                             </td>
                                             <td className="px-6 py-4 text-sm font-mono text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={sourceValue}>
-                                                {sourceValue || "N/A"}
+                                                {sourceValue || "-"}
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
                                                 {(() => {
@@ -516,7 +523,9 @@ export function Alerts() {
                                 <div className="font-medium text-gray-900 dark:text-gray-100 break-words">
                                     <ScenarioName
                                         name={selectedAlert.scenario}
+                                        reason={selectedAlert.reason}
                                         showLink={true}
+                                        showReason={true}
                                         simulated={simulationsEnabled && selectedAlertIsSimulated}
                                     />
                                 </div>
@@ -559,7 +568,7 @@ export function Alerts() {
                                             <ExternalLink size={14} />
                                         </a>
                                     ) : (
-                                        <span className="font-mono text-lg font-bold text-gray-900 dark:text-white">N/A</span>
+                                        <span className="font-mono text-lg font-bold text-gray-900 dark:text-white">-</span>
                                     )}
                                 </div>
                                 {selectedAlert.source?.range && selectedAlert.source.range !== selectedAlertSourceValue && (
@@ -602,8 +611,18 @@ export function Alerts() {
                         {/* Decisions */}
                         {selectedAlertDecisions.length > 0 && (
                             <div>
-                                <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">Decisions Taken</h4>
-                                <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
+                                <div className="flex items-center justify-between gap-3 mb-3">
+                                    <h4 className="text-lg font-semibold text-gray-900 dark:text-white">Decisions Taken</h4>
+                                    {selectedAlertDecisions.length > visibleSelectedAlertDecisions.length && (
+                                        <span className="text-xs text-gray-500 dark:text-gray-400">
+                                            Showing {visibleSelectedAlertDecisions.length} of {selectedAlertDecisions.length}
+                                        </span>
+                                    )}
+                                </div>
+                                <div
+                                    ref={decisionContainerRef}
+                                    className="max-h-[45vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-700"
+                                >
                                     <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                                         <thead className="bg-gray-50 dark:bg-gray-900">
                                             <tr>
@@ -616,7 +635,7 @@ export function Alerts() {
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-800">
-                                            {selectedAlertDecisions.map((decision, idx) => {
+                                            {visibleSelectedAlertDecisions.map((decision, idx) => {
                                                 // Check if this specific decision is active or expired
                                                 const isActive = (() => {
                                                     if (decision.expired !== undefined) {
@@ -632,9 +651,8 @@ export function Alerts() {
                                                     }
                                                     return true; // Assume active if no stop_at and not definitely expired
                                                 })();
-
                                                 return (
-                                                    <tr key={idx}>
+                                                    <tr key={`${decision.id}-${decision.duration ?? idx}`}>
                                                         <td className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400">#{decision.id}</td>
                                                         <td className="px-4 py-2 text-sm"><Badge variant="danger">{decision.type}</Badge></td>
                                                         <td className="px-4 py-2 text-sm font-mono">{decision.value}</td>
@@ -680,6 +698,14 @@ export function Alerts() {
                                         </tbody>
                                     </table>
                                 </div>
+                                {selectedAlertDecisions.length > visibleSelectedAlertDecisions.length && (
+                                    <button
+                                        onClick={() => setDisplayedDecisionCount((prev) => Math.min(prev + 50, selectedAlertDecisions.length))}
+                                        className="mt-3 w-full py-2 text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 bg-gray-50 dark:bg-gray-900/30 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors cursor-pointer"
+                                    >
+                                        Load 50 more decisions ({selectedAlertDecisions.length - visibleSelectedAlertDecisions.length} remaining)
+                                    </button>
+                                )}
                             </div>
                         )}
 

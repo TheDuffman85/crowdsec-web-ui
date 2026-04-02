@@ -164,8 +164,14 @@ This makes the backend fetch the union of:
 You can adapt those values to match your own CrowdSec setup. For example:
 
 - use `CROWDSEC_ALERT_ORIGINS` to keep only selected upstream origins
+- use `none` inside `CROWDSEC_ALERT_ORIGINS` to also fetch the normal unfiltered alert feed
 - use `CROWDSEC_ALERT_EXTRA_SCENARIOS` to include specific scenarios that should remain visible even if they come from a different origin
 - multiple values can be provided as CSV, for example `CROWDSEC_ALERT_ORIGINS=crowdsec,cscli` or `CROWDSEC_ALERT_EXTRA_SCENARIOS=manual/web-ui,my/custom-scenario`
+
+Examples:
+
+- `CROWDSEC_ALERT_ORIGINS=CAPI` fetches only CAPI alerts
+- `CROWDSEC_ALERT_ORIGINS=none,CAPI` fetches the normal unfiltered alert feed plus CAPI alerts
 
 These are upstream LAPI filters, so excluded alerts are skipped before they are cached locally. This is usually more effective than relying on UI-side limits when you have very large external data sets.
 
