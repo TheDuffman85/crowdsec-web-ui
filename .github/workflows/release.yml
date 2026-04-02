@@ -11,6 +11,9 @@ jobs:
   release:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
+    concurrency:
+      group: ghcr-${{ github.repository }}
+      cancel-in-progress: false
     permissions:
       contents: write
       packages: write

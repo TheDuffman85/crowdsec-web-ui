@@ -20,6 +20,9 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    concurrency:
+      group: ghcr-${{ github.repository }}
+      cancel-in-progress: false
     permissions:
       contents: write
       packages: write
