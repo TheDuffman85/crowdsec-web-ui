@@ -50,6 +50,12 @@ function insertAlert(database: CrowdsecDatabase, alert: AlertRecord): void {
     $created_at: alert.created_at,
     $scenario: alert.scenario,
     $source_ip: alert.source?.ip || alert.source?.value || '',
+    $source_cn: alert.source?.cn,
+    $source_as_name: alert.source?.as_name,
+    $source_scope: alert.source?.scope,
+    $source_range: alert.source?.range,
+    $target: alert.target,
+    $simulated: alert.simulated ? 1 : 0,
     $message: alert.message || '',
     $raw_data: JSON.stringify(alert),
   });

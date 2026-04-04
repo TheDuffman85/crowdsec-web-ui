@@ -61,6 +61,12 @@ describe('CrowdsecDatabase', () => {
       $created_at: '2025-01-01T00:00:00.000Z',
       $scenario: 'crowdsecurity/ssh-bf',
       $source_ip: '1.2.3.4',
+      $source_cn: undefined,
+      $source_as_name: undefined,
+      $source_scope: undefined,
+      $source_range: undefined,
+      $target: undefined,
+      $simulated: 0,
       $message: 'alert',
       $raw_data: JSON.stringify({ id: 1 }),
     });
@@ -75,6 +81,8 @@ describe('CrowdsecDatabase', () => {
       $type: 'ban',
       $origin: 'manual',
       $scenario: 'crowdsecurity/ssh-bf',
+      $target: undefined,
+      $simulated: 0,
       $raw_data: JSON.stringify({ id: 10, value: '1.2.3.4', stop_at: '2030-01-01T00:00:00.000Z' }),
     });
 
@@ -105,6 +113,12 @@ describe('CrowdsecDatabase', () => {
           $created_at: '2025-01-01T00:00:00.000Z',
           $scenario: 'scenario',
           $source_ip: '1.2.3.4',
+          $source_cn: undefined,
+          $source_as_name: undefined,
+          $source_scope: undefined,
+          $source_range: undefined,
+          $target: undefined,
+          $simulated: 0,
           $message: 'alert',
           $raw_data: JSON.stringify({ id }),
         });

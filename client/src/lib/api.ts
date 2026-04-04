@@ -58,6 +58,16 @@ export async function fetchDecisions(): Promise<DecisionListItem[]> {
     return fetchJson<DecisionListItem[]>('/api/decisions', undefined, 'Failed to fetch decisions');
 }
 
+export async function fetchDecisionsPaginated(page: number, pageSize = 100, filters?: Record<string, string>): Promise<PaginatedResponse<DecisionListItem>> {
+    const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+    if (filters) {
+        for (const [key, value] of Object.entries(filters)) {
+            if (value) params.set(key, value);
+        }
+    }
+    return fetchJson<PaginatedResponse<DecisionListItem>>(`/api/decisions?${params.toString()}`, undefined, 'Failed to fetch decisions');
+}
+
 // Helper to handle API errors with specific 403 guidance
 function handleApiError(res: Response, defaultMsg: string, operationName = 'Delete Operations'): void {
     if (!res.ok) {

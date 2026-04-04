@@ -1,7 +1,6 @@
 import { useEffect, useState, useRef, useCallback, type FormEvent } from "react";
 import { useSearchParams, Link } from "react-router-dom";
-import { deleteDecision, bulkDeleteDecisions, cleanupByIp, addDecision, fetchConfig } from "../lib/api";
-import { apiUrl } from "../lib/basePath";
+import { deleteDecision, bulkDeleteDecisions, cleanupByIp, addDecision, fetchConfig, fetchDecisionsPaginated } from "../lib/api";
 import { isSimulatedDecision, matchesSimulationFilter, parseSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
 import { Badge } from "../components/ui/Badge";
@@ -21,20 +20,6 @@ interface ErrorInfo {
     message: string;
     helpLink?: string;
     helpText?: string;
-}
-
-function getDecisionDateFilterKey(isoString: string, includeHour: boolean): string {
-    const date = new Date(isoString);
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-
-    if (includeHour) {
-        const hour = String(date.getHours()).padStart(2, '0');
-        return `${year}-${month}-${day}T${hour}`;
-    }
-
-    return `${year}-${month}-${day}`;
 }
 
 function toErrorInfo(error: unknown, fallbackMessage: string): ErrorInfo {
@@ -73,10 +58,13 @@ export function Decisions() {
     const { refreshSignal, setLastUpdated } = useRefresh();
     const [decisions, setDecisions] = useState<DecisionListItem[]>([]);
     const [simulationsEnabled, setSimulationsEnabled] = useState(false);
-    const [machineFeaturesEnabled, setMachineFeaturesEnabled] = useState(false);
     const [loading, setLoading] = useState(true);
     const [showAddModal, setShowAddModal] = useState(false);
     const [filter, setFilter] = useState("");
+    const [currentPage, setCurrentPage] = useState(1);
+    const [totalPages, setTotalPages] = useState(1);
+    const [totalDecisions, setTotalDecisions] = useState(0);
+    const PAGE_SIZE = 100;
     const [pendingDeleteAction, setPendingDeleteAction] = useState<DecisionDeleteAction | null>(null);
     const [selectedDecisionIds, setSelectedDecisionIds] = useState<string[]>([]);
     const [deleteInProgress, setDeleteInProgress] = useState(false);
@@ -98,37 +86,57 @@ export function Decisions() {
     // Default: hide duplicates unless explicitly set to false OR viewing a specific alert's decisions
     const showDuplicates = searchParams.get("hide_duplicates") === "false" || !!alertIdFilter;
 
-    const [displayedCount, setDisplayedCount] = useState(50);
-
-    // Intersection Observer for infinite scroll
-    const observer = useRef<IntersectionObserver | null>(null);
     const selectAllDecisionsRef = useRef<HTMLInputElement | null>(null);
-    const lastDecisionElementRef = useCallback((node: HTMLTableRowElement | null) => {
-        if (loading) return;
-        if (observer.current) observer.current.disconnect();
-        observer.current = new IntersectionObserver((entries) => {
-            if (entries[0].isIntersecting) {
-                setDisplayedCount((prev) => prev + 50);
-            }
-        });
-        if (node) observer.current.observe(node);
-    }, [loading]);
+    const filterDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const filterRef = useRef(filter);
+    const currentPageRef = useRef(currentPage);
+    filterRef.current = filter;
+    currentPageRef.current = currentPage;
 
-    const loadDecisions = useCallback(async (isBackground = false) => {
+    const buildServerFilters = useCallback((): Record<string, string> => {
+        const serverFilters: Record<string, string> = {};
+        if (filterRef.current) serverFilters.q = filterRef.current;
+        if (ipFilter) serverFilters.ip = ipFilter;
+        if (scenarioFilter) serverFilters.scenario = scenarioFilter;
+        if (dateStartFilter) serverFilters.dateStart = dateStartFilter;
+        if (dateEndFilter) serverFilters.dateEnd = dateEndFilter;
+        if (simulationFilter === 'simulated') serverFilters.simulation = 'simulated';
+        if (simulationFilter === 'live') serverFilters.simulation = 'live';
+        return serverFilters;
+    }, [ipFilter, scenarioFilter, dateStartFilter, dateEndFilter, simulationFilter]);
+
+    const loadDecisions = useCallback(async (isBackground = false, page?: number) => {
         if (!isBackground) setLoading(true);
         try {
-            const url = includeExpiredParam ? apiUrl('/api/decisions?include_expired=true') : apiUrl('/api/decisions');
+            const targetPage = page ?? currentPageRef.current;
 
-            const [res, configData] = await Promise.all([
-                fetch(url, { cache: "no-store" }),
-                fetchConfig(),
-            ]);
-            if (!res.ok) throw new Error('Failed to fetch decisions');
-            const data = await res.json() as DecisionListItem[];
-
-            setDecisions(data);
-            setSimulationsEnabled(configData.simulations_enabled === true);
-            setMachineFeaturesEnabled(configData.machine_features_enabled === true);
+            if (includeExpiredParam) {
+                // Expired decisions: use legacy full-load (no pagination for this mode)
+                const { apiUrl } = await import("../lib/basePath");
+                const [res, configData] = await Promise.all([
+                    fetch(apiUrl('/api/decisions?include_expired=true'), { cache: "no-store" }),
+                    fetchConfig(),
+                ]);
+                if (!res.ok) throw new Error('Failed to fetch decisions');
+                const data = await res.json() as DecisionListItem[];
+                setDecisions(data);
+                setSimulationsEnabled(configData.simulations_enabled === true);
+                setTotalDecisions(data.length);
+                setTotalPages(1);
+                setCurrentPage(1);
+            } else {
+                const serverFilters = buildServerFilters();
+                const hasFilters = Object.keys(serverFilters).length > 0;
+                const [paginatedResult, configData] = await Promise.all([
+                    fetchDecisionsPaginated(targetPage, PAGE_SIZE, hasFilters ? serverFilters : undefined),
+                    fetchConfig(),
+                ]);
+                setDecisions(paginatedResult.data);
+                setCurrentPage(paginatedResult.pagination.page);
+                setTotalPages(paginatedResult.pagination.total_pages);
+                setTotalDecisions(paginatedResult.pagination.total);
+                setSimulationsEnabled(configData.simulations_enabled === true);
+            }
 
             setLastUpdated(new Date());
         } catch (error) {
@@ -136,7 +144,7 @@ export function Decisions() {
         } finally {
             if (!isBackground) setLoading(false);
         }
-    }, [includeExpiredParam, setLastUpdated]);
+    }, [includeExpiredParam, setLastUpdated, buildServerFilters]);
 
     // Sync "q" param to filter state
     useEffect(() => {
@@ -147,8 +155,19 @@ export function Decisions() {
     }, [searchParams]);
 
     useEffect(() => {
-        loadDecisions(false);
+        loadDecisions(false, 1);
     }, [loadDecisions]);
+
+    // Debounced search: reload from page 1 when filter changes
+    useEffect(() => {
+        if (filterDebounceRef.current) clearTimeout(filterDebounceRef.current);
+        filterDebounceRef.current = setTimeout(() => {
+            setCurrentPage(1);
+            loadDecisions(false, 1);
+        }, 300);
+        return () => { if (filterDebounceRef.current) clearTimeout(filterDebounceRef.current); };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [filter]);
 
     useEffect(() => {
         if (refreshSignal > 0) loadDecisions(true);
@@ -162,8 +181,7 @@ export function Decisions() {
         setErrorInfo(null);
         try {
             await addDecision(decisionData);
-            await loadDecisions();
-            setDisplayedCount(50); // Reset to show new decision at top
+            await loadDecisions(false, 1);
         } catch (error) {
             console.error("Failed to add decision", error);
             setErrorInfo(toErrorInfo(error, "Failed to add decision. Please try again."));
@@ -201,7 +219,6 @@ export function Decisions() {
 
             setPendingDeleteAction(null);
             await loadDecisions();
-            setDisplayedCount(50);
             if (resultMessage) {
                 setErrorInfo({ message: resultMessage });
             }
@@ -249,70 +266,20 @@ export function Decisions() {
         setSearchParams(newParams);
     };
 
+    // Server-side filtering handles: q (generic search), ip, scenario, simulation, dates
+    // Client-side filtering for: duplicates, alertId, country, AS, target (use detail fields)
     const filteredDecisions = decisions.filter((decision) => {
-        // 0. Duplicate Filter (applied first, default: hide duplicates)
         if (!showDuplicates && decision.is_duplicate) return false;
-
-        // 1. Alert ID Filter
         if (alertIdFilter && String(decision.detail.alert_id) !== alertIdFilter) return false;
-        if (!matchesSimulationFilter({ simulated: isSimulatedDecision(decision) }, simulationFilter)) return false;
-
-        // 2. Exact Field Filters (from Dashboard)
         if (countryFilter && decision.detail.country !== countryFilter) return false;
-        if (scenarioFilter && decision.detail.reason !== scenarioFilter) return false;
         if (asFilter && decision.detail.as !== asFilter) return false;
-        if (asFilter && decision.detail.as !== asFilter) return false;
-        if (ipFilter && decision.value !== ipFilter) return false;
         if (targetFilter) {
             const decisionTarget = (decision.value || "").toLowerCase();
             const targetFromDetail = (decision.detail.target || "").toLowerCase();
             const filterValue = targetFilter.toLowerCase();
-
-            if (!decisionTarget.includes(filterValue) && !targetFromDetail.includes(filterValue)) {
-                return false;
-            }
+            if (!decisionTarget.includes(filterValue) && !targetFromDetail.includes(filterValue)) return false;
         }
-
-        // 3. Date Range Filter
-        if (dateStartFilter || dateEndFilter) {
-            if (!decision.created_at) return false;
-
-            // Helper to extract date/time key from ISO timestamp (Matches Alerts.jsx logic)
-            // This ensures we compare "apples to apples" with the dashboard local-time based filters
-            const itemKey = getDecisionDateFilterKey(
-                decision.created_at,
-                Boolean((dateStartFilter && dateStartFilter.includes('T')) || (dateEndFilter && dateEndFilter.includes('T'))),
-            );
-
-            if (dateStartFilter && itemKey < dateStartFilter) return false;
-            if (dateEndFilter && itemKey > dateEndFilter) return false;
-        }
-
-
-
-        // 4. Generic Text Search (existing)
-        const search = filter.toLowerCase();
-        if (!search) return true;
-
-        const ip = (decision.value || "").toLowerCase();
-        const reason = (decision.detail.reason || "").toLowerCase();
-        const countryCode = (decision.detail.country || "").toLowerCase();
-        const countryName = (getCountryName(decision.detail.country) || "").toLowerCase();
-        const as = (decision.detail.as || "").toLowerCase();
-        const machine = machineFeaturesEnabled ? (decision.machine || "").toLowerCase() : "";
-        const type = (decision.detail.type || "").toLowerCase();
-        const action = (decision.detail.action || "").toLowerCase();
-        const simulationSearch = isSimulatedDecision(decision) ? 'simulation simulated' : 'live';
-
-        return ip.includes(search) ||
-            reason.includes(search) ||
-            countryCode.includes(search) ||
-            countryName.includes(search) ||
-            as.includes(search) ||
-            (machineFeaturesEnabled && machine.includes(search)) ||
-            type.includes(search) ||
-            action.includes(search) ||
-            simulationSearch.includes(search);
+        return true;
     });
 
     const eligibleFilteredDecisionIds = filteredDecisions
@@ -344,7 +311,7 @@ export function Decisions() {
         });
     };
 
-    const visibleDecisions = filteredDecisions.slice(0, displayedCount);
+    const visibleDecisions = filteredDecisions;
     const selectedDecisionCount = selectedFilteredDecisionIds.length;
     const deleteActionTitle = pendingDeleteAction?.kind === "single"
         ? "Delete Decision?"
@@ -358,12 +325,10 @@ export function Decisions() {
 
     return (
         <div className="space-y-6">
-            {/* Only show count when non-default filters are applied */}
-            {(alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter || includeExpiredParam || showDuplicates || (simulationsEnabled && simulationFilter !== 'all')) && filteredDecisions.length !== decisions.length && (
-                <div className="text-sm text-gray-500">
-                    Showing {filteredDecisions.length} of {decisions.length} decisions
-                </div>
-            )}
+            <div className="text-sm text-gray-500">
+                {totalDecisions > 0 ? `Showing ${(currentPage - 1) * PAGE_SIZE + 1}-${Math.min(currentPage * PAGE_SIZE, totalDecisions)} of ${totalDecisions} decisions` : 'No decisions found'}
+                {totalPages > 1 && ` (page ${currentPage} of ${totalPages})`}
+            </div>
             
             <div className="flex items-center gap-3">
                 <button
@@ -593,9 +558,6 @@ export function Decisions() {
                                     />
                                 </th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Time</th>
-                                {machineFeaturesEnabled && (
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Machine</th>
-                                )}
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Scenario</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Country</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">AS</th>
@@ -608,9 +570,9 @@ export function Decisions() {
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                             {loading ? (
-                                <tr><td colSpan={machineFeaturesEnabled ? 11 : 10} className="px-6 py-4 text-center text-sm text-gray-500">Loading decisions...</td></tr>
+                                <tr><td colSpan={10} className="px-6 py-4 text-center text-sm text-gray-500">Loading decisions...</td></tr>
                             ) : visibleDecisions.length === 0 ? (
-                                <tr><td colSpan={machineFeaturesEnabled ? 11 : 10} className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? "No decisions for this alert" : "No decisions found"}</td></tr>
+                                <tr><td colSpan={10} className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? "No decisions for this alert" : "No decisions found"}</td></tr>
                             ) : (
                                 visibleDecisions.map((decision, index) => {
                                     const decisionDuration = decision.detail.duration ?? '';
@@ -619,14 +581,12 @@ export function Decisions() {
                                         ? "hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors opacity-60 bg-gray-50 dark:bg-gray-900/20"
                                         : "hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors";
 
-                                    const isLastElement = index === visibleDecisions.length - 1;
                                     const isSelected = selectedDecisionIds.includes(String(decision.id));
 
                                     return (
                                         <tr
                                             key={`${decision.id}-${decision.detail.duration}`}
                                             className={rowClasses}
-                                            ref={isLastElement ? lastDecisionElementRef : null}
                                         >
                                             <td className="px-6 py-4 whitespace-nowrap text-sm">
                                                 <input
@@ -641,11 +601,6 @@ export function Decisions() {
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
                                                 <TimeDisplay timestamp={decision.created_at} />
                                             </td>
-                                            {machineFeaturesEnabled && (
-                                                <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[120px] truncate" title={decision.machine}>
-                                                    {decision.machine || "-"}
-                                                </td>
-                                            )}
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={decision.detail.reason}>
                                                 <ScenarioName
                                                     name={decision.detail.reason}
@@ -724,6 +679,48 @@ export function Decisions() {
                     </table>
                 </div>
             </div>
+
+            {/* Pagination Controls */}
+            {totalPages > 1 && (
+                <div className="flex items-center justify-between">
+                    <div className="text-sm text-gray-500 dark:text-gray-400">
+                        {totalDecisions} decisions total
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={() => { setCurrentPage(1); loadDecisions(false, 1); }}
+                            disabled={currentPage <= 1}
+                            className="px-3 py-1.5 text-sm rounded-md border border-gray-300 dark:border-gray-600 disabled:opacity-40 hover:bg-gray-50 dark:hover:bg-gray-700"
+                        >
+                            First
+                        </button>
+                        <button
+                            onClick={() => { const p = currentPage - 1; setCurrentPage(p); loadDecisions(false, p); }}
+                            disabled={currentPage <= 1}
+                            className="px-3 py-1.5 text-sm rounded-md border border-gray-300 dark:border-gray-600 disabled:opacity-40 hover:bg-gray-50 dark:hover:bg-gray-700"
+                        >
+                            Previous
+                        </button>
+                        <span className="px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300">
+                            Page {currentPage} of {totalPages}
+                        </span>
+                        <button
+                            onClick={() => { const p = currentPage + 1; setCurrentPage(p); loadDecisions(false, p); }}
+                            disabled={currentPage >= totalPages}
+                            className="px-3 py-1.5 text-sm rounded-md border border-gray-300 dark:border-gray-600 disabled:opacity-40 hover:bg-gray-50 dark:hover:bg-gray-700"
+                        >
+                            Next
+                        </button>
+                        <button
+                            onClick={() => { setCurrentPage(totalPages); loadDecisions(false, totalPages); }}
+                            disabled={currentPage >= totalPages}
+                            className="px-3 py-1.5 text-sm rounded-md border border-gray-300 dark:border-gray-600 disabled:opacity-40 hover:bg-gray-50 dark:hover:bg-gray-700"
+                        >
+                            Last
+                        </button>
+                    </div>
+                </div>
+            )}
 
             {/* Delete Confirmation Modal */}
             <Modal

@@ -90,6 +90,17 @@ export interface AlertSearchFilters {
   simulated?: boolean;
 }
 
+export interface DecisionSearchFilters {
+  q?: string;
+  ip?: string;
+  scenario?: string;
+  type?: string;
+  origin?: string;
+  dateStart?: string;
+  dateEnd?: string;
+  simulated?: boolean;
+}
+
 export interface DatabaseOptions {
   dbDir?: string;
   dbPath?: string;
@@ -458,6 +469,61 @@ export class CrowdsecDatabase {
 
   countActiveDecisions(now: string): number {
     return (this.countActiveDecisionsStatement.get({ $now: now }) as CountRow).count;
+  }
+
+  searchDecisionsPaginated(now: string, filters: DecisionSearchFilters, limit: number, offset: number): RowWithRawData[] {
+    const { sql, params } = this.buildDecisionSearchQuery(now, filters, false);
+    const stmt = this.db.prepare(`${sql} ORDER BY stop_at DESC LIMIT ? OFFSET ?`);
+    return stmt.all(...params, limit, offset) as RowWithRawData[];
+  }
+
+  countSearchDecisions(now: string, filters: DecisionSearchFilters): number {
+    const { sql, params } = this.buildDecisionSearchQuery(now, filters, true);
+    const stmt = this.db.prepare(sql);
+    return (stmt.get(...params) as CountRow).count;
+  }
+
+  private buildDecisionSearchQuery(now: string, filters: DecisionSearchFilters, countOnly: boolean): { sql: string; params: unknown[] } {
+    const conditions: string[] = ['stop_at > ?'];
+    const params: unknown[] = [now];
+
+    if (filters.q) {
+      const like = `%${filters.q}%`;
+      conditions.push(`(value LIKE ? OR scenario LIKE ? OR type LIKE ? OR origin LIKE ? OR target LIKE ?)`);
+      params.push(like, like, like, like, like);
+    }
+    if (filters.ip) {
+      conditions.push('value LIKE ?');
+      params.push(`%${filters.ip}%`);
+    }
+    if (filters.scenario) {
+      conditions.push('scenario LIKE ?');
+      params.push(`%${filters.scenario}%`);
+    }
+    if (filters.type) {
+      conditions.push('type LIKE ?');
+      params.push(`%${filters.type}%`);
+    }
+    if (filters.origin) {
+      conditions.push('origin LIKE ?');
+      params.push(`%${filters.origin}%`);
+    }
+    if (filters.dateStart) {
+      conditions.push('created_at >= ?');
+      params.push(filters.dateStart);
+    }
+    if (filters.dateEnd) {
+      conditions.push('created_at <= ?');
+      params.push(filters.dateEnd);
+    }
+    if (filters.simulated !== undefined) {
+      conditions.push('simulated = ?');
+      params.push(filters.simulated ? 1 : 0);
+    }
+
+    const where = conditions.join(' AND ');
+    const select = countOnly ? 'SELECT COUNT(*) as count' : 'SELECT raw_data, created_at';
+    return { sql: `${select} FROM decisions WHERE ${where}`, params };
   }
 
   insertDecision(params: DecisionInsertParams): void {

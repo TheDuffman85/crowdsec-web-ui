@@ -25,7 +25,7 @@ import type {
 } from '../shared/contracts';
 import { normalizeMachineId, resolveMachineName } from '../shared/machine';
 import { createRuntimeConfig, getIntervalName, parseRefreshInterval, type RuntimeConfig } from './config';
-import { CrowdsecDatabase, type AlertInsertParams, type AlertSearchFilters, type DecisionInsertParams, type StatsAlertRow, type StatsDecisionRow } from './database';
+import { CrowdsecDatabase, type AlertInsertParams, type AlertSearchFilters, type DecisionInsertParams, type DecisionSearchFilters, type StatsAlertRow, type StatsDecisionRow } from './database';
 import { LapiClient } from './lapi';
 import { createNotificationService } from './notifications';
 import type { MqttPublishConfig } from './notifications/mqtt-client';
@@ -416,8 +416,36 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         const page = Math.max(1, Number(pageParam) || 1);
         const pageSize = Math.min(500, Math.max(10, Number(context.req.query('page_size')) || 100));
         const offset = (page - 1) * pageSize;
-        const total = database.countActiveDecisions(now);
-        const rows = database.getActiveDecisionsPaginated(now, pageSize, offset);
+
+        const filters: DecisionSearchFilters = {};
+        const q = context.req.query('q');
+        const ip = context.req.query('ip');
+        const scenario = context.req.query('scenario');
+        const type = context.req.query('type');
+        const origin = context.req.query('origin');
+        const dateStart = context.req.query('dateStart');
+        const dateEnd = context.req.query('dateEnd');
+        const simulation = context.req.query('simulation');
+
+        if (q) filters.q = q;
+        if (ip) filters.ip = ip;
+        if (scenario) filters.scenario = scenario;
+        if (type) filters.type = type;
+        if (origin) filters.origin = origin;
+        if (dateStart) filters.dateStart = dateStart;
+        if (dateEnd) filters.dateEnd = dateEnd;
+        if (simulation === 'simulated') filters.simulated = true;
+        if (simulation === 'live') filters.simulated = false;
+        if (!config.simulationsEnabled) filters.simulated = false;
+
+        const hasFilters = Object.keys(filters).length > 0;
+
+        const total = hasFilters
+          ? database.countSearchDecisions(now, filters)
+          : database.countActiveDecisions(now);
+        const rows = hasFilters
+          ? database.searchDecisionsPaginated(now, filters, pageSize, offset)
+          : database.getActiveDecisionsPaginated(now, pageSize, offset);
 
         let decisions = rows.map((row) => toDecisionListItem(JSON.parse(row.raw_data) as AlertDecision & Record<string, unknown>, false));
         if (!config.simulationsEnabled) {
@@ -646,22 +674,27 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       const statsRows = database.getAlertStatsSince(since);
       const alerts: StatsAlert[] = statsRows
         .filter((row) => config.simulationsEnabled || !row.simulated)
-        .map((row) => ({
-          created_at: row.created_at,
-          scenario: row.scenario || undefined,
-          source: row.source_ip
-            ? {
-                ip: row.source_ip,
-                value: row.source_ip,
-                range: row.source_range || undefined,
-                cn: row.source_cn || undefined,
-                as_name: row.source_as_name || undefined,
-                scope: row.source_scope || undefined,
-              }
-            : null,
-          target: row.target || undefined,
-          simulated: row.simulated === 1,
-        }));
+        .map((row) => {
+          const resolvedScenario = (row.source_scope && row.scenario?.startsWith('update :') && row.source_scope.includes('/'))
+            ? row.source_scope
+            : (row.scenario || undefined);
+          return {
+            created_at: row.created_at,
+            scenario: resolvedScenario,
+            source: row.source_ip
+              ? {
+                  ip: row.source_ip,
+                  value: row.source_ip,
+                  range: row.source_range || undefined,
+                  cn: row.source_cn || undefined,
+                  as_name: row.source_as_name || undefined,
+                  scope: row.source_scope || undefined,
+                }
+              : null,
+            target: row.target || undefined,
+            simulated: row.simulated === 1,
+          };
+        });
 
       responseCache.statsAlerts = { data: alerts, generatedAt: Date.now() };
       return context.json(alerts);
