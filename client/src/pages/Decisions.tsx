@@ -563,6 +563,7 @@ export function Decisions() {
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">AS</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">IP / Range</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Action</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Origin</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Expiration</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Alert</th>
                                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
@@ -570,9 +571,9 @@ export function Decisions() {
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                             {loading ? (
-                                <tr><td colSpan={10} className="px-6 py-4 text-center text-sm text-gray-500">Loading decisions...</td></tr>
+                                <tr><td colSpan={11} className="px-6 py-4 text-center text-sm text-gray-500">Loading decisions...</td></tr>
                             ) : visibleDecisions.length === 0 ? (
-                                <tr><td colSpan={10} className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? "No decisions for this alert" : "No decisions found"}</td></tr>
+                                <tr><td colSpan={11} className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? "No decisions for this alert" : "No decisions found"}</td></tr>
                             ) : (
                                 visibleDecisions.map((decision, index) => {
                                     const decisionDuration = decision.detail.duration ?? '';
@@ -626,6 +627,9 @@ export function Decisions() {
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100">
                                                 <Badge variant="danger">{decision.detail.action || "ban"}</Badge>
+                                            </td>
+                                            <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                                                {decision.detail.origin || "—"}
                                             </td>
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 whitespace-nowrap">
                                                 {decisionDuration.startsWith("-") ? "0s" : decisionDuration}

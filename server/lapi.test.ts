@@ -177,9 +177,10 @@ describe('LapiClient', () => {
     });
 
     await expect(client.fetchAlerts()).resolves.toEqual([]);
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);
     expect(calls[0]).toContain('/v1/alerts?since=1h&limit=0');
     expect(calls[1]).toContain('/v1/alerts?since=1h&limit=0');
+    expect(calls[2]).toContain('/v1/alerts?since=1h&limit=0');
     expect(calls.every((call) => !call.includes('simulated=true'))).toBe(true);
   });
 
@@ -211,9 +212,10 @@ describe('LapiClient', () => {
       }),
     ).resolves.toEqual([{ id: 9 }, { id: 10 }, { id: 11 }]);
 
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);
     expect(calls.some((call) => call.includes('/v1/alerts?since=30m&limit=0&until=10m&simulated=true&has_active_decision=true&origin=crowdsec&scenario=manual%2Fweb-ui&scope=ip'))).toBe(true);
     expect(calls.some((call) => call.includes('/v1/alerts?since=30m&limit=0&until=10m&simulated=true&has_active_decision=true&origin=crowdsec&scenario=manual%2Fweb-ui&scope=range'))).toBe(true);
+    expect(calls.some((call) => call.includes('/v1/alerts?since=30m&limit=0&until=10m&simulated=true&has_active_decision=true&origin=crowdsec&scenario=manual%2Fweb-ui') && !call.includes('scope='))).toBe(true);
   });
 
   test('uses an unscoped alert query for CAPI origins', async () => {
