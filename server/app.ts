@@ -13,6 +13,7 @@ import type {
   BulkDeleteFailure,
   CleanupByIpRequest,
   ConfigResponse,
+  DashboardStatsResponse,
   DecisionListItem,
   LapiStatus,
   SlimAlert,
@@ -25,7 +26,7 @@ import type {
 } from '../shared/contracts';
 import { normalizeMachineId, resolveMachineName } from '../shared/machine';
 import { createRuntimeConfig, getIntervalName, parseRefreshInterval, type RuntimeConfig } from './config';
-import { CrowdsecDatabase, type AlertInsertParams, type AlertSearchFilters, type DecisionInsertParams, type DecisionSearchFilters, type StatsAlertRow, type StatsDecisionRow } from './database';
+import { CrowdsecDatabase, type AlertInsertParams, type AlertSearchFilters, type DashboardStatsFilters, type DecisionInsertParams, type DecisionSearchFilters, type StatsAlertRow, type StatsDecisionRow } from './database';
 import { LapiClient } from './lapi';
 import { createNotificationService } from './notifications';
 import type { MqttPublishConfig } from './notifications/mqtt-client';
@@ -186,11 +187,13 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     statsDecisions: ResponseCacheEntry<StatsDecision[]> | null;
     alerts: ResponseCacheEntry<SlimAlert[]> | null;
     decisions: ResponseCacheEntry<unknown[]> | null;
+    dashboard: ResponseCacheEntry<DashboardStatsResponse> | null;
   } = {
     statsAlerts: null,
     statsDecisions: null,
     alerts: null,
     decisions: null,
+    dashboard: null,
   };
 
   function invalidateResponseCache(): void {
@@ -198,6 +201,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     responseCache.statsDecisions = null;
     responseCache.alerts = null;
     responseCache.decisions = null;
+    responseCache.dashboard = null;
   }
 
   function getResponseCacheTtl(): number {
@@ -739,6 +743,61 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     } catch (error: any) {
       console.error('Error serving stats decisions from database:', error.message);
       return context.json({ error: 'Failed to retrieve decision statistics' }, 500);
+    }
+  });
+
+  app.get(`${config.basePath}/api/stats/dashboard`, ensureAuth, async (context) => {
+    try {
+      if (refreshIntervalMs === 0) {
+        await updateCache();
+      }
+
+      if (!cache.isInitialized) {
+        await ensureBootstrapReady('dashboard stats request');
+      }
+
+      const granularity = context.req.query('granularity') === 'hour' ? 'hour' : 'day' as const;
+      const country = context.req.query('country') || undefined;
+      const scenario = context.req.query('scenario') || undefined;
+      const asName = context.req.query('as_name') || undefined;
+      const ip = context.req.query('ip') || undefined;
+      const target = context.req.query('target') || undefined;
+      const simulatedParam = context.req.query('simulated');
+      const simulated = simulatedParam === 'true' ? true : simulatedParam === 'false' ? false : undefined;
+
+      const hasFilters = country || scenario || asName || ip || target || simulated !== undefined;
+
+      // Use cache only for unfiltered requests with day granularity
+      if (!hasFilters && granularity === 'day' && isResponseCacheValid(responseCache.dashboard)) {
+        return context.json(responseCache.dashboard.data);
+      }
+
+      const since = new Date(Date.now() - config.lookbackMs).toISOString();
+      const now = new Date().toISOString();
+
+      const filters: DashboardStatsFilters | undefined = hasFilters
+        ? { country, scenario, as_name: asName, ip, target, simulated }
+        : undefined;
+
+      const result = database.getDashboardStats(since, now, granularity, filters);
+
+      // Also fetch all countries for the world map
+      const allCountries = database.getAllCountriesAggregated(since, filters);
+
+      const response: DashboardStatsResponse & { all_countries: typeof allCountries } = {
+        ...result,
+        all_countries: allCountries,
+      };
+
+      // Cache only unfiltered day results
+      if (!hasFilters && granularity === 'day') {
+        responseCache.dashboard = { data: response, generatedAt: Date.now() };
+      }
+
+      return context.json(response);
+    } catch (error: any) {
+      console.error('Error serving dashboard stats:', error.message);
+      return context.json({ error: 'Failed to retrieve dashboard statistics' }, 500);
     }
   });
 

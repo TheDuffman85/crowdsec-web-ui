@@ -6,6 +6,7 @@ import type {
   BulkDeleteResult,
   CleanupByIpRequest,
   ConfigResponse,
+  DashboardStatsResponse,
   DecisionListItem,
   NotificationChannel,
   NotificationListResponse,
@@ -113,6 +114,31 @@ export async function fetchDecisionsForStats(): Promise<StatsDecision[]> {
 
 export async function fetchAlertsForStats(): Promise<StatsAlert[]> {
     return fetchJson<StatsAlert[]>('/api/stats/alerts', undefined, 'Failed to fetch alert statistics');
+}
+
+export interface DashboardStatsFilters {
+    country?: string;
+    scenario?: string;
+    as_name?: string;
+    ip?: string;
+    target?: string;
+    simulated?: boolean;
+}
+
+export async function fetchDashboardStats(
+    granularity: 'hour' | 'day' = 'day',
+    filters?: DashboardStatsFilters,
+): Promise<DashboardStatsResponse> {
+    const params = new URLSearchParams({ granularity });
+    if (filters) {
+        if (filters.country) params.set('country', filters.country);
+        if (filters.scenario) params.set('scenario', filters.scenario);
+        if (filters.as_name) params.set('as_name', filters.as_name);
+        if (filters.ip) params.set('ip', filters.ip);
+        if (filters.target) params.set('target', filters.target);
+        if (filters.simulated !== undefined) params.set('simulated', String(filters.simulated));
+    }
+    return fetchJson<DashboardStatsResponse>(`/api/stats/dashboard?${params.toString()}`, undefined, 'Failed to fetch dashboard stats');
 }
 
 export async function deleteDecision(id: string | number): Promise<unknown> {

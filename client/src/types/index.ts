@@ -26,6 +26,7 @@ export type {
   NotificationSeverity,
   NotificationSettingsResponse,
   BulkDeleteFailure,
+  DashboardStatsResponse,
   DecisionListItem,
   PaginatedResponse,
   PaginationMeta,

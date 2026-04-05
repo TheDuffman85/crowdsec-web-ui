@@ -101,6 +101,35 @@ export interface DecisionSearchFilters {
   simulated?: boolean;
 }
 
+export interface DashboardStatsFilters {
+  country?: string;
+  scenario?: string;
+  as_name?: string;
+  ip?: string;
+  target?: string;
+  simulated?: boolean;
+}
+
+export interface DashboardStatsResult {
+  totals: {
+    alerts: number;
+    decisions: number;
+    simulated_alerts: number;
+  };
+  time_series: {
+    granularity: 'hour' | 'day';
+    alert_buckets: Array<{ date: string; count: number }>;
+    decision_buckets: Array<{ date: string; count: number }>;
+    simulated_alert_buckets: Array<{ date: string; count: number }>;
+    simulated_decision_buckets: Array<{ date: string; count: number }>;
+  };
+  top_countries: Array<{ code: string; count: number; simulated_count: number; live_count: number }>;
+  top_scenarios: Array<{ name: string; count: number }>;
+  top_as: Array<{ name: string; count: number }>;
+  top_targets: Array<{ name: string; count: number }>;
+  top_ips: Array<{ ip: string; count: number }>;
+}
+
 export interface DatabaseOptions {
   dbDir?: string;
   dbPath?: string;
@@ -714,6 +743,161 @@ export class CrowdsecDatabase {
 
   transaction<T>(callback: (value: T) => void): (value: T) => void {
     return this.db.transaction(callback);
+  }
+
+  getDashboardStats(
+    since: string,
+    now: string,
+    granularity: 'hour' | 'day',
+    filters?: DashboardStatsFilters,
+  ): DashboardStatsResult {
+    const dateFmt = granularity === 'hour'
+      ? "strftime('%Y-%m-%dT%H', created_at)"
+      : "strftime('%Y-%m-%d', created_at)";
+
+    // Build dynamic WHERE clauses for alerts based on filters
+    const alertConditions: string[] = ['created_at >= ?'];
+    const alertParams: unknown[] = [since];
+
+    if (filters?.country) {
+      alertConditions.push('source_cn = ?');
+      alertParams.push(filters.country);
+    }
+    if (filters?.scenario) {
+      alertConditions.push('scenario = ?');
+      alertParams.push(filters.scenario);
+    }
+    if (filters?.as_name) {
+      alertConditions.push('source_as_name = ?');
+      alertParams.push(filters.as_name);
+    }
+    if (filters?.ip) {
+      alertConditions.push('source_ip = ?');
+      alertParams.push(filters.ip);
+    }
+    if (filters?.target) {
+      alertConditions.push('target = ?');
+      alertParams.push(filters.target);
+    }
+    if (filters?.simulated !== undefined) {
+      alertConditions.push('simulated = ?');
+      alertParams.push(filters.simulated ? 1 : 0);
+    }
+
+    const alertWhere = alertConditions.join(' AND ');
+
+    // Total counts
+    const alertTotals = this.db.prepare(
+      `SELECT COUNT(*) as total, SUM(CASE WHEN simulated = 1 THEN 1 ELSE 0 END) as simulated FROM alerts WHERE ${alertWhere}`
+    ).get(...alertParams) as { total: number; simulated: number | null };
+
+    const decisionTotal = this.db.prepare(
+      'SELECT COUNT(*) as total FROM decisions WHERE stop_at > ?'
+    ).get(now) as { total: number };
+
+    // Time series - alerts (live only)
+    const alertBuckets = this.db.prepare(
+      `SELECT ${dateFmt} as date, COUNT(*) as count FROM alerts WHERE ${alertWhere} AND simulated = 0 GROUP BY ${dateFmt} ORDER BY date`
+    ).all(...alertParams) as Array<{ date: string; count: number }>;
+
+    // Time series - simulated alerts
+    const simulatedAlertBuckets = this.db.prepare(
+      `SELECT ${dateFmt} as date, COUNT(*) as count FROM alerts WHERE ${alertWhere} AND simulated = 1 GROUP BY ${dateFmt} ORDER BY date`
+    ).all(...alertParams) as Array<{ date: string; count: number }>;
+
+    // Time series - decisions (live only)
+    const decisionBuckets = this.db.prepare(
+      `SELECT ${dateFmt} as date, COUNT(*) as count FROM decisions WHERE created_at >= ? AND stop_at > ? AND simulated = 0 GROUP BY ${dateFmt} ORDER BY date`
+    ).all(since, now) as Array<{ date: string; count: number }>;
+
+    // Time series - simulated decisions
+    const simulatedDecisionBuckets = this.db.prepare(
+      `SELECT ${dateFmt} as date, COUNT(*) as count FROM decisions WHERE created_at >= ? AND stop_at > ? AND simulated = 1 GROUP BY ${dateFmt} ORDER BY date`
+    ).all(since, now) as Array<{ date: string; count: number }>;
+
+    // Top 10 aggregations
+    const topCountries = this.db.prepare(
+      `SELECT source_cn as code, COUNT(*) as count,
+        SUM(CASE WHEN simulated = 1 THEN 1 ELSE 0 END) as simulated_count,
+        SUM(CASE WHEN simulated = 0 THEN 1 ELSE 0 END) as live_count
+       FROM alerts WHERE ${alertWhere} AND source_cn IS NOT NULL AND source_cn != ''
+       GROUP BY source_cn ORDER BY count DESC LIMIT 10`
+    ).all(...alertParams) as Array<{ code: string; count: number; simulated_count: number; live_count: number }>;
+
+    const topScenarios = this.db.prepare(
+      `SELECT scenario as name, COUNT(*) as count FROM alerts WHERE ${alertWhere} AND scenario IS NOT NULL GROUP BY scenario ORDER BY count DESC LIMIT 10`
+    ).all(...alertParams) as Array<{ name: string; count: number }>;
+
+    const topAS = this.db.prepare(
+      `SELECT source_as_name as name, COUNT(*) as count FROM alerts WHERE ${alertWhere} AND source_as_name IS NOT NULL AND source_as_name != '' GROUP BY source_as_name ORDER BY count DESC LIMIT 10`
+    ).all(...alertParams) as Array<{ name: string; count: number }>;
+
+    const topTargets = this.db.prepare(
+      `SELECT target as name, COUNT(*) as count FROM alerts WHERE ${alertWhere} AND target IS NOT NULL AND target != '' GROUP BY target ORDER BY count DESC LIMIT 10`
+    ).all(...alertParams) as Array<{ name: string; count: number }>;
+
+    const topIPs = this.db.prepare(
+      `SELECT source_ip as ip, COUNT(*) as count FROM alerts WHERE ${alertWhere} AND source_ip IS NOT NULL GROUP BY source_ip ORDER BY count DESC LIMIT 10`
+    ).all(...alertParams) as Array<{ ip: string; count: number }>;
+
+    return {
+      totals: {
+        alerts: alertTotals.total,
+        decisions: decisionTotal.total,
+        simulated_alerts: alertTotals.simulated ?? 0,
+      },
+      time_series: {
+        granularity,
+        alert_buckets: alertBuckets,
+        decision_buckets: decisionBuckets,
+        simulated_alert_buckets: simulatedAlertBuckets,
+        simulated_decision_buckets: simulatedDecisionBuckets,
+      },
+      top_countries: topCountries,
+      top_scenarios: topScenarios,
+      top_as: topAS,
+      top_targets: topTargets,
+      top_ips: topIPs,
+    };
+  }
+
+  getAllCountriesAggregated(since: string, filters?: DashboardStatsFilters): Array<{ code: string; count: number; simulated_count: number; live_count: number }> {
+    const conditions: string[] = ['created_at >= ?'];
+    const params: unknown[] = [since];
+
+    if (filters?.country) {
+      conditions.push('source_cn = ?');
+      params.push(filters.country);
+    }
+    if (filters?.scenario) {
+      conditions.push('scenario = ?');
+      params.push(filters.scenario);
+    }
+    if (filters?.as_name) {
+      conditions.push('source_as_name = ?');
+      params.push(filters.as_name);
+    }
+    if (filters?.ip) {
+      conditions.push('source_ip = ?');
+      params.push(filters.ip);
+    }
+    if (filters?.target) {
+      conditions.push('target = ?');
+      params.push(filters.target);
+    }
+    if (filters?.simulated !== undefined) {
+      conditions.push('simulated = ?');
+      params.push(filters.simulated ? 1 : 0);
+    }
+
+    const where = conditions.join(' AND ');
+    return this.db.prepare(
+      `SELECT source_cn as code, COUNT(*) as count,
+        SUM(CASE WHEN simulated = 1 THEN 1 ELSE 0 END) as simulated_count,
+        SUM(CASE WHEN simulated = 0 THEN 1 ELSE 0 END) as live_count
+       FROM alerts WHERE ${where} AND source_cn IS NOT NULL AND source_cn != ''
+       GROUP BY source_cn ORDER BY count DESC`
+    ).all(...params) as Array<{ code: string; count: number; simulated_count: number; live_count: number }>;
   }
 }
 

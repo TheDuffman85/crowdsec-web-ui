@@ -336,3 +336,24 @@ export interface BulkDeleteResult {
 export interface DeleteResult {
   message: string;
 }
+
+export interface DashboardStatsResponse {
+  totals: {
+    alerts: number;
+    decisions: number;
+    simulated_alerts: number;
+  };
+  time_series: {
+    granularity: 'hour' | 'day';
+    alert_buckets: Array<{ date: string; count: number }>;
+    decision_buckets: Array<{ date: string; count: number }>;
+    simulated_alert_buckets: Array<{ date: string; count: number }>;
+    simulated_decision_buckets: Array<{ date: string; count: number }>;
+  };
+  top_countries: Array<{ code: string; count: number; simulated_count: number; live_count: number }>;
+  top_scenarios: Array<{ name: string; count: number }>;
+  top_as: Array<{ name: string; count: number }>;
+  top_targets: Array<{ name: string; count: number }>;
+  top_ips: Array<{ ip: string; count: number }>;
+  all_countries: Array<{ code: string; count: number; simulated_count: number; live_count: number }>;
+}
