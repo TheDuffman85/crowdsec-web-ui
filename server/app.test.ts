@@ -441,6 +441,7 @@ function seedAlert(database: CrowdsecDatabase, alert: AlertRecord): void {
     $source_range: alert.source?.range,
     $target: alert.target,
     $simulated: alert.simulated ? 1 : 0,
+    $machine_id: undefined,
     $message: alert.message || '',
     $raw_data: JSON.stringify(alert),
   });
@@ -497,6 +498,7 @@ describe('createApp', () => {
       $source_range: undefined,
       $target: alert.target,
       $simulated: 0,
+      $machine_id: undefined,
       $message: alert.message || '',
       $raw_data: JSON.stringify(alert),
     });
@@ -538,6 +540,7 @@ describe('createApp', () => {
       $source_range: undefined,
       $target: simulatedAlert.target,
       $simulated: 1,
+      $machine_id: undefined,
       $message: simulatedAlert.message || '',
       $raw_data: JSON.stringify(simulatedAlert),
     });
@@ -1145,6 +1148,7 @@ describe('createApp', () => {
       $source_range: undefined,
       $target: liveAlert.target,
       $simulated: 0,
+      $machine_id: undefined,
       $message: liveAlert.message || '',
       $raw_data: JSON.stringify(liveAlert),
     });
@@ -1160,6 +1164,7 @@ describe('createApp', () => {
       $source_range: undefined,
       $target: simulatedAlert.target,
       $simulated: 1,
+      $machine_id: undefined,
       $message: simulatedAlert.message || '',
       $raw_data: JSON.stringify(simulatedAlert),
     });

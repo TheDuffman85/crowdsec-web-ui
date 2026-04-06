@@ -217,7 +217,6 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   Refresh Interval: ${getIntervalName(refreshIntervalMs)} (${persistedConfig.refresh_interval_ms !== undefined ? 'from saved config' : 'from env'})
   Auth Mode: ${config.crowdsecAuthMode}
   Simulations: ${config.simulationsEnabled ? 'Enabled' : 'Disabled'}
-  Always Show Machine: ${config.alwaysShowMachine ? 'Enabled' : 'Disabled'}
   Alert Origin Allowlist: ${config.alertOrigins.length > 0 ? config.alertOrigins.join(', ') : 'Disabled'}
   Alert Scenario Allowlist: ${config.alertExtraScenarios.length > 0 ? config.alertExtraScenarios.join(', ') : 'Disabled'}
   Bootstrap Retry: ${config.bootstrapRetryEnabled ? getIntervalName(config.bootstrapRetryDelayMs) : 'Disabled'}
@@ -1040,6 +1039,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       $source_range: alertSource?.range,
       $target: target,
       $simulated: enrichedAlert.simulated ? 1 : 0,
+      $machine_id: alert.machine_id || undefined,
       $message: alert.message || '',
       $raw_data: JSON.stringify(enrichedAlert),
     };

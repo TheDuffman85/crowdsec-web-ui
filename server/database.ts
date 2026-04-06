@@ -31,6 +31,7 @@ export interface AlertInsertParams {
   $source_range?: string;
   $target?: string;
   $simulated?: number;
+  $machine_id?: string;
   $message: string;
   $raw_data: string;
 }
@@ -60,6 +61,7 @@ export interface StatsAlertRow {
   source_range: string | null;
   target: string | null;
   simulated: number;
+  machine_id: string | null;
 }
 
 export interface StatsDecisionRow {
@@ -217,8 +219,8 @@ export class CrowdsecDatabase {
     initSchema(this.db);
 
     this.insertAlertStatement = this.db.query(`
-      INSERT OR REPLACE INTO alerts (id, uuid, created_at, scenario, source_ip, source_cn, source_as_name, source_scope, source_range, target, simulated, message, raw_data)
-      VALUES ($id, $uuid, $created_at, $scenario, $source_ip, $source_cn, $source_as_name, $source_scope, $source_range, $target, $simulated, $message, $raw_data)
+      INSERT OR REPLACE INTO alerts (id, uuid, created_at, scenario, source_ip, source_cn, source_as_name, source_scope, source_range, target, simulated, machine_id, message, raw_data)
+      VALUES ($id, $uuid, $created_at, $scenario, $source_ip, $source_cn, $source_as_name, $source_scope, $source_range, $target, $simulated, $machine_id, $message, $raw_data)
     `);
 
     this.getAlertsStatement = this.db.query(`
@@ -236,7 +238,7 @@ export class CrowdsecDatabase {
     this.deleteOldAlertsStatement = this.db.query('DELETE FROM alerts WHERE created_at < $cutoff');
 
     this.getAlertStatsSinceStatement = this.db.query(`
-      SELECT created_at, scenario, source_ip, source_cn, source_as_name, source_scope, source_range, target, simulated
+      SELECT created_at, scenario, source_ip, source_cn, source_as_name, source_scope, source_range, target, simulated, machine_id
       FROM alerts
       WHERE created_at >= $since
       ORDER BY created_at DESC
@@ -451,8 +453,8 @@ export class CrowdsecDatabase {
 
     if (filters.q) {
       const like = `%${filters.q}%`;
-      conditions.push(`(scenario LIKE ? OR source_ip LIKE ? OR source_cn LIKE ? OR source_as_name LIKE ? OR target LIKE ? OR message LIKE ?)`);
-      params.push(like, like, like, like, like, like);
+      conditions.push(`(scenario LIKE ? OR source_ip LIKE ? OR source_cn LIKE ? OR source_as_name LIKE ? OR target LIKE ? OR message LIKE ? OR machine_id LIKE ?)`);
+      params.push(like, like, like, like, like, like, like);
     }
     if (filters.ip) {
       conditions.push('source_ip LIKE ?');
@@ -1145,6 +1147,10 @@ function migrateStatsColumns(db: Database): void {
     db.exec('ALTER TABLE alerts ADD COLUMN source_range TEXT');
     db.exec('ALTER TABLE alerts ADD COLUMN target TEXT');
     db.exec('ALTER TABLE alerts ADD COLUMN simulated INTEGER DEFAULT 0');
+  }
+
+  if (!alertColNames.has('machine_id')) {
+    db.exec('ALTER TABLE alerts ADD COLUMN machine_id TEXT');
   }
 
   const decisionCols = db.query('PRAGMA table_info(decisions)').all() as Array<{ name: string }>;

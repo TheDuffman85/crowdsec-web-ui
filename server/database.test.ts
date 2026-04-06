@@ -67,6 +67,7 @@ describe('CrowdsecDatabase', () => {
       $source_range: undefined,
       $target: undefined,
       $simulated: 0,
+      $machine_id: undefined,
       $message: 'alert',
       $raw_data: JSON.stringify({ id: 1 }),
     });
@@ -119,6 +120,7 @@ describe('CrowdsecDatabase', () => {
           $source_range: undefined,
           $target: undefined,
           $simulated: 0,
+          $machine_id: undefined,
           $message: 'alert',
           $raw_data: JSON.stringify({ id }),
         });
