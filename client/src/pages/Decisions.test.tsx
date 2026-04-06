@@ -5,10 +5,12 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import * as api from '../lib/api';
 import { Decisions } from './Decisions';
 
+const setLastUpdatedMock = vi.fn();
+
 vi.mock('../contexts/useRefresh', () => ({
   useRefresh: () => ({
     refreshSignal: 0,
-    setLastUpdated: vi.fn(),
+    setLastUpdated: setLastUpdatedMock,
   }),
 }));
 
