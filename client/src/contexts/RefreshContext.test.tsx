@@ -7,7 +7,12 @@ import { fetchConfig } from '../lib/api';
 
 vi.mock('../lib/api', () => ({
   fetchConfig: vi.fn(async () => ({
+    lookback_period: '1h',
+    lookback_hours: 1,
+    lookback_days: 1,
     refresh_interval: 5000,
+    current_interval_name: '5s',
+    lapi_status: { isConnected: true, lastCheck: null, lastError: null },
     sync_status: {
       isSyncing: false,
       progress: 100,
@@ -16,6 +21,7 @@ vi.mock('../lib/api', () => ({
       completedAt: null,
     },
     simulations_enabled: true,
+    machine_features_enabled: false,
   })),
 }));
 
@@ -92,6 +98,7 @@ describe('RefreshContext', () => {
       current_interval_name: '5s',
       lapi_status: { isConnected: true, lastCheck: null, lastError: null },
       simulations_enabled: true,
+      machine_features_enabled: false,
     }).mockResolvedValueOnce({
       refresh_interval: 1000,
       sync_status: {
@@ -107,6 +114,7 @@ describe('RefreshContext', () => {
       current_interval_name: '5s',
       lapi_status: { isConnected: true, lastCheck: null, lastError: null },
       simulations_enabled: true,
+      machine_features_enabled: false,
     });
 
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});

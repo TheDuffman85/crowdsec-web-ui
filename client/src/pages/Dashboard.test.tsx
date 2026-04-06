@@ -72,6 +72,7 @@ beforeEach(() => {
     lapi_status: { isConnected: true, lastCheck: null, lastError: null },
     sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
     simulations_enabled: true,
+    machine_features_enabled: false,
   });
   fetchAlertsForStatsMock.mockResolvedValue([
     {
@@ -195,6 +196,7 @@ describe('Dashboard page', () => {
       lapi_status: { isConnected: true, lastCheck: null, lastError: null },
       sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
       simulations_enabled: false,
+      machine_features_enabled: false,
     });
 
     render(

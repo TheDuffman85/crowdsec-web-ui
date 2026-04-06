@@ -23,6 +23,7 @@ import type {
   UpsertNotificationRuleRequest,
   UpdateCheckResponse,
 } from '../shared/contracts';
+import { normalizeMachineId, resolveMachineName } from '../shared/machine';
 import { createRuntimeConfig, getIntervalName, parseRefreshInterval, type RuntimeConfig } from './config';
 import { CrowdsecDatabase, type AlertInsertParams, type DecisionInsertParams } from './database';
 import { LapiClient } from './lapi';
@@ -179,6 +180,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   Refresh Interval: ${getIntervalName(refreshIntervalMs)} (${persistedConfig.refresh_interval_ms !== undefined ? 'from saved config' : 'from env'})
   Auth Mode: ${config.crowdsecAuthMode}
   Simulations: ${config.simulationsEnabled ? 'Enabled' : 'Disabled'}
+  Always Show Machine: ${config.alwaysShowMachine ? 'Enabled' : 'Disabled'}
   Alert Origin Allowlist: ${config.alertOrigins.length > 0 ? config.alertOrigins.join(', ') : 'Disabled'}
   Alert Scenario Allowlist: ${config.alertExtraScenarios.length > 0 ? config.alertExtraScenarios.join(', ') : 'Disabled'}
   Bootstrap Retry: ${config.bootstrapRetryEnabled ? getIntervalName(config.bootstrapRetryDelayMs) : 'Disabled'}
@@ -345,6 +347,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       lapi_status: lapiClient.getStatus(),
       sync_status: syncStatus,
       simulations_enabled: config.simulationsEnabled,
+      machine_features_enabled: isMachineFeatureEnabled(),
     };
 
     return context.json(payload);
@@ -805,6 +808,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     const alertSource = alert.source || null;
     const sourceValue = getAlertSourceValue(alertSource);
     const target = getAlertTarget(alert);
+    const machine = resolveMachineName(alert);
     const normalizedDecisions = decisions.map((decision) => ({
       ...decision,
       simulated: normalizeDecisionSimulated(decision, alert),
@@ -854,6 +858,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         type: decision.type || 'ban',
         country: alertSource?.cn,
         as: alertSource?.as_name,
+        machine,
         target,
         simulated: decision.simulated === true,
         is_duplicate: false,
@@ -1035,6 +1040,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
               const alertSource = alert.source || null;
               const sourceValue = getAlertSourceValue(alertSource);
+              const machine = resolveMachineName(alert);
               const enrichedDecision = {
                 ...decision,
                 created_at: createdAt,
@@ -1046,6 +1052,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
                 type: decision.type || 'ban',
                 country: alertSource?.cn,
                 as: alertSource?.as_name,
+                machine,
                 target: getAlertTarget(alert),
                 simulated: normalizeDecisionSimulated(decision, alert),
               };
@@ -1623,6 +1630,32 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     startRefreshScheduler();
     void ensureBootstrapReady('startup');
   }
+
+  function isMachineFeatureEnabled(): boolean {
+    if (config.alwaysShowMachine) {
+      return true;
+    }
+
+    const since = new Date(Date.now() - config.lookbackMs).toISOString();
+    const machineIds = new Set<string>();
+
+    for (const row of database.getAlertsSince(since)) {
+      try {
+        const alert = JSON.parse(row.raw_data) as AlertRecord;
+        const machineId = normalizeMachineId(alert.machine_id);
+        if (!machineId) continue;
+
+        machineIds.add(machineId);
+        if (machineIds.size > 1) {
+          return true;
+        }
+      } catch (error) {
+        console.error('Failed to parse cached alert while evaluating machine visibility:', error);
+      }
+    }
+
+    return false;
+  }
 }
 
 function loadPersistedConfig(database: CrowdsecDatabase): PersistedConfig {
@@ -1781,6 +1814,7 @@ function toDecisionListItem(
   return {
     id: decision.id,
     created_at: String(decision.created_at || ''),
+    machine: typeof decision.machine === 'string' ? decision.machine : undefined,
     scenario: typeof decision.scenario === 'string' ? decision.scenario : undefined,
     value: typeof decision.value === 'string' ? decision.value : undefined,
     expired,

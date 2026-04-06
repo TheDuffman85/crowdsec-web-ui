@@ -73,6 +73,7 @@ export function Decisions() {
     const { refreshSignal, setLastUpdated } = useRefresh();
     const [decisions, setDecisions] = useState<DecisionListItem[]>([]);
     const [simulationsEnabled, setSimulationsEnabled] = useState(false);
+    const [machineFeaturesEnabled, setMachineFeaturesEnabled] = useState(false);
     const [loading, setLoading] = useState(true);
     const [showAddModal, setShowAddModal] = useState(false);
     const [filter, setFilter] = useState("");
@@ -127,6 +128,7 @@ export function Decisions() {
 
             setDecisions(data);
             setSimulationsEnabled(configData.simulations_enabled === true);
+            setMachineFeaturesEnabled(configData.machine_features_enabled === true);
 
             setLastUpdated(new Date());
         } catch (error) {
@@ -297,6 +299,7 @@ export function Decisions() {
         const countryCode = (decision.detail.country || "").toLowerCase();
         const countryName = (getCountryName(decision.detail.country) || "").toLowerCase();
         const as = (decision.detail.as || "").toLowerCase();
+        const machine = machineFeaturesEnabled ? (decision.machine || "").toLowerCase() : "";
         const type = (decision.detail.type || "").toLowerCase();
         const action = (decision.detail.action || "").toLowerCase();
         const simulationSearch = isSimulatedDecision(decision) ? 'simulation simulated' : 'live';
@@ -306,6 +309,7 @@ export function Decisions() {
             countryCode.includes(search) ||
             countryName.includes(search) ||
             as.includes(search) ||
+            (machineFeaturesEnabled && machine.includes(search)) ||
             type.includes(search) ||
             action.includes(search) ||
             simulationSearch.includes(search);
@@ -589,6 +593,9 @@ export function Decisions() {
                                     />
                                 </th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Time</th>
+                                {machineFeaturesEnabled && (
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Machine</th>
+                                )}
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Scenario</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Country</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">AS</th>
@@ -601,9 +608,9 @@ export function Decisions() {
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                             {loading ? (
-                                <tr><td colSpan={10} className="px-6 py-4 text-center text-sm text-gray-500">Loading decisions...</td></tr>
+                                <tr><td colSpan={machineFeaturesEnabled ? 11 : 10} className="px-6 py-4 text-center text-sm text-gray-500">Loading decisions...</td></tr>
                             ) : visibleDecisions.length === 0 ? (
-                                <tr><td colSpan={10} className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? "No decisions for this alert" : "No decisions found"}</td></tr>
+                                <tr><td colSpan={machineFeaturesEnabled ? 11 : 10} className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? "No decisions for this alert" : "No decisions found"}</td></tr>
                             ) : (
                                 visibleDecisions.map((decision, index) => {
                                     const decisionDuration = decision.detail.duration ?? '';
@@ -634,6 +641,11 @@ export function Decisions() {
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
                                                 <TimeDisplay timestamp={decision.created_at} />
                                             </td>
+                                            {machineFeaturesEnabled && (
+                                                <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[120px] truncate" title={decision.machine}>
+                                                    {decision.machine || "-"}
+                                                </td>
+                                            )}
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={decision.detail.reason}>
                                                 <ScenarioName
                                                     name={decision.detail.reason}

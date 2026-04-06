@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { normalizeMachineId, resolveMachineName } from '../../shared/machine';
 import { buildMetaSearch, getAlertSourceValue, getAlertTarget, resolveAlertReason, resolveAlertScenario, toSlimAlert, toSlimDecision } from './alerts';
 
 describe('alert helpers', () => {
@@ -172,6 +173,14 @@ describe('alert helpers', () => {
       },
       decisions: [],
     }).reason).toBe('update : +15000/-0 IPs');
+  });
+
+  test('machine helpers ignore placeholder values like N/A and Unknown', () => {
+    expect(normalizeMachineId('N/A')).toBeUndefined();
+    expect(normalizeMachineId(' unknown ')).toBeUndefined();
+    expect(resolveMachineName({ machine_id: 'N/A' })).toBeUndefined();
+    expect(resolveMachineName({ machine_alias: 'Unknown', machine_id: 'machine-1' })).toBe('machine-1');
+    expect(resolveMachineName({ machine_alias: 'localhost', machine_id: 'N/A' })).toBe('localhost');
   });
 
 });

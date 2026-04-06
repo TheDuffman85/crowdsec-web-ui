@@ -30,6 +30,8 @@ vi.mock('../lib/api', () => ({
       id: 1,
       created_at: '2026-03-23T10:00:00.000Z',
       scenario: 'crowdsecurity/ssh-bf',
+      machine_id: 'machine-1',
+      machine_alias: 'host-a',
       source: { ip: '1.2.3.4', value: '1.2.3.4', cn: 'DE', as_name: 'Hetzner' },
       target: 'ssh',
       meta_search: 'ssh',
@@ -39,6 +41,7 @@ vi.mock('../lib/api', () => ({
       id: 2,
       created_at: '2026-03-23T11:00:00.000Z',
       scenario: 'crowdsecurity/nginx-bf',
+      machine_id: 'machine-2',
       source: { ip: '5.6.7.8', value: '5.6.7.8', cn: 'US', as_name: 'AWS' },
       target: 'nginx',
       meta_search: 'nginx',
@@ -59,6 +62,7 @@ vi.mock('../lib/api', () => ({
     id,
     created_at: '2026-03-23T11:00:00.000Z',
     scenario: 'crowdsecurity/nginx-bf',
+    machine_id: 'machine-2',
     source: { ip: '5.6.7.8', value: '5.6.7.8', cn: 'US', as_name: 'AWS' },
     target: 'nginx',
     message: 'Simulated alert',
@@ -90,6 +94,7 @@ vi.mock('../lib/api', () => ({
     lapi_status: { isConnected: true, lastCheck: null, lastError: null },
     sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
     simulations_enabled: true,
+    machine_features_enabled: false,
   })),
 }));
 
@@ -108,6 +113,55 @@ describe('Alerts page', () => {
     await waitFor(() => expect(screen.getByText('Active: 1')).toBeInTheDocument());
     expect(screen.getByText('Simulation')).toBeInTheDocument();
     expect(screen.queryByText('Simulation Mode')).not.toBeInTheDocument();
+  });
+
+  test('keeps machine UI hidden when the feature flag is disabled', async () => {
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+    expect(screen.queryByRole('columnheader', { name: 'Machine' })).not.toBeInTheDocument();
+  });
+
+  test('shows machine column and detail card when the feature flag is enabled', async () => {
+    vi.mocked(api.fetchConfig).mockResolvedValue({
+      lookback_period: '1h',
+      lookback_hours: 1,
+      lookback_days: 1,
+      refresh_interval: 30000,
+      current_interval_name: '30s',
+      lapi_status: { isConnected: true, lastCheck: null, lastError: null },
+      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+      simulations_enabled: true,
+      machine_features_enabled: true,
+    });
+    vi.mocked(api.fetchAlert).mockResolvedValueOnce({
+      id: 1,
+      created_at: '2026-03-23T10:00:00.000Z',
+      scenario: 'crowdsecurity/ssh-bf',
+      machine_id: 'machine-1',
+      machine_alias: 'host-a',
+      source: { ip: '1.2.3.4', value: '1.2.3.4', cn: 'DE', as_name: 'Hetzner' },
+      target: 'ssh',
+      message: 'Alert with machine alias',
+      simulated: false,
+      decisions: [{ id: 10, value: '1.2.3.4', type: 'ban', simulated: false, expired: false }],
+      events: [],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/alerts?id=1']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByRole('columnheader', { name: 'Machine' })).toBeInTheDocument());
+    expect(screen.getAllByText('host-a').length).toBeGreaterThan(1);
+    expect(screen.getByText('Alert Details #1')).toBeInTheDocument();
+    expect(screen.getAllByText('Machine').length).toBeGreaterThan(1);
   });
 
   test('renders and filters range-only alerts by CIDR source value', async () => {

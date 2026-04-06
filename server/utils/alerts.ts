@@ -1,4 +1,5 @@
 import type { AlertDecision, AlertEvent, AlertMeta, AlertRecord, AlertSource, SlimAlert, SlimDecision } from '../../shared/contracts';
+import { resolveMachineName } from '../../shared/machine';
 
 export function getAlertTarget(alert: Pick<AlertRecord, 'events' | 'scenario' | 'machine_alias' | 'machine_id'> | null | undefined): string {
   if (!alert) return 'Unknown';
@@ -26,7 +27,7 @@ export function getAlertTarget(alert: Pick<AlertRecord, 'events' | 'scenario' | 
     }
   }
 
-  return alert.machine_alias || alert.machine_id || 'Unknown';
+  return resolveMachineName(alert) || 'Unknown';
 }
 
 export function buildMetaSearch(events: AlertEvent[] | undefined): string {

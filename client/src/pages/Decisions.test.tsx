@@ -38,6 +38,7 @@ vi.mock('../lib/api', () => ({
     lapi_status: { isConnected: true, lastCheck: null, lastError: null },
     sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
     simulations_enabled: true,
+    machine_features_enabled: false,
   })),
 }));
 
@@ -48,6 +49,7 @@ beforeEach(() => {
       {
         id: 10,
         created_at: '2026-03-23T10:00:00.000Z',
+        machine: 'host-a',
         value: '1.2.3.4',
         expired: false,
         is_duplicate: false,
@@ -64,6 +66,7 @@ beforeEach(() => {
       {
         id: 20,
         created_at: '2026-03-23T11:00:00.000Z',
+        machine: 'machine-2',
         value: '5.6.7.8',
         expired: false,
         is_duplicate: false,
@@ -97,6 +100,44 @@ describe('Decisions page', () => {
     expect(screen.queryByText('1.2.3.4')).not.toBeInTheDocument();
     expect(screen.getAllByText('Simulation').length).toBeGreaterThan(0);
     expect(screen.queryByText('Mode')).not.toBeInTheDocument();
+  });
+
+  test('keeps machine column hidden when the feature flag is disabled', async () => {
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+    expect(screen.queryByRole('columnheader', { name: 'Machine' })).not.toBeInTheDocument();
+  });
+
+  test('shows machine column and allows filtering by machine when enabled', async () => {
+    vi.mocked(api.fetchConfig).mockResolvedValue({
+      lookback_period: '1h',
+      lookback_hours: 1,
+      lookback_days: 1,
+      refresh_interval: 30000,
+      current_interval_name: '30s',
+      lapi_status: { isConnected: true, lastCheck: null, lastError: null },
+      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+      simulations_enabled: true,
+      machine_features_enabled: true,
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByRole('columnheader', { name: 'Machine' })).toBeInTheDocument());
+    expect(screen.getByText('host-a')).toBeInTheDocument();
+
+    await userEvent.type(screen.getByPlaceholderText('Filter decisions...'), 'host-a');
+    expect(screen.getByText('1.2.3.4')).toBeInTheDocument();
+    expect(screen.queryByText('5.6.7.8')).not.toBeInTheDocument();
   });
 
   test('select all excludes expired decisions from bulk delete', async () => {

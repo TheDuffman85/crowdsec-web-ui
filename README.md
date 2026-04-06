@@ -141,6 +141,15 @@ CrowdSec can run scenarios in **simulation mode**, where alerts and decisions ar
 - When enabled, the UI shows simulation badges, simulation filters, and separate simulation counts on the dashboard.
 - When left unset or set to `false`, the UI hides simulated alerts/decisions and the backend stops requesting simulated data from the CrowdSec LAPI.
 
+### Machine Visibility
+
+In multi-machine deployments, CrowdSec alerts can include `machine_id` and `machine_alias`. The Web UI can surface that information in the Alerts and Decisions tables, but it stays hidden for single-machine setups unless you explicitly force it on.
+
+- `CROWDSEC_ALWAYS_SHOW_MACHINE=false` by default.
+- When left unset or set to `false`, the UI enables machine visibility only after this app has observed more than one distinct non-empty `machine_id` during the current runtime.
+- Set `CROWDSEC_ALWAYS_SHOW_MACHINE=true` to always show the Machine column/card, even before multiple machines have been observed.
+- Displayed `machine` values prefer `machine_alias` and fall back to `machine_id`.
+
 ### Alert Allowlist Filtering
 
 Some CrowdSec setups ingest very large volumes of alerts and decisions from external automation, third-party importers, bulk list sync jobs, or other custom workflows. In those cases, you may want the Web UI to focus on selected alert sources instead of caching everything exposed by the LAPI.
@@ -200,6 +209,7 @@ These are upstream LAPI filters, so excluded alerts are skipped before they are 
       -e CROWDSEC_USER=crowdsec-web-ui \
       -e CROWDSEC_PASSWORD=<your-secure-password> \
       -e CROWDSEC_SIMULATIONS_ENABLED=true \
+      -e CROWDSEC_ALWAYS_SHOW_MACHINE=false \
       -e CROWDSEC_LOOKBACK_PERIOD=5d \
       -e CROWDSEC_REFRESH_INTERVAL=0 \
       -v $(pwd)/data:/app/data \
@@ -224,6 +234,8 @@ services:
       - CROWDSEC_PASSWORD=<generated_password>
       # Optional: Include simulation-mode alerts/decisions from CrowdSec (default: false)
       - CROWDSEC_SIMULATIONS_ENABLED=true
+      # Optional: Always show machine names instead of waiting for multiple machine_ids at runtime
+      - CROWDSEC_ALWAYS_SHOW_MACHINE=false
       # Optional: Lookback period for alerts/stats (default: 168h/7d)
       - CROWDSEC_LOOKBACK_PERIOD=5d
       # Optional: Backend auto-refresh interval. Values: 0 (Off), 5s, 30s (default), 1m, 5m

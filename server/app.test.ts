@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
 import type { AlertRecord } from '../shared/contracts';
+import { resolveMachineName } from '../shared/machine';
 import { createRuntimeConfig } from './config';
 import { CrowdsecDatabase } from './database';
 import { LapiClient, type LapiRequestInit } from './lapi';
@@ -344,6 +345,7 @@ function createController(options: {
     BASE_PATH: '/crowdsec',
     CROWDSEC_URL: 'http://crowdsec:8080',
     CROWDSEC_SIMULATIONS_ENABLED: options.simulationsEnabled === false ? 'false' : 'true',
+    CROWDSEC_ALWAYS_SHOW_MACHINE: 'false',
     CROWDSEC_LOOKBACK_PERIOD: '1m',
     CROWDSEC_REFRESH_INTERVAL: '30s',
     VITE_VERSION: '1.0.0',
@@ -460,6 +462,7 @@ function seedAlert(database: CrowdsecDatabase, alert: AlertRecord): void {
         origin: decision.origin || 'manual',
         country: alert.source?.cn,
         as: alert.source?.as_name,
+        machine: resolveMachineName(alert),
         target: alert.target,
         alert_id: alert.id,
         simulated: decision.simulated === true,
@@ -548,8 +551,12 @@ describe('createApp', () => {
 
     const configResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
     expect(configResponse.status).toBe(200);
-    expect(((await configResponse.json()) as { lookback_period: string; simulations_enabled: boolean })).toEqual(
-      expect.objectContaining({ lookback_period: '1m', simulations_enabled: true }),
+    expect(((await configResponse.json()) as {
+      lookback_period: string;
+      simulations_enabled: boolean;
+      machine_features_enabled: boolean;
+    })).toEqual(
+      expect.objectContaining({ lookback_period: '1m', simulations_enabled: true, machine_features_enabled: false }),
     );
 
     const alerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
@@ -631,6 +638,120 @@ describe('createApp', () => {
     controller.stopBackgroundTasks();
     database.close();
     destroyTempDir();
+  });
+
+  test('reports machine features enabled immediately when always-show override is configured', async () => {
+    const { controller } = createController({
+      env: {
+        CROWDSEC_ALWAYS_SHOW_MACHINE: 'true',
+      },
+    });
+
+    const response = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { machine_features_enabled: boolean }).machine_features_enabled).toBe(true);
+  });
+
+  test('enables machine features after multiple machine ids are observed and includes machine in decision payloads', async () => {
+    const firstAlert = sampleAlert({
+      id: 101,
+      uuid: 'alert-101',
+      machine_id: 'machine-1',
+      machine_alias: 'host-a',
+      decisions: [
+        {
+          id: 1010,
+          type: 'ban',
+          value: '1.2.3.4',
+          duration: '30m',
+          origin: 'manual',
+          simulated: false,
+        },
+      ],
+    });
+    const secondAlert = sampleAlert({
+      id: 102,
+      uuid: 'alert-102',
+      source: {
+        ip: '5.6.7.8',
+        value: '5.6.7.8',
+        cn: 'US',
+        as_name: 'AWS',
+      },
+      machine_id: 'machine-2',
+      decisions: [
+        {
+          id: 1020,
+          type: 'ban',
+          value: '5.6.7.8',
+          duration: '30m',
+          origin: 'manual',
+          simulated: false,
+        },
+      ],
+    });
+
+    const { controller } = createController({
+      fetchResolver: (url) => {
+        if (url.includes('/v1/alerts?') && url.includes('scope=ip')) {
+          return Response.json([firstAlert, secondAlert]);
+        }
+        if (url.includes('/v1/alerts?') && url.includes('scope=range')) {
+          return Response.json([]);
+        }
+        return undefined;
+      },
+    });
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alertsResponse.status).toBe(200);
+
+    const configResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
+    expect(((await configResponse.json()) as { machine_features_enabled: boolean }).machine_features_enabled).toBe(true);
+
+    const decisionsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions'));
+    expect(decisionsResponse.status).toBe(200);
+    expect((await decisionsResponse.json()) as Array<{ id: number; machine?: string }>).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 1010, machine: 'host-a' }),
+        expect.objectContaining({ id: 1020, machine: 'machine-2' }),
+      ]),
+    );
+  });
+
+  test('keeps machine features disabled when only cached alerts use one machine id', async () => {
+    const cachedAlert = sampleAlert({
+      id: 1,
+      uuid: 'alert-1',
+      machine_id: 'machine-1',
+      machine_alias: 'localhost',
+      decisions: [
+        {
+          id: 10,
+          type: 'ban',
+          value: '1.2.3.4',
+          duration: '30m',
+          origin: 'manual',
+          simulated: false,
+        },
+      ],
+    });
+
+    const { controller, database } = createController({
+      alertDetailPayload: sampleAlert({
+        id: 1,
+        uuid: 'alert-1',
+        machine_id: 'machine-2',
+      }),
+    });
+
+    seedAlert(database, cachedAlert);
+
+    const detailResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts/1'));
+    expect(detailResponse.status).toBe(200);
+
+    const configResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
+    expect(((await configResponse.json()) as { machine_features_enabled: boolean }).machine_features_enabled).toBe(false);
   });
 
   test('validates bad ids and malformed input', async () => {

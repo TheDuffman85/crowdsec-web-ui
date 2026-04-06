@@ -12,6 +12,7 @@ export interface RuntimeConfig {
   alertOrigins: string[];
   alertExtraScenarios: string[];
   simulationsEnabled: boolean;
+  alwaysShowMachine: boolean;
   lookbackPeriod: string;
   lookbackMs: number;
   refreshIntervalMs: number;
@@ -106,6 +107,7 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
     alertOrigins: parseCsvEnv(env.CROWDSEC_ALERT_ORIGINS),
     alertExtraScenarios: parseCsvEnv(env.CROWDSEC_ALERT_EXTRA_SCENARIOS),
     simulationsEnabled: parseBooleanEnv(env.CROWDSEC_SIMULATIONS_ENABLED, false),
+    alwaysShowMachine: parseBooleanEnv(env.CROWDSEC_ALWAYS_SHOW_MACHINE, false),
     lookbackPeriod,
     lookbackMs: parseLookbackToMs(lookbackPeriod),
     refreshIntervalMs,
