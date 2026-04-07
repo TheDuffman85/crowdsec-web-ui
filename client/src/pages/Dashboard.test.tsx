@@ -142,6 +142,7 @@ describe('Dashboard page', () => {
 
     const decisionsCard = screen.getByText('Active Decisions').closest('a');
     expect(decisionsCard).not.toBeNull();
+    expect(decisionsCard).toHaveAttribute('href', '/decisions');
     expect(within(decisionsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('2');
     expect(within(decisionsCard as HTMLElement).getByText('Simulation')).toBeInTheDocument();
 

@@ -300,7 +300,7 @@ export function Dashboard() {
         setFilters(EMPTY_FILTERS);
     };
 
-    const buildDrilldownParams = (includeExpired = false) => {
+    const buildDrilldownParams = () => {
         const params = new URLSearchParams();
         if (filters.country) params.set('country', filters.country);
         if (filters.scenario) params.set('scenario', filters.scenario);
@@ -314,14 +314,11 @@ export function Dashboard() {
         if ((config?.simulations_enabled ?? false) && filters.simulation !== 'all') {
             params.set('simulation', filters.simulation);
         }
-        if (includeExpired) {
-            params.set('include_expired', 'true');
-        }
         return params.toString();
     };
 
     const alertsLink = `/alerts${buildDrilldownParams() ? `?${buildDrilldownParams()}` : ''}`;
-    const decisionsLink = `/decisions${buildDrilldownParams(true) ? `?${buildDrilldownParams(true)}` : ''}`;
+    const decisionsLink = `/decisions${buildDrilldownParams() ? `?${buildDrilldownParams()}` : ''}`;
     const simulationsEnabled = config?.simulations_enabled === true;
     const filteredTotals = dashboardData.filteredTotals;
     const filteredSimulationAlertsCount = filteredTotals.simulatedAlerts;
