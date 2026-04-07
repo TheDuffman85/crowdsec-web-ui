@@ -375,7 +375,6 @@ describe('Alerts page', () => {
     expect(screen.getByText('10.1.0.100')).toBeInTheDocument();
     expect(screen.queryByText('10.1.0.101')).not.toBeInTheDocument();
   });
-
   test('streams large decision lists inside alert details', async () => {
     const fetchAlertMock = vi.mocked(api.fetchAlert);
     fetchAlertMock.mockResolvedValueOnce({

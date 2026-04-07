@@ -369,7 +369,6 @@ describe('Decisions page', () => {
     expect(screen.getByText('10.1.0.100')).toBeInTheDocument();
     expect(screen.queryByText('10.1.0.101')).not.toBeInTheDocument();
   });
-
   test('select all excludes expired decisions from bulk delete', async () => {
     vi.mocked(api.fetchDecisionsPaginated).mockImplementation(async (page, pageSize) =>
       toPaginatedDecisions([
