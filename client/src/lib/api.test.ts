@@ -92,7 +92,6 @@ describe('api helpers', () => {
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/api/dashboard/stats');
     expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ signal: expect.any(AbortSignal) });
   });
-
   test('deduplicates simultaneous GET helper requests', async () => {
     let resolveFetch: (response: Response) => void = () => {};
     const fetchMock = vi.fn(

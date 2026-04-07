@@ -39,25 +39,6 @@ function toPaginatedAlerts(
   };
 }
 
-function toPaginatedAlerts(
-  alerts: SlimAlert[],
-  page = 1,
-  pageSize = 50,
-  unfilteredTotal = alerts.length,
-): PaginatedResponse<SlimAlert> {
-  return {
-    data: alerts.slice((page - 1) * pageSize, page * pageSize),
-    pagination: {
-      page,
-      page_size: pageSize,
-      total: alerts.length,
-      total_pages: Math.ceil(alerts.length / pageSize),
-      unfiltered_total: unfilteredTotal,
-    },
-    selectable_ids: alerts.map((alert) => alert.id),
-  };
-}
-
 vi.mock('../contexts/useRefresh', () => ({
   useRefresh: () => ({
     refreshSignal: refreshSignalMock,
