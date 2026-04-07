@@ -136,7 +136,6 @@ export function Decisions() {
 
         inFlightLoadKeysRef.current.add(loadKey);
         let completedSuccessfully = false;
-
         if (append) {
             setLoadingMore(true);
         } else if (!isBackground) {

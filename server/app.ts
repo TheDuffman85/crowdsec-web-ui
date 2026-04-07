@@ -200,7 +200,6 @@ interface DashboardDecisionAccumulator {
   liveDecisionBuckets: Map<string, number>;
   simulatedDecisionBuckets: Map<string, number>;
 }
-
 const NOTIFICATION_SECRET_KEY_META_KEY = 'notification_secret_key';
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const UNFILTERED_ALERT_ORIGIN_TOKENS = new Set(['none']);
@@ -1952,7 +1951,6 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       },
     };
   }
-
   function normalizeAlertDetail(input: unknown, alertId: string): AlertRecord | null {
     if (Array.isArray(input)) {
       const matchingAlert = input.find((candidate) => String((candidate as AlertRecord | undefined)?.id) === alertId);
@@ -2580,7 +2578,6 @@ function addDashboardBucketInterval(date: Date, granularity: DashboardGranularit
 function getDashboardBucketFullDate(key: string, timezoneOffsetMinutes: number): string {
   return parseDashboardBucketKey(key, timezoneOffsetMinutes).toISOString();
 }
-
 function lowerQuery(context: HonoContext, key: string): string {
   return (context.req.query(key) || '').toLowerCase();
 }

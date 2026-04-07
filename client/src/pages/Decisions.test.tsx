@@ -31,6 +31,27 @@ function toPaginatedDecisions(
   };
 }
 
+function toPaginatedDecisions(
+  decisions: DecisionListItem[],
+  page = 1,
+  pageSize = 50,
+  unfilteredTotal = decisions.length,
+): PaginatedResponse<DecisionListItem> {
+  return {
+    data: decisions.slice((page - 1) * pageSize, page * pageSize),
+    pagination: {
+      page,
+      page_size: pageSize,
+      total: decisions.length,
+      total_pages: Math.ceil(decisions.length / pageSize),
+      unfiltered_total: unfilteredTotal,
+    },
+    selectable_ids: decisions
+      .filter((decision) => !decision.expired && !(decision.detail.duration || '').startsWith('-'))
+      .map((decision) => decision.id),
+  };
+}
+
 vi.mock('../contexts/useRefresh', () => ({
   useRefresh: () => ({
     refreshSignal: refreshSignalMock,
