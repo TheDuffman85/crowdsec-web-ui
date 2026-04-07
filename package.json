@@ -33,7 +33,7 @@
     "verify": "pnpm run test && pnpm run coverage && pnpm run typecheck && pnpm run lint && pnpm run build"
   },
   "dependencies": {
-    "@hono/node-server": "1.19.12",
+    "@hono/node-server": "1.19.13",
     "better-sqlite3": "12.8.0",
     "hono": "4.12.9",
     "mqtt": "^5.15.1",
