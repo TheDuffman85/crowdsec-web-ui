@@ -349,7 +349,7 @@ export function Alerts() {
             {(totalAlerts !== totalUnfilteredAlerts || visibleAlerts.length < totalAlerts) && (
                 <div className="text-sm text-gray-500">
                     {totalAlerts !== totalUnfilteredAlerts
-                        ? `Showing ${totalAlerts} of ${totalUnfilteredAlerts} alerts`
+                        ? `Showing ${visibleAlerts.length} of ${totalAlerts} alerts (${totalUnfilteredAlerts} total before filters)`
                         : `Showing ${visibleAlerts.length} of ${totalAlerts} alerts`}
                 </div>
             )}

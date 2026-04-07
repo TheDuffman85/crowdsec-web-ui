@@ -227,10 +227,34 @@ describe('Alerts page', () => {
       </MemoryRouter>,
     );
 
-    await waitFor(() => expect(screen.getByText('Showing 1 of 3 alerts')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Showing 1 of 1 alerts (3 total before filters)')).toBeInTheDocument());
     expect(screen.getByRole('columnheader', { name: 'IP / Range' })).toBeInTheDocument();
     expect(screen.getAllByText('192.168.5.0/24')).toHaveLength(2);
     expect(screen.queryByText('1.2.3.4')).not.toBeInTheDocument();
+  });
+
+  test('shows loaded alert count when server filters still have more pages', async () => {
+    const filteredAlerts = Array.from({ length: 55 }, (_, index) => ({
+      id: index + 1,
+      created_at: `2026-03-24T${String(index % 24).padStart(2, '0')}:00:00.000Z`,
+      scenario: 'filtered/scenario',
+      source: { ip: `10.0.0.${index + 1}`, value: `10.0.0.${index + 1}`, cn: 'DE', as_name: 'Hetzner' },
+      target: 'ssh',
+      meta_search: 'filtered',
+      decisions: [],
+    }));
+    vi.mocked(api.fetchAlertsPaginated).mockImplementation(async (page, pageSize) =>
+      toPaginatedAlerts(filteredAlerts, page, pageSize, 60),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/alerts?scenario=filtered/scenario']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Showing 50 of 55 alerts (60 total before filters)')).toBeInTheDocument());
+    expect(screen.queryByText('10.0.0.55')).not.toBeInTheDocument();
   });
 
   test('streams large decision lists inside alert details', async () => {

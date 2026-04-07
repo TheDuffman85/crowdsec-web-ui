@@ -306,11 +306,10 @@ export function Decisions() {
 
     return (
         <div className="space-y-6">
-            {/* Only show count when non-default filters are applied */}
             {(totalDecisions !== totalUnfilteredDecisions || visibleDecisions.length < totalDecisions) && (
                 <div className="text-sm text-gray-500">
                     {totalDecisions !== totalUnfilteredDecisions
-                        ? `Showing ${totalDecisions} of ${totalUnfilteredDecisions} decisions`
+                        ? `Showing ${visibleDecisions.length} of ${totalDecisions} decisions (${totalUnfilteredDecisions} total before filters)`
                         : `Showing ${visibleDecisions.length} of ${totalDecisions} decisions`}
                 </div>
             )}

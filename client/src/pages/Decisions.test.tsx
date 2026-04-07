@@ -201,6 +201,38 @@ describe('Decisions page', () => {
     expect(screen.queryByText('5.6.7.8')).not.toBeInTheDocument();
   });
 
+  test('shows loaded decision count when server filters still have more pages', async () => {
+    const filteredDecisions = Array.from({ length: 313 }, (_, index) => ({
+      id: index + 1,
+      created_at: `2026-03-24T${String(index % 24).padStart(2, '0')}:00:00.000Z`,
+      value: `10.0.0.${index + 1}`,
+      expired: false,
+      is_duplicate: false,
+      simulated: false,
+      detail: {
+        origin: 'CAPI',
+        reason: 'crowdsecurity/http-probing',
+        country: 'DE',
+        as: 'Hetzner',
+        action: 'ban',
+        duration: '4h',
+        alert_id: index + 1,
+      },
+    }));
+    vi.mocked(api.fetchDecisionsPaginated).mockImplementation(async (page, pageSize) =>
+      toPaginatedDecisions(filteredDecisions, page, pageSize, 314),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/decisions?include_expired=true']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Showing 50 of 313 decisions (314 total before filters)')).toBeInTheDocument());
+    expect(screen.queryByText('10.0.0.313')).not.toBeInTheDocument();
+  });
+
   test('select all excludes expired decisions from bulk delete', async () => {
     vi.mocked(api.fetchDecisionsPaginated).mockImplementation(async (page, pageSize) =>
       toPaginatedDecisions([
