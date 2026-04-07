@@ -21,12 +21,34 @@ import type {
 } from '../types';
 import { apiUrl } from './basePath';
 
-async function fetchJson<T>(input: string, init?: RequestInit, defaultMsg?: string): Promise<T> {
-    const response = await fetch(apiUrl(input), init);
+const inFlightGetRequests = new Map<string, Promise<unknown>>();
+
+async function requestJson<T>(url: string, init: RequestInit | undefined, defaultMsg: string | undefined): Promise<T> {
+    const response = await fetch(url, init);
     if (!response.ok) {
         throw new Error(defaultMsg || 'Request failed');
     }
     return response.json() as Promise<T>;
+}
+
+async function fetchJson<T>(input: string, init?: RequestInit, defaultMsg?: string): Promise<T> {
+    const url = apiUrl(input);
+    if (init === undefined) {
+        const inFlightRequest = inFlightGetRequests.get(url);
+        if (inFlightRequest) {
+            return inFlightRequest as Promise<T>;
+        }
+
+        const request = requestJson<T>(url, init, defaultMsg).finally(() => {
+            if (inFlightGetRequests.get(url) === request) {
+                inFlightGetRequests.delete(url);
+            }
+        });
+        inFlightGetRequests.set(url, request);
+        return request;
+    }
+
+    return requestJson<T>(url, init, defaultMsg);
 }
 
 export async function fetchAlerts(): Promise<SlimAlert[]> {

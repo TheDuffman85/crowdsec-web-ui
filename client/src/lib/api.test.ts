@@ -61,6 +61,23 @@ describe('api helpers', () => {
     await expect(fetchNotifications()).resolves.toEqual([{ id: 1 }]);
   });
 
+  test('deduplicates simultaneous GET helper requests', async () => {
+    let resolveFetch: (response: Response) => void = () => {};
+    const fetchMock = vi.fn(
+      () => new Promise<Response>((resolve) => {
+        resolveFetch = resolve;
+      }),
+    );
+    mockFetch(fetchMock);
+
+    const firstRequest = fetchConfig();
+    const secondRequest = fetchConfig();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    resolveFetch(Response.json({ ok: true }));
+    await expect(Promise.all([firstRequest, secondRequest])).resolves.toEqual([{ ok: true }, { ok: true }]);
+  });
+
   test('fetchAlert handles direct payloads and empty array payloads', async () => {
     mockFetch(
       vi.fn(async (input) => {

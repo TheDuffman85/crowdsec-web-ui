@@ -1,5 +1,6 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { StrictMode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import type { DecisionListItem, PaginatedResponse } from '../types';
@@ -7,6 +8,7 @@ import * as api from '../lib/api';
 import { Decisions } from './Decisions';
 
 const setLastUpdatedMock = vi.fn();
+let refreshSignalMock = 0;
 
 function toPaginatedDecisions(
   decisions: DecisionListItem[],
@@ -31,7 +33,7 @@ function toPaginatedDecisions(
 
 vi.mock('../contexts/useRefresh', () => ({
   useRefresh: () => ({
-    refreshSignal: 0,
+    refreshSignal: refreshSignalMock,
     setLastUpdated: setLastUpdatedMock,
   }),
 }));
@@ -146,8 +148,31 @@ vi.mock('../lib/api', () => {
 });
 
 afterEach(() => {
+  refreshSignalMock = 0;
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+
+function installControlledIntersectionObserver() {
+  let triggerIntersection: (() => void) | undefined;
+
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(callback: IntersectionObserverCallback) {
+      triggerIntersection = () => {
+        callback([{ isIntersecting: true } as IntersectionObserverEntry], this as unknown as IntersectionObserver);
+      };
+    }
+
+    observe(): void {}
+    disconnect(): void {}
+    unobserve(): void {}
+    takeRecords(): IntersectionObserverEntry[] {
+      return [];
+    }
+  });
+
+  return () => triggerIntersection?.();
+}
 
 describe('Decisions page', () => {
   test('filters to simulated decisions and shows the simulation badge inline in the scenario column', async () => {
@@ -231,6 +256,97 @@ describe('Decisions page', () => {
 
     await waitFor(() => expect(screen.getByText('Showing 50 of 313 decisions (314 total before filters)')).toBeInTheDocument());
     expect(screen.queryByText('10.0.0.313')).not.toBeInTheDocument();
+  });
+
+  test('loads the first decision page once when StrictMode replays mount effects', async () => {
+    const decisions = [
+      {
+        id: 10,
+        created_at: '2026-03-23T10:00:00.000Z',
+        value: '1.2.3.4',
+        expired: false,
+        is_duplicate: false,
+        simulated: false,
+        detail: {
+          origin: 'CAPI',
+          reason: 'crowdsecurity/ssh-bf',
+          country: 'DE',
+          as: 'Hetzner',
+          action: 'ban',
+          duration: '4h',
+          alert_id: 1,
+        },
+      },
+    ];
+    const fetchDecisionsPaginatedMock = vi.mocked(api.fetchDecisionsPaginated).mockImplementation(async (page, pageSize) =>
+      toPaginatedDecisions(decisions, page, pageSize, decisions.length),
+    );
+    fetchDecisionsPaginatedMock.mockClear();
+
+    render(
+      <StrictMode>
+        <MemoryRouter initialEntries={['/decisions']}>
+          <Decisions />
+        </MemoryRouter>
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+    expect(fetchDecisionsPaginatedMock.mock.calls.filter(([page]) => page === 1)).toHaveLength(1);
+  });
+
+  test('auto-refresh preserves the already loaded decision pages', async () => {
+    const triggerIntersection = installControlledIntersectionObserver();
+    const pagedDecisions = Array.from({ length: 120 }, (_, index) => ({
+      id: index + 1,
+      created_at: `2026-03-24T${String(index % 24).padStart(2, '0')}:00:00.000Z`,
+      value: `10.1.0.${index + 1}`,
+      expired: false,
+      is_duplicate: false,
+      simulated: false,
+      detail: {
+        origin: 'CAPI',
+        reason: 'crowdsecurity/http-probing',
+        country: 'DE',
+        as: 'Hetzner',
+        action: 'ban',
+        duration: '4h',
+        alert_id: index + 1,
+      },
+    }));
+    const fetchDecisionsPaginatedMock = vi.mocked(api.fetchDecisionsPaginated).mockImplementation(async (page, pageSize) =>
+      toPaginatedDecisions(pagedDecisions, page, pageSize, pagedDecisions.length),
+    );
+
+    const { rerender } = render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Showing 50 of 120 decisions')).toBeInTheDocument());
+
+    await act(async () => {
+      triggerIntersection();
+    });
+
+    await waitFor(() => expect(screen.getByText('Showing 100 of 120 decisions')).toBeInTheDocument());
+    expect(screen.getByText('10.1.0.100')).toBeInTheDocument();
+
+    const callCountBeforeRefresh = fetchDecisionsPaginatedMock.mock.calls.length;
+    refreshSignalMock = 1;
+
+    rerender(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(fetchDecisionsPaginatedMock.mock.calls.length).toBeGreaterThanOrEqual(callCountBeforeRefresh + 2));
+    expect(fetchDecisionsPaginatedMock.mock.calls.slice(callCountBeforeRefresh, callCountBeforeRefresh + 2).map(([page]) => page)).toEqual([1, 2]);
+    expect(screen.getByText('Showing 100 of 120 decisions')).toBeInTheDocument();
+    expect(screen.getByText('10.1.0.100')).toBeInTheDocument();
+    expect(screen.queryByText('10.1.0.101')).not.toBeInTheDocument();
   });
 
   test('select all excludes expired decisions from bulk delete', async () => {

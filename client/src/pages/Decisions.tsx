@@ -94,6 +94,9 @@ export function Decisions() {
     // Intersection Observer for infinite scroll
     const observer = useRef<IntersectionObserver | null>(null);
     const selectAllDecisionsRef = useRef<HTMLInputElement | null>(null);
+    const currentPageRef = useRef(1);
+    const inFlightLoadKeysRef = useRef(new Set<string>());
+    const lastCompletedLoadRef = useRef<{ key: string; completedAt: number } | null>(null);
 
     const buildServerFilters = useCallback((requestedSimulationFilter = simulationFilter): Record<string, string> => {
         const filters: Record<string, string> = {
@@ -114,7 +117,26 @@ export function Decisions() {
         return filters;
     }, [alertIdFilter, asFilter, countryFilter, dateEndFilter, dateStartFilter, filter, includeExpiredParam, ipFilter, scenarioFilter, showDuplicates, simulationFilter, targetFilter]);
 
-    const loadDecisions = useCallback(async (isBackground = false, page = 1, append = false) => {
+    const loadDecisions = useCallback(async (isBackground = false, page = 1, append = false, preserveLoadedPages = false) => {
+        const loadKey = JSON.stringify({
+            page,
+            append,
+            preserveLoadedPages,
+            loadedPage: preserveLoadedPages ? currentPageRef.current : undefined,
+            filter,
+            search: searchParams.toString(),
+        });
+        const lastCompletedLoad = lastCompletedLoadRef.current;
+        if (
+            inFlightLoadKeysRef.current.has(loadKey) ||
+            (lastCompletedLoad?.key === loadKey && Date.now() - lastCompletedLoad.completedAt < 250)
+        ) {
+            return;
+        }
+
+        inFlightLoadKeysRef.current.add(loadKey);
+        let completedSuccessfully = false;
+
         if (append) {
             setLoadingMore(true);
         } else if (!isBackground) {
@@ -125,10 +147,28 @@ export function Decisions() {
             const requestedSimulationFilter = configData.simulations_enabled === true
                 ? parseSimulationFilter(searchParams.get("simulation"))
                 : 'all';
-            const decisionsResult = await fetchDecisionsPaginated(page, PAGE_SIZE, buildServerFilters(requestedSimulationFilter));
+            const filters = buildServerFilters(requestedSimulationFilter);
+            const decisionsResult = await fetchDecisionsPaginated(page, PAGE_SIZE, filters);
+            let decisionsData = decisionsResult.data;
+            let nextPage = decisionsResult.pagination.page;
 
-            setDecisions((current) => append ? [...current, ...decisionsResult.data] : decisionsResult.data);
-            setCurrentPage(decisionsResult.pagination.page);
+            if (!append && preserveLoadedPages) {
+                const loadedPageCount = Math.max(1, currentPageRef.current);
+                const maxPageToRefresh = Math.max(1, Math.min(loadedPageCount, decisionsResult.pagination.total_pages || 1));
+                if (maxPageToRefresh > 1) {
+                    const remainingPages = await Promise.all(
+                        Array.from({ length: maxPageToRefresh - 1 }, (_, index) =>
+                            fetchDecisionsPaginated(index + 2, PAGE_SIZE, filters),
+                        ),
+                    );
+                    decisionsData = [decisionsResult, ...remainingPages].flatMap((result) => result.data);
+                }
+                nextPage = maxPageToRefresh;
+            }
+
+            setDecisions((current) => append ? [...current, ...decisionsData] : decisionsData);
+            currentPageRef.current = append ? decisionsResult.pagination.page : nextPage;
+            setCurrentPage(currentPageRef.current);
             setTotalPages(decisionsResult.pagination.total_pages);
             setTotalDecisions(decisionsResult.pagination.total);
             setTotalUnfilteredDecisions(decisionsResult.pagination.unfiltered_total);
@@ -137,13 +177,18 @@ export function Decisions() {
             setMachineFeaturesEnabled(configData.machine_features_enabled === true);
 
             setLastUpdated(new Date());
+            completedSuccessfully = true;
         } catch (error) {
             console.error(error);
         } finally {
+            inFlightLoadKeysRef.current.delete(loadKey);
+            if (completedSuccessfully) {
+                lastCompletedLoadRef.current = { key: loadKey, completedAt: Date.now() };
+            }
             if (append) setLoadingMore(false);
             if (!isBackground) setLoading(false);
         }
-    }, [buildServerFilters, searchParams, setLastUpdated]);
+    }, [buildServerFilters, filter, searchParams, setLastUpdated]);
 
     const lastDecisionElementRef = useCallback((node: HTMLTableRowElement | null) => {
         if (loading || loadingMore || !hasMoreDecisions) return;
@@ -169,7 +214,7 @@ export function Decisions() {
     }, [loadDecisions]);
 
     useEffect(() => {
-        if (refreshSignal > 0) loadDecisions(true, 1, false);
+        if (refreshSignal > 0) loadDecisions(true, 1, false, true);
     }, [refreshSignal, loadDecisions]);
 
     const handleAddDecision = async (e: FormEvent<HTMLFormElement>) => {

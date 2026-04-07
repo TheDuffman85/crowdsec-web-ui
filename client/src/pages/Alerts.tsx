@@ -112,6 +112,9 @@ export function Alerts() {
     const observer = useRef<IntersectionObserver | null>(null);
     const decisionContainerRef = useRef<HTMLDivElement | null>(null);
     const selectAllAlertsRef = useRef<HTMLInputElement | null>(null);
+    const currentPageRef = useRef(1);
+    const inFlightLoadKeysRef = useRef(new Set<string>());
+    const lastCompletedLoadRef = useRef<{ key: string; completedAt: number } | null>(null);
 
     const buildServerFilters = useCallback((simulationFilter = currentSimulationFilter): Record<string, string> => {
         const filters: Record<string, string> = {
@@ -128,7 +131,26 @@ export function Alerts() {
         return filters;
     }, [currentSimulationFilter, filter, searchParams]);
 
-    const loadAlerts = useCallback(async (isBackground = false, page = 1, append = false) => {
+    const loadAlerts = useCallback(async (isBackground = false, page = 1, append = false, preserveLoadedPages = false) => {
+        const loadKey = JSON.stringify({
+            page,
+            append,
+            preserveLoadedPages,
+            loadedPage: preserveLoadedPages ? currentPageRef.current : undefined,
+            filter,
+            search: searchParams.toString(),
+        });
+        const lastCompletedLoad = lastCompletedLoadRef.current;
+        if (
+            inFlightLoadKeysRef.current.has(loadKey) ||
+            (lastCompletedLoad?.key === loadKey && Date.now() - lastCompletedLoad.completedAt < 250)
+        ) {
+            return;
+        }
+
+        inFlightLoadKeysRef.current.add(loadKey);
+        let completedSuccessfully = false;
+
         try {
             if (append) {
                 setLoadingMore(true);
@@ -139,10 +161,28 @@ export function Alerts() {
             const requestedSimulationFilter = configData.simulations_enabled === true
                 ? parseSimulationFilter(searchParams.get("simulation"))
                 : 'all';
-            const alertsResult = await fetchAlertsPaginated(page, PAGE_SIZE, buildServerFilters(requestedSimulationFilter));
-            const alertsData = alertsResult.data;
+            const filters = buildServerFilters(requestedSimulationFilter);
+            const alertsResult = await fetchAlertsPaginated(page, PAGE_SIZE, filters);
+            let alertsData = alertsResult.data;
+            let nextPage = alertsResult.pagination.page;
+
+            if (!append && preserveLoadedPages) {
+                const loadedPageCount = Math.max(1, currentPageRef.current);
+                const maxPageToRefresh = Math.max(1, Math.min(loadedPageCount, alertsResult.pagination.total_pages || 1));
+                if (maxPageToRefresh > 1) {
+                    const remainingPages = await Promise.all(
+                        Array.from({ length: maxPageToRefresh - 1 }, (_, index) =>
+                            fetchAlertsPaginated(index + 2, PAGE_SIZE, filters),
+                        ),
+                    );
+                    alertsData = [alertsResult, ...remainingPages].flatMap((result) => result.data);
+                }
+                nextPage = maxPageToRefresh;
+            }
+
             setAlerts((current) => append ? [...current, ...alertsData] : alertsData);
-            setCurrentPage(alertsResult.pagination.page);
+            currentPageRef.current = append ? alertsResult.pagination.page : nextPage;
+            setCurrentPage(currentPageRef.current);
             setTotalPages(alertsResult.pagination.total_pages);
             setTotalAlerts(alertsResult.pagination.total);
             setTotalUnfilteredAlerts(alertsResult.pagination.unfiltered_total);
@@ -184,14 +224,19 @@ export function Alerts() {
             }
 
             setLastUpdated(new Date());
+            completedSuccessfully = true;
 
         } catch (err) {
             console.error(err);
         } finally {
+            inFlightLoadKeysRef.current.delete(loadKey);
+            if (completedSuccessfully) {
+                lastCompletedLoadRef.current = { key: loadKey, completedAt: Date.now() };
+            }
             if (append) setLoadingMore(false);
             if (!isBackground) setLoading(false);
         }
-    }, [alertIdParam, buildServerFilters, queryParam, searchParams, setLastUpdated]);
+    }, [alertIdParam, buildServerFilters, filter, queryParam, searchParams, setLastUpdated]);
 
     const lastAlertElementRef = useCallback((node: HTMLTableRowElement | null) => {
         if (loading || loadingMore || !hasMoreAlerts) return;
@@ -210,7 +255,7 @@ export function Alerts() {
 
 
     useEffect(() => {
-        if (refreshSignal > 0) loadAlerts(true, 1, false);
+        if (refreshSignal > 0) loadAlerts(true, 1, false, true);
     }, [refreshSignal, loadAlerts]);
 
     // Keep ref in sync with selectedAlert for auto-refresh
