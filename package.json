@@ -37,7 +37,7 @@
     "better-sqlite3": "12.8.0",
     "hono": "4.12.9",
     "mqtt": "^5.15.1",
-    "undici": "7.24.6"
+    "undici": "8.0.2"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
