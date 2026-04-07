@@ -12,10 +12,12 @@ import {
   deleteDecision,
   fetchAlert,
   fetchAlerts,
+  fetchAlertsPaginated,
   fetchAlertsForStats,
   fetchConfig,
   fetchDashboardStats,
   fetchDecisions,
+  fetchDecisionsPaginated,
   fetchDecisionsForStats,
   fetchNotifications,
   fetchNotificationSettings,
@@ -61,6 +63,36 @@ describe('api helpers', () => {
     await expect(fetchNotifications()).resolves.toEqual([{ id: 1 }]);
   });
 
+  test('paginated helpers include only populated filters', async () => {
+    const fetchMock = vi.fn(async (_input: Parameters<typeof fetch>[0], _init?: Parameters<typeof fetch>[1]) =>
+      Response.json({ items: [], total: 0 }),
+    );
+    mockFetch(fetchMock);
+
+    await expect(fetchAlertsPaginated(2, 25, { scenario: 'ssh', country: '' })).resolves.toEqual({ items: [], total: 0 });
+    await expect(fetchDecisionsPaginated(3, 10, { ip: '1.2.3.4', target: '' })).resolves.toEqual({ items: [], total: 0 });
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/api/alerts?page=2&page_size=25&scenario=ssh');
+    expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain('country=');
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/api/decisions?page=3&page_size=10&ip=1.2.3.4');
+    expect(String(fetchMock.mock.calls[1]?.[0])).not.toContain('target=');
+  });
+
+  test('fetchDashboardStats handles empty filters and explicit request init', async () => {
+    const fetchMock = vi.fn(async (_input: Parameters<typeof fetch>[0], _init?: Parameters<typeof fetch>[1]) =>
+      Response.json({ totals: {} }),
+    );
+    mockFetch(fetchMock);
+
+    await expect(fetchDashboardStats()).resolves.toEqual({ totals: {} });
+    await expect(fetchDashboardStats({ simulation: '' }, { signal: AbortSignal.abort() })).resolves.toEqual({ totals: {} });
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/api/dashboard/stats');
+    expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain('?');
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/api/dashboard/stats');
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ signal: expect.any(AbortSignal) });
+  });
+
   test('deduplicates simultaneous GET helper requests', async () => {
     let resolveFetch: (response: Response) => void = () => {};
     const fetchMock = vi.fn(
@@ -91,6 +123,18 @@ describe('api helpers', () => {
 
     await expect(fetchAlert('direct')).resolves.toEqual({ id: 'direct' });
     await expect(fetchAlert('empty')).rejects.toThrow('Failed to fetch alert');
+  });
+
+  test('removes failed GET requests from the in-flight cache', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('{}', { status: 500 }))
+      .mockResolvedValueOnce(Response.json({ ok: true }));
+    mockFetch(fetchMock);
+
+    await expect(fetchConfig()).rejects.toThrow('Failed to fetch config');
+    await expect(fetchConfig()).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   test('delete and add helpers surface permission metadata on 403', async () => {
@@ -182,5 +226,23 @@ describe('api helpers', () => {
     await expect(markNotificationRead('1')).resolves.toBeUndefined();
     await expect(markAllNotificationsRead()).resolves.toBeUndefined();
     await expect(testNotificationChannel('boom')).rejects.toThrow('boom');
+  });
+
+  test('notification mutations handle 204 responses and default API errors', async () => {
+    mockFetch(
+      vi.fn(async (input) => {
+        if (String(input).includes('/api/notification-rules/invalid-json')) {
+          return new Response('not-json', { status: 400 });
+        }
+        if (String(input).includes('/api/notifications/no-message/read')) {
+          return Response.json({ error: '' }, { status: 400 });
+        }
+        return new Response(null, { status: 204 });
+      }),
+    );
+
+    await expect(deleteNotificationChannel('1')).resolves.toBeUndefined();
+    await expect(deleteNotificationRule('invalid-json')).rejects.toThrow('Failed to delete notification rule');
+    await expect(markNotificationRead('no-message')).rejects.toThrow('Failed to mark notification as read');
   });
 });

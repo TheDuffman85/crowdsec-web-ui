@@ -85,6 +85,13 @@ describe('stats helpers', () => {
       },
       {
         created_at: new Date(now).toISOString(),
+        scenario: 'crowdsecurity/ssh-bf',
+        source: { ip: '8.8.8.8', value: '8.8.8.8', cn: 'FR', as_name: 'Google' },
+        simulated: true,
+        target: 'dns',
+      },
+      {
+        created_at: new Date(now).toISOString(),
         scenario: 'crowdsecurity/community-blocklist',
         source: null,
         target: 'N/A',
@@ -102,6 +109,10 @@ describe('stats helpers', () => {
     expect(getTopAS(noisyAlerts, 5).some((item) => item.label === 'Unknown')).toBe(false);
     expect(getTopTargets(noisyAlerts, 5).some((item) => item.label === 'Unknown')).toBe(false);
     expect(getTopTargets(noisyAlerts, 5).some((item) => item.label === 'N/A')).toBe(false);
+    expect(getAllCountries(noisyAlerts).find((item) => item.countryCode === 'FR')).toMatchObject({
+      simulatedCount: 1,
+      liveCount: 0,
+    });
   });
 
   test('aggregates daily and hourly data with explicit ranges', () => {

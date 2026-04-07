@@ -30,6 +30,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  vi.clearAllMocks();
   vi.useRealTimers();
 });
 
@@ -153,6 +154,53 @@ describe('RefreshContext', () => {
     await waitFor(() => expect(errorSpy).toHaveBeenCalledWith('Failed to load config', expect.any(Error)));
     await userEvent.click(screen.getByRole('button', { name: 'set-300000' }));
     await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+  });
+
+  test('handles missing config fields and all interval names', async () => {
+    vi.mocked(fetchConfig)
+      .mockResolvedValueOnce(null as unknown as Awaited<ReturnType<typeof fetchConfig>>)
+      .mockResolvedValueOnce({
+        lookback_period: '1h',
+        lookback_hours: 1,
+        lookback_days: 1,
+        current_interval_name: 'off',
+        lapi_status: { isConnected: true, lastCheck: null, lastError: null },
+        simulations_enabled: true,
+        machine_features_enabled: false,
+      } as unknown as Awaited<ReturnType<typeof fetchConfig>>);
+
+    const fetchSpy = vi.fn(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { interval: string };
+      return Response.json({ new_interval_ms: body.interval === '0' ? 0 : 1234 });
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const firstRender = render(
+      <RefreshProvider>
+        <Consumer />
+      </RefreshProvider>,
+    );
+    await waitFor(() => expect(fetchConfig).toHaveBeenCalledTimes(1));
+    firstRender.unmount();
+
+    render(
+      <RefreshProvider>
+        <IntervalConsumer value={5000} />
+        <IntervalConsumer value={60000} />
+        <IntervalConsumer value={0} />
+      </RefreshProvider>,
+    );
+
+    await waitFor(() => expect(fetchConfig).toHaveBeenCalledTimes(2));
+    await userEvent.click(screen.getByRole('button', { name: 'set-5000' }));
+    await userEvent.click(screen.getByRole('button', { name: 'set-60000' }));
+    await userEvent.click(screen.getByRole('button', { name: 'set-0' }));
+
+    expect(fetchSpy.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([
+      { interval: '5s' },
+      { interval: '1m' },
+      { interval: '0' },
+    ]);
   });
 
   test('throws when used outside the provider', () => {
