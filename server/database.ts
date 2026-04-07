@@ -53,7 +53,7 @@ export interface DatabaseOptions {
   dbPath?: string;
 }
 
-type RowWithRawData = { raw_data: string; created_at?: string; stop_at?: string };
+type RowWithRawData = { raw_data: string; created_at?: string; stop_at?: string; alert_id?: string | number | null };
 type MetaRow = { value: string };
 type CountRow = { count: number };
 type JsonRow = {
@@ -158,13 +158,13 @@ export class CrowdsecDatabase {
     `);
 
     this.getActiveDecisionsStatement = this.db.query(`
-      SELECT raw_data, created_at FROM decisions
+      SELECT raw_data, created_at, alert_id FROM decisions
       WHERE stop_at > $now
       ORDER BY stop_at DESC
     `);
 
     this.getDecisionsSinceStatement = this.db.query(`
-      SELECT raw_data, created_at FROM decisions
+      SELECT raw_data, created_at, alert_id FROM decisions
       WHERE created_at >= $since OR stop_at > $now
       ORDER BY stop_at DESC
     `);
@@ -317,6 +317,24 @@ export class CrowdsecDatabase {
 
   getDecisionById(id: string | number): { raw_data: string; stop_at: string } | null {
     return (this.getDecisionByIdStatement.get({ $id: String(id) }) as { raw_data: string; stop_at: string } | null) || null;
+  }
+
+  getDecisionStopAtBatch(ids: string[]): Map<string, string> {
+    const result = new Map<string, string>();
+    if (ids.length === 0) return result;
+
+    const chunkSize = 900;
+    for (let offset = 0; offset < ids.length; offset += chunkSize) {
+      const chunk = ids.slice(offset, offset + chunkSize);
+      const placeholders = chunk.map(() => '?').join(',');
+      const statement = this.db.prepare(`SELECT id, stop_at FROM decisions WHERE id IN (${placeholders})`);
+      const rows = statement.all(...chunk) as Array<{ id: string; stop_at: string }>;
+      for (const row of rows) {
+        result.set(String(row.id), row.stop_at);
+      }
+    }
+
+    return result;
   }
 
   getActiveDecisionByValue(value: string, now: string): { raw_data: string; stop_at: string } | null {
@@ -493,6 +511,11 @@ function openDatabase(dbPath: string): Database {
   try {
     const database = createDatabase(dbPath);
     database.exec('PRAGMA journal_mode = WAL');
+    database.exec('PRAGMA synchronous = NORMAL');
+    database.exec('PRAGMA cache_size = -32000');
+    database.exec('PRAGMA temp_store = MEMORY');
+    database.exec('PRAGMA busy_timeout = 5000');
+    database.exec('PRAGMA mmap_size = 268435456');
     return database;
   } catch (error: any) {
     if (dbPath.startsWith('/app/data') && error?.code === 'EACCES') {
@@ -556,6 +579,9 @@ function initSchema(db: Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_decisions_stop_at ON decisions(stop_at);
     CREATE INDEX IF NOT EXISTS idx_decisions_alert_id ON decisions(alert_id);
+    CREATE INDEX IF NOT EXISTS idx_decisions_value ON decisions(value);
+    CREATE INDEX IF NOT EXISTS idx_decisions_created_at ON decisions(created_at);
+    CREATE INDEX IF NOT EXISTS idx_decisions_value_stop_at ON decisions(value, stop_at DESC);
   `;
 
   const createMetaTable = `

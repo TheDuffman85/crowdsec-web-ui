@@ -2,6 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import type { PaginatedResponse, SlimAlert } from '../types';
 import * as api from '../lib/api';
 import { Alerts } from './Alerts';
 
@@ -17,6 +18,25 @@ const largeDecisionList = Array.from({ length: 75 }, (_, index) => ({
 
 const setLastUpdatedMock = vi.fn();
 
+function toPaginatedAlerts(
+  alerts: SlimAlert[],
+  page = 1,
+  pageSize = 50,
+  unfilteredTotal = alerts.length,
+): PaginatedResponse<SlimAlert> {
+  return {
+    data: alerts.slice((page - 1) * pageSize, page * pageSize),
+    pagination: {
+      page,
+      page_size: pageSize,
+      total: alerts.length,
+      total_pages: Math.ceil(alerts.length / pageSize),
+      unfiltered_total: unfilteredTotal,
+    },
+    selectable_ids: alerts.map((alert) => alert.id),
+  };
+}
+
 vi.mock('../contexts/useRefresh', () => ({
   useRefresh: () => ({
     refreshSignal: 0,
@@ -24,8 +44,8 @@ vi.mock('../contexts/useRefresh', () => ({
   }),
 }));
 
-vi.mock('../lib/api', () => ({
-  fetchAlerts: vi.fn(async () => [
+vi.mock('../lib/api', () => {
+  const defaultAlerts = [
     {
       id: 1,
       created_at: '2026-03-23T10:00:00.000Z',
@@ -57,46 +77,82 @@ vi.mock('../lib/api', () => ({
       meta_search: '192.168.5.0/24 localhost',
       decisions: [{ id: 14302, value: '192.168.5.0/24', type: 'ban', simulated: false, expired: false }],
     },
-  ]),
-  fetchAlert: vi.fn(async (id: string | number) => ({
-    id,
-    created_at: '2026-03-23T11:00:00.000Z',
-    scenario: 'crowdsecurity/nginx-bf',
-    machine_id: 'machine-2',
-    source: { ip: '5.6.7.8', value: '5.6.7.8', cn: 'US', as_name: 'AWS' },
-    target: 'nginx',
-    message: 'Simulated alert',
-    simulated: true,
-    decisions: [{ id: 20, value: '5.6.7.8', type: 'ban', simulated: true, expired: false }],
-    events: [],
-  })),
-  deleteAlert: vi.fn(),
-  bulkDeleteAlerts: vi.fn(async () => ({
-    requested_alerts: 0,
-    requested_decisions: 0,
-    deleted_alerts: 0,
-    deleted_decisions: 0,
-    failed: [],
-  })),
-  cleanupByIp: vi.fn(async () => ({
-    requested_alerts: 0,
-    requested_decisions: 0,
-    deleted_alerts: 0,
-    deleted_decisions: 0,
-    failed: [],
-  })),
-  fetchConfig: vi.fn(async () => ({
-    lookback_period: '1h',
-    lookback_hours: 1,
-    lookback_days: 1,
-    refresh_interval: 30000,
-    current_interval_name: '30s',
-    lapi_status: { isConnected: true, lastCheck: null, lastError: null },
-    sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
-    simulations_enabled: true,
-    machine_features_enabled: false,
-  })),
-}));
+  ];
+
+  const paginateAlerts = (
+    alerts: typeof defaultAlerts,
+    page = 1,
+    pageSize = 50,
+    unfilteredTotal = alerts.length,
+  ) => ({
+    data: alerts.slice((page - 1) * pageSize, page * pageSize),
+    pagination: {
+      page,
+      page_size: pageSize,
+      total: alerts.length,
+      total_pages: Math.ceil(alerts.length / pageSize),
+      unfiltered_total: unfilteredTotal,
+    },
+    selectable_ids: alerts.map((alert) => alert.id),
+  });
+
+  return {
+    fetchAlertsPaginated: vi.fn(async (page: number, pageSize: number, filters?: Record<string, string>) => {
+      let alerts = defaultAlerts;
+      if (filters?.simulation === 'simulated') {
+        alerts = alerts.filter((alert) => alert.simulated === true);
+      }
+      if (filters?.ip) {
+        alerts = alerts.filter((alert) => {
+          const source = alert.source?.ip || alert.source?.value || alert.source?.range || '';
+          return source.toLowerCase().includes(filters.ip.toLowerCase());
+        });
+      }
+      if (filters?.scenario) {
+        alerts = alerts.filter((alert) => (alert.scenario || '').includes(filters.scenario));
+      }
+      return paginateAlerts(alerts, page, pageSize, defaultAlerts.length);
+    }),
+    fetchAlert: vi.fn(async (id: string | number) => ({
+      id,
+      created_at: '2026-03-23T11:00:00.000Z',
+      scenario: 'crowdsecurity/nginx-bf',
+      machine_id: 'machine-2',
+      source: { ip: '5.6.7.8', value: '5.6.7.8', cn: 'US', as_name: 'AWS' },
+      target: 'nginx',
+      message: 'Simulated alert',
+      simulated: true,
+      decisions: [{ id: 20, value: '5.6.7.8', type: 'ban', simulated: true, expired: false }],
+      events: [],
+    })),
+    deleteAlert: vi.fn(),
+    bulkDeleteAlerts: vi.fn(async () => ({
+      requested_alerts: 0,
+      requested_decisions: 0,
+      deleted_alerts: 0,
+      deleted_decisions: 0,
+      failed: [],
+    })),
+    cleanupByIp: vi.fn(async () => ({
+      requested_alerts: 0,
+      requested_decisions: 0,
+      deleted_alerts: 0,
+      deleted_decisions: 0,
+      failed: [],
+    })),
+    fetchConfig: vi.fn(async () => ({
+      lookback_period: '1h',
+      lookback_hours: 1,
+      lookback_days: 1,
+      refresh_interval: 30000,
+      current_interval_name: '30s',
+      lapi_status: { isConnected: true, lastCheck: null, lastError: null },
+      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+      simulations_enabled: true,
+      machine_features_enabled: false,
+    })),
+  };
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -215,7 +271,9 @@ describe('Alerts page', () => {
       meta_search: 'bulk',
       decisions: [],
     }));
-    vi.mocked(api.fetchAlerts).mockResolvedValue(bulkAlerts);
+    vi.mocked(api.fetchAlertsPaginated).mockImplementation(async (page, pageSize) =>
+      toPaginatedAlerts(bulkAlerts, page, pageSize, bulkAlerts.length),
+    );
     const bulkDeleteAlertsMock = vi.mocked(api.bulkDeleteAlerts).mockResolvedValue({
       requested_alerts: 55,
       requested_decisions: 0,

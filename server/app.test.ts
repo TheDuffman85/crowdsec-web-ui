@@ -565,6 +565,18 @@ describe('createApp', () => {
       expect.arrayContaining([expect.objectContaining({ simulated: true })]),
     );
 
+    const paginatedAlerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=10&simulation=simulated'));
+    expect(paginatedAlerts.status).toBe(200);
+    expect((await paginatedAlerts.json()) as {
+      data: Array<{ id: number; simulated?: boolean }>;
+      pagination: { total: number; unfiltered_total: number };
+      selectable_ids: number[];
+    }).toEqual({
+      data: [expect.objectContaining({ id: 2, simulated: true })],
+      pagination: expect.objectContaining({ total: 1, unfiltered_total: 2 }),
+      selectable_ids: [2],
+    });
+
     const alertDetails = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts/1'));
     expect(alertDetails.status).toBe(200);
     expect(((await alertDetails.json()) as { id: number; simulated?: boolean }).id).toBe(1);
@@ -574,6 +586,18 @@ describe('createApp', () => {
     expect(((await decisions.json()) as Array<{ simulated?: boolean }>)).toEqual(
       expect.arrayContaining([expect.objectContaining({ simulated: true })]),
     );
+
+    const paginatedDecisions = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions?page=1&page_size=10&alert_id=2'));
+    expect(paginatedDecisions.status).toBe(200);
+    expect((await paginatedDecisions.json()) as {
+      data: Array<{ id: number; detail: { alert_id?: number } }>;
+      pagination: { total: number; unfiltered_total: number };
+      selectable_ids: number[];
+    }).toEqual({
+      data: [expect.objectContaining({ id: 20, detail: expect.objectContaining({ alert_id: 2 }) })],
+      pagination: expect.objectContaining({ total: 1, unfiltered_total: 2 }),
+      selectable_ids: [20],
+    });
 
     const statsAlerts = await controller.fetch(new Request('http://localhost/crowdsec/api/stats/alerts'));
     expect(statsAlerts.status).toBe(200);

@@ -2,6 +2,20 @@ export interface ApiErrorResponse {
   error: string;
 }
 
+export interface PaginationMeta {
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
+  unfiltered_total: number;
+}
+
+export interface PaginatedResponse<T> {
+  data: T[];
+  pagination: PaginationMeta;
+  selectable_ids: Array<string | number>;
+}
+
 export type AlertMetaValue =
   | string
   | number

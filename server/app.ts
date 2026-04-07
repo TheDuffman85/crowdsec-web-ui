@@ -15,6 +15,7 @@ import type {
   ConfigResponse,
   DecisionListItem,
   LapiStatus,
+  PaginatedResponse,
   SlimAlert,
   StatsAlert,
   StatsDecision,
@@ -98,6 +99,40 @@ interface CachedAlertRecord {
   id: string;
   sourceValue?: string;
   raw_data: string;
+}
+
+interface PageRequest {
+  page: number;
+  pageSize: number;
+}
+
+interface AlertListFilters {
+  q: string;
+  ip: string;
+  country: string;
+  scenario: string;
+  as: string;
+  date: string;
+  dateStart: string;
+  dateEnd: string;
+  target: string;
+  simulation: string;
+  timezoneOffsetMinutes: number;
+}
+
+interface DecisionListFilters {
+  q: string;
+  alertId: string;
+  country: string;
+  scenario: string;
+  as: string;
+  ip: string;
+  target: string;
+  dateStart: string;
+  dateEnd: string;
+  simulation: string;
+  showDuplicates: boolean;
+  timezoneOffsetMinutes: number;
 }
 
 const NOTIFICATION_SECRET_KEY_META_KEY = 'notification_secret_key';
@@ -222,12 +257,24 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       }
 
       const since = new Date(Date.now() - config.lookbackMs).toISOString();
-      const alerts = database
-        .getAlertsSince(since)
-        .map((row) => applySimulationModeToAlert(hydrateAlertWithDecisions(JSON.parse(row.raw_data) as AlertRecord), config.simulationsEnabled))
+      const alerts = hydrateAlertsBatch(database.getAlertsSince(since))
+        .map((alert) => applySimulationModeToAlert(alert, config.simulationsEnabled))
         .filter((alert): alert is AlertRecord => alert !== null)
         .map((alert) => toSlimAlert(alert))
         .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
+
+      const pageRequest = getPageRequest(context);
+      if (pageRequest) {
+        const filters = getAlertListFilters(context);
+        const machineFeaturesEnabled = isMachineFeatureEnabled();
+        const filteredAlerts = alerts.filter((alert) => matchesAlertListFilters(alert, filters, machineFeaturesEnabled));
+        return context.json(toPaginatedResponse(
+          filteredAlerts,
+          pageRequest,
+          alerts.length,
+          filteredAlerts.map((alert) => alert.id),
+        ));
+      }
 
       return context.json(alerts);
     } catch (error: any) {
@@ -322,12 +369,33 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         ? database.getDecisionsSince(since, now)
         : database.getActiveDecisions(now);
 
-      let decisions = rows.map((row) => toDecisionListItem(JSON.parse(row.raw_data) as AlertDecision & Record<string, unknown>, includeExpired));
+      let decisions = rows.map((row) => {
+        const decision = JSON.parse(row.raw_data) as AlertDecision & Record<string, unknown>;
+        if (decision.alert_id === undefined && row.alert_id !== undefined && row.alert_id !== null) {
+          decision.alert_id = row.alert_id;
+        }
+        return toDecisionListItem(decision, includeExpired);
+      });
       if (!config.simulationsEnabled) {
         decisions = decisions.filter((decision) => !decision.simulated);
       }
       decisions = markDuplicateDecisions(decisions);
       decisions.sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
+
+      const pageRequest = getPageRequest(context);
+      if (pageRequest) {
+        const filters = getDecisionListFilters(context);
+        const machineFeaturesEnabled = isMachineFeatureEnabled();
+        const filteredDecisions = decisions.filter((decision) => matchesDecisionListFilters(decision, filters, machineFeaturesEnabled));
+        return context.json(toPaginatedResponse(
+          filteredDecisions,
+          pageRequest,
+          decisions.length,
+          filteredDecisions
+            .filter((decision) => !isDecisionListItemExpired(decision))
+            .map((decision) => decision.id),
+        ));
+      }
 
       return context.json(decisions);
     } catch (error: any) {
@@ -520,11 +588,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       }
 
       const since = new Date(Date.now() - config.lookbackMs).toISOString();
-      const alerts = database
-        .getAlertsSince(since)
-        .map((row) => {
+      const alerts = hydrateAlertsBatch(database.getAlertsSince(since))
+        .map((hydratedAlert) => {
           const alert = applySimulationModeToAlert(
-            hydrateAlertWithDecisions(JSON.parse(row.raw_data) as AlertRecord),
+            hydratedAlert,
             config.simulationsEnabled,
           );
           if (!alert) {
@@ -1592,6 +1659,56 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     return clone;
   }
 
+  function hydrateAlertWithDecisionsBatch(alert: AlertRecord, stopAtMap: Map<string, string>): AlertRecord {
+    const clone: AlertRecord = { ...alert };
+    const decisions = Array.isArray(clone.decisions) ? clone.decisions : [];
+
+    clone.decisions = decisions.map((decision) => {
+      const cachedStopAt = stopAtMap.get(String(decision.id));
+      const now = new Date();
+      const stopAt = cachedStopAt
+        ? new Date(cachedStopAt)
+        : decision.stop_at
+          ? new Date(decision.stop_at)
+          : null;
+      const isExpired = !stopAt || stopAt < now;
+
+      let duration = decision.duration;
+      if (stopAt && !isExpired) {
+        const remainingMs = stopAt.getTime() - now.getTime();
+        const hours = Math.floor(remainingMs / 3_600_000);
+        const minutes = Math.floor((remainingMs % 3_600_000) / 60_000);
+        const seconds = Math.floor((remainingMs % 60_000) / 1_000);
+        duration = `${hours > 0 ? `${hours}h` : ''}${minutes > 0 || hours > 0 ? `${minutes}m` : ''}${seconds}s`;
+      } else if (isExpired) {
+        duration = '0s';
+      }
+
+      return {
+        ...decision,
+        stop_at: stopAt ? stopAt.toISOString() : decision.stop_at,
+        duration,
+        expired: isExpired,
+        simulated: normalizeDecisionSimulated(decision, clone),
+      };
+    });
+
+    clone.reason = resolveAlertReason(clone);
+    clone.scenario = resolveAlertScenario(clone);
+    clone.simulated = isAlertSimulated(clone);
+
+    return clone;
+  }
+
+  function hydrateAlertsBatch(rows: Array<{ raw_data: string }>): AlertRecord[] {
+    const parsedAlerts = rows.map((row) => JSON.parse(row.raw_data) as AlertRecord);
+    const decisionIds = parsedAlerts.flatMap((alert) =>
+      (Array.isArray(alert.decisions) ? alert.decisions : []).map((decision) => String(decision.id)),
+    );
+    const stopAtMap = database.getDecisionStopAtBatch(decisionIds);
+    return parsedAlerts.map((alert) => hydrateAlertWithDecisionsBatch(alert, stopAtMap));
+  }
+
   function normalizeAlertDetail(input: unknown, alertId: string): AlertRecord | null {
     if (Array.isArray(input)) {
       const matchingAlert = input.find((candidate) => String((candidate as AlertRecord | undefined)?.id) === alertId);
@@ -1870,4 +1987,200 @@ function getNumericDecisionId(id: string | number): number {
   }
   const numeric = Number.parseInt(value, 10);
   return Number.isNaN(numeric) ? Number.POSITIVE_INFINITY : numeric;
+}
+
+function getPageRequest(context: HonoContext): PageRequest | null {
+  if (!context.req.query('page')) {
+    return null;
+  }
+
+  const page = Math.max(1, Number.parseInt(context.req.query('page') || '1', 10) || 1);
+  const pageSize = Math.min(200, Math.max(10, Number.parseInt(context.req.query('page_size') || '50', 10) || 50));
+  return { page, pageSize };
+}
+
+function toPaginatedResponse<T>(
+  items: T[],
+  pageRequest: PageRequest,
+  unfilteredTotal: number,
+  selectableIds: Array<string | number>,
+): PaginatedResponse<T> {
+  const offset = (pageRequest.page - 1) * pageRequest.pageSize;
+  return {
+    data: items.slice(offset, offset + pageRequest.pageSize),
+    pagination: {
+      page: pageRequest.page,
+      page_size: pageRequest.pageSize,
+      total: items.length,
+      total_pages: Math.ceil(items.length / pageRequest.pageSize),
+      unfiltered_total: unfilteredTotal,
+    },
+    selectable_ids: selectableIds,
+  };
+}
+
+function getAlertListFilters(context: HonoContext): AlertListFilters {
+  return {
+    q: lowerQuery(context, 'q'),
+    ip: lowerQuery(context, 'ip'),
+    country: lowerQuery(context, 'country'),
+    scenario: lowerQuery(context, 'scenario'),
+    as: lowerQuery(context, 'as'),
+    date: context.req.query('date') || '',
+    dateStart: context.req.query('dateStart') || '',
+    dateEnd: context.req.query('dateEnd') || '',
+    target: lowerQuery(context, 'target'),
+    simulation: context.req.query('simulation') || 'all',
+    timezoneOffsetMinutes: parseTimezoneOffset(context),
+  };
+}
+
+function getDecisionListFilters(context: HonoContext): DecisionListFilters {
+  const alertId = context.req.query('alert_id') || '';
+  return {
+    q: lowerQuery(context, 'q'),
+    alertId,
+    country: context.req.query('country') || '',
+    scenario: context.req.query('scenario') || '',
+    as: context.req.query('as') || '',
+    ip: context.req.query('ip') || '',
+    target: lowerQuery(context, 'target'),
+    dateStart: context.req.query('dateStart') || '',
+    dateEnd: context.req.query('dateEnd') || '',
+    simulation: context.req.query('simulation') || 'all',
+    showDuplicates: context.req.query('hide_duplicates') === 'false' || Boolean(alertId),
+    timezoneOffsetMinutes: parseTimezoneOffset(context),
+  };
+}
+
+function lowerQuery(context: HonoContext, key: string): string {
+  return (context.req.query(key) || '').toLowerCase();
+}
+
+function parseTimezoneOffset(context: HonoContext): number {
+  const value = Number.parseInt(context.req.query('tz_offset') || '0', 10);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function matchesAlertListFilters(alert: SlimAlert, filters: AlertListFilters, machineFeaturesEnabled: boolean): boolean {
+  if (!matchesSimulationFilter(alert.simulated === true, filters.simulation)) return false;
+
+  const scenario = (alert.scenario || '').toLowerCase();
+  const message = (alert.message || '').toLowerCase();
+  const sourceValue = (getAlertSourceValue(alert.source) || '').toLowerCase();
+  const cn = (alert.source?.cn || '').toLowerCase();
+  const asName = (alert.source?.as_name || '').toLowerCase();
+  const machine = machineFeaturesEnabled ? (resolveMachineName(alert) || '').toLowerCase() : '';
+  const target = (alert.target || '').toLowerCase();
+
+  if (filters.ip && !sourceValue.includes(filters.ip)) return false;
+  if (filters.country && !cn.includes(filters.country)) return false;
+  if (filters.scenario && !scenario.includes(filters.scenario)) return false;
+  if (filters.as && !asName.includes(filters.as)) return false;
+  if (filters.target && !target.includes(filters.target)) return false;
+  if (filters.date && !(alert.created_at && alert.created_at.startsWith(filters.date))) return false;
+
+  if (filters.dateStart || filters.dateEnd) {
+    const itemKey = getDateFilterKey(
+      alert.created_at,
+      filters.dateStart.includes('T') || filters.dateEnd.includes('T'),
+      filters.timezoneOffsetMinutes,
+    );
+    if (filters.dateStart && itemKey < filters.dateStart) return false;
+    if (filters.dateEnd && itemKey > filters.dateEnd) return false;
+  }
+
+  if (!filters.q) return true;
+
+  const countryName = (getCountryName(alert.source?.cn) || '').toLowerCase();
+  return scenario.includes(filters.q) ||
+    message.includes(filters.q) ||
+    sourceValue.includes(filters.q) ||
+    cn.includes(filters.q) ||
+    countryName.includes(filters.q) ||
+    asName.includes(filters.q) ||
+    (machineFeaturesEnabled && machine.includes(filters.q)) ||
+    target.includes(filters.q) ||
+    (alert.meta_search || '').toLowerCase().includes(filters.q) ||
+    (alert.simulated === true ? 'simulation simulated' : 'live').includes(filters.q);
+}
+
+function matchesDecisionListFilters(decision: DecisionListItem, filters: DecisionListFilters, machineFeaturesEnabled: boolean): boolean {
+  if (!filters.showDuplicates && decision.is_duplicate) return false;
+  if (filters.alertId && String(decision.detail.alert_id) !== filters.alertId) return false;
+  if (!matchesSimulationFilter(decision.simulated === true, filters.simulation)) return false;
+  if (filters.country && decision.detail.country !== filters.country) return false;
+  if (filters.scenario && decision.detail.reason !== filters.scenario) return false;
+  if (filters.as && decision.detail.as !== filters.as) return false;
+  if (filters.ip && decision.value !== filters.ip) return false;
+
+  if (filters.target) {
+    const value = (decision.value || '').toLowerCase();
+    const target = (decision.detail.target || '').toLowerCase();
+    if (!value.includes(filters.target) && !target.includes(filters.target)) return false;
+  }
+
+  if (filters.dateStart || filters.dateEnd) {
+    if (!decision.created_at) return false;
+    const itemKey = getDateFilterKey(
+      decision.created_at,
+      filters.dateStart.includes('T') || filters.dateEnd.includes('T'),
+      filters.timezoneOffsetMinutes,
+    );
+    if (filters.dateStart && itemKey < filters.dateStart) return false;
+    if (filters.dateEnd && itemKey > filters.dateEnd) return false;
+  }
+
+  if (!filters.q) return true;
+
+  const countryCode = (decision.detail.country || '').toLowerCase();
+  const countryName = (getCountryName(decision.detail.country) || '').toLowerCase();
+  const machine = machineFeaturesEnabled ? (decision.machine || '').toLowerCase() : '';
+  const simulationSearch = decision.simulated === true ? 'simulation simulated' : 'live';
+
+  return (decision.value || '').toLowerCase().includes(filters.q) ||
+    (decision.detail.reason || '').toLowerCase().includes(filters.q) ||
+    countryCode.includes(filters.q) ||
+    countryName.includes(filters.q) ||
+    (decision.detail.as || '').toLowerCase().includes(filters.q) ||
+    (machineFeaturesEnabled && machine.includes(filters.q)) ||
+    (decision.detail.type || '').toLowerCase().includes(filters.q) ||
+    (decision.detail.action || '').toLowerCase().includes(filters.q) ||
+    simulationSearch.includes(filters.q);
+}
+
+function matchesSimulationFilter(isSimulated: boolean, filter: string): boolean {
+  if (filter === 'simulated') return isSimulated;
+  if (filter === 'live') return !isSimulated;
+  return true;
+}
+
+function isDecisionListItemExpired(decision: DecisionListItem): boolean {
+  const decisionDuration = decision.detail.duration ?? '';
+  return Boolean(decision.expired || decisionDuration.startsWith('-'));
+}
+
+function getDateFilterKey(isoString: string, includeHour: boolean, timezoneOffsetMinutes: number): string {
+  const source = new Date(isoString);
+  const localDate = new Date(source.getTime() - timezoneOffsetMinutes * 60_000);
+  const year = localDate.getUTCFullYear();
+  const month = String(localDate.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(localDate.getUTCDate()).padStart(2, '0');
+
+  if (includeHour) {
+    const hour = String(localDate.getUTCHours()).padStart(2, '0');
+    return `${year}-${month}-${day}T${hour}`;
+  }
+
+  return `${year}-${month}-${day}`;
+}
+
+function getCountryName(code?: string | null): string | null {
+  if (!code) return null;
+  try {
+    const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
+    return regionNames.of(code.toUpperCase()) || code;
+  } catch {
+    return code;
+  }
 }

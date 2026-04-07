@@ -11,6 +11,7 @@ import type {
   NotificationListResponse,
   NotificationRule,
   NotificationSettingsResponse,
+  PaginatedResponse,
   SlimAlert,
   StatsAlert,
   StatsDecision,
@@ -31,6 +32,18 @@ export async function fetchAlerts(): Promise<SlimAlert[]> {
     return fetchJson<SlimAlert[]>('/api/alerts', undefined, 'Failed to fetch alerts');
 }
 
+export async function fetchAlertsPaginated(
+    page: number,
+    pageSize = 50,
+    filters?: Record<string, string>,
+): Promise<PaginatedResponse<SlimAlert>> {
+    const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+    for (const [key, value] of Object.entries(filters ?? {})) {
+        if (value) params.set(key, value);
+    }
+    return fetchJson<PaginatedResponse<SlimAlert>>(`/api/alerts?${params.toString()}`, undefined, 'Failed to fetch alerts');
+}
+
 export async function fetchAlert(id: string | number): Promise<AlertRecord> {
     const payload = await fetchJson<AlertRecord | AlertRecord[]>(`/api/alerts/${id}`, undefined, 'Failed to fetch alert');
     if (Array.isArray(payload)) {
@@ -45,6 +58,18 @@ export async function fetchAlert(id: string | number): Promise<AlertRecord> {
 
 export async function fetchDecisions(): Promise<DecisionListItem[]> {
     return fetchJson<DecisionListItem[]>('/api/decisions', undefined, 'Failed to fetch decisions');
+}
+
+export async function fetchDecisionsPaginated(
+    page: number,
+    pageSize = 50,
+    filters?: Record<string, string>,
+): Promise<PaginatedResponse<DecisionListItem>> {
+    const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+    for (const [key, value] of Object.entries(filters ?? {})) {
+        if (value) params.set(key, value);
+    }
+    return fetchJson<PaginatedResponse<DecisionListItem>>(`/api/decisions?${params.toString()}`, undefined, 'Failed to fetch decisions');
 }
 
 // Helper to handle API errors with specific 403 guidance

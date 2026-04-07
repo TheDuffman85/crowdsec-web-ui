@@ -1,8 +1,7 @@
 import { useEffect, useState, useRef, useCallback, type FormEvent } from "react";
 import { useSearchParams, Link } from "react-router-dom";
-import { deleteDecision, bulkDeleteDecisions, cleanupByIp, addDecision, fetchConfig } from "../lib/api";
-import { apiUrl } from "../lib/basePath";
-import { isSimulatedDecision, matchesSimulationFilter, parseSimulationFilter } from "../lib/simulation";
+import { deleteDecision, bulkDeleteDecisions, cleanupByIp, addDecision, fetchConfig, fetchDecisionsPaginated } from "../lib/api";
+import { isSimulatedDecision, parseSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
@@ -21,20 +20,6 @@ interface ErrorInfo {
     message: string;
     helpLink?: string;
     helpText?: string;
-}
-
-function getDecisionDateFilterKey(isoString: string, includeHour: boolean): string {
-    const date = new Date(isoString);
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-
-    if (includeHour) {
-        const hour = String(date.getHours()).padStart(2, '0');
-        return `${year}-${month}-${day}T${hour}`;
-    }
-
-    return `${year}-${month}-${day}`;
 }
 
 function toErrorInfo(error: unknown, fallbackMessage: string): ErrorInfo {
@@ -75,8 +60,14 @@ export function Decisions() {
     const [simulationsEnabled, setSimulationsEnabled] = useState(false);
     const [machineFeaturesEnabled, setMachineFeaturesEnabled] = useState(false);
     const [loading, setLoading] = useState(true);
+    const [loadingMore, setLoadingMore] = useState(false);
     const [showAddModal, setShowAddModal] = useState(false);
     const [filter, setFilter] = useState("");
+    const [currentPage, setCurrentPage] = useState(1);
+    const [totalPages, setTotalPages] = useState(1);
+    const [totalDecisions, setTotalDecisions] = useState(0);
+    const [totalUnfilteredDecisions, setTotalUnfilteredDecisions] = useState(0);
+    const [selectableDecisionIds, setSelectableDecisionIds] = useState<string[]>([]);
     const [pendingDeleteAction, setPendingDeleteAction] = useState<DecisionDeleteAction | null>(null);
     const [selectedDecisionIds, setSelectedDecisionIds] = useState<string[]>([]);
     const [deleteInProgress, setDeleteInProgress] = useState(false);
@@ -98,35 +89,50 @@ export function Decisions() {
     // Default: hide duplicates unless explicitly set to false OR viewing a specific alert's decisions
     const showDuplicates = searchParams.get("hide_duplicates") === "false" || !!alertIdFilter;
 
-    const [displayedCount, setDisplayedCount] = useState(50);
-
+    const PAGE_SIZE = 50;
+    const hasMoreDecisions = currentPage < totalPages;
     // Intersection Observer for infinite scroll
     const observer = useRef<IntersectionObserver | null>(null);
     const selectAllDecisionsRef = useRef<HTMLInputElement | null>(null);
-    const lastDecisionElementRef = useCallback((node: HTMLTableRowElement | null) => {
-        if (loading) return;
-        if (observer.current) observer.current.disconnect();
-        observer.current = new IntersectionObserver((entries) => {
-            if (entries[0].isIntersecting) {
-                setDisplayedCount((prev) => prev + 50);
-            }
-        });
-        if (node) observer.current.observe(node);
-    }, [loading]);
 
-    const loadDecisions = useCallback(async (isBackground = false) => {
-        if (!isBackground) setLoading(true);
+    const buildServerFilters = useCallback((requestedSimulationFilter = simulationFilter): Record<string, string> => {
+        const filters: Record<string, string> = {
+            tz_offset: String(new Date().getTimezoneOffset()),
+        };
+        if (filter) filters.q = filter;
+        if (alertIdFilter) filters.alert_id = alertIdFilter;
+        if (includeExpiredParam) filters.include_expired = 'true';
+        if (countryFilter) filters.country = countryFilter;
+        if (scenarioFilter) filters.scenario = scenarioFilter;
+        if (asFilter) filters.as = asFilter;
+        if (ipFilter) filters.ip = ipFilter;
+        if (targetFilter) filters.target = targetFilter;
+        if (dateStartFilter) filters.dateStart = dateStartFilter;
+        if (dateEndFilter) filters.dateEnd = dateEndFilter;
+        if (requestedSimulationFilter !== 'all') filters.simulation = requestedSimulationFilter;
+        if (showDuplicates) filters.hide_duplicates = 'false';
+        return filters;
+    }, [alertIdFilter, asFilter, countryFilter, dateEndFilter, dateStartFilter, filter, includeExpiredParam, ipFilter, scenarioFilter, showDuplicates, simulationFilter, targetFilter]);
+
+    const loadDecisions = useCallback(async (isBackground = false, page = 1, append = false) => {
+        if (append) {
+            setLoadingMore(true);
+        } else if (!isBackground) {
+            setLoading(true);
+        }
         try {
-            const url = includeExpiredParam ? apiUrl('/api/decisions?include_expired=true') : apiUrl('/api/decisions');
+            const configData = await fetchConfig();
+            const requestedSimulationFilter = configData.simulations_enabled === true
+                ? parseSimulationFilter(searchParams.get("simulation"))
+                : 'all';
+            const decisionsResult = await fetchDecisionsPaginated(page, PAGE_SIZE, buildServerFilters(requestedSimulationFilter));
 
-            const [res, configData] = await Promise.all([
-                fetch(url, { cache: "no-store" }),
-                fetchConfig(),
-            ]);
-            if (!res.ok) throw new Error('Failed to fetch decisions');
-            const data = await res.json() as DecisionListItem[];
-
-            setDecisions(data);
+            setDecisions((current) => append ? [...current, ...decisionsResult.data] : decisionsResult.data);
+            setCurrentPage(decisionsResult.pagination.page);
+            setTotalPages(decisionsResult.pagination.total_pages);
+            setTotalDecisions(decisionsResult.pagination.total);
+            setTotalUnfilteredDecisions(decisionsResult.pagination.unfiltered_total);
+            setSelectableDecisionIds(decisionsResult.selectable_ids.map(String));
             setSimulationsEnabled(configData.simulations_enabled === true);
             setMachineFeaturesEnabled(configData.machine_features_enabled === true);
 
@@ -134,9 +140,21 @@ export function Decisions() {
         } catch (error) {
             console.error(error);
         } finally {
+            if (append) setLoadingMore(false);
             if (!isBackground) setLoading(false);
         }
-    }, [includeExpiredParam, setLastUpdated]);
+    }, [buildServerFilters, searchParams, setLastUpdated]);
+
+    const lastDecisionElementRef = useCallback((node: HTMLTableRowElement | null) => {
+        if (loading || loadingMore || !hasMoreDecisions) return;
+        if (observer.current) observer.current.disconnect();
+        observer.current = new IntersectionObserver((entries) => {
+            if (entries[0].isIntersecting) {
+                void loadDecisions(true, currentPage + 1, true);
+            }
+        });
+        if (node) observer.current.observe(node);
+    }, [currentPage, hasMoreDecisions, loadDecisions, loading, loadingMore]);
 
     // Sync "q" param to filter state
     useEffect(() => {
@@ -151,7 +169,7 @@ export function Decisions() {
     }, [loadDecisions]);
 
     useEffect(() => {
-        if (refreshSignal > 0) loadDecisions(true);
+        if (refreshSignal > 0) loadDecisions(true, 1, false);
     }, [refreshSignal, loadDecisions]);
 
     const handleAddDecision = async (e: FormEvent<HTMLFormElement>) => {
@@ -162,8 +180,7 @@ export function Decisions() {
         setErrorInfo(null);
         try {
             await addDecision(decisionData);
-            await loadDecisions();
-            setDisplayedCount(50); // Reset to show new decision at top
+            await loadDecisions(false, 1, false);
         } catch (error) {
             console.error("Failed to add decision", error);
             setErrorInfo(toErrorInfo(error, "Failed to add decision. Please try again."));
@@ -200,8 +217,7 @@ export function Decisions() {
             }
 
             setPendingDeleteAction(null);
-            await loadDecisions();
-            setDisplayedCount(50);
+            await loadDecisions(false, 1, false);
             if (resultMessage) {
                 setErrorInfo({ message: resultMessage });
             }
@@ -249,78 +265,10 @@ export function Decisions() {
         setSearchParams(newParams);
     };
 
-    const filteredDecisions = decisions.filter((decision) => {
-        // 0. Duplicate Filter (applied first, default: hide duplicates)
-        if (!showDuplicates && decision.is_duplicate) return false;
-
-        // 1. Alert ID Filter
-        if (alertIdFilter && String(decision.detail.alert_id) !== alertIdFilter) return false;
-        if (!matchesSimulationFilter({ simulated: isSimulatedDecision(decision) }, simulationFilter)) return false;
-
-        // 2. Exact Field Filters (from Dashboard)
-        if (countryFilter && decision.detail.country !== countryFilter) return false;
-        if (scenarioFilter && decision.detail.reason !== scenarioFilter) return false;
-        if (asFilter && decision.detail.as !== asFilter) return false;
-        if (asFilter && decision.detail.as !== asFilter) return false;
-        if (ipFilter && decision.value !== ipFilter) return false;
-        if (targetFilter) {
-            const decisionTarget = (decision.value || "").toLowerCase();
-            const targetFromDetail = (decision.detail.target || "").toLowerCase();
-            const filterValue = targetFilter.toLowerCase();
-
-            if (!decisionTarget.includes(filterValue) && !targetFromDetail.includes(filterValue)) {
-                return false;
-            }
-        }
-
-        // 3. Date Range Filter
-        if (dateStartFilter || dateEndFilter) {
-            if (!decision.created_at) return false;
-
-            // Helper to extract date/time key from ISO timestamp (Matches Alerts.jsx logic)
-            // This ensures we compare "apples to apples" with the dashboard local-time based filters
-            const itemKey = getDecisionDateFilterKey(
-                decision.created_at,
-                Boolean((dateStartFilter && dateStartFilter.includes('T')) || (dateEndFilter && dateEndFilter.includes('T'))),
-            );
-
-            if (dateStartFilter && itemKey < dateStartFilter) return false;
-            if (dateEndFilter && itemKey > dateEndFilter) return false;
-        }
-
-
-
-        // 4. Generic Text Search (existing)
-        const search = filter.toLowerCase();
-        if (!search) return true;
-
-        const ip = (decision.value || "").toLowerCase();
-        const reason = (decision.detail.reason || "").toLowerCase();
-        const countryCode = (decision.detail.country || "").toLowerCase();
-        const countryName = (getCountryName(decision.detail.country) || "").toLowerCase();
-        const as = (decision.detail.as || "").toLowerCase();
-        const machine = machineFeaturesEnabled ? (decision.machine || "").toLowerCase() : "";
-        const type = (decision.detail.type || "").toLowerCase();
-        const action = (decision.detail.action || "").toLowerCase();
-        const simulationSearch = isSimulatedDecision(decision) ? 'simulation simulated' : 'live';
-
-        return ip.includes(search) ||
-            reason.includes(search) ||
-            countryCode.includes(search) ||
-            countryName.includes(search) ||
-            as.includes(search) ||
-            (machineFeaturesEnabled && machine.includes(search)) ||
-            type.includes(search) ||
-            action.includes(search) ||
-            simulationSearch.includes(search);
-    });
-
-    const eligibleFilteredDecisionIds = filteredDecisions
-        .filter((decision) => !isDecisionExpired(decision))
-        .map((decision) => String(decision.id));
-    const eligibleFilteredDecisionIdsKey = eligibleFilteredDecisionIds.join("|");
-    const selectedFilteredDecisionIds = eligibleFilteredDecisionIds.filter((id) => selectedDecisionIds.includes(id));
-    const allFilteredDecisionsSelected = eligibleFilteredDecisionIds.length > 0 && selectedFilteredDecisionIds.length === eligibleFilteredDecisionIds.length;
+    const filteredDecisions = decisions;
+    const eligibleFilteredDecisionIdsKey = selectableDecisionIds.join("|");
+    const selectedFilteredDecisionIds = selectableDecisionIds.filter((id) => selectedDecisionIds.includes(id));
+    const allFilteredDecisionsSelected = selectableDecisionIds.length > 0 && selectedFilteredDecisionIds.length === selectableDecisionIds.length;
     const someFilteredDecisionsSelected = selectedFilteredDecisionIds.length > 0 && !allFilteredDecisionsSelected;
 
     useEffect(() => {
@@ -337,14 +285,14 @@ export function Decisions() {
     const toggleAllFilteredDecisions = () => {
         setSelectedDecisionIds((prev) => {
             if (allFilteredDecisionsSelected) {
-                return prev.filter((id) => !eligibleFilteredDecisionIds.includes(id));
+                return prev.filter((id) => !selectableDecisionIds.includes(id));
             }
 
-            return Array.from(new Set([...prev, ...eligibleFilteredDecisionIds]));
+            return Array.from(new Set([...prev, ...selectableDecisionIds]));
         });
     };
 
-    const visibleDecisions = filteredDecisions.slice(0, displayedCount);
+    const visibleDecisions = filteredDecisions;
     const selectedDecisionCount = selectedFilteredDecisionIds.length;
     const deleteActionTitle = pendingDeleteAction?.kind === "single"
         ? "Delete Decision?"
@@ -359,9 +307,11 @@ export function Decisions() {
     return (
         <div className="space-y-6">
             {/* Only show count when non-default filters are applied */}
-            {(alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter || includeExpiredParam || showDuplicates || (simulationsEnabled && simulationFilter !== 'all')) && filteredDecisions.length !== decisions.length && (
+            {(totalDecisions !== totalUnfilteredDecisions || visibleDecisions.length < totalDecisions) && (
                 <div className="text-sm text-gray-500">
-                    Showing {filteredDecisions.length} of {decisions.length} decisions
+                    {totalDecisions !== totalUnfilteredDecisions
+                        ? `Showing ${totalDecisions} of ${totalUnfilteredDecisions} decisions`
+                        : `Showing ${visibleDecisions.length} of ${totalDecisions} decisions`}
                 </div>
             )}
             
@@ -587,7 +537,7 @@ export function Decisions() {
                                         type="checkbox"
                                         aria-label="Select all filtered decisions"
                                         checked={allFilteredDecisionsSelected}
-                                        disabled={eligibleFilteredDecisionIds.length === 0}
+                                        disabled={selectableDecisionIds.length === 0}
                                         onChange={toggleAllFilteredDecisions}
                                         className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                                     />

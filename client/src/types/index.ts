@@ -20,6 +20,7 @@ export type {
   NotificationFilter,
   NotificationItem,
   NotificationListResponse,
+  PaginatedResponse,
   NotificationRule,
   NotificationRuleConfig,
   NotificationRuleType,

@@ -84,6 +84,9 @@ describe('CrowdsecDatabase', () => {
     expect(db.getAlertsSince('2024-12-31T00:00:00.000Z')).toHaveLength(1);
     expect(db.getActiveDecisions('2025-01-01T00:00:00.000Z')).toHaveLength(1);
     expect(db.getDecisionById('10')?.stop_at).toBe('2030-01-01T00:00:00.000Z');
+    expect(db.getDecisionStopAtBatch(['10', 'missing'])).toEqual(
+      new Map([['10', '2030-01-01T00:00:00.000Z']]),
+    );
     expect(db.getMeta('refresh_interval_ms')?.value).toBe('5000');
     expect(db.getAlertsBetween('2024-12-31T00:00:00.000Z', '2025-01-02T00:00:00.000Z')).toHaveLength(1);
 

@@ -1,11 +1,33 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+import type { DecisionListItem, PaginatedResponse } from '../types';
 import * as api from '../lib/api';
 import { Decisions } from './Decisions';
 
 const setLastUpdatedMock = vi.fn();
+
+function toPaginatedDecisions(
+  decisions: DecisionListItem[],
+  page = 1,
+  pageSize = 50,
+  unfilteredTotal = decisions.length,
+): PaginatedResponse<DecisionListItem> {
+  return {
+    data: decisions.slice((page - 1) * pageSize, page * pageSize),
+    pagination: {
+      page,
+      page_size: pageSize,
+      total: decisions.length,
+      total_pages: Math.ceil(decisions.length / pageSize),
+      unfiltered_total: unfilteredTotal,
+    },
+    selectable_ids: decisions
+      .filter((decision) => !decision.expired && !(decision.detail.duration || '').startsWith('-'))
+      .map((decision) => decision.id),
+  };
+}
 
 vi.mock('../contexts/useRefresh', () => ({
   useRefresh: () => ({
@@ -14,76 +36,113 @@ vi.mock('../contexts/useRefresh', () => ({
   }),
 }));
 
-vi.mock('../lib/api', () => ({
-  addDecision: vi.fn(),
-  deleteDecision: vi.fn(),
-  bulkDeleteDecisions: vi.fn(async () => ({
-    requested_alerts: 0,
-    requested_decisions: 0,
-    deleted_alerts: 0,
-    deleted_decisions: 0,
-    failed: [],
-  })),
-  cleanupByIp: vi.fn(async () => ({
-    requested_alerts: 0,
-    requested_decisions: 0,
-    deleted_alerts: 0,
-    deleted_decisions: 0,
-    failed: [],
-  })),
-  fetchConfig: vi.fn(async () => ({
-    lookback_period: '1h',
-    lookback_hours: 1,
-    lookback_days: 1,
-    refresh_interval: 30000,
-    current_interval_name: '30s',
-    lapi_status: { isConnected: true, lastCheck: null, lastError: null },
-    sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
-    simulations_enabled: true,
-    machine_features_enabled: false,
-  })),
-}));
+vi.mock('../lib/api', () => {
+  const defaultDecisions = [
+    {
+      id: 10,
+      created_at: '2026-03-23T10:00:00.000Z',
+      machine: 'host-a',
+      value: '1.2.3.4',
+      expired: false,
+      is_duplicate: false,
+      simulated: false,
+      detail: {
+        origin: 'CAPI',
+        reason: 'crowdsecurity/ssh-bf',
+        country: 'DE',
+        as: 'Hetzner',
+        action: 'ban',
+        duration: '4h',
+        alert_id: 1,
+      },
+    },
+    {
+      id: 20,
+      created_at: '2026-03-23T11:00:00.000Z',
+      machine: 'machine-2',
+      value: '5.6.7.8',
+      expired: false,
+      is_duplicate: false,
+      simulated: true,
+      detail: {
+        origin: 'CAPI',
+        reason: 'crowdsecurity/nginx-bf',
+        country: 'US',
+        as: 'AWS',
+        action: 'ban',
+        duration: '4h',
+        alert_id: 2,
+      },
+    },
+  ];
 
-beforeEach(() => {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async () => Response.json([
-      {
-        id: 10,
-        created_at: '2026-03-23T10:00:00.000Z',
-        machine: 'host-a',
-        value: '1.2.3.4',
-        expired: false,
-        is_duplicate: false,
-        simulated: false,
-        detail: {
-          reason: 'crowdsecurity/ssh-bf',
-          country: 'DE',
-          as: 'Hetzner',
-          action: 'ban',
-          duration: '4h',
-          alert_id: 1,
-        },
-      },
-      {
-        id: 20,
-        created_at: '2026-03-23T11:00:00.000Z',
-        machine: 'machine-2',
-        value: '5.6.7.8',
-        expired: false,
-        is_duplicate: false,
-        simulated: true,
-        detail: {
-          reason: 'crowdsecurity/nginx-bf',
-          country: 'US',
-          as: 'AWS',
-          action: 'ban',
-          duration: '4h',
-          alert_id: 2,
-        },
-      },
-    ])),
-  );
+  const paginateDecisions = (
+    decisions: typeof defaultDecisions,
+    page = 1,
+    pageSize = 50,
+    unfilteredTotal = decisions.length,
+  ) => ({
+    data: decisions.slice((page - 1) * pageSize, page * pageSize),
+    pagination: {
+      page,
+      page_size: pageSize,
+      total: decisions.length,
+      total_pages: Math.ceil(decisions.length / pageSize),
+      unfiltered_total: unfilteredTotal,
+    },
+    selectable_ids: decisions
+      .filter((decision) => !decision.expired && !(decision.detail.duration || '').startsWith('-'))
+      .map((decision) => decision.id),
+  });
+
+  return {
+    fetchDecisionsPaginated: vi.fn(async (page: number, pageSize: number, filters?: Record<string, string>) => {
+      let decisions = defaultDecisions;
+      if (filters?.simulation === 'simulated') {
+        decisions = decisions.filter((decision) => decision.simulated === true);
+      }
+      if (filters?.q) {
+        const query = filters.q.toLowerCase();
+        decisions = decisions.filter((decision) => [
+          decision.value,
+          decision.machine,
+          decision.detail.reason,
+          decision.detail.country,
+          decision.detail.as,
+          decision.detail.action,
+          decision.simulated === true ? 'simulation simulated' : 'live',
+        ].some((value) => (value || '').toLowerCase().includes(query)));
+      }
+      return paginateDecisions(decisions, page, pageSize, defaultDecisions.length);
+    }),
+    addDecision: vi.fn(),
+    deleteDecision: vi.fn(),
+    bulkDeleteDecisions: vi.fn(async () => ({
+      requested_alerts: 0,
+      requested_decisions: 0,
+      deleted_alerts: 0,
+      deleted_decisions: 0,
+      failed: [],
+    })),
+    cleanupByIp: vi.fn(async () => ({
+      requested_alerts: 0,
+      requested_decisions: 0,
+      deleted_alerts: 0,
+      deleted_decisions: 0,
+      failed: [],
+    })),
+    fetchConfig: vi.fn(async () => ({
+      lookback_period: '1h',
+      lookback_hours: 1,
+      lookback_days: 1,
+      refresh_interval: 30000,
+      current_interval_name: '30s',
+      lapi_status: { isConnected: true, lastCheck: null, lastError: null },
+      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+      simulations_enabled: true,
+      machine_features_enabled: false,
+    })),
+  };
 });
 
 afterEach(() => {
@@ -143,9 +202,8 @@ describe('Decisions page', () => {
   });
 
   test('select all excludes expired decisions from bulk delete', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => Response.json([
+    vi.mocked(api.fetchDecisionsPaginated).mockImplementation(async (page, pageSize) =>
+      toPaginatedDecisions([
         {
           id: 10,
           created_at: '2026-03-23T10:00:00.000Z',
@@ -154,6 +212,7 @@ describe('Decisions page', () => {
           is_duplicate: false,
           simulated: false,
           detail: {
+            origin: 'CAPI',
             reason: 'crowdsecurity/ssh-bf',
             country: 'DE',
             as: 'Hetzner',
@@ -170,6 +229,7 @@ describe('Decisions page', () => {
           is_duplicate: false,
           simulated: false,
           detail: {
+            origin: 'CAPI',
             reason: 'crowdsecurity/http-probing',
             country: 'FR',
             as: 'OVH',
@@ -178,7 +238,7 @@ describe('Decisions page', () => {
             alert_id: 3,
           },
         },
-      ])),
+      ], page, pageSize),
     );
     const bulkDeleteDecisionsMock = vi.mocked(api.bulkDeleteDecisions).mockResolvedValue({
       requested_alerts: 0,
