@@ -1,21 +1,11 @@
-import { lazy, Suspense, useEffect, useState, useMemo, useCallback } from "react";
+import { lazy, Suspense, useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-import { fetchAlertsForStats, fetchDecisionsForStats, fetchConfig } from "../lib/api";
-import { matchesSimulationFilter } from "../lib/simulation";
+import { fetchDashboardStats, fetchConfig } from "../lib/api";
 import { useRefresh } from "../contexts/useRefresh";
 import { Card, CardContent } from "../components/ui/Card";
 import { StatCard } from "../components/StatCard";
 import { ScenarioName } from "../components/ScenarioName";
-import {
-    filterLastNDays,
-    getTopTargets,
-    getTopCountries,
-    getAllCountries,
-    getTopScenarios,
-    getTopAS,
-    getAggregatedData,
-} from "../lib/stats";
 import {
     ShieldAlert,
     Gavel,
@@ -31,9 +21,9 @@ import { DASHBOARD_COLORS } from "../lib/dashboardColors";
 import type {
     ConfigResponse,
     DashboardFilters,
+    DashboardStatsBucket,
+    DashboardStatsResponse,
     SimulationFilter,
-    StatsAlert,
-    StatsDecision,
 } from '../types';
 
 type Granularity = 'day' | 'hour';
@@ -48,32 +38,6 @@ interface DashboardCountState {
     simulatedDecisions: number;
 }
 
-interface RawDataState {
-    alertsForStats: StatsAlert[];
-    decisionsForStats: StatsDecision[];
-}
-
-interface FilteredDashboardData {
-    alerts: StatsAlert[];
-    liveAlerts: StatsAlert[];
-    simulatedAlerts: StatsAlert[];
-    decisions: StatsDecision[];
-    simulatedDecisions: StatsDecision[];
-    chartLiveAlerts: StatsAlert[];
-    chartSimulatedAlerts: StatsAlert[];
-    chartLiveDecisions: StatsDecision[];
-    chartSimulatedDecisions: StatsDecision[];
-    chartAlerts: StatsAlert[];
-    chartDecisions: StatsDecision[];
-    sliderLiveAlerts: StatsAlert[];
-    sliderSimulatedAlerts: StatsAlert[];
-    sliderLiveDecisions: StatsDecision[];
-    sliderSimulatedDecisions: StatsDecision[];
-    sliderAlerts: StatsAlert[];
-    sliderDecisions: StatsDecision[];
-    globalTotal: number;
-}
-
 const ActivityBarChart = lazy(async () => ({ default: (await import('../components/DashboardCharts')).ActivityBarChart }));
 const WorldMapCard = lazy(async () => ({ default: (await import('../components/WorldMapCard')).WorldMapCard }));
 
@@ -86,6 +50,34 @@ const EMPTY_FILTERS: DashboardFilters = {
     ip: null,
     target: null,
     simulation: 'all',
+};
+
+const EMPTY_TOTALS: DashboardCountState = {
+    alerts: 0,
+    decisions: 0,
+    simulatedAlerts: 0,
+    simulatedDecisions: 0,
+};
+
+const EMPTY_DASHBOARD_STATS: DashboardStatsResponse = {
+    totals: EMPTY_TOTALS,
+    filteredTotals: EMPTY_TOTALS,
+    globalTotal: 0,
+    topTargets: [],
+    topCountries: [],
+    allCountries: [],
+    topScenarios: [],
+    topAS: [],
+    series: {
+        alertsHistory: [],
+        simulatedAlertsHistory: [],
+        decisionsHistory: [],
+        simulatedDecisionsHistory: [],
+        unfilteredAlertsHistory: [],
+        unfilteredSimulatedAlertsHistory: [],
+        unfilteredDecisionsHistory: [],
+        unfilteredSimulatedDecisionsHistory: [],
+    },
 };
 
 function parseStoredGranularity(value: string | null): Granularity {
@@ -116,24 +108,31 @@ function parseStoredFilters(value: string | null): DashboardFilters {
     }
 }
 
-function getDateRangeItemKey(isoString: string, includeHour: boolean): string {
-    const date = new Date(isoString);
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
+function formatDashboardBucketLabel(bucketKey: string): string {
+    const [datePart, hourPart] = bucketKey.split('T');
+    const [year, month, day] = datePart.split('-').map(Number);
+    const date = new Date(year, month - 1, day, hourPart === undefined ? 0 : Number(hourPart));
+    const dateStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 
-    if (includeHour) {
-        const hour = String(date.getHours()).padStart(2, '0');
-        return `${year}-${month}-${day}T${hour}`;
+    if (hourPart !== undefined) {
+        return `${dateStr}, ${String(date.getHours()).padStart(2, '0')}:00`;
     }
 
-    return `${year}-${month}-${day}`;
+    return dateStr;
+}
+
+function toActivitySeries(buckets: DashboardStatsBucket[]) {
+    return buckets.map((bucket) => ({
+        date: bucket.date,
+        count: bucket.count,
+        label: formatDashboardBucketLabel(bucket.date),
+        fullDate: bucket.fullDate,
+    }));
 }
 
 export function Dashboard() {
     const navigate = useNavigate();
     const { refreshSignal, setLastUpdated } = useRefresh();
-    const [stats, setStats] = useState<DashboardCountState>({ alerts: 0, decisions: 0, simulatedAlerts: 0, simulatedDecisions: 0 });
     const [loading, setLoading] = useState(true);
     const [statsLoading, setStatsLoading] = useState(true);
     const [config, setConfig] = useState<ConfigResponse | null>(null);
@@ -146,12 +145,8 @@ export function Dashboard() {
     const [percentageBasis, setPercentageBasis] = useState<PercentageBasis>(() => parseStoredPercentageBasis(localStorage.getItem('dashboard_percentage_basis')));
 
     const [isOnline, setIsOnline] = useState(true);
-
-    // Raw data (stats endpoints only)
-    const [rawData, setRawData] = useState<RawDataState>({
-        alertsForStats: [],
-        decisionsForStats: []
-    });
+    const [dashboardStats, setDashboardStats] = useState<DashboardStatsResponse | null>(null);
+    const dashboardStatsRef = useRef<DashboardStatsResponse | null>(null);
 
     // Active filters
     const [filters, setFilters] = useState<DashboardFilters>(() => parseStoredFilters(localStorage.getItem('dashboard_filters')));
@@ -180,39 +175,45 @@ export function Dashboard() {
         setFilters(prev => ({ ...prev, dateRange: null }));
     };
 
-    const loadData = useCallback(async (isBackground = false) => {
+    const buildDashboardStatsFilters = useCallback((): Record<string, string> => {
+        const requestFilters: Record<string, string> = {
+            granularity,
+            tz_offset: String(new Date().getTimezoneOffset()),
+        };
+
+        if (filters.country) requestFilters.country = filters.country;
+        if (filters.scenario) requestFilters.scenario = filters.scenario;
+        if (filters.as) requestFilters.as = filters.as;
+        if (filters.ip) requestFilters.ip = filters.ip;
+        if (filters.target) requestFilters.target = filters.target;
+        if (filters.dateRange) {
+            requestFilters.dateStart = filters.dateRange.start;
+            requestFilters.dateEnd = filters.dateRange.end;
+        }
+        if (filters.simulation !== 'all') {
+            requestFilters.simulation = filters.simulation;
+        }
+
+        return requestFilters;
+    }, [filters, granularity]);
+
+    const loadData = useCallback(async (isBackground = false, signal?: AbortSignal) => {
+        if (!dashboardStatsRef.current && !isBackground) {
+            setStatsLoading(true);
+        }
+
         try {
-            // Only set loading spinners on initial load
-            // (loading=true is default state)
-
-            const configData = await fetchConfig();
-            setConfig(configData);
-
-            // Use optimized stats endpoints only
-            const [alertsForStatsResponse, decisionsForStats] = await Promise.all([
-                fetchAlertsForStats(),
-                fetchDecisionsForStats()
+            const [configData, dashboardStatsData] = await Promise.all([
+                fetchConfig(),
+                fetchDashboardStats(buildDashboardStatsFilters(), { signal }),
             ]);
-            const alertsForStats = alertsForStatsResponse;
+            if (signal?.aborted) {
+                return;
+            }
 
-            setRawData({ alertsForStats, decisionsForStats });
-
-            // Calculate active decisions count (stop_at > now)
-            const now = new Date();
-            const activeDecisionsCount = decisionsForStats.filter(d =>
-                d.simulated !== true && d.stop_at && new Date(d.stop_at) > now
-            ).length;
-            const simulatedAlertsCount = alertsForStats.filter(a => a.simulated === true).length;
-            const simulatedDecisionsCount = decisionsForStats.filter(d =>
-                d.simulated === true && d.stop_at && new Date(d.stop_at) > now
-            ).length;
-
-            setStats({
-                alerts: alertsForStats.length,
-                decisions: activeDecisionsCount,
-                simulatedAlerts: simulatedAlertsCount,
-                simulatedDecisions: simulatedDecisionsCount,
-            });
+            setConfig(configData);
+            dashboardStatsRef.current = dashboardStatsData;
+            setDashboardStats(dashboardStatsData);
 
             // Check LAPI status from config
             if (configData.lapi_status) {
@@ -225,274 +226,54 @@ export function Dashboard() {
             setLastUpdated(new Date());
 
         } catch (error) {
+            if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+                return;
+            }
             console.error("Failed to load dashboard data", error);
             setIsOnline(false);
         } finally {
-            if (!isBackground) {
+            if (!signal?.aborted) {
                 setLoading(false);
                 setStatsLoading(false);
             }
         }
-    }, [setLastUpdated]);
+    }, [buildDashboardStatsFilters, setLastUpdated]);
 
-    // Initial Load
     useEffect(() => {
-        loadData(false);
+        const controller = new AbortController();
+        loadData(false, controller.signal);
+        return () => controller.abort();
     }, [loadData]);
 
     // Background Refresh
     useEffect(() => {
         if (refreshSignal > 0) {
-            loadData(true);
+            const controller = new AbortController();
+            loadData(true, controller.signal);
+            return () => controller.abort();
         }
     }, [refreshSignal, loadData]);
 
-    // Filter Logic
-    const filteredData = useMemo<FilteredDashboardData>(() => {
-        const lookbackDays = config?.lookback_days || 7;
-        const now = new Date();
-        const simulationFilter = filters.simulation;
+    const dashboardData = dashboardStats ?? EMPTY_DASHBOARD_STATS;
+    const stats = dashboardData.totals;
 
-        // Use alertsForStats for all alert-related filtering and stats
-        let filteredAlerts = filterLastNDays(rawData.alertsForStats, lookbackDays)
-            .filter(a => matchesSimulationFilter({ simulated: a.simulated }, simulationFilter));
-
-        // Calculate active decisions (stop_at > now) for card display and filtering
-        let activeDecisions = filterLastNDays(rawData.decisionsForStats, lookbackDays)
-            .filter(d => d.simulated !== true && d.stop_at && new Date(d.stop_at) > now);
-
-        let simulatedDecisions = filterLastNDays(rawData.decisionsForStats, lookbackDays)
-            .filter(d => d.simulated === true && d.stop_at && new Date(d.stop_at) > now);
-
-        // Filter ALL decisions (including expired) for historical charts
-        const chartDecisions = filterLastNDays(rawData.decisionsForStats, lookbackDays)
-            .filter(d => matchesSimulationFilter({ simulated: d.simulated }, simulationFilter));
-
-        // Create separate datasets for charts (no date range filter to avoid zoom feedback loop)
-        let chartAlerts = [...filteredAlerts];
-        let chartDecisionsData = [...chartDecisions];
-
-        // Create datasets for the Slider/Brush (Context-aware but Time-ignorant)
-        // We start with the lookback-filtered data (Global scope)
-        let sliderAlerts = filterLastNDays(rawData.alertsForStats, lookbackDays)
-            .filter(a => matchesSimulationFilter({ simulated: a.simulated }, simulationFilter));
-        let sliderDecisions = filterLastNDays(rawData.decisionsForStats, lookbackDays)
-            .filter(d => matchesSimulationFilter({ simulated: d.simulated }, simulationFilter));
-
-        // Apply Cross-Filtering to cards and lists (including dateRange)
-        if (filters.dateRange) {
-            const dateRange = filters.dateRange;
-            // Helper function to extract date/time key from ISO timestamp
-            const includeHour = dateRange.start.includes('T');
-
-            // Filter by date range
-            filteredAlerts = filteredAlerts.filter(a => {
-                const itemKey = getDateRangeItemKey(a.created_at, includeHour);
-                return itemKey >= dateRange.start && itemKey <= dateRange.end;
-            });
-            activeDecisions = activeDecisions.filter(d => {
-                const itemKey = getDateRangeItemKey(d.created_at, includeHour);
-                return itemKey >= dateRange.start && itemKey <= dateRange.end;
-            });
-            simulatedDecisions = simulatedDecisions.filter(d => {
-                const itemKey = getDateRangeItemKey(d.created_at, includeHour);
-                return itemKey >= dateRange.start && itemKey <= dateRange.end;
-            });
-
-            // ALSO filter chart data by date range so the main chart reflects the selection
-            chartAlerts = chartAlerts.filter(a => {
-                const itemKey = getDateRangeItemKey(a.created_at, includeHour);
-                return itemKey >= dateRange.start && itemKey <= dateRange.end;
-            });
-            chartDecisionsData = chartDecisionsData.filter(d => {
-                const itemKey = getDateRangeItemKey(d.created_at, includeHour);
-                return itemKey >= dateRange.start && itemKey <= dateRange.end;
-            });
-        }
-
-
-        if (filters.country) {
-            filteredAlerts = filteredAlerts.filter(a => {
-                // Match by CN (2-letter country code)
-                return a.source?.cn === filters.country;
-            });
-            // Filter decisions by country - match IPs from filtered alerts
-            const ipsInCountry = new Set(
-                filteredAlerts.map(a => a.source?.ip).filter(ip => ip)
-            );
-            activeDecisions = activeDecisions.filter(d => ipsInCountry.has(d.value));
-            simulatedDecisions = simulatedDecisions.filter(d => ipsInCountry.has(d.value));
-
-            // Also filter chart data by country
-            chartAlerts = chartAlerts.filter(a => a.source?.cn === filters.country);
-            const chartIpsInCountry = new Set(
-                chartAlerts.map(a => a.source?.ip).filter(ip => ip)
-            );
-            chartDecisionsData = chartDecisionsData.filter(d => chartIpsInCountry.has(d.value));
-
-            // Also filter Slider data by country
-            sliderAlerts = sliderAlerts.filter(a => a.source?.cn === filters.country);
-            const sliderIpsInCountry = new Set(
-                sliderAlerts.map(a => a.source?.ip).filter(ip => ip)
-            );
-            sliderDecisions = sliderDecisions.filter(d => sliderIpsInCountry.has(d.value));
-        }
-
-        if (filters.scenario) {
-            filteredAlerts = filteredAlerts.filter(a => a.scenario === filters.scenario);
-            // Filter decisions by scenario - match decisions whose value (IP) appears in alerts with this scenario
-            const ipsInScenario = new Set(
-                filteredAlerts.map(a => a.source?.ip).filter(ip => ip)
-            );
-            activeDecisions = activeDecisions.filter(d => ipsInScenario.has(d.value));
-            simulatedDecisions = simulatedDecisions.filter(d => ipsInScenario.has(d.value));
-
-            // Also filter chart data
-            chartAlerts = chartAlerts.filter(a => a.scenario === filters.scenario);
-            const chartIpsInScenario = new Set(
-                chartAlerts.map(a => a.source?.ip).filter(ip => ip)
-            );
-            chartDecisionsData = chartDecisionsData.filter(d => chartIpsInScenario.has(d.value));
-
-            // Also filter Slider data
-            sliderAlerts = sliderAlerts.filter(a => a.scenario === filters.scenario);
-            const sliderIpsInScenario = new Set(
-                sliderAlerts.map(a => a.source?.ip).filter(ip => ip)
-            );
-            sliderDecisions = sliderDecisions.filter(d => sliderIpsInScenario.has(d.value));
-        }
-
-        if (filters.as) {
-            filteredAlerts = filteredAlerts.filter(a => a.source?.as_name === filters.as);
-            // Filter decisions by AS - match decisions whose value (IP) appears in alerts with this AS
-            const ipsInAS = new Set(
-                filteredAlerts.map(a => a.source?.ip).filter(ip => ip)
-            );
-            activeDecisions = activeDecisions.filter(d => ipsInAS.has(d.value));
-            simulatedDecisions = simulatedDecisions.filter(d => ipsInAS.has(d.value));
-
-            // Also filter chart data
-            chartAlerts = chartAlerts.filter(a => a.source?.as_name === filters.as);
-            const chartIpsInAS = new Set(
-                chartAlerts.map(a => a.source?.ip).filter(ip => ip)
-            );
-            chartDecisionsData = chartDecisionsData.filter(d => chartIpsInAS.has(d.value));
-
-            // Also filter Slider data
-            sliderAlerts = sliderAlerts.filter(a => a.source?.as_name === filters.as);
-            const sliderIpsInAS = new Set(
-                sliderAlerts.map(a => a.source?.ip).filter(ip => ip)
-            );
-            sliderDecisions = sliderDecisions.filter(d => sliderIpsInAS.has(d.value));
-        }
-
-        if (filters.ip) {
-            filteredAlerts = filteredAlerts.filter(a => a.source?.ip === filters.ip);
-            // Filter decisions by IP - direct match on the value field
-            activeDecisions = activeDecisions.filter(d => d.value === filters.ip);
-            simulatedDecisions = simulatedDecisions.filter(d => d.value === filters.ip);
-
-            // Also filter chart data
-            chartAlerts = chartAlerts.filter(a => a.source?.ip === filters.ip);
-            chartDecisionsData = chartDecisionsData.filter(d => d.value === filters.ip);
-
-            // Also filter Slider data
-            sliderAlerts = sliderAlerts.filter(a => a.source?.ip === filters.ip);
-            sliderDecisions = sliderDecisions.filter(d => d.value === filters.ip);
-        }
-
-        if (filters.target) {
-            // Use pre-computed target field from stats endpoint
-            filteredAlerts = filteredAlerts.filter(a => a.target === filters.target);
-            // Filter decisions by target - match IPs from filtered alerts
-            const ipsOnTarget = new Set(
-                filteredAlerts.map(a => a.source?.ip).filter(ip => ip)
-            );
-            activeDecisions = activeDecisions.filter(d => ipsOnTarget.has(d.value));
-            simulatedDecisions = simulatedDecisions.filter(d => ipsOnTarget.has(d.value));
-
-            // Charts - use pre-computed target
-            chartAlerts = chartAlerts.filter(a => a.target === filters.target);
-            const chartIpsOnTarget = new Set(
-                chartAlerts.map(a => a.source?.ip).filter(ip => ip)
-            );
-            chartDecisionsData = chartDecisionsData.filter(d => chartIpsOnTarget.has(d.value));
-
-            // Slider - use pre-computed target
-            sliderAlerts = sliderAlerts.filter(a => a.target === filters.target);
-            const sliderIpsOnTarget = new Set(
-                sliderAlerts.map(a => a.source?.ip).filter(ip => ip)
-            );
-            sliderDecisions = sliderDecisions.filter(d => sliderIpsOnTarget.has(d.value));
-        }
-
-        const liveAlerts = filteredAlerts.filter((alert) => alert.simulated !== true);
-        const simulatedAlerts = filteredAlerts.filter((alert) => alert.simulated === true);
-        const chartLiveAlerts = chartAlerts.filter((alert) => alert.simulated !== true);
-        const chartSimulatedAlerts = chartAlerts.filter((alert) => alert.simulated === true);
-        const chartLiveDecisions = chartDecisionsData.filter((decision) => decision.simulated !== true);
-        const chartSimulatedDecisions = chartDecisionsData.filter((decision) => decision.simulated === true);
-        const sliderLiveAlerts = sliderAlerts.filter((alert) => alert.simulated !== true);
-        const sliderSimulatedAlerts = sliderAlerts.filter((alert) => alert.simulated === true);
-        const sliderLiveDecisions = sliderDecisions.filter((decision) => decision.simulated !== true);
-        const sliderSimulatedDecisions = sliderDecisions.filter((decision) => decision.simulated === true);
-
-        return {
-            liveAlerts,
-            simulatedAlerts,
-            alerts: filteredAlerts,
-            decisions: activeDecisions,
-            simulatedDecisions,
-            chartLiveAlerts,
-            chartSimulatedAlerts,
-            chartLiveDecisions,
-            chartSimulatedDecisions,
-            chartAlerts: chartAlerts,
-            chartDecisions: chartDecisionsData,
-            sliderLiveAlerts,
-            sliderSimulatedAlerts,
-            sliderLiveDecisions,
-            sliderSimulatedDecisions,
-            sliderAlerts: sliderAlerts,
-            sliderDecisions: sliderDecisions,
-            // Global total (filtered by Lookback ONLY, ignoring sidebar filters)
-            globalTotal: filterLastNDays(rawData.alertsForStats, lookbackDays)
-                .filter(a => matchesSimulationFilter({ simulated: a.simulated }, simulationFilter)).length
-        };
-    }, [rawData, config?.lookback_days, filters]);
-
-
-
-    // Derived Statistics
     const statistics = useMemo(() => {
-        const lookbackDays = config?.lookback_days || 7;
-
-        // For lists, we use the filtered data
-        // For charts, we effectively want to show the context of the WHOLE dataset (or subset) 
-        // depending on UX. 
-        // User Requirement: "charts will filter each other". 
-        // Usually visual filtering means the chart highlights the selection but keeps context, OR it drills down.
-        // Given "Power BI Report", usually clicking a bar filters the other charts. 
-        // So the pie chart should reflect the date selection. The bar chart should reflect the country selection.
-
         return {
-            topTargets: getTopTargets(filteredData.alerts, 10),
-            // Top Countries list is removed per requirements, but we calculate it for the Pie Chart
-            topCountries: getTopCountries(filteredData.alerts, 10), // Get more for the pie chart
-            allCountries: getAllCountries(filteredData.alerts),  // For map display
-            topScenarios: getTopScenarios(filteredData.alerts, 10),
-            topAS: getTopAS(filteredData.alerts, 10),
-            alertsHistory: getAggregatedData(filteredData.chartLiveAlerts, lookbackDays, granularity, filters.dateRange),
-            simulatedAlertsHistory: getAggregatedData(filteredData.chartSimulatedAlerts, lookbackDays, granularity, filters.dateRange),
-            decisionsHistory: getAggregatedData(filteredData.chartLiveDecisions, lookbackDays, granularity, filters.dateRange),
-            simulatedDecisionsHistory: getAggregatedData(filteredData.chartSimulatedDecisions, lookbackDays, granularity, filters.dateRange),
-            // Unfiltered history for the TimeRangeSlider (Global context + Sidebar Filters)
-            unfilteredAlertsHistory: getAggregatedData(filteredData.sliderLiveAlerts, lookbackDays, granularity),
-            unfilteredSimulatedAlertsHistory: getAggregatedData(filteredData.sliderSimulatedAlerts, lookbackDays, granularity),
-            unfilteredDecisionsHistory: getAggregatedData(filteredData.sliderLiveDecisions, lookbackDays, granularity),
-            unfilteredSimulatedDecisionsHistory: getAggregatedData(filteredData.sliderSimulatedDecisions, lookbackDays, granularity),
+            topTargets: dashboardData.topTargets,
+            topCountries: dashboardData.topCountries,
+            allCountries: dashboardData.allCountries,
+            topScenarios: dashboardData.topScenarios,
+            topAS: dashboardData.topAS,
+            alertsHistory: toActivitySeries(dashboardData.series.alertsHistory),
+            simulatedAlertsHistory: toActivitySeries(dashboardData.series.simulatedAlertsHistory),
+            decisionsHistory: toActivitySeries(dashboardData.series.decisionsHistory),
+            simulatedDecisionsHistory: toActivitySeries(dashboardData.series.simulatedDecisionsHistory),
+            unfilteredAlertsHistory: toActivitySeries(dashboardData.series.unfilteredAlertsHistory),
+            unfilteredSimulatedAlertsHistory: toActivitySeries(dashboardData.series.unfilteredSimulatedAlertsHistory),
+            unfilteredDecisionsHistory: toActivitySeries(dashboardData.series.unfilteredDecisionsHistory),
+            unfilteredSimulatedDecisionsHistory: toActivitySeries(dashboardData.series.unfilteredSimulatedDecisionsHistory),
         };
-    }, [filteredData, config?.lookback_days, granularity, filters.dateRange]);
+    }, [dashboardData]);
     
 
     // Handle Filters
@@ -542,11 +323,12 @@ export function Dashboard() {
     const alertsLink = `/alerts${buildDrilldownParams() ? `?${buildDrilldownParams()}` : ''}`;
     const decisionsLink = `/decisions${buildDrilldownParams(true) ? `?${buildDrilldownParams(true)}` : ''}`;
     const simulationsEnabled = config?.simulations_enabled === true;
-    const filteredSimulationAlertsCount = filteredData.simulatedAlerts.length;
-    const filteredSimulationDecisionsCount = filteredData.simulatedDecisions.length;
+    const filteredTotals = dashboardData.filteredTotals;
+    const filteredSimulationAlertsCount = filteredTotals.simulatedAlerts;
+    const filteredSimulationDecisionsCount = filteredTotals.simulatedDecisions;
     const totalLiveAlerts = stats.alerts - stats.simulatedAlerts;
     const totalAllDecisions = stats.decisions + stats.simulatedDecisions;
-    const filteredAllDecisions = filteredData.decisions.length + filteredSimulationDecisionsCount;
+    const filteredAllDecisions = filteredTotals.decisions + filteredSimulationDecisionsCount;
     const modeAwareAlertsTotal = filters.simulation === 'simulated'
         ? stats.simulatedAlerts
         : filters.simulation === 'live'
@@ -555,8 +337,8 @@ export function Dashboard() {
     const modeAwareAlertsFiltered = filters.simulation === 'simulated'
         ? filteredSimulationAlertsCount
         : filters.simulation === 'live'
-            ? filteredData.liveAlerts.length
-            : filteredData.alerts.length;
+            ? filteredTotals.alerts
+            : filteredTotals.alerts;
     const modeAwareDecisionsTotal = filters.simulation === 'simulated'
         ? stats.simulatedDecisions
         : filters.simulation === 'live'
@@ -565,7 +347,7 @@ export function Dashboard() {
     const modeAwareDecisionsFiltered = filters.simulation === 'simulated'
         ? filteredSimulationDecisionsCount
         : filters.simulation === 'live'
-            ? filteredData.decisions.length
+            ? filteredTotals.decisions
             : filteredAllDecisions;
     const showSimulationBreakout = simulationsEnabled && filters.simulation === 'all';
 
@@ -813,7 +595,7 @@ export function Dashboard() {
                                 items={statistics.topCountries}
                                 onSelect={(item) => toggleFilter('country', item.countryCode)}
                                 selectedValue={filters.country}
-                                total={percentageBasis === 'global' ? filteredData.globalTotal : filteredData.alerts.length}
+                                total={percentageBasis === 'global' ? dashboardData.globalTotal : filteredTotals.alerts}
                             />
                             <StatCard
                                 title="Top Scenarios"
@@ -823,21 +605,21 @@ export function Dashboard() {
                                 renderLabel={(item) => (
                                     <ScenarioName name={item.label} showLink={true} />
                                 )}
-                                total={percentageBasis === 'global' ? filteredData.globalTotal : filteredData.alerts.length}
+                                total={percentageBasis === 'global' ? dashboardData.globalTotal : filteredTotals.alerts}
                             />
                             <StatCard
                                 title="Top AS"
                                 items={statistics.topAS}
                                 onSelect={(item) => toggleFilter('as', item.label)}
                                 selectedValue={filters.as}
-                                total={percentageBasis === 'global' ? filteredData.globalTotal : filteredData.alerts.length}
+                                total={percentageBasis === 'global' ? dashboardData.globalTotal : filteredTotals.alerts}
                             />
                             <StatCard
                                 title="Top Targets"
                                 items={statistics.topTargets}
                                 onSelect={(item) => toggleFilter('target', item.label)}
                                 selectedValue={filters.target}
-                                total={percentageBasis === 'global' ? filteredData.globalTotal : filteredData.alerts.length}
+                                total={percentageBasis === 'global' ? dashboardData.globalTotal : filteredTotals.alerts}
                             />
                         </div>
                     </>

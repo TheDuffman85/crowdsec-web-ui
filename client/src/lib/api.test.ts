@@ -14,6 +14,7 @@ import {
   fetchAlerts,
   fetchAlertsForStats,
   fetchConfig,
+  fetchDashboardStats,
   fetchDecisions,
   fetchDecisionsForStats,
   fetchNotifications,
@@ -54,6 +55,7 @@ describe('api helpers', () => {
     await expect(fetchDecisions()).resolves.toEqual([{ id: 1 }]);
     await expect(fetchAlertsForStats()).resolves.toEqual([{ id: 1 }]);
     await expect(fetchDecisionsForStats()).resolves.toEqual([{ id: 1 }]);
+    await expect(fetchDashboardStats({ simulation: 'live' })).resolves.toEqual([{ id: 1 }]);
     await expect(fetchConfig()).resolves.toEqual([{ id: 1 }]);
     await expect(fetchNotificationSettings()).resolves.toEqual([{ id: 1 }]);
     await expect(fetchNotifications()).resolves.toEqual([{ id: 1 }]);

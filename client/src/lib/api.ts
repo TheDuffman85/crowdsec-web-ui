@@ -6,6 +6,7 @@ import type {
   BulkDeleteResult,
   CleanupByIpRequest,
   ConfigResponse,
+  DashboardStatsResponse,
   DecisionListItem,
   NotificationChannel,
   NotificationListResponse,
@@ -117,6 +118,22 @@ export async function fetchDecisionsForStats(): Promise<StatsDecision[]> {
 
 export async function fetchAlertsForStats(): Promise<StatsAlert[]> {
     return fetchJson<StatsAlert[]>('/api/stats/alerts', undefined, 'Failed to fetch alert statistics');
+}
+
+export async function fetchDashboardStats(
+  filters?: Record<string, string>,
+  init?: RequestInit,
+): Promise<DashboardStatsResponse> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters ?? {})) {
+    if (value) params.set(key, value);
+  }
+  const query = params.toString();
+  return fetchJson<DashboardStatsResponse>(
+    `/api/dashboard/stats${query ? `?${query}` : ''}`,
+    init,
+    'Failed to fetch dashboard statistics',
+  );
 }
 
 export async function deleteDecision(id: string | number): Promise<unknown> {

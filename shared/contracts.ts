@@ -168,6 +168,60 @@ export interface StatsDecision {
   simulated?: boolean;
 }
 
+export type DashboardGranularity = 'day' | 'hour';
+export type DashboardSimulationFilter = 'all' | 'live' | 'simulated';
+
+export interface DashboardStatsBucket {
+  date: string;
+  count: number;
+  fullDate: string;
+}
+
+export interface DashboardStatListItem {
+  label: string;
+  count: number;
+  value?: string;
+  countryCode?: string;
+}
+
+export interface DashboardWorldMapDatum {
+  label: string;
+  count: number;
+  countryCode: string;
+  simulatedCount?: number;
+  liveCount?: number;
+}
+
+export interface DashboardStatsTotals {
+  alerts: number;
+  decisions: number;
+  simulatedAlerts: number;
+  simulatedDecisions: number;
+}
+
+export interface DashboardStatsSeries {
+  alertsHistory: DashboardStatsBucket[];
+  simulatedAlertsHistory: DashboardStatsBucket[];
+  decisionsHistory: DashboardStatsBucket[];
+  simulatedDecisionsHistory: DashboardStatsBucket[];
+  unfilteredAlertsHistory: DashboardStatsBucket[];
+  unfilteredSimulatedAlertsHistory: DashboardStatsBucket[];
+  unfilteredDecisionsHistory: DashboardStatsBucket[];
+  unfilteredSimulatedDecisionsHistory: DashboardStatsBucket[];
+}
+
+export interface DashboardStatsResponse {
+  totals: DashboardStatsTotals;
+  filteredTotals: DashboardStatsTotals;
+  globalTotal: number;
+  topTargets: DashboardStatListItem[];
+  topCountries: DashboardStatListItem[];
+  allCountries: DashboardWorldMapDatum[];
+  topScenarios: DashboardStatListItem[];
+  topAS: DashboardStatListItem[];
+  series: DashboardStatsSeries;
+}
+
 export interface UpdateCheckResponse {
   update_available: boolean;
   reason?: string;

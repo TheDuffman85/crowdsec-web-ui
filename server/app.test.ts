@@ -471,6 +471,18 @@ function seedAlert(database: CrowdsecDatabase, alert: AlertRecord): void {
   }
 }
 
+function dashboardDateKey(isoString: string, timezoneOffsetMinutes: number, includeHour = false): string {
+  const source = new Date(isoString);
+  const localDate = new Date(source.getTime() - timezoneOffsetMinutes * 60_000);
+  const year = localDate.getUTCFullYear();
+  const month = String(localDate.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(localDate.getUTCDate()).padStart(2, '0');
+  if (includeHour) {
+    return `${year}-${month}-${day}T${String(localDate.getUTCHours()).padStart(2, '0')}`;
+  }
+  return `${year}-${month}-${day}`;
+}
+
 describe('createApp', () => {
   test('serves health, config, alerts, decisions, stats, update-check, and mutations', async () => {
     const { controller, database, lapiClient } = createController();
@@ -611,6 +623,24 @@ describe('createApp', () => {
       expect.arrayContaining([expect.objectContaining({ value: '5.6.7.8', simulated: true })]),
     );
 
+    const dashboardStats = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats?granularity=day'));
+    expect(dashboardStats.status).toBe(200);
+    expect((await dashboardStats.json()) as {
+      totals: { alerts: number; decisions: number; simulatedAlerts: number; simulatedDecisions: number };
+      filteredTotals: { alerts: number; decisions: number; simulatedAlerts: number; simulatedDecisions: number };
+      series: { simulatedAlertsHistory: Array<{ count: number }> };
+      allCountries: Array<{ simulatedCount?: number }>;
+    }).toEqual(
+      expect.objectContaining({
+        totals: { alerts: 2, decisions: 1, simulatedAlerts: 1, simulatedDecisions: 1 },
+        filteredTotals: { alerts: 2, decisions: 1, simulatedAlerts: 1, simulatedDecisions: 1 },
+        series: expect.objectContaining({
+          simulatedAlertsHistory: expect.arrayContaining([expect.objectContaining({ count: 1 })]),
+        }),
+        allCountries: expect.arrayContaining([expect.objectContaining({ countryCode: 'US', simulatedCount: 1 })]),
+      }),
+    );
+
     const updateCheck = await controller.fetch(new Request('http://localhost/crowdsec/api/update-check'));
     expect(updateCheck.status).toBe(200);
     expect(((await updateCheck.json()) as { update_available: boolean }).update_available).toBe(true);
@@ -658,6 +688,84 @@ describe('createApp', () => {
     const redirect = await controller.fetch(new Request('http://localhost/'));
     expect(redirect.status).toBe(302);
     expect(redirect.headers.get('location')).toBe('/crowdsec/');
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('aggregates dashboard stats with mutual filters, simulation mode, and timezone date ranges', async () => {
+    const { controller, database, lapiClient } = createController();
+    const createdAt = new Date().toISOString();
+    const stopAt = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
+    const timezoneOffset = -120;
+    const dateKey = dashboardDateKey(createdAt, timezoneOffset);
+
+    seedAlert(database, sampleAlert({
+      id: 101,
+      uuid: 'dashboard-alert-101',
+      created_at: createdAt,
+      scenario: 'crowdsecurity/ssh-bf',
+      source: { ip: '1.2.3.4', value: '1.2.3.4', cn: 'DE', as_name: 'Hetzner' },
+      target: 'ssh',
+      decisions: [{ id: 1010, value: '1.2.3.4', stop_at: stopAt, type: 'ban', origin: 'manual', simulated: false }],
+      simulated: false,
+    }));
+    seedAlert(database, sampleAlert({
+      id: 102,
+      uuid: 'dashboard-alert-102',
+      created_at: createdAt,
+      scenario: 'crowdsecurity/http-probing',
+      source: { ip: '9.9.9.9', value: '9.9.9.9', cn: 'DE', as_name: 'OVH' },
+      target: 'http',
+      decisions: [{ id: 1020, value: '9.9.9.9', stop_at: stopAt, type: 'ban', origin: 'manual', simulated: false }],
+      simulated: false,
+    }));
+    seedAlert(database, sampleAlert({
+      id: 103,
+      uuid: 'dashboard-alert-103',
+      created_at: createdAt,
+      scenario: 'crowdsecurity/nginx-bf',
+      source: { ip: '5.6.7.8', value: '5.6.7.8', cn: 'US', as_name: 'AWS' },
+      target: 'nginx',
+      decisions: [{ id: 1030, value: '5.6.7.8', stop_at: stopAt, type: 'ban', origin: 'crowdsec', simulated: true }],
+      simulated: true,
+    }));
+
+    await lapiClient.login();
+
+    const countryResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats?country=DE'));
+    expect(countryResponse.status).toBe(200);
+    expect((await countryResponse.json()) as {
+      filteredTotals: { alerts: number; decisions: number; simulatedAlerts: number; simulatedDecisions: number };
+      topCountries: Array<{ countryCode?: string; count: number }>;
+    }).toEqual(expect.objectContaining({
+      filteredTotals: { alerts: 2, decisions: 2, simulatedAlerts: 0, simulatedDecisions: 0 },
+      topCountries: [expect.objectContaining({ countryCode: 'DE', count: 2 })],
+    }));
+
+    const combinedResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats?country=DE&scenario=crowdsecurity/ssh-bf&target=ssh'));
+    expect((await combinedResponse.json()) as {
+      filteredTotals: { alerts: number; decisions: number };
+      topScenarios: Array<{ label: string; count: number }>;
+    }).toEqual(expect.objectContaining({
+      filteredTotals: expect.objectContaining({ alerts: 1, decisions: 1 }),
+      topScenarios: [expect.objectContaining({ label: 'crowdsecurity/ssh-bf', count: 1 })],
+    }));
+
+    const simulatedResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats?simulation=simulated'));
+    expect((await simulatedResponse.json()) as {
+      filteredTotals: { alerts: number; decisions: number; simulatedAlerts: number; simulatedDecisions: number };
+    }).toEqual(expect.objectContaining({
+      filteredTotals: { alerts: 1, decisions: 0, simulatedAlerts: 1, simulatedDecisions: 1 },
+    }));
+
+    const dateResponse = await controller.fetch(new Request(`http://localhost/crowdsec/api/dashboard/stats?dateStart=${dateKey}&dateEnd=${dateKey}&tz_offset=${timezoneOffset}`));
+    expect((await dateResponse.json()) as {
+      filteredTotals: { alerts: number; decisions: number; simulatedAlerts: number; simulatedDecisions: number };
+    }).toEqual(expect.objectContaining({
+      filteredTotals: { alerts: 3, decisions: 2, simulatedAlerts: 1, simulatedDecisions: 1 },
+    }));
 
     controller.stopBackgroundTasks();
     database.close();

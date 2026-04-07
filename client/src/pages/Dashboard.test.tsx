@@ -8,14 +8,12 @@ const {
   chartSpy,
   mapSpy,
   fetchConfigMock,
-  fetchAlertsForStatsMock,
-  fetchDecisionsForStatsMock,
+  fetchDashboardStatsMock,
 } = vi.hoisted(() => ({
   chartSpy: vi.fn(),
   mapSpy: vi.fn(),
   fetchConfigMock: vi.fn(),
-  fetchAlertsForStatsMock: vi.fn(),
-  fetchDecisionsForStatsMock: vi.fn(),
+  fetchDashboardStatsMock: vi.fn(),
 }));
 
 vi.mock('../contexts/useRefresh', () => ({
@@ -41,17 +39,62 @@ vi.mock('../components/WorldMapCard', () => ({
 
 vi.mock('../lib/api', () => ({
   fetchConfig: fetchConfigMock,
-  fetchAlertsForStats: fetchAlertsForStatsMock,
-  fetchDecisionsForStats: fetchDecisionsForStatsMock,
+  fetchDashboardStats: fetchDashboardStatsMock,
 }));
 
-beforeEach(() => {
-  const now = Date.now();
-  const liveCreatedAt = new Date(now - 2 * 60 * 60 * 1000).toISOString();
-  const simulatedCreatedAt = new Date(now - 60 * 60 * 1000).toISOString();
-  const liveStopAt = new Date(now + 2 * 60 * 60 * 1000).toISOString();
-  const simulatedStopAt = new Date(now + 3 * 60 * 60 * 1000).toISOString();
+function buildDashboardStatsResponse(filters?: Record<string, string>) {
+  const simulation = filters?.simulation || 'all';
+  const liveAlertCount = simulation === 'simulated' ? 0 : 1;
+  const simulatedAlertCount = simulation === 'live' ? 0 : 1;
+  const liveDecisionCount = simulation === 'simulated' ? 0 : 1;
+  const simulatedDecisionCount = simulation === 'live' ? 0 : 1;
+  const allAlertCount = liveAlertCount + simulatedAlertCount;
+  const bucket = {
+    date: filters?.granularity === 'hour' ? '2026-04-07T10' : '2026-04-07',
+    fullDate: '2026-04-07T10:00:00.000Z',
+  };
 
+  return {
+    totals: {
+      alerts: 2,
+      decisions: 1,
+      simulatedAlerts: 1,
+      simulatedDecisions: 1,
+    },
+    filteredTotals: {
+      alerts: allAlertCount,
+      decisions: liveDecisionCount,
+      simulatedAlerts: simulatedAlertCount,
+      simulatedDecisions: simulatedDecisionCount,
+    },
+    globalTotal: allAlertCount,
+    topTargets: liveAlertCount ? [{ label: 'ssh', count: liveAlertCount }] : [],
+    topCountries: liveAlertCount ? [{ label: 'Germany', value: 'DE', countryCode: 'DE', count: liveAlertCount }] : [],
+    allCountries: [
+      {
+        label: 'Germany',
+        countryCode: 'DE',
+        count: allAlertCount,
+        liveCount: liveAlertCount,
+        simulatedCount: simulatedAlertCount,
+      },
+    ],
+    topScenarios: liveAlertCount ? [{ label: 'crowdsecurity/ssh-bf', count: liveAlertCount }] : [],
+    topAS: liveAlertCount ? [{ label: 'Hetzner', count: liveAlertCount }] : [],
+    series: {
+      alertsHistory: [{ ...bucket, count: liveAlertCount }],
+      simulatedAlertsHistory: [{ ...bucket, count: simulatedAlertCount }],
+      decisionsHistory: [{ ...bucket, count: liveDecisionCount }],
+      simulatedDecisionsHistory: [{ ...bucket, count: simulatedDecisionCount }],
+      unfilteredAlertsHistory: [{ ...bucket, count: liveAlertCount }],
+      unfilteredSimulatedAlertsHistory: [{ ...bucket, count: simulatedAlertCount }],
+      unfilteredDecisionsHistory: [{ ...bucket, count: liveDecisionCount }],
+      unfilteredSimulatedDecisionsHistory: [{ ...bucket, count: simulatedDecisionCount }],
+    },
+  };
+}
+
+beforeEach(() => {
   vi.stubGlobal(
     'matchMedia',
     vi.fn().mockImplementation(() => ({
@@ -63,6 +106,7 @@ beforeEach(() => {
   localStorage.clear();
   chartSpy.mockClear();
   mapSpy.mockClear();
+  fetchDashboardStatsMock.mockClear();
   fetchConfigMock.mockResolvedValue({
     lookback_period: '7d',
     lookback_hours: 168,
@@ -74,42 +118,7 @@ beforeEach(() => {
     simulations_enabled: true,
     machine_features_enabled: false,
   });
-  fetchAlertsForStatsMock.mockResolvedValue([
-    {
-      created_at: liveCreatedAt,
-      scenario: 'crowdsecurity/ssh-bf',
-      source: { ip: '1.2.3.4', value: '1.2.3.4', cn: 'DE', as_name: 'Hetzner' },
-      target: 'ssh',
-      simulated: false,
-    },
-    {
-      created_at: simulatedCreatedAt,
-      scenario: 'crowdsecurity/nginx-bf',
-      source: { ip: '5.6.7.8', value: '5.6.7.8', cn: 'US', as_name: 'AWS' },
-      target: 'nginx',
-      simulated: true,
-    },
-  ]);
-  fetchDecisionsForStatsMock.mockResolvedValue([
-    {
-      id: 10,
-      created_at: liveCreatedAt,
-      scenario: 'crowdsecurity/ssh-bf',
-      value: '1.2.3.4',
-      stop_at: liveStopAt,
-      target: 'ssh',
-      simulated: false,
-    },
-    {
-      id: 20,
-      created_at: simulatedCreatedAt,
-      scenario: 'crowdsecurity/nginx-bf',
-      value: '5.6.7.8',
-      stop_at: simulatedStopAt,
-      target: 'nginx',
-      simulated: true,
-    },
-  ]);
+  fetchDashboardStatsMock.mockImplementation(async (filters?: Record<string, string>) => buildDashboardStatsResponse(filters));
 });
 
 afterEach(() => {
@@ -171,18 +180,18 @@ describe('Dashboard page', () => {
     expect(decisionsCard).not.toBeNull();
 
     await userEvent.click(screen.getByRole('button', { name: 'Live' }));
-    expect(within(alertsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('1');
-    expect(within(decisionsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('1');
+    await waitFor(() => expect(within(alertsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('1'));
+    await waitFor(() => expect(within(decisionsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('1'));
     expect(within(alertsCard as HTMLElement).queryByText('Simulation')).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Simulation' }));
-    expect(within(alertsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('1');
-    expect(within(decisionsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('1');
+    await waitFor(() => expect(within(alertsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('1'));
+    await waitFor(() => expect(within(decisionsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('1'));
     expect(within(decisionsCard as HTMLElement).queryByText('Simulation')).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'All' }));
-    expect(within(alertsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('2');
-    expect(within(decisionsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('2');
+    await waitFor(() => expect(within(alertsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('2'));
+    await waitFor(() => expect(within(decisionsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('2'));
     expect(within(alertsCard as HTMLElement).getByText('Simulation')).toBeInTheDocument();
   });
 
