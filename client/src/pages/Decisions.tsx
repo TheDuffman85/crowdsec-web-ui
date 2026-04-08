@@ -678,18 +678,18 @@ export function Decisions() {
                                     />
                                 </th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Time</th>
-                                {machineFeaturesEnabled && (
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Machine</th>
-                                )}
-                                {originFeaturesEnabled && (
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Origin</th>
-                                )}
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Scenario</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Country</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">AS</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">IP / Range</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Action</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Expiration</th>
+                                {machineFeaturesEnabled && (
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Machine</th>
+                                )}
+                                {originFeaturesEnabled && (
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Origin</th>
+                                )}
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Alert</th>
                                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
                             </tr>
@@ -729,16 +729,6 @@ export function Decisions() {
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
                                                 <TimeDisplay timestamp={decision.created_at} />
                                             </td>
-                                            {machineFeaturesEnabled && (
-                                                <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[120px] truncate" title={decision.machine}>
-                                                    {decision.machine || "-"}
-                                                </td>
-                                            )}
-                                            {originFeaturesEnabled && (
-                                                <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[120px] truncate" title={decision.detail.origin}>
-                                                    {decision.detail.origin || "-"}
-                                                </td>
-                                            )}
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={decision.detail.reason}>
                                                 <ScenarioName
                                                     name={decision.detail.reason}
@@ -769,6 +759,16 @@ export function Decisions() {
                                                 {decisionDuration.startsWith("-") ? "0s" : decisionDuration}
                                                 {isExpired && <span className="ml-2 text-xs text-red-500 dark:text-red-400">(Expired)</span>}
                                             </td>
+                                            {machineFeaturesEnabled && (
+                                                <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[120px] truncate" title={decision.machine}>
+                                                    {decision.machine || "-"}
+                                                </td>
+                                            )}
+                                            {originFeaturesEnabled && (
+                                                <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[120px] truncate" title={decision.detail.origin}>
+                                                    {decision.detail.origin || "-"}
+                                                </td>
+                                            )}
                                             <td className="px-6 py-4 whitespace-nowrap text-sm">
                                                 {decision.detail.alert_id ? (
                                                     <Link

@@ -676,16 +676,16 @@ export function Alerts() {
                                     />
                                 </th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Time</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Scenario</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Country</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">AS</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">IP / Range</th>
                                 {machineFeaturesEnabled && (
                                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Machine</th>
                                 )}
                                 {originFeaturesEnabled && (
                                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Origin</th>
                                 )}
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Scenario</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Country</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">AS</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">IP / Range</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Decisions</th>
                                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
                             </tr>
@@ -722,16 +722,6 @@ export function Alerts() {
                                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
                                                 <TimeDisplay timestamp={alert.created_at} />
                                             </td>
-                                            {machineFeaturesEnabled && (
-                                                <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[120px] truncate" title={resolveMachineName(alert)}>
-                                                    {resolveMachineName(alert) || "-"}
-                                                </td>
-                                            )}
-                                            {originFeaturesEnabled && (
-                                                <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[140px] truncate" title={alertOriginTitle}>
-                                                    {alertOriginDisplay}
-                                                </td>
-                                            )}
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={alert.scenario}>
                                                 <ScenarioName
                                                     name={alert.scenario}
@@ -756,6 +746,16 @@ export function Alerts() {
                                             <td className="px-6 py-4 text-sm font-mono text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={sourceValue}>
                                                 {sourceValue || "-"}
                                             </td>
+                                            {machineFeaturesEnabled && (
+                                                <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[120px] truncate" title={resolveMachineName(alert)}>
+                                                    {resolveMachineName(alert) || "-"}
+                                                </td>
+                                            )}
+                                            {originFeaturesEnabled && (
+                                                <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[140px] truncate" title={alertOriginTitle}>
+                                                    {alertOriginDisplay}
+                                                </td>
+                                            )}
                                             <td className="px-6 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
                                                 {(() => {
                                                     const visibleDecisions = simulationsEnabled && currentSimulationFilter !== 'all'
