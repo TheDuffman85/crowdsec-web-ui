@@ -117,6 +117,7 @@ beforeEach(() => {
     sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
     simulations_enabled: true,
     machine_features_enabled: false,
+    origin_features_enabled: false,
   });
   fetchDashboardStatsMock.mockImplementation(async (filters?: Record<string, string>) => buildDashboardStatsResponse(filters));
 });
@@ -207,6 +208,7 @@ describe('Dashboard page', () => {
       sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
       simulations_enabled: false,
       machine_features_enabled: false,
+      origin_features_enabled: false,
     });
 
     render(

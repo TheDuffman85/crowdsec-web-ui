@@ -32,6 +32,7 @@ import type {
   UpdateCheckResponse,
 } from '../shared/contracts';
 import { normalizeMachineId, resolveMachineName } from '../shared/machine';
+import { collectDistinctOrigins, normalizeOrigin } from '../shared/origin';
 import { createRuntimeConfig, getIntervalName, parseRefreshInterval, type RuntimeConfig } from './config';
 import { CrowdsecDatabase, type AlertInsertParams, type DecisionInsertParams } from './database';
 import { LapiClient } from './lapi';
@@ -483,6 +484,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       sync_status: syncStatus,
       simulations_enabled: config.simulationsEnabled,
       machine_features_enabled: isMachineFeatureEnabled(),
+      origin_features_enabled: isOriginFeatureEnabled(),
     };
 
     return context.json(payload);
@@ -2015,6 +2017,33 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
     return false;
   }
+
+  function isOriginFeatureEnabled(): boolean {
+    if (config.alwaysShowOrigin) {
+      return true;
+    }
+
+    const since = new Date(Date.now() - config.lookbackMs).toISOString();
+    const now = new Date().toISOString();
+    const origins = new Set<string>();
+
+    for (const row of database.getDecisionsSince(since, now)) {
+      try {
+        const decision = JSON.parse(row.raw_data) as AlertDecision;
+        const origin = normalizeOrigin(decision.origin);
+        if (!origin) continue;
+
+        origins.add(origin);
+        if (origins.size > 1) {
+          return true;
+        }
+      } catch (error) {
+        console.error('Failed to parse cached decision while evaluating origin visibility:', error);
+      }
+    }
+
+    return false;
+  }
 }
 
 function loadPersistedConfig(database: CrowdsecDatabase): PersistedConfig {
@@ -2596,6 +2625,7 @@ function matchesAlertListFilters(alert: SlimAlert, filters: AlertListFilters, ma
   const cn = (alert.source?.cn || '').toLowerCase();
   const asName = (alert.source?.as_name || '').toLowerCase();
   const machine = machineFeaturesEnabled ? (resolveMachineName(alert) || '').toLowerCase() : '';
+  const origins = collectDistinctOrigins(alert.decisions).map((origin) => origin.toLowerCase());
   const target = (alert.target || '').toLowerCase();
 
   if (filters.ip && !sourceValue.includes(filters.ip)) return false;
@@ -2625,6 +2655,7 @@ function matchesAlertListFilters(alert: SlimAlert, filters: AlertListFilters, ma
     countryName.includes(filters.q) ||
     asName.includes(filters.q) ||
     (machineFeaturesEnabled && machine.includes(filters.q)) ||
+    origins.some((origin) => origin.includes(filters.q)) ||
     target.includes(filters.q) ||
     (alert.meta_search || '').toLowerCase().includes(filters.q) ||
     (alert.simulated === true ? 'simulation simulated' : 'live').includes(filters.q);
@@ -2661,6 +2692,7 @@ function matchesDecisionListFilters(decision: DecisionListItem, filters: Decisio
   const countryCode = (decision.detail.country || '').toLowerCase();
   const countryName = (getCountryName(decision.detail.country) || '').toLowerCase();
   const machine = machineFeaturesEnabled ? (decision.machine || '').toLowerCase() : '';
+  const origin = (decision.detail.origin || '').toLowerCase();
   const simulationSearch = decision.simulated === true ? 'simulation simulated' : 'live';
 
   return (decision.value || '').toLowerCase().includes(filters.q) ||
@@ -2669,6 +2701,7 @@ function matchesDecisionListFilters(decision: DecisionListItem, filters: Decisio
     countryName.includes(filters.q) ||
     (decision.detail.as || '').toLowerCase().includes(filters.q) ||
     (machineFeaturesEnabled && machine.includes(filters.q)) ||
+    origin.includes(filters.q) ||
     (decision.detail.type || '').toLowerCase().includes(filters.q) ||
     (decision.detail.action || '').toLowerCase().includes(filters.q) ||
     simulationSearch.includes(filters.q);

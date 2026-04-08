@@ -22,6 +22,7 @@ vi.mock('../lib/api', () => ({
     },
     simulations_enabled: true,
     machine_features_enabled: false,
+    origin_features_enabled: false,
   })),
 }));
 
@@ -100,6 +101,7 @@ describe('RefreshContext', () => {
       lapi_status: { isConnected: true, lastCheck: null, lastError: null },
       simulations_enabled: true,
       machine_features_enabled: false,
+      origin_features_enabled: false,
     }).mockResolvedValueOnce({
       refresh_interval: 1000,
       sync_status: {
@@ -116,6 +118,7 @@ describe('RefreshContext', () => {
       lapi_status: { isConnected: true, lastCheck: null, lastError: null },
       simulations_enabled: true,
       machine_features_enabled: false,
+      origin_features_enabled: false,
     });
 
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -167,6 +170,7 @@ describe('RefreshContext', () => {
         lapi_status: { isConnected: true, lastCheck: null, lastError: null },
         simulations_enabled: true,
         machine_features_enabled: false,
+        origin_features_enabled: false,
       } as unknown as Awaited<ReturnType<typeof fetchConfig>>);
 
     const fetchSpy = vi.fn(async (_input, init) => {

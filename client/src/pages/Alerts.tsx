@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback, type MouseEvent as ReactMouseEvent } from "react";
 import { useSearchParams, Link } from "react-router-dom";
-import { fetchAlertsPaginated, fetchAlert, deleteAlert, bulkDeleteAlerts, cleanupByIp, fetchConfig } from "../lib/api";
+import { fetchAlertsPaginated, fetchAlert, deleteAlert, bulkDeleteAlerts, cleanupByIp, fetchConfig, fetchDecisionsPaginated } from "../lib/api";
 import { isSimulatedAlert, isSimulatedDecision, matchesSimulationFilter, parseSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
 import { Badge } from "../components/ui/Badge";
@@ -10,8 +10,9 @@ import { TimeDisplay } from "../components/TimeDisplay";
 import { EventCard } from "../components/EventCard";
 import { getCountryName } from "../lib/utils";
 import { resolveMachineName } from "../../../shared/machine";
+import { collectDistinctOrigins, getOriginDisplayValue, getOriginTitle } from "../../../shared/origin";
 import { Search, Info, ExternalLink, Shield, ShieldBan, Trash2, X, AlertCircle } from "lucide-react";
-import type { AlertRecord, AlertSource, ApiPermissionError, BulkDeleteResult, SimulationFilter, SlimAlert } from '../types';
+import type { AlertRecord, AlertSource, ApiPermissionError, BulkDeleteResult, DecisionListItem, SimulationFilter, SlimAlert } from '../types';
 
 type AlertListItem = SlimAlert;
 type AlertSelection = AlertListItem | AlertRecord;
@@ -84,11 +85,17 @@ export function Alerts() {
     const [alerts, setAlerts] = useState<AlertListItem[]>([]);
     const [simulationsEnabled, setSimulationsEnabled] = useState(false);
     const [machineFeaturesEnabled, setMachineFeaturesEnabled] = useState(false);
+    const [originFeaturesEnabled, setOriginFeaturesEnabled] = useState(false);
     const [filter, setFilter] = useState("");
     const [loading, setLoading] = useState(true);
     const [loadingMore, setLoadingMore] = useState(false);
     const [selectedAlert, setSelectedAlert] = useState<AlertSelection | null>(null);
-    const [displayedDecisionCount, setDisplayedDecisionCount] = useState(50);
+    const [modalDecisions, setModalDecisions] = useState<DecisionListItem[]>([]);
+    const [modalDecisionsLoading, setModalDecisionsLoading] = useState(false);
+    const [modalDecisionsLoadingMore, setModalDecisionsLoadingMore] = useState(false);
+    const [modalDecisionsPage, setModalDecisionsPage] = useState(1);
+    const [modalDecisionsTotalPages, setModalDecisionsTotalPages] = useState(1);
+    const [modalDecisionsTotal, setModalDecisionsTotal] = useState(0);
     const [currentPage, setCurrentPage] = useState(1);
     const [totalPages, setTotalPages] = useState(1);
     const [totalAlerts, setTotalAlerts] = useState(0);
@@ -111,10 +118,12 @@ export function Alerts() {
     const hasMoreAlerts = currentPage < totalPages;
     const observer = useRef<IntersectionObserver | null>(null);
     const decisionContainerRef = useRef<HTMLDivElement | null>(null);
+    const modalDecisionObserverRef = useRef<IntersectionObserver | null>(null);
     const selectAllAlertsRef = useRef<HTMLInputElement | null>(null);
     const currentPageRef = useRef(1);
     const inFlightLoadKeysRef = useRef(new Set<string>());
     const lastCompletedLoadRef = useRef<{ key: string; completedAt: number } | null>(null);
+    const modalDecisionsLoadRef = useRef<{ alertId: string | null; page: number | null }>({ alertId: null, page: null });
 
     const buildServerFilters = useCallback((simulationFilter = currentSimulationFilter): Record<string, string> => {
         const filters: Record<string, string> = {
@@ -189,6 +198,7 @@ export function Alerts() {
             setSelectableAlertIds(alertsResult.selectable_ids.map(String));
             setSimulationsEnabled(configData.simulations_enabled === true);
             setMachineFeaturesEnabled(configData.machine_features_enabled === true);
+            setOriginFeaturesEnabled(configData.origin_features_enabled === true);
 
             // Check if there's an alert ID in the URL
             if (alertIdParam) {
@@ -262,8 +272,73 @@ export function Alerts() {
     useEffect(() => {
         selectedAlertIdRef.current = selectedAlert?.id || null;
         setShowAllEvents(false);
-        setDisplayedDecisionCount(50);
     }, [selectedAlert]);
+
+    const selectedAlertId = selectedAlert ? String(selectedAlert.id) : null;
+    const hasMoreModalDecisions = modalDecisionsPage < modalDecisionsTotalPages;
+
+    const loadModalDecisions = useCallback(async (alertId: string, page = 1, append = false) => {
+        const previousLoad = modalDecisionsLoadRef.current;
+        if (previousLoad.alertId === alertId && previousLoad.page === page) {
+            return;
+        }
+
+        modalDecisionsLoadRef.current = { alertId, page };
+
+        if (append) {
+            setModalDecisionsLoadingMore(true);
+        } else {
+            setModalDecisionsLoading(true);
+        }
+
+        try {
+            const result = await fetchDecisionsPaginated(page, PAGE_SIZE, {
+                alert_id: alertId,
+                include_expired: "true",
+                tz_offset: String(new Date().getTimezoneOffset()),
+            });
+
+            setModalDecisions((current) => append ? [...current, ...result.data] : result.data);
+            setModalDecisionsPage(result.pagination.page);
+            setModalDecisionsTotalPages(result.pagination.total_pages);
+            setModalDecisionsTotal(result.pagination.total);
+        } catch (error) {
+            console.error("Failed to load alert decisions", error);
+        } finally {
+            if (append) {
+                setModalDecisionsLoadingMore(false);
+            } else {
+                setModalDecisionsLoading(false);
+            }
+        }
+    }, []);
+
+    useEffect(() => {
+        modalDecisionsLoadRef.current = { alertId: null, page: null };
+        setModalDecisions([]);
+        setModalDecisionsPage(1);
+        setModalDecisionsTotalPages(1);
+        setModalDecisionsTotal(0);
+
+        if (!selectedAlertId) {
+            return;
+        }
+
+        void loadModalDecisions(selectedAlertId, 1, false);
+    }, [loadModalDecisions, selectedAlertId]);
+
+    const lastModalDecisionElementRef = useCallback((node: HTMLTableRowElement | null) => {
+        if (!selectedAlertId || modalDecisionsLoading || modalDecisionsLoadingMore || !hasMoreModalDecisions) return;
+        if (modalDecisionObserverRef.current) modalDecisionObserverRef.current.disconnect();
+        modalDecisionObserverRef.current = new IntersectionObserver((entries) => {
+            if (entries[0].isIntersecting) {
+                void loadModalDecisions(selectedAlertId, modalDecisionsPage + 1, true);
+            }
+        }, {
+            root: decisionContainerRef.current,
+        });
+        if (node) modalDecisionObserverRef.current.observe(node);
+    }, [hasMoreModalDecisions, loadModalDecisions, modalDecisionsLoading, modalDecisionsLoadingMore, modalDecisionsPage, selectedAlertId]);
 
     // Handler to fetch full alert data when clicking on a row
     // Since list view now returns slim alerts, we need to fetch full data for the modal
@@ -373,8 +448,6 @@ export function Alerts() {
     };
 
     const visibleAlerts = filteredAlerts;
-    const selectedAlertDecisions = selectedAlert?.decisions ?? [];
-    const visibleSelectedAlertDecisions = selectedAlertDecisions.slice(0, displayedDecisionCount);
     const selectedAlertEvents = selectedAlert && hasAlertEvents(selectedAlert) ? selectedAlert.events ?? [] : [];
     const selectedAlertIsSimulated = selectedAlert ? isSimulatedAlert(selectedAlert) : false;
     const selectedAlertSourceValue = getAlertSourceValue(selectedAlert?.source);
@@ -515,6 +588,9 @@ export function Alerts() {
                                 {machineFeaturesEnabled && (
                                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Machine</th>
                                 )}
+                                {originFeaturesEnabled && (
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Origin</th>
+                                )}
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Scenario</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Country</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">AS</th>
@@ -525,13 +601,16 @@ export function Alerts() {
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                             {loading ? (
-                                <tr><td colSpan={machineFeaturesEnabled ? 9 : 8} className="px-6 py-4 text-center text-sm text-gray-500">Loading alerts...</td></tr>
+                                <tr><td colSpan={8 + (machineFeaturesEnabled ? 1 : 0) + (originFeaturesEnabled ? 1 : 0)} className="px-6 py-4 text-center text-sm text-gray-500">Loading alerts...</td></tr>
                             ) : visibleAlerts.length === 0 ? (
-                                <tr><td colSpan={machineFeaturesEnabled ? 9 : 8} className="px-6 py-4 text-center text-sm text-gray-500">No alerts found</td></tr>
+                                <tr><td colSpan={8 + (machineFeaturesEnabled ? 1 : 0) + (originFeaturesEnabled ? 1 : 0)} className="px-6 py-4 text-center text-sm text-gray-500">No alerts found</td></tr>
                             ) : (
                                 visibleAlerts.map((alert, index) => {
                                     const isLastElement = index === visibleAlerts.length - 1;
                                     const sourceValue = getAlertSourceValue(alert.source);
+                                    const alertOrigins = collectDistinctOrigins(alert.decisions);
+                                    const alertOriginDisplay = getOriginDisplayValue(alertOrigins);
+                                    const alertOriginTitle = getOriginTitle(alertOrigins);
                                     const isSelected = selectedAlertIds.includes(String(alert.id));
                                     return (
                                         <tr
@@ -555,6 +634,11 @@ export function Alerts() {
                                             {machineFeaturesEnabled && (
                                                 <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[120px] truncate" title={resolveMachineName(alert)}>
                                                     {resolveMachineName(alert) || "-"}
+                                                </td>
+                                            )}
+                                            {originFeaturesEnabled && (
+                                                <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[140px] truncate" title={alertOriginTitle}>
+                                                    {alertOriginDisplay}
                                                 </td>
                                             )}
                                             <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={alert.scenario}>
@@ -778,13 +862,13 @@ export function Alerts() {
                         )}
 
                         {/* Decisions */}
-                        {selectedAlertDecisions.length > 0 && (
+                        {(modalDecisionsLoading || modalDecisionsTotal > 0) && (
                             <div>
                                 <div className="flex items-center justify-between gap-3 mb-3">
                                     <h4 className="text-lg font-semibold text-gray-900 dark:text-white">Decisions Taken</h4>
-                                    {selectedAlertDecisions.length > visibleSelectedAlertDecisions.length && (
+                                    {(modalDecisionsLoading || modalDecisions.length < modalDecisionsTotal) && (
                                         <span className="text-xs text-gray-500 dark:text-gray-400">
-                                            Showing {visibleSelectedAlertDecisions.length} of {selectedAlertDecisions.length}
+                                            Showing {modalDecisions.length} of {modalDecisionsTotal}
                                         </span>
                                     )}
                                 </div>
@@ -804,32 +888,41 @@ export function Alerts() {
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-800">
-                                            {visibleSelectedAlertDecisions.map((decision, idx) => {
+                                            {modalDecisionsLoading && modalDecisions.length === 0 ? (
+                                                <tr>
+                                                    <td colSpan={6} className="px-4 py-4 text-sm text-center text-gray-500">
+                                                        Loading decisions...
+                                                    </td>
+                                                </tr>
+                                            ) : modalDecisions.map((decision, idx) => {
                                                 // Check if this specific decision is active or expired
                                                 const isActive = (() => {
                                                     if (decision.expired !== undefined) {
                                                         return !decision.expired;
                                                     }
 
-                                                    if (decision.stop_at) {
-                                                        return new Date(decision.stop_at) > new Date();
+                                                    if (decision.detail.expiration) {
+                                                        return new Date(decision.detail.expiration) > new Date();
                                                     }
                                                     // If stop_at is missing, check if duration implies expiration
-                                                    if (decision.duration && decision.duration.startsWith('-')) {
+                                                    if (decision.detail.duration && decision.detail.duration.startsWith('-')) {
                                                         return false;
                                                     }
                                                     return true; // Assume active if no stop_at and not definitely expired
                                                 })();
                                                 return (
-                                                    <tr key={`${decision.id}-${decision.duration ?? idx}`}>
+                                                    <tr
+                                                        key={`${decision.id}-${decision.detail.duration ?? idx}`}
+                                                        ref={idx === modalDecisions.length - 1 ? lastModalDecisionElementRef : null}
+                                                    >
                                                         <td className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400">#{decision.id}</td>
-                                                        <td className="px-4 py-2 text-sm"><Badge variant="danger">{decision.type}</Badge></td>
+                                                        <td className="px-4 py-2 text-sm"><Badge variant="danger">{decision.detail.type || decision.detail.action || "ban"}</Badge></td>
                                                         <td className="px-4 py-2 text-sm font-mono">{decision.value}</td>
                                                         <td className="px-4 py-2 text-sm">
-                                                            {decision.duration && decision.duration.startsWith('-') ? "0s" : decision.duration}
+                                                            {(decision.detail.duration || "").startsWith('-') ? "0s" : decision.detail.duration}
                                                             {!isActive && <span className="ml-2 text-xs text-red-500 dark:text-red-400">(Expired)</span>}
                                                         </td>
-                                                        <td className="px-4 py-2 text-sm">{decision.origin}</td>
+                                                        <td className="px-4 py-2 text-sm">{decision.detail.origin || "-"}</td>
                                                         <td className="px-4 py-2 text-sm">
                                                             {isActive ? (
                                                                 <Link
@@ -864,17 +957,16 @@ export function Alerts() {
                                                     </tr>
                                                 );
                                             })}
+                                            {modalDecisionsLoadingMore && (
+                                                <tr>
+                                                    <td colSpan={6} className="px-4 py-4 text-sm text-center text-gray-500">
+                                                        Loading more decisions...
+                                                    </td>
+                                                </tr>
+                                            )}
                                         </tbody>
                                     </table>
                                 </div>
-                                {selectedAlertDecisions.length > visibleSelectedAlertDecisions.length && (
-                                    <button
-                                        onClick={() => setDisplayedDecisionCount((prev) => Math.min(prev + 50, selectedAlertDecisions.length))}
-                                        className="mt-3 w-full py-2 text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 bg-gray-50 dark:bg-gray-900/30 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors cursor-pointer"
-                                    >
-                                        Load 50 more decisions ({selectedAlertDecisions.length - visibleSelectedAlertDecisions.length} remaining)
-                                    </button>
-                                )}
                             </div>
                         )}
 

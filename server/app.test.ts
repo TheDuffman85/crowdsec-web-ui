@@ -567,8 +567,14 @@ describe('createApp', () => {
       lookback_period: string;
       simulations_enabled: boolean;
       machine_features_enabled: boolean;
+      origin_features_enabled: boolean;
     })).toEqual(
-      expect.objectContaining({ lookback_period: '1m', simulations_enabled: true, machine_features_enabled: false }),
+      expect.objectContaining({
+        lookback_period: '1m',
+        simulations_enabled: true,
+        machine_features_enabled: false,
+        origin_features_enabled: true,
+      }),
     );
 
     const alerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
@@ -784,6 +790,22 @@ describe('createApp', () => {
     expect(((await response.json()) as { machine_features_enabled: boolean }).machine_features_enabled).toBe(true);
   });
 
+  test('reports origin features enabled immediately when always-show override is configured', async () => {
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_ALWAYS_SHOW_ORIGIN: 'true',
+      },
+    });
+
+    const response = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { origin_features_enabled: boolean }).origin_features_enabled).toBe(true);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
   test('enables machine features after multiple machine ids are observed and includes machine in decision payloads', async () => {
     const firstAlert = sampleAlert({
       id: 101,
@@ -884,6 +906,124 @@ describe('createApp', () => {
 
     const configResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
     expect(((await configResponse.json()) as { machine_features_enabled: boolean }).machine_features_enabled).toBe(false);
+  });
+
+  test('enables origin features after multiple decision origins are observed', async () => {
+    const { controller, database } = createController();
+
+    seedAlert(database, sampleAlert({
+      id: 1,
+      uuid: 'alert-1',
+      decisions: [{ id: 10, value: '1.2.3.4', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'manual', simulated: false }],
+    }));
+    seedAlert(database, sampleAlert({
+      id: 2,
+      uuid: 'alert-2',
+      source: { ip: '5.6.7.8', value: '5.6.7.8', cn: 'US', as_name: 'AWS' },
+      decisions: [{ id: 20, value: '5.6.7.8', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'CAPI', simulated: false }],
+    }));
+
+    const response = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { origin_features_enabled: boolean }).origin_features_enabled).toBe(true);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('keeps origin features disabled when only one cached decision origin exists', async () => {
+    const { controller, database } = createController();
+
+    seedAlert(database, sampleAlert({
+      id: 1,
+      uuid: 'alert-1',
+      decisions: [{ id: 10, value: '1.2.3.4', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'manual', simulated: false }],
+    }));
+
+    const response = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { origin_features_enabled: boolean }).origin_features_enabled).toBe(false);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('matches alert search queries against decision origins', async () => {
+    const { controller, database } = createController();
+
+    seedAlert(database, sampleAlert({
+      id: 1,
+      uuid: 'alert-1',
+      decisions: [
+        { id: 10, value: '1.2.3.4', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'manual', simulated: false },
+        { id: 11, value: '1.2.3.4', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'CAPI', simulated: false },
+      ],
+    }));
+    seedAlert(database, sampleAlert({
+      id: 2,
+      uuid: 'alert-2',
+      source: { ip: '5.6.7.8', value: '5.6.7.8', cn: 'US', as_name: 'AWS' },
+      decisions: [{ id: 20, value: '5.6.7.8', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'crowdsec', simulated: false }],
+    }));
+
+    const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=10&q=capi'));
+    expect(response.status).toBe(200);
+    expect((await response.json()) as { data: Array<{ id: number }>; pagination: { total: number } }).toEqual(
+      expect.objectContaining({
+        data: [expect.objectContaining({ id: 1 })],
+        pagination: expect.objectContaining({ total: 1 }),
+      }),
+    );
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('matches decision search queries against machine and origin', async () => {
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_ALWAYS_SHOW_MACHINE: 'true',
+      },
+    });
+
+    seedAlert(database, sampleAlert({
+      id: 1,
+      uuid: 'alert-1',
+      machine_id: 'machine-1',
+      machine_alias: 'host-a',
+      decisions: [{ id: 10, value: '1.2.3.4', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'manual', simulated: false }],
+    }));
+    seedAlert(database, sampleAlert({
+      id: 2,
+      uuid: 'alert-2',
+      source: { ip: '5.6.7.8', value: '5.6.7.8', cn: 'US', as_name: 'AWS' },
+      decisions: [{ id: 20, value: '5.6.7.8', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'crowdsec', simulated: false }],
+    }));
+
+    const machineResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions?page=1&page_size=10&q=host-a'));
+    expect(machineResponse.status).toBe(200);
+    expect((await machineResponse.json()) as { data: Array<{ id: number }>; pagination: { total: number } }).toEqual(
+      expect.objectContaining({
+        data: [expect.objectContaining({ id: 10 })],
+        pagination: expect.objectContaining({ total: 1 }),
+      }),
+    );
+
+    const originResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions?page=1&page_size=10&q=manual'));
+    expect(originResponse.status).toBe(200);
+    expect((await originResponse.json()) as { data: Array<{ id: number }>; pagination: { total: number } }).toEqual(
+      expect.objectContaining({
+        data: [expect.objectContaining({ id: 10 })],
+        pagination: expect.objectContaining({ total: 1 }),
+      }),
+    );
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
   });
 
   test('validates bad ids and malformed input', async () => {

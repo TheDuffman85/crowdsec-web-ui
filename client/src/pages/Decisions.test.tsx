@@ -49,7 +49,7 @@ vi.mock('../lib/api', () => {
       is_duplicate: false,
       simulated: false,
       detail: {
-        origin: 'CAPI',
+        origin: 'manual',
         reason: 'crowdsecurity/ssh-bf',
         country: 'DE',
         as: 'Hetzner',
@@ -108,6 +108,7 @@ vi.mock('../lib/api', () => {
         decisions = decisions.filter((decision) => [
           decision.value,
           decision.machine,
+          decision.detail.origin,
           decision.detail.reason,
           decision.detail.country,
           decision.detail.as,
@@ -143,6 +144,7 @@ vi.mock('../lib/api', () => {
       sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
       simulations_enabled: true,
       machine_features_enabled: false,
+      origin_features_enabled: false,
     })),
   };
 });
@@ -154,13 +156,13 @@ afterEach(() => {
 });
 
 function installControlledIntersectionObserver() {
-  let triggerIntersection: (() => void) | undefined;
+  const callbacks: Array<() => void> = [];
 
   vi.stubGlobal('IntersectionObserver', class {
     constructor(callback: IntersectionObserverCallback) {
-      triggerIntersection = () => {
+      callbacks.push(() => {
         callback([{ isIntersecting: true } as IntersectionObserverEntry], this as unknown as IntersectionObserver);
-      };
+      });
     }
 
     observe(): void {}
@@ -171,7 +173,7 @@ function installControlledIntersectionObserver() {
     }
   });
 
-  return () => triggerIntersection?.();
+  return () => callbacks.forEach((callback) => callback());
 }
 
 describe('Decisions page', () => {
@@ -197,6 +199,7 @@ describe('Decisions page', () => {
 
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
     expect(screen.queryByRole('columnheader', { name: 'Machine' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Origin' })).not.toBeInTheDocument();
   });
 
   test('shows machine column and allows filtering by machine when enabled', async () => {
@@ -210,6 +213,7 @@ describe('Decisions page', () => {
       sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
       simulations_enabled: true,
       machine_features_enabled: true,
+      origin_features_enabled: true,
     });
 
     render(
@@ -223,6 +227,35 @@ describe('Decisions page', () => {
 
     await userEvent.type(screen.getByPlaceholderText('Filter decisions...'), 'host-a');
     expect(screen.getByText('1.2.3.4')).toBeInTheDocument();
+    expect(screen.queryByText('5.6.7.8')).not.toBeInTheDocument();
+  });
+
+  test('shows origin column and allows filtering by origin when enabled', async () => {
+    vi.mocked(api.fetchConfig).mockResolvedValue({
+      lookback_period: '1h',
+      lookback_hours: 1,
+      lookback_days: 1,
+      refresh_interval: 30000,
+      current_interval_name: '30s',
+      lapi_status: { isConnected: true, lastCheck: null, lastError: null },
+      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+      simulations_enabled: true,
+      machine_features_enabled: false,
+      origin_features_enabled: true,
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByRole('columnheader', { name: 'Origin' })).toBeInTheDocument());
+    expect(screen.getByText('manual')).toBeInTheDocument();
+    expect(screen.getByText('CAPI')).toBeInTheDocument();
+
+    await userEvent.type(screen.getByPlaceholderText('Filter decisions...'), 'manual');
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
     expect(screen.queryByText('5.6.7.8')).not.toBeInTheDocument();
   });
 

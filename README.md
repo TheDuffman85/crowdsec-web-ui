@@ -150,6 +150,15 @@ In multi-machine deployments, CrowdSec alerts can include `machine_id` and `mach
 - Set `CROWDSEC_ALWAYS_SHOW_MACHINE=true` to always show the Machine column/card, even before multiple machines have been observed.
 - Displayed `machine` values prefer `machine_alias` and fall back to `machine_id`.
 
+### Origin Visibility
+
+CrowdSec decisions also carry an `origin`, which the Web UI can surface in the Alerts and Decisions tables when multiple distinct origins are present.
+
+- `CROWDSEC_ALWAYS_SHOW_ORIGIN=false` by default.
+- When left unset or set to `false`, the UI enables origin visibility only after this app has observed more than one distinct non-empty decision origin during the current lookback window.
+- Set `CROWDSEC_ALWAYS_SHOW_ORIGIN=true` to always show the Origin column, even before multiple origins have been observed.
+- Alerts with decisions from more than one origin display `Mixed`, while search still matches each underlying origin value.
+
 ### Alert Allowlist Filtering
 
 Some CrowdSec setups ingest very large volumes of alerts and decisions from external automation, third-party importers, bulk list sync jobs, or other custom workflows. In those cases, you may want the Web UI to focus on selected alert sources instead of caching everything exposed by the LAPI.
@@ -210,6 +219,7 @@ These are upstream LAPI filters, so excluded alerts are skipped before they are 
       -e CROWDSEC_PASSWORD=<your-secure-password> \
       -e CROWDSEC_SIMULATIONS_ENABLED=true \
       -e CROWDSEC_ALWAYS_SHOW_MACHINE=false \
+      -e CROWDSEC_ALWAYS_SHOW_ORIGIN=false \
       -e CROWDSEC_LOOKBACK_PERIOD=5d \
       -e CROWDSEC_REFRESH_INTERVAL=0 \
       -v $(pwd)/data:/app/data \

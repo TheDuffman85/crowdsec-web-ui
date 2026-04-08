@@ -51,6 +51,7 @@ describe('config helpers', () => {
       CROWDSEC_ALERT_EXTRA_SCENARIOS: 'manual/web-ui',
       CROWDSEC_SIMULATIONS_ENABLED: 'false',
       CROWDSEC_ALWAYS_SHOW_MACHINE: 'true',
+      CROWDSEC_ALWAYS_SHOW_ORIGIN: 'true',
       CROWDSEC_LOOKBACK_PERIOD: '2d',
       CROWDSEC_REFRESH_INTERVAL: '5s',
       CROWDSEC_IDLE_REFRESH_INTERVAL: '1m',
@@ -75,6 +76,7 @@ describe('config helpers', () => {
     expect(config.alertExtraScenarios).toEqual(['manual/web-ui']);
     expect(config.simulationsEnabled).toBe(false);
     expect(config.alwaysShowMachine).toBe(true);
+    expect(config.alwaysShowOrigin).toBe(true);
     expect(config.lookbackMs).toBe(172_800_000);
     expect(config.refreshIntervalMs).toBe(5_000);
     expect(config.bootstrapRetryEnabled).toBe(false);
@@ -93,6 +95,7 @@ describe('config helpers', () => {
     expect(config.alertExtraScenarios).toEqual([]);
     expect(config.simulationsEnabled).toBe(false);
     expect(config.alwaysShowMachine).toBe(false);
+    expect(config.alwaysShowOrigin).toBe(false);
     expect(config.notificationSecretKey).toBeUndefined();
     expect(config.notificationAllowPrivateAddresses).toBe(true);
   });

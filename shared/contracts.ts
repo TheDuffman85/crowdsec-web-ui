@@ -351,6 +351,7 @@ export interface ConfigResponse {
   sync_status: SyncStatus;
   simulations_enabled: boolean;
   machine_features_enabled: boolean;
+  origin_features_enabled: boolean;
 }
 
 export interface AddDecisionRequest {
