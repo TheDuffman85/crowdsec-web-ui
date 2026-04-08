@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StrictMode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -186,6 +186,12 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+async function flushDecisionSearchDebounce(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 350));
+  });
+}
+
 describe('Decisions page', () => {
   test('filters to simulated decisions and shows the simulation badge inline in the scenario column', async () => {
     render(
@@ -235,7 +241,8 @@ describe('Decisions page', () => {
     await waitFor(() => expect(screen.getByRole('columnheader', { name: 'Machine' })).toBeInTheDocument());
     expect(screen.getByText('host-a')).toBeInTheDocument();
 
-    await userEvent.type(screen.getByPlaceholderText('Filter decisions...'), 'host-a');
+    fireEvent.change(screen.getByPlaceholderText('Filter decisions...'), { target: { value: 'host-a' } });
+    await flushDecisionSearchDebounce();
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
     await waitFor(() => expect(screen.queryByText('5.6.7.8')).not.toBeInTheDocument());
   });
@@ -264,7 +271,8 @@ describe('Decisions page', () => {
     expect(screen.getByText('manual')).toBeInTheDocument();
     expect(screen.getByText('CAPI')).toBeInTheDocument();
 
-    await userEvent.type(screen.getByPlaceholderText('Filter decisions...'), 'manual');
+    fireEvent.change(screen.getByPlaceholderText('Filter decisions...'), { target: { value: 'manual' } });
+    await flushDecisionSearchDebounce();
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
     await waitFor(() => expect(screen.queryByText('5.6.7.8')).not.toBeInTheDocument());
   });
@@ -279,7 +287,8 @@ describe('Decisions page', () => {
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
 
     const input = screen.getByPlaceholderText('Filter decisions...');
-    await userEvent.type(input, 'origin:(manual OR');
+    fireEvent.change(input, { target: { value: 'origin:(manual OR' } });
+    await flushDecisionSearchDebounce();
 
     await waitFor(() => expect(screen.getByText(/Search syntax error at character/i)).toBeInTheDocument());
     expect(screen.getByText('1.2.3.4')).toBeInTheDocument();
@@ -324,7 +333,8 @@ describe('Decisions page', () => {
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
 
     const input = screen.getByPlaceholderText('Filter decisions...');
-    await userEvent.type(input, 'country:germany AND action:ban');
+    fireEvent.change(input, { target: { value: 'country:germany AND action:ban' } });
+    await flushDecisionSearchDebounce();
 
     await waitFor(() => expect(screen.queryByText('5.6.7.8')).not.toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: 'Reset all filters' }));
