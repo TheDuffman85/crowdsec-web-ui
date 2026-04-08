@@ -38,6 +38,11 @@ interface DashboardCountState {
     simulatedDecisions: number;
 }
 
+interface InFlightDashboardLoad {
+    requestId: number;
+    signal?: AbortSignal;
+}
+
 const ActivityBarChart = lazy(async () => ({ default: (await import('../components/DashboardCharts')).ActivityBarChart }));
 const WorldMapCard = lazy(async () => ({ default: (await import('../components/WorldMapCard')).WorldMapCard }));
 
@@ -149,7 +154,8 @@ export function Dashboard() {
     const dashboardStatsRef = useRef<DashboardStatsResponse | null>(null);
     const loadDataRef = useRef<(isBackground?: boolean, signal?: AbortSignal) => Promise<void>>(async () => {});
     const lastRefreshSignalRef = useRef(refreshSignal);
-    const inFlightLoadKeysRef = useRef(new Set<string>());
+    const inFlightLoadKeysRef = useRef(new Map<string, InFlightDashboardLoad>());
+    const nextLoadRequestIdRef = useRef(0);
     const lastCompletedLoadRef = useRef<{ key: string; completedAt: number } | null>(null);
 
     // Active filters
@@ -205,14 +211,17 @@ export function Dashboard() {
         const requestFilters = buildDashboardStatsFilters();
         const loadKey = JSON.stringify(requestFilters);
         const lastCompletedLoad = lastCompletedLoadRef.current;
+        const inFlightLoad = inFlightLoadKeysRef.current.get(loadKey);
         if (
-            inFlightLoadKeysRef.current.has(loadKey) ||
+            (inFlightLoad && !inFlightLoad.signal?.aborted) ||
             (lastCompletedLoad?.key === loadKey && Date.now() - lastCompletedLoad.completedAt < 250)
         ) {
             return;
         }
 
-        inFlightLoadKeysRef.current.add(loadKey);
+        const requestId = nextLoadRequestIdRef.current + 1;
+        nextLoadRequestIdRef.current = requestId;
+        inFlightLoadKeysRef.current.set(loadKey, { requestId, signal });
         const shouldBlockWithInitialLoading = !dashboardStatsRef.current && !isBackground;
         if (shouldBlockWithInitialLoading) {
             setInitialLoading(true);
@@ -250,7 +259,9 @@ export function Dashboard() {
             console.error("Failed to load dashboard data", error);
             setIsOnline(false);
         } finally {
-            inFlightLoadKeysRef.current.delete(loadKey);
+            if (inFlightLoadKeysRef.current.get(loadKey)?.requestId === requestId) {
+                inFlightLoadKeysRef.current.delete(loadKey);
+            }
             if (!signal?.aborted) {
                 lastCompletedLoadRef.current = { key: loadKey, completedAt: Date.now() };
             }

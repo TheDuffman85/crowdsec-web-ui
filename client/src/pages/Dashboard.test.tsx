@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
@@ -311,8 +312,69 @@ describe('Dashboard page', () => {
     });
   });
 
+  test('retries the initial dashboard load after a strict mode abort cleanup', async () => {
+    const pendingRequests: Array<{ resolve: (value: ReturnType<typeof buildDashboardStatsResponse>) => void }> = [];
+    fetchDashboardStatsMock.mockImplementation((_filters?: Record<string, string>, init?: RequestInit) => (
+      new Promise((resolve, reject) => {
+        const signal = init?.signal;
+        if (signal) {
+          if (signal.aborted) {
+            reject(new Error('aborted'));
+            return;
+          }
+          signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        }
+
+        pendingRequests.push({
+          resolve: (value) => resolve(value),
+        });
+      })
+    ));
+
+    render(
+      <StrictMode>
+        <MemoryRouter>
+          <Dashboard />
+        </MemoryRouter>
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledTimes(2));
+
+    const latestRequest = pendingRequests.at(-1);
+    expect(latestRequest).toBeDefined();
+    latestRequest?.resolve(buildDashboardStatsResponse());
+
+    await waitFor(() => expect(screen.getByText('Total Alerts')).toBeInTheDocument());
+  });
+
   test('does not trigger a duplicate dashboard load when filters change after a refresh signal', async () => {
     refreshSignalMock = 1;
+    const completedLiveLoads: Array<Record<string, string> | undefined> = [];
+    fetchDashboardStatsMock.mockImplementation((filters?: Record<string, string>, init?: RequestInit) => (
+      new Promise((resolve, reject) => {
+        const signal = init?.signal;
+        const finishRequest = () => {
+          if (signal?.aborted) {
+            reject(new Error('aborted'));
+            return;
+          }
+
+          completedLiveLoads.push(filters);
+          resolve(buildDashboardStatsResponse(filters));
+        };
+
+        if (signal) {
+          if (signal.aborted) {
+            reject(new Error('aborted'));
+            return;
+          }
+          signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        }
+
+        queueMicrotask(finishRequest);
+      })
+    ));
 
     render(
       <MemoryRouter>
@@ -322,6 +384,7 @@ describe('Dashboard page', () => {
 
     await waitFor(() => expect(screen.getByText('Total Alerts')).toBeInTheDocument());
     fetchDashboardStatsMock.mockClear();
+    completedLiveLoads.length = 0;
     await userEvent.click(screen.getByRole('button', { name: 'Live' }));
 
     await waitFor(() => {
@@ -330,7 +393,7 @@ describe('Dashboard page', () => {
       expect(within(alertsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('1');
     });
 
-    expect(fetchDashboardStatsMock.mock.calls.length).toBe(1);
-    expect(fetchDashboardStatsMock.mock.calls.at(-1)?.[0]).toMatchObject({ simulation: 'live' });
+    expect(completedLiveLoads).toHaveLength(1);
+    expect(completedLiveLoads[0]).toMatchObject({ simulation: 'live' });
   });
 });

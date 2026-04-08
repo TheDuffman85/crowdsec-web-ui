@@ -108,7 +108,7 @@ describe('WorldMapCard', () => {
     );
 
     await waitFor(() => expect(screen.getByTestId('choropleth')).toBeInTheDocument());
-    expect(choroplethMountSpy).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(choroplethMountSpy).toHaveBeenCalledTimes(1));
     expect(choroplethUnmountSpy).not.toHaveBeenCalled();
 
     rerender(
@@ -121,7 +121,7 @@ describe('WorldMapCard', () => {
     );
 
     await waitFor(() => expect(screen.getByTestId('choropleth')).toBeInTheDocument());
-    expect(choroplethMountSpy).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(choroplethMountSpy).toHaveBeenCalledTimes(1));
     expect(choroplethUnmountSpy).not.toHaveBeenCalled();
   });
 });
