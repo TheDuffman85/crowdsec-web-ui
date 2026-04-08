@@ -1471,6 +1471,216 @@ describe('createApp', () => {
     destroyTempDir();
   });
 
+  test('keeps alerts and decisions endpoints consistent when sync repairs stale cached decisions', async () => {
+    const createdAt = new Date().toISOString();
+    const stopAt = new Date(Date.now() + 30 * 60 * 1_000).toISOString();
+    const syncedAlert = sampleAlert({
+      id: 200,
+      uuid: 'alert-200',
+      created_at: createdAt,
+      source: {
+        ip: '2.2.2.2',
+        value: '2.2.2.2',
+        cn: 'DE',
+        as_name: 'Hetzner',
+      },
+      decisions: [
+        {
+          id: 2001,
+          type: 'ban',
+          value: '2.2.2.2',
+          duration: '30m',
+          stop_at: stopAt,
+          origin: 'manual',
+          scenario: 'crowdsecurity/ssh-bf',
+          simulated: false,
+        },
+      ],
+      simulated: false,
+    });
+
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '0',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (url.includes('/v1/alerts?')) {
+          return Response.json([syncedAlert]);
+        }
+        return undefined;
+      },
+    });
+
+    seedAlert(database, syncedAlert);
+    database.insertDecision({
+      $id: '2999',
+      $uuid: '2999',
+      $alert_id: 200,
+      $created_at: createdAt,
+      $stop_at: new Date(Date.now() + 45 * 60 * 1_000).toISOString(),
+      $value: '2.2.2.2',
+      $type: 'ban',
+      $origin: 'manual',
+      $scenario: 'crowdsecurity/ssh-bf',
+      $raw_data: JSON.stringify({
+        id: 2999,
+        created_at: createdAt,
+        scenario: 'crowdsecurity/ssh-bf',
+        value: '2.2.2.2',
+        stop_at: new Date(Date.now() + 45 * 60 * 1_000).toISOString(),
+        type: 'ban',
+        origin: 'manual',
+        country: 'DE',
+        as: 'Hetzner',
+        target: 'ssh',
+        alert_id: 200,
+        simulated: false,
+      }),
+    });
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50'));
+    expect(alertsResponse.status).toBe(200);
+    const alertsJson = await alertsResponse.json() as {
+      data: Array<{ id: number; decisions: Array<{ id: number; expired?: boolean }> }>;
+    };
+    const alertRow = alertsJson.data.find((alert) => alert.id === 200);
+    expect(alertRow?.decisions.filter((decision) => decision.expired !== true)).toHaveLength(1);
+
+    const decisionsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions?page=1&page_size=50&alert_id=200&include_expired=true'));
+    expect(decisionsResponse.status).toBe(200);
+    const decisionsJson = await decisionsResponse.json() as {
+      data: Array<{ id: number }>;
+      pagination: { total: number };
+    };
+    expect(decisionsJson.pagination.total).toBe(1);
+    expect(decisionsJson.data.map((decision) => decision.id)).toEqual([2001]);
+    expect(database.getDecisionById('2999')).toBeNull();
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('removes stale decisions during active-decision delta refresh and updates alert payloads to match', async () => {
+    const createdAt = new Date().toISOString();
+    const initialStopAt = new Date(Date.now() + 30 * 60 * 1_000).toISOString();
+    const staleStopAt = new Date(Date.now() + 45 * 60 * 1_000).toISOString();
+    const initialAlert = sampleAlert({
+      id: 210,
+      uuid: 'alert-210',
+      created_at: createdAt,
+      source: {
+        ip: '3.3.3.3',
+        value: '3.3.3.3',
+        cn: 'US',
+        as_name: 'DigitalOcean',
+      },
+      decisions: [
+        {
+          id: 2101,
+          type: 'ban',
+          value: '3.3.3.3',
+          duration: '30m',
+          stop_at: initialStopAt,
+          origin: 'manual',
+          scenario: 'crowdsecurity/http-probing',
+          simulated: false,
+        },
+        {
+          id: 2102,
+          type: 'ban',
+          value: '3.3.3.3',
+          duration: '45m',
+          stop_at: staleStopAt,
+          origin: 'manual',
+          scenario: 'crowdsecurity/http-probing',
+          simulated: false,
+        },
+      ],
+      simulated: false,
+    });
+    const refreshedAlert = sampleAlert({
+      id: 210,
+      uuid: 'alert-210',
+      created_at: createdAt,
+      source: initialAlert.source,
+      decisions: [
+        {
+          id: 2101,
+          type: 'ban',
+          value: '3.3.3.3',
+          duration: '30m',
+          stop_at: initialStopAt,
+          origin: 'manual',
+          scenario: 'crowdsecurity/http-probing',
+          simulated: false,
+        },
+      ],
+      simulated: false,
+    });
+    let phase: 'initial' | 'delta' = 'initial';
+
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '0',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (url.includes('/v1/alerts?')) {
+          if (phase === 'initial') {
+            return Response.json([initialAlert]);
+          }
+          if (url.includes('has_active_decision=true')) {
+            return Response.json([refreshedAlert]);
+          }
+          return Response.json([]);
+        }
+        return undefined;
+      },
+    });
+
+    const initialAlertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50'));
+    expect(initialAlertsResponse.status).toBe(200);
+
+    const initialDecisionsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions?page=1&page_size=50&alert_id=210&include_expired=true'));
+    expect(initialDecisionsResponse.status).toBe(200);
+    const initialDecisionsJson = await initialDecisionsResponse.json() as {
+      data: Array<{ id: number }>;
+      pagination: { total: number };
+    };
+    expect(initialDecisionsJson.pagination.total).toBe(2);
+    expect(initialDecisionsJson.data.map((decision) => decision.id).sort()).toEqual([2101, 2102]);
+
+    phase = 'delta';
+
+    const refreshedAlertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50'));
+    expect(refreshedAlertsResponse.status).toBe(200);
+    const refreshedAlertsJson = await refreshedAlertsResponse.json() as {
+      data: Array<{ id: number; decisions: Array<{ id: number; expired?: boolean }> }>;
+    };
+    const refreshedAlertRow = refreshedAlertsJson.data.find((alert) => alert.id === 210);
+    expect(refreshedAlertRow?.decisions.filter((decision) => decision.expired !== true).map((decision) => decision.id)).toEqual([2101]);
+
+    const refreshedDecisionsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions?page=1&page_size=50&alert_id=210&include_expired=true'));
+    expect(refreshedDecisionsResponse.status).toBe(200);
+    const refreshedDecisionsJson = await refreshedDecisionsResponse.json() as {
+      data: Array<{ id: number }>;
+      pagination: { total: number };
+    };
+    expect(refreshedDecisionsJson.pagination.total).toBe(1);
+    expect(refreshedDecisionsJson.data.map((decision) => decision.id)).toEqual([2101]);
+    expect(database.getDecisionById('2102')).toBeNull();
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
   test('supports notification settings APIs and records fired notifications', async () => {
     const liveAlert = sampleAlert({
       id: 99,

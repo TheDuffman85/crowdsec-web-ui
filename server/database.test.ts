@@ -119,6 +119,72 @@ describe('CrowdsecDatabase', () => {
     db.close();
   });
 
+  test('deleteDecisionsByAlertIdExcept removes stale decisions while preserving kept and unrelated rows', () => {
+    const db = createTestDatabase();
+
+    db.insertDecision({
+      $id: '10',
+      $uuid: '10',
+      $alert_id: 1,
+      $created_at: '2025-01-01T00:00:00.000Z',
+      $stop_at: '2030-01-01T00:00:00.000Z',
+      $value: '1.2.3.4',
+      $type: 'ban',
+      $origin: 'manual',
+      $scenario: 'crowdsecurity/ssh-bf',
+      $raw_data: JSON.stringify({ id: 10, alert_id: 1 }),
+    });
+    db.insertDecision({
+      $id: '11',
+      $uuid: '11',
+      $alert_id: 1,
+      $created_at: '2025-01-01T00:01:00.000Z',
+      $stop_at: '2030-01-01T00:01:00.000Z',
+      $value: '1.2.3.5',
+      $type: 'ban',
+      $origin: 'manual',
+      $scenario: 'crowdsecurity/ssh-bf',
+      $raw_data: JSON.stringify({ id: 11, alert_id: 1 }),
+    });
+    db.insertDecision({
+      $id: '12',
+      $uuid: '12',
+      $alert_id: 1,
+      $created_at: '2025-01-01T00:02:00.000Z',
+      $stop_at: '2030-01-01T00:02:00.000Z',
+      $value: '1.2.3.6',
+      $type: 'ban',
+      $origin: 'manual',
+      $scenario: 'crowdsecurity/ssh-bf',
+      $raw_data: JSON.stringify({ id: 12, alert_id: 1 }),
+    });
+    db.insertDecision({
+      $id: '20',
+      $uuid: '20',
+      $alert_id: 2,
+      $created_at: '2025-01-01T00:03:00.000Z',
+      $stop_at: '2030-01-01T00:03:00.000Z',
+      $value: '5.6.7.8',
+      $type: 'ban',
+      $origin: 'manual',
+      $scenario: 'crowdsecurity/http-probing',
+      $raw_data: JSON.stringify({ id: 20, alert_id: 2 }),
+    });
+
+    expect(db.deleteDecisionsByAlertIdExcept(1, ['10', '12'])).toBe(1);
+    expect(db.getDecisionById('10')).not.toBeNull();
+    expect(db.getDecisionById('11')).toBeNull();
+    expect(db.getDecisionById('12')).not.toBeNull();
+    expect(db.getDecisionById('20')).not.toBeNull();
+
+    expect(db.deleteDecisionsByAlertIdExcept(1, [])).toBe(2);
+    expect(db.getDecisionById('10')).toBeNull();
+    expect(db.getDecisionById('12')).toBeNull();
+    expect(db.getDecisionById('20')).not.toBeNull();
+
+    db.close();
+  });
+
   test('stores notification channels, rules, notifications, and cve cache', () => {
     const db = createTestDatabase();
 

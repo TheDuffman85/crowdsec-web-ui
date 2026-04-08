@@ -996,7 +996,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       }
     }
 
+    const currentDecisionIds: string[] = [];
     for (const decision of normalizedDecisions) {
+      currentDecisionIds.push(String(decision.id));
       const createdAt = decision.created_at || alert.created_at;
       const stopAt = decision.duration
         ? new Date(Date.now() + parseGoDuration(decision.duration)).toISOString()
@@ -1038,6 +1040,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         console.error(`Failed to insert decision ${decision.id}:`, error.message);
       }
     }
+
+    database.deleteDecisionsByAlertIdExcept(alert.id, currentDecisionIds);
   }
 
   async function syncHistory(): Promise<number> {
@@ -1187,37 +1191,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       if (activeDecisionAlerts.length > 0) {
         const refreshTransaction = database.transaction<AlertRecord[]>((alerts) => {
           for (const alert of alerts) {
-            for (const decision of alert.decisions || []) {
-              const createdAt = decision.created_at || alert.created_at;
-              const stopAt = decision.duration
-                ? new Date(Date.now() + parseGoDuration(decision.duration)).toISOString()
-                : decision.stop_at || createdAt;
-
-              const alertSource = alert.source || null;
-              const sourceValue = getAlertSourceValue(alertSource);
-              const machine = resolveMachineName(alert);
-              const enrichedDecision = {
-                ...decision,
-                created_at: createdAt,
-                stop_at: stopAt,
-                scenario: decision.scenario || alert.scenario || 'unknown',
-                origin: decision.origin || decision.scenario || alert.scenario || 'unknown',
-                alert_id: alert.id,
-                value: decision.value || sourceValue,
-                type: decision.type || 'ban',
-                country: alertSource?.cn,
-                as: alertSource?.as_name,
-                machine,
-                target: getAlertTarget(alert),
-                simulated: normalizeDecisionSimulated(decision, alert),
-              };
-
-              database.updateDecision({
-                $id: String(decision.id),
-                $stop_at: stopAt,
-                $raw_data: JSON.stringify(enrichedDecision),
-              });
-            }
+            processAlertForDatabase(alert);
           }
         });
         refreshTransaction(activeDecisionAlerts);

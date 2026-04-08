@@ -98,6 +98,7 @@ export class CrowdsecDatabase {
   private readonly deleteOldDecisionsStatement: any;
   private readonly deleteDecisionStatement: any;
   private readonly getDecisionByIdStatement: any;
+  private readonly getDecisionIdsByAlertIdStatement: any;
   private readonly getActiveDecisionByValueStatement: any;
   private readonly deleteAlertStatement: any;
   private readonly deleteDecisionsByAlertIdStatement: any;
@@ -172,6 +173,7 @@ export class CrowdsecDatabase {
     this.deleteOldDecisionsStatement = this.db.query('DELETE FROM decisions WHERE stop_at < $cutoff');
     this.deleteDecisionStatement = this.db.query('DELETE FROM decisions WHERE id = $id');
     this.getDecisionByIdStatement = this.db.query('SELECT raw_data, stop_at FROM decisions WHERE id = $id');
+    this.getDecisionIdsByAlertIdStatement = this.db.query('SELECT id FROM decisions WHERE alert_id = $alert_id');
     this.getActiveDecisionByValueStatement = this.db.query(`
       SELECT raw_data, stop_at FROM decisions
       WHERE value = $value AND stop_at > $now AND id NOT LIKE 'dup_%'
@@ -317,6 +319,29 @@ export class CrowdsecDatabase {
 
   getDecisionById(id: string | number): { raw_data: string; stop_at: string } | null {
     return (this.getDecisionByIdStatement.get({ $id: String(id) }) as { raw_data: string; stop_at: string } | null) || null;
+  }
+
+  deleteDecisionsByAlertIdExcept(alertId: string | number, keepIds: string[]): number {
+    const keepSet = new Set(keepIds.map(String));
+    const rows = this.getDecisionIdsByAlertIdStatement.all({ $alert_id: alertId }) as Array<{ id: string | number }>;
+    const staleIds = rows
+      .map((row) => String(row.id))
+      .filter((id) => !keepSet.has(id));
+
+    if (staleIds.length === 0) {
+      return 0;
+    }
+
+    let changes = 0;
+    const chunkSize = 900;
+    for (let offset = 0; offset < staleIds.length; offset += chunkSize) {
+      const chunk = staleIds.slice(offset, offset + chunkSize);
+      const placeholders = chunk.map(() => '?').join(',');
+      const statement = this.db.prepare(`DELETE FROM decisions WHERE id IN (${placeholders})`);
+      changes += statement.run(...chunk).changes;
+    }
+
+    return changes;
   }
 
   getDecisionStopAtBatch(ids: string[]): Map<string, string> {

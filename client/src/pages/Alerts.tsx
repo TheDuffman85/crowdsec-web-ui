@@ -98,6 +98,7 @@ export function Alerts() {
     const [modalDecisionsPage, setModalDecisionsPage] = useState(1);
     const [modalDecisionsTotalPages, setModalDecisionsTotalPages] = useState(1);
     const [modalDecisionsTotal, setModalDecisionsTotal] = useState(0);
+    const [modalDecisionsRefreshToken, setModalDecisionsRefreshToken] = useState(0);
     const [currentPage, setCurrentPage] = useState(1);
     const [totalPages, setTotalPages] = useState(1);
     const [totalAlerts, setTotalAlerts] = useState(0);
@@ -122,6 +123,8 @@ export function Alerts() {
     const decisionContainerRef = useRef<HTMLDivElement | null>(null);
     const modalDecisionObserverRef = useRef<IntersectionObserver | null>(null);
     const selectAllAlertsRef = useRef<HTMLInputElement | null>(null);
+    const previousSelectedAlertIdRef = useRef<string | null>(null);
+    const modalSelectedAlertIdRef = useRef<string | null>(null);
     const currentPageRef = useRef(1);
     const inFlightLoadKeysRef = useRef(new Set<string>());
     const lastCompletedLoadRef = useRef<{ key: string; completedAt: number } | null>(null);
@@ -256,6 +259,7 @@ export function Alerts() {
                 try {
                     const alertData = await fetchAlert(alertIdParam);
                     setSelectedAlert(alertData);
+                    setModalDecisionsRefreshToken((current) => current + 1);
                 } catch (err) {
                     console.error("Alert not found", err);
                     // Fallback to slim data from list if fetch fails
@@ -271,6 +275,7 @@ export function Alerts() {
                     try {
                         const fullAlert = await fetchAlert(selectedAlertIdRef.current);
                         setSelectedAlert(fullAlert);
+                        setModalDecisionsRefreshToken((current) => current + 1);
                     } catch (err) {
                         console.error("Failed to refresh alert details", err);
                         // Keep showing current data on error
@@ -346,16 +351,32 @@ export function Alerts() {
 
     // Keep ref in sync with selectedAlert for auto-refresh
     useEffect(() => {
+        const nextSelectedAlertId = selectedAlert ? String(selectedAlert.id) : null;
         selectedAlertIdRef.current = selectedAlert?.id || null;
-        setShowAllEvents(false);
+        if (previousSelectedAlertIdRef.current !== nextSelectedAlertId) {
+            setShowAllEvents(false);
+        }
+        previousSelectedAlertIdRef.current = nextSelectedAlertId;
     }, [selectedAlert]);
 
     const selectedAlertId = selectedAlert ? String(selectedAlert.id) : null;
     const hasMoreModalDecisions = modalDecisionsPage < modalDecisionsTotalPages;
 
-    const loadModalDecisions = useCallback(async (alertId: string, page = 1, append = false) => {
+    const loadModalDecisions = useCallback(async (
+        alertId: string,
+        page = 1,
+        {
+            append = false,
+            preserveLoadedPages = false,
+            forceRefresh = false,
+        }: {
+            append?: boolean;
+            preserveLoadedPages?: boolean;
+            forceRefresh?: boolean;
+        } = {},
+    ) => {
         const previousLoad = modalDecisionsLoadRef.current;
-        if (previousLoad.alertId === alertId && previousLoad.page === page) {
+        if (!forceRefresh && previousLoad.alertId === alertId && previousLoad.page === page) {
             return;
         }
 
@@ -374,8 +395,29 @@ export function Alerts() {
                 tz_offset: String(new Date().getTimezoneOffset()),
             });
 
-            setModalDecisions((current) => append ? [...current, ...result.data] : result.data);
-            setModalDecisionsPage(result.pagination.page);
+            let decisionsData = result.data;
+            let nextPage = result.pagination.page;
+
+            if (!append && preserveLoadedPages) {
+                const loadedPageCount = Math.max(1, modalDecisionsPage);
+                const maxPageToRefresh = Math.max(1, Math.min(loadedPageCount, result.pagination.total_pages || 1));
+                if (maxPageToRefresh > 1) {
+                    const remainingPages = await Promise.all(
+                        Array.from({ length: maxPageToRefresh - 1 }, (_, index) => (
+                            fetchDecisionsPaginated(index + 2, PAGE_SIZE, {
+                                alert_id: alertId,
+                                include_expired: "true",
+                                tz_offset: String(new Date().getTimezoneOffset()),
+                            })
+                        )),
+                    );
+                    decisionsData = [result, ...remainingPages].flatMap((pageResult) => pageResult.data);
+                }
+                nextPage = maxPageToRefresh;
+            }
+
+            setModalDecisions((current) => append ? [...current, ...result.data] : decisionsData);
+            setModalDecisionsPage(nextPage);
             setModalDecisionsTotalPages(result.pagination.total_pages);
             setModalDecisionsTotal(result.pagination.total);
         } catch (error) {
@@ -387,28 +429,43 @@ export function Alerts() {
                 setModalDecisionsLoading(false);
             }
         }
-    }, []);
+    }, [modalDecisionsPage]);
 
     useEffect(() => {
-        modalDecisionsLoadRef.current = { alertId: null, page: null };
-        setModalDecisions([]);
-        setModalDecisionsPage(1);
-        setModalDecisionsTotalPages(1);
-        setModalDecisionsTotal(0);
-
         if (!selectedAlertId) {
+            modalDecisionsLoadRef.current = { alertId: null, page: null };
+            setModalDecisions([]);
+            setModalDecisionsPage(1);
+            setModalDecisionsTotalPages(1);
+            setModalDecisionsTotal(0);
+            modalSelectedAlertIdRef.current = null;
             return;
         }
 
-        void loadModalDecisions(selectedAlertId, 1, false);
-    }, [loadModalDecisions, selectedAlertId]);
+        const selectedAlertChanged = modalSelectedAlertIdRef.current !== selectedAlertId;
+        modalSelectedAlertIdRef.current = selectedAlertId;
+        if (selectedAlertChanged) {
+            modalDecisionsLoadRef.current = { alertId: null, page: null };
+            setModalDecisions([]);
+            setModalDecisionsPage(1);
+            setModalDecisionsTotalPages(1);
+            setModalDecisionsTotal(0);
+            void loadModalDecisions(selectedAlertId, 1, { forceRefresh: true });
+            return;
+        }
+
+        void loadModalDecisions(selectedAlertId, 1, {
+            preserveLoadedPages: true,
+            forceRefresh: true,
+        });
+    }, [loadModalDecisions, modalDecisionsRefreshToken, selectedAlertId]);
 
     const lastModalDecisionElementRef = useCallback((node: HTMLTableRowElement | null) => {
         if (!selectedAlertId || modalDecisionsLoading || modalDecisionsLoadingMore || !hasMoreModalDecisions) return;
         if (modalDecisionObserverRef.current) modalDecisionObserverRef.current.disconnect();
         modalDecisionObserverRef.current = new IntersectionObserver((entries) => {
             if (entries[0].isIntersecting) {
-                void loadModalDecisions(selectedAlertId, modalDecisionsPage + 1, true);
+                void loadModalDecisions(selectedAlertId, modalDecisionsPage + 1, { append: true });
             }
         }, {
             root: decisionContainerRef.current,

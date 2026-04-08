@@ -690,6 +690,154 @@ describe('Alerts page', () => {
     await waitFor(() => expect(screen.getByText('#1074')).toBeInTheDocument());
   });
 
+  test('refreshes alert detail decisions for the same open alert during data refresh', async () => {
+    const fetchAlertMock = vi.mocked(api.fetchAlert);
+    fetchAlertMock
+      .mockResolvedValueOnce({
+        id: 1,
+        created_at: '2026-03-23T11:00:00.000Z',
+        scenario: 'crowdsecurity/ssh-bf',
+        source: { ip: '1.2.3.4', value: '1.2.3.4', cn: 'DE', as_name: 'Hetzner' },
+        target: 'ssh',
+        message: 'Initial alert',
+        simulated: false,
+        decisions: [{ id: 10, value: '1.2.3.4', type: 'ban', simulated: false, expired: false }],
+        events: [],
+      })
+      .mockResolvedValueOnce({
+        id: 1,
+        created_at: '2026-03-23T11:00:00.000Z',
+        scenario: 'crowdsecurity/ssh-bf',
+        source: { ip: '1.2.3.4', value: '1.2.3.4', cn: 'DE', as_name: 'Hetzner' },
+        target: 'ssh',
+        message: 'Refreshed alert',
+        simulated: false,
+        decisions: [
+          { id: 10, value: '1.2.3.4', type: 'ban', simulated: false, expired: false },
+          { id: 11, value: '1.2.3.4', type: 'ban', simulated: false, expired: false },
+        ],
+        events: [],
+      });
+
+    let decisionIds = [10];
+    const fetchDecisionsPaginatedMock = vi.mocked(api.fetchDecisionsPaginated).mockImplementation(async (_page, pageSize, filters) => {
+      const decisions: DecisionListItem[] = decisionIds.map((id) => ({
+        id,
+        created_at: '2026-03-23T11:00:00.000Z',
+        machine: 'host-a',
+        value: '1.2.3.4',
+        expired: false,
+        is_duplicate: false,
+        simulated: false,
+        detail: {
+          origin: 'manual',
+          type: 'ban',
+          reason: 'crowdsecurity/ssh-bf',
+          action: 'ban',
+          country: 'DE',
+          as: 'Hetzner',
+          duration: '4h',
+          expiration: '2030-01-01T00:00:00.000Z',
+          alert_id: Number(filters?.alert_id || 1),
+        },
+      }));
+
+      return toPaginatedDecisions(decisions, 1, pageSize);
+    });
+
+    const { rerender } = render(
+      <MemoryRouter initialEntries={['/alerts?id=1']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Alert Details #1')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('#10')).toBeInTheDocument());
+    expect(screen.queryByText('#11')).not.toBeInTheDocument();
+
+    decisionIds = [10, 11];
+    refreshSignalMock = 1;
+
+    rerender(
+      <MemoryRouter initialEntries={['/alerts?id=1']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('#11')).toBeInTheDocument());
+    expect(fetchDecisionsPaginatedMock.mock.calls.length).toBeGreaterThan(1);
+    expect(fetchDecisionsPaginatedMock.mock.calls.at(-1)?.[2]).toEqual(expect.objectContaining({
+      alert_id: '1',
+      include_expired: 'true',
+    }));
+  });
+
+  test('preserves loaded decision pages during same-alert detail refresh', async () => {
+    const triggerIntersection = installControlledIntersectionObserver();
+    vi.mocked(api.fetchAlert).mockResolvedValue({
+      id: 1,
+      created_at: '2026-03-23T11:00:00.000Z',
+      scenario: 'crowdsecurity/community-blocklist',
+      source: { value: 'community-blocklist' },
+      decisions: [],
+      events: [],
+    });
+
+    const fetchDecisionsPaginatedMock = vi.mocked(api.fetchDecisionsPaginated).mockImplementation(async (page, pageSize, filters) => {
+      expect(filters).toEqual(expect.objectContaining({
+        alert_id: '1',
+        include_expired: 'true',
+      }));
+
+      const decisions: DecisionListItem[] = largeDecisionList.map((decision) => ({
+        id: decision.id,
+        created_at: '2026-03-23T11:00:00.000Z',
+        value: decision.value,
+        expired: false,
+        is_duplicate: false,
+        simulated: false,
+        detail: {
+          origin: decision.origin || 'CAPI',
+          type: decision.type,
+          reason: 'crowdsecurity/community-blocklist',
+          action: decision.type,
+          duration: decision.duration,
+          expiration: '2030-01-01T00:00:00.000Z',
+          alert_id: 1,
+        },
+      }));
+
+      return toPaginatedDecisions(decisions, page, pageSize);
+    });
+
+    const { rerender } = render(
+      <MemoryRouter initialEntries={['/alerts?id=1']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Showing 50 of 75')).toBeInTheDocument());
+
+    await act(async () => {
+      triggerIntersection();
+    });
+
+    await waitFor(() => expect(screen.getByText('#1074')).toBeInTheDocument());
+
+    const callCountBeforeRefresh = fetchDecisionsPaginatedMock.mock.calls.length;
+    refreshSignalMock = 1;
+
+    rerender(
+      <MemoryRouter initialEntries={['/alerts?id=1']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(fetchDecisionsPaginatedMock.mock.calls.length).toBeGreaterThanOrEqual(callCountBeforeRefresh + 2));
+    expect(fetchDecisionsPaginatedMock.mock.calls.slice(callCountBeforeRefresh, callCountBeforeRefresh + 2).map(([page]) => page)).toEqual([1, 2]);
+    expect(screen.getByText('#1074')).toBeInTheDocument();
+  });
+
   test('bulk delete selects all filtered alerts, not just the first rendered slice', async () => {
     const bulkAlerts = Array.from({ length: 55 }, (_, index) => ({
       id: index + 1,
