@@ -603,7 +603,7 @@ export function ActivityBarChart({
     return (
         <Card className="h-full outline-none flex flex-col">
             <CardHeader className="flex-none">
-                <div className="flex items-center justify-between w-full">
+                <div className="flex w-full flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <CardTitle className="flex items-center gap-2">
                         <BarChart3 className="w-5 h-5 text-primary-600 dark:text-primary-400" />
                         Activity History
@@ -613,7 +613,7 @@ export function ActivityBarChart({
                             </span>
                         )}
                     </CardTitle>
-                    <div className="flex items-center gap-3">
+                    <div className="flex w-full items-center justify-between gap-2 sm:w-auto sm:justify-start sm:gap-3">
                         <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-lg" role="group" aria-label="Activity chart scale">
                             {scaleModes.map((mode) => (
                                 <button
@@ -631,7 +631,7 @@ export function ActivityBarChart({
                                 </button>
                             ))}
                         </div>
-                        <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-lg">
+                        <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-lg" role="group" aria-label="Activity chart granularity">
                             {granularities.map((g) => (
                                 <button
                                     key={g}

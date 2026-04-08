@@ -108,6 +108,30 @@ describe('ActivityBarChart', () => {
     expect(setGranularity).toHaveBeenCalledWith('hour');
   });
 
+  test('keeps the chart controls on a single row on mobile-sized layouts', () => {
+    render(
+      <ActivityBarChart
+        alertsData={series}
+        decisionsData={series}
+        unfilteredAlertsData={series}
+        unfilteredDecisionsData={series}
+        granularity="day"
+        setGranularity={vi.fn()}
+        onDateRangeSelect={vi.fn()}
+        selectedDateRange={null}
+        isSticky={false}
+      />,
+    );
+
+    const scaleGroup = screen.getByRole('group', { name: 'Activity chart scale' });
+    const granularityGroup = screen.getByRole('group', { name: 'Activity chart granularity' });
+    const controlsWrapper = scaleGroup.parentElement;
+
+    expect(controlsWrapper).toHaveClass('justify-between');
+    expect(controlsWrapper).not.toHaveClass('flex-col');
+    expect(granularityGroup).not.toHaveClass('self-start');
+  });
+
   test('renders the activity chart with linear scaling by default', () => {
     const mixedSeries = [
       { date: '2025-01-01', label: 'Jan 1', count: 5, fullDate: '2025-01-01' },
