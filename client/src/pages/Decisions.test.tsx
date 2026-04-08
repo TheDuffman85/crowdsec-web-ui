@@ -6,6 +6,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import type { DecisionListItem, PaginatedResponse } from '../types';
 import * as api from '../lib/api';
 import { Decisions } from './Decisions';
+import { compileDecisionSearch } from '../../../shared/search';
 
 const setLastUpdatedMock = vi.fn();
 let refreshSignalMock = 0;
@@ -104,17 +105,14 @@ vi.mock('../lib/api', () => {
         decisions = decisions.filter((decision) => decision.simulated === true);
       }
       if (filters?.q) {
-        const query = filters.q.toLowerCase();
-        decisions = decisions.filter((decision) => [
-          decision.value,
-          decision.machine,
-          decision.detail.origin,
-          decision.detail.reason,
-          decision.detail.country,
-          decision.detail.as,
-          decision.detail.action,
-          decision.simulated === true ? 'simulation simulated' : 'live',
-        ].some((value) => (value || '').toLowerCase().includes(query)));
+        const compiledSearch = compileDecisionSearch(filters.q, {
+          machineEnabled: true,
+          originEnabled: true,
+        });
+        if (!compiledSearch.ok) {
+          throw new Error(compiledSearch.error.message);
+        }
+        decisions = decisions.filter(compiledSearch.predicate);
       }
       return paginateDecisions(decisions, page, pageSize, defaultDecisions.length);
     }),
@@ -271,6 +269,70 @@ describe('Decisions page', () => {
     await waitFor(() => expect(screen.queryByText('5.6.7.8')).not.toBeInTheDocument());
   });
 
+  test('shows inline syntax errors while keeping the previous decision results visible', async () => {
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+
+    const input = screen.getByPlaceholderText('Filter decisions...');
+    await userEvent.type(input, 'origin:(manual OR');
+
+    await waitFor(() => expect(screen.getByText(/Search syntax error at character/i)).toBeInTheDocument());
+    expect(screen.getByText('1.2.3.4')).toBeInTheDocument();
+    expect(screen.getByText('5.6.7.8')).toBeInTheDocument();
+  });
+
+  test('opens the search syntax help modal', async () => {
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));
+
+    expect(screen.getByRole('dialog', { name: 'Decision Search Syntax' })).toBeInTheDocument();
+    expect(screen.getByText('status:active AND action:ban')).toBeInTheDocument();
+  });
+
+  test('clicking a syntax example fills the search input', async () => {
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));
+    await userEvent.click(screen.getByRole('button', { name: /status:active AND action:ban/i }));
+
+    await waitFor(() => expect(screen.getByPlaceholderText('Filter decisions...')).toHaveValue('status:active AND action:ban'));
+  });
+
+  test('reset all filters clears an advanced decision query without restoring it', async () => {
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+
+    const input = screen.getByPlaceholderText('Filter decisions...');
+    await userEvent.type(input, 'country:germany AND action:ban');
+
+    await waitFor(() => expect(screen.queryByText('5.6.7.8')).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: 'Reset all filters' }));
+
+    await waitFor(() => expect(screen.getByPlaceholderText('Filter decisions...')).toHaveValue(''));
+    await waitFor(() => expect(screen.getByText('5.6.7.8')).toBeInTheDocument());
+  });
+
   test('keeps the decisions table mounted while debounced search is loading and keeps the summary mounted', async () => {
     const user = userEvent.setup();
     const decisions: DecisionListItem[] = [
@@ -384,6 +446,7 @@ describe('Decisions page', () => {
     await waitFor(() => expect(screen.getByText('Showing 50 of 313 decisions (314 total before filters)')).toBeInTheDocument());
     expect(screen.queryByText('10.0.0.313')).not.toBeInTheDocument();
   });
+
 
   test('loads the first decision page once when StrictMode replays mount effects', async () => {
     const decisions = [

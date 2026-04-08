@@ -1026,6 +1026,87 @@ describe('createApp', () => {
     destroyTempDir();
   });
 
+  test('supports advanced boolean search for alerts and decisions', async () => {
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_ALWAYS_SHOW_MACHINE: 'true',
+        CROWDSEC_ALWAYS_SHOW_ORIGIN: 'true',
+      },
+    });
+
+    seedAlert(database, sampleAlert({
+      id: 1,
+      uuid: 'alert-1',
+      machine_id: 'machine-1',
+      machine_alias: 'host-a',
+      source: { ip: '1.2.3.4', value: '1.2.3.4', cn: 'DE', as_name: 'Hetzner' },
+      decisions: [
+        { id: 10, value: '1.2.3.4', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'manual', simulated: false },
+        { id: 11, value: '1.2.3.4', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'CAPI', simulated: false },
+      ],
+    }));
+    seedAlert(database, sampleAlert({
+      id: 2,
+      uuid: 'alert-2',
+      machine_id: 'machine-2',
+      machine_alias: 'host-b',
+      source: { ip: '5.6.7.8', value: '5.6.7.8', cn: 'US', as_name: 'AWS' },
+      decisions: [{ id: 20, value: '5.6.7.8', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'crowdsec', simulated: true }],
+      simulated: true,
+    }));
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=10&q=origin:(manual%20OR%20CAPI)%20AND%20-country:us'));
+    expect(alertsResponse.status).toBe(200);
+    expect((await alertsResponse.json()) as { data: Array<{ id: number }>; pagination: { total: number } }).toEqual(
+      expect.objectContaining({
+        data: [expect.objectContaining({ id: 1 })],
+        pagination: expect.objectContaining({ total: 1 }),
+      }),
+    );
+
+    const decisionsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions?page=1&page_size=10&q=status:active%20AND%20alert:1%20AND%20duplicate:false'));
+    expect(decisionsResponse.status).toBe(200);
+    expect((await decisionsResponse.json()) as { data: Array<{ id: number }>; pagination: { total: number } }).toEqual(
+      expect.objectContaining({
+        data: [expect.objectContaining({ id: 10 })],
+        pagination: expect.objectContaining({ total: 1 }),
+      }),
+    );
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('returns a 400 for invalid advanced search queries', async () => {
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_ALWAYS_SHOW_ORIGIN: 'true',
+      },
+    });
+
+    seedAlert(database, sampleAlert({
+      id: 1,
+      uuid: 'alert-1',
+      decisions: [{ id: 10, value: '1.2.3.4', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'manual', simulated: false }],
+    }));
+
+    const response = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions?page=1&page_size=10&q=origin:(manual%20OR'));
+    expect(response.status).toBe(400);
+    expect((await response.json()) as { error: string; details: { position: number } }).toEqual(
+      expect.objectContaining({
+        error: expect.stringContaining('Missing closing parenthesis'),
+        details: expect.objectContaining({
+          position: expect.any(Number),
+        }),
+      }),
+    );
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
   test('validates bad ids and malformed input', async () => {
     const { controller, database, lapiClient } = createController();
     await lapiClient.login();

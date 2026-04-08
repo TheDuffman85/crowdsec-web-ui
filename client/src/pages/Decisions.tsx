@@ -1,14 +1,16 @@
-import { useEffect, useState, useRef, useCallback, type FormEvent } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo, type FormEvent } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { deleteDecision, bulkDeleteDecisions, cleanupByIp, addDecision, fetchConfig, fetchDecisionsPaginated } from "../lib/api";
 import { isSimulatedDecision, parseSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
+import { SearchSyntaxModal } from "../components/SearchSyntaxModal";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { getCountryName } from "../lib/utils";
-import { Trash2, Gavel, X, ExternalLink, Shield, ShieldBan, Search, AlertCircle } from "lucide-react";
+import { compileDecisionSearch, getSearchHelpDefinition, type SearchParseError } from "../../../shared/search";
+import { Trash2, Gavel, X, ExternalLink, Shield, ShieldBan, Search, AlertCircle, Info } from "lucide-react";
 import type { AddDecisionRequest, ApiPermissionError, BulkDeleteResult, DecisionListItem } from '../types';
 
 type DecisionDeleteAction =
@@ -60,8 +62,11 @@ export function Decisions() {
     const [simulationsEnabled, setSimulationsEnabled] = useState(false);
     const [machineFeaturesEnabled, setMachineFeaturesEnabled] = useState(false);
     const [originFeaturesEnabled, setOriginFeaturesEnabled] = useState(false);
-    const [searchInput, setSearchInput] = useState("");
-    const [debouncedFilter, setDebouncedFilter] = useState("");
+    const [searchDraft, setSearchDraft] = useState("");
+    const [debouncedSearchDraft, setDebouncedSearchDraft] = useState("");
+    const [appliedQuery, setAppliedQuery] = useState("");
+    const [queryError, setQueryError] = useState<SearchParseError | null>(null);
+    const [showSearchSyntaxModal, setShowSearchSyntaxModal] = useState(false);
     const [initialLoading, setInitialLoading] = useState(true);
     const [backgroundLoading, setBackgroundLoading] = useState(false);
     const [loadingMore, setLoadingMore] = useState(false);
@@ -114,12 +119,22 @@ export function Decisions() {
         originFeaturesEnabled: boolean;
     } | null>(null);
     const hasLoadedDecisionsRef = useRef(false);
+    const searchInputRef = useRef<HTMLInputElement | null>(null);
+    const searchValidationFeatures = useMemo(() => (
+        configRef.current
+            ? { machineEnabled: machineFeaturesEnabled, originEnabled: originFeaturesEnabled }
+            : { machineEnabled: true, originEnabled: true }
+    ), [machineFeaturesEnabled, originFeaturesEnabled]);
+    const searchHelp = useMemo(
+        () => getSearchHelpDefinition('decisions', searchValidationFeatures),
+        [searchValidationFeatures],
+    );
 
     const buildServerFilters = useCallback((requestedSimulationFilter = simulationFilter): Record<string, string> => {
         const filters: Record<string, string> = {
             tz_offset: String(new Date().getTimezoneOffset()),
         };
-        if (debouncedFilter) filters.q = debouncedFilter;
+        if (appliedQuery) filters.q = appliedQuery;
         if (alertIdFilter) filters.alert_id = alertIdFilter;
         if (includeExpiredParam) filters.include_expired = 'true';
         if (countryFilter) filters.country = countryFilter;
@@ -132,7 +147,7 @@ export function Decisions() {
         if (requestedSimulationFilter !== 'all') filters.simulation = requestedSimulationFilter;
         if (showDuplicates) filters.hide_duplicates = 'false';
         return filters;
-    }, [alertIdFilter, asFilter, countryFilter, dateEndFilter, dateStartFilter, debouncedFilter, includeExpiredParam, ipFilter, scenarioFilter, showDuplicates, simulationFilter, targetFilter]);
+    }, [alertIdFilter, appliedQuery, asFilter, countryFilter, dateEndFilter, dateStartFilter, includeExpiredParam, ipFilter, scenarioFilter, showDuplicates, simulationFilter, targetFilter]);
 
     const loadConfig = useCallback(async (refresh = false) => {
         if (!refresh && configRef.current) {
@@ -172,7 +187,7 @@ export function Decisions() {
             append,
             preserveLoadedPages,
             loadedPage: preserveLoadedPages ? currentPageRef.current : undefined,
-            filter: debouncedFilter,
+            filter: appliedQuery,
             search: searchParams.toString(),
             refreshConfig,
         });
@@ -243,7 +258,7 @@ export function Decisions() {
                 setBackgroundLoading(false);
             }
         }
-    }, [buildServerFilters, debouncedFilter, loadConfig, searchParams, setLastUpdated]);
+    }, [appliedQuery, buildServerFilters, loadConfig, searchParams, setLastUpdated]);
 
     useEffect(() => {
         loadDecisionsRef.current = loadDecisions;
@@ -264,8 +279,8 @@ export function Decisions() {
     useEffect(() => {
         const queryParam = searchParams.get("q");
         const nextQuery = queryParam ?? "";
-        setSearchInput((current) => current === nextQuery ? current : nextQuery);
-        setDebouncedFilter((current) => current === nextQuery ? current : nextQuery);
+        setSearchDraft((current) => current === nextQuery ? current : nextQuery);
+        setDebouncedSearchDraft((current) => current === nextQuery ? current : nextQuery);
     }, [searchParams]);
 
     useEffect(() => {
@@ -282,16 +297,49 @@ export function Decisions() {
     }, [refreshSignal]);
 
     useEffect(() => {
-        if (searchInput === debouncedFilter) {
+        if (searchDraft === debouncedSearchDraft) {
             return;
         }
 
         const timeoutId = window.setTimeout(() => {
-            setDebouncedFilter(searchInput);
+            setDebouncedSearchDraft(searchDraft);
         }, 300);
 
         return () => window.clearTimeout(timeoutId);
-    }, [debouncedFilter, searchInput]);
+    }, [debouncedSearchDraft, searchDraft]);
+
+    useEffect(() => {
+        const compiledSearch = compileDecisionSearch(debouncedSearchDraft, searchValidationFeatures);
+        if (!compiledSearch.ok) {
+            setQueryError((current) => (
+                current?.message === compiledSearch.error.message &&
+                current.position === compiledSearch.error.position &&
+                current.length === compiledSearch.error.length
+                    ? current
+                    : compiledSearch.error
+            ));
+            return;
+        }
+
+        const nextQuery = debouncedSearchDraft.trim();
+        const currentQuery = searchParams.get("q") ?? "";
+        setQueryError(null);
+        setAppliedQuery((current) => current === nextQuery ? current : nextQuery);
+
+        if (currentQuery === nextQuery) {
+            return;
+        }
+
+        const nextParams = new URLSearchParams(searchParams);
+        if (nextQuery) {
+            nextParams.set("q", nextQuery);
+        } else {
+            nextParams.delete("q");
+        }
+        if (nextParams.toString() !== searchParams.toString()) {
+            setSearchParams(nextParams);
+        }
+    }, [debouncedSearchDraft, searchParams, searchValidationFeatures, setSearchParams]);
 
     const handleAddDecision = async (e: FormEvent<HTMLFormElement>) => {
         e.preventDefault();
@@ -363,9 +411,24 @@ export function Decisions() {
         ));
     };
 
-    const clearFilter = () => {
+    const applySearchExample = useCallback((query: string) => {
+        setSearchDraft(query);
+        setDebouncedSearchDraft(query);
+        setAppliedQuery(query.trim());
+        setQueryError(null);
+        setShowSearchSyntaxModal(false);
+        window.setTimeout(() => {
+            searchInputRef.current?.focus();
+        }, 0);
+    }, []);
+
+    const clearFilter = useCallback(() => {
+        setSearchDraft("");
+        setDebouncedSearchDraft("");
+        setAppliedQuery("");
+        setQueryError(null);
         setSearchParams({});
-    };
+    }, [setSearchParams]);
 
     const removeParam = (key: string) => {
         const newParams = new URLSearchParams(searchParams);
@@ -496,8 +559,28 @@ export function Decisions() {
             )}
 
             {/* Show active filters */}
-            {(includeExpiredParam || !includeExpiredParam || alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter || (simulationsEnabled && simulationFilter !== 'all')) && (
+            {(includeExpiredParam || !includeExpiredParam || appliedQuery || alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter || (simulationsEnabled && simulationFilter !== 'all')) && (
                 <div className="flex flex-wrap gap-2">
+                    {appliedQuery && (
+                        <Badge variant="secondary" className="flex items-center gap-1 max-w-full">
+                            <span className="font-semibold">Search:</span>
+                            <span className="font-mono text-xs truncate max-w-[320px]">{appliedQuery}</span>
+                            <button
+                                onClick={() => {
+                                    const nextParams = new URLSearchParams(searchParams);
+                                    nextParams.delete("q");
+                                    setSearchDraft("");
+                                    setDebouncedSearchDraft("");
+                                    setAppliedQuery("");
+                                    setQueryError(null);
+                                    setSearchParams(nextParams);
+                                }}
+                                className="ml-1 hover:text-red-500"
+                            >
+                                &times;
+                            </button>
+                        </Badge>
+                    )}
                     {!includeExpiredParam && (
                         <Badge variant="secondary" className="flex items-center gap-1">
                             <span className="font-semibold">Hide:</span> Inactive
@@ -630,7 +713,7 @@ export function Decisions() {
                     )}
 
                     {/* Show Reset button if we have any active filters OR if we are showing expired/duplicates (non-default state) */}
-                    {(alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter || includeExpiredParam || showDuplicates || (simulationsEnabled && simulationFilter !== 'all')) && (
+                    {(appliedQuery || alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter || includeExpiredParam || showDuplicates || (simulationsEnabled && simulationFilter !== 'all')) && (
                         <button
                             onClick={clearFilter}
                             className="text-xs text-gray-500 hover:text-gray-900 dark:hover:text-gray-300 underline"
@@ -641,20 +724,38 @@ export function Decisions() {
                 </div>
             )}
 
-
-
-
-            <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                    <Search className="h-5 w-5 text-gray-400" />
+            <div className="space-y-2">
+                <div className="flex items-stretch gap-2">
+                    <div className="relative flex-1">
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <Search className="h-5 w-5 text-gray-400" />
+                        </div>
+                        <input
+                            ref={searchInputRef}
+                            type="text"
+                            placeholder="Filter decisions..."
+                            className={`block w-full pl-10 pr-3 py-2 border rounded-md leading-5 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 sm:text-sm ${queryError ? 'border-red-300 dark:border-red-700 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 dark:border-gray-700 focus:ring-primary-500 focus:border-primary-500'}`}
+                            value={searchDraft}
+                            onChange={(e) => setSearchDraft(e.target.value)}
+                            aria-invalid={queryError ? 'true' : 'false'}
+                            aria-describedby={queryError ? 'decisions-search-error' : undefined}
+                        />
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setShowSearchSyntaxModal(true)}
+                        className="inline-flex items-center justify-center rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-gray-600 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
+                        aria-label="Search syntax help"
+                        title="Search syntax help"
+                    >
+                        <Info size={18} />
+                    </button>
                 </div>
-                <input
-                    type="text"
-                    placeholder="Filter decisions..."
-                    className="block w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md leading-5 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-                    value={searchInput}
-                    onChange={(e) => setSearchInput(e.target.value)}
-                />
+                {queryError && (
+                    <p id="decisions-search-error" className="text-xs text-red-600 dark:text-red-400">
+                        Search syntax error at character {queryError.position + 1}: {queryError.message}
+                    </p>
+                )}
             </div>
 
 
@@ -914,6 +1015,12 @@ export function Decisions() {
                     </div>
                 </form>
             </Modal>
+            <SearchSyntaxModal
+                help={searchHelp}
+                isOpen={showSearchSyntaxModal}
+                onClose={() => setShowSearchSyntaxModal(false)}
+                onSelectExample={applySearchExample}
+            />
         </div >
     );
 }

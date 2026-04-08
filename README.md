@@ -34,7 +34,7 @@ High-level overview of total alerts and live active decisions. Statistics and to
 </a>
 
 ### Alerts Management
-View detailed logs of security events, including clear simulation-mode labeling.
+View detailed logs of security events, including clear simulation-mode labeling, broad free-text filtering, and optional advanced search syntax.
 
 <a href="screenshots/alerts.png">
   <img src="screenshots/alerts.png" alt="Alerts" width="50%">
@@ -48,7 +48,7 @@ Detailed modal view showing attacker IP, AS information, location with map, and 
 </a>
 
 ### Decisions Management
-View and manage active bans/decisions. Supports filtering by status (active/expired), simulation mode, and hiding duplicate decisions.
+View and manage active bans/decisions. Supports filtering by status (active/expired), simulation mode, hiding duplicate decisions, and the same unified search syntax used on Alerts.
 
 <a href="screenshots/decisions.png">
   <img src="screenshots/decisions.png" alt="Decisions" width="50%">
@@ -66,6 +66,12 @@ Automatically detects new container images on GitHub Container Registry (GHCR). 
 
 ### Notification Center
 Create notification rules for alert spikes, alert thresholds, recent CVE activity, and application updates, then deliver them to one or more outbound destinations such as Email, Gotify, MQTT, ntfy, or Webhooks.
+
+### Unified Search
+-   **Free-text first**: The Alerts and Decisions search bars still support normal free-text queries.
+-   **Advanced syntax**: Power users can refine searches with quoted phrases, `field:value`, `AND`, `OR`, `NOT`, unary `-`, and parentheses.
+-   **Inline field search**: Mix free text and fielded terms in the same query, for example `country:germany ssh`.
+-   **Built-in help**: Use the `Info` button next to each search bar to open the page-specific syntax reference and examples.
 
 ### Modern UI
 -   **Dark/Light Mode**: Full support for both themes.
@@ -158,6 +164,30 @@ CrowdSec decisions also carry an `origin`, which the Web UI can surface in the A
 - When left unset or set to `false`, the UI enables origin visibility only after this app has observed more than one distinct non-empty decision origin during the current lookback window.
 - Set `CROWDSEC_ALWAYS_SHOW_ORIGIN=true` to always show the Origin column, even before multiple origins have been observed.
 - Alerts with decisions from more than one origin display `Mixed`, while search still matches each underlying origin value.
+
+### Search Syntax
+
+The Alerts and Decisions pages use a single search box that supports both normal free-text search and optional advanced syntax.
+
+- Plain words keep working as free-text search, for example `ssh hetzner`
+- Quoted phrases match exact text, for example `"nginx bf"`
+- Fielded search uses `field:value`, for example `country:germany` or `status:active`
+- Boolean operators `AND`, `OR`, and `NOT` are supported
+- Unary `-` can be used as shorthand for negation, for example `-sim:simulated`
+- Parentheses can group expressions, for example `origin:(manual OR CAPI)`
+
+Examples:
+
+- Alerts: `country:germany ssh`
+- Alerts: `origin:(manual OR CAPI) AND -sim:simulated`
+- Decisions: `status:active AND action:ban`
+- Decisions: `alert:123 OR ip:"192.168.5.0/24"`
+
+Notes:
+
+- A field name by itself, such as `country`, is treated as normal free text unless it is followed by `:`
+- If you want to search for literal operator words like `AND`, `OR`, or `NOT`, wrap them in double quotes
+- Use the `Info` button beside the search field to see the supported fields and examples for the current page
 
 ### Alert Allowlist Filtering
 

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import type { DecisionListItem, PaginatedResponse, SlimAlert } from '../types';
 import * as api from '../lib/api';
 import { Alerts } from './Alerts';
+import { compileAlertSearch } from '../../../shared/search';
 
 const largeDecisionList = Array.from({ length: 75 }, (_, index) => ({
   id: 1000 + index,
@@ -134,21 +135,14 @@ vi.mock('../lib/api', () => {
         alerts = alerts.filter((alert) => (alert.scenario || '').includes(filters.scenario));
       }
       if (filters?.q) {
-        const query = filters.q.toLowerCase();
-        alerts = alerts.filter((alert) => [
-          alert.machine_alias,
-          alert.machine_id,
-          alert.scenario,
-          alert.message,
-          alert.source?.ip,
-          alert.source?.value,
-          alert.source?.range,
-          alert.source?.cn,
-          alert.source?.as_name,
-          alert.target,
-          alert.meta_search,
-          ...(alert.decisions || []).map((decision) => decision.origin || ''),
-        ].some((value) => (value || '').toLowerCase().includes(query)));
+        const compiledSearch = compileAlertSearch(filters.q, {
+          machineEnabled: true,
+          originEnabled: true,
+        });
+        if (!compiledSearch.ok) {
+          throw new Error(compiledSearch.error.message);
+        }
+        alerts = alerts.filter(compiledSearch.predicate);
       }
       return paginateAlerts(alerts, page, pageSize, defaultAlerts.length);
     }),
@@ -383,6 +377,69 @@ describe('Alerts page', () => {
 
     await waitFor(() => expect(screen.getByText('Mixed')).toBeInTheDocument());
     await waitFor(() => expect(screen.queryByText('crowdsec')).not.toBeInTheDocument());
+  });
+
+  test('supports advanced field search and shows the active search badge', async () => {
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+
+    const input = screen.getByPlaceholderText('Filter alerts...');
+    await userEvent.type(input, 'country:germany');
+
+    await waitFor(() => expect(screen.getByText('country:germany')).toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText('5.6.7.8')).not.toBeInTheDocument());
+  });
+
+  test('opens the alert search syntax help modal', async () => {
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));
+
+    expect(screen.getByRole('dialog', { name: 'Alert Search Syntax' })).toBeInTheDocument();
+    expect(screen.getByText('origin:(manual OR CAPI) AND -sim:simulated')).toBeInTheDocument();
+  });
+
+  test('clicking an alert syntax example fills the search input', async () => {
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));
+    await userEvent.click(screen.getByRole('button', { name: /country:germany ssh/i }));
+
+    await waitFor(() => expect(screen.getByPlaceholderText('Filter alerts...')).toHaveValue('country:germany ssh'));
+  });
+
+  test('reset all filters clears an advanced alert query without restoring it', async () => {
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+
+    const input = screen.getByPlaceholderText('Filter alerts...');
+    await userEvent.type(input, 'country:germany AND target:ssh');
+
+    await waitFor(() => expect(screen.queryByText('5.6.7.8')).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: 'Reset all filters' }));
+
+    await waitFor(() => expect(screen.getByPlaceholderText('Filter alerts...')).toHaveValue(''));
+    await waitFor(() => expect(screen.getByText('5.6.7.8')).toBeInTheDocument());
   });
 
   test('keeps the alerts table mounted while debounced search is loading and keeps the summary mounted', async () => {
