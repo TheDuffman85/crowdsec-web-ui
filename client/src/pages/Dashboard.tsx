@@ -133,8 +133,8 @@ function toActivitySeries(buckets: DashboardStatsBucket[]) {
 export function Dashboard() {
     const navigate = useNavigate();
     const { refreshSignal, setLastUpdated } = useRefresh();
-    const [loading, setLoading] = useState(true);
-    const [statsLoading, setStatsLoading] = useState(true);
+    const [initialLoading, setInitialLoading] = useState(true);
+    const [backgroundRefreshing, setBackgroundRefreshing] = useState(false);
     const [config, setConfig] = useState<ConfigResponse | null>(null);
 
     // Initialize state from local storage or defaults
@@ -147,6 +147,10 @@ export function Dashboard() {
     const [isOnline, setIsOnline] = useState(true);
     const [dashboardStats, setDashboardStats] = useState<DashboardStatsResponse | null>(null);
     const dashboardStatsRef = useRef<DashboardStatsResponse | null>(null);
+    const loadDataRef = useRef<(isBackground?: boolean, signal?: AbortSignal) => Promise<void>>(async () => {});
+    const lastRefreshSignalRef = useRef(refreshSignal);
+    const inFlightLoadKeysRef = useRef(new Set<string>());
+    const lastCompletedLoadRef = useRef<{ key: string; completedAt: number } | null>(null);
 
     // Active filters
     const [filters, setFilters] = useState<DashboardFilters>(() => parseStoredFilters(localStorage.getItem('dashboard_filters')));
@@ -198,14 +202,28 @@ export function Dashboard() {
     }, [filters, granularity]);
 
     const loadData = useCallback(async (isBackground = false, signal?: AbortSignal) => {
-        if (!dashboardStatsRef.current && !isBackground) {
-            setStatsLoading(true);
+        const requestFilters = buildDashboardStatsFilters();
+        const loadKey = JSON.stringify(requestFilters);
+        const lastCompletedLoad = lastCompletedLoadRef.current;
+        if (
+            inFlightLoadKeysRef.current.has(loadKey) ||
+            (lastCompletedLoad?.key === loadKey && Date.now() - lastCompletedLoad.completedAt < 250)
+        ) {
+            return;
+        }
+
+        inFlightLoadKeysRef.current.add(loadKey);
+        const shouldBlockWithInitialLoading = !dashboardStatsRef.current && !isBackground;
+        if (shouldBlockWithInitialLoading) {
+            setInitialLoading(true);
+        } else {
+            setBackgroundRefreshing(true);
         }
 
         try {
             const [configData, dashboardStatsData] = await Promise.all([
                 fetchConfig(),
-                fetchDashboardStats(buildDashboardStatsFilters(), { signal }),
+                fetchDashboardStats(requestFilters, { signal }),
             ]);
             if (signal?.aborted) {
                 return;
@@ -232,12 +250,20 @@ export function Dashboard() {
             console.error("Failed to load dashboard data", error);
             setIsOnline(false);
         } finally {
+            inFlightLoadKeysRef.current.delete(loadKey);
             if (!signal?.aborted) {
-                setLoading(false);
-                setStatsLoading(false);
+                lastCompletedLoadRef.current = { key: loadKey, completedAt: Date.now() };
+            }
+            if (!signal?.aborted) {
+                setInitialLoading(false);
+                setBackgroundRefreshing(false);
             }
         }
     }, [buildDashboardStatsFilters, setLastUpdated]);
+
+    useEffect(() => {
+        loadDataRef.current = loadData;
+    }, [loadData]);
 
     useEffect(() => {
         const controller = new AbortController();
@@ -247,12 +273,15 @@ export function Dashboard() {
 
     // Background Refresh
     useEffect(() => {
-        if (refreshSignal > 0) {
-            const controller = new AbortController();
-            loadData(true, controller.signal);
-            return () => controller.abort();
+        if (refreshSignal <= lastRefreshSignalRef.current) {
+            return;
         }
-    }, [refreshSignal, loadData]);
+
+        lastRefreshSignalRef.current = refreshSignal;
+        const controller = new AbortController();
+        void loadDataRef.current(true, controller.signal);
+        return () => controller.abort();
+    }, [refreshSignal]);
 
     const dashboardData = dashboardStats ?? EMPTY_DASHBOARD_STATS;
     const stats = dashboardData.totals;
@@ -356,7 +385,7 @@ export function Dashboard() {
         filters.target !== null ||
         filters.simulation !== 'all';
 
-    if (loading) {
+    if (initialLoading) {
         return <div className="text-center p-8 text-gray-500">Loading dashboard...</div>;
     }
 
@@ -465,16 +494,24 @@ export function Dashboard() {
             {/* Statistics Section */}
             <div className="space-y-4">
                 <div className="flex flex-col md:flex-row items-center justify-between mb-4 gap-4 md:min-h-[3rem]">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-2">
                         <TrendingUp className="w-6 h-6 text-primary-600 dark:text-primary-400" />
                         <h3 className="text-2xl font-bold text-gray-900 dark:text-white">
                             Last {config?.lookback_days ?? 7} Days Statistics
                         </h3>
                     </div>
+                        <div className="min-h-[1.25rem] text-sm text-gray-500" aria-live="polite">
+                            <span className={`inline-flex items-center gap-2 transition-opacity ${backgroundRefreshing ? 'opacity-100' : 'opacity-0'}`}>
+                                <span className="h-2 w-2 rounded-full bg-primary-500 animate-pulse" aria-hidden="true" />
+                                Refreshing dashboard...
+                            </span>
+                        </div>
+                    </div>
 
                     <div className="flex flex-col md:flex-row items-center gap-4">
-                        {hasActiveFilters && (
-                            <div className="flex flex-row items-center gap-2">
+                        <div className="min-h-[38px]">
+                            <div className={`flex flex-row items-center gap-2 transition-opacity ${hasActiveFilters ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
                                 <button
                                     onClick={() => navigate(alertsLink)}
                                     className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
@@ -500,7 +537,7 @@ export function Dashboard() {
                                     <span className="sm:hidden">Reset</span>
                                 </button>
                             </div>
-                        )}
+                        </div>
 
                         <div className="flex items-center gap-3 bg-white dark:bg-gray-800 px-3 py-1.5 rounded-lg border border-gray-100 dark:border-gray-700 shadow-sm h-[38px] box-border">
                             <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
@@ -538,89 +575,83 @@ export function Dashboard() {
                     </div>
                 </div>
 
-                {statsLoading ? (
-                    <div className="text-center p-8 text-gray-500">Loading statistics...</div>
-                ) : (
-                    <>
-                        {/* Charts Area */}
-                        <div className="grid gap-8 md:grid-cols-2">
-                            {/* Activity Chart - Left */}
-                            <div className="h-[450px]">
-                                <Suspense fallback={<div className="text-center p-8 text-gray-500">Loading chart...</div>}>
-                                    <ActivityBarChart
-                                        alertsData={statistics.alertsHistory}
-                                        decisionsData={statistics.decisionsHistory}
-                                        simulatedAlertsData={statistics.simulatedAlertsHistory}
-                                        simulatedDecisionsData={statistics.simulatedDecisionsHistory}
-                                        unfilteredAlertsData={statistics.unfilteredAlertsHistory}
-                                        unfilteredDecisionsData={statistics.unfilteredDecisionsHistory}
-                                        unfilteredSimulatedAlertsData={statistics.unfilteredSimulatedAlertsHistory}
-                                        unfilteredSimulatedDecisionsData={statistics.unfilteredSimulatedDecisionsHistory}
-                                        simulationsEnabled={simulationsEnabled}
-                                        onDateRangeSelect={(dateRange, isAtEnd) => setFilters(prev => ({
-                                            ...prev,
-                                            dateRange,
-                                            dateRangeSticky: isAtEnd && dateRange !== null
-                                        }))}
-                                        selectedDateRange={filters.dateRange}
-                                        isSticky={filters.dateRangeSticky}
-                                        granularity={granularity}
-                                        setGranularity={handleGranularityChange}
-                                        scaleMode={scaleMode}
-                                        setScaleMode={setScaleMode}
-                                    />
-                                </Suspense>
-                            </div>
+                {/* Charts Area */}
+                <div className="grid gap-8 md:grid-cols-2" aria-busy={backgroundRefreshing}>
+                    {/* Activity Chart - Left */}
+                    <div className="h-[450px]">
+                        <Suspense fallback={<div className="text-center p-8 text-gray-500">Loading chart...</div>}>
+                            <ActivityBarChart
+                                alertsData={statistics.alertsHistory}
+                                decisionsData={statistics.decisionsHistory}
+                                simulatedAlertsData={statistics.simulatedAlertsHistory}
+                                simulatedDecisionsData={statistics.simulatedDecisionsHistory}
+                                unfilteredAlertsData={statistics.unfilteredAlertsHistory}
+                                unfilteredDecisionsData={statistics.unfilteredDecisionsHistory}
+                                unfilteredSimulatedAlertsData={statistics.unfilteredSimulatedAlertsHistory}
+                                unfilteredSimulatedDecisionsData={statistics.unfilteredSimulatedDecisionsHistory}
+                                simulationsEnabled={simulationsEnabled}
+                                onDateRangeSelect={(dateRange, isAtEnd) => setFilters(prev => ({
+                                    ...prev,
+                                    dateRange,
+                                    dateRangeSticky: isAtEnd && dateRange !== null
+                                }))}
+                                selectedDateRange={filters.dateRange}
+                                isSticky={filters.dateRangeSticky}
+                                granularity={granularity}
+                                setGranularity={handleGranularityChange}
+                                scaleMode={scaleMode}
+                                setScaleMode={setScaleMode}
+                            />
+                        </Suspense>
+                    </div>
 
-                            {/* World Map - Right */}
-                            <div className="h-[450px]">
-                                <Suspense fallback={<div className="text-center p-8 text-gray-500">Loading map...</div>}>
-                                    <WorldMapCard
-                                        data={statistics.allCountries}
-                                        onCountrySelect={(code) => toggleFilter('country', code)}
-                                        selectedCountry={filters.country}
-                                        simulationsEnabled={simulationsEnabled}
-                                    />
-                                </Suspense>
-                            </div>
-                        </div>
+                    {/* World Map - Right */}
+                    <div className="h-[450px]">
+                        <Suspense fallback={<div className="text-center p-8 text-gray-500">Loading map...</div>}>
+                            <WorldMapCard
+                                data={statistics.allCountries}
+                                onCountrySelect={(code) => toggleFilter('country', code)}
+                                selectedCountry={filters.country}
+                                simulationsEnabled={simulationsEnabled}
+                            />
+                        </Suspense>
+                    </div>
+                </div>
 
-                        {/* Top Statistics Grid */}
-                        <div className="grid gap-8 md:grid-cols-2 xl:grid-cols-4">
-                            <StatCard
-                                title="Top Countries"
-                                items={statistics.topCountries}
-                                onSelect={(item) => toggleFilter('country', item.countryCode)}
-                                selectedValue={filters.country}
-                                total={percentageBasis === 'global' ? dashboardData.globalTotal : filteredTotals.alerts}
-                            />
-                            <StatCard
-                                title="Top Scenarios"
-                                items={statistics.topScenarios}
-                                onSelect={(item) => toggleFilter('scenario', item.label)}
-                                selectedValue={filters.scenario}
-                                renderLabel={(item) => (
-                                    <ScenarioName name={item.label} showLink={true} />
-                                )}
-                                total={percentageBasis === 'global' ? dashboardData.globalTotal : filteredTotals.alerts}
-                            />
-                            <StatCard
-                                title="Top AS"
-                                items={statistics.topAS}
-                                onSelect={(item) => toggleFilter('as', item.label)}
-                                selectedValue={filters.as}
-                                total={percentageBasis === 'global' ? dashboardData.globalTotal : filteredTotals.alerts}
-                            />
-                            <StatCard
-                                title="Top Targets"
-                                items={statistics.topTargets}
-                                onSelect={(item) => toggleFilter('target', item.label)}
-                                selectedValue={filters.target}
-                                total={percentageBasis === 'global' ? dashboardData.globalTotal : filteredTotals.alerts}
-                            />
-                        </div>
-                    </>
-                )}
+                {/* Top Statistics Grid */}
+                <div className="grid gap-8 md:grid-cols-2 xl:grid-cols-4" aria-busy={backgroundRefreshing}>
+                    <StatCard
+                        title="Top Countries"
+                        items={statistics.topCountries}
+                        onSelect={(item) => toggleFilter('country', item.countryCode)}
+                        selectedValue={filters.country}
+                        total={percentageBasis === 'global' ? dashboardData.globalTotal : filteredTotals.alerts}
+                    />
+                    <StatCard
+                        title="Top Scenarios"
+                        items={statistics.topScenarios}
+                        onSelect={(item) => toggleFilter('scenario', item.label)}
+                        selectedValue={filters.scenario}
+                        renderLabel={(item) => (
+                            <ScenarioName name={item.label} showLink={true} />
+                        )}
+                        total={percentageBasis === 'global' ? dashboardData.globalTotal : filteredTotals.alerts}
+                    />
+                    <StatCard
+                        title="Top AS"
+                        items={statistics.topAS}
+                        onSelect={(item) => toggleFilter('as', item.label)}
+                        selectedValue={filters.as}
+                        total={percentageBasis === 'global' ? dashboardData.globalTotal : filteredTotals.alerts}
+                    />
+                    <StatCard
+                        title="Top Targets"
+                        items={statistics.topTargets}
+                        onSelect={(item) => toggleFilter('target', item.label)}
+                        selectedValue={filters.target}
+                        total={percentageBasis === 'global' ? dashboardData.globalTotal : filteredTotals.alerts}
+                    />
+                </div>
             </div>
         </div>
     );

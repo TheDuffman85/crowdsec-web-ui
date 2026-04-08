@@ -176,6 +176,18 @@ function installControlledIntersectionObserver() {
   return () => callbacks.forEach((callback) => callback());
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+
+  return { promise, resolve, reject };
+}
+
 describe('Decisions page', () => {
   test('filters to simulated decisions and shows the simulation badge inline in the scenario column', async () => {
     render(
@@ -226,8 +238,8 @@ describe('Decisions page', () => {
     expect(screen.getByText('host-a')).toBeInTheDocument();
 
     await userEvent.type(screen.getByPlaceholderText('Filter decisions...'), 'host-a');
-    expect(screen.getByText('1.2.3.4')).toBeInTheDocument();
-    expect(screen.queryByText('5.6.7.8')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText('5.6.7.8')).not.toBeInTheDocument());
   });
 
   test('shows origin column and allows filtering by origin when enabled', async () => {
@@ -256,7 +268,89 @@ describe('Decisions page', () => {
 
     await userEvent.type(screen.getByPlaceholderText('Filter decisions...'), 'manual');
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
-    expect(screen.queryByText('5.6.7.8')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('5.6.7.8')).not.toBeInTheDocument());
+  });
+
+  test('keeps the decisions table mounted while debounced search is loading and keeps the summary mounted', async () => {
+    const user = userEvent.setup();
+    const decisions: DecisionListItem[] = [
+      {
+        id: 10,
+        created_at: '2026-03-23T10:00:00.000Z',
+        machine: 'host-a',
+        value: '1.2.3.4',
+        expired: false,
+        is_duplicate: false,
+        simulated: false,
+        detail: {
+          origin: 'manual',
+          reason: 'crowdsecurity/ssh-bf',
+          country: 'DE',
+          as: 'Hetzner',
+          action: 'ban',
+          duration: '4h',
+          alert_id: 1,
+        },
+      },
+      {
+        id: 20,
+        created_at: '2026-03-23T11:00:00.000Z',
+        machine: 'machine-2',
+        value: '5.6.7.8',
+        expired: false,
+        is_duplicate: false,
+        simulated: false,
+        detail: {
+          origin: 'CAPI',
+          reason: 'crowdsecurity/nginx-bf',
+          country: 'US',
+          as: 'AWS',
+          action: 'ban',
+          duration: '4h',
+          alert_id: 2,
+        },
+      },
+    ];
+    const deferred = createDeferred<PaginatedResponse<DecisionListItem>>();
+
+    vi.mocked(api.fetchDecisionsPaginated).mockImplementation((page, pageSize, filters) => {
+      if (filters?.q === 'aws') {
+        return deferred.promise;
+      }
+
+      return Promise.resolve(toPaginatedDecisions(decisions, page, pageSize, decisions.length));
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+    const summary = screen.getByTestId('decisions-summary');
+    expect(summary).toHaveTextContent('Showing 2 of 2 decisions');
+
+    const input = screen.getByPlaceholderText('Filter decisions...');
+    await user.clear(input);
+    await user.type(input, 'aws');
+
+    expect(summary).toBeInTheDocument();
+    expect(screen.getByText('1.2.3.4')).toBeInTheDocument();
+    expect(screen.queryByText('Loading decisions...')).not.toBeInTheDocument();
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    });
+
+    expect(screen.getByText('1.2.3.4')).toBeInTheDocument();
+    expect(screen.queryByText('Loading decisions...')).not.toBeInTheDocument();
+
+    deferred.resolve(toPaginatedDecisions([decisions[1]], 1, 50, decisions.length));
+
+    await waitFor(() => expect(screen.queryByText('1.2.3.4')).not.toBeInTheDocument());
+    expect(screen.getByText('5.6.7.8')).toBeInTheDocument();
+    expect(summary).toHaveTextContent('Showing 1 of 1 decisions (2 total before filters)');
   });
 
   test('shows loaded decision count when server filters still have more pages', async () => {

@@ -246,6 +246,18 @@ function installControlledIntersectionObserver() {
   return () => callbacks.forEach((callback) => callback());
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+
+  return { promise, resolve, reject };
+}
+
 describe('Alerts page', () => {
   test('shows simulated alerts with an inline scenario badge and standard decision actions', async () => {
     render(
@@ -370,7 +382,71 @@ describe('Alerts page', () => {
     await userEvent.type(screen.getByPlaceholderText('Filter alerts...'), 'capi');
 
     await waitFor(() => expect(screen.getByText('Mixed')).toBeInTheDocument());
-    expect(screen.queryByText('crowdsec')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('crowdsec')).not.toBeInTheDocument());
+  });
+
+  test('keeps the alerts table mounted while debounced search is loading and keeps the summary mounted', async () => {
+    const user = userEvent.setup();
+    const alerts: SlimAlert[] = [
+      {
+        id: 1,
+        created_at: '2026-03-23T10:00:00.000Z',
+        scenario: 'crowdsecurity/ssh-bf',
+        source: { ip: '1.2.3.4', value: '1.2.3.4', cn: 'DE', as_name: 'Hetzner' },
+        target: 'ssh',
+        meta_search: 'ssh',
+        decisions: [],
+      },
+      {
+        id: 2,
+        created_at: '2026-03-23T11:00:00.000Z',
+        scenario: 'crowdsecurity/nginx-bf',
+        source: { ip: '5.6.7.8', value: '5.6.7.8', cn: 'US', as_name: 'AWS' },
+        target: 'nginx',
+        meta_search: 'aws',
+        decisions: [],
+      },
+    ];
+    const deferred = createDeferred<PaginatedResponse<SlimAlert>>();
+
+    vi.mocked(api.fetchAlertsPaginated).mockImplementation((page, pageSize, filters) => {
+      if (filters?.q === 'aws') {
+        return deferred.promise;
+      }
+
+      return Promise.resolve(toPaginatedAlerts(alerts, page, pageSize, alerts.length));
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+    const summary = screen.getByTestId('alerts-summary');
+    expect(summary).toHaveTextContent('Showing 2 of 2 alerts');
+
+    const input = screen.getByPlaceholderText('Filter alerts...');
+    await user.clear(input);
+    await user.type(input, 'aws');
+
+    expect(summary).toBeInTheDocument();
+    expect(screen.getByText('1.2.3.4')).toBeInTheDocument();
+    expect(screen.queryByText('Loading alerts...')).not.toBeInTheDocument();
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    });
+
+    expect(screen.getByText('1.2.3.4')).toBeInTheDocument();
+    expect(screen.queryByText('Loading alerts...')).not.toBeInTheDocument();
+
+    deferred.resolve(toPaginatedAlerts([alerts[1]], 1, 50, alerts.length));
+
+    await waitFor(() => expect(screen.queryByText('1.2.3.4')).not.toBeInTheDocument());
+    expect(screen.getByText('5.6.7.8')).toBeInTheDocument();
+    expect(summary).toHaveTextContent('Showing 1 of 1 alerts (2 total before filters)');
   });
 
   test('renders and filters range-only alerts by CIDR source value', async () => {

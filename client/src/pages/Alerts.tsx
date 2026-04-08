@@ -86,8 +86,10 @@ export function Alerts() {
     const [simulationsEnabled, setSimulationsEnabled] = useState(false);
     const [machineFeaturesEnabled, setMachineFeaturesEnabled] = useState(false);
     const [originFeaturesEnabled, setOriginFeaturesEnabled] = useState(false);
-    const [filter, setFilter] = useState("");
-    const [loading, setLoading] = useState(true);
+    const [searchInput, setSearchInput] = useState("");
+    const [debouncedFilter, setDebouncedFilter] = useState("");
+    const [initialLoading, setInitialLoading] = useState(true);
+    const [backgroundLoading, setBackgroundLoading] = useState(false);
     const [loadingMore, setLoadingMore] = useState(false);
     const [selectedAlert, setSelectedAlert] = useState<AlertSelection | null>(null);
     const [modalDecisions, setModalDecisions] = useState<DecisionListItem[]>([]);
@@ -124,12 +126,26 @@ export function Alerts() {
     const inFlightLoadKeysRef = useRef(new Set<string>());
     const lastCompletedLoadRef = useRef<{ key: string; completedAt: number } | null>(null);
     const modalDecisionsLoadRef = useRef<{ alertId: string | null; page: number | null }>({ alertId: null, page: null });
+    const loadAlertsRef = useRef<(options?: {
+        isBackground?: boolean;
+        page?: number;
+        append?: boolean;
+        preserveLoadedPages?: boolean;
+        refreshConfig?: boolean;
+    }) => Promise<void>>(async () => {});
+    const lastRefreshSignalRef = useRef(refreshSignal);
+    const configRef = useRef<{
+        simulationsEnabled: boolean;
+        machineFeaturesEnabled: boolean;
+        originFeaturesEnabled: boolean;
+    } | null>(null);
+    const hasLoadedAlertsRef = useRef(false);
 
     const buildServerFilters = useCallback((simulationFilter = currentSimulationFilter): Record<string, string> => {
         const filters: Record<string, string> = {
             tz_offset: String(new Date().getTimezoneOffset()),
         };
-        if (filter) filters.q = filter;
+        if (debouncedFilter) filters.q = debouncedFilter;
         for (const key of ["ip", "country", "scenario", "as", "target", "date", "dateStart", "dateEnd"]) {
             const value = searchParams.get(key);
             if (value) filters[key] = value;
@@ -138,16 +154,49 @@ export function Alerts() {
             filters.simulation = simulationFilter;
         }
         return filters;
-    }, [currentSimulationFilter, filter, searchParams]);
+    }, [currentSimulationFilter, debouncedFilter, searchParams]);
 
-    const loadAlerts = useCallback(async (isBackground = false, page = 1, append = false, preserveLoadedPages = false) => {
+    const loadConfig = useCallback(async (refresh = false) => {
+        if (!refresh && configRef.current) {
+            return configRef.current;
+        }
+
+        const configData = await fetchConfig();
+        const nextConfig = {
+            simulationsEnabled: configData.simulations_enabled === true,
+            machineFeaturesEnabled: configData.machine_features_enabled === true,
+            originFeaturesEnabled: configData.origin_features_enabled === true,
+        };
+
+        configRef.current = nextConfig;
+        setSimulationsEnabled(nextConfig.simulationsEnabled);
+        setMachineFeaturesEnabled(nextConfig.machineFeaturesEnabled);
+        setOriginFeaturesEnabled(nextConfig.originFeaturesEnabled);
+
+        return nextConfig;
+    }, []);
+
+    const loadAlerts = useCallback(async ({
+        isBackground = false,
+        page = 1,
+        append = false,
+        preserveLoadedPages = false,
+        refreshConfig = false,
+    }: {
+        isBackground?: boolean;
+        page?: number;
+        append?: boolean;
+        preserveLoadedPages?: boolean;
+        refreshConfig?: boolean;
+    } = {}) => {
         const loadKey = JSON.stringify({
             page,
             append,
             preserveLoadedPages,
             loadedPage: preserveLoadedPages ? currentPageRef.current : undefined,
-            filter,
+            filter: debouncedFilter,
             search: searchParams.toString(),
+            refreshConfig,
         });
         const lastCompletedLoad = lastCompletedLoadRef.current;
         if (
@@ -159,15 +208,18 @@ export function Alerts() {
 
         inFlightLoadKeysRef.current.add(loadKey);
         let completedSuccessfully = false;
+        const shouldBlockWithInitialLoading = !append && !isBackground && !hasLoadedAlertsRef.current;
 
         try {
             if (append) {
                 setLoadingMore(true);
-            } else if (!isBackground) {
-                setLoading(true);
+            } else if (shouldBlockWithInitialLoading) {
+                setInitialLoading(true);
+            } else {
+                setBackgroundLoading(true);
             }
-            const configData = await fetchConfig();
-            const requestedSimulationFilter = configData.simulations_enabled === true
+            const configData = await loadConfig(refreshConfig || !configRef.current);
+            const requestedSimulationFilter = configData.simulationsEnabled === true
                 ? parseSimulationFilter(searchParams.get("simulation"))
                 : 'all';
             const filters = buildServerFilters(requestedSimulationFilter);
@@ -196,9 +248,7 @@ export function Alerts() {
             setTotalAlerts(alertsResult.pagination.total);
             setTotalUnfilteredAlerts(alertsResult.pagination.unfiltered_total);
             setSelectableAlertIds(alertsResult.selectable_ids.map(String));
-            setSimulationsEnabled(configData.simulations_enabled === true);
-            setMachineFeaturesEnabled(configData.machine_features_enabled === true);
-            setOriginFeaturesEnabled(configData.origin_features_enabled === true);
+            hasLoadedAlertsRef.current = true;
 
             // Check if there's an alert ID in the URL
             if (alertIdParam) {
@@ -228,11 +278,6 @@ export function Alerts() {
                 }
             }
 
-            // Check for generic search query param
-            if (queryParam) {
-                setFilter(queryParam);
-            }
-
             setLastUpdated(new Date());
             completedSuccessfully = true;
 
@@ -244,29 +289,60 @@ export function Alerts() {
                 lastCompletedLoadRef.current = { key: loadKey, completedAt: Date.now() };
             }
             if (append) setLoadingMore(false);
-            if (!isBackground) setLoading(false);
+            if (shouldBlockWithInitialLoading) {
+                setInitialLoading(false);
+            } else {
+                setBackgroundLoading(false);
+            }
         }
-    }, [alertIdParam, buildServerFilters, filter, queryParam, searchParams, setLastUpdated]);
+    }, [alertIdParam, buildServerFilters, debouncedFilter, loadConfig, searchParams, setLastUpdated]);
+
+    useEffect(() => {
+        loadAlertsRef.current = loadAlerts;
+    }, [loadAlerts]);
 
     const lastAlertElementRef = useCallback((node: HTMLTableRowElement | null) => {
-        if (loading || loadingMore || !hasMoreAlerts) return;
+        if (initialLoading || backgroundLoading || loadingMore || !hasMoreAlerts) return;
         if (observer.current) observer.current.disconnect();
         observer.current = new IntersectionObserver((entries) => {
             if (entries[0].isIntersecting) {
-                void loadAlerts(true, currentPage + 1, true);
+                void loadAlerts({ isBackground: true, page: currentPage + 1, append: true });
             }
         });
         if (node) observer.current.observe(node);
-    }, [currentPage, hasMoreAlerts, loadAlerts, loading, loadingMore]);
+    }, [backgroundLoading, currentPage, hasMoreAlerts, initialLoading, loadAlerts, loadingMore]);
 
     useEffect(() => {
-        loadAlerts(false);
+        void loadAlerts({ refreshConfig: true });
     }, [loadAlerts]);
 
 
     useEffect(() => {
-        if (refreshSignal > 0) loadAlerts(true, 1, false, true);
-    }, [refreshSignal, loadAlerts]);
+        if (refreshSignal <= lastRefreshSignalRef.current) {
+            return;
+        }
+
+        lastRefreshSignalRef.current = refreshSignal;
+        void loadAlertsRef.current({ isBackground: true, page: 1, preserveLoadedPages: true, refreshConfig: true });
+    }, [refreshSignal]);
+
+    useEffect(() => {
+        const nextQuery = queryParam ?? "";
+        setSearchInput((current) => current === nextQuery ? current : nextQuery);
+        setDebouncedFilter((current) => current === nextQuery ? current : nextQuery);
+    }, [queryParam]);
+
+    useEffect(() => {
+        if (searchInput === debouncedFilter) {
+            return;
+        }
+
+        const timeoutId = window.setTimeout(() => {
+            setDebouncedFilter(searchInput);
+        }, 300);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [debouncedFilter, searchInput]);
 
     // Keep ref in sync with selectedAlert for auto-refresh
     useEffect(() => {
@@ -395,7 +471,7 @@ export function Alerts() {
             }
 
             setPendingDeleteAction(null);
-            await loadAlerts(false, 1, false);
+            await loadAlerts({ page: 1, refreshConfig: true });
             if (resultMessage) {
                 setErrorInfo({ message: resultMessage });
             }
@@ -461,16 +537,28 @@ export function Alerts() {
     const selectedAlertCount = selectedFilteredAlertIds.length;
     const pendingSingleAlertId = pendingDeleteAction?.kind === "single" ? pendingDeleteAction.alertId : null;
     const pendingIp = pendingDeleteAction?.kind === "ip" ? pendingDeleteAction.ip : null;
+    const summaryText = initialLoading && !hasLoadedAlertsRef.current
+        ? "Loading alerts..."
+        : totalAlerts !== totalUnfilteredAlerts
+            ? `Showing ${visibleAlerts.length} of ${totalAlerts} alerts (${totalUnfilteredAlerts} total before filters)`
+            : `Showing ${visibleAlerts.length} of ${totalAlerts} alerts`;
+    const tableBusy = initialLoading || backgroundLoading || loadingMore;
 
     return (
         <div className="space-y-6">
-            {(totalAlerts !== totalUnfilteredAlerts || visibleAlerts.length < totalAlerts) && (
-                <div className="text-sm text-gray-500">
-                    {totalAlerts !== totalUnfilteredAlerts
-                        ? `Showing ${visibleAlerts.length} of ${totalAlerts} alerts (${totalUnfilteredAlerts} total before filters)`
-                        : `Showing ${visibleAlerts.length} of ${totalAlerts} alerts`}
-                </div>
-            )}
+            <div
+                data-testid="alerts-summary"
+                className="flex min-h-[1.5rem] items-center justify-between gap-3 text-sm text-gray-500"
+            >
+                <span>{summaryText}</span>
+                <span
+                    className={`inline-flex items-center gap-2 text-xs transition-opacity ${backgroundLoading ? 'opacity-100' : 'opacity-0'}`}
+                    aria-live="polite"
+                >
+                    <span className="h-2 w-2 rounded-full bg-primary-500 animate-pulse" aria-hidden="true" />
+                    Refreshing...
+                </span>
+            </div>
 
             <div className="flex items-center gap-3">
                 <button
@@ -563,12 +651,15 @@ export function Alerts() {
                     type="text"
                     placeholder="Filter alerts..."
                     className="block w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md leading-5 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-                    value={filter}
-                    onChange={(e) => setFilter(e.target.value)}
+                    value={searchInput}
+                    onChange={(e) => setSearchInput(e.target.value)}
                 />
             </div>
 
-            <div className="bg-white dark:bg-gray-800 shadow-sm rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700">
+            <div
+                className="bg-white dark:bg-gray-800 shadow-sm rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700"
+                aria-busy={tableBusy}
+            >
                 <div className="overflow-x-auto">
                     <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 transition-opacity duration-200">
                         <thead className="bg-gray-50 dark:bg-gray-900/50">
@@ -600,7 +691,7 @@ export function Alerts() {
                             </tr>
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                            {loading ? (
+                            {initialLoading && visibleAlerts.length === 0 ? (
                                 <tr><td colSpan={8 + (machineFeaturesEnabled ? 1 : 0) + (originFeaturesEnabled ? 1 : 0)} className="px-6 py-4 text-center text-sm text-gray-500">Loading alerts...</td></tr>
                             ) : visibleAlerts.length === 0 ? (
                                 <tr><td colSpan={8 + (machineFeaturesEnabled ? 1 : 0) + (originFeaturesEnabled ? 1 : 0)} className="px-6 py-4 text-center text-sm text-gray-500">No alerts found</td></tr>

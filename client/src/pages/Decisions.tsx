@@ -60,10 +60,12 @@ export function Decisions() {
     const [simulationsEnabled, setSimulationsEnabled] = useState(false);
     const [machineFeaturesEnabled, setMachineFeaturesEnabled] = useState(false);
     const [originFeaturesEnabled, setOriginFeaturesEnabled] = useState(false);
-    const [loading, setLoading] = useState(true);
+    const [searchInput, setSearchInput] = useState("");
+    const [debouncedFilter, setDebouncedFilter] = useState("");
+    const [initialLoading, setInitialLoading] = useState(true);
+    const [backgroundLoading, setBackgroundLoading] = useState(false);
     const [loadingMore, setLoadingMore] = useState(false);
     const [showAddModal, setShowAddModal] = useState(false);
-    const [filter, setFilter] = useState("");
     const [currentPage, setCurrentPage] = useState(1);
     const [totalPages, setTotalPages] = useState(1);
     const [totalDecisions, setTotalDecisions] = useState(0);
@@ -98,12 +100,26 @@ export function Decisions() {
     const currentPageRef = useRef(1);
     const inFlightLoadKeysRef = useRef(new Set<string>());
     const lastCompletedLoadRef = useRef<{ key: string; completedAt: number } | null>(null);
+    const loadDecisionsRef = useRef<(options?: {
+        isBackground?: boolean;
+        page?: number;
+        append?: boolean;
+        preserveLoadedPages?: boolean;
+        refreshConfig?: boolean;
+    }) => Promise<void>>(async () => {});
+    const lastRefreshSignalRef = useRef(refreshSignal);
+    const configRef = useRef<{
+        simulationsEnabled: boolean;
+        machineFeaturesEnabled: boolean;
+        originFeaturesEnabled: boolean;
+    } | null>(null);
+    const hasLoadedDecisionsRef = useRef(false);
 
     const buildServerFilters = useCallback((requestedSimulationFilter = simulationFilter): Record<string, string> => {
         const filters: Record<string, string> = {
             tz_offset: String(new Date().getTimezoneOffset()),
         };
-        if (filter) filters.q = filter;
+        if (debouncedFilter) filters.q = debouncedFilter;
         if (alertIdFilter) filters.alert_id = alertIdFilter;
         if (includeExpiredParam) filters.include_expired = 'true';
         if (countryFilter) filters.country = countryFilter;
@@ -116,16 +132,49 @@ export function Decisions() {
         if (requestedSimulationFilter !== 'all') filters.simulation = requestedSimulationFilter;
         if (showDuplicates) filters.hide_duplicates = 'false';
         return filters;
-    }, [alertIdFilter, asFilter, countryFilter, dateEndFilter, dateStartFilter, filter, includeExpiredParam, ipFilter, scenarioFilter, showDuplicates, simulationFilter, targetFilter]);
+    }, [alertIdFilter, asFilter, countryFilter, dateEndFilter, dateStartFilter, debouncedFilter, includeExpiredParam, ipFilter, scenarioFilter, showDuplicates, simulationFilter, targetFilter]);
 
-    const loadDecisions = useCallback(async (isBackground = false, page = 1, append = false, preserveLoadedPages = false) => {
+    const loadConfig = useCallback(async (refresh = false) => {
+        if (!refresh && configRef.current) {
+            return configRef.current;
+        }
+
+        const configData = await fetchConfig();
+        const nextConfig = {
+            simulationsEnabled: configData.simulations_enabled === true,
+            machineFeaturesEnabled: configData.machine_features_enabled === true,
+            originFeaturesEnabled: configData.origin_features_enabled === true,
+        };
+
+        configRef.current = nextConfig;
+        setSimulationsEnabled(nextConfig.simulationsEnabled);
+        setMachineFeaturesEnabled(nextConfig.machineFeaturesEnabled);
+        setOriginFeaturesEnabled(nextConfig.originFeaturesEnabled);
+
+        return nextConfig;
+    }, []);
+
+    const loadDecisions = useCallback(async ({
+        isBackground = false,
+        page = 1,
+        append = false,
+        preserveLoadedPages = false,
+        refreshConfig = false,
+    }: {
+        isBackground?: boolean;
+        page?: number;
+        append?: boolean;
+        preserveLoadedPages?: boolean;
+        refreshConfig?: boolean;
+    } = {}) => {
         const loadKey = JSON.stringify({
             page,
             append,
             preserveLoadedPages,
             loadedPage: preserveLoadedPages ? currentPageRef.current : undefined,
-            filter,
+            filter: debouncedFilter,
             search: searchParams.toString(),
+            refreshConfig,
         });
         const lastCompletedLoad = lastCompletedLoadRef.current;
         if (
@@ -137,14 +186,17 @@ export function Decisions() {
 
         inFlightLoadKeysRef.current.add(loadKey);
         let completedSuccessfully = false;
+        const shouldBlockWithInitialLoading = !append && !isBackground && !hasLoadedDecisionsRef.current;
         if (append) {
             setLoadingMore(true);
-        } else if (!isBackground) {
-            setLoading(true);
+        } else if (shouldBlockWithInitialLoading) {
+            setInitialLoading(true);
+        } else {
+            setBackgroundLoading(true);
         }
         try {
-            const configData = await fetchConfig();
-            const requestedSimulationFilter = configData.simulations_enabled === true
+            const configData = await loadConfig(refreshConfig || !configRef.current);
+            const requestedSimulationFilter = configData.simulationsEnabled === true
                 ? parseSimulationFilter(searchParams.get("simulation"))
                 : 'all';
             const filters = buildServerFilters(requestedSimulationFilter);
@@ -173,9 +225,7 @@ export function Decisions() {
             setTotalDecisions(decisionsResult.pagination.total);
             setTotalUnfilteredDecisions(decisionsResult.pagination.unfiltered_total);
             setSelectableDecisionIds(decisionsResult.selectable_ids.map(String));
-            setSimulationsEnabled(configData.simulations_enabled === true);
-            setMachineFeaturesEnabled(configData.machine_features_enabled === true);
-            setOriginFeaturesEnabled(configData.origin_features_enabled === true);
+            hasLoadedDecisionsRef.current = true;
 
             setLastUpdated(new Date());
             completedSuccessfully = true;
@@ -187,36 +237,61 @@ export function Decisions() {
                 lastCompletedLoadRef.current = { key: loadKey, completedAt: Date.now() };
             }
             if (append) setLoadingMore(false);
-            if (!isBackground) setLoading(false);
+            if (shouldBlockWithInitialLoading) {
+                setInitialLoading(false);
+            } else {
+                setBackgroundLoading(false);
+            }
         }
-    }, [buildServerFilters, filter, searchParams, setLastUpdated]);
+    }, [buildServerFilters, debouncedFilter, loadConfig, searchParams, setLastUpdated]);
+
+    useEffect(() => {
+        loadDecisionsRef.current = loadDecisions;
+    }, [loadDecisions]);
 
     const lastDecisionElementRef = useCallback((node: HTMLTableRowElement | null) => {
-        if (loading || loadingMore || !hasMoreDecisions) return;
+        if (initialLoading || backgroundLoading || loadingMore || !hasMoreDecisions) return;
         if (observer.current) observer.current.disconnect();
         observer.current = new IntersectionObserver((entries) => {
             if (entries[0].isIntersecting) {
-                void loadDecisions(true, currentPage + 1, true);
+                void loadDecisions({ isBackground: true, page: currentPage + 1, append: true });
             }
         });
         if (node) observer.current.observe(node);
-    }, [currentPage, hasMoreDecisions, loadDecisions, loading, loadingMore]);
+    }, [backgroundLoading, currentPage, hasMoreDecisions, initialLoading, loadDecisions, loadingMore]);
 
     // Sync "q" param to filter state
     useEffect(() => {
         const queryParam = searchParams.get("q");
-        if (queryParam) {
-            setFilter(queryParam);
-        }
+        const nextQuery = queryParam ?? "";
+        setSearchInput((current) => current === nextQuery ? current : nextQuery);
+        setDebouncedFilter((current) => current === nextQuery ? current : nextQuery);
     }, [searchParams]);
 
     useEffect(() => {
-        loadDecisions(false);
+        void loadDecisions({ refreshConfig: true });
     }, [loadDecisions]);
 
     useEffect(() => {
-        if (refreshSignal > 0) loadDecisions(true, 1, false, true);
-    }, [refreshSignal, loadDecisions]);
+        if (refreshSignal <= lastRefreshSignalRef.current) {
+            return;
+        }
+
+        lastRefreshSignalRef.current = refreshSignal;
+        void loadDecisionsRef.current({ isBackground: true, page: 1, preserveLoadedPages: true, refreshConfig: true });
+    }, [refreshSignal]);
+
+    useEffect(() => {
+        if (searchInput === debouncedFilter) {
+            return;
+        }
+
+        const timeoutId = window.setTimeout(() => {
+            setDebouncedFilter(searchInput);
+        }, 300);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [debouncedFilter, searchInput]);
 
     const handleAddDecision = async (e: FormEvent<HTMLFormElement>) => {
         e.preventDefault();
@@ -226,7 +301,7 @@ export function Decisions() {
         setErrorInfo(null);
         try {
             await addDecision(decisionData);
-            await loadDecisions(false, 1, false);
+            await loadDecisions({ page: 1, refreshConfig: true });
         } catch (error) {
             console.error("Failed to add decision", error);
             setErrorInfo(toErrorInfo(error, "Failed to add decision. Please try again."));
@@ -263,7 +338,7 @@ export function Decisions() {
             }
 
             setPendingDeleteAction(null);
-            await loadDecisions(false, 1, false);
+            await loadDecisions({ page: 1, refreshConfig: true });
             if (resultMessage) {
                 setErrorInfo({ message: resultMessage });
             }
@@ -349,16 +424,28 @@ export function Decisions() {
                 : "Delete";
     const pendingDecisionId = pendingDeleteAction?.kind === "single" ? pendingDeleteAction.decisionId : null;
     const pendingIp = pendingDeleteAction?.kind === "ip" ? pendingDeleteAction.ip : null;
+    const summaryText = initialLoading && !hasLoadedDecisionsRef.current
+        ? "Loading decisions..."
+        : totalDecisions !== totalUnfilteredDecisions
+            ? `Showing ${visibleDecisions.length} of ${totalDecisions} decisions (${totalUnfilteredDecisions} total before filters)`
+            : `Showing ${visibleDecisions.length} of ${totalDecisions} decisions`;
+    const tableBusy = initialLoading || backgroundLoading || loadingMore;
 
     return (
         <div className="space-y-6">
-            {(totalDecisions !== totalUnfilteredDecisions || visibleDecisions.length < totalDecisions) && (
-                <div className="text-sm text-gray-500">
-                    {totalDecisions !== totalUnfilteredDecisions
-                        ? `Showing ${visibleDecisions.length} of ${totalDecisions} decisions (${totalUnfilteredDecisions} total before filters)`
-                        : `Showing ${visibleDecisions.length} of ${totalDecisions} decisions`}
-                </div>
-            )}
+            <div
+                data-testid="decisions-summary"
+                className="flex min-h-[1.5rem] items-center justify-between gap-3 text-sm text-gray-500"
+            >
+                <span>{summaryText}</span>
+                <span
+                    className={`inline-flex items-center gap-2 text-xs transition-opacity ${backgroundLoading ? 'opacity-100' : 'opacity-0'}`}
+                    aria-live="polite"
+                >
+                    <span className="h-2 w-2 rounded-full bg-primary-500 animate-pulse" aria-hidden="true" />
+                    Refreshing...
+                </span>
+            </div>
             
             <div className="flex items-center gap-3">
                 <button
@@ -565,13 +652,16 @@ export function Decisions() {
                     type="text"
                     placeholder="Filter decisions..."
                     className="block w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md leading-5 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-                    value={filter}
-                    onChange={(e) => setFilter(e.target.value)}
+                    value={searchInput}
+                    onChange={(e) => setSearchInput(e.target.value)}
                 />
             </div>
 
 
-            <div className="bg-white dark:bg-gray-800 shadow-sm rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700">
+            <div
+                className="bg-white dark:bg-gray-800 shadow-sm rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700"
+                aria-busy={tableBusy}
+            >
                 <div className="overflow-x-auto">
                     <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                         <thead className="bg-gray-50 dark:bg-gray-900/50">
@@ -605,7 +695,7 @@ export function Decisions() {
                             </tr>
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                            {loading ? (
+                            {initialLoading && visibleDecisions.length === 0 ? (
                                 <tr><td colSpan={10 + (machineFeaturesEnabled ? 1 : 0) + (originFeaturesEnabled ? 1 : 0)} className="px-6 py-4 text-center text-sm text-gray-500">Loading decisions...</td></tr>
                             ) : visibleDecisions.length === 0 ? (
                                 <tr><td colSpan={10 + (machineFeaturesEnabled ? 1 : 0) + (originFeaturesEnabled ? 1 : 0)} className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? "No decisions for this alert" : "No decisions found"}</td></tr>

@@ -15,10 +15,11 @@ const {
   fetchConfigMock: vi.fn(),
   fetchDashboardStatsMock: vi.fn(),
 }));
+let refreshSignalMock = 0;
 
 vi.mock('../contexts/useRefresh', () => ({
   useRefresh: () => ({
-    refreshSignal: 0,
+    refreshSignal: refreshSignalMock,
     setLastUpdated: vi.fn(),
   }),
 }));
@@ -95,6 +96,7 @@ function buildDashboardStatsResponse(filters?: Record<string, string>) {
 }
 
 beforeEach(() => {
+  refreshSignalMock = 0;
   vi.stubGlobal(
     'matchMedia',
     vi.fn().mockImplementation(() => ({
@@ -123,8 +125,21 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  refreshSignalMock = 0;
   vi.restoreAllMocks();
 });
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+
+  return { promise, resolve, reject };
+}
 
 describe('Dashboard page', () => {
   test('shows simulation counts separately and passes simulation series to chart and map when enabled', async () => {
@@ -258,5 +273,64 @@ describe('Dashboard page', () => {
       scaleMode?: 'linear' | 'symlog';
     };
     expect(defaultScaleProps.scaleMode).toBe('linear');
+  });
+
+  test('keeps dashboard cards and visualizations mounted while filter refresh is in flight', async () => {
+    const deferred = createDeferred<ReturnType<typeof buildDashboardStatsResponse>>();
+    fetchDashboardStatsMock.mockImplementation((filters?: Record<string, string>) => {
+      if (filters?.simulation === 'live') {
+        return deferred.promise;
+      }
+
+      return Promise.resolve(buildDashboardStatsResponse(filters));
+    });
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Total Alerts')).toBeInTheDocument());
+    expect(screen.getByText('Chart')).toBeInTheDocument();
+    expect(screen.getByText('Map')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Live' }));
+
+    expect(screen.getByText('Chart')).toBeInTheDocument();
+    expect(screen.getByText('Map')).toBeInTheDocument();
+    expect(screen.queryByText('Loading statistics...')).not.toBeInTheDocument();
+    expect(screen.getByText('Refreshing dashboard...')).toBeInTheDocument();
+
+    deferred.resolve(buildDashboardStatsResponse({ simulation: 'live' }));
+
+    await waitFor(() => {
+      const alertsCard = screen.getByText('Total Alerts').closest('a');
+      expect(alertsCard).not.toBeNull();
+      expect(within(alertsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('1');
+    });
+  });
+
+  test('does not trigger a duplicate dashboard load when filters change after a refresh signal', async () => {
+    refreshSignalMock = 1;
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Total Alerts')).toBeInTheDocument());
+    fetchDashboardStatsMock.mockClear();
+    await userEvent.click(screen.getByRole('button', { name: 'Live' }));
+
+    await waitFor(() => {
+      const alertsCard = screen.getByText('Total Alerts').closest('a');
+      expect(alertsCard).not.toBeNull();
+      expect(within(alertsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('1');
+    });
+
+    expect(fetchDashboardStatsMock.mock.calls.length).toBe(1);
+    expect(fetchDashboardStatsMock.mock.calls.at(-1)?.[0]).toMatchObject({ simulation: 'live' });
   });
 });
