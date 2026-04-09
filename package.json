@@ -33,11 +33,11 @@
     "verify": "pnpm run test && pnpm run coverage && pnpm run typecheck && pnpm run lint && pnpm run build"
   },
   "dependencies": {
-    "@hono/node-server": "1.19.12",
+    "@hono/node-server": "1.19.13",
     "better-sqlite3": "12.8.0",
-    "hono": "4.12.9",
+    "hono": "4.12.12",
     "mqtt": "^5.15.1",
-    "undici": "7.24.6"
+    "undici": "8.0.2"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -64,8 +64,8 @@
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.13.2",
     "react-window": "^2.2.7",
-    "react-zoom-pan-pinch": "^3.7.0",
-    "recharts": "3.8.0",
+    "react-zoom-pan-pinch": "4.0.3",
+    "recharts": "3.8.1",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.2.1",
     "tsup": "8.5.1",
@@ -73,6 +73,6 @@
     "typescript": "^6.0.2",
     "typescript-eslint": "^8.57.2",
     "vitest": "4.1.2",
-    "vite": "8.0.3"
+    "vite": "8.0.5"
   }
 }
