@@ -7,6 +7,7 @@ import {
   type InputHTMLAttributes,
   type KeyboardEventHandler,
   type MouseEventHandler,
+  type ReactNode,
   type Ref,
   type UIEventHandler,
 } from 'react';
@@ -25,11 +26,62 @@ type HighlightedSearchInputProps = Omit<InputHTMLAttributes<HTMLInputElement>, '
   error?: SearchParseError | null;
 };
 
+interface SearchQueryHighlightProps {
+  query: string;
+  searchPage: SearchPage;
+  searchFeatures?: SearchFeatureFlags;
+  error?: SearchParseError | null;
+  highlightErrors?: boolean;
+  ariaHidden?: boolean;
+  className?: string;
+}
+
 interface HighlightSegment {
   key: string;
   text: string;
   kind: SearchHighlightTokenKind | 'plain';
   hasError: boolean;
+}
+
+export const SearchQueryHighlight = forwardRef<HTMLDivElement, SearchQueryHighlightProps>(
+  function SearchQueryHighlight(
+    {
+      query,
+      searchPage,
+      searchFeatures,
+      error,
+      highlightErrors = false,
+      ariaHidden,
+      className = '',
+    },
+    ref,
+  ) {
+    const segments = useSearchHighlightSegments(query, searchPage, searchFeatures, error, highlightErrors);
+
+    return (
+      <div ref={ref} className={className} aria-hidden={ariaHidden} data-search-highlight-layer="true">
+        {renderHighlightSegments(segments)}
+      </div>
+    );
+  },
+);
+
+export function InlineSearchQueryHighlight({
+  query,
+  searchPage,
+  searchFeatures,
+  error,
+  highlightErrors = false,
+  ariaHidden,
+  className = '',
+}: SearchQueryHighlightProps) {
+  const segments = useSearchHighlightSegments(query, searchPage, searchFeatures, error, highlightErrors);
+
+  return (
+    <span className={className} aria-hidden={ariaHidden} data-search-highlight-layer="true">
+      {renderHighlightSegments(segments)}
+    </span>
+  );
 }
 
 export const HighlightedSearchInput = forwardRef<HTMLInputElement, HighlightedSearchInputProps>(
@@ -51,15 +103,12 @@ export const HighlightedSearchInput = forwardRef<HTMLInputElement, HighlightedSe
   ) {
     const inputRef = useRef<HTMLInputElement | null>(null);
     const highlightRef = useRef<HTMLDivElement | null>(null);
-    const analysis = useMemo(
-      () => analyzeSearchQuery(String(value), searchPage, searchFeatures),
-      [searchFeatures, searchPage, value],
+    const query = String(value);
+    const { error: analysisError } = useMemo(
+      () => analyzeSearchQuery(query, searchPage, searchFeatures),
+      [searchFeatures, searchPage, query],
     );
-    const activeError = error ?? analysis.error;
-    const segments = useMemo(
-      () => buildHighlightSegments(String(value), analysis.tokens, activeError),
-      [activeError, analysis.tokens, value],
-    );
+    const activeError = error ?? analysisError;
 
     const syncScroll = (scrollLeft: number) => {
       if (highlightRef.current) {
@@ -109,22 +158,15 @@ export const HighlightedSearchInput = forwardRef<HTMLInputElement, HighlightedSe
         </div>
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden rounded-md">
           <div className="absolute inset-y-0 left-0 right-0 overflow-hidden px-3 py-2 pl-10 font-mono text-sm leading-5">
-            <div
+            <SearchQueryHighlight
               ref={highlightRef}
+              query={query}
+              searchPage={searchPage}
+              searchFeatures={searchFeatures}
+              error={error}
+              highlightErrors
               className="min-w-full whitespace-pre text-gray-900 dark:text-gray-100"
-              data-search-highlight-layer="true"
-            >
-              {segments.map((segment) => (
-                <span
-                  key={segment.key}
-                  data-search-highlight-kind={segment.kind}
-                  data-search-highlight-error={segment.hasError ? 'true' : 'false'}
-                  className={getSegmentClassName(segment.kind, segment.hasError)}
-                >
-                  {segment.text}
-                </span>
-              ))}
-            </div>
+            />
           </div>
         </div>
         <input
@@ -149,6 +191,38 @@ export const HighlightedSearchInput = forwardRef<HTMLInputElement, HighlightedSe
     );
   },
 );
+
+function useSearchHighlightSegments(
+  query: string,
+  searchPage: SearchPage,
+  searchFeatures: SearchFeatureFlags | undefined,
+  error: SearchParseError | null | undefined,
+  highlightErrors: boolean,
+): HighlightSegment[] {
+  const analysis = useMemo(
+    () => analyzeSearchQuery(query, searchPage, searchFeatures),
+    [query, searchFeatures, searchPage],
+  );
+  const activeError = highlightErrors ? (error ?? analysis.error) : null;
+
+  return useMemo(
+    () => buildHighlightSegments(query, analysis.tokens, activeError),
+    [activeError, analysis.tokens, query],
+  );
+}
+
+function renderHighlightSegments(segments: HighlightSegment[]): ReactNode {
+  return segments.map((segment) => (
+    <span
+      key={segment.key}
+      data-search-highlight-kind={segment.kind}
+      data-search-highlight-error={segment.hasError ? 'true' : 'false'}
+      className={getSegmentClassName(segment.kind, segment.hasError)}
+    >
+      {segment.text}
+    </span>
+  ));
+}
 
 function buildHighlightSegments(
   query: string,

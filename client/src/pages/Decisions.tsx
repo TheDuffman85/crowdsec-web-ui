@@ -1023,6 +1023,7 @@ export function Decisions() {
             </Modal>
             <SearchSyntaxModal
                 help={searchHelp}
+                searchFeatures={searchValidationFeatures}
                 isOpen={showSearchSyntaxModal}
                 onClose={() => setShowSearchSyntaxModal(false)}
                 onSelectExample={applySearchExample}
