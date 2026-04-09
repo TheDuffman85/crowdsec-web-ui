@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback, useMemo, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, type FormEvent } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { deleteDecision, bulkDeleteDecisions, cleanupByIp, addDecision, fetchConfig, fetchDecisionsPaginated } from "../lib/api";
 import { isSimulatedDecision, parseSimulationFilter } from "../lib/simulation";
@@ -120,6 +120,10 @@ export function Decisions() {
     } | null>(null);
     const hasLoadedDecisionsRef = useRef(false);
     const searchInputRef = useRef<HTMLInputElement | null>(null);
+    const searchDraftRef = useRef(searchDraft);
+    const searchSelectionRef = useRef({ start: 0, end: 0 });
+    const pendingSearchFocusRef = useRef<number | null>(null);
+    const skipSearchParamSyncRef = useRef<string | null>(null);
     const searchValidationFeatures = useMemo(() => (
         configRef.current
             ? { machineEnabled: machineFeaturesEnabled, originEnabled: originFeaturesEnabled }
@@ -279,9 +283,63 @@ export function Decisions() {
     useEffect(() => {
         const queryParam = searchParams.get("q");
         const nextQuery = queryParam ?? "";
+        if (skipSearchParamSyncRef.current === nextQuery) {
+            skipSearchParamSyncRef.current = null;
+            return;
+        }
+        searchDraftRef.current = nextQuery;
         setSearchDraft((current) => current === nextQuery ? current : nextQuery);
         setDebouncedSearchDraft((current) => current === nextQuery ? current : nextQuery);
+        searchSelectionRef.current = { start: nextQuery.length, end: nextQuery.length };
     }, [searchParams]);
+
+    useEffect(() => {
+        searchDraftRef.current = searchDraft;
+    }, [searchDraft]);
+
+    useLayoutEffect(() => {
+        if (showSearchSyntaxModal) {
+            return;
+        }
+
+        const caretPosition = pendingSearchFocusRef.current;
+        if (caretPosition === null) {
+            return;
+        }
+
+        const input = searchInputRef.current;
+        if (!input) {
+            return;
+        }
+
+        input.focus();
+        input.setSelectionRange(caretPosition, caretPosition);
+        searchSelectionRef.current = { start: caretPosition, end: caretPosition };
+        pendingSearchFocusRef.current = null;
+    }, [searchDraft, showSearchSyntaxModal]);
+
+    const updateSearchSelection = useCallback((start: number | null, end: number | null, fallbackLength: number) => {
+        const nextStart = Math.min(start ?? fallbackLength, fallbackLength);
+        const nextEnd = Math.min(end ?? nextStart, fallbackLength);
+        searchSelectionRef.current = { start: nextStart, end: nextEnd };
+    }, []);
+
+    const updateSearchSelectionFromInput = useCallback((input: HTMLInputElement) => {
+        updateSearchSelection(input.selectionStart, input.selectionEnd, input.value.length);
+    }, [updateSearchSelection]);
+
+    const getSearchInsertionRange = useCallback((currentValue: string) => {
+        const input = searchInputRef.current;
+        if (input && document.activeElement === input && input.selectionStart !== null && input.selectionEnd !== null) {
+            updateSearchSelection(input.selectionStart, input.selectionEnd, currentValue.length);
+        }
+
+        const { start, end } = searchSelectionRef.current;
+        return {
+            start: Math.min(start, currentValue.length),
+            end: Math.min(end, currentValue.length),
+        };
+    }, [updateSearchSelection]);
 
     useEffect(() => {
         void loadDecisions({ refreshConfig: true });
@@ -337,6 +395,7 @@ export function Decisions() {
             nextParams.delete("q");
         }
         if (nextParams.toString() !== searchParams.toString()) {
+            skipSearchParamSyncRef.current = nextQuery;
             setSearchParams(nextParams);
         }
     }, [debouncedSearchDraft, searchParams, searchValidationFeatures, setSearchParams]);
@@ -412,40 +471,39 @@ export function Decisions() {
     };
 
     const applySearchExample = useCallback((query: string) => {
+        searchDraftRef.current = query;
         setSearchDraft(query);
         setDebouncedSearchDraft(query);
         setAppliedQuery(query.trim());
         setQueryError(null);
+        pendingSearchFocusRef.current = query.length;
         setShowSearchSyntaxModal(false);
-        window.setTimeout(() => {
-            searchInputRef.current?.focus();
-        }, 0);
     }, []);
 
     const insertSearchSnippet = useCallback((snippet: string) => {
-        const input = searchInputRef.current;
-        let nextCaretPosition = 0;
+        const currentValue = searchInputRef.current?.value ?? searchDraftRef.current;
+        const { start, end } = getSearchInsertionRange(currentValue);
+        const nextCaretPosition = start + snippet.length;
+        const nextQuery = `${currentValue.slice(0, start)}${snippet}${currentValue.slice(end)}`;
 
-        setSearchDraft((current) => {
-            const currentValue = input?.value ?? current;
-            const selectionStart = input?.selectionStart ?? currentValue.length;
-            const selectionEnd = input?.selectionEnd ?? currentValue.length;
-            nextCaretPosition = selectionStart + snippet.length;
-            return `${currentValue.slice(0, selectionStart)}${snippet}${currentValue.slice(selectionEnd)}`;
-        });
+        searchDraftRef.current = nextQuery;
+        searchSelectionRef.current = { start: nextCaretPosition, end: nextCaretPosition };
+        setSearchDraft(nextQuery);
+        setDebouncedSearchDraft(nextQuery);
         setQueryError(null);
-
-        window.setTimeout(() => {
-            searchInputRef.current?.focus();
-            searchInputRef.current?.setSelectionRange(nextCaretPosition, nextCaretPosition);
-        }, 0);
-    }, []);
+        pendingSearchFocusRef.current = nextCaretPosition;
+        setShowSearchSyntaxModal(false);
+    }, [getSearchInsertionRange]);
 
     const clearFilter = useCallback(() => {
+        searchDraftRef.current = "";
         setSearchDraft("");
         setDebouncedSearchDraft("");
         setAppliedQuery("");
         setQueryError(null);
+        pendingSearchFocusRef.current = null;
+        searchSelectionRef.current = { start: 0, end: 0 };
+        skipSearchParamSyncRef.current = "";
         setSearchParams({});
     }, [setSearchParams]);
 
@@ -755,7 +813,14 @@ export function Decisions() {
                             placeholder="Filter decisions..."
                             className={`block w-full pl-10 pr-3 py-2 border rounded-md leading-5 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 sm:text-sm ${queryError ? 'border-red-300 dark:border-red-700 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 dark:border-gray-700 focus:ring-primary-500 focus:border-primary-500'}`}
                             value={searchDraft}
-                            onChange={(e) => setSearchDraft(e.target.value)}
+                            onChange={(e) => {
+                                searchDraftRef.current = e.target.value;
+                                setSearchDraft(e.target.value);
+                                updateSearchSelectionFromInput(e.target);
+                            }}
+                            onClick={(e) => updateSearchSelectionFromInput(e.currentTarget)}
+                            onKeyUp={(e) => updateSearchSelectionFromInput(e.currentTarget)}
+                            onSelect={(e) => updateSearchSelectionFromInput(e.currentTarget)}
                             aria-invalid={queryError ? 'true' : 'false'}
                             aria-describedby={queryError ? 'decisions-search-error' : undefined}
                         />

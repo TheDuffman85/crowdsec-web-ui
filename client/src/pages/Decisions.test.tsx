@@ -347,6 +347,30 @@ describe('Decisions page', () => {
     await waitFor(() => expect(screen.queryByText('1.2.3.4')).not.toBeInTheDocument());
   });
 
+  test('decision snippet insertion ignores stale input selections while the modal has focus', async () => {
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Insert field date' }));
+
+    const input = screen.getByPlaceholderText('Filter decisions...') as HTMLInputElement;
+    expect(input).toHaveValue('date');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));
+    fireEvent.click(screen.getByRole('button', { name: /^>=/ }));
+
+    expect(input).toHaveValue('date>=');
+
+    await flushDecisionSearchDebounce();
+    expect(input).toHaveValue('date>=');
+  });
+
   test('reset all filters clears an advanced decision query without restoring it', async () => {
     render(
       <MemoryRouter initialEntries={['/decisions']}>

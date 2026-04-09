@@ -13,12 +13,10 @@ interface SearchSyntaxModalProps {
 export function SearchSyntaxModal({ help, isOpen, onClose, onSelectExample, onInsertSnippet }: SearchSyntaxModalProps) {
   const handleInsertSnippet = (snippet: string) => {
     onInsertSnippet?.(snippet);
-    onClose();
   };
 
   const handleSelectExample = (query: string) => {
     onSelectExample?.(query);
-    onClose();
   };
 
   return (
