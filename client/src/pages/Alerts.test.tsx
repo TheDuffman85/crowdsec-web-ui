@@ -252,6 +252,12 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+async function flushAlertSearchDebounce(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 350));
+  });
+}
+
 describe('Alerts page', () => {
   test('shows simulated alerts with an inline scenario badge and standard decision actions', async () => {
     render(
@@ -497,7 +503,8 @@ describe('Alerts page', () => {
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
 
     const input = screen.getByPlaceholderText('Filter alerts...');
-    await userEvent.type(input, 'country:germany AND target:ssh');
+    fireEvent.change(input, { target: { value: 'country:germany AND target:ssh' } });
+    await flushAlertSearchDebounce();
 
     await waitFor(() => expect(screen.queryByText('5.6.7.8')).not.toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: 'Reset all filters' }));
