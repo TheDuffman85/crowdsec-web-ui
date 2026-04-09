@@ -61,7 +61,7 @@ vi.mock('../lib/api', () => {
     },
     {
       id: 20,
-      created_at: '2026-03-23T11:00:00.000Z',
+      created_at: '2026-03-24T11:00:00.000Z',
       machine: 'machine-2',
       value: '5.6.7.8',
       expired: false,
@@ -321,6 +321,30 @@ describe('Decisions page', () => {
     await userEvent.click(screen.getByRole('button', { name: /status:active AND action:ban/i }));
 
     await waitFor(() => expect(screen.getByPlaceholderText('Filter decisions...')).toHaveValue('status:active AND action:ban'));
+  });
+
+  test('clicking decision fields and operators inserts snippets into the search input', async () => {
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Insert field date' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));
+    await userEvent.click(screen.getByRole('button', { name: /^>=/ }));
+
+    const input = screen.getByPlaceholderText('Filter decisions...');
+    expect(input).toHaveValue('date>=');
+
+    await userEvent.type(input, '2026-03-24');
+
+    await flushDecisionSearchDebounce();
+    await waitFor(() => expect(screen.getByPlaceholderText('Filter decisions...')).toHaveValue('date>=2026-03-24'));
+    await waitFor(() => expect(screen.getByText('5.6.7.8')).toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText('1.2.3.4')).not.toBeInTheDocument());
   });
 
   test('reset all filters clears an advanced decision query without restoring it', async () => {

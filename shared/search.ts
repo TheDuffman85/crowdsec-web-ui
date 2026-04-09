@@ -4,6 +4,8 @@ import { collectDistinctOrigins } from './origin';
 
 export type SearchPage = 'alerts' | 'decisions';
 export type SearchBooleanOperator = 'AND' | 'OR';
+export type SearchComparisonOperator = '=' | '<>' | '<' | '>' | '<=' | '>=';
+type SearchFieldValueType = 'text' | 'date';
 
 export interface SearchFeatureFlags {
   machineEnabled?: boolean;
@@ -15,6 +17,7 @@ export interface SearchFieldDefinition {
   aliases: string[];
   description: string;
   availability?: 'always' | 'machine' | 'origin';
+  valueType?: SearchFieldValueType;
 }
 
 export interface SearchHelpExample {
@@ -22,10 +25,18 @@ export interface SearchHelpExample {
   description: string;
 }
 
+export interface SearchHelpOperatorDefinition {
+  label: string;
+  insertText: string;
+  description: string;
+}
+
 export interface SearchHelpDefinition {
   page: SearchPage;
   title: string;
   summary: string;
+  tips: string[];
+  operators: SearchHelpOperatorDefinition[];
   examples: SearchHelpExample[];
   fields: SearchFieldDefinition[];
 }
@@ -42,7 +53,10 @@ export type SearchNode =
   | { kind: 'term'; value: string; quoted: boolean }
   | { kind: 'not'; expression: SearchNode }
   | { kind: 'binary'; operator: SearchBooleanOperator; left: SearchNode; right: SearchNode }
-  | { kind: 'field'; field: string; expression: SearchNode };
+  | { kind: 'field'; field: string; expression: SearchNode }
+  | { kind: 'comparison'; field: string; operator: SearchComparisonOperator; value: string; quoted: boolean };
+
+type SearchComparatorTokenValue = ':' | '=' | '<>' | '<' | '>' | '<=' | '>=' | '=>';
 
 type SearchToken =
   | { type: 'word'; value: string; start: number; end: number }
@@ -50,7 +64,7 @@ type SearchToken =
   | { type: 'operator'; value: 'AND' | 'OR' | 'NOT'; start: number; end: number }
   | { type: 'lparen'; start: number; end: number }
   | { type: 'rparen'; start: number; end: number }
-  | { type: 'colon'; start: number; end: number }
+  | { type: 'comparator'; value: SearchComparatorTokenValue; start: number; end: number }
   | { type: 'minus'; start: number; end: number };
 
 type FieldMap = Map<string, SearchFieldDefinition>;
@@ -86,6 +100,7 @@ const alertFieldDefinitions: SearchFieldDefinition[] = [
   { name: 'country', aliases: [], description: 'Country code or name' },
   { name: 'as', aliases: [], description: 'Autonomous system / provider name' },
   { name: 'target', aliases: [], description: 'Alert target' },
+  { name: 'date', aliases: ['created', 'created_at', 'time'], description: 'Alert creation date or ISO timestamp', valueType: 'date' },
   { name: 'sim', aliases: ['simulation'], description: 'Simulation state (`live` or `simulated`)' },
   { name: 'machine', aliases: [], description: 'Machine alias or ID', availability: 'machine' },
   { name: 'origin', aliases: [], description: 'Decision origin', availability: 'origin' },
@@ -99,6 +114,7 @@ const decisionFieldDefinitions: SearchFieldDefinition[] = [
   { name: 'country', aliases: [], description: 'Country code or name' },
   { name: 'as', aliases: [], description: 'Autonomous system / provider name' },
   { name: 'target', aliases: [], description: 'Decision target' },
+  { name: 'date', aliases: ['created', 'created_at', 'time'], description: 'Decision creation date or ISO timestamp', valueType: 'date' },
   { name: 'action', aliases: [], description: 'Decision action' },
   { name: 'type', aliases: [], description: 'Decision type' },
   { name: 'status', aliases: [], description: 'Decision status (`active` or `expired`)' },
@@ -112,6 +128,7 @@ const alertExamples: SearchHelpExample[] = [
   { query: 'ssh hetzner', description: 'Normal free-text search across the existing alert fields' },
   { query: '"nginx bf"', description: 'Find an exact phrase' },
   { query: 'country:germany ssh', description: 'Mix fielded search with normal free-text terms' },
+  { query: 'date>=2026-03-24 AND date<2026-03-25', description: 'Filter alerts by date or timestamp ranges' },
   { query: 'origin:(manual OR CAPI) AND -sim:simulated', description: 'Use grouping, boolean logic, and negation' },
   { query: 'machine:host-a AND target:ssh', description: 'Match a specific machine and target when available' },
 ];
@@ -119,9 +136,24 @@ const alertExamples: SearchHelpExample[] = [
 const decisionExamples: SearchHelpExample[] = [
   { query: 'manual live', description: 'Normal free-text search across the existing decision fields' },
   { query: 'status:active AND action:ban', description: 'Filter semantic decision fields' },
+  { query: 'date>=2026-03-24 AND action:ban', description: 'Combine date filters with semantic decision fields' },
   { query: 'alert:123 OR ip:"192.168.5.0/24"', description: 'Search by linked alert or a quoted IP/range' },
   { query: 'origin:(manual OR CAPI) AND -duplicate:true', description: 'Exclude duplicates while grouping origins' },
   { query: 'machine:host-a AND sim:live', description: 'Limit results to one machine and live decisions' },
+];
+
+const searchHelpOperators: SearchHelpOperatorDefinition[] = [
+  { label: 'AND', insertText: ' AND ', description: 'Both expressions must match' },
+  { label: 'OR', insertText: ' OR ', description: 'Either expression may match' },
+  { label: 'NOT', insertText: 'NOT ', description: 'Negate the next expression' },
+  { label: '-', insertText: '-', description: 'Short negation for a single term or field' },
+  { label: ':', insertText: ':', description: 'Broad field match, for example `country:germany`' },
+  { label: '=', insertText: '=', description: 'Exact match, for example `origin=manual` or `date=2026-03-24`' },
+  { label: '<>', insertText: '<>', description: 'Exclude a value, for example `sim<>simulated`' },
+  { label: '>', insertText: '>', description: 'Date is after the supplied value, for example `date>2026-03-24`' },
+  { label: '>=', insertText: '>=', description: 'Date is on or after the supplied value, for example `date>=2026-03-24`' },
+  { label: '<', insertText: '<', description: 'Date is before the supplied value, for example `date<2026-03-24`' },
+  { label: '<=', insertText: '<=', description: 'Date is on or before the supplied value, for example `date<=2026-03-24`' },
 ];
 
 const alertFieldMatchers: AlertFieldMatcherMap = {
@@ -135,6 +167,7 @@ const alertFieldMatchers: AlertFieldMatcherMap = {
   },
   as: (alert, value) => includesNormalized(alert.source?.as_name, value),
   target: (alert, value) => includesNormalized(alert.target, value),
+  date: (alert, value) => includesNormalized(alert.created_at, value),
   sim: (alert, value) => matchesSimulationTerm(alert.simulated === true, value),
   machine: (alert, value) => includesNormalized(resolveMachineName(alert), value),
   origin: (alert, value) => collectDistinctOrigins(alert.decisions).some((origin) => includesNormalized(origin, value)),
@@ -151,6 +184,7 @@ const decisionFieldMatchers: DecisionFieldMatcherMap = {
   },
   as: (decision, value) => includesNormalized(decision.detail.as, value),
   target: (decision, value) => includesNormalized(decision.detail.target, value),
+  date: (decision, value) => includesNormalized(decision.created_at, value),
   action: (decision, value) => includesNormalized(decision.detail.action, value),
   type: (decision, value) => includesNormalized(decision.detail.type, value),
   status: (decision, value) => matchesDecisionStatus(decision, value),
@@ -164,7 +198,14 @@ export function getSearchHelpDefinition(page: SearchPage, features: SearchFeatur
   return {
     page,
     title: page === 'alerts' ? 'Alert Search Syntax' : 'Decision Search Syntax',
-    summary: 'Normal free-text search still works. Advanced syntax is optional: use quotes for exact phrases, `field:value` for fielded search, `AND` / `OR` / `NOT`, unary `-`, and parentheses for grouping.',
+    summary: 'Start with normal free-text search, then add exact phrases, field filters, and date comparisons only when you need them. Use `field:value` for broad matches, `=` / `<>` for exact field checks, and `date>=2026-03-24` style comparisons for time-based filters.',
+    tips: [
+      'Click any field or operator below to insert it into the search box.',
+      'Use the `date` field with `YYYY-MM-DD` or a full ISO timestamp such as `2026-03-24T10:00:00Z`.',
+      'If you want literal text such as `AND`, `OR`, `NOT`, or `date`, wrap it in double quotes like `"AND"`.',
+      'Boolean operators, unary `-`, and parentheses can be combined with fielded and date searches.',
+    ],
+    operators: searchHelpOperators,
     fields: getFieldDefinitions(page, features),
     examples: page === 'alerts' ? alertExamples : decisionExamples,
   };
@@ -300,7 +341,7 @@ function tokenizeQuery(query: string, fieldMap: FieldMap): { ok: true; tokens: S
         break;
       }
 
-      if (current === ':' && shouldSplitColon(value, query, index, fieldMap)) {
+      if (shouldSplitComparator(value, query, index, fieldMap)) {
         break;
       }
 
@@ -309,9 +350,15 @@ function tokenizeQuery(query: string, fieldMap: FieldMap): { ok: true; tokens: S
     }
 
     if (!value) {
-      if (query[index] === ':') {
-        tokens.push({ type: 'colon', start: index, end: index + 1 });
-        index += 1;
+      const comparator = readComparatorToken(query, index);
+      if (comparator) {
+        tokens.push({
+          type: 'comparator',
+          value: comparator.value,
+          start: index,
+          end: index + comparator.length,
+        });
+        index += comparator.length;
         continue;
       }
 
@@ -338,18 +385,29 @@ function tokenizeQuery(query: string, fieldMap: FieldMap): { ok: true; tokens: S
       });
     }
 
-    if (query[index] === ':') {
-      tokens.push({ type: 'colon', start: index, end: index + 1 });
-      index += 1;
+    const comparator = readComparatorToken(query, index);
+    if (comparator && shouldSplitComparator(value, query, index, fieldMap)) {
+      tokens.push({
+        type: 'comparator',
+        value: comparator.value,
+        start: index,
+        end: index + comparator.length,
+      });
+      index += comparator.length;
     }
   }
 
   return { ok: true, tokens };
 }
 
-function shouldSplitColon(currentValue: string, query: string, index: number, fieldMap: FieldMap): boolean {
-  const nextChar = query[index + 1] || '';
-  if (!currentValue || nextChar === ':' || nextChar === '/') {
+function shouldSplitComparator(currentValue: string, query: string, index: number, fieldMap: FieldMap): boolean {
+  const comparator = readComparatorToken(query, index);
+  if (!comparator) {
+    return false;
+  }
+
+  const nextChar = query[index + comparator.length] || '';
+  if (!currentValue) {
     return false;
   }
 
@@ -357,15 +415,32 @@ function shouldSplitColon(currentValue: string, query: string, index: number, fi
     return false;
   }
 
+  if (comparator.value === ':' && (nextChar === ':' || nextChar === '/')) {
+    return false;
+  }
+
   if (fieldMap.has(currentValue.toLowerCase())) {
     return true;
   }
 
-  return nextChar === '"' || nextChar === '(' || /[A-Za-z_]/.test(nextChar) || isWhitespace(nextChar);
+  if (comparator.value === ':') {
+    return nextChar === '"' || nextChar === '(' || /[A-Za-z_]/.test(nextChar) || isWhitespace(nextChar);
+  }
+
+  return nextChar === '"' || /[A-Za-z0-9_-]/.test(nextChar);
+}
+
+function readComparatorToken(query: string, index: number): { value: SearchComparatorTokenValue; length: number } | null {
+  for (const value of ['<=', '>=', '=>', '<>', ':', '<', '>', '='] as const) {
+    if (query.startsWith(value, index)) {
+      return { value, length: value.length };
+    }
+  }
+  return null;
 }
 
 function enableLowercaseBooleanMode(query: string): boolean {
-  return /(^|\s)-(?=\S)|[()"]|[A-Za-z_][A-Za-z0-9_-]*\s*:|\b(?:AND|OR|NOT)\b/.test(query);
+  return /(^|\s)-(?=\S)|[()"]|[A-Za-z_][A-Za-z0-9_-]*\s*(?::|<=|>=|=>|<>|=|<|>)|\b(?:AND|OR|NOT)\b/.test(query);
 }
 
 function toOperatorToken(value: string, lowercaseBooleanMode: boolean): 'AND' | 'OR' | 'NOT' | null {
@@ -393,7 +468,7 @@ function findClosingQuote(query: string, startIndex: number): number {
 function isUnaryMinusBoundary(query: string, index: number): boolean {
   const previous = query[index - 1];
   const next = query[index + 1];
-  const previousAllowsUnary = previous === undefined || isWhitespace(previous) || previous === '(' || previous === ':';
+  const previousAllowsUnary = previous === undefined || isWhitespace(previous) || previous === '(' || previous === ':' || previous === '=' || previous === '<' || previous === '>';
   return previousAllowsUnary && Boolean(next) && !isWhitespace(next);
 }
 
@@ -472,6 +547,7 @@ class SearchParser {
 
     if (this.isFieldPrefix()) {
       const fieldToken = this.current() as SearchToken & { type: 'word' };
+      const comparatorToken = this.peek(1) as SearchToken & { type: 'comparator' };
       const definition = this.fieldMap.get(fieldToken.value.toLowerCase());
       if (!definition) {
         throw this.error(`Unknown field \`${fieldToken.value}\``, fieldToken.start, fieldToken.end - fieldToken.start, fieldToken.value);
@@ -479,13 +555,56 @@ class SearchParser {
 
       this.index += 2;
       if (!this.current()) {
-        throw this.error(`Missing search value after \`${fieldToken.value}:\``, fieldToken.end, 0, fieldToken.value);
+        throw this.error(`Missing search value after \`${fieldToken.value}${comparatorToken.value}\``, comparatorToken.end, 0, fieldToken.value);
       }
 
+      if (comparatorToken.value === ':') {
+        return {
+          kind: 'field',
+          field: definition.name,
+          expression: this.parseUnary(),
+        };
+      }
+
+      const operator = normalizeComparisonOperator(comparatorToken.value);
+      if (!supportsComparisonOperator(definition, operator)) {
+        throw this.error(
+          `Operator \`${comparatorToken.value}\` is only supported for date fields`,
+          comparatorToken.start,
+          comparatorToken.end - comparatorToken.start,
+          comparatorToken.value,
+        );
+      }
+
+      const valueToken = this.current();
+      if (!valueToken) {
+        throw this.error(`Missing search value after \`${fieldToken.value}${comparatorToken.value}\``, comparatorToken.end, 0, fieldToken.value);
+      }
+      if (valueToken.type !== 'word' && valueToken.type !== 'string') {
+        throw this.error(
+          `Expected a value after \`${fieldToken.value}${comparatorToken.value}\``,
+          valueToken.start,
+          valueToken.end - valueToken.start,
+          tokenToText(valueToken),
+        );
+      }
+
+      if (definition.valueType === 'date' && parseSearchDateValue(valueToken.value) === null) {
+        throw this.error(
+          'Invalid date value. Use `YYYY-MM-DD` or an ISO timestamp',
+          valueToken.start,
+          valueToken.end - valueToken.start,
+          valueToken.value,
+        );
+      }
+
+      this.index += 1;
       return {
-        kind: 'field',
+        kind: 'comparison',
         field: definition.name,
-        expression: this.parseUnary(),
+        operator,
+        value: valueToken.value,
+        quoted: valueToken.type === 'string',
       };
     }
 
@@ -533,7 +652,7 @@ class SearchParser {
   private isFieldPrefix(): boolean {
     const current = this.current();
     const next = this.peek(1);
-    return current?.type === 'word' && next?.type === 'colon';
+    return current?.type === 'word' && next?.type === 'comparator';
   }
 
   private isImplicitAndStart(): boolean {
@@ -576,12 +695,12 @@ function createParseError(query: string, message: string, position: number, leng
 }
 
 function tokenToText(token: SearchToken): string {
+  if (token.type === 'lparen') return '(';
+  if (token.type === 'rparen') return ')';
+  if (token.type === 'comparator') return token.value;
   if ('value' in token) {
     return token.value;
   }
-  if (token.type === 'lparen') return '(';
-  if (token.type === 'rparen') return ')';
-  if (token.type === 'colon') return ':';
   return '-';
 }
 
@@ -598,6 +717,8 @@ function evaluateNode<T>(
         return fieldMatchers[scopedField]?.(item, node.value) === true;
       }
       return freeTextMatcher(item, node.value);
+    case 'comparison':
+      return compareFieldValue(item, node.field, node.operator, node.value, fieldMatchers);
     case 'field':
       return evaluateNode(node.expression, item, fieldMatchers, freeTextMatcher, node.field);
     case 'not':
@@ -660,6 +781,44 @@ function matchDecisionFreeText(decision: DecisionListItem, value: string): boole
   ].some((candidate) => includesNormalized(candidate, value));
 }
 
+function normalizeComparisonOperator(value: Exclude<SearchComparatorTokenValue, ':'>): SearchComparisonOperator {
+  return value === '=>' ? '>=' : value;
+}
+
+function supportsComparisonOperator(definition: SearchFieldDefinition, operator: SearchComparisonOperator): boolean {
+  if (operator === '=' || operator === '<>') {
+    return true;
+  }
+  return definition.valueType === 'date';
+}
+
+function compareFieldValue<T>(
+  item: T,
+  field: string,
+  operator: SearchComparisonOperator,
+  value: string,
+  fieldMatchers: Record<string, (item: T, value: string) => boolean>,
+): boolean {
+  if (field === 'date') {
+    return compareDateValue((item as { created_at?: string }).created_at, operator, value);
+  }
+
+  const matcher = fieldMatchers[field];
+  if (!matcher) {
+    return false;
+  }
+
+  if (operator === '=') {
+    return matcher(item, value);
+  }
+
+  if (operator === '<>') {
+    return !matcher(item, value);
+  }
+
+  return false;
+}
+
 function getAlertSourceValues(alert: SlimAlert): string[] {
   return [alert.source?.ip, alert.source?.value, alert.source?.range].filter((value): value is string => Boolean(value));
 }
@@ -718,6 +877,90 @@ function matchesBoolean(candidate: boolean, value: string): boolean {
     return !candidate;
   }
   return false;
+}
+
+function compareDateValue(candidate: string | undefined, operator: SearchComparisonOperator, rawValue: string): boolean {
+  const candidateTimestamp = parseIsoTimestamp(candidate);
+  const filterRange = parseSearchDateValue(rawValue);
+  if (candidateTimestamp === null || filterRange === null) {
+    return false;
+  }
+
+  if (filterRange.precision === 'day') {
+    switch (operator) {
+      case '=':
+        return candidateTimestamp >= filterRange.start && candidateTimestamp < filterRange.end;
+      case '<>':
+        return candidateTimestamp < filterRange.start || candidateTimestamp >= filterRange.end;
+      case '<':
+        return candidateTimestamp < filterRange.start;
+      case '<=':
+        return candidateTimestamp < filterRange.end;
+      case '>':
+        return candidateTimestamp >= filterRange.end;
+      case '>=':
+        return candidateTimestamp >= filterRange.start;
+      default:
+        return false;
+    }
+  }
+
+  switch (operator) {
+    case '=':
+      return candidateTimestamp === filterRange.start;
+    case '<>':
+      return candidateTimestamp !== filterRange.start;
+    case '<':
+      return candidateTimestamp < filterRange.start;
+    case '<=':
+      return candidateTimestamp <= filterRange.start;
+    case '>':
+      return candidateTimestamp > filterRange.start;
+    case '>=':
+      return candidateTimestamp >= filterRange.start;
+    default:
+      return false;
+  }
+}
+
+function parseSearchDateValue(value: string): { start: number; end: number; precision: 'day' | 'instant' } | null {
+  const trimmedValue = value.trim();
+  if (!trimmedValue) {
+    return null;
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmedValue)) {
+    const start = Date.parse(`${trimmedValue}T00:00:00.000Z`);
+    if (Number.isNaN(start)) {
+      return null;
+    }
+
+    return {
+      start,
+      end: start + 24 * 60 * 60 * 1000,
+      precision: 'day',
+    };
+  }
+
+  const timestamp = Date.parse(trimmedValue);
+  if (Number.isNaN(timestamp)) {
+    return null;
+  }
+
+  return {
+    start: timestamp,
+    end: timestamp,
+    precision: 'instant',
+  };
+}
+
+function parseIsoTimestamp(value: string | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const timestamp = Date.parse(value);
+  return Number.isNaN(timestamp) ? null : timestamp;
 }
 
 function isWhitespace(value: string): boolean {

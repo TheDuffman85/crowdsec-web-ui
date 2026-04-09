@@ -70,6 +70,18 @@ describe('shared search compiler', () => {
     expect(compiled.predicate({ ...baseAlert, simulated: true })).toBe(false);
   });
 
+  test('supports date comparison operators for alerts', () => {
+    const compiled = compileAlertSearch('date>=2026-03-24 AND date<2026-03-25');
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) {
+      return;
+    }
+
+    expect(compiled.predicate(baseAlert)).toBe(true);
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-03-23T23:59:59.000Z' })).toBe(false);
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-03-25T00:00:00.000Z' })).toBe(false);
+  });
+
   test('treats lowercase boolean keywords as operators when the query is clearly advanced', () => {
     const compiled = compileAlertSearch('origin:manual or country:us', {
       originEnabled: true,
@@ -95,6 +107,17 @@ describe('shared search compiler', () => {
     expect(compiled.predicate({ ...baseDecision, is_duplicate: true })).toBe(false);
   });
 
+  test('supports date equality and the => alias for decisions', () => {
+    const compiled = compileDecisionSearch('date=>2026-03-24 AND date=2026-03-24');
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) {
+      return;
+    }
+
+    expect(compiled.predicate(baseDecision)).toBe(true);
+    expect(compiled.predicate({ ...baseDecision, created_at: '2026-03-25T10:00:00.000Z' })).toBe(false);
+  });
+
   test('returns parse errors for malformed expressions', () => {
     const compiled = compileDecisionSearch('origin:(manual OR', {
       originEnabled: true,
@@ -116,5 +139,15 @@ describe('shared search compiler', () => {
     }
 
     expect(compiled.error.message).toContain('Unknown field');
+  });
+
+  test('rejects ordered comparisons on non-date fields', () => {
+    const compiled = compileAlertSearch('scenario>ssh');
+    expect(compiled.ok).toBe(false);
+    if (compiled.ok) {
+      return;
+    }
+
+    expect(compiled.error.message).toContain('only supported for date fields');
   });
 });

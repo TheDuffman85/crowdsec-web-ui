@@ -395,6 +395,22 @@ describe('Alerts page', () => {
     await waitFor(() => expect(screen.queryByText('5.6.7.8')).not.toBeInTheDocument());
   });
 
+  test('supports date comparisons in advanced alert search', async () => {
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+
+    const input = screen.getByPlaceholderText('Filter alerts...');
+    await userEvent.type(input, 'date>=2026-03-24');
+
+    await waitFor(() => expect(screen.getByText('date>=2026-03-24')).toBeInTheDocument());
+    expect(screen.queryByText(/Search syntax error/i)).not.toBeInTheDocument();
+  });
+
   test('opens the alert search syntax help modal', async () => {
     render(
       <MemoryRouter initialEntries={['/alerts']}>
@@ -421,6 +437,28 @@ describe('Alerts page', () => {
     await userEvent.click(screen.getByRole('button', { name: /country:germany ssh/i }));
 
     await waitFor(() => expect(screen.getByPlaceholderText('Filter alerts...')).toHaveValue('country:germany ssh'));
+  });
+
+  test('clicking alert fields and operators inserts snippets into the search input', async () => {
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Insert field date' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));
+    await userEvent.click(screen.getByRole('button', { name: /^>=/ }));
+
+    const input = screen.getByPlaceholderText('Filter alerts...');
+    expect(input).toHaveValue('date>=');
+
+    await userEvent.type(input, '2026-03-24');
+
+    await waitFor(() => expect(screen.getByPlaceholderText('Filter alerts...')).toHaveValue('date>=2026-03-24'));
+    await waitFor(() => expect(screen.getByText('date>=2026-03-24')).toBeInTheDocument());
   });
 
   test('reset all filters clears an advanced alert query without restoring it', async () => {

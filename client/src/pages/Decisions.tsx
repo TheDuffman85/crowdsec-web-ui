@@ -422,6 +422,23 @@ export function Decisions() {
         }, 0);
     }, []);
 
+    const insertSearchSnippet = useCallback((snippet: string) => {
+        const input = searchInputRef.current;
+        const currentValue = input?.value ?? searchDraft;
+        const selectionStart = input?.selectionStart ?? currentValue.length;
+        const selectionEnd = input?.selectionEnd ?? currentValue.length;
+        const nextQuery = `${currentValue.slice(0, selectionStart)}${snippet}${currentValue.slice(selectionEnd)}`;
+        const nextCaretPosition = selectionStart + snippet.length;
+
+        setSearchDraft(nextQuery);
+        setQueryError(null);
+
+        window.setTimeout(() => {
+            searchInputRef.current?.focus();
+            searchInputRef.current?.setSelectionRange(nextCaretPosition, nextCaretPosition);
+        }, 0);
+    }, [searchDraft]);
+
     const clearFilter = useCallback(() => {
         setSearchDraft("");
         setDebouncedSearchDraft("");
@@ -1020,6 +1037,7 @@ export function Decisions() {
                 isOpen={showSearchSyntaxModal}
                 onClose={() => setShowSearchSyntaxModal(false)}
                 onSelectExample={applySearchExample}
+                onInsertSnippet={insertSearchSnippet}
             />
         </div >
     );
