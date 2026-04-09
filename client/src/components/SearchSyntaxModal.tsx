@@ -1,16 +1,25 @@
 import type { ReactNode } from 'react';
 import { Modal } from './ui/Modal';
-import type { SearchHelpDefinition } from '../../../shared/search';
+import type { SearchFeatureFlags, SearchHelpDefinition } from '../../../shared/search';
+import { InlineSearchQueryHighlight, SearchQueryHighlight } from './HighlightedSearchInput';
 
 interface SearchSyntaxModalProps {
   help: SearchHelpDefinition;
+  searchFeatures?: SearchFeatureFlags;
   isOpen: boolean;
   onClose: () => void;
   onSelectExample?: (query: string) => void;
   onInsertSnippet?: (snippet: string) => void;
 }
 
-export function SearchSyntaxModal({ help, isOpen, onClose, onSelectExample, onInsertSnippet }: SearchSyntaxModalProps) {
+export function SearchSyntaxModal({
+  help,
+  searchFeatures,
+  isOpen,
+  onClose,
+  onSelectExample,
+  onInsertSnippet,
+}: SearchSyntaxModalProps) {
   const handleInsertSnippet = (snippet: string) => {
     onInsertSnippet?.(snippet);
   };
@@ -23,12 +32,12 @@ export function SearchSyntaxModal({ help, isOpen, onClose, onSelectExample, onIn
     <Modal isOpen={isOpen} onClose={onClose} title={help.title} maxWidth="max-w-3xl">
       <div className="space-y-6 text-sm text-gray-700 dark:text-gray-200">
         <div className="space-y-3">
-          <p className="leading-6">{renderInlineCode(help.summary)}</p>
+          <p className="leading-6">{renderInlineCode(help.summary, help.page, searchFeatures)}</p>
           <ul className="space-y-2 text-sm text-gray-600 dark:text-gray-300">
             {help.tips.map((tip) => (
               <li key={tip} className="flex gap-2">
                 <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-primary-500" aria-hidden="true" />
-                <span>{renderInlineCode(tip)}</span>
+                <span>{renderInlineCode(tip, help.page, searchFeatures)}</span>
               </li>
             ))}
           </ul>
@@ -47,7 +56,9 @@ export function SearchSyntaxModal({ help, isOpen, onClose, onSelectExample, onIn
                 <span className="min-w-[2.5rem] rounded-md border border-primary-200 bg-white px-2 py-1 text-center font-mono text-xs font-semibold text-primary-700 shadow-sm dark:border-primary-900 dark:bg-gray-800 dark:text-primary-300">
                   {operator.label}
                 </span>
-                <span className="text-sm text-gray-600 dark:text-gray-300">{renderInlineCode(operator.description)}</span>
+                <span className="text-sm text-gray-600 dark:text-gray-300">
+                  {renderInlineCode(operator.description, help.page, searchFeatures)}
+                </span>
               </button>
             ))}
           </div>
@@ -68,7 +79,7 @@ export function SearchSyntaxModal({ help, isOpen, onClose, onSelectExample, onIn
                   {field.name}
                 </span>
                 <span className="text-sm text-gray-600 dark:text-gray-300">
-                  {renderInlineCode(field.description)}
+                  {renderInlineCode(field.description, help.page, searchFeatures)}
                   {field.aliases.length > 0 && (
                     <span className="text-xs text-gray-500 dark:text-gray-400">
                       {' '}Aliases:{' '}
@@ -98,8 +109,17 @@ export function SearchSyntaxModal({ help, isOpen, onClose, onSelectExample, onIn
                 onClick={() => handleSelectExample(example.query)}
                 className="block w-full cursor-pointer rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/40 px-4 py-3 text-left transition-colors hover:border-primary-300 hover:bg-gray-100 dark:hover:border-primary-700 dark:hover:bg-gray-900/70 focus:outline-none focus:ring-2 focus:ring-primary-500"
               >
-                <div className="font-mono text-xs text-primary-700 dark:text-primary-300">{example.query}</div>
-                <div className="mt-1 text-sm text-gray-600 dark:text-gray-300">{renderInlineCode(example.description)}</div>
+                <span className="sr-only">{example.query}</span>
+                <SearchQueryHighlight
+                  query={example.query}
+                  searchPage={help.page}
+                  searchFeatures={searchFeatures}
+                  ariaHidden
+                  className="font-mono text-xs leading-5 whitespace-pre-wrap break-words"
+                />
+                <div className="mt-1 text-sm text-gray-600 dark:text-gray-300">
+                  {renderInlineCode(example.description, help.page, searchFeatures)}
+                </div>
               </button>
             ))}
           </div>
@@ -109,7 +129,11 @@ export function SearchSyntaxModal({ help, isOpen, onClose, onSelectExample, onIn
   );
 }
 
-function renderInlineCode(text: string): ReactNode {
+function renderInlineCode(
+  text: string,
+  searchPage: SearchHelpDefinition['page'],
+  searchFeatures?: SearchFeatureFlags,
+): ReactNode {
   const segments = text.split(/(`[^`]+`)/g).filter(Boolean);
 
   return segments.map((segment, index) => {
@@ -117,9 +141,13 @@ function renderInlineCode(text: string): ReactNode {
       return (
         <code
           key={`${segment}-${index}`}
-          className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[0.95em] text-gray-800 dark:bg-gray-700/70 dark:text-gray-100"
+          className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[0.95em] dark:bg-gray-700/70"
         >
-          {segment.slice(1, -1)}
+          <InlineSearchQueryHighlight
+            query={segment.slice(1, -1)}
+            searchPage={searchPage}
+            searchFeatures={searchFeatures}
+          />
         </code>
       );
     }

@@ -135,6 +135,73 @@ function toActivitySeries(buckets: DashboardStatsBucket[]) {
     }));
 }
 
+function quoteSearchValue(value: string): string {
+    if (/^[^\s()"]+$/.test(value) && !['AND', 'OR', 'NOT'].includes(value.toUpperCase())) {
+        return value;
+    }
+
+    return `"${value.replace(/"/g, '')}"`;
+}
+
+function toSearchDateValue(bucketKey: string): string {
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}$/.test(bucketKey)) {
+        return `${bucketKey}:00:00`;
+    }
+
+    return bucketKey;
+}
+
+function padDatePart(value: number): string {
+    return String(value).padStart(2, '0');
+}
+
+function addDashboardBucketToSearchEnd(bucketKey: string): string | null {
+    const hourMatch = /^(\d{4})-(\d{2})-(\d{2})T(\d{2})$/.exec(bucketKey);
+    if (hourMatch) {
+        const [, year, month, day, hour] = hourMatch;
+        const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour) + 1));
+        return `${date.getUTCFullYear()}-${padDatePart(date.getUTCMonth() + 1)}-${padDatePart(date.getUTCDate())}T${padDatePart(date.getUTCHours())}:00:00`;
+    }
+
+    const dayMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(bucketKey);
+    if (dayMatch) {
+        const [, year, month, day] = dayMatch;
+        const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day) + 1));
+        return `${date.getUTCFullYear()}-${padDatePart(date.getUTCMonth() + 1)}-${padDatePart(date.getUTCDate())}`;
+    }
+
+    return null;
+}
+
+function buildDashboardDrilldownQuery(filters: DashboardFilters, simulationsEnabled: boolean): string {
+    const clauses: string[] = [];
+
+    if (filters.country) clauses.push(`country:${quoteSearchValue(filters.country)}`);
+    if (filters.scenario) clauses.push(`scenario:${quoteSearchValue(filters.scenario)}`);
+    if (filters.as) clauses.push(`as:${quoteSearchValue(filters.as)}`);
+    if (filters.ip) clauses.push(`ip:${quoteSearchValue(filters.ip)}`);
+    if (filters.target) clauses.push(`target:${quoteSearchValue(filters.target)}`);
+    if (filters.dateRange) {
+        const exclusiveEnd = addDashboardBucketToSearchEnd(filters.dateRange.end);
+        clauses.push(`date>=${toSearchDateValue(filters.dateRange.start)}`);
+        clauses.push(exclusiveEnd ? `date<${exclusiveEnd}` : `date<=${toSearchDateValue(filters.dateRange.end)}`);
+    }
+    if (simulationsEnabled && filters.simulation !== 'all') {
+        clauses.push(`sim:${filters.simulation}`);
+    }
+
+    return clauses.join(' AND ');
+}
+
+function buildDashboardDrilldownHref(pathname: '/alerts' | '/decisions', query: string): string {
+    if (!query) {
+        return pathname;
+    }
+
+    const params = new URLSearchParams({ q: query });
+    return `${pathname}?${params.toString()}`;
+}
+
 export function Dashboard() {
     const navigate = useNavigate();
     const { refreshSignal, setLastUpdated } = useRefresh();
@@ -340,26 +407,10 @@ export function Dashboard() {
         setFilters(EMPTY_FILTERS);
     };
 
-    const buildDrilldownParams = () => {
-        const params = new URLSearchParams();
-        if (filters.country) params.set('country', filters.country);
-        if (filters.scenario) params.set('scenario', filters.scenario);
-        if (filters.as) params.set('as', filters.as);
-        if (filters.ip) params.set('ip', filters.ip);
-        if (filters.target) params.set('target', filters.target);
-        if (filters.dateRange) {
-            params.set('dateStart', filters.dateRange.start);
-            params.set('dateEnd', filters.dateRange.end);
-        }
-        if ((config?.simulations_enabled ?? false) && filters.simulation !== 'all') {
-            params.set('simulation', filters.simulation);
-        }
-        return params.toString();
-    };
-
-    const alertsLink = `/alerts${buildDrilldownParams() ? `?${buildDrilldownParams()}` : ''}`;
-    const decisionsLink = `/decisions${buildDrilldownParams() ? `?${buildDrilldownParams()}` : ''}`;
     const simulationsEnabled = config?.simulations_enabled === true;
+    const drilldownQuery = buildDashboardDrilldownQuery(filters, simulationsEnabled);
+    const alertsLink = buildDashboardDrilldownHref('/alerts', drilldownQuery);
+    const decisionsLink = buildDashboardDrilldownHref('/decisions', drilldownQuery);
     const filteredTotals = dashboardData.filteredTotals;
     const filteredSimulationAlertsCount = filteredTotals.simulatedAlerts;
     const filteredSimulationDecisionsCount = filteredTotals.simulatedDecisions;

@@ -5,12 +5,13 @@ import { isSimulatedDecision, parseSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
+import { HighlightedSearchInput } from "../components/HighlightedSearchInput";
 import { SearchSyntaxModal } from "../components/SearchSyntaxModal";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { getCountryName } from "../lib/utils";
 import { compileDecisionSearch, getSearchHelpDefinition, type SearchParseError } from "../../../shared/search";
-import { Trash2, Gavel, X, ExternalLink, Shield, ShieldBan, Search, AlertCircle, Info } from "lucide-react";
+import { Trash2, Gavel, X, ExternalLink, Shield, ShieldBan, AlertCircle, Info } from "lucide-react";
 import type { AddDecisionRequest, ApiPermissionError, BulkDeleteResult, DecisionListItem } from '../types';
 
 type DecisionDeleteAction =
@@ -58,13 +59,15 @@ function summarizeDeleteResult(result: BulkDeleteResult): string | null {
 
 export function Decisions() {
     const { refreshSignal, setLastUpdated } = useRefresh();
+    const [searchParams, setSearchParams] = useSearchParams();
+    const initialQueryParam = searchParams.get("q") ?? "";
     const [decisions, setDecisions] = useState<DecisionListItem[]>([]);
     const [simulationsEnabled, setSimulationsEnabled] = useState(false);
     const [machineFeaturesEnabled, setMachineFeaturesEnabled] = useState(false);
     const [originFeaturesEnabled, setOriginFeaturesEnabled] = useState(false);
-    const [searchDraft, setSearchDraft] = useState("");
-    const [debouncedSearchDraft, setDebouncedSearchDraft] = useState("");
-    const [appliedQuery, setAppliedQuery] = useState("");
+    const [searchDraft, setSearchDraft] = useState(initialQueryParam);
+    const [debouncedSearchDraft, setDebouncedSearchDraft] = useState(initialQueryParam);
+    const [appliedQuery, setAppliedQuery] = useState(initialQueryParam.trim());
     const [queryError, setQueryError] = useState<SearchParseError | null>(null);
     const [showSearchSyntaxModal, setShowSearchSyntaxModal] = useState(false);
     const [initialLoading, setInitialLoading] = useState(true);
@@ -81,18 +84,8 @@ export function Decisions() {
     const [deleteInProgress, setDeleteInProgress] = useState(false);
     const [newDecision, setNewDecision] = useState<AddDecisionRequest>({ ip: "", duration: "4h", reason: "manual" });
     const [errorInfo, setErrorInfo] = useState<ErrorInfo | null>(null);
-    const [searchParams, setSearchParams] = useSearchParams();
     const alertIdFilter = searchParams.get("alert_id");
     const includeExpiredParam = searchParams.get("include_expired") === "true";
-
-    // New Filters from URL
-    const countryFilter = searchParams.get("country");
-    const scenarioFilter = searchParams.get("scenario");
-    const asFilter = searchParams.get("as");
-    const ipFilter = searchParams.get("ip");
-    const targetFilter = searchParams.get("target");
-    const dateStartFilter = searchParams.get("dateStart");
-    const dateEndFilter = searchParams.get("dateEnd");
     const simulationFilter = simulationsEnabled ? parseSimulationFilter(searchParams.get("simulation")) : 'all';
     // Default: hide duplicates unless explicitly set to false OR viewing a specific alert's decisions
     const showDuplicates = searchParams.get("hide_duplicates") === "false" || !!alertIdFilter;
@@ -148,17 +141,10 @@ export function Decisions() {
         if (appliedQuery) filters.q = appliedQuery;
         if (alertIdFilter) filters.alert_id = alertIdFilter;
         if (includeExpiredParam) filters.include_expired = 'true';
-        if (countryFilter) filters.country = countryFilter;
-        if (scenarioFilter) filters.scenario = scenarioFilter;
-        if (asFilter) filters.as = asFilter;
-        if (ipFilter) filters.ip = ipFilter;
-        if (targetFilter) filters.target = targetFilter;
-        if (dateStartFilter) filters.dateStart = dateStartFilter;
-        if (dateEndFilter) filters.dateEnd = dateEndFilter;
         if (requestedSimulationFilter !== 'all') filters.simulation = requestedSimulationFilter;
         if (showDuplicates) filters.hide_duplicates = 'false';
         return filters;
-    }, [alertIdFilter, appliedQuery, asFilter, countryFilter, dateEndFilter, dateStartFilter, includeExpiredParam, ipFilter, scenarioFilter, showDuplicates, simulationFilter, targetFilter]);
+    }, [alertIdFilter, appliedQuery, includeExpiredParam, showDuplicates, simulationFilter]);
 
     const loadConfig = useCallback(async (refresh = false) => {
         if (!refresh && configRef.current) {
@@ -655,7 +641,7 @@ export function Decisions() {
             )}
 
             {/* Show active filters */}
-            {(includeExpiredParam || !includeExpiredParam || appliedQuery || alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter || (simulationsEnabled && simulationFilter !== 'all')) && (
+            {(includeExpiredParam || !includeExpiredParam || appliedQuery || alertIdFilter || (simulationsEnabled && simulationFilter !== 'all')) && (
                 <div className="flex flex-wrap gap-2">
                     {appliedQuery && (
                         <Badge variant="secondary" className="flex items-center gap-1 max-w-full">
@@ -715,88 +701,6 @@ export function Decisions() {
                             </button>
                         </Badge>
                     )}
-                    {/* Iterate over other filters to cleaner code, or keep explicit for now to match exactly what we have but styled better */}
-                    {searchParams.get("country") && (
-                        <Badge variant="secondary" className="flex items-center gap-1">
-                            <span className="font-semibold">Country:</span> {countryFilter}
-                            <button
-                                onClick={() => removeParam("country")}
-                                className="ml-1 hover:text-red-500"
-                            >
-                                &times;
-                            </button>
-                        </Badge>
-                    )}
-                    {searchParams.get("scenario") && (
-                        <div title={scenarioFilter || undefined}>
-                            <Badge variant="secondary" className="flex items-center gap-1 max-w-[300px] truncate">
-                                <span className="font-semibold">Scenario:</span> {scenarioFilter}
-                                <button
-                                    onClick={() => removeParam("scenario")}
-                                    className="ml-1 hover:text-red-500"
-                                >
-                                    &times;
-                                </button>
-                            </Badge>
-                        </div>
-                    )}
-                    {searchParams.get("as") && (
-                        <div title={asFilter || undefined}>
-                            <Badge variant="secondary" className="flex items-center gap-1 max-w-[300px] truncate">
-                                <span className="font-semibold">AS:</span> {asFilter}
-                                <button
-                                    onClick={() => removeParam("as")}
-                                    className="ml-1 hover:text-red-500"
-                                >
-                                    &times;
-                                </button>
-                            </Badge>
-                        </div>
-                    )}
-                    {searchParams.get("ip") && (
-                        <Badge variant="secondary" className="flex items-center gap-1">
-                            <span className="font-semibold">IP / Range:</span> {ipFilter}
-                            <button
-                                onClick={() => removeParam("ip")}
-                                className="ml-1 hover:text-red-500"
-                            >
-                                &times;
-                            </button>
-                        </Badge>
-                    )}
-                    {targetFilter && (
-                        <Badge variant="secondary" className="flex items-center gap-1">
-                            <span className="font-semibold">Target:</span> {targetFilter}
-                            <button
-                                onClick={() => removeParam("target")}
-                                className="ml-1 hover:text-red-500"
-                            >
-                                &times;
-                            </button>
-                        </Badge>
-                    )}
-                    {dateStartFilter && (
-                        <Badge variant="secondary" className="flex items-center gap-1">
-                            <span className="font-semibold">Date Start:</span> {dateStartFilter}
-                            <button
-                                onClick={() => removeParam("dateStart")}
-                                className="ml-1 hover:text-red-500"
-                            >
-                                &times;
-                            </button>
-                        </Badge>
-                    )}
-                    {dateEndFilter && (
-                        <Badge variant="secondary" className="flex items-center gap-1">
-                            <span className="font-semibold">Date End:</span> {dateEndFilter}
-                            <button
-                                onClick={() => removeParam("dateEnd")}
-                                className="ml-1 hover:text-red-500"
-                            >
-                                &times;
-                            </button>
-                        </Badge>
-                    )}
                     {simulationsEnabled && simulationFilter !== 'all' && (
                         <Badge variant="secondary" className="flex items-center gap-1">
                             <span className="font-semibold">Simulation:</span> {simulationFilter}
@@ -810,7 +714,7 @@ export function Decisions() {
                     )}
 
                     {/* Show Reset button if we have any active filters OR if we are showing expired/duplicates (non-default state) */}
-                    {(appliedQuery || alertIdFilter || countryFilter || scenarioFilter || asFilter || ipFilter || targetFilter || dateStartFilter || dateEndFilter || includeExpiredParam || showDuplicates || (simulationsEnabled && simulationFilter !== 'all')) && (
+                    {(appliedQuery || alertIdFilter || includeExpiredParam || showDuplicates || (simulationsEnabled && simulationFilter !== 'all')) && (
                         <button
                             onClick={clearFilter}
                             className="text-xs text-gray-500 hover:text-gray-900 dark:hover:text-gray-300 underline"
@@ -823,16 +727,14 @@ export function Decisions() {
 
             <div className="space-y-2">
                 <div className="flex items-stretch gap-2">
-                    <div className="relative flex-1">
-                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                            <Search className="h-5 w-5 text-gray-400" />
-                        </div>
-                        <input
+                    <div className="flex-1">
+                        <HighlightedSearchInput
                             ref={searchInputRef}
-                            type="text"
+                            searchPage="decisions"
+                            searchFeatures={searchValidationFeatures}
                             placeholder="Filter decisions..."
-                            className={`block w-full pl-10 pr-3 py-2 border rounded-md leading-5 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 sm:text-sm ${queryError ? 'border-red-300 dark:border-red-700 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 dark:border-gray-700 focus:ring-primary-500 focus:border-primary-500'}`}
                             value={searchDraft}
+                            error={queryError}
                             onChange={(e) => {
                                 searchDraftRef.current = e.target.value;
                                 setSearchDraft(e.target.value);
@@ -1121,6 +1023,7 @@ export function Decisions() {
             </Modal>
             <SearchSyntaxModal
                 help={searchHelp}
+                searchFeatures={searchValidationFeatures}
                 isOpen={showSearchSyntaxModal}
                 onClose={() => setShowSearchSyntaxModal(false)}
                 onSelectExample={applySearchExample}

@@ -5,6 +5,7 @@ import { isSimulatedAlert, isSimulatedDecision, matchesSimulationFilter, parseSi
 import { useRefresh } from "../contexts/useRefresh";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
+import { HighlightedSearchInput } from "../components/HighlightedSearchInput";
 import { SearchSyntaxModal } from "../components/SearchSyntaxModal";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
@@ -13,7 +14,7 @@ import { getCountryName } from "../lib/utils";
 import { resolveMachineName } from "../../../shared/machine";
 import { collectDistinctOrigins, getOriginDisplayValue, getOriginTitle } from "../../../shared/origin";
 import { compileAlertSearch, getSearchHelpDefinition, type SearchParseError } from "../../../shared/search";
-import { Search, Info, ExternalLink, Shield, ShieldBan, Trash2, X, AlertCircle } from "lucide-react";
+import { Info, ExternalLink, Shield, ShieldBan, Trash2, X, AlertCircle } from "lucide-react";
 import type { AlertRecord, AlertSource, ApiPermissionError, BulkDeleteResult, DecisionListItem, SimulationFilter, SlimAlert } from '../types';
 
 type AlertListItem = SlimAlert;
@@ -84,13 +85,15 @@ function summarizeDeleteResult(result: BulkDeleteResult): string | null {
 
 export function Alerts() {
     const { refreshSignal, setLastUpdated } = useRefresh();
+    const [searchParams, setSearchParams] = useSearchParams();
+    const initialQueryParam = searchParams.get("q") ?? "";
     const [alerts, setAlerts] = useState<AlertListItem[]>([]);
     const [simulationsEnabled, setSimulationsEnabled] = useState(false);
     const [machineFeaturesEnabled, setMachineFeaturesEnabled] = useState(false);
     const [originFeaturesEnabled, setOriginFeaturesEnabled] = useState(false);
-    const [searchDraft, setSearchDraft] = useState("");
-    const [debouncedSearchDraft, setDebouncedSearchDraft] = useState("");
-    const [appliedQuery, setAppliedQuery] = useState("");
+    const [searchDraft, setSearchDraft] = useState(initialQueryParam);
+    const [debouncedSearchDraft, setDebouncedSearchDraft] = useState(initialQueryParam);
+    const [appliedQuery, setAppliedQuery] = useState(initialQueryParam.trim());
     const [queryError, setQueryError] = useState<SearchParseError | null>(null);
     const [showSearchSyntaxModal, setShowSearchSyntaxModal] = useState(false);
     const [initialLoading, setInitialLoading] = useState(true);
@@ -109,7 +112,6 @@ export function Alerts() {
     const [totalAlerts, setTotalAlerts] = useState(0);
     const [totalUnfilteredAlerts, setTotalUnfilteredAlerts] = useState(0);
     const [selectableAlertIds, setSelectableAlertIds] = useState<string[]>([]);
-    const [searchParams, setSearchParams] = useSearchParams();
     const [pendingDeleteAction, setPendingDeleteAction] = useState<AlertDeleteAction | null>(null);
     const [selectedAlertIds, setSelectedAlertIds] = useState<string[]>([]);
     const [deleteInProgress, setDeleteInProgress] = useState(false);
@@ -175,15 +177,11 @@ export function Alerts() {
             tz_offset: String(new Date().getTimezoneOffset()),
         };
         if (appliedQuery) filters.q = appliedQuery;
-        for (const key of ["ip", "country", "scenario", "as", "target", "date", "dateStart", "dateEnd"]) {
-            const value = searchParams.get(key);
-            if (value) filters[key] = value;
-        }
         if (simulationFilter !== 'all') {
             filters.simulation = simulationFilter;
         }
         return filters;
-    }, [appliedQuery, currentSimulationFilter, searchParams]);
+    }, [appliedQuery, currentSimulationFilter]);
 
     const loadConfig = useCallback(async (refresh = false) => {
         if (!refresh && configRef.current) {
@@ -821,7 +819,7 @@ export function Alerts() {
             )}
 
             {/* Show active filters */}
-            {(appliedQuery || searchParams.get("ip") || searchParams.get("country") || searchParams.get("scenario") || searchParams.get("as") || searchParams.get("target") || searchParams.get("date") || searchParams.get("dateStart") || searchParams.get("dateEnd") || (simulationsEnabled && searchParams.get("simulation"))) && (
+            {(appliedQuery || (simulationsEnabled && searchParams.get("simulation"))) && (
                 <div className="flex flex-wrap gap-2">
                     {appliedQuery && (
                         <Badge variant="secondary" className="flex items-center gap-1 max-w-full">
@@ -844,35 +842,21 @@ export function Alerts() {
                             </button>
                         </Badge>
                     )}
-                    {[
-                        "ip",
-                        "country",
-                        "scenario",
-                        "as",
-                        "target",
-                        "date",
-                        "dateStart",
-                        "dateEnd",
-                        ...(simulationsEnabled ? ["simulation"] : []),
-                    ].map(key => {
-                        const val = searchParams.get(key);
-                        if (!val) return null;
-                        return (
-                            <Badge key={key} variant="secondary" className="flex items-center gap-1">
-                                <span className="font-semibold">{key.charAt(0).toUpperCase() + key.slice(1).replace(/([A-Z])/g, ' $1')}:</span> {val}
-                                <button
-                                    onClick={() => {
-                                        const newParams = new URLSearchParams(searchParams);
-                                        newParams.delete(key);
-                                        setSearchParams(newParams);
-                                    }}
-                                    className="ml-1 hover:text-red-500"
-                                >
-                                    &times;
-                                </button>
-                            </Badge>
-                        );
-                    })}
+                    {simulationsEnabled && searchParams.get("simulation") && (
+                        <Badge variant="secondary" className="flex items-center gap-1">
+                            <span className="font-semibold">Simulation:</span> {searchParams.get("simulation")}
+                            <button
+                                onClick={() => {
+                                    const newParams = new URLSearchParams(searchParams);
+                                    newParams.delete("simulation");
+                                    setSearchParams(newParams);
+                                }}
+                                className="ml-1 hover:text-red-500"
+                            >
+                                &times;
+                            </button>
+                        </Badge>
+                    )}
                     <button
                         onClick={clearAllFilters}
                         className="text-xs text-gray-500 hover:text-gray-900 dark:hover:text-gray-300 underline"
@@ -885,16 +869,14 @@ export function Alerts() {
 
             <div className="space-y-2">
                 <div className="flex items-stretch gap-2">
-                    <div className="relative flex-1">
-                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                            <Search className="h-5 w-5 text-gray-400" />
-                        </div>
-                        <input
+                    <div className="flex-1">
+                        <HighlightedSearchInput
                             ref={searchInputRef}
-                            type="text"
+                            searchPage="alerts"
+                            searchFeatures={searchValidationFeatures}
                             placeholder="Filter alerts..."
-                            className={`block w-full pl-10 pr-3 py-2 border rounded-md leading-5 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 sm:text-sm ${queryError ? 'border-red-300 dark:border-red-700 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 dark:border-gray-700 focus:ring-primary-500 focus:border-primary-500'}`}
                             value={searchDraft}
+                            error={queryError}
                             onChange={(e) => {
                                 searchDraftRef.current = e.target.value;
                                 setSearchDraft(e.target.value);
@@ -1400,6 +1382,7 @@ export function Alerts() {
             </Modal>
             <SearchSyntaxModal
                 help={searchHelp}
+                searchFeatures={searchValidationFeatures}
                 isOpen={showSearchSyntaxModal}
                 onClose={() => setShowSearchSyntaxModal(false)}
                 onSelectExample={applySearchExample}

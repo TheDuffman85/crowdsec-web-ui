@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { DecisionListItem, SlimAlert } from '../shared/contracts';
-import { compileAlertSearch, compileDecisionSearch } from '../shared/search';
+import { analyzeSearchQuery, compileAlertSearch, compileDecisionSearch } from '../shared/search';
 
 const baseAlert: SlimAlert = {
   id: 1,
@@ -129,6 +129,40 @@ describe('shared search compiler', () => {
 
     expect(compiled.error.message).toContain('Missing closing parenthesis');
     expect(compiled.error.position).toBeGreaterThanOrEqual(0);
+  });
+
+  test('analyzes advanced queries into highlightable tokens', () => {
+    const analysis = analyzeSearchQuery('origin:manual or country:"germany"', 'alerts', {
+      originEnabled: true,
+    });
+
+    expect(analysis.error).toBeNull();
+    expect(analysis.tokens.map((token) => `${token.kind}:${token.value}`)).toEqual([
+      'field:origin',
+      'comparator::',
+      'term:manual',
+      'booleanOperator:OR',
+      'field:country',
+      'comparator::',
+      'string:germany',
+    ]);
+  });
+
+  test('keeps tokens when parsing fails and shifts raw-query error positions', () => {
+    const analysis = analyzeSearchQuery('  origin:(manual OR', 'decisions', {
+      originEnabled: true,
+    });
+
+    expect(analysis.tokens.map((token) => `${token.kind}:${token.start}`)).toEqual([
+      'field:2',
+      'comparator:8',
+      'paren:9',
+      'term:10',
+      'booleanOperator:17',
+    ]);
+    expect(analysis.error).not.toBeNull();
+    expect(analysis.error?.message).toContain('Missing closing parenthesis');
+    expect(analysis.error?.position).toBe(9);
   });
 
   test('returns parse errors for unknown fields', () => {

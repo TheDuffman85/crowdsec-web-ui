@@ -49,6 +49,28 @@ export interface SearchParseError {
   token?: string;
 }
 
+export type SearchHighlightTokenKind =
+  | 'term'
+  | 'string'
+  | 'field'
+  | 'booleanOperator'
+  | 'comparator'
+  | 'paren'
+  | 'negation';
+
+export interface SearchHighlightToken {
+  kind: SearchHighlightTokenKind;
+  start: number;
+  end: number;
+  value: string;
+  normalizedValue?: string;
+}
+
+export interface SearchQueryAnalysis {
+  tokens: SearchHighlightToken[];
+  error: SearchParseError | null;
+}
+
 export type SearchNode =
   | { kind: 'term'; value: string; quoted: boolean }
   | { kind: 'not'; expression: SearchNode }
@@ -243,6 +265,40 @@ export function compileDecisionSearch(query: string, features: SearchFeatureFlag
   };
 }
 
+export function analyzeSearchQuery(
+  query: string,
+  page: SearchPage,
+  features: SearchFeatureFlags = {},
+): SearchQueryAnalysis {
+  const fieldMap = getFieldMap(page, features);
+  const { trimmedQuery, trimOffset } = normalizeSearchQuery(query);
+
+  if (!trimmedQuery) {
+    return { tokens: [], error: null };
+  }
+
+  const tokenResult = tokenizeQuery(trimmedQuery, fieldMap);
+  if (!tokenResult.ok) {
+    return {
+      tokens: [],
+      error: shiftParseError(tokenResult.error, query, trimOffset),
+    };
+  }
+
+  const tokens = classifyHighlightTokens(tokenResult.tokens, fieldMap).map((token) => ({
+    ...token,
+    start: token.start + trimOffset,
+    end: token.end + trimOffset,
+  }));
+  const parser = new SearchParser(trimmedQuery, tokenResult.tokens, fieldMap);
+  const parsed = parser.parse();
+
+  return {
+    tokens,
+    error: parsed.ok ? null : shiftParseError(parsed.error, query, trimOffset),
+  };
+}
+
 function getFieldDefinitions(page: SearchPage, features: SearchFeatureFlags): SearchFieldDefinition[] {
   const definitions = page === 'alerts' ? alertFieldDefinitions : decisionFieldDefinitions;
   return definitions.filter((definition) => isFieldAvailable(definition, features));
@@ -270,18 +326,29 @@ function isFieldAvailable(definition: SearchFieldDefinition, features: SearchFea
 }
 
 function parseQuery(query: string, fieldMap: FieldMap): { ok: true; ast: SearchNode | null } | { ok: false; error: SearchParseError } {
-  const trimmedQuery = query.trim();
+  const { trimmedQuery, trimOffset } = normalizeSearchQuery(query);
   if (!trimmedQuery) {
     return { ok: true, ast: null };
   }
 
   const tokenResult = tokenizeQuery(trimmedQuery, fieldMap);
   if (!tokenResult.ok) {
-    return tokenResult;
+    return {
+      ok: false,
+      error: shiftParseError(tokenResult.error, query, trimOffset),
+    };
   }
 
   const parser = new SearchParser(trimmedQuery, tokenResult.tokens, fieldMap);
-  return parser.parse();
+  const parsed = parser.parse();
+  if (!parsed.ok) {
+    return {
+      ok: false,
+      error: shiftParseError(parsed.error, query, trimOffset),
+    };
+  }
+
+  return parsed;
 }
 
 function tokenizeQuery(query: string, fieldMap: FieldMap): { ok: true; tokens: SearchToken[] } | { ok: false; error: SearchParseError } {
@@ -398,6 +465,92 @@ function tokenizeQuery(query: string, fieldMap: FieldMap): { ok: true; tokens: S
   }
 
   return { ok: true, tokens };
+}
+
+function normalizeSearchQuery(query: string): { trimmedQuery: string; trimOffset: number } {
+  const trimmedQuery = query.trim();
+  return {
+    trimmedQuery,
+    trimOffset: query.indexOf(trimmedQuery),
+  };
+}
+
+function shiftParseError(error: SearchParseError, originalQuery: string, offset: number): SearchParseError {
+  return {
+    ...error,
+    query: originalQuery,
+    position: error.position + offset,
+  };
+}
+
+function classifyHighlightTokens(tokens: SearchToken[], fieldMap: FieldMap): SearchHighlightToken[] {
+  return tokens.map((token, index) => {
+    if (token.type === 'word') {
+      const nextToken = tokens[index + 1];
+      const definition = fieldMap.get(token.value.toLowerCase());
+      if (definition && nextToken?.type === 'comparator') {
+        return {
+          kind: 'field',
+          start: token.start,
+          end: token.end,
+          value: token.value,
+          normalizedValue: definition.name,
+        };
+      }
+
+      return {
+        kind: 'term',
+        start: token.start,
+        end: token.end,
+        value: token.value,
+      };
+    }
+
+    if (token.type === 'string') {
+      return {
+        kind: 'string',
+        start: token.start,
+        end: token.end,
+        value: token.value,
+      };
+    }
+
+    if (token.type === 'operator') {
+      return {
+        kind: 'booleanOperator',
+        start: token.start,
+        end: token.end,
+        value: token.value,
+        normalizedValue: token.value,
+      };
+    }
+
+    if (token.type === 'comparator') {
+      return {
+        kind: 'comparator',
+        start: token.start,
+        end: token.end,
+        value: token.value,
+        normalizedValue: token.value === ':' ? ':' : normalizeComparisonOperator(token.value),
+      };
+    }
+
+    if (token.type === 'minus') {
+      return {
+        kind: 'negation',
+        start: token.start,
+        end: token.end,
+        value: '-',
+      };
+    }
+
+    return {
+      kind: 'paren',
+      start: token.start,
+      end: token.end,
+      value: token.type === 'lparen' ? '(' : ')',
+    };
+  });
 }
 
 function shouldSplitComparator(currentValue: string, query: string, index: number, fieldMap: FieldMap): boolean {

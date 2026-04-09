@@ -213,6 +213,36 @@ describe('Dashboard page', () => {
     expect(within(alertsCard as HTMLElement).getByText('Simulation')).toBeInTheDocument();
   });
 
+  test('uses advanced search syntax for filtered drilldown links', async () => {
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Top Countries')).toBeInTheDocument());
+
+    await userEvent.click(screen.getByText('Germany'));
+    await userEvent.click(screen.getByText('ssh-bf'));
+    await userEvent.click(screen.getByText('Hetzner'));
+    await userEvent.click(screen.getAllByText('ssh')[0]);
+    await userEvent.click(screen.getByRole('button', { name: 'Live' }));
+
+    const alertsCard = screen.getByText('Total Alerts').closest('a');
+    const decisionsCard = screen.getByText('Active Decisions').closest('a');
+    expect(alertsCard).not.toBeNull();
+    expect(decisionsCard).not.toBeNull();
+
+    const alertsParams = new URLSearchParams((alertsCard as HTMLElement).getAttribute('href')?.split('?')[1] ?? '');
+    const decisionsParams = new URLSearchParams((decisionsCard as HTMLElement).getAttribute('href')?.split('?')[1] ?? '');
+    const expectedQuery = 'country:DE AND scenario:crowdsecurity/ssh-bf AND as:Hetzner AND target:ssh AND sim:live';
+
+    expect(alertsParams.get('q')).toBe(expectedQuery);
+    expect(decisionsParams.get('q')).toBe(expectedQuery);
+    expect((alertsCard as HTMLElement).getAttribute('href')).not.toContain('country=');
+    expect((decisionsCard as HTMLElement).getAttribute('href')).not.toContain('scenario=');
+  });
+
   test('hides simulation labels and series when simulations are disabled', async () => {
     fetchConfigMock.mockResolvedValue({
       lookback_period: '7d',
