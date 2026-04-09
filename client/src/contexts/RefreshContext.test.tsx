@@ -122,7 +122,7 @@ describe('RefreshContext', () => {
     });
 
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 500 })));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 500 })));
 
     render(
       <RefreshProvider>

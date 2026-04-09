@@ -30,19 +30,31 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
     ];
 
     useEffect(() => {
+        let cancelled = false;
+
         const checkUpdates = async () => {
             try {
                 const response = await fetch(apiUrl('/api/update-check'), { cache: 'no-store' });
-                if (response.ok) {
-                    setUpdateStatus(await response.json());
+                if (!response.ok || cancelled) {
+                    return;
+                }
+
+                const status = await response.json();
+                if (!cancelled) {
+                    setUpdateStatus(status);
                 }
             } catch (error) {
-                console.error("Failed to check for updates", error);
+                if (!cancelled) {
+                    console.error("Failed to check for updates", error);
+                }
             }
         };
 
-        checkUpdates();
+        void checkUpdates();
         // Check on mount and when refresh signal triggers
+        return () => {
+            cancelled = true;
+        };
     }, [refreshSignal]);
 
     const formatTime = (date: Date | null) => {
