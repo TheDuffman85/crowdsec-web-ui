@@ -125,15 +125,6 @@ vi.mock('../lib/api', () => {
       if (filters?.simulation === 'simulated') {
         alerts = alerts.filter((alert) => alert.simulated === true);
       }
-      if (filters?.ip) {
-        alerts = alerts.filter((alert) => {
-          const source = alert.source?.ip || alert.source?.value || alert.source?.range || '';
-          return source.toLowerCase().includes(filters.ip.toLowerCase());
-        });
-      }
-      if (filters?.scenario) {
-        alerts = alerts.filter((alert) => (alert.scenario || '').includes(filters.scenario));
-      }
       if (filters?.q) {
         const compiledSearch = compileAlertSearch(filters.q, {
           machineEnabled: true,
@@ -405,6 +396,22 @@ describe('Alerts page', () => {
     expect(highlightLayer?.querySelector('[data-search-highlight-kind="comparator"]')).toHaveTextContent(':');
   });
 
+  test('applies an initial advanced search URL query on the first alert load', async () => {
+    const fetchAlertsPaginatedMock = vi.mocked(api.fetchAlertsPaginated);
+    fetchAlertsPaginatedMock.mockClear();
+
+    render(
+      <MemoryRouter initialEntries={['/alerts?q=country:germany']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(fetchAlertsPaginatedMock).toHaveBeenCalled());
+    expect(fetchAlertsPaginatedMock.mock.calls[0]?.[2]).toMatchObject({ q: 'country:germany' });
+    await waitFor(() => expect(screen.getByPlaceholderText('Filter alerts...')).toHaveValue('country:germany'));
+    await waitFor(() => expect(screen.queryByText('5.6.7.8')).not.toBeInTheDocument());
+  });
+
   test('supports date comparisons in advanced alert search', async () => {
     render(
       <MemoryRouter initialEntries={['/alerts']}>
@@ -624,14 +631,17 @@ describe('Alerts page', () => {
           decisions: [{ id: 14302, value: '192.168.5.0/24', type: 'ban', origin: 'cscli', simulated: false, expired: false }],
         },
       ];
-      const filteredAlerts = filters?.ip
-        ? rangeAlerts.filter((alert) => (alert.source?.ip || alert.source?.value || alert.source?.range || '').toLowerCase().includes(filters.ip.toLowerCase()))
+      const compiledSearch = filters?.q
+        ? compileAlertSearch(filters.q, { machineEnabled: true, originEnabled: true })
+        : null;
+      const filteredAlerts = compiledSearch?.ok
+        ? rangeAlerts.filter(compiledSearch.predicate)
         : rangeAlerts;
       return toPaginatedAlerts(filteredAlerts, page, pageSize, rangeAlerts.length);
     });
 
     render(
-      <MemoryRouter initialEntries={['/alerts?ip=192.168.5.0/24']}>
+      <MemoryRouter initialEntries={['/alerts?q=ip:192.168.5.0/24']}>
         <Alerts />
       </MemoryRouter>,
     );
@@ -657,7 +667,7 @@ describe('Alerts page', () => {
     );
 
     render(
-      <MemoryRouter initialEntries={['/alerts?scenario=filtered/scenario']}>
+      <MemoryRouter initialEntries={['/alerts?q=scenario:filtered/scenario']}>
         <Alerts />
       </MemoryRouter>,
     );

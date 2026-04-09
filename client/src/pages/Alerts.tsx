@@ -85,13 +85,15 @@ function summarizeDeleteResult(result: BulkDeleteResult): string | null {
 
 export function Alerts() {
     const { refreshSignal, setLastUpdated } = useRefresh();
+    const [searchParams, setSearchParams] = useSearchParams();
+    const initialQueryParam = searchParams.get("q") ?? "";
     const [alerts, setAlerts] = useState<AlertListItem[]>([]);
     const [simulationsEnabled, setSimulationsEnabled] = useState(false);
     const [machineFeaturesEnabled, setMachineFeaturesEnabled] = useState(false);
     const [originFeaturesEnabled, setOriginFeaturesEnabled] = useState(false);
-    const [searchDraft, setSearchDraft] = useState("");
-    const [debouncedSearchDraft, setDebouncedSearchDraft] = useState("");
-    const [appliedQuery, setAppliedQuery] = useState("");
+    const [searchDraft, setSearchDraft] = useState(initialQueryParam);
+    const [debouncedSearchDraft, setDebouncedSearchDraft] = useState(initialQueryParam);
+    const [appliedQuery, setAppliedQuery] = useState(initialQueryParam.trim());
     const [queryError, setQueryError] = useState<SearchParseError | null>(null);
     const [showSearchSyntaxModal, setShowSearchSyntaxModal] = useState(false);
     const [initialLoading, setInitialLoading] = useState(true);
@@ -110,7 +112,6 @@ export function Alerts() {
     const [totalAlerts, setTotalAlerts] = useState(0);
     const [totalUnfilteredAlerts, setTotalUnfilteredAlerts] = useState(0);
     const [selectableAlertIds, setSelectableAlertIds] = useState<string[]>([]);
-    const [searchParams, setSearchParams] = useSearchParams();
     const [pendingDeleteAction, setPendingDeleteAction] = useState<AlertDeleteAction | null>(null);
     const [selectedAlertIds, setSelectedAlertIds] = useState<string[]>([]);
     const [deleteInProgress, setDeleteInProgress] = useState(false);
@@ -176,15 +177,11 @@ export function Alerts() {
             tz_offset: String(new Date().getTimezoneOffset()),
         };
         if (appliedQuery) filters.q = appliedQuery;
-        for (const key of ["ip", "country", "scenario", "as", "target", "date", "dateStart", "dateEnd"]) {
-            const value = searchParams.get(key);
-            if (value) filters[key] = value;
-        }
         if (simulationFilter !== 'all') {
             filters.simulation = simulationFilter;
         }
         return filters;
-    }, [appliedQuery, currentSimulationFilter, searchParams]);
+    }, [appliedQuery, currentSimulationFilter]);
 
     const loadConfig = useCallback(async (refresh = false) => {
         if (!refresh && configRef.current) {
@@ -822,7 +819,7 @@ export function Alerts() {
             )}
 
             {/* Show active filters */}
-            {(appliedQuery || searchParams.get("ip") || searchParams.get("country") || searchParams.get("scenario") || searchParams.get("as") || searchParams.get("target") || searchParams.get("date") || searchParams.get("dateStart") || searchParams.get("dateEnd") || (simulationsEnabled && searchParams.get("simulation"))) && (
+            {(appliedQuery || (simulationsEnabled && searchParams.get("simulation"))) && (
                 <div className="flex flex-wrap gap-2">
                     {appliedQuery && (
                         <Badge variant="secondary" className="flex items-center gap-1 max-w-full">
@@ -845,35 +842,21 @@ export function Alerts() {
                             </button>
                         </Badge>
                     )}
-                    {[
-                        "ip",
-                        "country",
-                        "scenario",
-                        "as",
-                        "target",
-                        "date",
-                        "dateStart",
-                        "dateEnd",
-                        ...(simulationsEnabled ? ["simulation"] : []),
-                    ].map(key => {
-                        const val = searchParams.get(key);
-                        if (!val) return null;
-                        return (
-                            <Badge key={key} variant="secondary" className="flex items-center gap-1">
-                                <span className="font-semibold">{key.charAt(0).toUpperCase() + key.slice(1).replace(/([A-Z])/g, ' $1')}:</span> {val}
-                                <button
-                                    onClick={() => {
-                                        const newParams = new URLSearchParams(searchParams);
-                                        newParams.delete(key);
-                                        setSearchParams(newParams);
-                                    }}
-                                    className="ml-1 hover:text-red-500"
-                                >
-                                    &times;
-                                </button>
-                            </Badge>
-                        );
-                    })}
+                    {simulationsEnabled && searchParams.get("simulation") && (
+                        <Badge variant="secondary" className="flex items-center gap-1">
+                            <span className="font-semibold">Simulation:</span> {searchParams.get("simulation")}
+                            <button
+                                onClick={() => {
+                                    const newParams = new URLSearchParams(searchParams);
+                                    newParams.delete("simulation");
+                                    setSearchParams(newParams);
+                                }}
+                                className="ml-1 hover:text-red-500"
+                            >
+                                &times;
+                            </button>
+                        </Badge>
+                    )}
                     <button
                         onClick={clearAllFilters}
                         className="text-xs text-gray-500 hover:text-gray-900 dark:hover:text-gray-300 underline"

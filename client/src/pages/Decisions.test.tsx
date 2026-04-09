@@ -324,6 +324,22 @@ describe('Decisions page', () => {
     await waitFor(() => expect(screen.getByPlaceholderText('Filter decisions...')).toHaveValue('status:active AND action:ban'));
   });
 
+  test('applies an initial advanced search URL query on the first decision load', async () => {
+    const fetchDecisionsPaginatedMock = vi.mocked(api.fetchDecisionsPaginated);
+    fetchDecisionsPaginatedMock.mockClear();
+
+    render(
+      <MemoryRouter initialEntries={['/decisions?q=country:germany']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(fetchDecisionsPaginatedMock).toHaveBeenCalled());
+    expect(fetchDecisionsPaginatedMock.mock.calls[0]?.[2]).toMatchObject({ q: 'country:germany' });
+    await waitFor(() => expect(screen.getByPlaceholderText('Filter decisions...')).toHaveValue('country:germany'));
+    await waitFor(() => expect(screen.queryByText('5.6.7.8')).not.toBeInTheDocument());
+  });
+
   test('clicking decision fields and operators inserts snippets into the search input', async () => {
     render(
       <MemoryRouter initialEntries={['/decisions']}>
