@@ -153,6 +153,7 @@ export function Alerts() {
     const searchSelectionRef = useRef({ start: 0, end: 0 });
     const pendingSearchFocusRef = useRef<number | null>(null);
     const skipSearchParamSyncRef = useRef<string | null>(null);
+    const searchDebounceTimeoutRef = useRef<number | null>(null);
     const searchValidationFeatures = useMemo(() => (
         configRef.current
             ? { machineEnabled: machineFeaturesEnabled, originEnabled: originFeaturesEnabled }
@@ -162,6 +163,12 @@ export function Alerts() {
         () => getSearchHelpDefinition('alerts', searchValidationFeatures),
         [searchValidationFeatures],
     );
+    const cancelSearchDebounce = useCallback(() => {
+        if (searchDebounceTimeoutRef.current !== null) {
+            window.clearTimeout(searchDebounceTimeoutRef.current);
+            searchDebounceTimeoutRef.current = null;
+        }
+    }, []);
 
     const buildServerFilters = useCallback((simulationFilter = currentSimulationFilter): Record<string, string> => {
         const filters: Record<string, string> = {
@@ -356,11 +363,12 @@ export function Alerts() {
             skipSearchParamSyncRef.current = null;
             return;
         }
+        cancelSearchDebounce();
         searchDraftRef.current = nextQuery;
         setSearchDraft((current) => current === nextQuery ? current : nextQuery);
         setDebouncedSearchDraft((current) => current === nextQuery ? current : nextQuery);
         searchSelectionRef.current = { start: nextQuery.length, end: nextQuery.length };
-    }, [queryParam]);
+    }, [cancelSearchDebounce, queryParam]);
 
     useEffect(() => {
         searchDraftRef.current = searchDraft;
@@ -412,15 +420,23 @@ export function Alerts() {
 
     useEffect(() => {
         if (searchDraft === debouncedSearchDraft) {
+            cancelSearchDebounce();
             return;
         }
 
         const timeoutId = window.setTimeout(() => {
+            searchDebounceTimeoutRef.current = null;
             setDebouncedSearchDraft(searchDraft);
         }, 300);
+        searchDebounceTimeoutRef.current = timeoutId;
 
-        return () => window.clearTimeout(timeoutId);
-    }, [debouncedSearchDraft, searchDraft]);
+        return () => {
+            if (searchDebounceTimeoutRef.current === timeoutId) {
+                window.clearTimeout(timeoutId);
+                searchDebounceTimeoutRef.current = null;
+            }
+        };
+    }, [cancelSearchDebounce, debouncedSearchDraft, searchDraft]);
 
     useEffect(() => {
         const compiledSearch = compileAlertSearch(debouncedSearchDraft, searchValidationFeatures);
@@ -596,6 +612,7 @@ export function Alerts() {
     };
 
     const applySearchExample = useCallback((query: string) => {
+        cancelSearchDebounce();
         searchDraftRef.current = query;
         setSearchDraft(query);
         setDebouncedSearchDraft(query);
@@ -603,7 +620,7 @@ export function Alerts() {
         setQueryError(null);
         pendingSearchFocusRef.current = query.length;
         setShowSearchSyntaxModal(false);
-    }, []);
+    }, [cancelSearchDebounce]);
 
     const insertSearchSnippet = useCallback((snippet: string) => {
         const currentValue = searchInputRef.current?.value ?? searchDraftRef.current;
@@ -611,6 +628,7 @@ export function Alerts() {
         const nextCaretPosition = start + snippet.length;
         const nextQuery = `${currentValue.slice(0, start)}${snippet}${currentValue.slice(end)}`;
 
+        cancelSearchDebounce();
         searchDraftRef.current = nextQuery;
         searchSelectionRef.current = { start: nextCaretPosition, end: nextCaretPosition };
         setSearchDraft(nextQuery);
@@ -618,9 +636,10 @@ export function Alerts() {
         setQueryError(null);
         pendingSearchFocusRef.current = nextCaretPosition;
         setShowSearchSyntaxModal(false);
-    }, [getSearchInsertionRange]);
+    }, [cancelSearchDebounce, getSearchInsertionRange]);
 
     const clearAllFilters = useCallback(() => {
+        cancelSearchDebounce();
         searchDraftRef.current = "";
         setSearchDraft("");
         setDebouncedSearchDraft("");
@@ -630,7 +649,7 @@ export function Alerts() {
         searchSelectionRef.current = { start: 0, end: 0 };
         skipSearchParamSyncRef.current = "";
         setSearchParams({});
-    }, [setSearchParams]);
+    }, [cancelSearchDebounce, setSearchParams]);
 
     // Delete handlers
     const requestDelete = (id: string | number, event: ReactMouseEvent<HTMLButtonElement>) => {
@@ -812,6 +831,7 @@ export function Alerts() {
                                 onClick={() => {
                                     const nextParams = new URLSearchParams(searchParams);
                                     nextParams.delete("q");
+                                    cancelSearchDebounce();
                                     setSearchDraft("");
                                     setDebouncedSearchDraft("");
                                     setAppliedQuery("");
