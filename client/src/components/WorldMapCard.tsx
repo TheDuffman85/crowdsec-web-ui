@@ -438,7 +438,8 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
                             maxScale={8}
                             centerOnInit={true}
                             centerZoomedOut={false}
-                            wheel={{ step: 0.1 }}
+                            smooth={false}
+                            wheel={{ step: 0.15 }}
                             panning={{ velocityDisabled: true }}
                             doubleClick={{ mode: 'zoomIn', step: 0.7 }}
                             limitToBounds={false}

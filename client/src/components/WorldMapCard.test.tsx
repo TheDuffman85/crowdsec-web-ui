@@ -2,9 +2,10 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { WorldMapCard } from './WorldMapCard';
 
-const { choroplethMountSpy, choroplethUnmountSpy } = vi.hoisted(() => ({
+const { choroplethMountSpy, choroplethUnmountSpy, transformWrapperPropsSpy } = vi.hoisted(() => ({
   choroplethMountSpy: vi.fn(),
   choroplethUnmountSpy: vi.fn(),
+  transformWrapperPropsSpy: vi.fn(),
 }));
 
 vi.mock('@nivo/geo', async () => {
@@ -34,16 +35,25 @@ vi.mock('react-zoom-pan-pinch', async () => {
   const React = await import('react');
 
   return {
-    TransformWrapper: React.forwardRef(({ children }: { children: React.ReactNode | ((controls: {
-      zoomIn: () => void;
-      zoomOut: () => void;
-      centerView: () => void;
-    }) => React.ReactNode) }, ref: React.Ref<{ centerView: () => void }>) => {
+    TransformWrapper: React.forwardRef(({
+      children,
+      ...props
+    }: {
+      children: React.ReactNode | ((controls: {
+        zoomIn: () => void;
+        zoomOut: () => void;
+        centerView: () => void;
+      }) => React.ReactNode);
+      smooth?: boolean;
+      wheel?: { step?: number };
+    }, ref: React.Ref<{ centerView: () => void }>) => {
       const controls = {
         zoomIn: vi.fn(),
         zoomOut: vi.fn(),
         centerView: vi.fn(),
       };
+
+      transformWrapperPropsSpy(props);
 
       React.useImperativeHandle(ref, () => ({
         centerView: controls.centerView,
@@ -63,6 +73,7 @@ describe('WorldMapCard', () => {
   beforeEach(() => {
     choroplethMountSpy.mockClear();
     choroplethUnmountSpy.mockClear();
+    transformWrapperPropsSpy.mockClear();
 
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       json: async () => ({
@@ -123,5 +134,25 @@ describe('WorldMapCard', () => {
     await waitFor(() => expect(screen.getByTestId('choropleth')).toBeInTheDocument());
     await waitFor(() => expect(choroplethMountSpy).toHaveBeenCalledTimes(1));
     expect(choroplethUnmountSpy).not.toHaveBeenCalled();
+  });
+
+  test('uses deterministic wheel zoom settings for the map wrapper', async () => {
+    render(
+      <WorldMapCard
+        data={[{ label: 'Germany', countryCode: 'DE', count: 2, liveCount: 2, simulatedCount: 0 }]}
+        onCountrySelect={vi.fn()}
+        selectedCountry={null}
+        simulationsEnabled={true}
+      />,
+    );
+
+    await waitFor(() => expect(transformWrapperPropsSpy).toHaveBeenCalled());
+
+    expect(transformWrapperPropsSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        smooth: false,
+        wheel: expect.objectContaining({ step: 0.15 }),
+      }),
+    );
   });
 });
