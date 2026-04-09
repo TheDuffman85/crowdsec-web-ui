@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StrictMode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -459,6 +459,32 @@ describe('Alerts page', () => {
 
     await waitFor(() => expect(screen.getByPlaceholderText('Filter alerts...')).toHaveValue('date>=2026-03-24'));
     await waitFor(() => expect(screen.getByText('date>=2026-03-24')).toBeInTheDocument());
+  });
+
+  test('alert snippet insertion ignores stale input selections while the modal has focus', async () => {
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Insert field date' }));
+
+    const input = screen.getByPlaceholderText('Filter alerts...') as HTMLInputElement;
+    expect(input).toHaveValue('date');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));
+    fireEvent.click(screen.getByRole('button', { name: /^>=/ }));
+
+    expect(input).toHaveValue('date>=');
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    });
+    expect(input).toHaveValue('date>=');
   });
 
   test('reset all filters clears an advanced alert query without restoring it', async () => {
