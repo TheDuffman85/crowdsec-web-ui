@@ -127,7 +127,7 @@ describe('api helpers', () => {
   test('removes failed GET requests from the in-flight cache', async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(new Response('{}', { status: 500 }))
+      .mockResolvedValueOnce(new Response(null, { status: 500 }))
       .mockResolvedValueOnce(Response.json({ ok: true }));
     mockFetch(fetchMock);
 
@@ -137,7 +137,7 @@ describe('api helpers', () => {
   });
 
   test('delete and add helpers surface permission metadata on 403', async () => {
-    mockFetch(vi.fn(async () => new Response('{}', { status: 403 })));
+    mockFetch(vi.fn(async () => new Response(null, { status: 403 })));
 
     await expect(deleteAlert(1)).rejects.toMatchObject({
       message: 'Permission denied.',
@@ -172,7 +172,7 @@ describe('api helpers', () => {
         if (init?.method === 'DELETE') {
           return new Response(null, { status: 204 });
         }
-        return new Response('{}', { status: 500 });
+        return new Response(null, { status: 500 });
       }),
     );
 
@@ -205,7 +205,7 @@ describe('api helpers', () => {
   });
 
   test('throws the provided message for non-403 mutation failures', async () => {
-    mockFetch(vi.fn(async () => new Response('{}', { status: 500 })));
+    mockFetch(vi.fn(async () => new Response(null, { status: 500 })));
     await expect(deleteAlert(1)).rejects.toThrow('Failed to delete alert');
   });
 

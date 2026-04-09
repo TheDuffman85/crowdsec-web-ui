@@ -549,20 +549,22 @@ export function Alerts() {
 
     const insertSearchSnippet = useCallback((snippet: string) => {
         const input = searchInputRef.current;
-        const currentValue = input?.value ?? searchDraft;
-        const selectionStart = input?.selectionStart ?? currentValue.length;
-        const selectionEnd = input?.selectionEnd ?? currentValue.length;
-        const nextQuery = `${currentValue.slice(0, selectionStart)}${snippet}${currentValue.slice(selectionEnd)}`;
-        const nextCaretPosition = selectionStart + snippet.length;
+        let nextCaretPosition = 0;
 
-        setSearchDraft(nextQuery);
+        setSearchDraft((current) => {
+            const currentValue = input?.value ?? current;
+            const selectionStart = input?.selectionStart ?? currentValue.length;
+            const selectionEnd = input?.selectionEnd ?? currentValue.length;
+            nextCaretPosition = selectionStart + snippet.length;
+            return `${currentValue.slice(0, selectionStart)}${snippet}${currentValue.slice(selectionEnd)}`;
+        });
         setQueryError(null);
 
         window.setTimeout(() => {
             searchInputRef.current?.focus();
             searchInputRef.current?.setSelectionRange(nextCaretPosition, nextCaretPosition);
         }, 0);
-    }, [searchDraft]);
+    }, []);
 
     const clearAllFilters = useCallback(() => {
         setSearchDraft("");
