@@ -293,6 +293,7 @@ describe('Decisions page', () => {
     await waitFor(() => expect(screen.getByText(/Search syntax error at character/i)).toBeInTheDocument());
     expect(screen.getByText('1.2.3.4')).toBeInTheDocument();
     expect(screen.getByText('5.6.7.8')).toBeInTheDocument();
+    expect(document.querySelectorAll('[data-search-highlight-error="true"]').length).toBeGreaterThan(0);
   });
 
   test('opens the search syntax help modal', async () => {

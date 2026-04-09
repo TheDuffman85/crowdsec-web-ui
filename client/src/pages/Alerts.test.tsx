@@ -399,6 +399,10 @@ describe('Alerts page', () => {
 
     await waitFor(() => expect(screen.getByText('country:germany')).toBeInTheDocument());
     await waitFor(() => expect(screen.queryByText('5.6.7.8')).not.toBeInTheDocument());
+
+    const highlightLayer = document.querySelector('[data-search-highlight-layer="true"]');
+    expect(highlightLayer?.querySelector('[data-search-highlight-kind="field"]')).toHaveTextContent('country');
+    expect(highlightLayer?.querySelector('[data-search-highlight-kind="comparator"]')).toHaveTextContent(':');
   });
 
   test('supports date comparisons in advanced alert search', async () => {

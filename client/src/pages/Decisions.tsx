@@ -5,12 +5,13 @@ import { isSimulatedDecision, parseSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
+import { HighlightedSearchInput } from "../components/HighlightedSearchInput";
 import { SearchSyntaxModal } from "../components/SearchSyntaxModal";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { getCountryName } from "../lib/utils";
 import { compileDecisionSearch, getSearchHelpDefinition, type SearchParseError } from "../../../shared/search";
-import { Trash2, Gavel, X, ExternalLink, Shield, ShieldBan, Search, AlertCircle, Info } from "lucide-react";
+import { Trash2, Gavel, X, ExternalLink, Shield, ShieldBan, AlertCircle, Info } from "lucide-react";
 import type { AddDecisionRequest, ApiPermissionError, BulkDeleteResult, DecisionListItem } from '../types';
 
 type DecisionDeleteAction =
@@ -823,16 +824,14 @@ export function Decisions() {
 
             <div className="space-y-2">
                 <div className="flex items-stretch gap-2">
-                    <div className="relative flex-1">
-                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                            <Search className="h-5 w-5 text-gray-400" />
-                        </div>
-                        <input
+                    <div className="flex-1">
+                        <HighlightedSearchInput
                             ref={searchInputRef}
-                            type="text"
+                            searchPage="decisions"
+                            searchFeatures={searchValidationFeatures}
                             placeholder="Filter decisions..."
-                            className={`block w-full pl-10 pr-3 py-2 border rounded-md leading-5 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 sm:text-sm ${queryError ? 'border-red-300 dark:border-red-700 focus:ring-red-500 focus:border-red-500' : 'border-gray-300 dark:border-gray-700 focus:ring-primary-500 focus:border-primary-500'}`}
                             value={searchDraft}
+                            error={queryError}
                             onChange={(e) => {
                                 searchDraftRef.current = e.target.value;
                                 setSearchDraft(e.target.value);
