@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { Agent, type Dispatcher } from 'undici';
+import { Agent, fetch as undiciFetch, type Dispatcher } from 'undici';
 import type { LapiStatus } from '../shared/contracts';
 import type { CrowdsecAuthConfig } from './auth';
 
@@ -59,7 +59,11 @@ export class LapiClient {
     this.simulationsEnabled = options.simulationsEnabled ?? false;
     this.lookbackPeriod = options.lookbackPeriod;
     this.version = options.version;
-    this.fetchImpl = options.fetchImpl || ((input, init) => fetch(input, init as RequestInit));
+    this.fetchImpl = options.fetchImpl || ((input, init) =>
+      undiciFetch(
+        input as Parameters<typeof undiciFetch>[0],
+        init as Parameters<typeof undiciFetch>[1],
+      ) as unknown as Promise<Response>);
     this.dispatcher = this.auth.mode === 'mtls'
       ? new Agent({
           connect: {

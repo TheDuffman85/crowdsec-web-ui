@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { getGlobalDispatcher, MockAgent, setGlobalDispatcher } from 'undici';
 import { LapiClient, type LapiRequestInit } from './lapi';
 
 const passwordAuth = {
@@ -11,6 +12,8 @@ const passwordAuth = {
 } as const;
 
 const tempDirs: string[] = [];
+const originalFetch = globalThis.fetch;
+const originalUndiciDispatcher = getGlobalDispatcher();
 
 function createMtlsAuth() {
   const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-lapi-'));
@@ -30,6 +33,9 @@ function createMtlsAuth() {
 }
 
 afterEach(() => {
+  globalThis.fetch = originalFetch;
+  setGlobalDispatcher(originalUndiciDispatcher);
+
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (dir) {
@@ -39,6 +45,45 @@ afterEach(() => {
 });
 
 describe('LapiClient', () => {
+  test('default fetch implementation uses the userland undici dispatcher', async () => {
+    const mockAgent = new MockAgent();
+    mockAgent.disableNetConnect();
+    mockAgent
+      .get('http://crowdsec:8080')
+      .intercept({
+        path: '/v1/watchers/login',
+        method: 'POST',
+      })
+      .reply(200, { code: 200, token: 'token-userland-undici' }, {
+        headers: { 'content-type': 'application/json' },
+      });
+
+    let globalFetchCalled = false;
+    setGlobalDispatcher(mockAgent);
+    globalThis.fetch = (async () => {
+      globalFetchCalled = true;
+      throw new Error('global fetch should not be used for LAPI requests');
+    }) as typeof fetch;
+
+    try {
+      const client = new LapiClient({
+        crowdsecUrl: 'http://crowdsec:8080',
+        auth: passwordAuth,
+        simulationsEnabled: true,
+        lookbackPeriod: '1h',
+        version: '1.0.0',
+      });
+
+      await expect(client.login()).resolves.toBe(true);
+      expect(globalFetchCalled).toBe(false);
+      mockAgent.assertNoPendingInterceptors();
+    } finally {
+      globalThis.fetch = originalFetch;
+      setGlobalDispatcher(originalUndiciDispatcher);
+      await mockAgent.close();
+    }
+  });
+
   test('logs in and stores a token', async () => {
     const client = new LapiClient({
       crowdsecUrl: 'http://crowdsec:8080',
