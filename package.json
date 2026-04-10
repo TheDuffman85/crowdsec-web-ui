@@ -23,6 +23,7 @@
     "pretest:server": "pnpm run ensure:native-deps",
     "test:server": "vitest run --config vitest.server.config.ts",
     "test:client": "vitest run --config vitest.client.config.ts",
+    "test:mtls:crowdsec": "node --experimental-strip-types scripts/crowdsec-mtls-smoke-test.mjs",
     "coverage": "pnpm run coverage:server && pnpm run coverage:client && pnpm run coverage:check",
     "precoverage:server": "pnpm run ensure:native-deps",
     "coverage:server": "vitest run --config vitest.server.config.ts --coverage",

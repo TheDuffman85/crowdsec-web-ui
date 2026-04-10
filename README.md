@@ -697,6 +697,18 @@ The Web UI maintains its own local history of alerts and decisions. Data fetched
     ./run.sh
     ```
 
+4.  **CrowdSec mTLS smoke test**:
+    Starts a disposable CrowdSec LAPI container, generates temporary server/client certificates, enables LAPI client certificate verification, logs in through the Web UI LAPI client, and confirms CrowdSec registered the TLS machine.
+    ```bash
+    pnpm run test:mtls:crowdsec
+    ```
+
+    Optional overrides:
+    ```bash
+    CROWDSEC_MTLS_IMAGE=crowdsecurity/crowdsec:latest pnpm run test:mtls:crowdsec
+    CROWDSEC_MTLS_KEEP=1 pnpm run test:mtls:crowdsec
+    ```
+
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=TheDuffman85/crowdsec-web-ui&type=Date)](https://star-history.com/#TheDuffman85/crowdsec-web-ui&Date)
