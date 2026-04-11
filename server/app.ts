@@ -548,13 +548,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   });
 
   app.get(`${config.basePath}/api/notifications`, ensureAuth, (context) => {
-    const limit = Number.parseInt(context.req.query('limit') || '100', 10);
-    return context.json(notificationService.listNotifications(Number.isFinite(limit) ? limit : 100));
+    const pageRequest = getPageRequest(context) || { page: 1, pageSize: 50 };
+    return context.json(notificationService.listNotifications(pageRequest.page, pageRequest.pageSize));
   });
-
-  app.post(`${config.basePath}/api/notifications/read-all`, ensureAuth, () =>
-    Response.json({ updated: notificationService.markAllNotificationsRead() }),
-  );
 
   app.post(`${config.basePath}/api/cleanup/by-ip`, ensureAuth, async (context) => {
     const doRequest = async () => {
@@ -581,6 +577,39 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     if (!updated) {
       return context.json({ error: 'Notification not found' }, 404);
     }
+    return context.json({ success: true });
+  });
+
+  app.post(`${config.basePath}/api/notifications/bulk-read`, ensureAuth, async (context) => {
+    const body = await context.req.json<BulkDeleteRequest>();
+    const ids = normalizeNotificationIds(body.ids);
+    if (ids.length === 0) {
+      return context.json({ error: 'At least one notification ID is required' }, 400);
+    }
+
+    return context.json({ updated: notificationService.markNotificationsRead(ids) });
+  });
+
+  app.post(`${config.basePath}/api/notifications/bulk-delete`, ensureAuth, async (context) => {
+    const body = await context.req.json<BulkDeleteRequest>();
+    const ids = normalizeNotificationIds(body.ids);
+    if (ids.length === 0) {
+      return context.json({ error: 'At least one notification ID is required' }, 400);
+    }
+
+    return context.json({ deleted: notificationService.deleteNotifications(ids) });
+  });
+
+  app.post(`${config.basePath}/api/notifications/delete-read`, ensureAuth, () =>
+    Response.json({ deleted: notificationService.deleteReadNotifications() }),
+  );
+
+  app.delete(`${config.basePath}/api/notifications/:id`, ensureAuth, (context) => {
+    const id = String(context.req.param('id'));
+    if (!notificationService.deleteNotification(id)) {
+      return context.json({ error: 'Notification not found' }, 404);
+    }
+
     return context.json({ success: true });
   });
 
@@ -1442,6 +1471,20 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         ids
           .map((id) => String(id).trim())
           .filter((id) => /^\d+$/.test(id)),
+      ),
+    );
+  }
+
+  function normalizeNotificationIds(ids: Array<string | number> | undefined): string[] {
+    if (!Array.isArray(ids)) {
+      return [];
+    }
+
+    return Array.from(
+      new Set(
+        ids
+          .map((id) => String(id).trim())
+          .filter((id) => id.length > 0),
       ),
     );
   }

@@ -2,12 +2,15 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
   addDecision,
   bulkDeleteAlerts,
+  bulkDeleteNotifications,
   bulkDeleteDecisions,
   cleanupByIp,
   createNotificationChannel,
   createNotificationRule,
+  deleteNotification,
   deleteNotificationChannel,
   deleteNotificationRule,
+  deleteReadNotifications,
   deleteAlert,
   deleteDecision,
   fetchAlert,
@@ -20,9 +23,10 @@ import {
   fetchDecisionsPaginated,
   fetchDecisionsForStats,
   fetchNotifications,
+  fetchNotificationsPaginated,
   fetchNotificationSettings,
-  markAllNotificationsRead,
   markNotificationRead,
+  markNotificationsRead,
   testNotificationChannel,
   updateNotificationChannel,
   updateNotificationRule,
@@ -44,6 +48,12 @@ describe('api helpers', () => {
   test('fetch helpers return parsed JSON', async () => {
     mockFetch(
       vi.fn(async (input) => {
+        if (String(input).includes('/api/notifications/settings')) {
+          return Response.json([{ id: 1 }]);
+        }
+        if (String(input).includes('/api/notifications')) {
+          return Response.json({ data: [{ id: 1 }], pagination: { page: 1, page_size: 50, total: 1, total_pages: 1, unfiltered_total: 1 }, selectable_ids: ['1'], unread_count: 1 });
+        }
         if (String(input).endsWith('/api/alerts/1')) {
           return Response.json([{ id: 1 }]);
         }
@@ -60,7 +70,8 @@ describe('api helpers', () => {
     await expect(fetchDashboardStats({ simulation: 'live' })).resolves.toEqual([{ id: 1 }]);
     await expect(fetchConfig()).resolves.toEqual([{ id: 1 }]);
     await expect(fetchNotificationSettings()).resolves.toEqual([{ id: 1 }]);
-    await expect(fetchNotifications()).resolves.toEqual([{ id: 1 }]);
+    await expect(fetchNotifications()).resolves.toEqual({ data: [{ id: 1 }], pagination: { page: 1, page_size: 50, total: 1, total_pages: 1, unfiltered_total: 1 }, selectable_ids: ['1'], unread_count: 1 });
+    await expect(fetchNotificationsPaginated()).resolves.toEqual({ data: [{ id: 1 }], pagination: { page: 1, page_size: 50, total: 1, total_pages: 1, unfiltered_total: 1 }, selectable_ids: ['1'], unread_count: 1 });
   });
 
   test('paginated helpers include only populated filters', async () => {
@@ -71,11 +82,13 @@ describe('api helpers', () => {
 
     await expect(fetchAlertsPaginated(2, 25, { scenario: 'ssh', country: '' })).resolves.toEqual({ items: [], total: 0 });
     await expect(fetchDecisionsPaginated(3, 10, { ip: '1.2.3.4', target: '' })).resolves.toEqual({ items: [], total: 0 });
+    await expect(fetchNotificationsPaginated(4, 20)).resolves.toEqual({ items: [], total: 0 });
 
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/api/alerts?page=2&page_size=25&scenario=ssh');
     expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain('country=');
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/api/decisions?page=3&page_size=10&ip=1.2.3.4');
     expect(String(fetchMock.mock.calls[1]?.[0])).not.toContain('target=');
+    expect(String(fetchMock.mock.calls[2]?.[0])).toContain('/api/notifications?page=4&page_size=20');
   });
 
   test('fetchDashboardStats handles empty filters and explicit request init', async () => {
@@ -222,8 +235,11 @@ describe('api helpers', () => {
     await expect(testNotificationChannel('1')).resolves.toBeUndefined();
     await expect(deleteNotificationChannel('1')).resolves.toBeUndefined();
     await expect(deleteNotificationRule('1')).resolves.toBeUndefined();
+    await expect(deleteNotification('1')).resolves.toBeUndefined();
     await expect(markNotificationRead('1')).resolves.toBeUndefined();
-    await expect(markAllNotificationsRead()).resolves.toBeUndefined();
+    await expect(markNotificationsRead(['1', '2'])).resolves.toBeUndefined();
+    await expect(bulkDeleteNotifications(['1', '2'])).resolves.toBeUndefined();
+    await expect(deleteReadNotifications()).resolves.toBeUndefined();
     await expect(testNotificationChannel('boom')).rejects.toThrow('boom');
   });
 
@@ -236,6 +252,9 @@ describe('api helpers', () => {
         if (String(input).includes('/api/notifications/no-message/read')) {
           return Response.json({ error: '' }, { status: 400 });
         }
+        if (String(input).includes('/api/notifications/delete-fails')) {
+          return Response.json({ error: '' }, { status: 400 });
+        }
         return new Response(null, { status: 204 });
       }),
     );
@@ -243,5 +262,6 @@ describe('api helpers', () => {
     await expect(deleteNotificationChannel('1')).resolves.toBeUndefined();
     await expect(deleteNotificationRule('invalid-json')).rejects.toThrow('Failed to delete notification rule');
     await expect(markNotificationRead('no-message')).rejects.toThrow('Failed to mark notification as read');
+    await expect(deleteNotification('delete-fails')).rejects.toThrow('Failed to delete notification');
   });
 });

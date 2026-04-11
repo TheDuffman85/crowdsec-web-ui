@@ -1831,9 +1831,9 @@ describe('createApp', () => {
 
     const notifications = await controller.fetch(new Request('http://localhost/crowdsec/api/notifications'));
     expect(notifications.status).toBe(200);
-    const notificationsPayload = await notifications.json() as { unread_count: number; notifications: Array<{ id: string; deliveries: Array<{ status: string }> }> };
+    const notificationsPayload = await notifications.json() as { unread_count: number; data: Array<{ id: string; deliveries: Array<{ status: string }> }> };
     expect(notificationsPayload.unread_count).toBe(1);
-    expect(notificationsPayload.notifications[0]?.deliveries[0]?.status).toBe('delivered');
+    expect(notificationsPayload.data[0]?.deliveries[0]?.status).toBe('delivered');
 
     const settings = await controller.fetch(new Request('http://localhost/crowdsec/api/notifications/settings'));
     expect(settings.status).toBe(200);
@@ -1847,11 +1847,18 @@ describe('createApp', () => {
     const testChannel = await controller.fetch(new Request(`http://localhost/crowdsec/api/notification-channels/${channelPayload.id}/test`, { method: 'POST' }));
     expect(testChannel.status).toBe(200);
 
-    const markRead = await controller.fetch(new Request(`http://localhost/crowdsec/api/notifications/${notificationsPayload.notifications[0]?.id}/read`, { method: 'POST' }));
+    const markRead = await controller.fetch(new Request(`http://localhost/crowdsec/api/notifications/${notificationsPayload.data[0]?.id}/read`, { method: 'POST' }));
     expect(markRead.status).toBe(200);
 
-    const markAllRead = await controller.fetch(new Request('http://localhost/crowdsec/api/notifications/read-all', { method: 'POST' }));
-    expect(markAllRead.status).toBe(200);
+    const bulkRead = await controller.fetch(new Request('http://localhost/crowdsec/api/notifications/bulk-read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: notificationsPayload.data.map((notification) => notification.id) }),
+    }));
+    expect(bulkRead.status).toBe(200);
+
+    const deleteRead = await controller.fetch(new Request('http://localhost/crowdsec/api/notifications/delete-read', { method: 'POST' }));
+    expect(deleteRead.status).toBe(200);
 
     const deleteRule = await controller.fetch(new Request('http://localhost/crowdsec/api/notification-rules/not-real', { method: 'DELETE' }));
     expect(deleteRule.status).toBe(200);
@@ -2224,9 +2231,9 @@ describe('createApp', () => {
     const notifications = await controller.fetch(new Request('http://localhost/crowdsec/api/notifications'));
     expect(notifications.status).toBe(200);
     expect((await notifications.json()) as {
-      notifications: Array<{ rule_type: string; title: string; metadata: { remote_version?: string | null } }>;
+      data: Array<{ rule_type: string; title: string; metadata: { remote_version?: string | null } }>;
     }).toEqual(expect.objectContaining({
-      notifications: [
+      data: [
         expect.objectContaining({
           rule_type: 'application-update',
           title: 'App updates: application update available',

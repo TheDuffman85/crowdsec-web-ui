@@ -315,8 +315,7 @@ export interface NotificationItem {
   deliveries: NotificationDeliveryResult[];
 }
 
-export interface NotificationListResponse {
-  notifications: NotificationItem[];
+export interface NotificationListResponse extends PaginatedResponse<NotificationItem> {
   unread_count: number;
 }
 

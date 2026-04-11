@@ -1,5 +1,5 @@
 import { type SetStateAction, useCallback, useEffect, useState } from 'react';
-import { fetchNotifications } from '../lib/api';
+import { fetchNotificationsPaginated } from '../lib/api';
 import type { NotificationUnreadContextValue, WithChildren } from '../types';
 import { NotificationUnreadContext } from './notification-unread-context';
 import { useRefresh } from './useRefresh';
@@ -9,7 +9,7 @@ function sanitizeUnreadCount(value: unknown): number {
 }
 
 async function loadUnreadCount(): Promise<number> {
-  const notificationList = await fetchNotifications(1);
+  const notificationList = await fetchNotificationsPaginated(1, 1);
   return sanitizeUnreadCount(notificationList.unread_count);
 }
 

@@ -222,7 +222,15 @@ export async function fetchNotificationSettings(): Promise<NotificationSettingsR
 }
 
 export async function fetchNotifications(limit = 100): Promise<NotificationListResponse> {
-    return fetchJson<NotificationListResponse>(`/api/notifications?limit=${limit}`, undefined, 'Failed to fetch notifications');
+    return fetchNotificationsPaginated(1, limit);
+}
+
+export async function fetchNotificationsPaginated(
+    page = 1,
+    pageSize = 50,
+): Promise<NotificationListResponse> {
+    const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+    return fetchJson<NotificationListResponse>(`/api/notifications?${params.toString()}`, undefined, 'Failed to fetch notifications');
 }
 
 export async function createNotificationChannel(data: UpsertNotificationChannelRequest): Promise<NotificationChannel> {
@@ -273,6 +281,26 @@ export async function markNotificationRead(id: string): Promise<void> {
     await sendJson(`/api/notifications/${id}/read`, { method: 'POST' }, 'Failed to mark notification as read');
 }
 
-export async function markAllNotificationsRead(): Promise<void> {
-    await sendJson('/api/notifications/read-all', { method: 'POST' }, 'Failed to mark notifications as read');
+export async function markNotificationsRead(ids: BulkDeleteRequest['ids']): Promise<void> {
+    await sendJson('/api/notifications/bulk-read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+    }, 'Failed to mark selected notifications as read');
+}
+
+export async function deleteNotification(id: string): Promise<void> {
+    await sendJson(`/api/notifications/${id}`, { method: 'DELETE' }, 'Failed to delete notification');
+}
+
+export async function bulkDeleteNotifications(ids: BulkDeleteRequest['ids']): Promise<void> {
+    await sendJson('/api/notifications/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+    }, 'Failed to delete selected notifications');
+}
+
+export async function deleteReadNotifications(): Promise<void> {
+    await sendJson('/api/notifications/delete-read', { method: 'POST' }, 'Failed to delete read notifications');
 }

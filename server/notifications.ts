@@ -57,14 +57,18 @@ interface NotificationIncidentState {
 
 export interface NotificationService {
   listSettings: () => NotificationSettingsResponse;
-  listNotifications: (limit?: number) => NotificationListResponse;
+  listNotifications: (page?: number, pageSize?: number) => NotificationListResponse;
   createChannel: (input: UpsertNotificationChannelRequest) => NotificationChannel;
   updateChannel: (id: string, input: UpsertNotificationChannelRequest) => NotificationChannel;
   deleteChannel: (id: string) => void;
   createRule: (input: UpsertNotificationRuleRequest) => NotificationRule;
   updateRule: (id: string, input: UpsertNotificationRuleRequest) => NotificationRule;
   deleteRule: (id: string) => void;
+  deleteNotification: (id: string) => boolean;
+  deleteNotifications: (ids: string[]) => number;
+  deleteReadNotifications: () => number;
   markNotificationRead: (id: string) => boolean;
+  markNotificationsRead: (ids: string[]) => number;
   markAllNotificationsRead: () => number;
   testChannel: (id: string) => Promise<void>;
   evaluateRules: (now?: Date) => Promise<void>;
@@ -87,7 +91,11 @@ export function createNotificationService(options: NotificationServiceOptions): 
     createRule,
     updateRule,
     deleteRule,
+    deleteNotification,
+    deleteNotifications,
+    deleteReadNotifications,
     markNotificationRead,
+    markNotificationsRead,
     markAllNotificationsRead,
     testChannel,
     evaluateRules,
@@ -97,8 +105,11 @@ export function createNotificationService(options: NotificationServiceOptions): 
     return { channels: loadChannels(true), rules: loadRules() };
   }
 
-  function listNotifications(limit = 100): NotificationListResponse {
-    const notifications = database.listNotifications(limit).map((row) => ({
+  function listNotifications(page = 1, pageSize = 50): NotificationListResponse {
+    const total = database.countNotifications();
+    const safePage = Math.max(1, page);
+    const safePageSize = Math.max(1, pageSize);
+    const data = database.listNotificationsPage(safePage, safePageSize).map((row) => ({
       id: String(row.id),
       rule_id: String(row.rule_id),
       rule_name: String(row.rule_name),
@@ -113,7 +124,15 @@ export function createNotificationService(options: NotificationServiceOptions): 
     }));
 
     return {
-      notifications,
+      data,
+      pagination: {
+        page: safePage,
+        page_size: safePageSize,
+        total,
+        total_pages: Math.ceil(total / safePageSize),
+        unfiltered_total: total,
+      },
+      selectable_ids: database.listNotificationIds(),
       unread_count: database.countUnreadNotifications(),
     };
   }
@@ -177,8 +196,24 @@ export function createNotificationService(options: NotificationServiceOptions): 
     database.deleteNotificationRule(id);
   }
 
+  function deleteNotification(id: string): boolean {
+    return database.deleteNotification(id);
+  }
+
+  function deleteNotifications(ids: string[]): number {
+    return database.deleteNotifications(ids);
+  }
+
+  function deleteReadNotifications(): number {
+    return database.deleteReadNotifications();
+  }
+
   function markNotificationRead(id: string): boolean {
     return database.markNotificationRead(id, new Date().toISOString());
+  }
+
+  function markNotificationsRead(ids: string[]): number {
+    return database.markNotificationsRead(ids, new Date().toISOString());
   }
 
   function markAllNotificationsRead(): number {

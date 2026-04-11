@@ -255,6 +255,9 @@ describe('CrowdsecDatabase', () => {
     expect(db.listNotificationChannels()).toHaveLength(1);
     expect(db.listNotificationRules()).toHaveLength(1);
     expect(db.listNotifications()).toHaveLength(2);
+    expect(db.listNotificationsPage(1, 1)).toHaveLength(1);
+    expect(db.countNotifications()).toBe(2);
+    expect(db.listNotificationIds()).toEqual(['notif-2', 'notif-1']);
     expect(db.countUnreadNotifications()).toBe(2);
     expect(db.listNotificationIncidentsByRule('rule-1')).toEqual([
       expect.objectContaining({
@@ -269,7 +272,12 @@ describe('CrowdsecDatabase', () => {
 
     expect(db.markNotificationRead('notif-1', '2025-01-01T01:00:00.000Z')).toBe(true);
     expect(db.countUnreadNotifications()).toBe(1);
-    expect(db.markAllNotificationsRead('2025-01-01T03:00:00.000Z')).toBe(1);
+    expect(db.markNotificationsRead(['notif-2'], '2025-01-01T02:00:00.000Z')).toBe(1);
+    expect(db.countUnreadNotifications()).toBe(0);
+    expect(db.markAllNotificationsRead('2025-01-01T03:00:00.000Z')).toBe(0);
+    expect(db.deleteNotification('notif-1')).toBe(true);
+    expect(db.deleteNotifications(['notif-2'])).toBe(1);
+    expect(db.countNotifications()).toBe(0);
     expect(db.resolveNotificationIncident('rule-1', 'threshold:active', '2025-01-01T04:00:00.000Z')).toBe(true);
     expect(db.listNotificationIncidentsByRule('rule-1')[0]).toEqual(expect.objectContaining({
       resolved_at: '2025-01-01T04:00:00.000Z',

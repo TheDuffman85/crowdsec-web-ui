@@ -1,15 +1,18 @@
-import { type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useId, useState } from 'react';
+import { type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Bell, Check, CheckCheck, Plus, Send, SendHorizontal, SquarePen, Trash2 } from 'lucide-react';
 import {
+  bulkDeleteNotifications,
   createNotificationChannel,
   createNotificationRule,
+  deleteNotification,
   deleteNotificationChannel,
   deleteNotificationRule,
-  fetchNotifications,
+  deleteReadNotifications,
+  fetchNotificationsPaginated,
   fetchNotificationSettings,
-  markAllNotificationsRead,
   markNotificationRead,
+  markNotificationsRead,
   testNotificationChannel,
   updateNotificationChannel,
   updateNotificationRule,
@@ -71,6 +74,11 @@ type ToastState = {
   message: string;
   tone: 'error' | 'success';
 } | null;
+
+type NotificationDeleteAction =
+  | { kind: 'single'; id: string }
+  | { kind: 'selected'; ids: string[] }
+  | { kind: 'read' };
 
 const RULE_DEFAULTS: Record<NotificationRuleType, Record<string, string>> = {
   'alert-spike': { window_minutes: '60', percent_increase: '100', minimum_current_alerts: '10' },
@@ -163,7 +171,9 @@ export function Notifications() {
   const [channels, setChannels] = useState<NotificationChannel[]>([]);
   const [rules, setRules] = useState<NotificationRule[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [backgroundLoading, setBackgroundLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [channelModalOpen, setChannelModalOpen] = useState(false);
   const [ruleModalOpen, setRuleModalOpen] = useState(false);
@@ -173,7 +183,23 @@ export function Notifications() {
   const [ruleForm, setRuleForm] = useState<RuleFormState>(defaultRuleForm());
   const [toast, setToast] = useState<ToastState>(null);
   const [saving, setSaving] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(0);
+  const [totalNotifications, setTotalNotifications] = useState(0);
+  const [selectableNotificationIds, setSelectableNotificationIds] = useState<string[]>([]);
+  const [selectedNotificationIds, setSelectedNotificationIds] = useState<string[]>([]);
+  const [pendingDeleteAction, setPendingDeleteAction] = useState<NotificationDeleteAction | null>(null);
+  const [deleteInProgress, setDeleteInProgress] = useState(false);
   const linkedChannelIds = new Set(rules.flatMap((rule) => rule.channel_ids));
+  const PAGE_SIZE = 50;
+  const hasMoreNotifications = currentPage < totalPages;
+  const currentPageRef = useRef(1);
+  const observer = useRef<IntersectionObserver | null>(null);
+  const selectAllNotificationsRef = useRef<HTMLInputElement | null>(null);
+  const notificationScrollRef = useRef<HTMLDivElement | null>(null);
+  const hasLoadedNotificationsRef = useRef(false);
+  const inFlightLoadKeysRef = useRef(new Set<string>());
+  const lastCompletedLoadRef = useRef<{ key: string; completedAt: number } | null>(null);
 
   const showToast = useCallback((message: string, tone: 'error' | 'success' = 'error') => {
     setToast({ message, tone });
@@ -191,21 +217,104 @@ export function Notifications() {
     return () => window.clearTimeout(timeout);
   }, [toast]);
 
-  const loadData = useCallback(async () => {
+  const loadSettings = useCallback(async () => {
+    const settings = await fetchNotificationSettings();
+    setChannels(settings.channels);
+    setRules(settings.rules);
+  }, []);
+
+  const loadNotifications = useCallback(async ({
+    page = 1,
+    append = false,
+    preserveLoadedPages = false,
+  }: {
+    page?: number;
+    append?: boolean;
+    preserveLoadedPages?: boolean;
+  } = {}) => {
+    const loadKey = JSON.stringify({
+      page,
+      append,
+      preserveLoadedPages,
+      loadedPage: preserveLoadedPages ? currentPageRef.current : undefined,
+    });
+    const lastCompletedLoad = lastCompletedLoadRef.current;
+    if (
+      inFlightLoadKeysRef.current.has(loadKey) ||
+      (lastCompletedLoad?.key === loadKey && Date.now() - lastCompletedLoad.completedAt < 250)
+    ) {
+      return;
+    }
+
+    inFlightLoadKeysRef.current.add(loadKey);
+    let completedSuccessfully = false;
+    const shouldBlockWithInitialLoading = !append && !hasLoadedNotificationsRef.current;
+
+    try {
+      if (append) {
+        setLoadingMore(true);
+      } else if (shouldBlockWithInitialLoading) {
+        setInitialLoading(true);
+      } else {
+        setBackgroundLoading(true);
+      }
+
+      const notificationPage = await fetchNotificationsPaginated(page, PAGE_SIZE);
+      let nextNotifications = notificationPage.data;
+      let nextPage = notificationPage.pagination.page;
+
+      if (!append && preserveLoadedPages) {
+        const maxPageToRefresh = Math.max(1, Math.min(currentPageRef.current, notificationPage.pagination.total_pages || 1));
+        if (maxPageToRefresh > 1) {
+          const remainingPages = await Promise.all(
+            Array.from({ length: maxPageToRefresh - 1 }, (_, index) =>
+              fetchNotificationsPaginated(index + 2, PAGE_SIZE),
+            ),
+          );
+          nextNotifications = [notificationPage, ...remainingPages].flatMap((result) => result.data);
+          nextPage = maxPageToRefresh;
+        }
+      }
+
+      const nextSelectableIds = notificationPage.selectable_ids.map(String);
+      setNotifications((current) => append ? [...current, ...notificationPage.data] : nextNotifications);
+      currentPageRef.current = append ? notificationPage.pagination.page : nextPage;
+      setCurrentPage(currentPageRef.current);
+      setTotalPages(notificationPage.pagination.total_pages);
+      setTotalNotifications(notificationPage.pagination.total);
+      setSelectableNotificationIds(nextSelectableIds);
+      setSelectedNotificationIds((current) => current.filter((id) => nextSelectableIds.includes(id)));
+      setUnreadCount(notificationPage.unread_count);
+      hasLoadedNotificationsRef.current = true;
+      completedSuccessfully = true;
+    } finally {
+      inFlightLoadKeysRef.current.delete(loadKey);
+      if (completedSuccessfully) {
+        lastCompletedLoadRef.current = { key: loadKey, completedAt: Date.now() };
+      }
+
+      if (append) {
+        setLoadingMore(false);
+      } else if (shouldBlockWithInitialLoading) {
+        setInitialLoading(false);
+      } else {
+        setBackgroundLoading(false);
+      }
+    }
+  }, [setUnreadCount]);
+
+  const loadData = useCallback(async ({ preserveLoadedPages = false }: { preserveLoadedPages?: boolean } = {}) => {
     try {
       setError(null);
-      const [settings, notificationList] = await Promise.all([fetchNotificationSettings(), fetchNotifications()]);
-      setChannels(settings.channels);
-      setRules(settings.rules);
-      setNotifications(notificationList.notifications);
-      setUnreadCount(notificationList.unread_count);
+      await Promise.all([
+        loadSettings(),
+        loadNotifications({ preserveLoadedPages }),
+      ]);
     } catch (err) {
       console.error(err);
       setError(err instanceof Error ? err.message : 'Failed to load notifications');
-    } finally {
-      setLoading(false);
     }
-  }, [setUnreadCount]);
+  }, [loadNotifications, loadSettings]);
 
   useEffect(() => {
     void loadData();
@@ -213,9 +322,62 @@ export function Notifications() {
 
   useEffect(() => {
     if (refreshSignal > 0) {
-      void loadData();
+      void loadData({ preserveLoadedPages: true });
     }
   }, [refreshSignal, loadData]);
+
+  useEffect(() => () => observer.current?.disconnect(), []);
+
+  const lastNotificationElementRef = useCallback((node: HTMLDivElement | null) => {
+    if (loadingMore || initialLoading) {
+      return;
+    }
+
+    observer.current?.disconnect();
+
+    if (!node || !hasMoreNotifications) {
+      return;
+    }
+
+    observer.current = new IntersectionObserver((entries) => {
+      if (entries[0]?.isIntersecting) {
+        void loadNotifications({ page: currentPageRef.current + 1, append: true }).catch((err) => {
+          console.error(err);
+          setError(err instanceof Error ? err.message : 'Failed to load more notifications');
+        });
+      }
+    }, {
+      root: notificationScrollRef.current,
+      rootMargin: '0px 0px 160px 0px',
+    });
+
+    observer.current.observe(node);
+  }, [hasMoreNotifications, initialLoading, loadingMore, loadNotifications]);
+
+  const allNotificationsSelected = selectableNotificationIds.length > 0 && selectedNotificationIds.length === selectableNotificationIds.length;
+  const someNotificationsSelected = selectedNotificationIds.length > 0 && !allNotificationsSelected;
+  const selectedUnreadCount = notifications.filter((item) => selectedNotificationIds.includes(item.id) && !item.read_at).length;
+  const canMarkSelectedRead = selectedUnreadCount > 0 || (allNotificationsSelected && unreadCount > 0);
+  const readNotificationCount = Math.max(0, totalNotifications - unreadCount);
+  const tableBusy = initialLoading || backgroundLoading || loadingMore;
+
+  useEffect(() => {
+    if (selectAllNotificationsRef.current) {
+      selectAllNotificationsRef.current.indeterminate = someNotificationsSelected;
+    }
+  }, [someNotificationsSelected]);
+
+  const toggleNotificationSelection = (id: string) => {
+    setSelectedNotificationIds((current) =>
+      current.includes(id)
+        ? current.filter((value) => value !== id)
+        : [...current, id],
+    );
+  };
+
+  const toggleAllNotifications = () => {
+    setSelectedNotificationIds((current) => (allNotificationsSelected ? current.filter((id) => !selectableNotificationIds.includes(id)) : selectableNotificationIds));
+  };
 
   const openCreateChannel = () => {
     setEditingChannel(null);
@@ -285,7 +447,7 @@ export function Notifications() {
       }
 
       setChannelModalOpen(false);
-      await loadData();
+      await loadData({ preserveLoadedPages: true });
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to save destination');
     } finally {
@@ -303,7 +465,7 @@ export function Notifications() {
         await createNotificationRule(payload);
       }
       setRuleModalOpen(false);
-      await loadData();
+      await loadData({ preserveLoadedPages: true });
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to save rule');
     } finally {
@@ -314,16 +476,70 @@ export function Notifications() {
   const sendTestNotification = async (channel: NotificationChannel) => {
     try {
       await testNotificationChannel(channel.id);
-      await loadData();
+      await loadData({ preserveLoadedPages: true });
       showToast(`Test notification sent to ${channel.name}`, 'success');
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to send test notification');
     }
   };
 
-  if (loading) {
+  const handleMarkRead = async (id: string) => {
+    try {
+      setError(null);
+      await markNotificationRead(id);
+      await loadNotifications({ preserveLoadedPages: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to mark notification as read');
+    }
+  };
+
+  const handleMarkSelectedRead = async () => {
+    try {
+      setError(null);
+      await markNotificationsRead(selectedNotificationIds);
+      await loadNotifications({ preserveLoadedPages: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to mark selected notifications as read');
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!pendingDeleteAction) {
+      return;
+    }
+
+    try {
+      setDeleteInProgress(true);
+      setError(null);
+      if (pendingDeleteAction.kind === 'single') {
+        await deleteNotification(pendingDeleteAction.id);
+      } else if (pendingDeleteAction.kind === 'selected') {
+        await bulkDeleteNotifications(pendingDeleteAction.ids);
+      } else {
+        await deleteReadNotifications();
+      }
+
+      setPendingDeleteAction(null);
+      await loadNotifications({ preserveLoadedPages: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete notifications');
+    } finally {
+      setDeleteInProgress(false);
+    }
+  };
+
+  if (initialLoading) {
     return <div className="p-8 text-center text-gray-500">Loading notifications...</div>;
   }
+
+  const deleteActionTitle = pendingDeleteAction?.kind === 'single'
+    ? 'Delete Notification?'
+    : pendingDeleteAction?.kind === 'selected'
+      ? 'Delete Selected Notifications?'
+      : pendingDeleteAction?.kind === 'read'
+        ? 'Delete All Read Notifications?'
+        : 'Delete';
+  const pendingSingleNotificationId = pendingDeleteAction?.kind === 'single' ? pendingDeleteAction.id : null;
 
   return (
     <div className="space-y-6">
@@ -334,7 +550,7 @@ export function Notifications() {
         </div>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-3">
+      <div className="grid grid-cols-3 gap-3 sm:gap-4 lg:gap-6">
         <SummaryCard icon={<Bell className="h-6 w-6" />} label="Unread Notifications" value={String(unreadCount)} />
         <SummaryCard
           icon={<Send className="h-6 w-6" />}
@@ -351,26 +567,83 @@ export function Notifications() {
       </div>
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
+        <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <CardTitle>Recent Notifications</CardTitle>
-          <button
-            onClick={() => void markAllNotificationsRead().then(loadData).catch((err) => setError(err instanceof Error ? err.message : 'Failed to mark notifications as read'))}
-            className="inline-flex items-center gap-2 rounded-lg bg-gray-100 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-100 dark:hover:bg-gray-600"
-          >
-            <CheckCheck className="h-4 w-4" />
-            Mark All Read
-          </button>
         </CardHeader>
         <CardContent className="space-y-4">
-          {notifications.length === 0
-            ? <p className="text-sm text-gray-500 dark:text-gray-400">No notifications yet.</p>
-            : notifications.map((item) => (
-              <NotificationRow
-                key={item.id}
-                item={item}
-                onMarkRead={() => void markNotificationRead(item.id).then(loadData).catch((err) => setError(err instanceof Error ? err.message : 'Failed to mark notification as read'))}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label className="inline-flex items-center gap-2 rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-700 dark:border-gray-700 dark:text-gray-200">
+              <input
+                ref={selectAllNotificationsRef}
+                type="checkbox"
+                aria-label="Select all notifications"
+                checked={allNotificationsSelected}
+                disabled={selectableNotificationIds.length === 0}
+                onChange={toggleAllNotifications}
+                className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
               />
-            ))}
+              Select all
+            </label>
+            <button
+              type="button"
+              onClick={() => void handleMarkSelectedRead()}
+              disabled={!canMarkSelectedRead || tableBusy}
+              className="inline-flex items-center gap-2 rounded-lg bg-gray-100 px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-gray-700 dark:text-gray-100 dark:hover:bg-gray-600"
+            >
+              <CheckCheck className="h-4 w-4" />
+              Mark Selected Read
+            </button>
+            <button
+              type="button"
+              onClick={() => setPendingDeleteAction({ kind: 'selected', ids: selectedNotificationIds })}
+              disabled={selectedNotificationIds.length === 0 || tableBusy}
+              className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete Selected
+            </button>
+            <button
+              type="button"
+              onClick={() => setPendingDeleteAction({ kind: 'read' })}
+              disabled={readNotificationCount === 0 || tableBusy}
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-100 px-3 py-2 text-sm font-medium text-red-700 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:bg-gray-700 dark:text-red-300 dark:hover:bg-red-900/20"
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete All Read
+            </button>
+            <span
+              className={`ml-auto inline-flex items-center gap-2 text-xs text-gray-500 transition-opacity dark:text-gray-400 ${backgroundLoading ? 'opacity-100' : 'opacity-0'}`}
+              aria-live="polite"
+            >
+              <span className="h-2 w-2 animate-pulse rounded-full bg-primary-500" aria-hidden="true" />
+              Refreshing...
+            </span>
+          </div>
+
+          {notifications.length === 0 ? (
+            <p className="text-sm text-gray-500 dark:text-gray-400">No notifications yet.</p>
+          ) : (
+            <div
+              ref={notificationScrollRef}
+              className="max-h-[32rem] overflow-y-auto pr-1 [scrollbar-gutter:stable]"
+              aria-busy={tableBusy}
+            >
+              <div className="space-y-4">
+                {notifications.map((item, index) => (
+                  <NotificationRow
+                    key={item.id}
+                    item={item}
+                    selected={selectedNotificationIds.includes(item.id)}
+                    onSelect={() => toggleNotificationSelection(item.id)}
+                    onMarkRead={() => void handleMarkRead(item.id)}
+                    onDelete={() => setPendingDeleteAction({ kind: 'single', id: item.id })}
+                    rowRef={index === notifications.length - 1 ? lastNotificationElementRef : undefined}
+                  />
+                ))}
+                {loadingMore && <p className="py-2 text-center text-sm text-gray-500 dark:text-gray-400">Loading more notifications...</p>}
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -385,7 +658,7 @@ export function Notifications() {
                 hasAttachedRule={linkedChannelIds.has(channel.id)}
                 onEdit={() => openEditChannel(channel)}
                 onTest={() => void sendTestNotification(channel)}
-                onDelete={() => void deleteNotificationChannel(channel.id).then(loadData).catch((err) => setError(err instanceof Error ? err.message : 'Failed to delete destination'))}
+                onDelete={() => void deleteNotificationChannel(channel.id).then(() => loadData({ preserveLoadedPages: true })).catch((err) => setError(err instanceof Error ? err.message : 'Failed to delete destination'))}
               />
             ))}
         </ResourceCard>
@@ -400,11 +673,49 @@ export function Notifications() {
                 channels={channels}
                 hasDestinations={rule.channel_ids.length > 0}
                 onEdit={() => openEditRule(rule)}
-                onDelete={() => void deleteNotificationRule(rule.id).then(loadData).catch((err) => setError(err instanceof Error ? err.message : 'Failed to delete rule'))}
+                onDelete={() => void deleteNotificationRule(rule.id).then(() => loadData({ preserveLoadedPages: true })).catch((err) => setError(err instanceof Error ? err.message : 'Failed to delete rule'))}
               />
             ))}
         </ResourceCard>
       </div>
+
+      <Modal
+        isOpen={!!pendingDeleteAction}
+        onClose={() => !deleteInProgress && setPendingDeleteAction(null)}
+        title={deleteActionTitle}
+        maxWidth="max-w-sm"
+        showCloseButton={false}
+      >
+        <p className="mb-6 text-gray-600 dark:text-gray-300">
+          {pendingSingleNotificationId ? (
+            <>
+              Are you sure you want to delete notification <span className="font-mono text-sm font-bold">{pendingSingleNotificationId}</span>? This action cannot be undone.
+            </>
+          ) : pendingDeleteAction?.kind === 'read' ? (
+            <>Are you sure you want to delete all read notifications? This action cannot be undone.</>
+          ) : (
+            <>Are you sure you want to delete {selectedNotificationIds.length} selected notification{selectedNotificationIds.length === 1 ? '' : 's'}? This action cannot be undone.</>
+          )}
+        </p>
+        <div className="flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={() => setPendingDeleteAction(null)}
+            disabled={deleteInProgress}
+            className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => void confirmDelete()}
+            disabled={deleteInProgress}
+            className="rounded-md border border-transparent bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {deleteInProgress ? 'Deleting...' : 'Delete'}
+          </button>
+        </div>
+      </Modal>
 
       <ChannelModal
         open={channelModalOpen}
@@ -432,11 +743,11 @@ export function Notifications() {
 function SummaryCard({ icon, label, value, sublabel }: { icon: ReactNode; label: string; value: string; sublabel?: string }) {
   return (
     <Card>
-      <CardContent className="flex items-center gap-4 p-6">
-        <div className="rounded-full bg-blue-100 p-3 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">{icon}</div>
-        <div>
-          <p className="text-sm text-gray-500 dark:text-gray-400">{label}</p>
-          <p className="text-3xl font-bold">{value}</p>
+      <CardContent className="flex flex-col items-center gap-2 p-3 text-center sm:flex-row sm:items-center sm:gap-3 sm:p-4 sm:text-left lg:gap-4 lg:p-6">
+        <div className="rounded-full bg-blue-100 p-2 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">{icon}</div>
+        <div className="min-w-0">
+          <p className="text-xs text-gray-500 dark:text-gray-400 sm:text-sm">{label}</p>
+          <p className="text-xl font-bold leading-none sm:text-2xl lg:text-3xl">{value}</p>
           {sublabel && <p className="text-xs text-gray-500 dark:text-gray-400">{sublabel}</p>}
         </div>
       </CardContent>
@@ -459,27 +770,58 @@ function ResourceCard({ title, actionLabel, onAction, children }: { title: strin
   );
 }
 
-function NotificationRow({ item, onMarkRead }: { item: NotificationItem; onMarkRead: () => void }) {
+function NotificationRow({
+  item,
+  selected,
+  onSelect,
+  onMarkRead,
+  onDelete,
+  rowRef,
+}: {
+  item: NotificationItem;
+  selected: boolean;
+  onSelect: () => void;
+  onMarkRead: () => void;
+  onDelete: () => void;
+  rowRef?: (node: HTMLDivElement | null) => void;
+}) {
   return (
-    <div className={`rounded-xl border p-4 ${item.read_at ? 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800' : 'border-blue-200 bg-blue-50/70 dark:border-blue-900/40 dark:bg-blue-950/20'}`}>
-      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="font-semibold">{item.title}</h3>
-            <Badge variant={item.severity === 'critical' ? 'danger' : item.severity === 'warning' ? 'warning' : 'info'}>{item.severity}</Badge>
-            {!item.read_at && <Badge variant="secondary">Unread</Badge>}
+    <div
+      ref={rowRef}
+      className={`rounded-xl border p-4 ${item.read_at ? 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800' : 'border-blue-200 bg-blue-50/70 dark:border-blue-900/40 dark:bg-blue-950/20'}`}
+    >
+      <div className="flex gap-3">
+        <div className="pt-1">
+          <input
+            type="checkbox"
+            aria-label={`Select notification ${item.id}`}
+            checked={selected}
+            onChange={onSelect}
+            className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div className="flex min-w-0 flex-1 flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div className="min-w-0 space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="font-semibold">{item.title}</h3>
+              <Badge variant={item.severity === 'critical' ? 'danger' : item.severity === 'warning' ? 'warning' : 'info'}>{item.severity}</Badge>
+              {!item.read_at && <Badge variant="secondary">Unread</Badge>}
+            </div>
+            <p className="text-sm text-gray-700 dark:text-gray-300">{item.message}</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">Rule: {item.rule_name} • {new Date(item.created_at).toLocaleString()}</p>
+            <div className="flex flex-wrap gap-2">
+              {item.deliveries.map((delivery, index) => (
+                <Badge key={`${delivery.channel_id}-${index}`} variant={delivery.status === 'delivered' ? 'success' : 'danger'}>
+                  {delivery.channel_name}: {delivery.status}
+                </Badge>
+              ))}
+            </div>
           </div>
-          <p className="text-sm text-gray-700 dark:text-gray-300">{item.message}</p>
-          <p className="text-xs text-gray-500 dark:text-gray-400">Rule: {item.rule_name} • {new Date(item.created_at).toLocaleString()}</p>
-          <div className="flex flex-wrap gap-2">
-            {item.deliveries.map((delivery, index) => (
-              <Badge key={`${delivery.channel_id}-${index}`} variant={delivery.status === 'delivered' ? 'success' : 'danger'}>
-                {delivery.channel_name}: {delivery.status}
-              </Badge>
-            ))}
+          <div className="flex flex-wrap gap-2 md:self-start">
+            {!item.read_at && <ActionIconButton label="Mark read" icon={<Check className="h-4 w-4" />} onClick={onMarkRead} variant="accent" />}
+            <ActionIconButton label="Delete notification" icon={<Trash2 className="h-4 w-4" />} onClick={onDelete} variant="danger" />
           </div>
         </div>
-        {!item.read_at && <ActionIconButton label="Mark read" icon={<Check className="h-4 w-4" />} onClick={onMarkRead} variant="accent" />}
       </div>
     </div>
   );

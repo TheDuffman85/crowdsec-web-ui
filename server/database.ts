@@ -112,14 +112,18 @@ export class CrowdsecDatabase {
   private readonly getNotificationRuleByIdStatement: any;
   private readonly upsertNotificationRuleStatement: any;
   private readonly deleteNotificationRuleStatement: any;
-  private readonly listNotificationsStatement: any;
+  private readonly listNotificationsPageStatement: any;
+  private readonly countNotificationsStatement: any;
+  private readonly listNotificationIdsStatement: any;
   private readonly insertNotificationStatement: any;
   private readonly listNotificationIncidentsByRuleStatement: any;
   private readonly upsertNotificationIncidentStatement: any;
   private readonly resolveNotificationIncidentStatement: any;
   private readonly deleteNotificationIncidentsByRuleStatement: any;
+  private readonly deleteNotificationStatement: any;
   private readonly markNotificationReadStatement: any;
   private readonly markAllNotificationsReadStatement: any;
+  private readonly deleteReadNotificationsStatement: any;
   private readonly countUnreadNotificationsStatement: any;
   private readonly getCveCacheEntryStatement: any;
   private readonly upsertCveCacheEntryStatement: any;
@@ -216,11 +220,17 @@ export class CrowdsecDatabase {
       VALUES ($id, $created_at, $updated_at, $name, $type, $enabled, $severity, $channel_ids_json, $config_json)
     `);
     this.deleteNotificationRuleStatement = this.db.query('DELETE FROM notification_rules WHERE id = $id');
-    this.listNotificationsStatement = this.db.query(`
+    this.listNotificationsPageStatement = this.db.query(`
       SELECT id, created_at, updated_at, rule_id, rule_name, rule_type, severity, title, message, read_at, metadata_json, deliveries_json, dedupe_key
       FROM notifications
       ORDER BY created_at DESC
-      LIMIT $limit
+      LIMIT $limit OFFSET $offset
+    `);
+    this.countNotificationsStatement = this.db.query('SELECT COUNT(*) as count FROM notifications');
+    this.listNotificationIdsStatement = this.db.query(`
+      SELECT id
+      FROM notifications
+      ORDER BY created_at DESC
     `);
     this.insertNotificationStatement = this.db.query(`
       INSERT OR IGNORE INTO notifications (
@@ -246,12 +256,14 @@ export class CrowdsecDatabase {
       WHERE rule_id = $rule_id AND incident_key = $incident_key AND resolved_at IS NULL
     `);
     this.deleteNotificationIncidentsByRuleStatement = this.db.query('DELETE FROM notification_incidents WHERE rule_id = $rule_id');
+    this.deleteNotificationStatement = this.db.query('DELETE FROM notifications WHERE id = $id');
     this.markNotificationReadStatement = this.db.query('UPDATE notifications SET read_at = $read_at, updated_at = $updated_at WHERE id = $id');
     this.markAllNotificationsReadStatement = this.db.query(`
       UPDATE notifications
       SET read_at = $read_at, updated_at = $updated_at
       WHERE read_at IS NULL
     `);
+    this.deleteReadNotificationsStatement = this.db.query('DELETE FROM notifications WHERE read_at IS NOT NULL');
     this.countUnreadNotificationsStatement = this.db.query('SELECT COUNT(*) as count FROM notifications WHERE read_at IS NULL');
     this.getCveCacheEntryStatement = this.db.query(`
       SELECT id, published_at, fetched_at
@@ -432,8 +444,25 @@ export class CrowdsecDatabase {
     this.deleteNotificationRuleStatement.run({ $id: id });
   }
 
+  listNotificationsPage(page: number, pageSize: number): JsonRow[] {
+    const safePage = Math.max(1, page);
+    const safePageSize = Math.max(1, pageSize);
+    return this.listNotificationsPageStatement.all({
+      $limit: safePageSize,
+      $offset: (safePage - 1) * safePageSize,
+    }) as JsonRow[];
+  }
+
   listNotifications(limit = 100): JsonRow[] {
-    return this.listNotificationsStatement.all({ $limit: limit }) as JsonRow[];
+    return this.listNotificationsPage(1, limit);
+  }
+
+  countNotifications(): number {
+    return (this.countNotificationsStatement.get() as CountRow).count;
+  }
+
+  listNotificationIds(): string[] {
+    return (this.listNotificationIdsStatement.all() as Array<{ id: string }>).map((row) => String(row.id));
   }
 
   insertNotification(params: {
@@ -481,12 +510,33 @@ export class CrowdsecDatabase {
     this.deleteNotificationIncidentsByRuleStatement.run({ $rule_id: ruleId });
   }
 
+  deleteNotification(id: string): boolean {
+    return this.deleteNotificationStatement.run({ $id: id }).changes > 0;
+  }
+
+  deleteNotifications(ids: string[]): number {
+    return runChunkedIdMutation(this.db, 'DELETE FROM notifications WHERE id IN', ids);
+  }
+
   markNotificationRead(id: string, readAt: string): boolean {
     return this.markNotificationReadStatement.run({ $id: id, $read_at: readAt, $updated_at: readAt }).changes > 0;
   }
 
+  markNotificationsRead(ids: string[], readAt: string): number {
+    return runChunkedIdMutation(
+      this.db,
+      'UPDATE notifications SET read_at = ?, updated_at = ? WHERE read_at IS NULL AND id IN',
+      ids,
+      [readAt, readAt],
+    );
+  }
+
   markAllNotificationsRead(readAt: string): number {
     return this.markAllNotificationsReadStatement.run({ $read_at: readAt, $updated_at: readAt }).changes;
+  }
+
+  deleteReadNotifications(): number {
+    return this.deleteReadNotificationsStatement.run().changes;
   }
 
   countUnreadNotifications(): number {
@@ -504,6 +554,23 @@ export class CrowdsecDatabase {
   transaction<T>(callback: (value: T) => void): (value: T) => void {
     return this.db.transaction(callback);
   }
+}
+
+function runChunkedIdMutation(db: Database, statementPrefix: string, ids: string[], leadingParams: unknown[] = []): number {
+  if (ids.length === 0) {
+    return 0;
+  }
+
+  let changes = 0;
+  const chunkSize = 900;
+  for (let offset = 0; offset < ids.length; offset += chunkSize) {
+    const chunk = ids.slice(offset, offset + chunkSize);
+    const placeholders = chunk.map(() => '?').join(',');
+    const statement = db.prepare(`${statementPrefix} (${placeholders})`);
+    changes += statement.run(...leadingParams, ...chunk).changes;
+  }
+
+  return changes;
 }
 
 function resolveDatabasePath(options: DatabaseOptions): string {
