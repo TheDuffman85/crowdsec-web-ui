@@ -16,6 +16,9 @@
 
 A modern, responsive web interface for managing [CrowdSec](https://crowdsec.net/) alerts and decisions. Built with **React**, **Vite**, **Node.js**, and **Tailwind CSS**.
 
+> [!IMPORTANT]
+> **Improved Performance & Better Scale**: Recent backend and caching improvements significantly reduce resource pressure and improve responsiveness across the application. CrowdSec Web UI now also supports larger-scale deployments more reliably, including environments with multiple machines and high alert or decision volumes.
+
 <div align="center">
   <a href="https://react.dev/"><img src="https://img.shields.io/badge/react-%2320232a.svg?style=for-the-badge&logo=react&logoColor=%2361DAFB" alt="React" /></a>
   <a href="https://vite.dev/"><img src="https://img.shields.io/badge/vite-%23646CFF.svg?style=for-the-badge&logo=vite&logoColor=white" alt="Vite" /></a>
@@ -84,7 +87,7 @@ Create notification rules for alert spikes, alert thresholds, recent CVE activit
 ## Architecture
 
 -   **Client**: React (Vite) + Tailwind CSS. Located in `client/`.
--   **Server**: Node.js (Hono). Acts as an intelligent caching layer for CrowdSec Local API (LAPI) with delta updates and optimized chunked historical data sync.
+-   **Server**: Node.js (Hono). Acts as an intelligent caching layer for CrowdSec Local API (LAPI) with delta updates and optimized chunked historical data sync for improved performance and larger-scale deployments.
 -   **Build Output**: The root build emits the frontend to `dist/client` and the compiled server to `dist/server`.
 -   **Database**: SQLite (`better-sqlite3`). Persists alerts and decisions locally in `/app/data/crowdsec.db` to reduce memory usage and support historical data.
 -   **Security**: The application runs as a non-root user (`node`) inside the container and communicates with CrowdSec via HTTP/LAPI. It uses **Machine Authentication** to obtain a JWT for full access (read/write), either via watcher `User/Password` or agent **mTLS**.
