@@ -454,34 +454,34 @@ export function Dashboard() {
     return (
         <div className="space-y-8">
             {/* Summary Cards */}
-            <div className="grid gap-8 md:grid-cols-3">
-                <Link to={alertsLink} className="block transition-transform hover:scale-105">
+            <div className="grid grid-cols-3 gap-3 sm:gap-4 lg:gap-6">
+                <Link to={alertsLink} className="block h-full transition-transform hover:scale-105">
                     <Card className="h-full cursor-pointer hover:shadow-lg transition-shadow">
-                        <CardContent className="flex items-center p-6">
-                            <div className="p-4 bg-red-100 dark:bg-red-900/20 rounded-full mr-4">
-                                <ShieldAlert className="w-8 h-8 text-red-600 dark:text-red-400" />
+                        <CardContent className="flex flex-col items-center gap-2 p-3 text-center sm:flex-row sm:items-center sm:gap-3 sm:p-4 sm:text-left lg:gap-4 lg:p-6">
+                            <div className="rounded-full bg-red-100 p-2 text-red-600 dark:bg-red-900/20 dark:text-red-400 sm:p-3 lg:p-4">
+                                <ShieldAlert className="h-5 w-5 sm:h-6 sm:w-6 lg:h-8 lg:w-8" />
                             </div>
-                            <div>
-                                <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Total Alerts</p>
-                                <div className="flex items-baseline gap-2">
-                                    <h3 className="text-2xl font-bold text-gray-900 dark:text-white">{modeAwareAlertsTotal}</h3>
+                            <div className="min-w-0">
+                                <p className="text-[11px] font-medium leading-tight text-gray-500 dark:text-gray-400 sm:text-sm">Total Alerts</p>
+                                <div className="flex items-baseline justify-center gap-1 sm:justify-start sm:gap-2">
+                                    <h3 className="text-lg font-bold text-gray-900 dark:text-white sm:text-2xl">{modeAwareAlertsTotal}</h3>
                                     {hasActiveFilters && (
-                                        <span className="text-sm text-gray-500 dark:text-gray-400">
+                                        <span className="text-xs text-gray-500 dark:text-gray-400 sm:text-sm">
                                             {modeAwareAlertsFiltered}
                                         </span>
                                     )}
                                 </div>
                                 {showSimulationBreakout && stats.simulatedAlerts > 0 && (
-                                    <div className="mt-3">
-                                        <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400">
+                                    <div className="mt-2 sm:mt-3">
+                                        <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400 sm:text-[11px]">
                                             Simulation
                                         </p>
-                                        <div className="flex items-baseline gap-2">
-                                            <span className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                                        <div className="flex items-baseline justify-center gap-1 sm:justify-start sm:gap-2">
+                                            <span className="text-sm font-semibold text-gray-900 dark:text-gray-100 sm:text-lg">
                                                 {stats.simulatedAlerts}
                                             </span>
                                             {hasActiveFilters && (
-                                                <span className="text-xs text-gray-500 dark:text-gray-400">
+                                                <span className="text-[10px] text-gray-500 dark:text-gray-400 sm:text-xs">
                                                     {filteredSimulationAlertsCount}
                                                 </span>
                                             )}
@@ -493,33 +493,33 @@ export function Dashboard() {
                     </Card>
                 </Link>
 
-                <Link to={decisionsLink} className="block transition-transform hover:scale-105">
+                <Link to={decisionsLink} className="block h-full transition-transform hover:scale-105">
                     <Card className="h-full cursor-pointer hover:shadow-lg transition-shadow">
-                        <CardContent className="flex items-center p-6">
-                            <div className="p-4 bg-blue-100 dark:bg-blue-900/20 rounded-full mr-4">
-                                <Gavel className="w-8 h-8 text-blue-600 dark:text-blue-400" />
+                        <CardContent className="flex flex-col items-center gap-2 p-3 text-center sm:flex-row sm:items-center sm:gap-3 sm:p-4 sm:text-left lg:gap-4 lg:p-6">
+                            <div className="rounded-full bg-blue-100 p-2 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400 sm:p-3 lg:p-4">
+                                <Gavel className="h-5 w-5 sm:h-6 sm:w-6 lg:h-8 lg:w-8" />
                             </div>
-                            <div>
-                                <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Active Decisions</p>
-                                <div className="flex items-baseline gap-2">
-                                    <h3 className="text-2xl font-bold text-gray-900 dark:text-white">{modeAwareDecisionsTotal}</h3>
+                            <div className="min-w-0">
+                                <p className="text-[11px] font-medium leading-tight text-gray-500 dark:text-gray-400 sm:text-sm">Active Decisions</p>
+                                <div className="flex items-baseline justify-center gap-1 sm:justify-start sm:gap-2">
+                                    <h3 className="text-lg font-bold text-gray-900 dark:text-white sm:text-2xl">{modeAwareDecisionsTotal}</h3>
                                     {hasActiveFilters && (
-                                        <span className="text-sm text-gray-500 dark:text-gray-400">
+                                        <span className="text-xs text-gray-500 dark:text-gray-400 sm:text-sm">
                                             {modeAwareDecisionsFiltered}
                                         </span>
                                     )}
                                 </div>
                                 {showSimulationBreakout && stats.simulatedDecisions > 0 && (
-                                    <div className="mt-3">
-                                        <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400">
+                                    <div className="mt-2 sm:mt-3">
+                                        <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400 sm:text-[11px]">
                                             Simulation
                                         </p>
-                                        <div className="flex items-baseline gap-2">
-                                            <span className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                                        <div className="flex items-baseline justify-center gap-1 sm:justify-start sm:gap-2">
+                                            <span className="text-sm font-semibold text-gray-900 dark:text-gray-100 sm:text-lg">
                                                 {stats.simulatedDecisions}
                                             </span>
                                             {hasActiveFilters && (
-                                                <span className="text-xs text-gray-500 dark:text-gray-400">
+                                                <span className="text-[10px] text-gray-500 dark:text-gray-400 sm:text-xs">
                                                     {filteredSimulationDecisionsCount}
                                                 </span>
                                             )}
@@ -532,19 +532,19 @@ export function Dashboard() {
                 </Link>
 
                 <Card>
-                    <CardContent className="flex items-center p-6">
-                        <div className={`p-4 rounded-full mr-4 ${isOnline
+                    <CardContent className="flex flex-col items-center gap-2 p-3 text-center sm:flex-row sm:items-center sm:gap-3 sm:p-4 sm:text-left lg:gap-4 lg:p-6">
+                        <div className={`rounded-full p-2 sm:p-3 lg:p-4 ${isOnline
                             ? 'bg-green-100 dark:bg-green-900/20'
                             : 'bg-red-100 dark:bg-red-900/20'
                             }`}>
-                            <Activity className={`w-8 h-8 ${isOnline
+                            <Activity className={`h-5 w-5 sm:h-6 sm:w-6 lg:h-8 lg:w-8 ${isOnline
                                 ? 'text-green-600 dark:text-green-400'
                                 : 'text-red-600 dark:text-red-400'
                                 }`} />
                         </div>
-                        <div>
-                            <p className="text-sm font-medium text-gray-500 dark:text-gray-400">CrowdSec LAPI</p>
-                            <h3 className={`text-2xl font-bold ${isOnline
+                        <div className="min-w-0">
+                            <p className="text-[11px] font-medium leading-tight text-gray-500 dark:text-gray-400 sm:text-sm">CrowdSec LAPI</p>
+                            <h3 className={`text-lg font-bold sm:text-2xl ${isOnline
                                 ? 'text-gray-900 dark:text-white'
                                 : 'text-red-600 dark:text-red-400'
                                 }`}>{isOnline ? 'Online' : 'Offline'}</h3>
