@@ -41,6 +41,11 @@ export interface SearchHelpDefinition {
   fields: SearchFieldDefinition[];
 }
 
+export interface SearchHelpSampleData {
+  alerts?: SlimAlert[];
+  decisions?: DecisionListItem[];
+}
+
 export interface SearchParseError {
   message: string;
   position: number;
@@ -146,22 +151,22 @@ const decisionFieldDefinitions: SearchFieldDefinition[] = [
   { name: 'origin', aliases: [], description: 'Decision origin', availability: 'origin' },
 ];
 
-const alertExamples: SearchHelpExample[] = [
+const fallbackAlertExamples: SearchHelpExample[] = [
   { query: 'ssh hetzner', description: 'Normal free-text search across the existing alert fields' },
   { query: '"nginx bf"', description: 'Find an exact phrase' },
   { query: 'country:germany ssh', description: 'Mix fielded search with normal free-text terms' },
   { query: 'date>=2026-03-24 AND date<2026-03-25', description: 'Filter alerts by date or timestamp ranges' },
-  { query: 'origin:(manual OR CAPI) AND -sim:simulated', description: 'Use grouping, boolean logic, and negation' },
-  { query: 'machine:host-a AND target:ssh', description: 'Match a specific machine and target when available' },
+  { query: 'country:(germany OR france) AND -sim:simulated', description: 'Use grouping, boolean logic, and negation' },
+  { query: 'ip:1.2.3.4 AND target:ssh', description: 'Match a specific IP and target' },
 ];
 
-const decisionExamples: SearchHelpExample[] = [
-  { query: 'manual live', description: 'Normal free-text search across the existing decision fields' },
+const fallbackDecisionExamples: SearchHelpExample[] = [
+  { query: 'ssh ban', description: 'Normal free-text search across the existing decision fields' },
   { query: 'status:active AND action:ban', description: 'Filter semantic decision fields' },
   { query: 'date>=2026-03-24 AND action:ban', description: 'Combine date filters with semantic decision fields' },
   { query: 'alert:123 OR ip:"192.168.5.0/24"', description: 'Search by linked alert or a quoted IP/range' },
-  { query: 'origin:(manual OR CAPI) AND -duplicate:true', description: 'Exclude duplicates while grouping origins' },
-  { query: 'machine:host-a AND sim:live', description: 'Limit results to one machine and live decisions' },
+  { query: 'country:(germany OR france) AND -duplicate:true', description: 'Exclude duplicates while grouping countries' },
+  { query: 'target:ssh AND sim:live', description: 'Limit results to one target and simulation state' },
 ];
 
 const searchHelpOperators: SearchHelpOperatorDefinition[] = [
@@ -170,13 +175,315 @@ const searchHelpOperators: SearchHelpOperatorDefinition[] = [
   { label: 'NOT', insertText: 'NOT ', description: 'Negate the next expression' },
   { label: '-', insertText: '-', description: 'Short negation for a single term or field' },
   { label: ':', insertText: ':', description: 'Broad field match, for example `country:germany`' },
-  { label: '=', insertText: '=', description: 'Exact match, for example `origin=manual` or `date=2026-03-24`' },
+  { label: '=', insertText: '=', description: 'Exact match, for example `country=DE` or `date=2026-03-24`' },
   { label: '<>', insertText: '<>', description: 'Exclude a value, for example `sim<>simulated`' },
   { label: '>', insertText: '>', description: 'Date is after the supplied value, for example `date>2026-03-24`' },
   { label: '>=', insertText: '>=', description: 'Date is on or after the supplied value, for example `date>=2026-03-24`' },
   { label: '<', insertText: '<', description: 'Date is before the supplied value, for example `date<2026-03-24`' },
   { label: '<=', insertText: '<=', description: 'Date is on or before the supplied value, for example `date<=2026-03-24`' },
 ];
+
+const EXAMPLE_STOP_WORDS = new Set(['crowdsecurity', 'crowdsec', 'manual', 'web', 'ui']);
+
+function getSearchHelpExamples(page: SearchPage, samples?: SearchHelpSampleData): SearchHelpExample[] {
+  return page === 'alerts'
+    ? buildAlertExamples(samples?.alerts)
+    : buildDecisionExamples(samples?.decisions);
+}
+
+function buildAlertExamples(alerts?: SlimAlert[]): SearchHelpExample[] {
+  return [
+    { query: findAlertFreeTextExample(alerts) ?? fallbackAlertExamples[0].query, description: fallbackAlertExamples[0].description },
+    { query: findAlertPhraseExample(alerts) ?? fallbackAlertExamples[1].query, description: fallbackAlertExamples[1].description },
+    { query: findAlertMixedFieldExample(alerts) ?? fallbackAlertExamples[2].query, description: fallbackAlertExamples[2].description },
+    { query: findAlertDateExample(alerts) ?? fallbackAlertExamples[3].query, description: fallbackAlertExamples[3].description },
+    { query: findAlertBooleanExample(alerts) ?? fallbackAlertExamples[4].query, description: fallbackAlertExamples[4].description },
+    { query: findAlertSpecificFieldExample(alerts) ?? fallbackAlertExamples[5].query, description: fallbackAlertExamples[5].description },
+  ];
+}
+
+function buildDecisionExamples(decisions?: DecisionListItem[]): SearchHelpExample[] {
+  return [
+    { query: findDecisionFreeTextExample(decisions) ?? fallbackDecisionExamples[0].query, description: fallbackDecisionExamples[0].description },
+    { query: findDecisionSemanticExample(decisions) ?? fallbackDecisionExamples[1].query, description: fallbackDecisionExamples[1].description },
+    { query: findDecisionDateExample(decisions) ?? fallbackDecisionExamples[2].query, description: fallbackDecisionExamples[2].description },
+    { query: findDecisionLinkedRecordExample(decisions) ?? fallbackDecisionExamples[3].query, description: fallbackDecisionExamples[3].description },
+    { query: findDecisionBooleanExample(decisions) ?? fallbackDecisionExamples[4].query, description: fallbackDecisionExamples[4].description },
+    { query: findDecisionSimulationExample(decisions) ?? fallbackDecisionExamples[5].query, description: fallbackDecisionExamples[5].description },
+  ];
+}
+
+function findAlertFreeTextExample(alerts?: SlimAlert[]): string | null {
+  for (const alert of alerts ?? []) {
+    const terms = uniqueTerms(
+      extractExampleTerms(alert.target),
+      extractExampleTerms(alert.source?.as_name),
+      extractExampleTerms(alert.scenario),
+      extractExampleTerms(alert.meta_search),
+    );
+    if (terms.length >= 2) {
+      return `${terms[0]} ${terms[1]}`;
+    }
+  }
+  return null;
+}
+
+function findAlertPhraseExample(alerts?: SlimAlert[]): string | null {
+  for (const alert of alerts ?? []) {
+    const messagePhrase = extractQuotedPhrase(alert.message);
+    if (messagePhrase) {
+      return messagePhrase;
+    }
+
+    const scenario = sanitizeExampleValue(alert.scenario);
+    if (scenario) {
+      return quoteSearchValue(scenario);
+    }
+  }
+  return null;
+}
+
+function findAlertMixedFieldExample(alerts?: SlimAlert[]): string | null {
+  for (const alert of alerts ?? []) {
+    const country = getAlertCountryExampleValue(alert);
+    const term = getAlertTargetOrScenarioTerm(alert);
+    if (country && term) {
+      return `country:${formatSearchExampleValue(country)} ${term}`;
+    }
+  }
+  return null;
+}
+
+function findAlertDateExample(alerts?: SlimAlert[]): string | null {
+  for (const alert of alerts ?? []) {
+    const dateRange = getUtcDateRangeQuery(alert.created_at);
+    if (dateRange) {
+      return dateRange;
+    }
+  }
+  return null;
+}
+
+function findAlertBooleanExample(alerts?: SlimAlert[]): string | null {
+  const countries = collectDistinctValues((alerts ?? []).map(getAlertCountryExampleValue));
+  if (countries.length < 2) {
+    return null;
+  }
+  return `country:(${formatSearchExampleValue(countries[0])} OR ${formatSearchExampleValue(countries[1])}) AND -sim:simulated`;
+}
+
+function findAlertSpecificFieldExample(alerts?: SlimAlert[]): string | null {
+  for (const alert of alerts ?? []) {
+    const sourceValue = getAlertSourceExampleValue(alert);
+    const target = sanitizeExampleValue(alert.target);
+    if (sourceValue && target) {
+      return `ip:${formatSearchExampleValue(sourceValue)} AND target:${formatSearchExampleValue(target)}`;
+    }
+  }
+  return null;
+}
+
+function findDecisionFreeTextExample(decisions?: DecisionListItem[]): string | null {
+  for (const decision of decisions ?? []) {
+    const terms = uniqueTerms(
+      extractExampleTerms(decision.detail.reason || decision.scenario),
+      extractExampleTerms(decision.detail.action),
+      extractExampleTerms(decision.detail.type),
+    );
+    if (terms.length >= 2) {
+      return `${terms[0]} ${terms[1]}`;
+    }
+  }
+  return null;
+}
+
+function findDecisionSemanticExample(decisions?: DecisionListItem[]): string | null {
+  for (const decision of decisions ?? []) {
+    const action = sanitizeExampleValue(decision.detail.action);
+    if (action) {
+      return `status:${isDecisionExpired(decision) ? 'expired' : 'active'} AND action:${formatSearchExampleValue(action)}`;
+    }
+  }
+  return null;
+}
+
+function findDecisionDateExample(decisions?: DecisionListItem[]): string | null {
+  for (const decision of decisions ?? []) {
+    const day = getUtcDateString(decision.created_at);
+    const action = sanitizeExampleValue(decision.detail.action);
+    if (day && action) {
+      return `date>=${day} AND action:${formatSearchExampleValue(action)}`;
+    }
+  }
+  return null;
+}
+
+function findDecisionLinkedRecordExample(decisions?: DecisionListItem[]): string | null {
+  for (const decision of decisions ?? []) {
+    const alertId = decision.detail.alert_id;
+    const value = sanitizeExampleValue(decision.value);
+    if (alertId !== undefined && alertId !== null && value) {
+      return `alert:${String(alertId)} OR ip:${quoteSearchValue(value)}`;
+    }
+  }
+  return null;
+}
+
+function findDecisionBooleanExample(decisions?: DecisionListItem[]): string | null {
+  const countries = collectDistinctValues((decisions ?? []).map(getDecisionCountryExampleValue));
+  if (countries.length < 2) {
+    return null;
+  }
+  return `country:(${formatSearchExampleValue(countries[0])} OR ${formatSearchExampleValue(countries[1])}) AND -duplicate:true`;
+}
+
+function findDecisionSimulationExample(decisions?: DecisionListItem[]): string | null {
+  for (const decision of decisions ?? []) {
+    const target = sanitizeExampleValue(decision.detail.target || undefined);
+    if (target) {
+      return `target:${formatSearchExampleValue(target)} AND sim:${decision.simulated === true ? 'simulated' : 'live'}`;
+    }
+  }
+  return null;
+}
+
+function getAlertCountryExampleValue(alert: SlimAlert): string | null {
+  return getCountryExampleValue(alert.source?.cn);
+}
+
+function getDecisionCountryExampleValue(decision: DecisionListItem): string | null {
+  return getCountryExampleValue(decision.detail.country);
+}
+
+function getCountryExampleValue(countryCode: string | undefined): string | null {
+  const countryName = sanitizeExampleValue(getCountryName(countryCode));
+  if (countryName) {
+    return countryName;
+  }
+
+  return sanitizeExampleValue(countryCode);
+}
+
+function getAlertTargetOrScenarioTerm(alert: SlimAlert): string | null {
+  const terms = uniqueTerms(extractExampleTerms(alert.target), extractExampleTerms(alert.scenario));
+  return terms[0] ?? null;
+}
+
+function getAlertSourceExampleValue(alert: SlimAlert): string | null {
+  return sanitizeExampleValue(alert.source?.ip) ||
+    sanitizeExampleValue(alert.source?.value) ||
+    sanitizeExampleValue(alert.source?.range);
+}
+
+function uniqueTerms(...groups: string[][]): string[] {
+  const seen = new Set<string>();
+  const terms: string[] = [];
+
+  for (const group of groups) {
+    for (const term of group) {
+      if (!seen.has(term)) {
+        seen.add(term);
+        terms.push(term);
+      }
+    }
+  }
+
+  return terms;
+}
+
+function extractExampleTerms(value: string | null | undefined): string[] {
+  const normalized = sanitizeExampleValue(value)?.toLowerCase() ?? '';
+  if (!normalized) {
+    return [];
+  }
+
+  return normalized
+    .split(/[^a-z0-9]+/i)
+    .map((term) => term.trim())
+    .filter((term) => term.length >= 2 && /[a-z]/i.test(term) && !EXAMPLE_STOP_WORDS.has(term));
+}
+
+function extractQuotedPhrase(value: string | null | undefined): string | null {
+  const sanitized = sanitizeExampleValue(value);
+  if (!sanitized) {
+    return null;
+  }
+
+  const words = sanitized.split(/\s+/).filter(Boolean);
+  if (words.length < 2) {
+    return null;
+  }
+
+  return quoteSearchValue(words.slice(0, Math.min(words.length, 4)).join(' '));
+}
+
+function sanitizeExampleValue(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const sanitized = value.replace(/"/g, '').replace(/\s+/g, ' ').trim();
+  return sanitized || null;
+}
+
+function formatSearchExampleValue(value: string): string {
+  return /^[A-Za-z0-9._-]+$/.test(value) ? value : quoteSearchValue(value);
+}
+
+function quoteSearchValue(value: string): string {
+  return `"${value}"`;
+}
+
+function collectDistinctValues(values: Array<string | null>): string[] {
+  const distinct: string[] = [];
+  const seen = new Set<string>();
+
+  for (const value of values) {
+    if (!value) {
+      continue;
+    }
+
+    const normalized = normalizeValue(value);
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+      distinct.push(value);
+    }
+  }
+
+  return distinct;
+}
+
+function getUtcDateRangeQuery(value: string | undefined): string | null {
+  const start = getUtcDateString(value);
+  if (!start) {
+    return null;
+  }
+
+  const end = getNextUtcDateString(start);
+  if (!end) {
+    return null;
+  }
+
+  return `date>=${start} AND date<${end}`;
+}
+
+function getUtcDateString(value: string | undefined): string | null {
+  const timestamp = parseIsoTimestamp(value);
+  if (timestamp === null) {
+    return null;
+  }
+
+  return new Date(timestamp).toISOString().slice(0, 10);
+}
+
+function getNextUtcDateString(day: string): string | null {
+  const timestamp = Date.parse(`${day}T00:00:00.000Z`);
+  if (Number.isNaN(timestamp)) {
+    return null;
+  }
+
+  return new Date(timestamp + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
 
 const alertFieldMatchers: AlertFieldMatcherMap = {
   id: (alert, value) => normalizeValue(alert.id) === normalizeValue(value),
@@ -216,7 +523,11 @@ const decisionFieldMatchers: DecisionFieldMatcherMap = {
   origin: (decision, value) => includesNormalized(decision.detail.origin, value),
 };
 
-export function getSearchHelpDefinition(page: SearchPage, features: SearchFeatureFlags = {}): SearchHelpDefinition {
+export function getSearchHelpDefinition(
+  page: SearchPage,
+  features: SearchFeatureFlags = {},
+  samples?: SearchHelpSampleData,
+): SearchHelpDefinition {
   return {
     page,
     title: page === 'alerts' ? 'Alert Search Syntax' : 'Decision Search Syntax',
@@ -229,7 +540,7 @@ export function getSearchHelpDefinition(page: SearchPage, features: SearchFeatur
     ],
     operators: searchHelpOperators,
     fields: getFieldDefinitions(page, features),
-    examples: page === 'alerts' ? alertExamples : decisionExamples,
+    examples: getSearchHelpExamples(page, samples),
   };
 }
 
@@ -1009,9 +1320,13 @@ function matchesSimulationTerm(isSimulated: boolean, value: string): boolean {
   return false;
 }
 
+function isDecisionExpired(decision: DecisionListItem): boolean {
+  return decision.expired === true || (decision.detail.duration || '').startsWith('-');
+}
+
 function matchesDecisionStatus(decision: DecisionListItem, value: string): boolean {
   const normalized = normalizeValue(value);
-  const isExpired = decision.expired === true || (decision.detail.duration || '').startsWith('-');
+  const isExpired = isDecisionExpired(decision);
   if (['expired', 'inactive'].includes(normalized)) {
     return isExpired;
   }

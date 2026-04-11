@@ -124,8 +124,8 @@ export function Decisions() {
             : { machineEnabled: true, originEnabled: true }
     ), [machineFeaturesEnabled, originFeaturesEnabled]);
     const searchHelp = useMemo(
-        () => getSearchHelpDefinition('decisions', searchValidationFeatures),
-        [searchValidationFeatures],
+        () => getSearchHelpDefinition('decisions', searchValidationFeatures, { decisions }),
+        [decisions, searchValidationFeatures],
     );
     const cancelSearchDebounce = useCallback(() => {
         if (searchDebounceTimeoutRef.current !== null) {

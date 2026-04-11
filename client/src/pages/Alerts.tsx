@@ -162,8 +162,8 @@ export function Alerts() {
             : { machineEnabled: true, originEnabled: true }
     ), [machineFeaturesEnabled, originFeaturesEnabled]);
     const searchHelp = useMemo(
-        () => getSearchHelpDefinition('alerts', searchValidationFeatures),
-        [searchValidationFeatures],
+        () => getSearchHelpDefinition('alerts', searchValidationFeatures, { alerts }),
+        [alerts, searchValidationFeatures],
     );
     const cancelSearchDebounce = useCallback(() => {
         if (searchDebounceTimeoutRef.current !== null) {

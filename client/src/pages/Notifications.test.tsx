@@ -37,7 +37,6 @@ import {
   deleteReadNotifications,
   fetchNotificationSettings,
   fetchNotificationsPaginated,
-  markNotificationRead,
   markNotificationsRead,
   testNotificationChannel,
 } from '../lib/api';

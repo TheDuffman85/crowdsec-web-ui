@@ -57,6 +57,7 @@ vi.mock('../lib/api', () => {
         action: 'ban',
         duration: '4h',
         alert_id: 1,
+        target: 'ssh',
       },
     },
     {
@@ -75,6 +76,7 @@ vi.mock('../lib/api', () => {
         action: 'ban',
         duration: '4h',
         alert_id: 2,
+        target: 'nginx',
       },
     },
   ];
@@ -308,6 +310,10 @@ describe('Decisions page', () => {
 
     expect(screen.getByRole('dialog', { name: 'Decision Search Syntax' })).toBeInTheDocument();
     expect(screen.getByText('status:active AND action:ban')).toBeInTheDocument();
+    expect(screen.getByText('alert:1 OR ip:"1.2.3.4"')).toBeInTheDocument();
+    expect(screen.getByText('target:ssh AND sim:live')).toBeInTheDocument();
+    expect(screen.queryByText(/origin:\(/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/machine:/i)).not.toBeInTheDocument();
   });
 
   test('clicking a syntax example fills the search input', async () => {

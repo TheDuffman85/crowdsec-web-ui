@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { DecisionListItem, SlimAlert } from '../shared/contracts';
-import { analyzeSearchQuery, compileAlertSearch, compileDecisionSearch } from '../shared/search';
+import { analyzeSearchQuery, compileAlertSearch, compileDecisionSearch, getSearchHelpDefinition } from '../shared/search';
 
 const baseAlert: SlimAlert = {
   id: 1,
@@ -42,6 +42,37 @@ const baseDecision: DecisionListItem = {
     duration: '4h',
     alert_id: 123,
     target: 'ssh',
+  },
+};
+
+const secondAlert: SlimAlert = {
+  ...baseAlert,
+  id: 2,
+  created_at: '2026-03-25T12:00:00.000Z',
+  scenario: 'crowdsecurity/nginx-bf',
+  source: {
+    ip: '5.6.7.8',
+    value: '5.6.7.8',
+    cn: 'US',
+    as_name: 'AWS',
+  },
+  target: 'nginx',
+  meta_search: 'nginx brute force',
+};
+
+const secondDecision: DecisionListItem = {
+  ...baseDecision,
+  id: 20,
+  created_at: '2026-03-25T12:00:00.000Z',
+  value: '5.6.7.8',
+  simulated: true,
+  detail: {
+    ...baseDecision.detail,
+    reason: 'crowdsecurity/nginx-bf',
+    country: 'US',
+    as: 'AWS',
+    alert_id: 456,
+    target: 'nginx',
   },
 };
 
@@ -183,5 +214,56 @@ describe('shared search compiler', () => {
     }
 
     expect(compiled.error.message).toContain('only supported for date fields');
+  });
+
+  test('builds alert help examples from provided alert rows', () => {
+    const help = getSearchHelpDefinition('alerts', {}, { alerts: [baseAlert, secondAlert] });
+
+    expect(help.examples.map((example) => example.query)).toEqual([
+      'ssh hetzner',
+      '"SSH brute force detected"',
+      'country:Germany ssh',
+      'date>=2026-03-24 AND date<2026-03-25',
+      'country:(Germany OR "United States") AND -sim:simulated',
+      'ip:1.2.3.4 AND target:ssh',
+    ]);
+    expect(help.examples.every((example) => !/\b(machine|origin)\b/i.test(example.query))).toBe(true);
+  });
+
+  test('builds decision help examples from provided decision rows', () => {
+    const help = getSearchHelpDefinition('decisions', {}, { decisions: [baseDecision, secondDecision] });
+
+    expect(help.examples.map((example) => example.query)).toEqual([
+      'ssh bf',
+      'status:active AND action:ban',
+      'date>=2026-03-24 AND action:ban',
+      'alert:123 OR ip:"1.2.3.4"',
+      'country:(Germany OR "United States") AND -duplicate:true',
+      'target:ssh AND sim:live',
+    ]);
+    expect(help.examples.every((example) => !/\b(machine|origin)\b/i.test(example.query))).toBe(true);
+  });
+
+  test('falls back to generic help examples when no sample rows are provided', () => {
+    const alertHelp = getSearchHelpDefinition('alerts');
+    const decisionHelp = getSearchHelpDefinition('decisions');
+
+    expect(alertHelp.examples[4]?.query).toBe('country:(germany OR france) AND -sim:simulated');
+    expect(decisionHelp.examples[5]?.query).toBe('target:ssh AND sim:live');
+  });
+
+  test('skips numeric-only chunks when building free-text alert examples', () => {
+    const help = getSearchHelpDefinition('alerts', {}, {
+      alerts: [{
+        ...baseAlert,
+        target: '85.215.176.66',
+        source: { ...baseAlert.source, as_name: undefined },
+        scenario: 'crowdsecurity/vpatch-CVE-2025-55182',
+        meta_search: '85.215.176.66 vpatch CVE-2025-55182',
+      }],
+    });
+
+    expect(help.examples[0]?.query).toBe('vpatch cve');
+    expect(help.examples[2]?.query).toBe('country:Germany vpatch');
   });
 });

@@ -439,7 +439,10 @@ describe('Alerts page', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));
 
     expect(screen.getByRole('dialog', { name: 'Alert Search Syntax' })).toBeInTheDocument();
-    expect(screen.getByText('origin:(manual OR CAPI) AND -sim:simulated')).toBeInTheDocument();
+    expect(screen.getByText('date>=2026-03-23 AND date<2026-03-24')).toBeInTheDocument();
+    expect(screen.getByText('ip:1.2.3.4 AND target:ssh')).toBeInTheDocument();
+    expect(screen.queryByText(/origin:\(/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/machine:/i)).not.toBeInTheDocument();
   });
 
   test('clicking an alert syntax example fills the search input', async () => {
@@ -453,7 +456,7 @@ describe('Alerts page', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));
     await userEvent.click(screen.getByRole('button', { name: /country:germany ssh/i }));
 
-    await waitFor(() => expect(screen.getByPlaceholderText('Filter alerts...')).toHaveValue('country:germany ssh'));
+    await waitFor(() => expect(screen.getByPlaceholderText('Filter alerts...')).toHaveValue('country:Germany ssh'));
   });
 
   test('clicking alert fields and operators inserts snippets into the search input', async () => {

@@ -173,16 +173,16 @@ The Alerts and Decisions pages use a single search box that supports both normal
 - Quoted phrases match exact text, for example `"nginx bf"`
 - Fielded search uses `field:value`, for example `country:germany` or `status:active`
 - Date filtering uses the `date` field with ISO dates or timestamps, for example `date>=2026-03-24` or `date<2026-03-25T12:00:00Z`
-- Exact field checks use `=` and `<>`, for example `origin=manual` or `sim<>simulated`
+- Exact field checks use `=` and `<>`, for example `country=DE` or `sim<>simulated`
 - Boolean operators `AND`, `OR`, and `NOT` are supported
 - Unary `-` can be used as shorthand for negation, for example `-sim:simulated`
-- Parentheses can group expressions, for example `origin:(manual OR CAPI)`
+- Parentheses can group expressions, for example `country:(germany OR france)`
 
 Examples:
 
 - Alerts: `country:germany ssh`
 - Alerts: `date>=2026-03-24 AND date<2026-03-25`
-- Alerts: `origin:(manual OR CAPI) AND -sim:simulated`
+- Alerts: `country:(germany OR france) AND -sim:simulated`
 - Decisions: `status:active AND action:ban`
 - Decisions: `date>=2026-03-24 AND action:ban`
 - Decisions: `alert:123 OR ip:"192.168.5.0/24"`
