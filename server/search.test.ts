@@ -76,6 +76,24 @@ const secondDecision: DecisionListItem = {
   },
 };
 
+const swedenAlert: SlimAlert = {
+  ...baseAlert,
+  id: 3,
+  source: {
+    ...baseAlert.source,
+    cn: 'SE',
+  },
+};
+
+const swedenDecision: DecisionListItem = {
+  ...baseDecision,
+  id: 30,
+  detail: {
+    ...baseDecision.detail,
+    country: 'SE',
+  },
+};
+
 describe('shared search compiler', () => {
   test('preserves free-text search for alerts', () => {
     const compiled = compileAlertSearch('ssh hetzner');
@@ -126,6 +144,26 @@ describe('shared search compiler', () => {
     expect(compiled.predicate({ ...baseAlert, source: { ...baseAlert.source, cn: 'US' } })).toBe(true);
   });
 
+  test('matches country codes exactly for alerts while keeping country-name matching broad', () => {
+    const codeSearch = compileAlertSearch('country:DE');
+    expect(codeSearch.ok).toBe(true);
+    if (!codeSearch.ok) {
+      return;
+    }
+
+    expect(codeSearch.predicate(baseAlert)).toBe(true);
+    expect(codeSearch.predicate(swedenAlert)).toBe(false);
+
+    const nameSearch = compileAlertSearch('country:germ');
+    expect(nameSearch.ok).toBe(true);
+    if (!nameSearch.ok) {
+      return;
+    }
+
+    expect(nameSearch.predicate(baseAlert)).toBe(true);
+    expect(nameSearch.predicate(swedenAlert)).toBe(false);
+  });
+
   test('supports semantic decision fields', () => {
     const compiled = compileDecisionSearch('status:active AND action:ban AND alert:123 AND duplicate:false');
     expect(compiled.ok).toBe(true);
@@ -136,6 +174,26 @@ describe('shared search compiler', () => {
     expect(compiled.predicate(baseDecision)).toBe(true);
     expect(compiled.predicate({ ...baseDecision, expired: true })).toBe(false);
     expect(compiled.predicate({ ...baseDecision, is_duplicate: true })).toBe(false);
+  });
+
+  test('matches country codes exactly for decisions while keeping country-name matching broad', () => {
+    const codeSearch = compileDecisionSearch('country:DE');
+    expect(codeSearch.ok).toBe(true);
+    if (!codeSearch.ok) {
+      return;
+    }
+
+    expect(codeSearch.predicate(baseDecision)).toBe(true);
+    expect(codeSearch.predicate(swedenDecision)).toBe(false);
+
+    const nameSearch = compileDecisionSearch('country:germ');
+    expect(nameSearch.ok).toBe(true);
+    if (!nameSearch.ok) {
+      return;
+    }
+
+    expect(nameSearch.predicate(baseDecision)).toBe(true);
+    expect(nameSearch.predicate(swedenDecision)).toBe(false);
   });
 
   test('supports date equality and the => alias for decisions', () => {

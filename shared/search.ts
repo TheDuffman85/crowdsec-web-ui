@@ -490,10 +490,7 @@ const alertFieldMatchers: AlertFieldMatcherMap = {
   scenario: (alert, value) => includesNormalized(alert.scenario, value),
   message: (alert, value) => includesNormalized(alert.message, value),
   ip: (alert, value) => getAlertSourceValues(alert).some((candidate) => includesNormalized(candidate, value)),
-  country: (alert, value) => {
-    const countryCode = alert.source?.cn || '';
-    return includesNormalized(countryCode, value) || includesNormalized(getCountryName(countryCode), value);
-  },
+  country: (alert, value) => matchesCountryField(alert.source?.cn || '', value),
   as: (alert, value) => includesNormalized(alert.source?.as_name, value),
   target: (alert, value) => includesNormalized(alert.target, value),
   date: (alert, value) => includesNormalized(alert.created_at, value),
@@ -507,10 +504,7 @@ const decisionFieldMatchers: DecisionFieldMatcherMap = {
   alert: (decision, value) => normalizeValue(decision.detail.alert_id) === normalizeValue(value),
   scenario: (decision, value) => includesNormalized(decision.detail.reason || decision.scenario, value),
   ip: (decision, value) => includesNormalized(decision.value, value),
-  country: (decision, value) => {
-    const countryCode = decision.detail.country || '';
-    return includesNormalized(countryCode, value) || includesNormalized(getCountryName(countryCode), value);
-  },
+  country: (decision, value) => matchesCountryField(decision.detail.country || '', value),
   as: (decision, value) => includesNormalized(decision.detail.as, value),
   target: (decision, value) => includesNormalized(decision.detail.target, value),
   date: (decision, value) => includesNormalized(decision.created_at, value),
@@ -1296,6 +1290,24 @@ function normalizeValue(value: string | number | null | undefined): string {
     return '';
   }
   return String(value).trim().toLowerCase();
+}
+
+function matchesCountryField(countryCode: string, value: string): boolean {
+  const normalizedValue = normalizeValue(value);
+  if (!normalizedValue) {
+    return false;
+  }
+
+  const normalizedCode = normalizeValue(countryCode);
+  const normalizedName = normalizeValue(getCountryName(countryCode));
+
+  // Treat short alphabetic searches as ISO country-code lookups so `DE`
+  // does not accidentally match the `de` in names like `Sweden`.
+  if (/^[a-z]{2}$/.test(normalizedValue)) {
+    return normalizedCode === normalizedValue;
+  }
+
+  return normalizedName.includes(normalizedValue) || normalizedCode === normalizedValue;
 }
 
 function getCountryName(code?: string | null): string {
