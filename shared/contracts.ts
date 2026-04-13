@@ -28,6 +28,7 @@ export interface LapiStatus {
   isConnected: boolean;
   lastCheck: string | null;
   lastError: string | null;
+  offline_since: string | null;
 }
 
 export interface SyncStatus {
@@ -233,7 +234,7 @@ export interface UpdateCheckResponse {
 }
 
 export type NotificationChannelType = 'ntfy' | 'gotify' | 'email' | 'mqtt' | 'webhook';
-export type NotificationRuleType = 'alert-spike' | 'alert-threshold' | 'new-cve' | 'application-update';
+export type NotificationRuleType = 'alert-spike' | 'alert-threshold' | 'new-cve' | 'application-update' | 'lapi-availability';
 export type NotificationSeverity = 'info' | 'warning' | 'critical';
 export type NotificationDeliveryStatus = 'delivered' | 'failed' | 'skipped';
 
@@ -263,11 +264,17 @@ export interface NewCveRuleConfig {
 
 export interface ApplicationUpdateRuleConfig {}
 
+export interface LapiAvailabilityRuleConfig {
+  outage_threshold_seconds: number;
+  notify_on_recovery: boolean;
+}
+
 export type NotificationRuleConfig =
   | AlertSpikeRuleConfig
   | AlertThresholdRuleConfig
   | NewCveRuleConfig
-  | ApplicationUpdateRuleConfig;
+  | ApplicationUpdateRuleConfig
+  | LapiAvailabilityRuleConfig;
 
 export interface NotificationChannel {
   id: string;

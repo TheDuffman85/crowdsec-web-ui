@@ -986,6 +986,9 @@ function normalizeIncidentKeyForSeed(ruleId: string, ruleType: string, dedupeKey
   if (ruleType === 'application-update') {
     return normalized.startsWith('application-update:') ? normalized : null;
   }
+  if (ruleType === 'lapi-availability') {
+    return normalized.startsWith('lapi-availability:') ? normalized : null;
+  }
 
   return normalized || null;
 }

@@ -4,6 +4,8 @@ import type {
   ApplicationUpdateRuleConfig,
   AlertRecord,
   AlertThresholdRuleConfig,
+  LapiAvailabilityRuleConfig,
+  LapiStatus,
   NewCveRuleConfig,
   NotificationChannel,
   NotificationChannelType,
@@ -37,6 +39,7 @@ export interface NotificationServiceOptions {
   fetchImpl?: FetchLike;
   mqttPublishImpl?: (config: MqttPublishConfig, payload: string) => Promise<void>;
   updateChecker?: () => Promise<UpdateCheckResponse>;
+  getLapiStatus?: () => LapiStatus;
   outboundGuard: NotificationOutboundGuard;
   secretStore: NotificationSecretStore;
 }
@@ -46,6 +49,8 @@ interface NotificationCandidate {
   title: string;
   message: string;
   metadata: Record<string, AlertMetaValue>;
+  incidentStartedAt?: string;
+  severity?: NotificationSeverity;
 }
 
 interface NotificationIncidentState {
@@ -79,6 +84,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
   const fetchImpl = options.fetchImpl || fetch;
   const mqttPublishImpl = options.mqttPublishImpl;
   const updateChecker = options.updateChecker;
+  const getLapiStatus = options.getLapiStatus;
   const outboundGuard = options.outboundGuard;
   const secretStore = options.secretStore;
 
@@ -273,8 +279,9 @@ export function createNotificationService(options: NotificationServiceOptions): 
         }
 
         const deliveries: NotificationDeliveryResult[] = [];
+        const candidateSeverity = candidate.severity || rule.severity;
         for (const channel of activeChannels.filter((item) => rule.channel_ids.includes(item.id))) {
-          deliveries.push(await sendToChannel(channel, candidate, rule.severity, rule));
+          deliveries.push(await sendToChannel(channel, candidate, candidateSeverity, rule));
         }
 
         database.insertNotification({
@@ -284,7 +291,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
           $rule_id: rule.id,
           $rule_name: rule.name,
           $rule_type: rule.type,
-          $severity: rule.severity,
+          $severity: candidateSeverity,
           $title: candidate.title,
           $message: candidate.message,
           $read_at: null,
@@ -292,10 +299,11 @@ export function createNotificationService(options: NotificationServiceOptions): 
           $deliveries_json: JSON.stringify(deliveries),
           $dedupe_key: candidate.dedupeKey,
         });
+        const incidentStartedAt = candidate.incidentStartedAt || timestamp;
         database.upsertNotificationIncident({
           $rule_id: rule.id,
           $incident_key: candidate.dedupeKey,
-          $first_seen_at: timestamp,
+          $first_seen_at: incidentStartedAt,
           $last_seen_at: timestamp,
           $resolved_at: null,
         });
@@ -504,6 +512,9 @@ export function createNotificationService(options: NotificationServiceOptions): 
     if (rule.type === 'application-update') {
       return evaluateApplicationUpdateRule(rule);
     }
+    if (rule.type === 'lapi-availability') {
+      return evaluateLapiAvailabilityRule(rule, now);
+    }
     return evaluateNewCveRule(rule, now);
   }
 
@@ -630,6 +641,66 @@ export function createNotificationService(options: NotificationServiceOptions): 
     }];
   }
 
+  async function evaluateLapiAvailabilityRule(rule: NotificationRule, now: Date): Promise<NotificationCandidate[]> {
+    if (!getLapiStatus) {
+      return [];
+    }
+
+    const status = getLapiStatus();
+    const config = normalizeRuleConfig('lapi-availability', rule.config);
+    const candidates: NotificationCandidate[] = [];
+    const activeIncidents = loadActiveIncidents(rule.id);
+    const activeOutageIncident = activeIncidents.get('lapi-availability:offline');
+
+    if (!status.isConnected && status.offline_since) {
+      const offlineSince = new Date(status.offline_since);
+      const outageDurationSeconds = Math.max(0, Math.floor((now.getTime() - offlineSince.getTime()) / 1_000));
+
+      if (outageDurationSeconds >= config.outage_threshold_seconds) {
+        candidates.push({
+          dedupeKey: 'lapi-availability:offline',
+          title: `${rule.name}: LAPI unavailable`,
+          message: `CrowdSec LAPI has been unavailable for ${outageDurationSeconds} seconds.`,
+          incidentStartedAt: status.offline_since,
+          metadata: {
+            offline_since: status.offline_since,
+            last_check: status.lastCheck,
+            last_error: status.lastError,
+            outage_threshold_seconds: config.outage_threshold_seconds,
+            outage_duration_seconds: outageDurationSeconds,
+          },
+        });
+      }
+
+      return candidates;
+    }
+
+    if (status.isConnected && config.notify_on_recovery && activeOutageIncident) {
+      const recoveredAt = now.toISOString();
+      const offlineSince = activeOutageIncident.firstSeenAt;
+      const outageDurationSeconds = Math.max(
+        0,
+        Math.floor((now.getTime() - new Date(offlineSince).getTime()) / 1_000),
+      );
+      candidates.push({
+        dedupeKey: `lapi-availability:recovery:${recoveredAt}`,
+        title: `${rule.name}: LAPI recovered`,
+        message: `CrowdSec LAPI connectivity has recovered after ${outageDurationSeconds} seconds of downtime.`,
+        metadata: {
+          offline_since: offlineSince,
+          recovered_at: recoveredAt,
+          last_check: status.lastCheck,
+          last_error: status.lastError,
+          outage_threshold_seconds: config.outage_threshold_seconds,
+          outage_duration_seconds: outageDurationSeconds,
+        },
+        severity: 'info',
+      });
+    }
+
+    return candidates;
+  }
+
   function getAlertsBetween(start: Date, end: Date, filters?: NotificationFilter): AlertRecord[] {
     return database
       .getAlertsBetween(start.toISOString(), end.toISOString())
@@ -721,6 +792,7 @@ function normalizeRuleConfig(type: 'alert-spike', config: RuleConfigInput): Aler
 function normalizeRuleConfig(type: 'alert-threshold', config: RuleConfigInput): AlertThresholdRuleConfig;
 function normalizeRuleConfig(type: 'new-cve', config: RuleConfigInput): NewCveRuleConfig;
 function normalizeRuleConfig(type: 'application-update', config: RuleConfigInput): ApplicationUpdateRuleConfig;
+function normalizeRuleConfig(type: 'lapi-availability', config: RuleConfigInput): LapiAvailabilityRuleConfig;
 function normalizeRuleConfig(type: NotificationRuleType, config: RuleConfigInput): NotificationRuleConfig;
 function normalizeRuleConfig(type: NotificationRuleType, config: RuleConfigInput): NotificationRuleConfig {
   const safeConfig = config && typeof config === 'object' && !Array.isArray(config)
@@ -747,6 +819,13 @@ function normalizeRuleConfig(type: NotificationRuleType, config: RuleConfigInput
 
   if (type === 'application-update') {
     return {};
+  }
+
+  if (type === 'lapi-availability') {
+    return {
+      outage_threshold_seconds: normalizePositiveNumber(safeConfig.outage_threshold_seconds, 60),
+      notify_on_recovery: safeConfig.notify_on_recovery === true,
+    };
   }
 
   return {
@@ -814,7 +893,7 @@ function normalizeChannelType(value: unknown): NotificationChannelType {
 }
 
 function normalizeRuleType(value: unknown): NotificationRuleType {
-  if (value === 'alert-spike' || value === 'alert-threshold' || value === 'new-cve' || value === 'application-update') return value;
+  if (value === 'alert-spike' || value === 'alert-threshold' || value === 'new-cve' || value === 'application-update' || value === 'lapi-availability') return value;
   throw new Error('Invalid notification rule type');
 }
 

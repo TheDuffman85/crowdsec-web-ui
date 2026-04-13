@@ -33,6 +33,7 @@ vi.mock('../lib/api', () => ({
 
 import {
   bulkDeleteNotifications,
+  createNotificationRule,
   deleteNotification,
   deleteReadNotifications,
   fetchNotificationSettings,
@@ -216,6 +217,35 @@ describe('Notifications page', () => {
     expect(screen.getByText(/built-in update check/i)).toBeInTheDocument();
     expect(screen.queryByLabelText('Scenario Contains')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Target Contains')).not.toBeInTheDocument();
+  });
+
+  test('shows and submits the lapi availability rule config without alert filters', async () => {
+    const user = userEvent.setup();
+    render(<Notifications />);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /add rule/i })).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /add rule/i }));
+    await user.selectOptions(screen.getByLabelText('Rule Type'), 'lapi-availability');
+
+    expect(screen.getByLabelText('Outage Threshold (seconds)')).toHaveValue('60');
+    expect(screen.getByText(/send recovery notification/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Scenario Contains')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Target Contains')).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText('Name'), 'LAPI health');
+    await user.clear(screen.getByLabelText('Outage Threshold (seconds)'));
+    await user.type(screen.getByLabelText('Outage Threshold (seconds)'), '90');
+    await user.click(screen.getAllByRole('switch')[1]);
+    await user.click(screen.getByRole('button', { name: /save rule/i }));
+
+    expect(createNotificationRule).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'LAPI health',
+      type: 'lapi-availability',
+      config: {
+        outage_threshold_seconds: 90,
+        notify_on_recovery: true,
+      },
+    }));
   });
 
   test('supports adding webhook query, header, and form fields from the destination modal', async () => {

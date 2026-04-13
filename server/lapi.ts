@@ -51,6 +51,7 @@ export class LapiClient {
     isConnected: false,
     lastCheck: null,
     lastError: null,
+    offline_since: null,
   };
 
   constructor(options: LapiClientOptions) {
@@ -76,8 +77,14 @@ export class LapiClient {
   }
 
   updateStatus(isConnected: boolean, error: { message?: string } | null = null): void {
+    const now = new Date().toISOString();
+    if (isConnected) {
+      this.lapiStatus.offline_since = null;
+    } else if (!this.lapiStatus.offline_since) {
+      this.lapiStatus.offline_since = now;
+    }
     this.lapiStatus.isConnected = isConnected;
-    this.lapiStatus.lastCheck = new Date().toISOString();
+    this.lapiStatus.lastCheck = now;
     this.lapiStatus.lastError = error?.message || null;
   }
 
@@ -238,16 +245,24 @@ export class LapiClient {
     const scopes = isCapiOrigin
       ? [undefined]
       : ['ip', 'range'] as const;
+    let successfulScopes = 0;
+    let lastError: Error | null = null;
     const resultSets = await Promise.all(scopes.map(async (scope) => {
       const scopeLabel = scope || 'unscoped';
       try {
         const response = await this.fetchLapi<unknown[]>(`/v1/alerts?${buildParams(scope).toString()}`);
+        successfulScopes += 1;
         return Array.isArray(response.data) ? response.data : [];
       } catch (error: any) {
+        lastError = error instanceof Error ? error : new Error(String(error));
         console.error(`Failed to fetch ${scopeLabel} alerts: ${error.message}`);
         return [];
       }
     }));
+
+    if (successfulScopes === 0) {
+      throw lastError || new Error('Failed to fetch alerts');
+    }
 
     const merged = new Map<string, unknown>();
     for (const resultSet of resultSets) {
