@@ -101,6 +101,36 @@ describe('LapiClient', () => {
     await expect(client.login()).resolves.toBe(true);
     expect(client.hasToken()).toBe(true);
     expect(client.getStatus().isConnected).toBe(true);
+    expect(client.getStatus().offline_since).toBeNull();
+  });
+
+  test('tracks offline_since across consecutive failures and clears it on success', () => {
+    const client = new LapiClient({
+      crowdsecUrl: 'http://crowdsec:8080',
+      auth: passwordAuth,
+      simulationsEnabled: true,
+      lookbackPeriod: '1h',
+      version: '1.0.0',
+      fetchImpl: async () => Response.json({}),
+    });
+
+    client.updateStatus(false, { message: 'Connection refused' });
+    const firstFailure = client.getStatus();
+    expect(firstFailure.isConnected).toBe(false);
+    expect(firstFailure.offline_since).not.toBeNull();
+    expect(firstFailure.lastError).toBe('Connection refused');
+
+    client.updateStatus(false, { message: 'Still down' });
+    const secondFailure = client.getStatus();
+    expect(secondFailure.offline_since).toBe(firstFailure.offline_since);
+    expect(secondFailure.lastError).toBe('Still down');
+
+    client.updateStatus(true);
+    expect(client.getStatus()).toEqual(expect.objectContaining({
+      isConnected: true,
+      lastError: null,
+      offline_since: null,
+    }));
   });
 
   test('retries once on 401 after re-authentication', async () => {
@@ -205,6 +235,44 @@ describe('LapiClient', () => {
     expect(calls.some((call) => call.url.endsWith('/v1/alerts/42') && call.method === 'GET')).toBe(true);
     expect(calls.some((call) => call.url.endsWith('/v1/alerts') && call.method === 'POST')).toBe(true);
     expect(calls.some((call) => call.url.endsWith('/v1/decisions/10') && call.method === 'DELETE')).toBe(true);
+  });
+
+  test('throws when all alert scope requests fail', async () => {
+    const client = new LapiClient({
+      crowdsecUrl: 'http://crowdsec:8080',
+      auth: passwordAuth,
+      simulationsEnabled: true,
+      lookbackPeriod: '1h',
+      version: '1.0.0',
+      fetchImpl: async () => {
+        throw new Error('fetch failed');
+      },
+    });
+
+    await expect(client.fetchAlerts()).rejects.toThrow('fetch failed');
+  });
+
+  test('returns merged alerts when at least one scope succeeds', async () => {
+    const calls: string[] = [];
+    const client = new LapiClient({
+      crowdsecUrl: 'http://crowdsec:8080',
+      auth: passwordAuth,
+      simulationsEnabled: true,
+      lookbackPeriod: '1h',
+      version: '1.0.0',
+      fetchImpl: async (input) => {
+        const url = String(input);
+        calls.push(url);
+        if (url.includes('scope=ip')) {
+          throw new Error('ip scope failed');
+        }
+        return Response.json([{ id: 42 }]);
+      },
+    });
+
+    await expect(client.fetchAlerts()).resolves.toEqual([{ id: 42 }]);
+    expect(calls.some((url) => url.includes('scope=ip'))).toBe(true);
+    expect(calls.some((url) => url.includes('scope=range'))).toBe(true);
   });
 
   test('does not request simulated alerts when simulations are disabled', async () => {

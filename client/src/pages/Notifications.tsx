@@ -85,6 +85,7 @@ const RULE_DEFAULTS: Record<NotificationRuleType, Record<string, string>> = {
   'alert-threshold': { window_minutes: '60', alert_threshold: '25' },
   'new-cve': { max_cve_age_days: '14' },
   'application-update': {},
+  'lapi-availability': { outage_threshold_seconds: '60', notify_on_recovery: 'false' },
 };
 
 const defaultChannelForm = (type: NotificationChannelType = 'ntfy'): ChannelFormState => ({
@@ -152,6 +153,17 @@ function buildRulePayload(ruleForm: RuleFormState): UpsertNotificationRuleReques
       ...basePayload,
       type: 'application-update',
       config: {},
+    };
+  }
+
+  if (ruleForm.type === 'lapi-availability') {
+    return {
+      ...basePayload,
+      type: 'lapi-availability',
+      config: {
+        outage_threshold_seconds: Number(ruleForm.config.outage_threshold_seconds || '0'),
+        notify_on_recovery: ruleForm.config.notify_on_recovery === 'true',
+      },
     };
   }
 
@@ -1025,7 +1037,7 @@ function RuleModal({
   onSave: () => void;
   onSetForm: Dispatch<SetStateAction<RuleFormState>>;
 }) {
-  const supportsAlertFilters = form.type !== 'application-update';
+  const supportsAlertFilters = form.type !== 'application-update' && form.type !== 'lapi-availability';
 
   return (
     <Modal isOpen={open} onClose={onClose} title={editingRule ? 'Edit Rule' : 'New Rule'} maxWidth="max-w-3xl">
@@ -1043,6 +1055,7 @@ function RuleModal({
               <option value="alert-threshold">Alert Threshold</option>
               <option value="new-cve">Recent CVE</option>
               <option value="application-update">Application Update</option>
+              <option value="lapi-availability">LAPI Availability</option>
             </select>
           </label>
         </div>
@@ -1098,7 +1111,11 @@ function RuleModal({
             </div>
           </div>
         )}
-        <RuleConfigFields form={form} onChange={(key, value) => onSetForm((current) => ({ ...current, config: { ...current.config, [key]: value } }))} />
+        <RuleConfigFields
+          form={form}
+          onChange={(key, value) => onSetForm((current) => ({ ...current, config: { ...current.config, [key]: value } }))}
+          onSetForm={onSetForm}
+        />
         <div className="flex justify-end gap-3">
           <button onClick={onClose} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium dark:border-gray-700">Cancel</button>
           <button onClick={onSave} disabled={saving} className="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-60">{saving ? 'Saving...' : 'Save Rule'}</button>
@@ -1529,7 +1546,15 @@ function RowEditor({ children, onRemove }: { children: ReactNode; onRemove: () =
   );
 }
 
-function RuleConfigFields({ form, onChange }: { form: RuleFormState; onChange: (key: string, value: string) => void }) {
+function RuleConfigFields({
+  form,
+  onChange,
+  onSetForm,
+}: {
+  form: RuleFormState;
+  onChange: (key: string, value: string) => void;
+  onSetForm: Dispatch<SetStateAction<RuleFormState>>;
+}) {
   const input = (key: string, label: string) => <LabeledInput key={key} label={label} value={form.config[key] || ''} onChange={(value) => onChange(key, value)} />;
   if (form.type === 'alert-spike') return <div className="grid gap-4 md:grid-cols-3">{input('window_minutes', 'Window Minutes')}{input('percent_increase', 'Percent Increase')}{input('minimum_current_alerts', 'Minimum Alerts')}</div>;
   if (form.type === 'alert-threshold') return <div className="grid gap-4 md:grid-cols-2">{input('window_minutes', 'Window Minutes')}{input('alert_threshold', 'Alert Threshold')}</div>;
@@ -1537,6 +1562,29 @@ function RuleConfigFields({ form, onChange }: { form: RuleFormState; onChange: (
     return (
       <div className="rounded-xl border border-blue-200 bg-blue-50/80 p-4 text-sm text-blue-900 dark:border-blue-900/40 dark:bg-blue-950/20 dark:text-blue-200">
         This rule uses the built-in update check and fires when a newer CrowdSec Web UI version is available.
+      </div>
+    );
+  }
+  if (form.type === 'lapi-availability') {
+    return (
+      <div className="space-y-4">
+        <div className="grid gap-4 md:grid-cols-2">
+          {input('outage_threshold_seconds', 'Outage Threshold (seconds)')}
+        </div>
+        <label className="flex items-center gap-3 rounded-lg border border-gray-200 p-3 text-sm dark:border-gray-700">
+          <Switch
+            id="rule-notify-on-recovery"
+            checked={form.config.notify_on_recovery === 'true'}
+            onCheckedChange={(checked) => onSetForm((current) => ({
+              ...current,
+              config: {
+                ...current.config,
+                notify_on_recovery: checked ? 'true' : 'false',
+              },
+            }))}
+          />
+          <span className="font-medium">Send recovery notification</span>
+        </label>
       </div>
     );
   }

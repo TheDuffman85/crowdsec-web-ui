@@ -235,6 +235,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     fetchImpl: options.notificationFetchImpl,
     mqttPublishImpl: options.mqttPublishImpl,
     updateChecker: checkForUpdates,
+    getLapiStatus: () => lapiClient.getStatus(),
     outboundGuard: notificationOutboundGuard,
     secretStore: notificationSecretStore,
   });
