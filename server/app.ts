@@ -96,6 +96,7 @@ interface UpdateCache {
 interface AlertSyncQuery {
   origin?: string;
   scenario?: string;
+  includeCapi?: boolean;
 }
 
 interface CachedDecisionRecord {
@@ -975,15 +976,15 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         includeUnfiltered = true;
         continue;
       }
-      queries.push({ origin });
+      queries.push({ origin, includeCapi: origin.trim().toUpperCase() === 'CAPI' });
     }
 
     if (includeUnfiltered) {
-      queries.push({});
+      queries.push({ includeCapi: false });
     }
 
     for (const scenario of config.alertExtraScenarios) {
-      queries.push({ scenario });
+      queries.push({ scenario, includeCapi: false });
     }
 
     return queries;
@@ -995,7 +996,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     hasActiveDecision = false,
   ): Promise<AlertRecord[]> {
     const configuredQueries = getAlertSyncQueries();
-    const queries = configuredQueries.length === 0 ? [{}] : configuredQueries;
+    const queries = configuredQueries.length === 0 ? [{ includeCapi: false }] : configuredQueries;
     const resultSets = await Promise.all(queries.map((query) => lapiClient.fetchAlerts(since, until, hasActiveDecision, query)));
 
     const merged = new Map<string, AlertRecord>();
