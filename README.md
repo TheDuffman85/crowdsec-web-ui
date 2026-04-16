@@ -197,39 +197,64 @@ Notes:
 - If you want to search for literal operator words like `AND`, `OR`, or `NOT`, wrap them in double quotes
 - Use the `Info` button beside the search field to see the supported fields and examples for the current page
 
-### Alert Allowlist Filtering
+### Alert Source Filtering
 
-Some CrowdSec setups ingest very large volumes of alerts and decisions from external automation, third-party importers, bulk list sync jobs, or other custom workflows. In those cases, you may want the Web UI to focus on selected alert sources instead of caching everything exposed by the LAPI.
+Some CrowdSec setups ingest very large volumes of alerts and decisions from external automation, imported blocklists, or community feeds. In those cases, you may want the Web UI to focus on specific synced alerts instead of caching everything exposed by the LAPI.
 
-You can do that with these optional environment variables:
+The recommended configuration is:
 
-- `CROWDSEC_ALERT_ORIGINS`: comma-separated list of LAPI alert origins
-- `CROWDSEC_ALERT_EXTRA_SCENARIOS`: comma-separated list of exact LAPI scenarios
+- `CROWDSEC_ALERT_INCLUDE_ORIGINS`: comma-separated list of exact origins to include when syncing alerts
+- `CROWDSEC_ALERT_EXCLUDE_ORIGINS`: comma-separated list of exact origins that cause a synced alert to be dropped
+- `CROWDSEC_ALERT_INCLUDE_CAPI`: set to `true` to include Central API / community blocklist alerts
+- `CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY`: set to `true` to also include alerts whose effective origin is empty when using explicit include filters
+- `CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY`: set to `true` to drop alerts whose effective origin is empty
 
 ```yaml
 environment:
-  - CROWDSEC_ALERT_ORIGINS=crowdsec
-  - CROWDSEC_ALERT_EXTRA_SCENARIOS=manual/web-ui
+  - CROWDSEC_ALERT_INCLUDE_ORIGINS=crowdsec,cscli-import
+  - CROWDSEC_ALERT_EXCLUDE_ORIGINS=cscli
+  - CROWDSEC_ALERT_INCLUDE_CAPI=true
+  - CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY=true
+  - CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY=false
 ```
 
-This makes the backend fetch the union of:
+Behavior:
 
-- alerts whose LAPI `origin` is `crowdsec`
-- alerts whose LAPI `scenario` is exactly `manual/web-ui`
+- if no alert source vars are set, the Web UI keeps the current default and fetches the normal non-CAPI/non-lists alert feed
+- `CROWDSEC_ALERT_INCLUDE_ORIGINS` limits upstream queries to alerts matching the origins you list
+- `CROWDSEC_ALERT_INCLUDE_CAPI=true` adds the dedicated CAPI/community-blocklist query on top of the normal non-CAPI/non-lists feed, unless you also enable explicit include filtering with `CROWDSEC_ALERT_INCLUDE_ORIGINS` and/or `CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY`
+- `CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY=true` adds an extra unfiltered non-CAPI query lane so explicit include filters can also keep alerts whose effective origin stays empty after local evaluation
+- `CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY=true` drops alerts whose effective origin stays empty after local evaluation
+- `CROWDSEC_ALERT_EXCLUDE_ORIGINS` removes matching alerts after the result sets are merged; if an alert contains any excluded origin, the whole alert is dropped
+- these origin checks are based on the alert's associated decision origins when present, with CrowdSec blocklist/list source scopes used as a fallback for alerts without decisions
 
-You can adapt those values to match your own CrowdSec setup. For example:
+Common origins in CrowdSec include:
 
-- use `CROWDSEC_ALERT_ORIGINS` to keep only selected upstream origins
-- use `none` inside `CROWDSEC_ALERT_ORIGINS` to also fetch the normal unfiltered alert feed
-- use `CROWDSEC_ALERT_EXTRA_SCENARIOS` to include specific scenarios that should remain visible even if they come from a different origin
-- multiple values can be provided as CSV, for example `CROWDSEC_ALERT_ORIGINS=crowdsec,cscli` or `CROWDSEC_ALERT_EXTRA_SCENARIOS=manual/web-ui,my/custom-scenario`
+- `crowdsec` for alerts carrying decisions created by the security engine
+- `cscli` for alerts created by manual `cscli decisions add`
+- `cscli-import` for alerts created by `cscli decisions import`
+- `lists` for imported list feeds
+- `CAPI` for Central API / community blocklist alerts
 
 Examples:
 
-- `CROWDSEC_ALERT_ORIGINS=CAPI` fetches only CAPI alerts
-- `CROWDSEC_ALERT_ORIGINS=none,CAPI` fetches the normal unfiltered alert feed plus CAPI alerts
+- `CROWDSEC_ALERT_INCLUDE_ORIGINS=crowdsec` keeps only security-engine alerts
+- `CROWDSEC_ALERT_INCLUDE_ORIGINS=lists` fetches only list-based alerts
+- `CROWDSEC_ALERT_INCLUDE_CAPI=true` keeps the default non-CAPI feed and adds CAPI/community-blocklist alerts
+- `CROWDSEC_ALERT_INCLUDE_ORIGINS=CAPI` fetches only CAPI/community-blocklist alerts
+- `CROWDSEC_ALERT_INCLUDE_ORIGINS=crowdsec` with `CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY=true` keeps both `crowdsec` alerts and alerts without an origin
+- `CROWDSEC_ALERT_INCLUDE_ORIGINS=cscli` with `CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY=true` keeps both `cscli` alerts and alerts without an origin
+- `CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY=true` removes alerts without an effective origin from the synced cache
+- `CROWDSEC_ALERT_EXCLUDE_ORIGINS=cscli,lists` removes manual `cscli` alerts and imported list alerts from the local synced cache view
 
-These are upstream LAPI filters, so excluded alerts are skipped before they are cached locally. This is usually more effective than relying on UI-side limits when you have very large external data sets.
+Notes:
+
+- include filters are applied upstream where possible, which is usually the biggest performance win
+- `CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY` is local-only because CrowdSec LAPI does not expose an upstream "missing origin" filter
+- `CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY` is mainly intended as an additive option alongside `CROWDSEC_ALERT_INCLUDE_ORIGINS` and/or `CROWDSEC_ALERT_INCLUDE_CAPI`
+- `CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY` is also local-only because CrowdSec LAPI does not expose an upstream "missing origin" filter
+- generic excludes are applied locally after fetch because CrowdSec LAPI does not expose a general alert-origin exclude filter
+- because the local decisions view is built from synced alerts, these settings also affect which imported decisions appear in the UI
 
 ## Run with Docker (Recommended)
 

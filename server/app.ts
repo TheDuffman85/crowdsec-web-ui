@@ -97,6 +97,7 @@ interface AlertSyncQuery {
   origin?: string;
   scenario?: string;
   includeCapi?: boolean;
+  singleScopeOnly?: boolean;
 }
 
 interface CachedDecisionRecord {
@@ -205,9 +206,32 @@ interface DashboardDecisionAccumulator {
 }
 const NOTIFICATION_SECRET_KEY_META_KEY = 'notification_secret_key';
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const UNFILTERED_ALERT_ORIGIN_TOKENS = new Set(['none']);
+const LEGACY_UNFILTERED_ALERT_ORIGIN_TOKENS = new Set(['none']);
+const CAPI_ALERT_ORIGIN = 'CAPI';
+const LISTS_ALERT_ORIGIN = 'lists';
+const COMMUNITY_BLOCKLIST_SOURCE_SCOPE = 'crowdsecurity/community-blocklist';
+const LIST_SOURCE_SCOPE_PREFIX = 'lists:';
 const IPV4_RE = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/;
 const IPV6_RE = /^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}(\/\d{1,3})?$/;
+
+function usesSingleScopeAlertQuery(origin: string | undefined): boolean {
+  return origin === CAPI_ALERT_ORIGIN || origin === LISTS_ALERT_ORIGIN;
+}
+
+function getAlertFallbackOrigins(alert: Pick<AlertRecord, 'decisions' | 'source'>): string[] {
+  const decisionOrigins = collectDistinctOrigins(alert.decisions);
+  if (decisionOrigins.length > 0) return decisionOrigins;
+
+  const sourceScope = typeof alert.source?.scope === 'string' ? alert.source.scope.trim() : '';
+  if (sourceScope === COMMUNITY_BLOCKLIST_SOURCE_SCOPE) {
+    return [CAPI_ALERT_ORIGIN];
+  }
+  if (sourceScope.startsWith(LIST_SOURCE_SCOPE_PREFIX)) {
+    return [LISTS_ALERT_ORIGIN];
+  }
+
+  return [];
+}
 
 export function createApp(options: CreateAppOptions = {}): AppController {
   const config = options.config || createRuntimeConfig();
@@ -286,8 +310,12 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   Auth Mode: ${config.crowdsecAuthMode}
   Simulations: ${config.simulationsEnabled ? 'Enabled' : 'Disabled'}
   Always Show Machine: ${config.alwaysShowMachine ? 'Enabled' : 'Disabled'}
-  Alert Origin Allowlist: ${config.alertOrigins.length > 0 ? config.alertOrigins.join(', ') : 'Disabled'}
-  Alert Scenario Allowlist: ${config.alertExtraScenarios.length > 0 ? config.alertExtraScenarios.join(', ') : 'Disabled'}
+  Alert Filter Mode: ${config.alertFilterMode}
+  Alert Include Origins: ${config.alertIncludeOrigins.length > 0 ? config.alertIncludeOrigins.join(', ') : 'Disabled'}
+  Alert Exclude Origins: ${config.alertExcludeOrigins.length > 0 ? config.alertExcludeOrigins.join(', ') : 'Disabled'}
+  Alert Include CAPI: ${config.alertIncludeCapi ? 'Enabled' : 'Disabled'}
+  Alert Include Origin Empty: ${config.alertIncludeOriginEmpty ? 'Enabled' : 'Disabled'}
+  Alert Exclude Origin Empty: ${config.alertExcludeOriginEmpty ? 'Enabled' : 'Disabled'}
   Bootstrap Retry: ${config.bootstrapRetryEnabled ? getIntervalName(config.bootstrapRetryDelayMs) : 'Disabled'}
   Notification Secret Storage: Encrypted (${config.notificationSecretKey ? 'configured key' : 'auto-generated key'})
   Notification Private Destinations: ${config.notificationAllowPrivateAddresses ? 'Allowed' : 'Blocked'}
@@ -967,27 +995,105 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
   }
 
-  function getAlertSyncQueries(): AlertSyncQuery[] {
+  function getLegacyAlertSyncQueries(): AlertSyncQuery[] {
     const queries: AlertSyncQuery[] = [];
     let includeUnfiltered = false;
 
-    for (const origin of config.alertOrigins) {
-      if (UNFILTERED_ALERT_ORIGIN_TOKENS.has(origin.trim().toLowerCase())) {
+    for (const origin of config.legacyAlertOrigins) {
+      if (LEGACY_UNFILTERED_ALERT_ORIGIN_TOKENS.has(origin.trim().toLowerCase())) {
         includeUnfiltered = true;
         continue;
       }
-      queries.push({ origin, includeCapi: origin.trim().toUpperCase() === 'CAPI' });
+      queries.push({
+        origin,
+        includeCapi: origin.trim().toUpperCase() === CAPI_ALERT_ORIGIN,
+        singleScopeOnly: usesSingleScopeAlertQuery(origin),
+      });
     }
 
     if (includeUnfiltered) {
       queries.push({ includeCapi: false });
     }
 
-    for (const scenario of config.alertExtraScenarios) {
+    for (const scenario of config.legacyAlertExtraScenarios) {
       queries.push({ scenario, includeCapi: false });
     }
 
     return queries;
+  }
+
+  function getNewAlertSyncQueries(): AlertSyncQuery[] {
+    const queries: AlertSyncQuery[] = [];
+    const includedOrigins = new Set(config.alertIncludeOrigins);
+    const needsUnfilteredNonCapiLane = config.alertIncludeOriginEmpty || config.alertIncludeOrigins.length === 0;
+
+    if (needsUnfilteredNonCapiLane) {
+      queries.push({ includeCapi: false });
+    }
+
+    if (config.alertIncludeCapi) {
+      includedOrigins.add(CAPI_ALERT_ORIGIN);
+    }
+
+    for (const origin of includedOrigins) {
+      if (origin === CAPI_ALERT_ORIGIN && config.alertExcludeOrigins.includes(CAPI_ALERT_ORIGIN)) {
+        continue;
+      }
+
+      queries.push({
+        origin,
+        includeCapi: origin === CAPI_ALERT_ORIGIN,
+        singleScopeOnly: usesSingleScopeAlertQuery(origin),
+      });
+    }
+
+    return queries;
+  }
+
+  function getAlertSyncQueries(): AlertSyncQuery[] {
+    if (config.alertFilterMode === 'legacy') {
+      return getLegacyAlertSyncQueries();
+    }
+    if (config.alertFilterMode === 'new') {
+      return getNewAlertSyncQueries();
+    }
+    return [];
+  }
+
+  function hasExplicitNewAlertIncludes(): boolean {
+    return config.alertIncludeOrigins.length > 0 || config.alertIncludeOriginEmpty;
+  }
+
+  function getEffectiveIncludedOrigins(): Set<string> {
+    const includedOrigins = new Set(config.alertIncludeOrigins);
+    if (config.alertIncludeCapi) {
+      includedOrigins.add(CAPI_ALERT_ORIGIN);
+    }
+    return includedOrigins;
+  }
+
+  function shouldIncludeAlertByOrigin(alert: AlertRecord): boolean {
+    if (config.alertFilterMode !== 'new' || !hasExplicitNewAlertIncludes()) {
+      return true;
+    }
+
+    const effectiveOrigins = getAlertFallbackOrigins(alert);
+    if (effectiveOrigins.length === 0) {
+      return config.alertIncludeOriginEmpty;
+    }
+
+    const includedOrigins = getEffectiveIncludedOrigins();
+    return effectiveOrigins.some((origin) => includedOrigins.has(origin));
+  }
+
+  function shouldExcludeAlertByOrigin(alert: AlertRecord): boolean {
+    const effectiveOrigins = getAlertFallbackOrigins(alert);
+    if (effectiveOrigins.length === 0) {
+      return config.alertExcludeOriginEmpty;
+    }
+
+    if (config.alertExcludeOrigins.length === 0) return false;
+    return effectiveOrigins.some((origin) => config.alertExcludeOrigins.includes(origin));
   }
 
   async function fetchAlertsForSync(
@@ -996,6 +1102,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     hasActiveDecision = false,
   ): Promise<AlertRecord[]> {
     const configuredQueries = getAlertSyncQueries();
+    if (configuredQueries.length === 0 && config.alertFilterMode === 'new' && hasExplicitNewAlertIncludes()) {
+      return [];
+    }
+
     const queries = configuredQueries.length === 0 ? [{ includeCapi: false }] : configuredQueries;
     const resultSets = await Promise.all(queries.map((query) => lapiClient.fetchAlerts(since, until, hasActiveDecision, query)));
 
@@ -1008,7 +1118,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       }
     }
 
-    return Array.from(merged.values());
+    return Array.from(merged.values())
+      .filter((alert) => shouldIncludeAlertByOrigin(alert))
+      .filter((alert) => !shouldExcludeAlertByOrigin(alert));
   }
 
   function processAlertForDatabase(alert: AlertRecord): void {

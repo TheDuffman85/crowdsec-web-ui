@@ -35,6 +35,7 @@ export interface FetchAlertsFilters {
   origin?: string;
   scenario?: string;
   includeCapi?: boolean;
+  singleScopeOnly?: boolean;
 }
 
 export class LapiClient {
@@ -229,7 +230,9 @@ export class LapiClient {
     filters: FetchAlertsFilters = {},
   ): Promise<unknown[]> {
     const sinceParam = since || this.lookbackPeriod;
-    const isCapiOrigin = filters.origin?.trim().toUpperCase() === 'CAPI';
+    const normalizedOrigin = filters.origin?.trim();
+    const isCapiOrigin = normalizedOrigin?.toUpperCase() === 'CAPI';
+    const isListsOrigin = normalizedOrigin === 'lists';
     const includeCapi = filters.includeCapi ?? isCapiOrigin;
     const buildParams = (scope?: 'ip' | 'range'): URLSearchParams => {
       const params = new URLSearchParams();
@@ -245,7 +248,8 @@ export class LapiClient {
       return params;
     };
 
-    const scopes: Array<'ip' | 'range' | undefined> = isCapiOrigin
+    const singleScopeOnly = filters.singleScopeOnly ?? (isCapiOrigin || isListsOrigin);
+    const scopes: Array<'ip' | 'range' | undefined> = singleScopeOnly
       ? [undefined]
       : [undefined, 'ip', 'range'];
     let successfulScopes = 0;

@@ -355,6 +355,27 @@ describe('LapiClient', () => {
     expect(calls[0]).not.toContain('scope=');
   });
 
+  test('uses an unscoped alert query for lists origins', async () => {
+    const calls: string[] = [];
+    const client = new LapiClient({
+      crowdsecUrl: 'http://crowdsec:8080',
+      auth: passwordAuth,
+      simulationsEnabled: false,
+      lookbackPeriod: '1h',
+      version: '1.0.0',
+      fetchImpl: async (input) => {
+        calls.push(String(input));
+        return Response.json([{ id: 6 }]);
+      },
+    });
+
+    await expect(client.fetchAlerts('24h', null, false, { origin: 'lists' })).resolves.toEqual([{ id: 6 }]);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain('/v1/alerts?since=24h&limit=0&origin=lists&include_capi=false');
+    expect(calls[0]).not.toContain('scope=');
+  });
+
   test('logs in with mTLS and attaches TLS options to login and subsequent requests', async () => {
     const mtlsAuth = createMtlsAuth();
     const calls: Array<{

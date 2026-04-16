@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { createRuntimeConfig, getIntervalName, parseBooleanEnv, parseCsvEnv, parseLookbackToMs, parseRefreshInterval } from './config';
 
 describe('config helpers', () => {
@@ -47,8 +47,11 @@ describe('config helpers', () => {
       CROWDSEC_URL: 'http://localhost:8080',
       CROWDSEC_USER: 'watcher',
       CROWDSEC_PASSWORD: 'secret',
-      CROWDSEC_ALERT_ORIGINS: 'crowdsec, cscli',
-      CROWDSEC_ALERT_EXTRA_SCENARIOS: 'manual/web-ui',
+      CROWDSEC_ALERT_INCLUDE_ORIGINS: 'crowdsec, cscli, crowdsec',
+      CROWDSEC_ALERT_EXCLUDE_ORIGINS: 'lists, crowdsec',
+      CROWDSEC_ALERT_INCLUDE_CAPI: 'true',
+      CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY: 'true',
+      CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY: 'true',
       CROWDSEC_SIMULATIONS_ENABLED: 'false',
       CROWDSEC_ALWAYS_SHOW_MACHINE: 'true',
       CROWDSEC_ALWAYS_SHOW_ORIGIN: 'true',
@@ -72,8 +75,14 @@ describe('config helpers', () => {
     expect(config.basePath).toBe('/crowdsec');
     expect(config.crowdsecAuthMode).toBe('password');
     expect(config.crowdsecAuth).toEqual({ mode: 'password', user: 'watcher', password: 'secret' });
-    expect(config.alertOrigins).toEqual(['crowdsec', 'cscli']);
-    expect(config.alertExtraScenarios).toEqual(['manual/web-ui']);
+    expect(config.alertFilterMode).toBe('new');
+    expect(config.alertIncludeOrigins).toEqual(['crowdsec', 'cscli']);
+    expect(config.alertExcludeOrigins).toEqual(['lists', 'crowdsec']);
+    expect(config.alertIncludeCapi).toBe(true);
+    expect(config.alertIncludeOriginEmpty).toBe(true);
+    expect(config.alertExcludeOriginEmpty).toBe(true);
+    expect(config.legacyAlertOrigins).toEqual([]);
+    expect(config.legacyAlertExtraScenarios).toEqual([]);
     expect(config.simulationsEnabled).toBe(false);
     expect(config.alwaysShowMachine).toBe(true);
     expect(config.alwaysShowOrigin).toBe(true);
@@ -91,13 +100,37 @@ describe('config helpers', () => {
     const config = createRuntimeConfig({});
     expect(config.crowdsecAuthMode).toBe('none');
     expect(config.crowdsecAuth).toEqual({ mode: 'none' });
-    expect(config.alertOrigins).toEqual([]);
-    expect(config.alertExtraScenarios).toEqual([]);
+    expect(config.alertFilterMode).toBe('default');
+    expect(config.alertIncludeOrigins).toEqual([]);
+    expect(config.alertExcludeOrigins).toEqual([]);
+    expect(config.alertIncludeCapi).toBe(false);
+    expect(config.alertIncludeOriginEmpty).toBe(false);
+    expect(config.alertExcludeOriginEmpty).toBe(false);
+    expect(config.legacyAlertOrigins).toEqual([]);
+    expect(config.legacyAlertExtraScenarios).toEqual([]);
     expect(config.simulationsEnabled).toBe(false);
     expect(config.alwaysShowMachine).toBe(false);
     expect(config.alwaysShowOrigin).toBe(false);
     expect(config.notificationSecretKey).toBeUndefined();
     expect(config.notificationAllowPrivateAddresses).toBe(true);
+  });
+
+  test('createRuntimeConfig ignores deprecated no-origin env vars and warns', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfig({
+        CROWDSEC_ALERT_INCLUDE_NO_ORIGIN: 'true',
+        CROWDSEC_ALERT_EXCLUDE_NO_ORIGIN: 'true',
+      });
+
+      expect(config.alertFilterMode).toBe('default');
+      expect(config.alertIncludeOriginEmpty).toBe(false);
+      expect(config.alertExcludeOriginEmpty).toBe(false);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toMatch(/no longer supported/i);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test('createRuntimeConfig supports mTLS authentication', () => {
@@ -137,5 +170,54 @@ describe('config helpers', () => {
     expect(() => createRuntimeConfig({
       CROWDSEC_TLS_CA_CERT_PATH: '/certs/ca.pem',
     })).toThrow(/CrowdSec mTLS authentication requires both CROWDSEC_TLS_CERT_PATH and CROWDSEC_TLS_KEY_PATH/i);
+  });
+
+  test('createRuntimeConfig translates deprecated alert origin settings', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfig({
+        CROWDSEC_ALERT_ORIGINS: 'none, crowdsec, CAPI',
+        CROWDSEC_ALERT_EXTRA_SCENARIOS: 'manual/web-ui',
+      });
+
+      expect(config.alertFilterMode).toBe('legacy');
+      expect(config.alertIncludeOrigins).toEqual(['crowdsec']);
+      expect(config.alertExcludeOrigins).toEqual([]);
+      expect(config.alertIncludeCapi).toBe(true);
+      expect(config.alertIncludeOriginEmpty).toBe(false);
+      expect(config.alertExcludeOriginEmpty).toBe(false);
+      expect(config.legacyAlertOrigins).toEqual(['none', 'crowdsec', 'CAPI']);
+      expect(config.legacyAlertExtraScenarios).toEqual(['manual/web-ui']);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toMatch(/deprecated/i);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test('createRuntimeConfig prefers new alert filters over deprecated ones and warns once', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfig({
+        CROWDSEC_ALERT_INCLUDE_ORIGINS: 'crowdsec',
+        CROWDSEC_ALERT_INCLUDE_CAPI: 'true',
+        CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY: 'true',
+        CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY: 'true',
+        CROWDSEC_ALERT_ORIGINS: 'none,CAPI',
+        CROWDSEC_ALERT_EXTRA_SCENARIOS: 'manual/web-ui',
+      });
+
+      expect(config.alertFilterMode).toBe('new');
+      expect(config.alertIncludeOrigins).toEqual(['crowdsec']);
+      expect(config.alertIncludeCapi).toBe(true);
+      expect(config.alertIncludeOriginEmpty).toBe(true);
+      expect(config.alertExcludeOriginEmpty).toBe(true);
+      expect(config.legacyAlertOrigins).toEqual(['none', 'CAPI']);
+      expect(config.legacyAlertExtraScenarios).toEqual(['manual/web-ui']);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toMatch(/deprecated/i);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
