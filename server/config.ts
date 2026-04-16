@@ -116,8 +116,6 @@ function parseAlertFilterConfig(env: NodeJS.ProcessEnv): Pick<
 > {
   const includeOriginEmpty = env.CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY;
   const excludeOriginEmpty = env.CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY;
-  const hasDeprecatedOriginEmptyFilters = env.CROWDSEC_ALERT_INCLUDE_NO_ORIGIN !== undefined
-    || env.CROWDSEC_ALERT_EXCLUDE_NO_ORIGIN !== undefined;
   const hasNewAlertFilters = env.CROWDSEC_ALERT_INCLUDE_ORIGINS !== undefined
     || env.CROWDSEC_ALERT_EXCLUDE_ORIGINS !== undefined
     || env.CROWDSEC_ALERT_INCLUDE_CAPI !== undefined
@@ -132,12 +130,6 @@ function parseAlertFilterConfig(env: NodeJS.ProcessEnv): Pick<
   if (hasNewAlertFilters && hasLegacyAlertFilters) {
     console.warn(
       'Both new and deprecated CrowdSec alert filter environment variables are set. Using CROWDSEC_ALERT_INCLUDE_ORIGINS/CROWDSEC_ALERT_EXCLUDE_ORIGINS/CROWDSEC_ALERT_INCLUDE_CAPI/CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY/CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY.',
-    );
-  }
-
-  if (hasDeprecatedOriginEmptyFilters) {
-    console.warn(
-      'CROWDSEC_ALERT_INCLUDE_NO_ORIGIN and CROWDSEC_ALERT_EXCLUDE_NO_ORIGIN are deprecated and no longer supported. Use CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY/CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY instead.',
     );
   }
 

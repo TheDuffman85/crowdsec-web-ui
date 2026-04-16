@@ -115,24 +115,6 @@ describe('config helpers', () => {
     expect(config.notificationAllowPrivateAddresses).toBe(true);
   });
 
-  test('createRuntimeConfig ignores deprecated no-origin env vars and warns', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      const config = createRuntimeConfig({
-        CROWDSEC_ALERT_INCLUDE_NO_ORIGIN: 'true',
-        CROWDSEC_ALERT_EXCLUDE_NO_ORIGIN: 'true',
-      });
-
-      expect(config.alertFilterMode).toBe('default');
-      expect(config.alertIncludeOriginEmpty).toBe(false);
-      expect(config.alertExcludeOriginEmpty).toBe(false);
-      expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls[0]?.[0]).toMatch(/no longer supported/i);
-    } finally {
-      warn.mockRestore();
-    }
-  });
-
   test('createRuntimeConfig supports mTLS authentication', () => {
     const config = createRuntimeConfig({
       CROWDSEC_URL: 'https://localhost:8080',

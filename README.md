@@ -120,9 +120,154 @@ Create notification rules for alert spikes, alert thresholds, recent CVE activit
 >
 > Do not set both modes at the same time. The container will fail fast on mixed or partial auth configuration.
 
+## Run with Docker (Recommended)
+
+The examples below intentionally use only the required environment variables. Optional knobs are documented in [Environment Variables](#environment-variables).
+
+1.  **Build the image**:
+    ```bash
+    docker build -t crowdsec-web-ui .
+    ```
+
+    You can optionally specify `DOCKER_IMAGE_REF` to override the default image reference used for checking updates (useful for forks or private registries):
+    ```bash
+    docker build --build-arg DOCKER_IMAGE_REF=my-registry/my-image -t crowdsec-web-ui .
+    ```
+
+> [!NOTE]
+> Current Docker images are based on Node.js rather than Bun, so the previous Bun/AVX-specific x64 runtime limitation no longer applies.
+
+2.  **Run the container**:
+    Provide the CrowdSec LAPI URL and one supported auth mode.
+
+    ```bash
+    docker run -d \
+      --name crowdsec_web_ui \
+      -p 3000:3000 \
+      -e CROWDSEC_URL=http://<crowdsec-host>:8080 \
+      -e CROWDSEC_USER=crowdsec-web-ui \
+      -e CROWDSEC_PASSWORD=<your-secure-password> \
+      -v $(pwd)/data:/app/data \
+      --network your_crowdsec_network \
+      crowdsec-web-ui
+    ```
+> [!NOTE]
+> Ensure the container is on the same Docker network as CrowdSec so it can reach the URL.
+
+### Docker Compose Example
+
+```yaml
+services:
+  crowdsec-web-ui:
+    image: ghcr.io/theduffman85/crowdsec-web-ui:latest
+    container_name: crowdsec_web_ui
+    ports:
+      - "3000:3000"
+    environment:
+      - CROWDSEC_URL=http://crowdsec:8080
+      - CROWDSEC_USER=crowdsec-web-ui
+      - CROWDSEC_PASSWORD=<generated_password>
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+```
+
+The repository also ships a minimal [`docker-compose.yml`](docker-compose.yml) that builds the image locally and reads the same runtime inputs from `.env`.
+
+### Docker Compose Example (mTLS Authentication)
+
+```yaml
+services:
+  crowdsec-web-ui:
+    image: ghcr.io/theduffman85/crowdsec-web-ui:latest
+    container_name: crowdsec_web_ui
+    ports:
+      - "3000:3000"
+    environment:
+      - CROWDSEC_URL=https://crowdsec:8080
+      - CROWDSEC_TLS_CERT_PATH=/certs/agent.pem
+      - CROWDSEC_TLS_KEY_PATH=/certs/agent-key.pem
+      # Optional when CrowdSec LAPI uses a private or self-signed CA
+      # - CROWDSEC_TLS_CA_CERT_PATH=/certs/ca.pem
+    volumes:
+      - ./data:/app/data
+      - /path/on/host/agent.pem:/certs/agent.pem:ro
+      - /path/on/host/agent-key.pem:/certs/agent-key.pem:ro
+      # - /path/on/host/ca.pem:/certs/ca.pem:ro
+    restart: unless-stopped
+```
+
+## Environment Variables
+
+### CrowdSec Connection and Authentication
+
+Choose exactly one auth mode: password auth or mTLS auth.
+
+| Variable | Default | Required | Description |
+| --- | --- | --- | --- |
+| `CROWDSEC_URL` | `http://crowdsec:8080` | Usually | CrowdSec LAPI base URL. Use `https://...` when TLS is enabled. |
+| `CROWDSEC_USER` | none | Password auth only | CrowdSec machine/user name for watcher-password login. Must be set together with `CROWDSEC_PASSWORD`. |
+| `CROWDSEC_PASSWORD` | none | Password auth only | CrowdSec watcher password. Must be set together with `CROWDSEC_USER`. |
+| `CROWDSEC_TLS_CERT_PATH` | none | mTLS only | Path inside the container or host process to the client certificate used for CrowdSec mTLS auth. |
+| `CROWDSEC_TLS_KEY_PATH` | none | mTLS only | Path to the client private key used for CrowdSec mTLS auth. |
+| `CROWDSEC_TLS_CA_CERT_PATH` | none | No | Optional CA bundle used to verify the CrowdSec LAPI server certificate during mTLS connections. |
+
+### Runtime Settings
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `PORT` | `3000` | HTTP listen port. If you change this in Docker, also update port mappings and the container health check to match. |
+| `BASE_PATH` | empty | Serve the UI under a path prefix such as `/crowdsec`. Start with `/` and omit the trailing slash. |
+| `DB_DIR` | `/app/data` | Directory that stores the SQLite database and other persisted app data. If you change it, update your volume mounts too. |
+| `CROWDSEC_LOOKBACK_PERIOD` | `168h` | Alert/history retention window used for sync and cleanup. Accepts values like `12h`, `7d`, or `30m`. |
+| `CROWDSEC_REFRESH_INTERVAL` | `30s` | Normal background refresh interval. Accepts `0`, `manual`, `5s`, `30s`, `1m`, `5m`, or other `s`/`m`/`h`/`d` values. |
+| `CROWDSEC_IDLE_REFRESH_INTERVAL` | `5m` | Refresh interval used when the app considers itself idle. |
+| `CROWDSEC_IDLE_THRESHOLD` | `2m` | Inactivity period before the app switches to idle refresh behavior. |
+| `CROWDSEC_FULL_REFRESH_INTERVAL` | `5m` | Interval for full cache refreshes while active. |
+| `CROWDSEC_BOOTSTRAP_RETRY_DELAY` | `30s` | Delay between background retries when initial CrowdSec bootstrap fails. |
+| `CROWDSEC_BOOTSTRAP_RETRY_ENABLED` | `true` | Enables background bootstrap retry after startup or login failures. |
+| `CROWDSEC_SIMULATIONS_ENABLED` | `false` | Include simulation-mode alerts and decisions from CrowdSec and expose the related UI indicators. |
+| `CROWDSEC_ALWAYS_SHOW_MACHINE` | `false` | Always show machine information, even before multiple machines have been observed. |
+| `CROWDSEC_ALWAYS_SHOW_ORIGIN` | `false` | Always show decision origin information, even before multiple origins have been observed. |
+| `CROWDSEC_ALERT_INCLUDE_ORIGINS` | empty | Comma-separated list of exact origins to include when syncing alerts. |
+| `CROWDSEC_ALERT_EXCLUDE_ORIGINS` | empty | Comma-separated list of exact origins to drop after alert results are merged. |
+| `CROWDSEC_ALERT_INCLUDE_CAPI` | `false` | Add the Central API / community-blocklist alert feed. |
+| `CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY` | `false` | Keep alerts whose effective origin is empty when using explicit include filters. |
+| `CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY` | `false` | Drop alerts whose effective origin is empty. |
+| `NOTIFICATION_SECRET_KEY` | auto-generated and persisted | Optional fixed encryption key for saved notification secrets. If unset, the app generates one and stores it in app metadata. |
+| `NOTIFICATION_ALLOW_PRIVATE_ADDRESSES` | `true` | Allow notification destinations on private, loopback, and link-local addresses. Set to `false` to block them. |
+| `NODE_EXTRA_CA_CERTS` | none | Optional Node.js trust bundle for HTTPS connections, useful when using password auth against a private or self-signed CrowdSec CA. |
+
+### Build and Image Metadata
+
+These values are mainly relevant when building your own image or local production bundle.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `DOCKER_IMAGE_REF` | `theduffman85/crowdsec-web-ui` | Image reference used by the built-in update checker. Accepts `owner/repo` or registry-prefixed forms such as `ghcr.io/owner/repo`. |
+| `VITE_VERSION` | `0.0.0` | Version label shown in the UI and used for update-check comparisons. |
+| `VITE_BRANCH` | `main` | Branch label shown in the UI. `dev` enables dev-build update comparisons. |
+| `VITE_COMMIT_HASH` | empty | Commit hash displayed in the sidebar and used for build metadata/update logic. |
+| `VITE_BUILD_DATE` | auto-generated at build time | Build timestamp shown in the UI. |
+| `VITE_REPO_URL` | `https://github.com/TheDuffman85/crowdsec-web-ui` | Repository URL used for release and commit links in the UI. |
+
+### Development and Test Only
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `BACKEND_URL` | `http://localhost:3000` | Vite dev-server proxy target for `/api` during local frontend development. |
+| `CROWDSEC_MTLS_IMAGE` | `crowdsecurity/crowdsec:latest` | Override image used by `pnpm run test:mtls:crowdsec`. |
+| `CROWDSEC_MTLS_KEEP` | `0` | Set to `1` to keep the disposable CrowdSec test container after the mTLS smoke test. |
+| `CROWDSEC_MTLS_CONTAINER` | auto-generated | Override the disposable container name used by the mTLS smoke test. |
+
+> [!NOTE]
+> `scripts/ensure-native-deps.mjs` also honors standard Node/npm cache variables such as `COREPACK_HOME`, `XDG_CACHE_HOME`, `PREBUILD_INSTALL_CACHE`, `npm_config_cache`, `npm_config_devdir`, and `npm_config_nodedir`. Those are generic toolchain settings rather than project-specific configuration, so they are not required for normal setup.
+
+## Deployment Notes
+
 ### Trusted IPs for Delete Operations (Optional)
 
-By default, CrowdSec may restrict certain write operations (like deleting alerts) to trusted IP addresses. If you encounter `403 Forbidden` errors when trying to delete alerts, you may need to add the Web UI's IP to CrowdSec's trusted IPs list.
+By default, CrowdSec may restrict certain write operations such as deleting alerts to trusted IP addresses. If you encounter `403 Forbidden` errors when trying to delete alerts, add the Web UI network or IP range to CrowdSec's trusted IPs list.
 
 **Docker Setup**: Add the Web UI container's network to the CrowdSec configuration in `/etc/crowdsec/config.yaml` or via environment variable:
 
@@ -136,11 +281,118 @@ api:
 ```
 
 Or using `TRUSTED_IPS` environment variable on the CrowdSec container:
+
 ```bash
 TRUSTED_IPS="127.0.0.1,::1,172.16.0.0/12"
 ```
 
 See the [CrowdSec documentation](https://docs.crowdsec.net/docs/local_api/intro/) for more details on LAPI configuration.
+
+### Using CrowdSec Web UI with a Local or Custom Certificate
+
+If your CrowdSec Local API (LAPI) uses HTTPS with a self-signed certificate or an internal Certificate Authority (CA), the Web UI container may not trust it by default. This can result in errors like:
+
+```
+Login failed: unable to get local issuer certificate
+```
+
+#### Solution: Mount the CA Certificate and Use NODE_EXTRA_CA_CERTS
+
+You can mount your CA certificate into the container and instruct Node.js to trust it using the `NODE_EXTRA_CA_CERTS` environment variable.
+
+#### Example Docker Compose
+
+```yaml
+services:
+  crowdsec-web-ui:
+    image: ghcr.io/theduffman85/crowdsec-web-ui:latest
+    container_name: crowdsec_web_ui
+    ports:
+      - "3000:3000"
+    environment:
+      - CROWDSEC_URL=https://crowdsec:8080
+      - CROWDSEC_USER=crowdsec-web-ui
+      - CROWDSEC_PASSWORD=<generated_password>
+      - NODE_EXTRA_CA_CERTS=/certs/root_ca.crt
+    volumes:
+      - ./data:/app/data
+      - /path/on/host/root_ca.crt:/certs/root_ca.crt:ro
+    restart: unless-stopped
+```
+
+#### Notes
+
+- Replace `/path/on/host/root_ca.crt` with the path to your local CA certificate.
+- The `:ro` ensures the certificate is mounted read-only.
+- This method avoids rebuilding the container image.
+- Works for self-signed certificates as well as private CA certificates.
+- `NODE_EXTRA_CA_CERTS` is a general runtime trust mechanism. When using the new mTLS auth mode, prefer `CROWDSEC_TLS_CA_CERT_PATH` as the explicit CrowdSec LAPI trust input for the Web UI client connection.
+
+### Reverse Proxy with Base Path
+
+If you need to serve the Web UI at a non-root URL path (e.g., `https://example.com/crowdsec/` instead of `https://example.com/`), use the `BASE_PATH` environment variable.
+
+#### Docker Compose Example
+
+```yaml
+services:
+  crowdsec-web-ui:
+    image: ghcr.io/theduffman85/crowdsec-web-ui:latest
+    container_name: crowdsec_web_ui
+    ports:
+      - "3000:3000"
+    environment:
+      - CROWDSEC_URL=http://crowdsec:8080
+      - CROWDSEC_USER=crowdsec-web-ui
+      - CROWDSEC_PASSWORD=<generated_password>
+      - BASE_PATH=/crowdsec
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+```
+
+#### Nginx Reverse Proxy Example
+
+```nginx
+location /crowdsec/ {
+    proxy_pass http://localhost:3000/crowdsec/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+#### Notes
+
+- The `BASE_PATH` must start with a `/` (e.g., `/crowdsec`, not `crowdsec`)
+- Do not include a trailing slash (use `/crowdsec`, not `/crowdsec/`)
+- When `BASE_PATH` is set, accessing the root URL (`/`) will redirect to the base path
+- All API calls, assets, and navigation will automatically use the configured base path
+
+### Health Check
+
+The Docker image includes a built-in `HEALTHCHECK` that verifies the web server is responding. Docker will automatically mark the container as `healthy` or `unhealthy`.
+
+Startup is non-blocking: if CrowdSec LAPI is temporarily unavailable, the Web UI stays up and continues retrying cache/bootstrap initialization in the background. This means the container can become `healthy` before the initial CrowdSec sync has completed.
+
+**Endpoint:** `GET /api/health` (no authentication required)
+
+```bash
+curl http://localhost:3000/api/health
+# {"status":"ok"}
+```
+
+The health check runs every 30 seconds with a 10-second start period to allow for initialization. You can check the container's health status with:
+
+```bash
+docker inspect --format='{{.State.Health.Status}}' crowdsec_web_ui
+```
+
+If you use `BASE_PATH`, the health check still targets `localhost:3000/api/health` directly inside the container, so no additional configuration is needed. If you change `PORT`, update the health check command in your deployment to match.
+
+## Runtime Behavior
 
 ### Simulation Mode Visibility
 
@@ -255,217 +507,6 @@ Notes:
 - `CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY` is also local-only because CrowdSec LAPI does not expose an upstream "missing origin" filter
 - generic excludes are applied locally after fetch because CrowdSec LAPI does not expose a general alert-origin exclude filter
 - because the local decisions view is built from synced alerts, these settings also affect which imported decisions appear in the UI
-
-## Run with Docker (Recommended)
-
-1.  **Build the image**:
-    ```bash
-    docker build -t crowdsec-web-ui .
-    ```
-
-    You can optionally specify `DOCKER_IMAGE_REF` to override the default image reference used for checking updates (useful for forks or private registries):
-    ```bash
-    docker build --build-arg DOCKER_IMAGE_REF=my-registry/my-image -t crowdsec-web-ui .
-    ```
-
-> [!NOTE]
-> Current Docker images are based on Node.js rather than Bun, so the previous Bun/AVX-specific x64 runtime limitation no longer applies.
-
-2.  **Run the container**:
-    Provide the CrowdSec LAPI URL and one supported auth mode.
-
-    ```bash
-    docker run -d \
-      -p 3000:3000 \
-      -e CROWDSEC_URL=http://crowdsec-container-name:8080 \
-      -e CROWDSEC_USER=crowdsec-web-ui \
-      -e CROWDSEC_PASSWORD=<your-secure-password> \
-      -e CROWDSEC_SIMULATIONS_ENABLED=true \
-      -e CROWDSEC_ALWAYS_SHOW_MACHINE=false \
-      -e CROWDSEC_ALWAYS_SHOW_ORIGIN=false \
-      -e CROWDSEC_LOOKBACK_PERIOD=5d \
-      -e CROWDSEC_REFRESH_INTERVAL=0 \
-      -v $(pwd)/data:/app/data \
-      --network your_crowdsec_network \
-      crowdsec-web-ui
-    ```
-> [!NOTE]
-> Ensure the container is on the same Docker network as CrowdSec so it can reach the URL.
-
-### Docker Compose Example
-
-```yaml
-services:
-  crowdsec-web-ui:
-    image: ghcr.io/theduffman85/crowdsec-web-ui:latest
-    container_name: crowdsec_web_ui
-    ports:
-      - "3000:3000"
-    environment:
-      - CROWDSEC_URL=http://crowdsec:8080
-      - CROWDSEC_USER=crowdsec-web-ui
-      - CROWDSEC_PASSWORD=<generated_password>
-      # Optional: Include simulation-mode alerts/decisions from CrowdSec (default: false)
-      - CROWDSEC_SIMULATIONS_ENABLED=true
-      # Optional: Always show machine names instead of waiting for multiple machine_ids at runtime
-      - CROWDSEC_ALWAYS_SHOW_MACHINE=false
-      # Optional: Lookback period for alerts/stats (default: 168h/7d)
-      - CROWDSEC_LOOKBACK_PERIOD=5d
-      # Optional: Backend auto-refresh interval. Values: 0 (Off), 5s, 30s (default), 1m, 5m
-      - CROWDSEC_REFRESH_INTERVAL=30s
-      # Optional: Idle Mode settings to save resources
-      # Interval to use when no users are active (default: 5m)
-      - CROWDSEC_IDLE_REFRESH_INTERVAL=5m
-      # Time without API requests to consider system idle (default: 2m)
-      - CROWDSEC_IDLE_THRESHOLD=2m
-      # Optional: Interval for full cache refresh (default: 5m)
-      # Forces a complete data reload when active, skipped when idle.
-      - CROWDSEC_FULL_REFRESH_INTERVAL=5m
-      # Optional: Background retry delay for initial LAPI/bootstrap recovery (default: 30s)
-      - CROWDSEC_BOOTSTRAP_RETRY_DELAY=30s
-      # Optional: Enable automatic bootstrap retry after startup/login failure (default: true)
-      - CROWDSEC_BOOTSTRAP_RETRY_ENABLED=true
-      # Optional: Encryption key for notification destinations with saved secrets
-      # - NOTIFICATION_SECRET_KEY=<long-random-secret>
-      # Optional: Block notifications to private/internal destinations (default: true)
-      # - NOTIFICATION_ALLOW_PRIVATE_ADDRESSES=false
-      # Optional: Base path for reverse proxy deployments (e.g., /crowdsec)
-      # - BASE_PATH=/crowdsec
-    volumes:
-      - ./data:/app/data
-    restart: unless-stopped
-```
-
-### Docker Compose Example (mTLS Authentication)
-
-```yaml
-services:
-  crowdsec-web-ui:
-    image: ghcr.io/theduffman85/crowdsec-web-ui:latest
-    container_name: crowdsec_web_ui
-    ports:
-      - "3000:3000"
-    environment:
-      - CROWDSEC_URL=https://crowdsec:8080
-      - CROWDSEC_TLS_CERT_PATH=/certs/agent.pem
-      - CROWDSEC_TLS_KEY_PATH=/certs/agent-key.pem
-      # Optional: Custom CA bundle used to verify the CrowdSec LAPI server certificate
-      - CROWDSEC_TLS_CA_CERT_PATH=/certs/ca.pem
-      - CROWDSEC_SIMULATIONS_ENABLED=true
-      - CROWDSEC_LOOKBACK_PERIOD=5d
-    volumes:
-      - ./data:/app/data
-      - /path/on/host/agent.pem:/certs/agent.pem:ro
-      - /path/on/host/agent-key.pem:/certs/agent-key.pem:ro
-      - /path/on/host/ca.pem:/certs/ca.pem:ro
-    restart: unless-stopped
-```
-
-### Using CrowdSec Web UI with a Local or Custom Certificate
-
-If your CrowdSec Local API (LAPI) uses HTTPS with a self-signed certificate or an internal Certificate Authority (CA), the Web UI container may not trust it by default. This can result in errors like:
-
-```
-Login failed: unable to get local issuer certificate
-```
-
-#### Solution: Mount the CA Certificate and Use NODE_EXTRA_CA_CERTS
-
-You can mount your CA certificate into the container and instruct Node.js to trust it using the `NODE_EXTRA_CA_CERTS` environment variable.
-
-#### Example Docker Compose
-
-```yaml
-services:
-  crowdsec-web-ui:
-    image: ghcr.io/theduffman85/crowdsec-web-ui:latest
-    container_name: crowdsec_web_ui
-    ports:
-      - "3000:3000"
-    environment:
-      - CROWDSEC_URL=https://crowdsec:8080
-      - CROWDSEC_USER=crowdsec-web-ui
-      - CROWDSEC_PASSWORD=<generated_password>
-      - CROWDSEC_SIMULATIONS_ENABLED=true
-      - NODE_EXTRA_CA_CERTS=/certs/root_ca.crt
-    volumes:
-      - ./data:/app/data
-      - /path/on/host/root_ca.crt:/certs/root_ca.crt:ro
-    restart: unless-stopped
-```
-
-#### Notes
-
-- Replace `/path/on/host/root_ca.crt` with the path to your local CA certificate.
-- The `:ro` ensures the certificate is mounted read-only.
-- This method avoids rebuilding the container image.
-- Works for self-signed certificates as well as private CA certificates.
-- `NODE_EXTRA_CA_CERTS` is a general runtime trust mechanism. When using the new mTLS auth mode, prefer `CROWDSEC_TLS_CA_CERT_PATH` as the explicit CrowdSec LAPI trust input for the Web UI client connection.
-
-### Reverse Proxy with Base Path
-
-If you need to serve the Web UI at a non-root URL path (e.g., `https://example.com/crowdsec/` instead of `https://example.com/`), use the `BASE_PATH` environment variable.
-
-#### Docker Compose Example
-
-```yaml
-services:
-  crowdsec-web-ui:
-    image: ghcr.io/theduffman85/crowdsec-web-ui:latest
-    container_name: crowdsec_web_ui
-    ports:
-      - "3000:3000"
-    environment:
-      - CROWDSEC_URL=http://crowdsec:8080
-      - CROWDSEC_USER=crowdsec-web-ui
-      - CROWDSEC_PASSWORD=<generated_password>
-      - CROWDSEC_SIMULATIONS_ENABLED=true
-      - BASE_PATH=/crowdsec
-    volumes:
-      - ./data:/app/data
-    restart: unless-stopped
-```
-
-#### Nginx Reverse Proxy Example
-
-```nginx
-location /crowdsec/ {
-    proxy_pass http://localhost:3000/crowdsec/;
-    proxy_http_version 1.1;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-}
-```
-
-#### Notes
-
-- The `BASE_PATH` must start with a `/` (e.g., `/crowdsec`, not `crowdsec`)
-- Do not include a trailing slash (use `/crowdsec`, not `/crowdsec/`)
-- When `BASE_PATH` is set, accessing the root URL (`/`) will redirect to the base path
-- All API calls, assets, and navigation will automatically use the configured base path
-
-### Health Check
-
-The Docker image includes a built-in `HEALTHCHECK` that verifies the web server is responding. Docker will automatically mark the container as `healthy` or `unhealthy`.
-
-Startup is non-blocking: if CrowdSec LAPI is temporarily unavailable, the Web UI stays up and continues retrying cache/bootstrap initialization in the background. This means the container can become `healthy` before the initial CrowdSec sync has completed.
-
-**Endpoint:** `GET /api/health` (no authentication required)
-
-```bash
-curl http://localhost:3000/api/health
-# {"status":"ok"}
-```
-
-The health check runs every 30 seconds with a 10-second start period to allow for initialization. You can check the container's health status with:
-
-```bash
-docker inspect --format='{{.State.Health.Status}}' crowdsec_web_ui
-```
-
-If you use `BASE_PATH`, the health check still targets `localhost:3000/api/health` directly inside the container, so no additional configuration is needed.
 
 ## Notifications
 
@@ -735,6 +776,7 @@ The Web UI maintains its own local history of alerts and decisions. Data fetched
     ```bash
     CROWDSEC_MTLS_IMAGE=crowdsecurity/crowdsec:latest pnpm run test:mtls:crowdsec
     CROWDSEC_MTLS_KEEP=1 pnpm run test:mtls:crowdsec
+    CROWDSEC_MTLS_CONTAINER=my-crowdsec-test pnpm run test:mtls:crowdsec
     ```
 
 ## Star History
