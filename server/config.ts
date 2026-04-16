@@ -1,5 +1,7 @@
 import { createCrowdsecAuthConfig, type CrowdsecAuthConfig } from './auth';
 
+export type AlertFilterMode = 'default' | 'new' | 'legacy';
+
 export interface RuntimeConfig {
   port: number;
   basePath: string;
@@ -9,8 +11,14 @@ export interface RuntimeConfig {
   crowdsecTlsCertPath?: string;
   crowdsecTlsKeyPath?: string;
   crowdsecTlsCaCertPath?: string;
-  alertOrigins: string[];
-  alertExtraScenarios: string[];
+  alertFilterMode: AlertFilterMode;
+  alertIncludeOrigins: string[];
+  alertExcludeOrigins: string[];
+  alertIncludeCapi: boolean;
+  alertIncludeOriginEmpty: boolean;
+  alertExcludeOriginEmpty: boolean;
+  legacyAlertOrigins: string[];
+  legacyAlertExtraScenarios: string[];
   simulationsEnabled: boolean;
   alwaysShowMachine: boolean;
   alwaysShowOrigin: boolean;
@@ -75,10 +83,15 @@ export function parseBooleanEnv(value: string | undefined, defaultValue = false)
 
 export function parseCsvEnv(value: string | undefined): string[] {
   if (!value) return [];
-  return value
+  const entries = value
     .split(',')
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
+  const deduped = new Set<string>();
+  for (const entry of entries) {
+    deduped.add(entry);
+  }
+  return Array.from(deduped);
 }
 
 export function getIntervalName(intervalMs: number): string {
@@ -90,11 +103,98 @@ export function getIntervalName(intervalMs: number): string {
   return `${intervalMs}ms`;
 }
 
+function parseAlertFilterConfig(env: NodeJS.ProcessEnv): Pick<
+  RuntimeConfig,
+  | 'alertFilterMode'
+  | 'alertIncludeOrigins'
+  | 'alertExcludeOrigins'
+  | 'alertIncludeCapi'
+  | 'alertIncludeOriginEmpty'
+  | 'alertExcludeOriginEmpty'
+  | 'legacyAlertOrigins'
+  | 'legacyAlertExtraScenarios'
+> {
+  const includeOriginEmpty = env.CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY;
+  const excludeOriginEmpty = env.CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY;
+  const hasNewAlertFilters = env.CROWDSEC_ALERT_INCLUDE_ORIGINS !== undefined
+    || env.CROWDSEC_ALERT_EXCLUDE_ORIGINS !== undefined
+    || env.CROWDSEC_ALERT_INCLUDE_CAPI !== undefined
+    || includeOriginEmpty !== undefined
+    || excludeOriginEmpty !== undefined;
+  const hasLegacyAlertFilters = env.CROWDSEC_ALERT_ORIGINS !== undefined
+    || env.CROWDSEC_ALERT_EXTRA_SCENARIOS !== undefined;
+
+  const legacyAlertOrigins = parseCsvEnv(env.CROWDSEC_ALERT_ORIGINS);
+  const legacyAlertExtraScenarios = parseCsvEnv(env.CROWDSEC_ALERT_EXTRA_SCENARIOS);
+
+  if (hasNewAlertFilters && hasLegacyAlertFilters) {
+    console.warn(
+      'Both new and deprecated CrowdSec alert filter environment variables are set. Using CROWDSEC_ALERT_INCLUDE_ORIGINS/CROWDSEC_ALERT_EXCLUDE_ORIGINS/CROWDSEC_ALERT_INCLUDE_CAPI/CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY/CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY.',
+    );
+  }
+
+  if (hasNewAlertFilters) {
+    return {
+      alertFilterMode: 'new',
+      alertIncludeOrigins: parseCsvEnv(env.CROWDSEC_ALERT_INCLUDE_ORIGINS),
+      alertExcludeOrigins: parseCsvEnv(env.CROWDSEC_ALERT_EXCLUDE_ORIGINS),
+      alertIncludeCapi: parseBooleanEnv(env.CROWDSEC_ALERT_INCLUDE_CAPI, false),
+      alertIncludeOriginEmpty: parseBooleanEnv(includeOriginEmpty, false),
+      alertExcludeOriginEmpty: parseBooleanEnv(excludeOriginEmpty, false),
+      legacyAlertOrigins,
+      legacyAlertExtraScenarios,
+    };
+  }
+
+  if (hasLegacyAlertFilters) {
+    console.warn(
+      'CROWDSEC_ALERT_ORIGINS and CROWDSEC_ALERT_EXTRA_SCENARIOS are deprecated. Please migrate to CROWDSEC_ALERT_INCLUDE_ORIGINS/CROWDSEC_ALERT_EXCLUDE_ORIGINS/CROWDSEC_ALERT_INCLUDE_CAPI/CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY/CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY.',
+    );
+
+    const alertIncludeOrigins: string[] = [];
+    let alertIncludeCapi = false;
+
+    for (const origin of legacyAlertOrigins) {
+      if (origin.trim().toLowerCase() === 'none') {
+        continue;
+      }
+      if (origin.trim().toUpperCase() === 'CAPI') {
+        alertIncludeCapi = true;
+        continue;
+      }
+      alertIncludeOrigins.push(origin);
+    }
+
+    return {
+      alertFilterMode: 'legacy',
+      alertIncludeOrigins,
+      alertExcludeOrigins: [],
+      alertIncludeCapi,
+      alertIncludeOriginEmpty: false,
+      alertExcludeOriginEmpty: false,
+      legacyAlertOrigins,
+      legacyAlertExtraScenarios,
+    };
+  }
+
+  return {
+    alertFilterMode: 'default',
+    alertIncludeOrigins: [],
+    alertExcludeOrigins: [],
+    alertIncludeCapi: false,
+    alertIncludeOriginEmpty: false,
+    alertExcludeOriginEmpty: false,
+    legacyAlertOrigins: [],
+    legacyAlertExtraScenarios: [],
+  };
+}
+
 export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig {
   const lookbackPeriod = env.CROWDSEC_LOOKBACK_PERIOD || '168h';
   const refreshIntervalMs = parseRefreshInterval(env.CROWDSEC_REFRESH_INTERVAL || '30s');
   const crowdsecAuth = createCrowdsecAuthConfig(env);
   const notificationSecretKey = env.NOTIFICATION_SECRET_KEY?.trim() || undefined;
+  const alertFilterConfig = parseAlertFilterConfig(env);
 
   return {
     port: Number(env.PORT || 3000),
@@ -105,8 +205,7 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
     crowdsecTlsCertPath: crowdsecAuth.mode === 'mtls' ? crowdsecAuth.certPath : undefined,
     crowdsecTlsKeyPath: crowdsecAuth.mode === 'mtls' ? crowdsecAuth.keyPath : undefined,
     crowdsecTlsCaCertPath: crowdsecAuth.mode === 'mtls' ? crowdsecAuth.caCertPath : undefined,
-    alertOrigins: parseCsvEnv(env.CROWDSEC_ALERT_ORIGINS),
-    alertExtraScenarios: parseCsvEnv(env.CROWDSEC_ALERT_EXTRA_SCENARIOS),
+    ...alertFilterConfig,
     simulationsEnabled: parseBooleanEnv(env.CROWDSEC_SIMULATIONS_ENABLED, false),
     alwaysShowMachine: parseBooleanEnv(env.CROWDSEC_ALWAYS_SHOW_MACHINE, false),
     alwaysShowOrigin: parseBooleanEnv(env.CROWDSEC_ALWAYS_SHOW_ORIGIN, false),

@@ -212,6 +212,41 @@ function sampleCapiAlert(overrides: Partial<AlertRecord> = {}): AlertRecord {
   };
 }
 
+function sampleListsAlert(overrides: Partial<AlertRecord> = {}): AlertRecord {
+  const createdAt = new Date().toISOString();
+  const stopAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
+  return {
+    id: 51,
+    uuid: 'alert-51',
+    created_at: createdAt,
+    scenario: 'lists:firehol_voipbl',
+    message: '',
+    source: {
+      ip: '4.4.4.4',
+      value: '4.4.4.4',
+      cn: 'US',
+      as_name: 'Example ISP',
+      scope: 'lists:firehol_voipbl',
+    },
+    target: 'blocklist',
+    events: [],
+    decisions: [
+      {
+        id: 510,
+        type: 'ban',
+        value: '4.4.4.4',
+        duration: '24h',
+        stop_at: stopAt,
+        origin: 'lists',
+        scenario: 'firehol_voipbl',
+        simulated: false,
+      },
+    ],
+    simulated: false,
+    ...overrides,
+  };
+}
+
 function sampleAppSecAlert(overrides: Partial<AlertRecord> = {}): AlertRecord {
   const createdAt = new Date().toISOString();
   const stopAt = new Date(Date.now() + 3 * 60 * 60 * 1_000).toISOString();
@@ -2432,7 +2467,9 @@ describe('createApp', () => {
     expect(alerts.status).toBe(200);
 
     const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
-    expect(alertRequests).toHaveLength(4);
+    expect(alertRequests).toHaveLength(6);
+    expect(alertRequests.every((call) => call.url.includes('include_capi=false'))).toBe(true);
+    expect(alertRequests.some((call) => !call.url.includes('scope='))).toBe(true);
     expect(alertRequests.some((call) => call.url.includes('scope=ip'))).toBe(true);
     expect(alertRequests.some((call) => call.url.includes('scope=range'))).toBe(true);
     expect(alertRequests.every((call) => !call.url.includes('origin='))).toBe(true);
@@ -2524,12 +2561,15 @@ describe('createApp', () => {
     );
 
     const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
-    expect(alertRequests).toHaveLength(8);
+    expect(alertRequests).toHaveLength(12);
     expect(alertRequests.some((call) => call.url.includes('origin=crowdsec'))).toBe(true);
     expect(alertRequests.some((call) => call.url.includes('scenario=manual%2Fweb-ui'))).toBe(true);
     expect(alertRequests.every((call) => call.url.includes('origin=') || call.url.includes('scenario='))).toBe(true);
+    expect(alertRequests.every((call) => call.url.includes('include_capi=false'))).toBe(true);
+    expect(alertRequests.some((call) => call.url.includes('origin=crowdsec') && !call.url.includes('scope='))).toBe(true);
     expect(alertRequests.some((call) => call.url.includes('origin=crowdsec') && call.url.includes('scope=ip'))).toBe(true);
     expect(alertRequests.some((call) => call.url.includes('origin=crowdsec') && call.url.includes('scope=range'))).toBe(true);
+    expect(alertRequests.some((call) => call.url.includes('scenario=manual%2Fweb-ui') && !call.url.includes('scope='))).toBe(true);
     expect(alertRequests.some((call) => call.url.includes('scenario=manual%2Fweb-ui') && call.url.includes('scope=ip'))).toBe(true);
     expect(alertRequests.some((call) => call.url.includes('scenario=manual%2Fweb-ui') && call.url.includes('scope=range'))).toBe(true);
     expect(alertRequests.every((call) => !call.url.match(/[?&]scope=ip&scope=range/))).toBe(true);
@@ -2550,12 +2590,348 @@ describe('createApp', () => {
     destroyTempDir();
   });
 
-  test('origin allowlist can include CAPI alerts and persist their decisions', async () => {
+  test('imports unscoped cscli alerts that only expose the IP on decisions', async () => {
+    const createdAt = new Date().toISOString();
+    const importedAlert = {
+      id: 17511,
+      uuid: 'c2685940-4dec-47b5-871f-996c890b2634',
+      created_at: createdAt,
+      scenario: 'import stdin: 1 IPs',
+      message: '',
+      kind: 'cscli',
+      source: {
+        scope: '',
+        value: '',
+      },
+      events: [],
+      events_count: 1,
+      decisions: [
+        {
+          id: 26211171,
+          type: 'ban',
+          value: '1.2.3.4',
+          duration: '11h52m40s',
+          origin: 'cscli-import',
+          scenario: 'test-import',
+          scope: 'Ip',
+          simulated: false,
+        },
+      ],
+      simulated: false,
+    } satisfies AlertRecord;
+
+    const { controller, database, fetchCalls } = createController({
+      env: {
+        CROWDSEC_ALERT_INCLUDE_ORIGINS: 'cscli-import',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (!url.includes('/v1/alerts?')) {
+          return undefined;
+        }
+        if (url.includes('origin=cscli-import') && !url.includes('scope=')) {
+          return Response.json([importedAlert]);
+        }
+        return Response.json([]);
+      },
+    });
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alertsResponse.status).toBe(200);
+
+    const alerts = await alertsResponse.json() as Array<{ id: number; decisions: Array<{ origin?: string; value?: string }> }>;
+    expect(alerts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 17511,
+        scenario: 'import stdin: 1 IPs',
+        decisions: expect.arrayContaining([
+          expect.objectContaining({
+            origin: 'cscli-import',
+            value: '1.2.3.4',
+          }),
+        ]),
+      }),
+    ]));
+
+    const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
+    expect(alertRequests).toHaveLength(6);
+    expect(alertRequests.every((call) => call.url.includes('include_capi=false'))).toBe(true);
+    expect(alertRequests.some((call) => call.url.includes('origin=cscli-import') && !call.url.includes('scope='))).toBe(true);
+    expect(alertRequests.some((call) => call.url.includes('origin=cscli-import') && call.url.includes('scope=ip'))).toBe(true);
+    expect(alertRequests.some((call) => call.url.includes('origin=cscli-import') && call.url.includes('scope=range'))).toBe(true);
+
+    const storedAlert = database.db.query('SELECT raw_data FROM alerts WHERE id = 17511').get() as { raw_data: string };
+    expect(JSON.parse(storedAlert.raw_data)).toEqual(expect.objectContaining({
+      id: 17511,
+      kind: 'cscli',
+    }));
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('none allowlist matches cscli alerts list defaults by excluding CAPI but keeping other unfiltered alerts', async () => {
+    const crowdsecAlert = sampleAlert({ id: 16, uuid: 'alert-16' });
+    const importedAlert = {
+      id: 17511,
+      uuid: 'c2685940-4dec-47b5-871f-996c890b2634',
+      created_at: new Date().toISOString(),
+      scenario: 'import stdin: 1 IPs',
+      message: '',
+      kind: 'cscli',
+      source: {
+        scope: '',
+        value: '',
+      },
+      events: [],
+      events_count: 1,
+      decisions: [
+        {
+          id: 26211171,
+          type: 'ban',
+          value: '1.2.3.4',
+          duration: '11h52m40s',
+          origin: 'cscli-import',
+          scenario: 'test-import',
+          scope: 'Ip',
+          simulated: false,
+        },
+      ],
+      simulated: false,
+    } satisfies AlertRecord;
+    const capiAlert = sampleCapiAlert({ id: 17, uuid: 'alert-17' });
+
+    const { controller, database, fetchCalls } = createController({
+      env: {
+        CROWDSEC_ALERT_ORIGINS: 'none',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (!url.includes('/v1/alerts?')) {
+          return undefined;
+        }
+        if (!url.includes('origin=') && !url.includes('scope=')) {
+          if (url.includes('include_capi=false')) {
+            return Response.json([importedAlert]);
+          }
+          return Response.json([importedAlert, capiAlert]);
+        }
+        if (!url.includes('origin=') && url.includes('scope=ip')) {
+          return Response.json([crowdsecAlert]);
+        }
+        return Response.json([]);
+      },
+    });
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alertsResponse.status).toBe(200);
+
+    const alerts = await alertsResponse.json() as Array<{ id: number; scenario?: string }>;
+    expect(alerts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 16, scenario: 'crowdsecurity/ssh-bf' }),
+      expect.objectContaining({ id: 17511, scenario: 'import stdin: 1 IPs' }),
+    ]));
+    expect(alerts.some((alert) => alert.id === 17)).toBe(false);
+
+    const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
+    expect(alertRequests).toHaveLength(6);
+    expect(alertRequests.every((call) => call.url.includes('include_capi=false'))).toBe(true);
+    expect(alertRequests.some((call) => !call.url.includes('scope='))).toBe(true);
+    expect(alertRequests.some((call) => call.url.includes('scope=ip'))).toBe(true);
+    expect(alertRequests.some((call) => call.url.includes('scope=range'))).toBe(true);
+    expect(alertRequests.every((call) => !call.url.includes('origin='))).toBe(true);
+
+    const alertCount = (database.db.query('SELECT COUNT(*) AS count FROM alerts').get() as { count: number }).count;
+    expect(alertCount).toBe(2);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('include capi adds CAPI alerts alongside the default non-CAPI feed and persists their decisions', async () => {
+    const crowdsecAlert = sampleAlert({
+      id: 6,
+      uuid: 'alert-6',
+      decisions: [
+        {
+          id: 60,
+          type: 'ban',
+          value: '1.2.3.4',
+          duration: '30m',
+          origin: 'crowdsec',
+          scenario: 'crowdsecurity/ssh-bf',
+          simulated: false,
+        },
+      ],
+    });
     const capiAlert = sampleCapiAlert();
 
     const { controller, database, fetchCalls } = createController({
       env: {
-        CROWDSEC_ALERT_ORIGINS: 'CAPI',
+        CROWDSEC_ALERT_INCLUDE_CAPI: 'true',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (!url.includes('/v1/alerts?')) {
+          return undefined;
+        }
+        if (url.includes('origin=CAPI') && !url.includes('scope=')) {
+          return Response.json([capiAlert]);
+        }
+        if (!url.includes('origin=') && url.includes('scope=ip')) {
+          return Response.json([crowdsecAlert]);
+        }
+        return Response.json([]);
+      },
+    });
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alertsResponse.status).toBe(200);
+
+    const alerts = await alertsResponse.json() as Array<{ id: number; decisions: Array<{ origin?: string }> }>;
+    expect(alerts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 6,
+        scenario: 'crowdsecurity/ssh-bf',
+      }),
+      expect.objectContaining({
+        id: 5,
+        scenario: 'crowdsecurity/community-blocklist',
+        reason: 'update : +15000/-0 IPs',
+        decisions: expect.arrayContaining([expect.objectContaining({ origin: 'CAPI' })]),
+      }),
+    ]));
+
+    const statsAlertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/stats/alerts'));
+    expect(statsAlertsResponse.status).toBe(200);
+    expect((await statsAlertsResponse.json()) as Array<{ scenario?: string }>).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ scenario: 'crowdsecurity/ssh-bf' }),
+        expect.objectContaining({ scenario: 'crowdsecurity/community-blocklist' }),
+      ]),
+    );
+
+    const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
+    expect(alertRequests.some((call) => !call.url.includes('origin=') && call.url.includes('include_capi=false') && !call.url.includes('scope='))).toBe(true);
+    expect(alertRequests.some((call) => !call.url.includes('origin=') && call.url.includes('include_capi=false') && call.url.includes('scope=ip'))).toBe(true);
+    expect(alertRequests.some((call) => !call.url.includes('origin=') && call.url.includes('include_capi=false') && call.url.includes('scope=range'))).toBe(true);
+    expect(alertRequests.some((call) => call.url.includes('origin=CAPI') && call.url.includes('include_capi=true') && !call.url.includes('scope='))).toBe(true);
+
+    const decisionCount = (database.db.query('SELECT COUNT(*) AS count FROM decisions').get() as { count: number }).count;
+    expect(decisionCount).toBe(2);
+
+    const storedDecisions = database.db.query('SELECT raw_data FROM decisions').all() as Array<{ raw_data: string }>;
+    expect(storedDecisions.map((row) => JSON.parse(row.raw_data))).toEqual(expect.arrayContaining([
+      expect.objectContaining({ origin: 'crowdsec' }),
+      expect.objectContaining({ origin: 'CAPI' }),
+    ]));
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('include origins can fetch lists alerts with unscoped queries only', async () => {
+    const listsAlert = sampleListsAlert();
+
+    const { controller, database, fetchCalls } = createController({
+      env: {
+        CROWDSEC_ALERT_INCLUDE_ORIGINS: 'lists',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (!url.includes('/v1/alerts?')) {
+          return undefined;
+        }
+        if (url.includes('origin=lists') && !url.includes('scope=')) {
+          return Response.json([listsAlert]);
+        }
+        return Response.json([]);
+      },
+    });
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alertsResponse.status).toBe(200);
+
+    const alerts = await alertsResponse.json() as Array<{ id: number; decisions: Array<{ origin?: string }> }>;
+    expect(alerts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 51,
+        decisions: expect.arrayContaining([expect.objectContaining({ origin: 'lists' })]),
+      }),
+    ]));
+
+    const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
+    expect(alertRequests).toHaveLength(2);
+    expect(alertRequests.every((call) => call.url.includes('origin=lists'))).toBe(true);
+    expect(alertRequests.every((call) => !call.url.includes('scope='))).toBe(true);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('include origins keeps no-decision lists alerts using source scope fallbacks', async () => {
+    const listsAlert = sampleListsAlert({
+      id: 53,
+      uuid: 'alert-53',
+      decisions: [],
+    });
+
+    const { controller, database, fetchCalls } = createController({
+      env: {
+        CROWDSEC_ALERT_INCLUDE_ORIGINS: 'lists',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (!url.includes('/v1/alerts?')) {
+          return undefined;
+        }
+        if (url.includes('origin=lists') && !url.includes('scope=')) {
+          return Response.json([listsAlert]);
+        }
+        return Response.json([]);
+      },
+    });
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alertsResponse.status).toBe(200);
+    expect(await alertsResponse.json()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: 53 })]),
+    );
+
+    const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
+    expect(alertRequests).toHaveLength(2);
+    expect(alertRequests.every((call) => call.url.includes('origin=lists'))).toBe(true);
+    expect(alertRequests.every((call) => !call.url.includes('scope='))).toBe(true);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('include capi keeps no-decision community blocklist alerts while preserving the default feed', async () => {
+    const capiAlert = sampleCapiAlert({
+      id: 54,
+      uuid: 'alert-54',
+      decisions: [],
+    });
+
+    const { controller, database, fetchCalls } = createController({
+      env: {
+        CROWDSEC_ALERT_INCLUDE_CAPI: 'true',
       },
       fetchResolver: (url) => {
         if (url.endsWith('/v1/watchers/login')) {
@@ -2573,35 +2949,359 @@ describe('createApp', () => {
 
     const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
     expect(alertsResponse.status).toBe(200);
+    expect(await alertsResponse.json()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: 54, scenario: 'crowdsecurity/community-blocklist' })]),
+    );
 
-    const alerts = await alertsResponse.json() as Array<{ id: number; decisions: Array<{ origin?: string }> }>;
-    expect(alerts).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        id: 5,
-        scenario: 'crowdsecurity/community-blocklist',
-        reason: 'update : +15000/-0 IPs',
-        decisions: expect.arrayContaining([expect.objectContaining({ origin: 'CAPI' })]),
-      }),
-    ]));
+    const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
+    expect(alertRequests.some((call) => !call.url.includes('origin=') && call.url.includes('include_capi=false'))).toBe(true);
+    expect(alertRequests.some((call) => call.url.includes('origin=CAPI') && !call.url.includes('scope='))).toBe(true);
 
-    const statsAlertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/stats/alerts'));
-    expect(statsAlertsResponse.status).toBe(200);
-    expect((await statsAlertsResponse.json()) as Array<{ scenario?: string }>).toEqual(
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('include no origin keeps no-origin alerts from the unfiltered query lane', async () => {
+    const noOriginAlert = sampleAlert({
+      id: 55,
+      uuid: 'alert-55',
+      decisions: [],
+      message: 'Alert without decision origin',
+    });
+
+    const { controller, database, fetchCalls } = createController({
+      env: {
+        CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY: 'true',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (!url.includes('/v1/alerts?')) {
+          return undefined;
+        }
+        if (!url.includes('origin=') && !url.includes('scope=')) {
+          return Response.json([noOriginAlert]);
+        }
+        return Response.json([]);
+      },
+    });
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alertsResponse.status).toBe(200);
+    expect(await alertsResponse.json()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: 55 })]),
+    );
+
+    const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
+    expect(alertRequests).toHaveLength(6);
+    expect(alertRequests.every((call) => call.url.includes('include_capi=false'))).toBe(true);
+    expect(alertRequests.every((call) => !call.url.includes('origin='))).toBe(true);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('include no origin can be combined with explicit origin includes', async () => {
+    const noOriginAlert = sampleAlert({
+      id: 56,
+      uuid: 'alert-56',
+      decisions: [],
+      message: 'No origin alert',
+    });
+    const crowdsecAlert = sampleAlert({
+      id: 57,
+      uuid: 'alert-57',
+      decisions: [
+        {
+          id: 570,
+          type: 'ban',
+          value: '5.5.5.5',
+          duration: '30m',
+          origin: 'crowdsec',
+          scenario: 'crowdsecurity/ssh-bf',
+          simulated: false,
+        },
+      ],
+    });
+
+    const { controller, database, fetchCalls } = createController({
+      env: {
+        CROWDSEC_ALERT_INCLUDE_ORIGINS: 'crowdsec',
+        CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY: 'true',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (!url.includes('/v1/alerts?')) {
+          return undefined;
+        }
+        if (url.includes('origin=crowdsec') && url.includes('scope=ip')) {
+          return Response.json([crowdsecAlert]);
+        }
+        if (!url.includes('origin=') && !url.includes('scope=')) {
+          return Response.json([noOriginAlert]);
+        }
+        return Response.json([]);
+      },
+    });
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alertsResponse.status).toBe(200);
+    expect(await alertsResponse.json()).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ scenario: 'crowdsecurity/community-blocklist' }),
+        expect.objectContaining({ id: 56 }),
+        expect.objectContaining({ id: 57 }),
       ]),
     );
 
     const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
+    expect(alertRequests).toHaveLength(12);
+    expect(alertRequests.filter((call) => !call.url.includes('origin=')).length).toBe(6);
+    expect(alertRequests.filter((call) => call.url.includes('origin=crowdsec')).length).toBe(6);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('exclude no origin drops no-origin alerts from the default unfiltered lane', async () => {
+    const noOriginAlert = sampleAlert({
+      id: 58,
+      uuid: 'alert-58',
+      decisions: [],
+      message: 'No origin alert to exclude',
+    });
+    const crowdsecAlert = sampleAlert({
+      id: 59,
+      uuid: 'alert-59',
+      decisions: [
+        {
+          id: 590,
+          type: 'ban',
+          value: '6.6.6.6',
+          duration: '30m',
+          origin: 'crowdsec',
+          scenario: 'crowdsecurity/ssh-bf',
+          simulated: false,
+        },
+      ],
+    });
+
+    const { controller, database, fetchCalls } = createController({
+      env: {
+        CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY: 'true',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (!url.includes('/v1/alerts?')) {
+          return undefined;
+        }
+        if (!url.includes('origin=') && !url.includes('scope=')) {
+          return Response.json([noOriginAlert]);
+        }
+        if (!url.includes('origin=') && url.includes('scope=ip')) {
+          return Response.json([crowdsecAlert]);
+        }
+        return Response.json([]);
+      },
+    });
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alertsResponse.status).toBe(200);
+    const alerts = await alertsResponse.json() as Array<{ id: number }>;
+    expect(alerts).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: 59 })]),
+    );
+    expect(alerts.some((alert) => alert.id === 58)).toBe(false);
+
+    const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
+    expect(alertRequests).toHaveLength(6);
+    expect(alertRequests.every((call) => call.url.includes('include_capi=false'))).toBe(true);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('exclude no origin wins over include no origin', async () => {
+    const noOriginAlert = sampleAlert({
+      id: 60,
+      uuid: 'alert-60',
+      decisions: [],
+      message: 'No origin alert to exclude',
+    });
+
+    const { controller, database, fetchCalls } = createController({
+      env: {
+        CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY: 'true',
+        CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY: 'true',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (!url.includes('/v1/alerts?')) {
+          return undefined;
+        }
+        if (!url.includes('origin=') && !url.includes('scope=')) {
+          return Response.json([noOriginAlert]);
+        }
+        return Response.json([]);
+      },
+    });
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alertsResponse.status).toBe(200);
+    expect(await alertsResponse.json()).toEqual([]);
+
+    const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
+    expect(alertRequests).toHaveLength(6);
+    expect(alertRequests.every((call) => !call.url.includes('origin='))).toBe(true);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('exclude origins drops mixed-origin alerts from the merged result set', async () => {
+    const mixedAlert = sampleAlert({
+      id: 21,
+      uuid: 'alert-21',
+      decisions: [
+        {
+          id: 210,
+          type: 'ban',
+          value: '1.2.3.4',
+          duration: '30m',
+          origin: 'crowdsec',
+          scenario: 'crowdsecurity/ssh-bf',
+          simulated: false,
+        },
+        {
+          id: 211,
+          type: 'ban',
+          value: '1.2.3.4',
+          duration: '30m',
+          origin: 'cscli',
+          scenario: 'manual/web-ui',
+          simulated: false,
+        },
+      ],
+    });
+    const cleanAlert = sampleAlert({
+      id: 22,
+      uuid: 'alert-22',
+      decisions: [
+        {
+          id: 220,
+          type: 'ban',
+          value: '2.2.2.2',
+          duration: '30m',
+          origin: 'crowdsec',
+          scenario: 'crowdsecurity/http-bf',
+          simulated: false,
+        },
+      ],
+    });
+
+    const { controller, database, fetchCalls } = createController({
+      env: {
+        CROWDSEC_ALERT_EXCLUDE_ORIGINS: 'cscli',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (!url.includes('/v1/alerts?')) {
+          return undefined;
+        }
+        if (!url.includes('origin=') && !url.includes('scope=')) {
+          return Response.json([mixedAlert]);
+        }
+        if (!url.includes('origin=') && url.includes('scope=ip')) {
+          return Response.json([cleanAlert]);
+        }
+        return Response.json([]);
+      },
+    });
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alertsResponse.status).toBe(200);
+
+    const alerts = await alertsResponse.json() as Array<{ id: number }>;
+    expect(alerts).toEqual([expect.objectContaining({ id: 22 })]);
+
+    const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
+    expect(alertRequests).toHaveLength(6);
+    expect(alertRequests.every((call) => call.url.includes('include_capi=false'))).toBe(true);
+    expect(alertRequests.every((call) => !call.url.includes('origin='))).toBe(true);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('exclude origins drops no-decision lists alerts using source scope fallbacks', async () => {
+    const listsAlert = sampleListsAlert({
+      id: 52,
+      uuid: 'alert-52',
+      decisions: [],
+    });
+
+    const { controller, database, fetchCalls } = createController({
+      env: {
+        CROWDSEC_ALERT_INCLUDE_ORIGINS: 'lists',
+        CROWDSEC_ALERT_EXCLUDE_ORIGINS: 'lists',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (!url.includes('/v1/alerts?')) {
+          return undefined;
+        }
+        if (url.includes('origin=lists') && !url.includes('scope=')) {
+          return Response.json([listsAlert]);
+        }
+        return Response.json([]);
+      },
+    });
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alertsResponse.status).toBe(200);
+    expect(await alertsResponse.json()).toEqual([]);
+
+    const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
     expect(alertRequests).toHaveLength(2);
-    expect(alertRequests.every((call) => call.url.includes('origin=CAPI'))).toBe(true);
+    expect(alertRequests.every((call) => call.url.includes('origin=lists'))).toBe(true);
     expect(alertRequests.every((call) => !call.url.includes('scope='))).toBe(true);
 
-    const decisionCount = (database.db.query('SELECT COUNT(*) AS count FROM decisions').get() as { count: number }).count;
-    expect(decisionCount).toBe(1);
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
 
-    const storedDecision = database.db.query('SELECT raw_data FROM decisions').get() as { raw_data: string };
-    expect(JSON.parse(storedDecision.raw_data)).toEqual(expect.objectContaining({ origin: 'CAPI' }));
+  test('excluding CAPI suppresses the extra CAPI query but keeps the default feed', async () => {
+    const { controller, database, fetchCalls } = createController({
+      env: {
+        CROWDSEC_ALERT_INCLUDE_CAPI: 'true',
+        CROWDSEC_ALERT_EXCLUDE_ORIGINS: 'CAPI',
+      },
+    });
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alertsResponse.status).toBe(200);
+    expect(await alertsResponse.json()).toEqual([]);
+
+    const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
+    expect(alertRequests.some((call) => !call.url.includes('origin=') && call.url.includes('include_capi=false'))).toBe(true);
+    expect(alertRequests.some((call) => call.url.includes('origin=CAPI'))).toBe(false);
 
     controller.stopBackgroundTasks();
     database.close();
@@ -2672,9 +3372,10 @@ describe('createApp', () => {
     ]));
 
     const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
-    expect(alertRequests.some((call) => !call.url.includes('origin=') && call.url.includes('scope=ip'))).toBe(true);
-    expect(alertRequests.some((call) => !call.url.includes('origin=') && call.url.includes('scope=range'))).toBe(true);
-    expect(alertRequests.some((call) => call.url.includes('origin=CAPI') && !call.url.includes('scope='))).toBe(true);
+    expect(alertRequests.some((call) => !call.url.includes('origin=') && call.url.includes('include_capi=false') && !call.url.includes('scope='))).toBe(true);
+    expect(alertRequests.some((call) => !call.url.includes('origin=') && call.url.includes('include_capi=false') && call.url.includes('scope=ip'))).toBe(true);
+    expect(alertRequests.some((call) => !call.url.includes('origin=') && call.url.includes('include_capi=false') && call.url.includes('scope=range'))).toBe(true);
+    expect(alertRequests.some((call) => call.url.includes('origin=CAPI') && call.url.includes('include_capi=true') && !call.url.includes('scope='))).toBe(true);
 
     const alertCount = (database.db.query('SELECT COUNT(*) AS count FROM alerts').get() as { count: number }).count;
     expect(alertCount).toBe(2);
@@ -2704,7 +3405,7 @@ describe('createApp', () => {
 
     const { controller, database, fetchCalls } = createController({
       env: {
-        CROWDSEC_ALERT_ORIGINS: 'crowdsec',
+        CROWDSEC_ALERT_INCLUDE_ORIGINS: 'crowdsec',
       },
       fetchResolver: (url) => {
         if (url.endsWith('/v1/watchers/login')) {
@@ -2736,8 +3437,8 @@ describe('createApp', () => {
     ]));
 
     const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
-    expect(alertRequests.some((call) => call.url.includes('origin=crowdsec') && call.url.includes('scope=ip'))).toBe(true);
-    expect(alertRequests.some((call) => call.url.includes('origin=crowdsec') && call.url.includes('scope=range'))).toBe(true);
+    expect(alertRequests.some((call) => call.url.includes('origin=crowdsec') && call.url.includes('include_capi=false') && call.url.includes('scope=ip'))).toBe(true);
+    expect(alertRequests.some((call) => call.url.includes('origin=crowdsec') && call.url.includes('include_capi=false') && call.url.includes('scope=range'))).toBe(true);
 
     const storedAlert = database.db.query('SELECT raw_data FROM alerts WHERE id = 6').get() as { raw_data: string };
     expect(JSON.parse(storedAlert.raw_data)).toEqual(expect.objectContaining({

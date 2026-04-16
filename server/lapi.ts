@@ -34,6 +34,8 @@ export interface LapiClientOptions {
 export interface FetchAlertsFilters {
   origin?: string;
   scenario?: string;
+  includeCapi?: boolean;
+  singleScopeOnly?: boolean;
 }
 
 export class LapiClient {
@@ -228,7 +230,10 @@ export class LapiClient {
     filters: FetchAlertsFilters = {},
   ): Promise<unknown[]> {
     const sinceParam = since || this.lookbackPeriod;
-    const isCapiOrigin = filters.origin?.trim().toUpperCase() === 'CAPI';
+    const normalizedOrigin = filters.origin?.trim();
+    const isCapiOrigin = normalizedOrigin?.toUpperCase() === 'CAPI';
+    const isListsOrigin = normalizedOrigin === 'lists';
+    const includeCapi = filters.includeCapi ?? isCapiOrigin;
     const buildParams = (scope?: 'ip' | 'range'): URLSearchParams => {
       const params = new URLSearchParams();
       params.append('since', sinceParam);
@@ -238,13 +243,15 @@ export class LapiClient {
       if (hasActiveDecision) params.append('has_active_decision', 'true');
       if (filters.origin) params.append('origin', filters.origin);
       if (filters.scenario) params.append('scenario', filters.scenario);
+      params.append('include_capi', String(includeCapi));
       if (scope) params.append('scope', scope);
       return params;
     };
 
-    const scopes = isCapiOrigin
+    const singleScopeOnly = filters.singleScopeOnly ?? (isCapiOrigin || isListsOrigin);
+    const scopes: Array<'ip' | 'range' | undefined> = singleScopeOnly
       ? [undefined]
-      : ['ip', 'range'] as const;
+      : [undefined, 'ip', 'range'];
     let successfulScopes = 0;
     let lastError: Error | null = null;
     const resultSets = await Promise.all(scopes.map(async (scope) => {
