@@ -68,7 +68,7 @@
     "react-zoom-pan-pinch": "4.0.3",
     "recharts": "3.8.1",
     "tailwind-merge": "^3.5.0",
-    "tailwindcss": "^4.2.1",
+    "tailwindcss": "^4.2.4",
     "tsup": "8.5.1",
     "tsx": "4.21.0",
     "typescript": "^6.0.2",
