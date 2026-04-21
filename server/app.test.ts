@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from 'vitest';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
@@ -1409,6 +1409,66 @@ describe('createApp', () => {
     controller.stopBackgroundTasks();
     database.close();
     destroyTempDir();
+  });
+
+  test('logs decision counts during bootstrap sync', async () => {
+    const stopAt = new Date(Date.now() + 30 * 60 * 1_000).toISOString();
+    const alert = sampleAlert({
+      id: 71,
+      uuid: 'alert-71',
+      decisions: [
+        {
+          id: 710,
+          type: 'ban',
+          value: '1.2.3.4',
+          duration: '30m',
+          stop_at: stopAt,
+          origin: 'manual',
+          simulated: false,
+        },
+        {
+          id: 711,
+          type: 'ban',
+          value: '1.2.3.5',
+          duration: '30m',
+          stop_at: stopAt,
+          origin: 'manual',
+          simulated: false,
+        },
+      ],
+    });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const { controller, database } = createController({
+      fetchResolver: (url) => {
+        if (url.includes('/v1/alerts?')) {
+          return Response.json([alert]);
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      const alerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+      expect(alerts.status).toBe(200);
+
+      const logs = logSpy.mock.calls.map((call) => String(call[0])).join('\n');
+      expect(logs).toContain('Imported 1 alerts and 2 decisions.');
+      expect(logs).toContain(
+        `Cache initialized successfully:
+  Historical: 1 alerts and 2 decisions fetched
+  Active decisions: checked 1 alerts and 2 decisions; no cache changes
+  Cache: 1 alerts and 2 decisions
+  Refresh Interval: 30s
+`,
+      );
+      expect(logs).not.toContain('Historical chunk sync complete');
+      expect(logs).not.toContain('-> Synced 1 active-decision alerts');
+    } finally {
+      logSpy.mockRestore();
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
   });
 
   test('fails fast on mixed password and mTLS configuration', () => {
@@ -2959,7 +3019,7 @@ describe('createApp', () => {
     const decisionCount = (database.db.query('SELECT COUNT(*) AS count FROM decisions').get() as { count: number }).count;
     expect(alertCount).toBe(3);
     expect(decisionCount).toBe(3);
-    expect(controller.getSyncStatus().message).toContain('3 alerts imported');
+    expect(controller.getSyncStatus().message).toContain('3 alerts and 3 decisions cached');
 
     const storedAlerts = database.db.query('SELECT raw_data FROM alerts').all() as Array<{ raw_data: string }>;
     expect(

@@ -100,6 +100,20 @@ interface AlertSyncQuery {
   singleScopeOnly?: boolean;
 }
 
+interface SyncHistorySummary {
+  historicalAlerts: number;
+  historicalDecisions: number;
+  activeDecisionAlerts: number;
+  activeDecisions: number;
+  activeNetCachedAlerts: number;
+  activeNetCachedDecisions: number;
+  activePrunedAlerts: number;
+  activePrunedDecisions: number;
+  activeError: string | null;
+  cachedAlerts: number;
+  cachedDecisions: number;
+}
+
 interface CachedDecisionRecord {
   id: string;
   value?: string;
@@ -231,6 +245,14 @@ function getAlertFallbackOrigins(alert: Pick<AlertRecord, 'decisions' | 'source'
   }
 
   return [];
+}
+
+function countAlertDecisions(alerts: AlertRecord[]): number {
+  return alerts.reduce((total, alert) => total + (Array.isArray(alert.decisions) ? alert.decisions.length : 0), 0);
+}
+
+function formatSignedCount(count: number): string {
+  return count > 0 ? `+${count}` : String(count);
 }
 
 export function createApp(options: CreateAppOptions = {}): AppController {
@@ -1251,7 +1273,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     return pruned;
   }
 
-  async function syncHistory(): Promise<number> {
+  async function syncHistory(): Promise<SyncHistorySummary> {
     const showOverlay = isFirstSync;
     isFirstSync = false;
     console.log('Starting historical data sync...');
@@ -1270,22 +1292,31 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     const totalDuration = now - lookbackStart;
     let currentStart = lookbackStart;
     let totalAlerts = 0;
+    let totalDecisions = 0;
+    let activeDecisionAlertsCount = 0;
+    let activeDecisionsCount = 0;
+    let activeNetCachedAlerts = 0;
+    let activeNetCachedDecisions = 0;
+    let activePrunedAlerts = 0;
+    let activePrunedDecisions = 0;
+    let activeError: string | null = null;
 
     while (currentStart < now) {
       const currentEnd = Math.min(currentStart + chunkSizeMs, now);
       const progress = Math.round(((currentEnd - lookbackStart) / totalDuration) * 100);
       const sinceDuration = toDuration(currentStart);
       const untilDuration = toDuration(currentEnd);
-      const progressMessage = `Syncing: ${sinceDuration} -> ${untilDuration} ago (${totalAlerts} alerts)`;
+      const progressMessage = `Syncing: ${sinceDuration} -> ${untilDuration} ago (${totalAlerts} alerts, ${totalDecisions} decisions)`;
 
       updateSyncStatus({
         progress: Math.min(progress, 90),
-        message: `Syncing: ${sinceDuration} -> ${untilDuration} ago (${totalAlerts} alerts)`,
+        message: progressMessage,
       });
       console.log(progressMessage);
 
       try {
         const alerts = await fetchAlertsForSync(sinceDuration, untilDuration, false, { requireComplete: true });
+        const decisionCount = countAlertDecisions(alerts);
         const pruned = reconcileSyncedAlertWindow(
           alerts,
           new Date(currentStart).toISOString(),
@@ -1293,7 +1324,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         );
         if (alerts.length > 0) {
           totalAlerts += alerts.length;
-          console.log(`  -> Imported ${alerts.length} alerts.`);
+          totalDecisions += decisionCount;
+          console.log(`  -> Imported ${alerts.length} alerts and ${decisionCount} decisions.`);
         }
         if (pruned.alerts > 0 || pruned.decisions > 0) {
           console.log(`  -> Pruned ${pruned.alerts} stale alerts and ${pruned.decisions} stale decisions.`);
@@ -1309,25 +1341,43 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     updateSyncStatus({ progress: 95, message: 'Syncing active decisions...' });
     try {
       const activeDecisionAlerts = await fetchAlertsForSync(null, null, true, { requireComplete: true });
+      const activeDecisionCount = countAlertDecisions(activeDecisionAlerts);
+      const cachedAlertsBeforeActiveSync = database.countAlerts();
+      const cachedDecisionsBeforeActiveSync = database.countDecisions();
       const pruned = reconcileActiveDecisionAlerts(activeDecisionAlerts, new Date().toISOString());
-      if (activeDecisionAlerts.length > 0 || pruned.alerts > 0 || pruned.decisions > 0) {
-        console.log(
-          `  -> Synced ${activeDecisionAlerts.length} active-decision alerts; pruned ${pruned.alerts} stale alerts and ${pruned.decisions} stale decisions.`,
-        );
-      }
+      activeDecisionAlertsCount = activeDecisionAlerts.length;
+      activeDecisionsCount = activeDecisionCount;
+      activeNetCachedAlerts = database.countAlerts() - cachedAlertsBeforeActiveSync;
+      activeNetCachedDecisions = database.countDecisions() - cachedDecisionsBeforeActiveSync;
+      activePrunedAlerts = pruned.alerts;
+      activePrunedDecisions = pruned.decisions;
     } catch (error: any) {
+      activeError = error.message;
       console.error('Failed to sync active decisions:', error.message);
     }
 
+    const cachedAlerts = database.countAlerts();
+    const cachedDecisions = database.countDecisions();
     updateSyncStatus({
       isSyncing: false,
       progress: 100,
-      message: `Sync complete. ${totalAlerts} alerts imported.`,
+      message: `Sync complete. ${cachedAlerts} alerts and ${cachedDecisions} decisions cached.`,
       completedAt: new Date().toISOString(),
     });
-    console.log(`Historical sync complete. Total imported: ${totalAlerts}`);
 
-    return totalAlerts;
+    return {
+      historicalAlerts: totalAlerts,
+      historicalDecisions: totalDecisions,
+      activeDecisionAlerts: activeDecisionAlertsCount,
+      activeDecisions: activeDecisionsCount,
+      activeNetCachedAlerts,
+      activeNetCachedDecisions,
+      activePrunedAlerts,
+      activePrunedDecisions,
+      activeError,
+      cachedAlerts,
+      cachedDecisions,
+    };
   }
 
   async function initializeCache(): Promise<boolean> {
@@ -1339,13 +1389,28 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     initializationPromise = (async () => {
       try {
         console.log('Initializing cache with chunked data load...');
-        await syncHistory();
+        const syncSummary = await syncHistory();
         cache.lastUpdate = new Date().toISOString();
         cache.isInitialized = true;
         lapiClient.updateStatus(true);
         await runNotificationEvaluation('cache initialization');
+        const activeDecisionChanged =
+          syncSummary.activeNetCachedAlerts !== 0 ||
+          syncSummary.activeNetCachedDecisions !== 0 ||
+          syncSummary.activePrunedAlerts !== 0 ||
+          syncSummary.activePrunedDecisions !== 0;
+        const activeDecisionSummary = syncSummary.activeError
+          ? `  Active decisions: failed (${syncSummary.activeError})`
+          : activeDecisionChanged
+            ? `  Active decisions:
+    Checked:      ${syncSummary.activeDecisionAlerts} alerts and ${syncSummary.activeDecisions} decisions
+    Cache change: ${formatSignedCount(syncSummary.activeNetCachedAlerts)} alerts and ${formatSignedCount(syncSummary.activeNetCachedDecisions)} decisions
+    Pruned stale: ${syncSummary.activePrunedAlerts} alerts and ${syncSummary.activePrunedDecisions} decisions`
+            : `  Active decisions: checked ${syncSummary.activeDecisionAlerts} alerts and ${syncSummary.activeDecisions} decisions; no cache changes`;
         console.log(`Cache initialized successfully:
-  Alerts: ${database.countAlerts()}
+  Historical: ${syncSummary.historicalAlerts} alerts and ${syncSummary.historicalDecisions} decisions fetched
+${activeDecisionSummary}
+  Cache: ${syncSummary.cachedAlerts} alerts and ${syncSummary.cachedDecisions} decisions
   Refresh Interval: ${getIntervalName(refreshIntervalMs)}
 `);
         return true;
@@ -1386,24 +1451,26 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         fetchAlertsForSync(sinceDuration, null, false, { requireComplete: true }),
         fetchAlertsForSync(null, null, true, { requireComplete: true }),
       ]);
+      const newDecisionCount = countAlertDecisions(newAlerts);
+      const activeDecisionCount = countAlertDecisions(activeDecisionAlerts);
 
       const deltaPruned = reconcileSyncedAlertWindow(newAlerts, deltaStart, deltaEnd);
       if (newAlerts.length > 0 || deltaPruned.alerts > 0 || deltaPruned.decisions > 0) {
         console.log(
-          `Delta update: ${newAlerts.length} alerts synced, ${deltaPruned.alerts} stale alerts and ${deltaPruned.decisions} stale decisions pruned`,
+          `Delta update: ${newAlerts.length} alerts and ${newDecisionCount} decisions synced, ${deltaPruned.alerts} stale alerts and ${deltaPruned.decisions} stale decisions pruned`,
         );
       }
 
       const activePruned = reconcileActiveDecisionAlerts(activeDecisionAlerts, new Date().toISOString());
       if (activeDecisionAlerts.length > 0 || activePruned.alerts > 0 || activePruned.decisions > 0) {
         console.log(
-          `Active decision refresh: ${activeDecisionAlerts.length} alerts synced, ${activePruned.alerts} stale alerts and ${activePruned.decisions} stale decisions pruned`,
+          `Active decision refresh: ${activeDecisionAlerts.length} alerts and ${activeDecisionCount} decisions synced, ${activePruned.alerts} stale alerts and ${activePruned.decisions} stale decisions pruned`,
         );
       }
 
       cache.lastUpdate = new Date().toISOString();
       lapiClient.updateStatus(true);
-      console.log(`Delta update complete: ${newAlerts.length} alerts, ${activeDecisionAlerts.length} active decision alerts refreshed`);
+      console.log(`Delta update complete: ${newAlerts.length} alerts and ${newDecisionCount} decisions synced, ${activeDecisionAlerts.length} active decision alerts and ${activeDecisionCount} decisions refreshed`);
     } catch (error: any) {
       console.error('Failed to update cache delta:', error.message);
       lapiClient.updateStatus(false, error);

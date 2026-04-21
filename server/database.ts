@@ -92,6 +92,7 @@ export class CrowdsecDatabase {
   private readonly getAlertsBetweenStatement: any;
   private readonly getAlertIdsBetweenStatement: any;
   private readonly countAlertsStatement: any;
+  private readonly countDecisionsStatement: any;
   private readonly deleteOldAlertsStatement: any;
   private readonly insertDecisionStatement: any;
   private readonly updateDecisionStatement: any;
@@ -157,6 +158,7 @@ export class CrowdsecDatabase {
     `);
 
     this.countAlertsStatement = this.db.query('SELECT COUNT(*) as count FROM alerts');
+    this.countDecisionsStatement = this.db.query('SELECT COUNT(*) as count FROM decisions');
     this.deleteOldAlertsStatement = this.db.query('DELETE FROM alerts WHERE created_at < $cutoff');
 
     this.insertDecisionStatement = this.db.query(`
@@ -326,6 +328,10 @@ export class CrowdsecDatabase {
 
   countAlerts(): number {
     return (this.countAlertsStatement.get() as CountRow).count;
+  }
+
+  countDecisions(): number {
+    return (this.countDecisionsStatement.get() as CountRow).count;
   }
 
   deleteOldAlerts(cutoff: string): number {
