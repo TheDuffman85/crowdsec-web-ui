@@ -54,7 +54,7 @@
     "@nivo/core": "^0.99.0",
     "@nivo/geo": "^0.99.0",
     "clsx": "^2.1.1",
-    "eslint": "^10.0.3",
+    "eslint": "^10.2.1",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "flag-icons": "^7.5.0",
