@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, test, vi } from 'vitest';
@@ -61,6 +61,16 @@ class ResizeObserverMock {
 }
 
 vi.stubGlobal('ResizeObserver', ResizeObserverMock);
+
+Object.defineProperty(HTMLElement.prototype, 'setPointerCapture', {
+  configurable: true,
+  value: vi.fn(),
+});
+
+Object.defineProperty(HTMLElement.prototype, 'releasePointerCapture', {
+  configurable: true,
+  value: vi.fn(),
+});
 
 const createDomRect = (width: number, height = 20): DOMRect => ({
   x: 0,
@@ -358,6 +368,43 @@ describe('ActivityBarChart', () => {
 
     expect(screen.getByTestId('activity-range-selection')).toHaveAttribute('data-start-index', '1');
     expect(screen.getByTestId('activity-range-selection')).toHaveAttribute('data-end-index', '2');
+  });
+
+  test('shows the selection summary while dragging from the full range', () => {
+    render(
+      <ActivityBarChart
+        alertsData={series}
+        decisionsData={series}
+        unfilteredAlertsData={series}
+        unfilteredDecisionsData={series}
+        granularity="day"
+        setGranularity={vi.fn()}
+        onDateRangeSelect={vi.fn()}
+        selectedDateRange={null}
+        isSticky={false}
+      />,
+    );
+
+    expect(screen.queryByText('Last 3 Days')).not.toBeInTheDocument();
+
+    const originalGetBoundingClientRect = HTMLElement.prototype.getBoundingClientRect;
+    const getBoundingClientRectSpy = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function mockBoundingClientRect(this: HTMLElement) {
+        if (this.getAttribute('data-testid') === 'activity-slider-track') {
+          return createDomRect(300, 40);
+        }
+        return originalGetBoundingClientRect.call(this);
+      });
+
+    fireEvent.pointerDown(screen.getByTestId('activity-range-start-handle'), {
+      pointerId: 1,
+      clientX: 0,
+    });
+
+    expect(screen.getByText('Last 3 Days')).toBeInTheDocument();
+
+    getBoundingClientRectSpy.mockRestore();
   });
 
   test('shows the selected start and end labels while the slider is hovered', async () => {

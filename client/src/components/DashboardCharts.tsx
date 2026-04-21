@@ -386,6 +386,7 @@ export function ActivityBarChart({
         ? (startIndex / sliderBucketCount) * 100
         : 0;
     const sliderSelectionRightPercent = sliderSelectionLeftPercent + sliderSelectionWidthPercent;
+    const showSelectionSummary = sliderBucketCount > 0 && (selectedDateRange !== null || isDraggingState);
     const sliderStartLabel = sliderData[startIndex]?.label ?? '';
     const sliderEndLabel = sliderData[endIndex]?.label ?? '';
     const showSliderLabels = (isSliderHovered || isDraggingState) && sliderBucketCount > 0;
@@ -607,7 +608,7 @@ export function ActivityBarChart({
                     <CardTitle className="flex items-center gap-2">
                         <BarChart3 className="w-5 h-5 text-primary-600 dark:text-primary-400" />
                         Activity History
-                        {selectedDateRange && sliderData.length > 0 && (
+                        {showSelectionSummary && (
                             <span className="ml-2 text-sm font-normal text-gray-500 dark:text-gray-400">
                                 {endIndex === sliderData.length - 1 ? 'Last' : 'Selected'} {endIndex - startIndex + 1} {granularity === 'day' ? 'Days' : 'Hours'}
                             </span>
