@@ -36,7 +36,7 @@
   "dependencies": {
     "@hono/node-server": "1.19.14",
     "better-sqlite3": "12.9.0",
-    "hono": "4.12.12",
+    "hono": "4.12.14",
     "mqtt": "^5.15.1",
     "undici": "8.1.0"
   },
