@@ -34,9 +34,9 @@
     "verify": "pnpm run test && pnpm run coverage && pnpm run typecheck && pnpm run lint && pnpm run build"
   },
   "dependencies": {
-    "@hono/node-server": "1.19.14",
+    "@hono/node-server": "2.0.0",
     "better-sqlite3": "12.9.0",
-    "hono": "4.12.12",
+    "hono": "4.12.14",
     "mqtt": "^5.15.1",
     "undici": "8.1.0"
   },
@@ -74,6 +74,6 @@
     "typescript": "^6.0.2",
     "typescript-eslint": "^8.57.2",
     "vitest": "4.1.4",
-    "vite": "8.0.8"
+    "vite": "8.0.9"
   }
 }
