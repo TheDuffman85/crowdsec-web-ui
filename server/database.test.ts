@@ -185,6 +185,94 @@ describe('CrowdsecDatabase', () => {
     db.close();
   });
 
+  test('deleteAlertsMissingBetween removes stale alerts and linked decisions only inside the window', () => {
+    const db = createTestDatabase();
+
+    for (const alert of [
+      { id: 1, createdAt: '2025-01-01T00:00:00.000Z' },
+      { id: 2, createdAt: '2025-01-01T00:01:00.000Z' },
+      { id: 3, createdAt: '2025-01-01T03:00:00.000Z' },
+    ]) {
+      db.insertAlert({
+        $id: alert.id,
+        $uuid: `alert-${alert.id}`,
+        $created_at: alert.createdAt,
+        $scenario: 'scenario',
+        $source_ip: '1.2.3.4',
+        $message: 'alert',
+        $raw_data: JSON.stringify({ id: alert.id }),
+      });
+      db.insertDecision({
+        $id: String(alert.id * 10),
+        $uuid: String(alert.id * 10),
+        $alert_id: alert.id,
+        $created_at: alert.createdAt,
+        $stop_at: '2030-01-01T00:00:00.000Z',
+        $value: '1.2.3.4',
+        $type: 'ban',
+        $origin: 'manual',
+        $scenario: 'scenario',
+        $raw_data: JSON.stringify({ id: alert.id * 10, alert_id: alert.id }),
+      });
+    }
+
+    expect(db.deleteAlertsMissingBetween(
+      '2025-01-01T00:00:00.000Z',
+      '2025-01-01T02:00:00.000Z',
+      ['1'],
+    )).toEqual({ alerts: 1, decisions: 1 });
+
+    expect(db.getAlertsBetween('2025-01-01T00:00:00.000Z', '2025-01-01T02:00:00.000Z')).toHaveLength(1);
+    expect(db.getAlertsSince('2025-01-01T00:00:00.000Z')).toHaveLength(2);
+    expect(db.getDecisionById('10')).not.toBeNull();
+    expect(db.getDecisionById('20')).toBeNull();
+    expect(db.getDecisionById('30')).not.toBeNull();
+
+    db.close();
+  });
+
+  test('deleteActiveAlertsMissing removes only active cached alerts absent from keep ids', () => {
+    const db = createTestDatabase();
+
+    for (const alert of [
+      { id: 1, createdAt: '2025-01-01T00:00:00.000Z', stopAt: '2030-01-01T00:00:00.000Z' },
+      { id: 2, createdAt: '2025-01-01T00:00:00.000Z', stopAt: '2030-01-01T00:00:00.000Z' },
+      { id: 3, createdAt: '2025-01-01T00:00:00.000Z', stopAt: '2020-01-01T00:00:00.000Z' },
+      { id: 4, createdAt: '2024-01-01T00:00:00.000Z', stopAt: '2030-01-01T00:00:00.000Z' },
+    ]) {
+      db.insertAlert({
+        $id: alert.id,
+        $uuid: `active-alert-${alert.id}`,
+        $created_at: alert.createdAt,
+        $scenario: 'scenario',
+        $source_ip: '1.2.3.4',
+        $message: 'alert',
+        $raw_data: JSON.stringify({ id: alert.id }),
+      });
+      db.insertDecision({
+        $id: String(alert.id * 10),
+        $uuid: String(alert.id * 10),
+        $alert_id: alert.id,
+        $created_at: '2025-01-01T00:00:00.000Z',
+        $stop_at: alert.stopAt,
+        $value: '1.2.3.4',
+        $type: 'ban',
+        $origin: 'manual',
+        $scenario: 'scenario',
+        $raw_data: JSON.stringify({ id: alert.id * 10, alert_id: alert.id }),
+      });
+    }
+
+    expect(db.deleteActiveAlertsMissing(['1'], '2025-01-01T00:00:00.000Z', '2024-12-31T00:00:00.000Z')).toEqual({ alerts: 1, decisions: 1 });
+    expect(db.getAlertsSince('2024-01-01T00:00:00.000Z')).toHaveLength(3);
+    expect(db.getDecisionById('10')).not.toBeNull();
+    expect(db.getDecisionById('20')).toBeNull();
+    expect(db.getDecisionById('30')).not.toBeNull();
+    expect(db.getDecisionById('40')).not.toBeNull();
+
+    db.close();
+  });
+
   test('stores notification channels, rules, notifications, and cve cache', () => {
     const db = createTestDatabase();
 

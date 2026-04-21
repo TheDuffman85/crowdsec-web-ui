@@ -693,10 +693,10 @@ volumes:
 
 ### How It Works
 
-The Web UI maintains its own local history of alerts and decisions. Data fetched from the CrowdSec LAPI is stored in the local database and **preserved across restarts and full refreshes**. This means the Web UI can retain more alerts than the LAPI itself keeps (LAPI has a configurable `max_items` limit, default 5000).
+The Web UI maintains its own local history of alerts and decisions. Data fetched from the CrowdSec LAPI is stored in the local database and preserved across restarts, while successful full refreshes reconcile the local cache with LAPI so alerts deleted outside the UI are removed locally too.
 
 - Alerts are kept for the duration of `CROWDSEC_LOOKBACK_PERIOD` (default: 7 days), then automatically cleaned up.
-- On restart, existing data is reused and new data from LAPI is merged in.
+- On restart, existing data is reused and new data from LAPI is merged in, then successful full sync windows prune alerts no longer returned by LAPI.
 - If LAPI is unavailable during startup, the Web UI keeps retrying bootstrap in the background using `CROWDSEC_BOOTSTRAP_RETRY_DELAY` until it can initialize automatically.
 - To force a full cache reset, use the `POST /api/cache/clear` endpoint.
 

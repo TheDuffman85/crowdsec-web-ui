@@ -277,6 +277,25 @@ describe('LapiClient', () => {
     expect(calls.some((url) => url.includes('scope=range'))).toBe(true);
   });
 
+  test('throws on partial scope failure when complete alert results are required', async () => {
+    const client = new LapiClient({
+      crowdsecUrl: 'http://crowdsec:8080',
+      auth: passwordAuth,
+      simulationsEnabled: true,
+      lookbackPeriod: '1h',
+      version: '1.0.0',
+      fetchImpl: async (input) => {
+        const url = String(input);
+        if (url.includes('scope=ip')) {
+          throw new Error('ip scope failed');
+        }
+        return Response.json([{ id: 42 }]);
+      },
+    });
+
+    await expect(client.fetchAlerts(null, null, false, { requireAllScopes: true })).rejects.toThrow('ip scope failed');
+  });
+
   test('does not request simulated alerts when simulations are disabled', async () => {
     const calls: string[] = [];
     const client = new LapiClient({

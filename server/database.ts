@@ -56,6 +56,7 @@ export interface DatabaseOptions {
 type RowWithRawData = { raw_data: string; created_at?: string; stop_at?: string; alert_id?: string | number | null };
 type MetaRow = { value: string };
 type CountRow = { count: number };
+type IdRow = { id: string | number };
 type JsonRow = {
   id: string;
   created_at: string;
@@ -89,11 +90,13 @@ export class CrowdsecDatabase {
   private readonly insertAlertStatement: any;
   private readonly getAlertsStatement: any;
   private readonly getAlertsBetweenStatement: any;
+  private readonly getAlertIdsBetweenStatement: any;
   private readonly countAlertsStatement: any;
   private readonly deleteOldAlertsStatement: any;
   private readonly insertDecisionStatement: any;
   private readonly updateDecisionStatement: any;
   private readonly getActiveDecisionsStatement: any;
+  private readonly getActiveAlertIdsStatement: any;
   private readonly getDecisionsSinceStatement: any;
   private readonly deleteOldDecisionsStatement: any;
   private readonly deleteDecisionStatement: any;
@@ -148,6 +151,10 @@ export class CrowdsecDatabase {
       WHERE created_at >= $start AND created_at < $end
       ORDER BY created_at DESC
     `);
+    this.getAlertIdsBetweenStatement = this.db.query(`
+      SELECT id FROM alerts
+      WHERE created_at >= $start AND created_at < $end
+    `);
 
     this.countAlertsStatement = this.db.query('SELECT COUNT(*) as count FROM alerts');
     this.deleteOldAlertsStatement = this.db.query('DELETE FROM alerts WHERE created_at < $cutoff');
@@ -166,6 +173,14 @@ export class CrowdsecDatabase {
       SELECT raw_data, created_at, alert_id FROM decisions
       WHERE stop_at > $now
       ORDER BY stop_at DESC
+    `);
+    this.getActiveAlertIdsStatement = this.db.query(`
+      SELECT DISTINCT decisions.alert_id AS id
+      FROM decisions
+      INNER JOIN alerts ON alerts.id = decisions.alert_id
+      WHERE decisions.stop_at > $now
+        AND decisions.alert_id IS NOT NULL
+        AND alerts.created_at >= $since
     `);
 
     this.getDecisionsSinceStatement = this.db.query(`
@@ -297,6 +312,18 @@ export class CrowdsecDatabase {
     return this.getAlertsBetweenStatement.all({ $start: start, $end: end }) as RowWithRawData[];
   }
 
+  deleteAlertsMissingBetween(start: string, end: string, keepIds: Array<string | number>): { alerts: number; decisions: number } {
+    const keepSet = new Set(keepIds.map(String));
+    const rows = this.getAlertIdsBetweenStatement.all({ $start: start, $end: end }) as IdRow[];
+    const staleIds = rows
+      .map((row) => String(row.id))
+      .filter((id) => !keepSet.has(id));
+
+    const decisions = runChunkedIdMutation(this.db, 'DELETE FROM decisions WHERE alert_id IN', staleIds);
+    const alerts = runChunkedIdMutation(this.db, 'DELETE FROM alerts WHERE id IN', staleIds);
+    return { alerts, decisions };
+  }
+
   countAlerts(): number {
     return (this.countAlertsStatement.get() as CountRow).count;
   }
@@ -315,6 +342,18 @@ export class CrowdsecDatabase {
 
   getActiveDecisions(now: string): RowWithRawData[] {
     return this.getActiveDecisionsStatement.all({ $now: now }) as RowWithRawData[];
+  }
+
+  deleteActiveAlertsMissing(keepIds: Array<string | number>, now: string, since: string): { alerts: number; decisions: number } {
+    const keepSet = new Set(keepIds.map(String));
+    const rows = this.getActiveAlertIdsStatement.all({ $now: now, $since: since }) as IdRow[];
+    const staleIds = rows
+      .map((row) => String(row.id))
+      .filter((id) => !keepSet.has(id));
+
+    const decisions = runChunkedIdMutation(this.db, 'DELETE FROM decisions WHERE alert_id IN', staleIds);
+    const alerts = runChunkedIdMutation(this.db, 'DELETE FROM alerts WHERE id IN', staleIds);
+    return { alerts, decisions };
   }
 
   getDecisionsSince(since: string, now: string): RowWithRawData[] {

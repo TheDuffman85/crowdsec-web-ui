@@ -520,9 +520,16 @@ function dashboardDateKey(isoString: string, timezoneOffsetMinutes: number, incl
 
 describe('createApp', () => {
   test('serves health, config, alerts, decisions, stats, update-check, and mutations', async () => {
-    const { controller, database, lapiClient } = createController();
     const alert = sampleAlert();
     const simulatedAlert = sampleSimulatedAlert();
+    const { controller, database, lapiClient } = createController({
+      fetchResolver: (url) => {
+        if (url.includes('/v1/alerts?')) {
+          return Response.json([alert, simulatedAlert]);
+        }
+        return undefined;
+      },
+    });
 
     database.insertAlert({
       $id: alert.id,
@@ -736,42 +743,54 @@ describe('createApp', () => {
   });
 
   test('aggregates dashboard stats with mutual filters, simulation mode, and timezone date ranges', async () => {
-    const { controller, database, lapiClient } = createController();
     const createdAt = new Date().toISOString();
     const stopAt = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
     const timezoneOffset = -120;
     const dateKey = dashboardDateKey(createdAt, timezoneOffset);
+    const dashboardAlerts = [
+      sampleAlert({
+        id: 101,
+        uuid: 'dashboard-alert-101',
+        created_at: createdAt,
+        scenario: 'crowdsecurity/ssh-bf',
+        source: { ip: '1.2.3.4', value: '1.2.3.4', cn: 'DE', as_name: 'Hetzner' },
+        target: 'ssh',
+        decisions: [{ id: 1010, value: '1.2.3.4', stop_at: stopAt, type: 'ban', origin: 'manual', simulated: false }],
+        simulated: false,
+      }),
+      sampleAlert({
+        id: 102,
+        uuid: 'dashboard-alert-102',
+        created_at: createdAt,
+        scenario: 'crowdsecurity/http-probing',
+        source: { ip: '9.9.9.9', value: '9.9.9.9', cn: 'DE', as_name: 'OVH' },
+        target: 'http',
+        decisions: [{ id: 1020, value: '9.9.9.9', stop_at: stopAt, type: 'ban', origin: 'manual', simulated: false }],
+        simulated: false,
+      }),
+      sampleAlert({
+        id: 103,
+        uuid: 'dashboard-alert-103',
+        created_at: createdAt,
+        scenario: 'crowdsecurity/nginx-bf',
+        source: { ip: '5.6.7.8', value: '5.6.7.8', cn: 'US', as_name: 'AWS' },
+        target: 'nginx',
+        decisions: [{ id: 1030, value: '5.6.7.8', stop_at: stopAt, type: 'ban', origin: 'crowdsec', simulated: true }],
+        simulated: true,
+      }),
+    ];
+    const { controller, database, lapiClient } = createController({
+      fetchResolver: (url) => {
+        if (url.includes('/v1/alerts?')) {
+          return Response.json(dashboardAlerts);
+        }
+        return undefined;
+      },
+    });
 
-    seedAlert(database, sampleAlert({
-      id: 101,
-      uuid: 'dashboard-alert-101',
-      created_at: createdAt,
-      scenario: 'crowdsecurity/ssh-bf',
-      source: { ip: '1.2.3.4', value: '1.2.3.4', cn: 'DE', as_name: 'Hetzner' },
-      target: 'ssh',
-      decisions: [{ id: 1010, value: '1.2.3.4', stop_at: stopAt, type: 'ban', origin: 'manual', simulated: false }],
-      simulated: false,
-    }));
-    seedAlert(database, sampleAlert({
-      id: 102,
-      uuid: 'dashboard-alert-102',
-      created_at: createdAt,
-      scenario: 'crowdsecurity/http-probing',
-      source: { ip: '9.9.9.9', value: '9.9.9.9', cn: 'DE', as_name: 'OVH' },
-      target: 'http',
-      decisions: [{ id: 1020, value: '9.9.9.9', stop_at: stopAt, type: 'ban', origin: 'manual', simulated: false }],
-      simulated: false,
-    }));
-    seedAlert(database, sampleAlert({
-      id: 103,
-      uuid: 'dashboard-alert-103',
-      created_at: createdAt,
-      scenario: 'crowdsecurity/nginx-bf',
-      source: { ip: '5.6.7.8', value: '5.6.7.8', cn: 'US', as_name: 'AWS' },
-      target: 'nginx',
-      decisions: [{ id: 1030, value: '5.6.7.8', stop_at: stopAt, type: 'ban', origin: 'crowdsec', simulated: true }],
-      simulated: true,
-    }));
+    for (const alert of dashboardAlerts) {
+      seedAlert(database, alert);
+    }
 
     await lapiClient.login();
 
@@ -986,22 +1005,34 @@ describe('createApp', () => {
   });
 
   test('matches alert search queries against decision origins', async () => {
-    const { controller, database } = createController();
-
-    seedAlert(database, sampleAlert({
+    const searchAlerts = [
+      sampleAlert({
       id: 1,
       uuid: 'alert-1',
       decisions: [
         { id: 10, value: '1.2.3.4', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'manual', simulated: false },
         { id: 11, value: '1.2.3.4', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'CAPI', simulated: false },
       ],
-    }));
-    seedAlert(database, sampleAlert({
+      }),
+      sampleAlert({
       id: 2,
       uuid: 'alert-2',
       source: { ip: '5.6.7.8', value: '5.6.7.8', cn: 'US', as_name: 'AWS' },
       decisions: [{ id: 20, value: '5.6.7.8', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'crowdsec', simulated: false }],
-    }));
+      }),
+    ];
+    const { controller, database } = createController({
+      fetchResolver: (url) => {
+        if (url.includes('/v1/alerts?')) {
+          return Response.json(searchAlerts);
+        }
+        return undefined;
+      },
+    });
+
+    for (const alert of searchAlerts) {
+      seedAlert(database, alert);
+    }
 
     const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=10&q=capi'));
     expect(response.status).toBe(200);
@@ -1018,25 +1049,36 @@ describe('createApp', () => {
   });
 
   test('matches decision search queries against machine and origin', async () => {
+    const searchAlerts = [
+      sampleAlert({
+        id: 1,
+        uuid: 'alert-1',
+        machine_id: 'machine-1',
+        machine_alias: 'host-a',
+        decisions: [{ id: 10, value: '1.2.3.4', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'manual', simulated: false }],
+      }),
+      sampleAlert({
+        id: 2,
+        uuid: 'alert-2',
+        source: { ip: '5.6.7.8', value: '5.6.7.8', cn: 'US', as_name: 'AWS' },
+        decisions: [{ id: 20, value: '5.6.7.8', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'crowdsec', simulated: false }],
+      }),
+    ];
     const { controller, database } = createController({
       env: {
         CROWDSEC_ALWAYS_SHOW_MACHINE: 'true',
       },
+      fetchResolver: (url) => {
+        if (url.includes('/v1/alerts?')) {
+          return Response.json(searchAlerts);
+        }
+        return undefined;
+      },
     });
 
-    seedAlert(database, sampleAlert({
-      id: 1,
-      uuid: 'alert-1',
-      machine_id: 'machine-1',
-      machine_alias: 'host-a',
-      decisions: [{ id: 10, value: '1.2.3.4', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'manual', simulated: false }],
-    }));
-    seedAlert(database, sampleAlert({
-      id: 2,
-      uuid: 'alert-2',
-      source: { ip: '5.6.7.8', value: '5.6.7.8', cn: 'US', as_name: 'AWS' },
-      decisions: [{ id: 20, value: '5.6.7.8', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'crowdsec', simulated: false }],
-    }));
+    for (const alert of searchAlerts) {
+      seedAlert(database, alert);
+    }
 
     const machineResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions?page=1&page_size=10&q=host-a'));
     expect(machineResponse.status).toBe(200);
@@ -1062,33 +1104,44 @@ describe('createApp', () => {
   });
 
   test('supports advanced boolean search for alerts and decisions', async () => {
+    const searchAlerts = [
+      sampleAlert({
+        id: 1,
+        uuid: 'alert-1',
+        machine_id: 'machine-1',
+        machine_alias: 'host-a',
+        source: { ip: '1.2.3.4', value: '1.2.3.4', cn: 'DE', as_name: 'Hetzner' },
+        decisions: [
+          { id: 10, value: '1.2.3.4', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'manual', simulated: false },
+          { id: 11, value: '1.2.3.4', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'CAPI', simulated: false },
+        ],
+      }),
+      sampleAlert({
+        id: 2,
+        uuid: 'alert-2',
+        machine_id: 'machine-2',
+        machine_alias: 'host-b',
+        source: { ip: '5.6.7.8', value: '5.6.7.8', cn: 'US', as_name: 'AWS' },
+        decisions: [{ id: 20, value: '5.6.7.8', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'crowdsec', simulated: true }],
+        simulated: true,
+      }),
+    ];
     const { controller, database } = createController({
       env: {
         CROWDSEC_ALWAYS_SHOW_MACHINE: 'true',
         CROWDSEC_ALWAYS_SHOW_ORIGIN: 'true',
       },
+      fetchResolver: (url) => {
+        if (url.includes('/v1/alerts?')) {
+          return Response.json(searchAlerts);
+        }
+        return undefined;
+      },
     });
 
-    seedAlert(database, sampleAlert({
-      id: 1,
-      uuid: 'alert-1',
-      machine_id: 'machine-1',
-      machine_alias: 'host-a',
-      source: { ip: '1.2.3.4', value: '1.2.3.4', cn: 'DE', as_name: 'Hetzner' },
-      decisions: [
-        { id: 10, value: '1.2.3.4', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'manual', simulated: false },
-        { id: 11, value: '1.2.3.4', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'CAPI', simulated: false },
-      ],
-    }));
-    seedAlert(database, sampleAlert({
-      id: 2,
-      uuid: 'alert-2',
-      machine_id: 'machine-2',
-      machine_alias: 'host-b',
-      source: { ip: '5.6.7.8', value: '5.6.7.8', cn: 'US', as_name: 'AWS' },
-      decisions: [{ id: 20, value: '5.6.7.8', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'crowdsec', simulated: true }],
-      simulated: true,
-    }));
+    for (const alert of searchAlerts) {
+      seedAlert(database, alert);
+    }
 
     const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=10&q=origin:(manual%20OR%20CAPI)%20AND%20-country:us'));
     expect(alertsResponse.status).toBe(200);
@@ -1491,9 +1544,17 @@ describe('createApp', () => {
   });
 
   test('filters simulated alerts and decisions when simulations are disabled', async () => {
-    const { controller, database, lapiClient } = createController({ simulationsEnabled: false });
     const liveAlert = sampleAlert();
     const simulatedAlert = sampleSimulatedAlert();
+    const { controller, database, lapiClient } = createController({
+      simulationsEnabled: false,
+      fetchResolver: (url) => {
+        if (url.includes('/v1/alerts?')) {
+          return Response.json([liveAlert, simulatedAlert]);
+        }
+        return undefined;
+      },
+    });
 
     database.insertAlert({
       $id: liveAlert.id,
@@ -1791,6 +1852,326 @@ describe('createApp', () => {
     expect(refreshedDecisionsJson.pagination.total).toBe(1);
     expect(refreshedDecisionsJson.data.map((decision) => decision.id)).toEqual([2101]);
     expect(database.getDecisionById('2102')).toBeNull();
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('prunes cached alerts missing from a successful historical sync window', async () => {
+    const createdAt = new Date(Date.now() - 30_000).toISOString();
+    const syncedAlert = sampleAlert({
+      id: 220,
+      uuid: 'alert-220',
+      created_at: createdAt,
+      decisions: [
+        {
+          id: 2201,
+          type: 'ban',
+          value: '4.4.4.4',
+          duration: '30m',
+          stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(),
+          origin: 'manual',
+          scenario: 'crowdsecurity/ssh-bf',
+          simulated: false,
+        },
+      ],
+    });
+    const staleAlert = sampleAlert({
+      id: 221,
+      uuid: 'alert-221',
+      created_at: createdAt,
+      decisions: [
+        {
+          id: 2211,
+          type: 'ban',
+          value: '5.5.5.5',
+          duration: '30m',
+          stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(),
+          origin: 'manual',
+          scenario: 'crowdsecurity/ssh-bf',
+          simulated: false,
+        },
+      ],
+    });
+
+    const { controller, database } = createController({
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (url.includes('/v1/alerts?')) {
+          return Response.json([syncedAlert]);
+        }
+        return undefined;
+      },
+    });
+
+    seedAlert(database, syncedAlert);
+    seedAlert(database, staleAlert);
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50'));
+    expect(alertsResponse.status).toBe(200);
+    const alertsJson = await alertsResponse.json() as {
+      data: Array<{ id: number }>;
+      pagination: { total: number };
+    };
+
+    expect(alertsJson.pagination.total).toBe(1);
+    expect(alertsJson.data.map((alert) => alert.id)).toEqual([220]);
+    expect(database.getAlertsSince(new Date(Date.now() - 60_000).toISOString())).toHaveLength(1);
+    expect(database.getDecisionById('2201')).not.toBeNull();
+    expect(database.getDecisionById('2211')).toBeNull();
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('does not prune cached alerts when historical sync has a partial scope failure', async () => {
+    const createdAt = new Date(Date.now() - 30_000).toISOString();
+    const syncedAlert = sampleAlert({
+      id: 240,
+      uuid: 'alert-240',
+      created_at: createdAt,
+      decisions: [
+        {
+          id: 2401,
+          type: 'ban',
+          value: '7.7.7.7',
+          duration: '30m',
+          stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(),
+          origin: 'manual',
+          scenario: 'crowdsecurity/ssh-bf',
+          simulated: false,
+        },
+      ],
+    });
+    const cachedOnlyAlert = sampleAlert({
+      id: 241,
+      uuid: 'alert-241',
+      created_at: createdAt,
+      decisions: [
+        {
+          id: 2411,
+          type: 'ban',
+          value: '8.8.8.8',
+          duration: '30m',
+          stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(),
+          origin: 'manual',
+          scenario: 'crowdsecurity/ssh-bf',
+          simulated: false,
+        },
+      ],
+    });
+
+    const { controller, database } = createController({
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (url.includes('/v1/alerts?') && url.includes('scope=ip')) {
+          throw new Error('ip scope failed');
+        }
+        if (url.includes('/v1/alerts?')) {
+          return Response.json([syncedAlert]);
+        }
+        return undefined;
+      },
+    });
+
+    seedAlert(database, syncedAlert);
+    seedAlert(database, cachedOnlyAlert);
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50'));
+    expect(alertsResponse.status).toBe(200);
+    const alertsJson = await alertsResponse.json() as {
+      data: Array<{ id: number }>;
+      pagination: { total: number };
+    };
+
+    expect(alertsJson.pagination.total).toBe(2);
+    expect(alertsJson.data.map((alert) => alert.id).sort()).toEqual([240, 241]);
+    expect(database.getDecisionById('2411')).not.toBeNull();
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('prunes stale cached alerts from the refreshed delta window without full lookback reconciliation', async () => {
+    const createdAt = new Date().toISOString();
+    const keptAlert = sampleAlert({
+      id: 250,
+      uuid: 'alert-250',
+      created_at: createdAt,
+      decisions: [],
+    });
+    const deletedAlert = sampleAlert({
+      id: 251,
+      uuid: 'alert-251',
+      created_at: createdAt,
+      decisions: [],
+    });
+    let phase: 'initial' | 'refresh' = 'initial';
+
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '0',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (url.includes('/v1/alerts?') && url.includes('has_active_decision=true')) {
+          return Response.json([]);
+        }
+        if (url.includes('/v1/alerts?')) {
+          return Response.json(phase === 'initial' ? [keptAlert, deletedAlert] : [keptAlert]);
+        }
+        return undefined;
+      },
+    });
+
+    const initialResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50'));
+    expect(initialResponse.status).toBe(200);
+    expect(((await initialResponse.json()) as { pagination: { total: number } }).pagination.total).toBe(2);
+
+    phase = 'refresh';
+
+    const refreshedResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50'));
+    expect(refreshedResponse.status).toBe(200);
+    const refreshedJson = await refreshedResponse.json() as {
+      data: Array<{ id: number }>;
+      pagination: { total: number };
+    };
+
+    expect(refreshedJson.pagination.total).toBe(1);
+    expect(refreshedJson.data.map((alert) => alert.id)).toEqual([250]);
+    expect(database.getAlertsSince(new Date(Date.now() - 60_000).toISOString())).toHaveLength(1);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('prunes stale cached alerts from active-decision refresh only', async () => {
+    const createdAt = new Date(Date.now() - 30_000).toISOString();
+    const keptAlert = sampleAlert({
+      id: 260,
+      uuid: 'alert-260',
+      created_at: createdAt,
+      decisions: [
+        {
+          id: 2601,
+          type: 'ban',
+          value: '11.11.11.11',
+          duration: '30m',
+          stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(),
+          origin: 'manual',
+          scenario: 'crowdsecurity/ssh-bf',
+          simulated: false,
+        },
+      ],
+    });
+    const deletedActiveAlert = sampleAlert({
+      id: 261,
+      uuid: 'alert-261',
+      created_at: createdAt,
+      decisions: [
+        {
+          id: 2611,
+          type: 'ban',
+          value: '12.12.12.12',
+          duration: '30m',
+          stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(),
+          origin: 'manual',
+          scenario: 'crowdsecurity/ssh-bf',
+          simulated: false,
+        },
+      ],
+    });
+    let phase: 'initial' | 'refresh' = 'initial';
+
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '0',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (url.includes('/v1/alerts?') && url.includes('has_active_decision=true')) {
+          return Response.json(phase === 'initial' ? [keptAlert, deletedActiveAlert] : [keptAlert]);
+        }
+        if (url.includes('/v1/alerts?')) {
+          return Response.json(phase === 'initial' ? [keptAlert, deletedActiveAlert] : []);
+        }
+        return undefined;
+      },
+    });
+
+    const initialResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50'));
+    expect(initialResponse.status).toBe(200);
+    expect(((await initialResponse.json()) as { pagination: { total: number } }).pagination.total).toBe(2);
+
+    phase = 'refresh';
+
+    const refreshedResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50'));
+    expect(refreshedResponse.status).toBe(200);
+    const refreshedJson = await refreshedResponse.json() as {
+      data: Array<{ id: number }>;
+      pagination: { total: number };
+    };
+
+    expect(refreshedJson.pagination.total).toBe(1);
+    expect(refreshedJson.data.map((alert) => alert.id)).toEqual([260]);
+    expect(database.getDecisionById('2601')).not.toBeNull();
+    expect(database.getDecisionById('2611')).toBeNull();
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('deleting an already removed LAPI alert cleans up the local cache', async () => {
+    const staleAlert = sampleAlert({
+      id: 230,
+      uuid: 'alert-230',
+      decisions: [
+        {
+          id: 2301,
+          type: 'ban',
+          value: '6.6.6.6',
+          duration: '30m',
+          stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(),
+          origin: 'manual',
+          scenario: 'crowdsecurity/ssh-bf',
+          simulated: false,
+        },
+      ],
+    });
+
+    const { controller, database, lapiClient } = createController({
+      fetchResolver: (url, init) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (url.endsWith('/v1/alerts/230') && init?.method === 'DELETE') {
+          return new Response('', { status: 404, statusText: 'Not Found' });
+        }
+        return undefined;
+      },
+    });
+
+    seedAlert(database, staleAlert);
+    await lapiClient.login();
+
+    const deleteResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts/230', { method: 'DELETE' }));
+    expect(deleteResponse.status).toBe(200);
+    expect(await deleteResponse.json()).toEqual({ message: 'Deleted' });
+    expect(database.getAlertsSince(new Date(Date.now() - 60_000).toISOString())).toHaveLength(0);
+    expect(database.getDecisionById('2301')).toBeNull();
 
     controller.stopBackgroundTasks();
     database.close();

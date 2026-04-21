@@ -36,6 +36,7 @@ export interface FetchAlertsFilters {
   scenario?: string;
   includeCapi?: boolean;
   singleScopeOnly?: boolean;
+  requireAllScopes?: boolean;
 }
 
 export class LapiClient {
@@ -269,6 +270,10 @@ export class LapiClient {
 
     if (successfulScopes === 0) {
       throw lastError || new Error('Failed to fetch alerts');
+    }
+
+    if (filters.requireAllScopes && successfulScopes !== scopes.length) {
+      throw lastError || new Error('Failed to fetch all alert scopes');
     }
 
     const merged = new Map<string, unknown>();
