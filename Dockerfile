@@ -3,7 +3,7 @@
 # ==========================================
 # Stage 1: Builder
 # ==========================================
-FROM node:24.14.1-trixie-slim AS builder
+FROM node:24.15.0-trixie-slim AS builder
 
 WORKDIR /app
 ENV NODE_ENV=development
@@ -51,7 +51,7 @@ RUN pnpm exec vite build \
 # ==========================================
 # Stage 2: Runner
 # ==========================================
-FROM node:24.14.1-trixie-slim
+FROM node:24.15.0-trixie-slim
 
 WORKDIR /app
 
