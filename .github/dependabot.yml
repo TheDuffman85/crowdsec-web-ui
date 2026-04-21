@@ -1,22 +1,15 @@
 version: 2
 updates:
-  - package-ecosystem: "bun"
+  - package-ecosystem: "npm"
     directory: "/"
     schedule:
-      interval: "weekly"
-    target-branch: "dev"
-    open-pull-requests-limit: 10
-
-  - package-ecosystem: "bun"
-    directory: "/frontend"
-    schedule:
-      interval: "weekly"
+      interval: "monthly"
     target-branch: "dev"
     open-pull-requests-limit: 10
 
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     target-branch: "dev"
     open-pull-requests-limit: 10
