@@ -85,6 +85,7 @@ interface PersistedConfig {
 
 interface CacheState {
   isInitialized: boolean;
+  isComplete: boolean;
   lastUpdate: string | null;
 }
 
@@ -103,15 +104,31 @@ interface AlertSyncQuery {
 interface SyncHistorySummary {
   historicalAlerts: number;
   historicalDecisions: number;
+  historicalErrors: string[];
   activeDecisionAlerts: number;
   activeDecisions: number;
   activeNetCachedAlerts: number;
   activeNetCachedDecisions: number;
   activePrunedAlerts: number;
   activePrunedDecisions: number;
-  activeError: string | null;
+  activeErrors: string[];
+  errors: string[];
+  state: 'complete' | 'partial' | 'failed';
   cachedAlerts: number;
   cachedDecisions: number;
+}
+
+interface WindowSyncSummary {
+  alerts: number;
+  decisions: number;
+  errors: string[];
+  successfulWindows: number;
+}
+
+interface ActiveWindowSyncSummary {
+  alerts: AlertRecord[];
+  errors: string[];
+  successfulWindows: number;
 }
 
 interface CachedDecisionRecord {
@@ -263,6 +280,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     auth: config.crowdsecAuth,
     simulationsEnabled: config.simulationsEnabled,
     lookbackPeriod: config.lookbackPeriod,
+    requestTimeoutMs: config.lapiRequestTimeoutMs,
     version: config.version,
   });
   const checkForUpdates = options.updateChecker || createUpdateChecker({
@@ -306,17 +324,20 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     message: '',
     startedAt: null,
     completedAt: null,
+    state: 'idle',
+    errors: [],
   };
 
   const cache: CacheState = {
     isInitialized: false,
+    isComplete: false,
     lastUpdate: null,
   };
   let dashboardStatsCache: DashboardStatsCache | null = null;
 
   const persistedConfig = loadPersistedConfig(database);
   let refreshIntervalMs = persistedConfig.refresh_interval_ms ?? config.refreshIntervalMs;
-  let initializationPromise: Promise<boolean> | null = null;
+  let initializationPromise: Promise<SyncHistorySummary | null> | null = null;
   let isFirstSync = true;
   let lastRequestTime = Date.now();
   let lastFullRefreshTime = Date.now();
@@ -329,6 +350,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   console.log(`Cache Configuration:
   Lookback Period: ${config.lookbackPeriod} (${config.lookbackMs}ms)
   Refresh Interval: ${getIntervalName(refreshIntervalMs)} (${persistedConfig.refresh_interval_ms !== undefined ? 'from saved config' : 'from env'})
+  LAPI Request Timeout: ${getIntervalName(config.lapiRequestTimeoutMs)}
+  Alert Sync Chunk: ${getIntervalName(config.alertSyncChunkMs)}
+  Alert Sync Min Chunk: ${getIntervalName(config.alertSyncMinChunkMs)}
   Auth Mode: ${config.crowdsecAuthMode}
   Simulations: ${config.simulationsEnabled ? 'Enabled' : 'Disabled'}
   Always Show Machine: ${config.alwaysShowMachine ? 'Enabled' : 'Disabled'}
@@ -1273,6 +1297,155 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     return pruned;
   }
 
+  function persistSyncedAlerts(alerts: AlertRecord[]): void {
+    const persistTransaction = database.transaction<AlertRecord[]>((items) => {
+      for (const alert of items) {
+        processAlertForDatabase(alert);
+      }
+    });
+
+    persistTransaction(alerts);
+  }
+
+  function mergeAlertRecords(alerts: AlertRecord[]): AlertRecord[] {
+    const merged = new Map<string, AlertRecord>();
+    for (const alert of alerts) {
+      if (!alert?.id) continue;
+      merged.set(String(alert.id), alert);
+    }
+    return Array.from(merged.values());
+  }
+
+  function isTimeoutError(error: unknown): boolean {
+    const candidate = error as { code?: string; message?: string } | null | undefined;
+    return candidate?.code === 'ETIMEDOUT' || /timeout/i.test(candidate?.message || '');
+  }
+
+  function combineWindowSummaries(left: WindowSyncSummary, right: WindowSyncSummary): WindowSyncSummary {
+    return {
+      alerts: left.alerts + right.alerts,
+      decisions: left.decisions + right.decisions,
+      errors: [...left.errors, ...right.errors],
+      successfulWindows: left.successfulWindows + right.successfulWindows,
+    };
+  }
+
+  function combineActiveWindowSummaries(left: ActiveWindowSyncSummary, right: ActiveWindowSyncSummary): ActiveWindowSyncSummary {
+    return {
+      alerts: mergeAlertRecords([...left.alerts, ...right.alerts]),
+      errors: [...left.errors, ...right.errors],
+      successfulWindows: left.successfulWindows + right.successfulWindows,
+    };
+  }
+
+  function formatSyncWindow(startMs: number, endMs: number, nowMs: number): string {
+    return `${toDuration(startMs, nowMs)} -> ${toDuration(endMs, nowMs)} ago`;
+  }
+
+  function canSplitWindow(startMs: number, endMs: number): boolean {
+    return endMs - startMs > config.alertSyncMinChunkMs;
+  }
+
+  function splitWindow(startMs: number, endMs: number): [number, number, number] {
+    const midpoint = Math.floor((startMs + endMs) / 2);
+    return [startMs, midpoint, endMs];
+  }
+
+  async function syncHistoricalWindow(startMs: number, endMs: number, nowMs: number): Promise<WindowSyncSummary> {
+    const windowLabel = formatSyncWindow(startMs, endMs, nowMs);
+    const sinceDuration = toDuration(startMs, nowMs);
+    const untilDuration = toDuration(endMs, nowMs);
+
+    try {
+      const alerts = await fetchAlertsForSync(sinceDuration, untilDuration, false, { requireComplete: true });
+      const decisionCount = countAlertDecisions(alerts);
+      const pruned = reconcileSyncedAlertWindow(
+        alerts,
+        new Date(startMs).toISOString(),
+        new Date(endMs).toISOString(),
+      );
+      if (alerts.length > 0) {
+        console.log(`  -> Imported ${alerts.length} alerts and ${decisionCount} decisions.`);
+      }
+      if (pruned.alerts > 0 || pruned.decisions > 0) {
+        console.log(`  -> Pruned ${pruned.alerts} stale alerts and ${pruned.decisions} stale decisions.`);
+      }
+
+      return {
+        alerts: alerts.length,
+        decisions: decisionCount,
+        errors: [],
+        successfulWindows: 1,
+      };
+    } catch (error: any) {
+      if (isTimeoutError(error) && canSplitWindow(startMs, endMs)) {
+        const [, midpoint] = splitWindow(startMs, endMs);
+        console.warn(`Historical sync window timed out (${windowLabel}); splitting into smaller windows.`);
+        const first = await syncHistoricalWindow(startMs, midpoint, nowMs);
+        const second = await syncHistoricalWindow(midpoint, endMs, nowMs);
+        return combineWindowSummaries(first, second);
+      }
+
+      const errorMessage = `Historical ${windowLabel}: ${error.message}`;
+      console.error('Failed to sync chunk:', error.message);
+      return {
+        alerts: 0,
+        decisions: 0,
+        errors: [errorMessage],
+        successfulWindows: 0,
+      };
+    }
+  }
+
+  async function fetchActiveDecisionWindow(startMs: number, endMs: number, nowMs: number): Promise<ActiveWindowSyncSummary> {
+    const windowLabel = formatSyncWindow(startMs, endMs, nowMs);
+    const sinceDuration = toDuration(startMs, nowMs);
+    const untilDuration = toDuration(endMs, nowMs);
+
+    try {
+      const alerts = await fetchAlertsForSync(sinceDuration, untilDuration, true, { requireComplete: true });
+      return {
+        alerts,
+        errors: [],
+        successfulWindows: 1,
+      };
+    } catch (error: any) {
+      if (isTimeoutError(error) && canSplitWindow(startMs, endMs)) {
+        const [, midpoint] = splitWindow(startMs, endMs);
+        console.warn(`Active-decision sync window timed out (${windowLabel}); splitting into smaller windows.`);
+        const first = await fetchActiveDecisionWindow(startMs, midpoint, nowMs);
+        const second = await fetchActiveDecisionWindow(midpoint, endMs, nowMs);
+        return combineActiveWindowSummaries(first, second);
+      }
+
+      const errorMessage = `Active decisions ${windowLabel}: ${error.message}`;
+      console.error('Failed to sync active decisions window:', error.message);
+      return {
+        alerts: [],
+        errors: [errorMessage],
+        successfulWindows: 0,
+      };
+    }
+  }
+
+  async function fetchActiveDecisionAlertsChunked(lookbackStart: number, now: number): Promise<ActiveWindowSyncSummary> {
+    let currentStart = lookbackStart;
+    let summary: ActiveWindowSyncSummary = {
+      alerts: [],
+      errors: [],
+      successfulWindows: 0,
+    };
+
+    while (currentStart < now) {
+      const currentEnd = Math.min(currentStart + config.alertSyncChunkMs, now);
+      const result = await fetchActiveDecisionWindow(currentStart, currentEnd, now);
+      summary = combineActiveWindowSummaries(summary, result);
+      currentStart = currentEnd;
+    }
+
+    return summary;
+  }
+
   async function syncHistory(): Promise<SyncHistorySummary> {
     const showOverlay = isFirstSync;
     isFirstSync = false;
@@ -1284,29 +1457,31 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       message: 'Starting historical data sync...',
       startedAt: new Date().toISOString(),
       completedAt: null,
+      state: 'syncing',
+      errors: [],
     });
 
     const now = Date.now();
     const lookbackStart = now - config.lookbackMs;
-    const chunkSizeMs = 6 * 60 * 60 * 1_000;
+    const chunkSizeMs = config.alertSyncChunkMs;
     const totalDuration = now - lookbackStart;
     let currentStart = lookbackStart;
     let totalAlerts = 0;
     let totalDecisions = 0;
+    let successfulWindows = 0;
+    const historicalErrors: string[] = [];
     let activeDecisionAlertsCount = 0;
     let activeDecisionsCount = 0;
     let activeNetCachedAlerts = 0;
     let activeNetCachedDecisions = 0;
     let activePrunedAlerts = 0;
     let activePrunedDecisions = 0;
-    let activeError: string | null = null;
+    let activeErrors: string[] = [];
 
     while (currentStart < now) {
       const currentEnd = Math.min(currentStart + chunkSizeMs, now);
       const progress = Math.round(((currentEnd - lookbackStart) / totalDuration) * 100);
-      const sinceDuration = toDuration(currentStart);
-      const untilDuration = toDuration(currentEnd);
-      const progressMessage = `Syncing: ${sinceDuration} -> ${untilDuration} ago (${totalAlerts} alerts, ${totalDecisions} decisions)`;
+      const progressMessage = `Syncing: ${formatSyncWindow(currentStart, currentEnd, now)} (${totalAlerts} alerts, ${totalDecisions} decisions)`;
 
       updateSyncStatus({
         progress: Math.min(progress, 90),
@@ -1314,73 +1489,79 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       });
       console.log(progressMessage);
 
-      try {
-        const alerts = await fetchAlertsForSync(sinceDuration, untilDuration, false, { requireComplete: true });
-        const decisionCount = countAlertDecisions(alerts);
-        const pruned = reconcileSyncedAlertWindow(
-          alerts,
-          new Date(currentStart).toISOString(),
-          new Date(currentEnd).toISOString(),
-        );
-        if (alerts.length > 0) {
-          totalAlerts += alerts.length;
-          totalDecisions += decisionCount;
-          console.log(`  -> Imported ${alerts.length} alerts and ${decisionCount} decisions.`);
-        }
-        if (pruned.alerts > 0 || pruned.decisions > 0) {
-          console.log(`  -> Pruned ${pruned.alerts} stale alerts and ${pruned.decisions} stale decisions.`);
-        }
-      } catch (error: any) {
-        console.error('Failed to sync chunk:', error.message);
-      }
+      const result = await syncHistoricalWindow(currentStart, currentEnd, now);
+      totalAlerts += result.alerts;
+      totalDecisions += result.decisions;
+      successfulWindows += result.successfulWindows;
+      historicalErrors.push(...result.errors);
 
       currentStart = currentEnd;
       await delay(100);
     }
 
     updateSyncStatus({ progress: 95, message: 'Syncing active decisions...' });
-    try {
-      const activeDecisionAlerts = await fetchAlertsForSync(null, null, true, { requireComplete: true });
-      const activeDecisionCount = countAlertDecisions(activeDecisionAlerts);
-      const cachedAlertsBeforeActiveSync = database.countAlerts();
-      const cachedDecisionsBeforeActiveSync = database.countDecisions();
+    const activeWindowSummary = await fetchActiveDecisionAlertsChunked(lookbackStart, now);
+    const activeDecisionAlerts = mergeAlertRecords(activeWindowSummary.alerts);
+    const activeDecisionCount = countAlertDecisions(activeDecisionAlerts);
+    const cachedAlertsBeforeActiveSync = database.countAlerts();
+    const cachedDecisionsBeforeActiveSync = database.countDecisions();
+    activeDecisionAlertsCount = activeDecisionAlerts.length;
+    activeDecisionsCount = activeDecisionCount;
+    successfulWindows += activeWindowSummary.successfulWindows;
+    activeErrors = activeWindowSummary.errors;
+
+    if (activeErrors.length === 0) {
       const pruned = reconcileActiveDecisionAlerts(activeDecisionAlerts, new Date().toISOString());
-      activeDecisionAlertsCount = activeDecisionAlerts.length;
-      activeDecisionsCount = activeDecisionCount;
-      activeNetCachedAlerts = database.countAlerts() - cachedAlertsBeforeActiveSync;
-      activeNetCachedDecisions = database.countDecisions() - cachedDecisionsBeforeActiveSync;
       activePrunedAlerts = pruned.alerts;
       activePrunedDecisions = pruned.decisions;
-    } catch (error: any) {
-      activeError = error.message;
-      console.error('Failed to sync active decisions:', error.message);
+    } else if (activeDecisionAlerts.length > 0) {
+      persistSyncedAlerts(activeDecisionAlerts);
     }
+    activeNetCachedAlerts = database.countAlerts() - cachedAlertsBeforeActiveSync;
+    activeNetCachedDecisions = database.countDecisions() - cachedDecisionsBeforeActiveSync;
 
     const cachedAlerts = database.countAlerts();
     const cachedDecisions = database.countDecisions();
+    const errors = [...historicalErrors, ...activeErrors];
+    const state = errors.length === 0
+      ? 'complete'
+      : successfulWindows > 0
+        ? 'partial'
+        : 'failed';
+    const message = state === 'complete'
+      ? `Sync complete. ${cachedAlerts} alerts and ${cachedDecisions} decisions cached.`
+      : state === 'partial'
+        ? `Sync partially complete. ${cachedAlerts} alerts and ${cachedDecisions} decisions cached; ${errors.length} window${errors.length === 1 ? '' : 's'} failed.`
+        : `Sync failed: ${errors[0] || 'no alert windows could be synced'}`;
+
     updateSyncStatus({
       isSyncing: false,
-      progress: 100,
-      message: `Sync complete. ${cachedAlerts} alerts and ${cachedDecisions} decisions cached.`,
+      progress: state === 'failed' ? 0 : 100,
+      message,
       completedAt: new Date().toISOString(),
+      state,
+      errors,
     });
 
     return {
       historicalAlerts: totalAlerts,
       historicalDecisions: totalDecisions,
+      historicalErrors,
       activeDecisionAlerts: activeDecisionAlertsCount,
       activeDecisions: activeDecisionsCount,
       activeNetCachedAlerts,
       activeNetCachedDecisions,
       activePrunedAlerts,
       activePrunedDecisions,
-      activeError,
+      activeErrors,
+      errors,
+      state,
       cachedAlerts,
       cachedDecisions,
     };
   }
 
-  async function initializeCache(): Promise<boolean> {
+  async function initializeCache(): Promise<SyncHistorySummary | null> {
     if (initializationPromise) {
       console.log('Cache initialization already in progress, waiting...');
       return initializationPromise;
@@ -1391,31 +1572,43 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         console.log('Initializing cache with chunked data load...');
         const syncSummary = await syncHistory();
         cache.lastUpdate = new Date().toISOString();
-        cache.isInitialized = true;
-        lapiClient.updateStatus(true);
+        cache.isInitialized = syncSummary.state !== 'failed';
+        cache.isComplete = syncSummary.state === 'complete';
+        lapiClient.updateStatus(syncSummary.state === 'complete', syncSummary.errors[0] ? { message: syncSummary.errors[0] } : null);
         await runNotificationEvaluation('cache initialization');
         const activeDecisionChanged =
           syncSummary.activeNetCachedAlerts !== 0 ||
           syncSummary.activeNetCachedDecisions !== 0 ||
           syncSummary.activePrunedAlerts !== 0 ||
           syncSummary.activePrunedDecisions !== 0;
-        const activeDecisionSummary = syncSummary.activeError
-          ? `  Active decisions: failed (${syncSummary.activeError})`
+        const activeDecisionSummary = syncSummary.activeErrors.length > 0
+          ? `  Active decisions: incomplete (${syncSummary.activeErrors.length} failed window${syncSummary.activeErrors.length === 1 ? '' : 's'})`
           : activeDecisionChanged
             ? `  Active decisions:
     Checked:      ${syncSummary.activeDecisionAlerts} alerts and ${syncSummary.activeDecisions} decisions
     Cache change: ${formatSignedCount(syncSummary.activeNetCachedAlerts)} alerts and ${formatSignedCount(syncSummary.activeNetCachedDecisions)} decisions
     Pruned stale: ${syncSummary.activePrunedAlerts} alerts and ${syncSummary.activePrunedDecisions} decisions`
             : `  Active decisions: checked ${syncSummary.activeDecisionAlerts} alerts and ${syncSummary.activeDecisions} decisions; no cache changes`;
-        console.log(`Cache initialized successfully:
+        const errorSummary = syncSummary.errors.length > 0
+          ? `  Errors: ${syncSummary.errors.length} window${syncSummary.errors.length === 1 ? '' : 's'} failed
+`
+          : '';
+        const cacheSummary = `Cache ${syncSummary.state === 'complete' ? 'initialized successfully' : 'initialized partially'}:
   Historical: ${syncSummary.historicalAlerts} alerts and ${syncSummary.historicalDecisions} decisions fetched
 ${activeDecisionSummary}
   Cache: ${syncSummary.cachedAlerts} alerts and ${syncSummary.cachedDecisions} decisions
+${errorSummary}  Status: ${syncSummary.state}
   Refresh Interval: ${getIntervalName(refreshIntervalMs)}
-`);
-        return true;
+`;
+        if (syncSummary.state === 'complete') {
+          console.log(cacheSummary);
+        } else {
+          console.warn(cacheSummary);
+        }
+        return syncSummary;
       } catch (error: any) {
         cache.isInitialized = false;
+        cache.isComplete = false;
         lapiClient.updateStatus(false, error);
         console.error('Failed to initialize cache:', error.message);
         updateSyncStatus({
@@ -1423,8 +1616,10 @@ ${activeDecisionSummary}
           progress: 0,
           message: `Sync failed: ${error.message}`,
           completedAt: new Date().toISOString(),
+          state: 'failed',
+          errors: [error.message],
         });
-        return false;
+        return null;
       } finally {
         initializationPromise = null;
       }
@@ -1447,10 +1642,12 @@ ${activeDecisionSummary}
       const deltaStart = new Date(deltaStartedAt - diffSeconds * 1_000).toISOString();
       const deltaEnd = new Date(deltaStartedAt).toISOString();
       console.log(`Fetching delta updates (since: ${sinceDuration})...`);
-      const [newAlerts, activeDecisionAlerts] = await Promise.all([
+      const activeLookbackStart = deltaStartedAt - config.lookbackMs;
+      const [newAlerts, activeWindowSummary] = await Promise.all([
         fetchAlertsForSync(sinceDuration, null, false, { requireComplete: true }),
-        fetchAlertsForSync(null, null, true, { requireComplete: true }),
+        fetchActiveDecisionAlertsChunked(activeLookbackStart, deltaStartedAt),
       ]);
+      const activeDecisionAlerts = mergeAlertRecords(activeWindowSummary.alerts);
       const newDecisionCount = countAlertDecisions(newAlerts);
       const activeDecisionCount = countAlertDecisions(activeDecisionAlerts);
 
@@ -1461,11 +1658,19 @@ ${activeDecisionSummary}
         );
       }
 
-      const activePruned = reconcileActiveDecisionAlerts(activeDecisionAlerts, new Date().toISOString());
+      const activePruned = activeWindowSummary.errors.length === 0
+        ? reconcileActiveDecisionAlerts(activeDecisionAlerts, new Date().toISOString())
+        : { alerts: 0, decisions: 0 };
+      if (activeWindowSummary.errors.length > 0 && activeDecisionAlerts.length > 0) {
+        persistSyncedAlerts(activeDecisionAlerts);
+      }
       if (activeDecisionAlerts.length > 0 || activePruned.alerts > 0 || activePruned.decisions > 0) {
         console.log(
           `Active decision refresh: ${activeDecisionAlerts.length} alerts and ${activeDecisionCount} decisions synced, ${activePruned.alerts} stale alerts and ${activePruned.decisions} stale decisions pruned`,
         );
+      }
+      if (activeWindowSummary.errors.length > 0) {
+        throw new Error(`Active decision refresh incomplete: ${activeWindowSummary.errors.join('; ')}`);
       }
 
       cache.lastUpdate = new Date().toISOString();
@@ -1510,8 +1715,13 @@ ${activeDecisionSummary}
     }
   }
 
-  function scheduleBootstrapRetry(reason = 'retry requested'): void {
-    if (!lapiClient.hasAuthConfig() || !config.bootstrapRetryEnabled || cache.isInitialized || bootstrapRetryTimeout) {
+  function scheduleBootstrapRetry(reason = 'retry requested', options: { allowInitialized?: boolean } = {}): void {
+    if (
+      !lapiClient.hasAuthConfig() ||
+      !config.bootstrapRetryEnabled ||
+      (!options.allowInitialized && cache.isInitialized) ||
+      bootstrapRetryTimeout
+    ) {
       return;
     }
 
@@ -1527,7 +1737,11 @@ ${activeDecisionSummary}
       return false;
     }
 
-    if (cache.isInitialized) {
+    const shouldRetryIncompleteCache = cache.isInitialized && !cache.isComplete && source.includes('retry');
+    if (cache.isInitialized && !shouldRetryIncompleteCache) {
+      if (!cache.isComplete) {
+        scheduleBootstrapRetry(`cache is partially initialized during ${source}`, { allowInitialized: true });
+      }
       finalizeBootstrapRecovery();
       return true;
     }
@@ -1547,10 +1761,17 @@ ${activeDecisionSummary}
         }
       }
 
-      const initialized = await initializeCache();
-      if (initialized) {
+      const syncSummary = await initializeCache();
+      if (syncSummary?.state === 'complete') {
         finalizeBootstrapRecovery();
         console.log(`Bootstrap recovery completed successfully (${source}).`);
+        return true;
+      }
+
+      if (syncSummary?.state === 'partial') {
+        finalizeBootstrapRecovery();
+        console.warn(`Bootstrap recovery completed partially (${source}); retrying incomplete windows in the background.`);
+        scheduleBootstrapRetry(`partial cache initialization during ${source}`, { allowInitialized: true });
         return true;
       }
 

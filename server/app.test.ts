@@ -437,6 +437,7 @@ function createController(options: {
     auth: config.crowdsecAuth,
     simulationsEnabled: config.simulationsEnabled,
     lookbackPeriod: config.lookbackPeriod,
+    requestTimeoutMs: config.lapiRequestTimeoutMs,
     version: config.version,
     fetchImpl,
   });
@@ -1458,6 +1459,7 @@ describe('createApp', () => {
   Historical: 1 alerts and 2 decisions fetched
   Active decisions: checked 1 alerts and 2 decisions; no cache changes
   Cache: 1 alerts and 2 decisions
+  Status: complete
   Refresh Interval: 30s
 `,
       );
@@ -1465,6 +1467,144 @@ describe('createApp', () => {
       expect(logs).not.toContain('-> Synced 1 active-decision alerts');
     } finally {
       logSpy.mockRestore();
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
+  test('syncs active decisions in configured windows instead of one full-lookback request', async () => {
+    const { controller, database, fetchCalls } = createController({
+      env: {
+        CROWDSEC_LOOKBACK_PERIOD: '2h',
+        CROWDSEC_ALERT_SYNC_CHUNK: '1h',
+      },
+      fetchResolver: (url) => {
+        if (url.includes('/v1/alerts?') && url.includes('has_active_decision=true')) {
+          return Response.json([]);
+        }
+        return undefined;
+      },
+    });
+
+    const alerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alerts.status).toBe(200);
+
+    const activeRequests = fetchCalls.filter((call) =>
+      call.url.includes('/v1/alerts?') && call.url.includes('has_active_decision=true'),
+    );
+    expect(activeRequests).toHaveLength(6);
+    expect(activeRequests.every((call) => call.url.includes('until='))).toBe(true);
+    expect(activeRequests.every((call) => !call.url.includes('since=2h') || !call.url.includes('until=0h'))).toBe(true);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('splits timed-out active decision windows and imports successful smaller windows', async () => {
+    const activeAlert = sampleAlert({
+      id: 81,
+      uuid: 'alert-81',
+      decisions: [{
+        id: 810,
+        type: 'ban',
+        value: '8.8.8.8',
+        duration: '30m',
+        origin: 'crowdsec',
+        simulated: false,
+      }],
+    });
+    const { controller, database, fetchCalls } = createController({
+      env: {
+        CROWDSEC_LOOKBACK_PERIOD: '1h',
+        CROWDSEC_ALERT_SYNC_CHUNK: '1h',
+        CROWDSEC_ALERT_SYNC_MIN_CHUNK: '15m',
+      },
+      fetchResolver: (url) => {
+        if (!url.includes('/v1/alerts?')) return undefined;
+        const parsed = new URL(url);
+        const params = parsed.searchParams;
+        if (
+          params.get('has_active_decision') === 'true' &&
+          params.get('since')?.startsWith('1h') &&
+          params.get('until') === '0h0m0s'
+        ) {
+          const error = new Error('Request timeout') as Error & { code?: string };
+          error.code = 'ETIMEDOUT';
+          throw error;
+        }
+        if (params.get('has_active_decision') === 'true') {
+          return Response.json([activeAlert]);
+        }
+        return Response.json([]);
+      },
+    });
+
+    const alerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alerts.status).toBe(200);
+    expect(database.getDecisionById('810')).not.toBeNull();
+    expect(controller.getSyncStatus().state).toBe('complete');
+
+    const activeRequests = fetchCalls.filter((call) =>
+      call.url.includes('/v1/alerts?') && call.url.includes('has_active_decision=true'),
+    );
+    expect(activeRequests.length).toBeGreaterThan(3);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('marks bootstrap partial when minimum active windows fail and skips active pruning', async () => {
+    const activeAlert = sampleAlert({
+      id: 91,
+      uuid: 'alert-91',
+      decisions: [{
+        id: 910,
+        type: 'ban',
+        value: '9.9.9.9',
+        duration: '30m',
+        origin: 'crowdsec',
+        simulated: false,
+      }],
+    });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_LOOKBACK_PERIOD: '30m',
+        CROWDSEC_ALERT_SYNC_CHUNK: '30m',
+        CROWDSEC_ALERT_SYNC_MIN_CHUNK: '30m',
+        CROWDSEC_BOOTSTRAP_RETRY_DELAY: '5m',
+      },
+      fetchResolver: (url) => {
+        if (!url.includes('/v1/alerts?')) return undefined;
+        if (url.includes('has_active_decision=true')) {
+          const error = new Error('Request timeout') as Error & { code?: string };
+          error.code = 'ETIMEDOUT';
+          throw error;
+        }
+        return Response.json([activeAlert]);
+      },
+    });
+
+    try {
+      const alerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+      expect(alerts.status).toBe(200);
+      expect(database.getDecisionById('910')).not.toBeNull();
+      expect(controller.getSyncStatus()).toEqual(expect.objectContaining({
+        state: 'partial',
+        errors: expect.arrayContaining([expect.stringContaining('Active decisions')]),
+      }));
+
+      const logs = logSpy.mock.calls.map((call) => String(call[0])).join('\n');
+      const warnings = warnSpy.mock.calls.map((call) => String(call[0])).join('\n');
+      expect(logs).not.toContain('Cache initialized successfully');
+      expect(warnings).toContain('Cache initialized partially');
+    } finally {
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
       controller.stopBackgroundTasks();
       database.close();
       destroyTempDir();

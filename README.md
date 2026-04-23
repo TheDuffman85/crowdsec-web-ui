@@ -224,6 +224,9 @@ Choose exactly one auth mode: password auth or mTLS auth.
 | `CROWDSEC_IDLE_REFRESH_INTERVAL` | `5m` | Refresh interval used when the app considers itself idle. |
 | `CROWDSEC_IDLE_THRESHOLD` | `2m` | Inactivity period before the app switches to idle refresh behavior. |
 | `CROWDSEC_FULL_REFRESH_INTERVAL` | `5m` | Interval for full cache refreshes while active. |
+| `CROWDSEC_LAPI_REQUEST_TIMEOUT` | `30s` | Timeout for individual CrowdSec LAPI requests. Increase this for high-latency or very large CrowdSec datasets. |
+| `CROWDSEC_ALERT_SYNC_CHUNK` | `6h` | Window size used when syncing historical and active-decision alerts from LAPI. Smaller chunks reduce per-request payload size. |
+| `CROWDSEC_ALERT_SYNC_MIN_CHUNK` | `15m` | Smallest window size used when retrying timed-out alert sync windows. |
 | `CROWDSEC_BOOTSTRAP_RETRY_DELAY` | `30s` | Delay between background retries when initial CrowdSec bootstrap fails. |
 | `CROWDSEC_BOOTSTRAP_RETRY_ENABLED` | `true` | Enables background bootstrap retry after startup or login failures. |
 | `CROWDSEC_SIMULATIONS_ENABLED` | `false` | Include simulation-mode alerts and decisions from CrowdSec and expose the related UI indicators. |
@@ -697,7 +700,9 @@ The Web UI maintains its own local history of alerts and decisions. Data fetched
 
 - Alerts are kept for the duration of `CROWDSEC_LOOKBACK_PERIOD` (default: 7 days), then automatically cleaned up.
 - On restart, existing data is reused and new data from LAPI is merged in, then successful full sync windows prune alerts no longer returned by LAPI.
+- Large active-decision sets are synced in `CROWDSEC_ALERT_SYNC_CHUNK` windows. If a window times out, it is retried in smaller windows down to `CROWDSEC_ALERT_SYNC_MIN_CHUNK`.
 - If LAPI is unavailable during startup, the Web UI keeps retrying bootstrap in the background using `CROWDSEC_BOOTSTRAP_RETRY_DELAY` until it can initialize automatically.
+- If some sync windows fail but others succeed, the UI serves the imported cache and marks sync as partial while background retries continue.
 - To force a full cache reset, use the `POST /api/cache/clear` endpoint.
 
 ## Local Development
@@ -716,6 +721,9 @@ The Web UI maintains its own local history of alerts and decisions. Data fetched
     CROWDSEC_PASSWORD=<your-secure-password>
     CROWDSEC_SIMULATIONS_ENABLED=true
     CROWDSEC_REFRESH_INTERVAL=30s
+    CROWDSEC_LAPI_REQUEST_TIMEOUT=30s
+    CROWDSEC_ALERT_SYNC_CHUNK=6h
+    CROWDSEC_ALERT_SYNC_MIN_CHUNK=15m
     CROWDSEC_BOOTSTRAP_RETRY_DELAY=30s
     CROWDSEC_BOOTSTRAP_RETRY_ENABLED=true
     # Optional: Base path for reverse proxy deployments

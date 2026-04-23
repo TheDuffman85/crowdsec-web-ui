@@ -28,6 +28,9 @@ export interface RuntimeConfig {
   idleRefreshIntervalMs: number;
   idleThresholdMs: number;
   fullRefreshIntervalMs: number;
+  lapiRequestTimeoutMs: number;
+  alertSyncChunkMs: number;
+  alertSyncMinChunkMs: number;
   bootstrapRetryDelayMs: number;
   bootstrapRetryEnabled: boolean;
   dockerImageRef: string;
@@ -100,7 +103,17 @@ export function getIntervalName(intervalMs: number): string {
   if (intervalMs === 30_000) return '30s';
   if (intervalMs === 60_000) return '1m';
   if (intervalMs === 300_000) return '5m';
+  if (intervalMs % 86_400_000 === 0) return `${intervalMs / 86_400_000}d`;
+  if (intervalMs % 3_600_000 === 0) return `${intervalMs / 3_600_000}h`;
+  if (intervalMs % 60_000 === 0) return `${intervalMs / 60_000}m`;
+  if (intervalMs % 1_000 === 0) return `${intervalMs / 1_000}s`;
   return `${intervalMs}ms`;
+}
+
+function parsePositiveIntervalEnv(value: string | undefined, defaultValue: string): number {
+  const parsed = parseRefreshInterval(value || defaultValue);
+  if (parsed > 0) return parsed;
+  return parseRefreshInterval(defaultValue);
 }
 
 function parseAlertFilterConfig(env: NodeJS.ProcessEnv): Pick<
@@ -215,6 +228,9 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
     idleRefreshIntervalMs: parseRefreshInterval(env.CROWDSEC_IDLE_REFRESH_INTERVAL || '5m'),
     idleThresholdMs: parseRefreshInterval(env.CROWDSEC_IDLE_THRESHOLD || '2m'),
     fullRefreshIntervalMs: parseRefreshInterval(env.CROWDSEC_FULL_REFRESH_INTERVAL || '5m'),
+    lapiRequestTimeoutMs: parsePositiveIntervalEnv(env.CROWDSEC_LAPI_REQUEST_TIMEOUT, '30s'),
+    alertSyncChunkMs: parsePositiveIntervalEnv(env.CROWDSEC_ALERT_SYNC_CHUNK, '6h'),
+    alertSyncMinChunkMs: parsePositiveIntervalEnv(env.CROWDSEC_ALERT_SYNC_MIN_CHUNK, '15m'),
     bootstrapRetryDelayMs: parseRefreshInterval(env.CROWDSEC_BOOTSTRAP_RETRY_DELAY || '30s'),
     bootstrapRetryEnabled: parseBooleanEnv(env.CROWDSEC_BOOTSTRAP_RETRY_ENABLED, true),
     dockerImageRef: (env.DOCKER_IMAGE_REF || 'theduffman85/crowdsec-web-ui').toLowerCase(),

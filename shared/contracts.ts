@@ -37,6 +37,8 @@ export interface SyncStatus {
   message: string;
   startedAt: string | null;
   completedAt: string | null;
+  state?: 'idle' | 'syncing' | 'complete' | 'partial' | 'failed';
+  errors?: string[];
 }
 
 export interface AlertMeta {
