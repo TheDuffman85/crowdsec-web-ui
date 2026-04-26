@@ -708,7 +708,7 @@ The Web UI maintains its own local history of alerts and decisions. Data fetched
 ## Local Development
 
 1.  **Install Dependencies**:
-    You need Node.js `24.14.1` and pnpm `10.33.0` installed locally.
+    You need Node.js `24.15.0` and pnpm `10.33.0` installed locally.
     ```bash
     pnpm install
     ```
