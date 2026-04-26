@@ -134,6 +134,7 @@ function installControlledIntersectionObserver() {
 describe('Notifications page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.clear();
     mockMatchMedia();
     setUnreadCountMock.mockReset();
     refreshUnreadCountMock.mockReset();
@@ -204,6 +205,123 @@ describe('Notifications page', () => {
     await user.click(screen.getByRole('button', { name: /add rule/i }));
 
     expect(screen.getByText(/no outbound destinations exist yet/i)).toBeInTheDocument();
+  });
+
+  test('restores saved notification, destination, and rule order after remounting', async () => {
+    window.localStorage.setItem('crowdsec-web-ui:notifications:notification-order', JSON.stringify(['notif-2', 'notif-1']));
+    window.localStorage.setItem('crowdsec-web-ui:notifications:destination-order', JSON.stringify(['channel-2', 'channel-1']));
+    window.localStorage.setItem('crowdsec-web-ui:notifications:rule-order', JSON.stringify(['rule-2', 'rule-1']));
+
+    vi.mocked(fetchNotificationSettings).mockResolvedValueOnce(buildSettings({
+      channels: [
+        {
+          id: 'channel-1',
+          name: 'Ops MQTT',
+          type: 'mqtt',
+          enabled: true,
+          config: {
+            brokerUrl: 'mqtt://broker.example.com:1883',
+            username: 'ops',
+            password: '(stored)',
+            clientId: '',
+            keepaliveSeconds: 60,
+            connectTimeoutMs: 10000,
+            qos: 1,
+            topic: 'crowdsec/notifications',
+            retainEvents: false,
+          },
+          configured_secrets: ['password'],
+          created_at: '2026-03-28T12:00:00.000Z',
+          updated_at: '2026-03-28T12:00:00.000Z',
+        },
+        {
+          id: 'channel-2',
+          name: 'Security Email',
+          type: 'email',
+          enabled: true,
+          config: {},
+          configured_secrets: [],
+          created_at: '2026-03-28T12:05:00.000Z',
+          updated_at: '2026-03-28T12:05:00.000Z',
+        },
+      ],
+      rules: [
+        {
+          id: 'rule-1',
+          name: 'Alert Threshold',
+          type: 'alert-threshold',
+          enabled: true,
+          severity: 'warning',
+          channel_ids: ['channel-1'],
+          config: {
+            window_minutes: 60,
+            alert_threshold: 10,
+            filters: {},
+          },
+          created_at: '2026-03-28T12:00:00.000Z',
+          updated_at: '2026-03-28T12:00:00.000Z',
+        },
+        {
+          id: 'rule-2',
+          name: 'New CVE',
+          type: 'new-cve',
+          enabled: true,
+          severity: 'critical',
+          channel_ids: ['channel-2'],
+          config: {
+            max_cve_age_days: 14,
+            filters: {
+              scenario: '',
+              target: '',
+              include_simulated: false,
+            },
+          },
+          created_at: '2026-03-28T12:10:00.000Z',
+          updated_at: '2026-03-28T12:10:00.000Z',
+        },
+      ],
+    }));
+    vi.mocked(fetchNotificationsPaginated).mockResolvedValueOnce(buildNotificationPage({
+      data: [
+        {
+          id: 'notif-1',
+          rule_id: 'rule-1',
+          rule_name: 'Alert Threshold',
+          rule_type: 'alert-threshold',
+          severity: 'warning',
+          title: 'First server notification',
+          message: 'Server order first',
+          created_at: '2026-03-28T12:00:00.000Z',
+          read_at: null,
+          metadata: {},
+          deliveries: [],
+        },
+        {
+          id: 'notif-2',
+          rule_id: 'rule-2',
+          rule_name: 'New CVE',
+          rule_type: 'new-cve',
+          severity: 'critical',
+          title: 'Saved order notification',
+          message: 'Saved order first',
+          created_at: '2026-03-28T12:10:00.000Z',
+          read_at: null,
+          metadata: {},
+          deliveries: [],
+        },
+      ],
+      selectable_ids: ['notif-1', 'notif-2'],
+      unread_count: 2,
+      total: 2,
+    }));
+
+    render(<Notifications />);
+
+    await waitFor(() => expect(screen.getByText('Saved order notification')).toBeInTheDocument());
+
+    expect(screen.getByLabelText('Reorder notification notif-2').compareDocumentPosition(screen.getByLabelText('Reorder notification notif-1')) & 4).toBeTruthy();
+    expect(screen.getByLabelText('Reorder destination Security Email').compareDocumentPosition(screen.getByLabelText('Reorder destination Ops MQTT')) & 4).toBeTruthy();
+    expect(screen.getByLabelText('Reorder rule New CVE').compareDocumentPosition(screen.getByLabelText('Reorder rule Alert Threshold')) & 4).toBeTruthy();
   });
 
   test('shows the application update rule type without alert filter fields', async () => {

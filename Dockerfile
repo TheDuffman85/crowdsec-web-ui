@@ -1,9 +1,22 @@
 # Dockerfile (Multi-stage)
 
 # ==========================================
+# Stage 0: Node + pnpm
+# ==========================================
+FROM node:24.15.0-trixie-slim AS node-pnpm
+
+RUN npm config set fetch-retries 5 \
+    && npm config set fetch-retry-factor 2 \
+    && npm config set fetch-retry-mintimeout 20000 \
+    && npm config set fetch-retry-maxtimeout 120000 \
+    && npm config set registry https://registry.npmjs.org/ \
+    && npm install -g pnpm@10.33.0
+
+
+# ==========================================
 # Stage 1: Builder
 # ==========================================
-FROM node:24.15.0-trixie-slim AS builder
+FROM node-pnpm AS builder
 
 WORKDIR /app
 ENV NODE_ENV=development
@@ -13,7 +26,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     g++ \
     && rm -rf /var/lib/apt/lists/*
-RUN npm install -g pnpm@10.33.0
 
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile --prod=false
@@ -51,7 +63,7 @@ RUN pnpm exec vite build \
 # ==========================================
 # Stage 2: Runner
 # ==========================================
-FROM node:24.15.0-trixie-slim
+FROM node-pnpm
 
 WORKDIR /app
 
@@ -72,8 +84,6 @@ ENV VITE_VERSION=$VITE_VERSION
 ENV DOCKER_IMAGE_REF=$DOCKER_IMAGE_REF
 ENV DB_DIR="/app/data"
 ENV NODE_ENV=production
-
-RUN npm install -g pnpm@10.33.0
 
 # Install gosu (for entrypoint) and apply security updates
 RUN apt-get update && apt-get upgrade -y && apt-get install -y \

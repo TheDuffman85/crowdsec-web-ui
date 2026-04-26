@@ -37,6 +37,8 @@ describe('config helpers', () => {
   test('getIntervalName formats known intervals', () => {
     expect(getIntervalName(0)).toBe('Off');
     expect(getIntervalName(30_000)).toBe('30s');
+    expect(getIntervalName(900_000)).toBe('15m');
+    expect(getIntervalName(21_600_000)).toBe('6h');
     expect(getIntervalName(12_345)).toBe('12345ms');
   });
 
@@ -53,13 +55,14 @@ describe('config helpers', () => {
       CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY: 'true',
       CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY: 'true',
       CROWDSEC_SIMULATIONS_ENABLED: 'false',
-      CROWDSEC_ALWAYS_SHOW_MACHINE: 'true',
-      CROWDSEC_ALWAYS_SHOW_ORIGIN: 'true',
       CROWDSEC_LOOKBACK_PERIOD: '2d',
       CROWDSEC_REFRESH_INTERVAL: '5s',
       CROWDSEC_IDLE_REFRESH_INTERVAL: '1m',
       CROWDSEC_IDLE_THRESHOLD: '30s',
       CROWDSEC_FULL_REFRESH_INTERVAL: '5m',
+      CROWDSEC_LAPI_REQUEST_TIMEOUT: '2m',
+      CROWDSEC_ALERT_SYNC_CHUNK: '3h',
+      CROWDSEC_ALERT_SYNC_MIN_CHUNK: '30m',
       CROWDSEC_BOOTSTRAP_RETRY_DELAY: '1m',
       CROWDSEC_BOOTSTRAP_RETRY_ENABLED: 'false',
       DOCKER_IMAGE_REF: 'Example/Repo',
@@ -84,10 +87,11 @@ describe('config helpers', () => {
     expect(config.legacyAlertOrigins).toEqual([]);
     expect(config.legacyAlertExtraScenarios).toEqual([]);
     expect(config.simulationsEnabled).toBe(false);
-    expect(config.alwaysShowMachine).toBe(true);
-    expect(config.alwaysShowOrigin).toBe(true);
     expect(config.lookbackMs).toBe(172_800_000);
     expect(config.refreshIntervalMs).toBe(5_000);
+    expect(config.lapiRequestTimeoutMs).toBe(120_000);
+    expect(config.alertSyncChunkMs).toBe(10_800_000);
+    expect(config.alertSyncMinChunkMs).toBe(1_800_000);
     expect(config.bootstrapRetryEnabled).toBe(false);
     expect(config.dockerImageRef).toBe('example/repo');
     expect(config.updateCheckEnabled).toBe(true);
@@ -109,10 +113,11 @@ describe('config helpers', () => {
     expect(config.legacyAlertOrigins).toEqual([]);
     expect(config.legacyAlertExtraScenarios).toEqual([]);
     expect(config.simulationsEnabled).toBe(false);
-    expect(config.alwaysShowMachine).toBe(false);
-    expect(config.alwaysShowOrigin).toBe(false);
     expect(config.notificationSecretKey).toBeUndefined();
     expect(config.notificationAllowPrivateAddresses).toBe(true);
+    expect(config.lapiRequestTimeoutMs).toBe(30_000);
+    expect(config.alertSyncChunkMs).toBe(21_600_000);
+    expect(config.alertSyncMinChunkMs).toBe(900_000);
   });
 
   test('createRuntimeConfig supports mTLS authentication', () => {
@@ -198,6 +203,24 @@ describe('config helpers', () => {
       expect(config.legacyAlertExtraScenarios).toEqual(['manual/web-ui']);
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn.mock.calls[0]?.[0]).toMatch(/deprecated/i);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test('createRuntimeConfig warns when removed column visibility env vars are still set', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      createRuntimeConfig({
+        CROWDSEC_ALWAYS_SHOW_MACHINE: 'true',
+        CROWDSEC_ALWAYS_SHOW_ORIGIN: 'true',
+      });
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toContain('CROWDSEC_ALWAYS_SHOW_MACHINE');
+      expect(warn.mock.calls[0]?.[0]).toContain('CROWDSEC_ALWAYS_SHOW_ORIGIN');
+      expect(warn.mock.calls[0]?.[0]).toMatch(/deprecated and ignored/i);
+      expect(warn.mock.calls[0]?.[0]).toMatch(/Columns dialog/i);
     } finally {
       warn.mockRestore();
     }

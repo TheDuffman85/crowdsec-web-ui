@@ -187,6 +187,28 @@ describe('LapiClient', () => {
     });
   });
 
+  test('uses the configured default request timeout', async () => {
+    const client = new LapiClient({
+      crowdsecUrl: 'http://crowdsec:8080',
+      auth: passwordAuth,
+      simulationsEnabled: true,
+      lookbackPeriod: '1h',
+      requestTimeoutMs: 1,
+      version: '1.0.0',
+      fetchImpl: async (_input, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            reject(new DOMException('Aborted', 'AbortError'));
+          });
+        }),
+    });
+
+    await expect(client.fetchLapi('/v1/alerts')).rejects.toMatchObject({
+      message: 'Request timeout',
+      code: 'ETIMEDOUT',
+    });
+  });
+
   test('supports alert and decision helper methods', async () => {
     const calls: Array<{ url: string; method: string; body?: unknown }> = [];
     const client = new LapiClient({

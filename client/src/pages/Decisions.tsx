@@ -1,18 +1,21 @@
 import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, type FormEvent } from "react";
 import { useSearchParams, Link } from "react-router-dom";
-import { deleteDecision, bulkDeleteDecisions, cleanupByIp, addDecision, fetchConfig, fetchDecisionsPaginated } from "../lib/api";
+import { deleteDecision, bulkDeleteDecisions, cleanupByIp, addDecision, fetchConfig, fetchDecisionsPaginated, updateTableColumns } from "../lib/api";
 import { isSimulatedDecision, parseSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
 import { HighlightedSearchInput } from "../components/HighlightedSearchInput";
 import { SearchSyntaxModal } from "../components/SearchSyntaxModal";
+import { TableColumnsModal } from "../components/TableColumnsModal";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { getCountryName } from "../lib/utils";
+import { useTableColumnViewport } from "../lib/useTableColumnViewport";
+import { DEFAULT_TABLE_COLUMN_PREFERENCES, TABLE_COLUMN_DEFINITIONS } from "../../../shared/contracts";
 import { compileDecisionSearch, getSearchHelpDefinition, type SearchParseError } from "../../../shared/search";
-import { Trash2, Gavel, X, ExternalLink, Shield, ShieldBan, AlertCircle, Info } from "lucide-react";
-import type { AddDecisionRequest, ApiPermissionError, BulkDeleteResult, DecisionListItem } from '../types';
+import { Trash2, Gavel, X, ExternalLink, Shield, ShieldBan, AlertCircle, Info, Columns3 } from "lucide-react";
+import type { AddDecisionRequest, ApiPermissionError, BulkDeleteResult, DecisionListItem, TableColumnId, TableColumnPreferences, TableColumnViewportPreferences } from '../types';
 
 type DecisionDeleteAction =
     | { kind: "single"; decisionId: string | number }
@@ -63,8 +66,9 @@ export function Decisions() {
     const initialQueryParam = searchParams.get("q") ?? "";
     const [decisions, setDecisions] = useState<DecisionListItem[]>([]);
     const [simulationsEnabled, setSimulationsEnabled] = useState(false);
-    const [machineFeaturesEnabled, setMachineFeaturesEnabled] = useState(false);
-    const [originFeaturesEnabled, setOriginFeaturesEnabled] = useState(false);
+    const [tableColumnPreferences, setTableColumnPreferences] = useState<TableColumnPreferences>(DEFAULT_TABLE_COLUMN_PREFERENCES);
+    const [showColumnsModal, setShowColumnsModal] = useState(false);
+    const [columnsSaving, setColumnsSaving] = useState(false);
     const [searchDraft, setSearchDraft] = useState(initialQueryParam);
     const [debouncedSearchDraft, setDebouncedSearchDraft] = useState(initialQueryParam);
     const [appliedQuery, setAppliedQuery] = useState(initialQueryParam.trim());
@@ -84,6 +88,7 @@ export function Decisions() {
     const [deleteInProgress, setDeleteInProgress] = useState(false);
     const [newDecision, setNewDecision] = useState<AddDecisionRequest>({ ip: "", duration: "4h", reason: "manual" });
     const [errorInfo, setErrorInfo] = useState<ErrorInfo | null>(null);
+    const tableColumnViewport = useTableColumnViewport();
     const alertIdFilter = searchParams.get("alert_id");
     const includeExpiredParam = searchParams.get("include_expired") === "true";
     const simulationFilter = simulationsEnabled ? parseSimulationFilter(searchParams.get("simulation")) : 'all';
@@ -108,8 +113,7 @@ export function Decisions() {
     const lastRefreshSignalRef = useRef(refreshSignal);
     const configRef = useRef<{
         simulationsEnabled: boolean;
-        machineFeaturesEnabled: boolean;
-        originFeaturesEnabled: boolean;
+        tableColumnPreferences: TableColumnPreferences;
     } | null>(null);
     const hasLoadedDecisionsRef = useRef(false);
     const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -118,15 +122,20 @@ export function Decisions() {
     const pendingSearchFocusRef = useRef<number | null>(null);
     const skipSearchParamSyncRef = useRef<string | null>(null);
     const searchDebounceTimeoutRef = useRef<number | null>(null);
-    const searchValidationFeatures = useMemo(() => (
-        configRef.current
-            ? { machineEnabled: machineFeaturesEnabled, originEnabled: originFeaturesEnabled }
-            : { machineEnabled: true, originEnabled: true }
-    ), [machineFeaturesEnabled, originFeaturesEnabled]);
+    const searchValidationFeatures = useMemo(() => ({ machineEnabled: true, originEnabled: true }), []);
     const searchHelp = useMemo(
         () => getSearchHelpDefinition('decisions', searchValidationFeatures, { decisions }),
         [decisions, searchValidationFeatures],
     );
+    const visibleDecisionColumns = tableColumnPreferences.decisions[tableColumnViewport];
+    const decisionColumnDefinitionById = useMemo(
+        () => new Map<TableColumnId, (typeof TABLE_COLUMN_DEFINITIONS.decisions)[number]>(
+            TABLE_COLUMN_DEFINITIONS.decisions.map((column) => [column.id, column]),
+        ),
+        [],
+    );
+    const visibleDecisionColumnCount = visibleDecisionColumns.length;
+    const decisionTableColSpan = visibleDecisionColumnCount + 2;
     const cancelSearchDebounce = useCallback(() => {
         if (searchDebounceTimeoutRef.current !== null) {
             window.clearTimeout(searchDebounceTimeoutRef.current);
@@ -154,16 +163,43 @@ export function Decisions() {
         const configData = await fetchConfig();
         const nextConfig = {
             simulationsEnabled: configData.simulations_enabled === true,
-            machineFeaturesEnabled: configData.machine_features_enabled === true,
-            originFeaturesEnabled: configData.origin_features_enabled === true,
+            tableColumnPreferences: configData.table_column_preferences || DEFAULT_TABLE_COLUMN_PREFERENCES,
         };
 
         configRef.current = nextConfig;
         setSimulationsEnabled(nextConfig.simulationsEnabled);
-        setMachineFeaturesEnabled(nextConfig.machineFeaturesEnabled);
-        setOriginFeaturesEnabled(nextConfig.originFeaturesEnabled);
+        setTableColumnPreferences(nextConfig.tableColumnPreferences);
 
         return nextConfig;
+    }, []);
+
+    const saveDecisionColumns = useCallback(async (visiblePreferences: TableColumnViewportPreferences) => {
+        setColumnsSaving(true);
+        try {
+            const [, mobileResult] = await Promise.all([
+                updateTableColumns({ table: 'decisions', viewport: 'desktop', visible_columns: visiblePreferences.desktop }),
+                updateTableColumns({ table: 'decisions', viewport: 'mobile', visible_columns: visiblePreferences.mobile }),
+            ]);
+            const nextPreferences = {
+                ...mobileResult.table_column_preferences,
+                decisions: {
+                    ...mobileResult.table_column_preferences.decisions,
+                    ...visiblePreferences,
+                },
+            };
+            setTableColumnPreferences(nextPreferences);
+            if (configRef.current) {
+                configRef.current = {
+                    ...configRef.current,
+                    tableColumnPreferences: nextPreferences,
+                };
+            }
+            setShowColumnsModal(false);
+        } catch (error) {
+            console.error(error);
+        } finally {
+            setColumnsSaving(false);
+        }
     }, []);
 
     const loadDecisions = useCallback(async ({
@@ -756,6 +792,15 @@ export function Decisions() {
                     >
                         <Info size={18} />
                     </button>
+                    <button
+                        type="button"
+                        onClick={() => setShowColumnsModal(true)}
+                        className="inline-flex items-center justify-center rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-gray-600 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
+                        aria-label="Choose decision table columns"
+                        title="Choose columns"
+                    >
+                        <Columns3 size={18} />
+                    </button>
                 </div>
                 {queryError && (
                     <p id="decisions-search-error" className="text-xs text-red-600 dark:text-red-400">
@@ -784,28 +829,26 @@ export function Decisions() {
                                         className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                                     />
                                 </th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Time</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Scenario</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Country</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">AS</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">IP / Range</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Action</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Expiration</th>
-                                {machineFeaturesEnabled && (
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Machine</th>
-                                )}
-                                {originFeaturesEnabled && (
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Origin</th>
-                                )}
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Alert</th>
+                                {visibleDecisionColumns.map((columnId) => {
+                                    const column = decisionColumnDefinitionById.get(columnId);
+                                    if (!column) {
+                                        return null;
+                                    }
+
+                                    return (
+                                        <th key={columnId} className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                            {column.label}
+                                        </th>
+                                    );
+                                })}
                                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
                             </tr>
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                             {initialLoading && visibleDecisions.length === 0 ? (
-                                <tr><td colSpan={10 + (machineFeaturesEnabled ? 1 : 0) + (originFeaturesEnabled ? 1 : 0)} className="px-6 py-4 text-center text-sm text-gray-500">Loading decisions...</td></tr>
+                                <tr><td colSpan={decisionTableColSpan} className="px-6 py-4 text-center text-sm text-gray-500">Loading decisions...</td></tr>
                             ) : visibleDecisions.length === 0 ? (
-                                <tr><td colSpan={10 + (machineFeaturesEnabled ? 1 : 0) + (originFeaturesEnabled ? 1 : 0)} className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? "No decisions for this alert" : "No decisions found"}</td></tr>
+                                <tr><td colSpan={decisionTableColSpan} className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? "No decisions for this alert" : "No decisions found"}</td></tr>
                             ) : (
                                 visibleDecisions.map((decision, index) => {
                                     const decisionDuration = decision.detail.duration ?? '';
@@ -833,64 +876,102 @@ export function Decisions() {
                                                     className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
                                                 />
                                             </td>
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
-                                                <TimeDisplay timestamp={decision.created_at} />
-                                            </td>
-                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={decision.detail.reason}>
-                                                <ScenarioName
-                                                    name={decision.detail.reason}
-                                                    showLink={true}
-                                                    simulated={simulationsEnabled && isSimulatedDecision(decision)}
-                                                />
-                                            </td>
-                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 align-middle">
-                                                {decision.detail.country && decision.detail.country !== "Unknown" ? (
-                                                    <div className="flex items-center gap-2" title={decision.detail.country}>
-                                                        <span className={`fi fi-${decision.detail.country.toLowerCase()} flex-shrink-0`}></span>
-                                                        <span>{getCountryName(decision.detail.country)}</span>
-                                                    </div>
-                                                ) : (
-                                                    "-"
-                                                )}
-                                            </td>
-                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[150px] truncate" title={decision.detail.as}>
-                                                {decision.detail.as && decision.detail.as !== "Unknown" ? decision.detail.as : "-"}
-                                            </td>
-                                            <td className="px-6 py-4 text-sm font-mono text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={decision.value}>
-                                                {decision.value}
-                                            </td>
-                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100">
-                                                <Badge variant="danger">{decision.detail.action || "ban"}</Badge>
-                                            </td>
-                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 whitespace-nowrap">
-                                                {decisionDuration.startsWith("-") ? "0s" : decisionDuration}
-                                                {isExpired && <span className="ml-2 text-xs text-red-500 dark:text-red-400">(Expired)</span>}
-                                            </td>
-                                            {machineFeaturesEnabled && (
-                                                <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[120px] truncate" title={decision.machine}>
-                                                    {decision.machine || "-"}
-                                                </td>
-                                            )}
-                                            {originFeaturesEnabled && (
-                                                <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[120px] truncate" title={decision.detail.origin}>
-                                                    {decision.detail.origin || "-"}
-                                                </td>
-                                            )}
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm">
-                                                {decision.detail.alert_id ? (
-                                                    <Link
-                                                        to={`/alerts?id=${decision.detail.alert_id}`}
-                                                        className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors border border-primary-200 dark:border-primary-800"
-                                                        title={`View Alert #${decision.detail.alert_id}`}
-                                                    >
-                                                        <Shield size={14} className="fill-current" />
-                                                        <span className="text-xs font-semibold">Alert</span>
-                                                        <ExternalLink size={12} className="ml-0.5" />
-                                                    </Link>
-                                                ) : (
-                                                    <span className="text-gray-400">-</span>
-                                                )}
-                                            </td>
+                                            {visibleDecisionColumns.map((columnId) => {
+                                                switch (columnId) {
+                                                    case 'id':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-900 dark:text-gray-100">
+                                                                #{decision.id}
+                                                            </td>
+                                                        );
+                                                    case 'time':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                                                                <TimeDisplay timestamp={decision.created_at} />
+                                                            </td>
+                                                        );
+                                                    case 'scenario':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={decision.detail.reason}>
+                                                                <ScenarioName
+                                                                    name={decision.detail.reason}
+                                                                    showLink={true}
+                                                                    simulated={simulationsEnabled && isSimulatedDecision(decision)}
+                                                                />
+                                                            </td>
+                                                        );
+                                                    case 'country':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 align-middle">
+                                                                {decision.detail.country && decision.detail.country !== "Unknown" ? (
+                                                                    <div className="flex items-center gap-2" title={decision.detail.country}>
+                                                                        <span className={`fi fi-${decision.detail.country.toLowerCase()} flex-shrink-0`}></span>
+                                                                        <span>{getCountryName(decision.detail.country)}</span>
+                                                                    </div>
+                                                                ) : (
+                                                                    "-"
+                                                                )}
+                                                            </td>
+                                                        );
+                                                    case 'as':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[150px] truncate" title={decision.detail.as}>
+                                                                {decision.detail.as && decision.detail.as !== "Unknown" ? decision.detail.as : "-"}
+                                                            </td>
+                                                        );
+                                                    case 'source':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm font-mono text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={decision.value}>
+                                                                {decision.value}
+                                                            </td>
+                                                        );
+                                                    case 'action':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100">
+                                                                <Badge variant="danger">{decision.detail.action || "ban"}</Badge>
+                                                            </td>
+                                                        );
+                                                    case 'expiration':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 whitespace-nowrap">
+                                                                {decisionDuration.startsWith("-") ? "0s" : decisionDuration}
+                                                                {isExpired && <span className="ml-2 text-xs text-red-500 dark:text-red-400">(Expired)</span>}
+                                                            </td>
+                                                        );
+                                                    case 'machine':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[120px] truncate" title={decision.machine}>
+                                                                {decision.machine || "-"}
+                                                            </td>
+                                                        );
+                                                    case 'origin':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[120px] truncate" title={decision.detail.origin}>
+                                                                {decision.detail.origin || "-"}
+                                                            </td>
+                                                        );
+                                                    case 'alert':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm">
+                                                                {decision.detail.alert_id ? (
+                                                                    <Link
+                                                                        to={`/alerts?id=${decision.detail.alert_id}`}
+                                                                        className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors border border-primary-200 dark:border-primary-800"
+                                                                        title={`View Alert #${decision.detail.alert_id}`}
+                                                                    >
+                                                                        <Shield size={14} className="fill-current" />
+                                                                        <span className="text-xs font-semibold">Alert</span>
+                                                                        <ExternalLink size={12} className="ml-0.5" />
+                                                                    </Link>
+                                                                ) : (
+                                                                    <span className="text-gray-400">-</span>
+                                                                )}
+                                                            </td>
+                                                        );
+                                                    default:
+                                                        return null;
+                                                }
+                                            })}
                                             <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                                                 <div className="flex items-center justify-end gap-2">
                                                     {decision.value && (
@@ -1028,6 +1109,15 @@ export function Decisions() {
                 onClose={() => setShowSearchSyntaxModal(false)}
                 onSelectExample={applySearchExample}
                 onInsertSnippet={insertSearchSnippet}
+            />
+            <TableColumnsModal
+                isOpen={showColumnsModal}
+                table="decisions"
+                activeViewport={tableColumnViewport}
+                columnPreferences={tableColumnPreferences.decisions}
+                saving={columnsSaving}
+                onClose={() => setShowColumnsModal(false)}
+                onSave={saveDecisionColumns}
             />
         </div >
     );

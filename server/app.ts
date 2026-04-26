@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { Hono } from 'hono';
 import { compress } from 'hono/compress';
 import { serveStatic } from '@hono/node-server/serve-static';
+import { DEFAULT_TABLE_COLUMN_PREFERENCES, TABLE_COLUMN_DEFINITIONS } from '../shared/contracts';
 import type {
   AddDecisionRequest,
   AlertDecision,
@@ -27,11 +28,16 @@ import type {
   StatsAlert,
   StatsDecision,
   SyncStatus,
+  TableColumnId,
+  TableColumnPreferences,
+  TableColumnPreferenceTable,
+  TableColumnPreferenceViewport,
+  UpdateTableColumnsRequest,
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
   UpdateCheckResponse,
 } from '../shared/contracts';
-import { normalizeMachineId, resolveMachineName } from '../shared/machine';
+import { resolveMachineName } from '../shared/machine';
 import { collectDistinctOrigins, normalizeOrigin } from '../shared/origin';
 import { compileAlertSearch, compileDecisionSearch, type SearchParseError } from '../shared/search';
 import { createRuntimeConfig, getIntervalName, parseRefreshInterval, type RuntimeConfig } from './config';
@@ -83,8 +89,11 @@ interface PersistedConfig {
   refresh_interval_ms?: number;
 }
 
+const TABLE_COLUMN_PREFERENCES_META_KEY = 'table_column_preferences';
+
 interface CacheState {
   isInitialized: boolean;
+  isComplete: boolean;
   lastUpdate: string | null;
 }
 
@@ -103,15 +112,31 @@ interface AlertSyncQuery {
 interface SyncHistorySummary {
   historicalAlerts: number;
   historicalDecisions: number;
+  historicalErrors: string[];
   activeDecisionAlerts: number;
   activeDecisions: number;
   activeNetCachedAlerts: number;
   activeNetCachedDecisions: number;
   activePrunedAlerts: number;
   activePrunedDecisions: number;
-  activeError: string | null;
+  activeErrors: string[];
+  errors: string[];
+  state: 'complete' | 'partial' | 'failed';
   cachedAlerts: number;
   cachedDecisions: number;
+}
+
+interface WindowSyncSummary {
+  alerts: number;
+  decisions: number;
+  errors: string[];
+  successfulWindows: number;
+}
+
+interface ActiveWindowSyncSummary {
+  alerts: AlertRecord[];
+  errors: string[];
+  successfulWindows: number;
 }
 
 interface CachedDecisionRecord {
@@ -263,6 +288,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     auth: config.crowdsecAuth,
     simulationsEnabled: config.simulationsEnabled,
     lookbackPeriod: config.lookbackPeriod,
+    requestTimeoutMs: config.lapiRequestTimeoutMs,
     version: config.version,
   });
   const checkForUpdates = options.updateChecker || createUpdateChecker({
@@ -306,17 +332,20 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     message: '',
     startedAt: null,
     completedAt: null,
+    state: 'idle',
+    errors: [],
   };
 
   const cache: CacheState = {
     isInitialized: false,
+    isComplete: false,
     lastUpdate: null,
   };
   let dashboardStatsCache: DashboardStatsCache | null = null;
 
   const persistedConfig = loadPersistedConfig(database);
   let refreshIntervalMs = persistedConfig.refresh_interval_ms ?? config.refreshIntervalMs;
-  let initializationPromise: Promise<boolean> | null = null;
+  let initializationPromise: Promise<SyncHistorySummary | null> | null = null;
   let isFirstSync = true;
   let lastRequestTime = Date.now();
   let lastFullRefreshTime = Date.now();
@@ -329,9 +358,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   console.log(`Cache Configuration:
   Lookback Period: ${config.lookbackPeriod} (${config.lookbackMs}ms)
   Refresh Interval: ${getIntervalName(refreshIntervalMs)} (${persistedConfig.refresh_interval_ms !== undefined ? 'from saved config' : 'from env'})
+  LAPI Request Timeout: ${getIntervalName(config.lapiRequestTimeoutMs)}
+  Alert Sync Chunk: ${getIntervalName(config.alertSyncChunkMs)}
+  Alert Sync Min Chunk: ${getIntervalName(config.alertSyncMinChunkMs)}
   Auth Mode: ${config.crowdsecAuthMode}
   Simulations: ${config.simulationsEnabled ? 'Enabled' : 'Disabled'}
-  Always Show Machine: ${config.alwaysShowMachine ? 'Enabled' : 'Disabled'}
   Alert Filter Mode: ${config.alertFilterMode}
   Alert Include Origins: ${config.alertIncludeOrigins.length > 0 ? config.alertIncludeOrigins.join(', ') : 'Disabled'}
   Alert Exclude Origins: ${config.alertExcludeOrigins.length > 0 ? config.alertExcludeOrigins.join(', ') : 'Disabled'}
@@ -386,17 +417,15 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       const pageRequest = getPageRequest(context);
       if (pageRequest) {
         const filters = getAlertListFilters(context);
-        const machineFeaturesEnabled = isMachineFeatureEnabled();
-        const originFeaturesEnabled = isOriginFeatureEnabled();
         const compiledSearch = compileAlertSearch(filters.q, {
-          machineEnabled: machineFeaturesEnabled,
-          originEnabled: originFeaturesEnabled,
+          machineEnabled: true,
+          originEnabled: true,
         });
         if (!compiledSearch.ok) {
           return context.json(toSearchErrorResponse(compiledSearch.error), 400);
         }
         const filteredAlerts = alerts.filter((alert) =>
-          matchesAlertListFilters(alert, filters, machineFeaturesEnabled) &&
+          matchesAlertListFilters(alert, filters) &&
           compiledSearch.predicate(alert),
         );
         return context.json(toPaginatedResponse(
@@ -517,17 +546,15 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       const pageRequest = getPageRequest(context);
       if (pageRequest) {
         const filters = getDecisionListFilters(context);
-        const machineFeaturesEnabled = isMachineFeatureEnabled();
-        const originFeaturesEnabled = isOriginFeatureEnabled();
         const compiledSearch = compileDecisionSearch(filters.q, {
-          machineEnabled: machineFeaturesEnabled,
-          originEnabled: originFeaturesEnabled,
+          machineEnabled: true,
+          originEnabled: true,
         });
         if (!compiledSearch.ok) {
           return context.json(toSearchErrorResponse(compiledSearch.error), 400);
         }
         const filteredDecisions = decisions.filter((decision) =>
-          matchesDecisionListFilters(decision, filters, machineFeaturesEnabled) &&
+          matchesDecisionListFilters(decision, filters) &&
           compiledSearch.predicate(decision),
         );
         return context.json(toPaginatedResponse(
@@ -558,11 +585,55 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       lapi_status: lapiClient.getStatus(),
       sync_status: syncStatus,
       simulations_enabled: config.simulationsEnabled,
-      machine_features_enabled: isMachineFeatureEnabled(),
-      origin_features_enabled: isOriginFeatureEnabled(),
+      machine_features_enabled: true,
+      origin_features_enabled: true,
+      table_column_preferences: loadTableColumnPreferences(database),
     };
 
     return context.json(payload);
+  });
+
+  app.put(`${config.basePath}/api/config/table-columns`, ensureAuth, async (context) => {
+    try {
+      const body = await context.req.json<UpdateTableColumnsRequest>();
+      const table = body.table;
+      if (!isTableColumnPreferenceTable(table)) {
+        return context.json({ error: 'Invalid table. Must be one of: alerts, decisions' }, 400);
+      }
+      const viewport = body.viewport || 'desktop';
+      if (!isTableColumnPreferenceViewport(viewport)) {
+        return context.json({ error: 'Invalid viewport. Must be one of: desktop, mobile' }, 400);
+      }
+
+      if (!Array.isArray(body.visible_columns)) {
+        return context.json({ error: 'visible_columns must be an array' }, 400);
+      }
+
+      const validColumnIds = getTableColumnIdSet(table);
+      const visibleColumns: TableColumnId[] = [];
+      const seenColumnIds = new Set<string>();
+      for (const columnId of body.visible_columns) {
+        if (typeof columnId !== 'string' || !validColumnIds.has(columnId as TableColumnId)) {
+          return context.json({ error: `Invalid column for ${table}: ${String(columnId)}` }, 400);
+        }
+        if (!seenColumnIds.has(columnId)) {
+          seenColumnIds.add(columnId);
+          visibleColumns.push(columnId as TableColumnId);
+        }
+      }
+
+      const nextPreferences = loadTableColumnPreferences(database);
+      nextPreferences[table][viewport] = visibleColumns;
+      saveTableColumnPreferences(database, nextPreferences);
+
+      return context.json({
+        success: true,
+        table_column_preferences: nextPreferences,
+      });
+    } catch (error: any) {
+      console.error('Error updating table columns:', error.message);
+      return context.json({ error: 'Failed to update table columns' }, 500);
+    }
   });
 
   app.put(`${config.basePath}/api/config/refresh-interval`, ensureAuth, async (context) => {
@@ -949,6 +1020,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
   });
 
+  app.use(`${config.basePath}/assets/*`, async (context, next) => {
+    context.header('Cache-Control', 'public, max-age=31536000, immutable');
+    await next();
+  });
+
   app.use(
     `${config.basePath}/assets/*`,
     serveStatic({
@@ -956,6 +1032,12 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       rewriteRequestPath: (requestPath) => (config.basePath ? requestPath.replace(config.basePath, '') : requestPath),
     }),
   );
+
+  app.get(`${config.basePath}/assets/*`, (context) => {
+    context.header('Cache-Control', 'no-store, no-cache, must-revalidate');
+    context.header('Pragma', 'no-cache');
+    return context.text('Not Found', 404);
+  });
 
   staticFiles.forEach((file) => {
     app.use(
@@ -995,6 +1077,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         html = html.replace(/src="\.\//g, `src="${config.basePath}/`);
       }
 
+      context.header('Cache-Control', 'no-store, no-cache, must-revalidate');
+      context.header('Pragma', 'no-cache');
+      context.header('Expires', '0');
       return context.html(html);
     } catch {
       return context.text('Not Found', 404);
@@ -1116,6 +1201,173 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
     if (config.alertExcludeOrigins.length === 0) return false;
     return effectiveOrigins.some((origin) => config.alertExcludeOrigins.includes(origin));
+  }
+
+  function hasLegacyUnfilteredNonCapiLane(): boolean {
+    return config.legacyAlertOrigins.some((origin) =>
+      LEGACY_UNFILTERED_ALERT_ORIGIN_TOKENS.has(origin.trim().toLowerCase()),
+    );
+  }
+
+  function hasLegacyDefaultNonCapiLane(): boolean {
+    return config.legacyAlertOrigins.length === 0 && config.legacyAlertExtraScenarios.length === 0;
+  }
+
+  function isLegacyCapiIncluded(): boolean {
+    return config.legacyAlertOrigins.some((origin) => origin.trim().toUpperCase() === CAPI_ALERT_ORIGIN);
+  }
+
+  function matchesLegacyExtraScenario(alert: AlertRecord): boolean {
+    if (!alert.scenario || config.legacyAlertExtraScenarios.length === 0) {
+      return false;
+    }
+    return config.legacyAlertExtraScenarios.includes(alert.scenario);
+  }
+
+  function isNonCapiOrigin(origin: string): boolean {
+    return origin !== CAPI_ALERT_ORIGIN;
+  }
+
+  function isCachedAlertAllowedByCurrentFilter(alert: AlertRecord): boolean {
+    const effectiveOrigins = getAlertFallbackOrigins(alert);
+
+    if (config.alertFilterMode === 'new') {
+      if (shouldExcludeAlertByOrigin(alert)) {
+        return false;
+      }
+
+      if (hasExplicitNewAlertIncludes()) {
+        return shouldIncludeAlertByOrigin(alert);
+      }
+
+      if (effectiveOrigins.length === 0) {
+        return !config.alertExcludeOriginEmpty;
+      }
+
+      return effectiveOrigins.some(isNonCapiOrigin) || config.alertIncludeCapi;
+    }
+
+    if (config.alertFilterMode === 'legacy') {
+      const legacyIncludesCapi = isLegacyCapiIncluded();
+      const hasUnfilteredNonCapiLane = hasLegacyUnfilteredNonCapiLane() || hasLegacyDefaultNonCapiLane();
+      const matchesExtraScenario = matchesLegacyExtraScenario(alert);
+
+      if (effectiveOrigins.length === 0) {
+        return hasUnfilteredNonCapiLane || matchesExtraScenario;
+      }
+
+      const hasCapiOrigin = effectiveOrigins.includes(CAPI_ALERT_ORIGIN);
+      const hasAllowedExplicitOrigin = effectiveOrigins.some((origin) =>
+        origin === CAPI_ALERT_ORIGIN
+          ? legacyIncludesCapi
+          : config.legacyAlertOrigins.includes(origin),
+      );
+      const hasAllowedUnfilteredOrigin = effectiveOrigins.some(isNonCapiOrigin) && (hasUnfilteredNonCapiLane || matchesExtraScenario);
+
+      return hasAllowedExplicitOrigin || hasAllowedUnfilteredOrigin || (!hasCapiOrigin && matchesExtraScenario);
+    }
+
+    if (effectiveOrigins.length === 0) {
+      return true;
+    }
+
+    return effectiveOrigins.some(isNonCapiOrigin);
+  }
+
+  function isDecisionOriginAllowedByCurrentFilter(origin: string | undefined): boolean {
+    if (!origin) {
+      if (config.alertFilterMode === 'new') {
+        return hasExplicitNewAlertIncludes()
+          ? config.alertIncludeOriginEmpty && !config.alertExcludeOriginEmpty
+          : !config.alertExcludeOriginEmpty;
+      }
+      if (config.alertFilterMode === 'legacy') {
+        return hasLegacyUnfilteredNonCapiLane() || hasLegacyDefaultNonCapiLane();
+      }
+      return true;
+    }
+
+    if (config.alertFilterMode === 'new') {
+      if (config.alertExcludeOrigins.includes(origin)) {
+        return false;
+      }
+      if (hasExplicitNewAlertIncludes()) {
+        return getEffectiveIncludedOrigins().has(origin);
+      }
+      return origin !== CAPI_ALERT_ORIGIN || config.alertIncludeCapi;
+    }
+
+    if (config.alertFilterMode === 'legacy') {
+      if (origin === CAPI_ALERT_ORIGIN) {
+        return isLegacyCapiIncluded();
+      }
+      return hasLegacyUnfilteredNonCapiLane() || hasLegacyDefaultNonCapiLane() || config.legacyAlertOrigins.includes(origin);
+    }
+
+    return origin !== CAPI_ALERT_ORIGIN;
+  }
+
+  function pruneCachedEntriesForCurrentAlertFilters(): { alerts: number; decisions: number } {
+    const cachedAlerts = database.getAllAlerts();
+    const allAlertIds = new Set<string>();
+    const staleAlertIds: string[] = [];
+    const staleAlertIdSet = new Set<string>();
+
+    for (const row of cachedAlerts) {
+      try {
+        const alert = JSON.parse(row.raw_data) as AlertRecord;
+        if (!alert?.id) {
+          continue;
+        }
+
+        const alertId = String(alert.id);
+        allAlertIds.add(alertId);
+        if (!isCachedAlertAllowedByCurrentFilter(alert)) {
+          staleAlertIds.push(alertId);
+          staleAlertIdSet.add(alertId);
+        }
+      } catch {
+        // Keep malformed cache rows; normal sync reconciliation can replace them.
+      }
+    }
+
+    const remainingAlertIds = new Set([...allAlertIds].filter((id) => !staleAlertIdSet.has(id)));
+    const prunedAlerts = database.deleteCachedAlerts(staleAlertIds);
+    const staleDecisionIds: string[] = [];
+
+    for (const row of database.getAllDecisions()) {
+      try {
+        const decision = JSON.parse(row.raw_data) as { id?: string | number; alert_id?: string | number; origin?: unknown };
+        if (decision.id === undefined || decision.id === null) {
+          continue;
+        }
+
+        const alertId = row.alert_id ?? decision.alert_id;
+        if (alertId !== undefined && alertId !== null && remainingAlertIds.has(String(alertId))) {
+          continue;
+        }
+
+        const origin = normalizeOrigin(decision.origin);
+        if (!isDecisionOriginAllowedByCurrentFilter(origin)) {
+          staleDecisionIds.push(String(decision.id));
+        }
+      } catch {
+        // Keep malformed decision rows for the same reason as malformed alert rows.
+      }
+    }
+
+    const orphanDecisions = database.deleteCachedDecisions(staleDecisionIds);
+    const pruned = {
+      alerts: prunedAlerts.alerts,
+      decisions: prunedAlerts.decisions + orphanDecisions,
+    };
+
+    if (pruned.alerts > 0 || pruned.decisions > 0) {
+      dashboardStatsCache = null;
+      console.log(`Alert filter cleanup: removed ${pruned.alerts} stale cached alerts and ${pruned.decisions} stale cached decisions.`);
+    }
+
+    return pruned;
   }
 
   async function fetchAlertsForSync(
@@ -1273,6 +1525,155 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     return pruned;
   }
 
+  function persistSyncedAlerts(alerts: AlertRecord[]): void {
+    const persistTransaction = database.transaction<AlertRecord[]>((items) => {
+      for (const alert of items) {
+        processAlertForDatabase(alert);
+      }
+    });
+
+    persistTransaction(alerts);
+  }
+
+  function mergeAlertRecords(alerts: AlertRecord[]): AlertRecord[] {
+    const merged = new Map<string, AlertRecord>();
+    for (const alert of alerts) {
+      if (!alert?.id) continue;
+      merged.set(String(alert.id), alert);
+    }
+    return Array.from(merged.values());
+  }
+
+  function isTimeoutError(error: unknown): boolean {
+    const candidate = error as { code?: string; message?: string } | null | undefined;
+    return candidate?.code === 'ETIMEDOUT' || /timeout/i.test(candidate?.message || '');
+  }
+
+  function combineWindowSummaries(left: WindowSyncSummary, right: WindowSyncSummary): WindowSyncSummary {
+    return {
+      alerts: left.alerts + right.alerts,
+      decisions: left.decisions + right.decisions,
+      errors: [...left.errors, ...right.errors],
+      successfulWindows: left.successfulWindows + right.successfulWindows,
+    };
+  }
+
+  function combineActiveWindowSummaries(left: ActiveWindowSyncSummary, right: ActiveWindowSyncSummary): ActiveWindowSyncSummary {
+    return {
+      alerts: mergeAlertRecords([...left.alerts, ...right.alerts]),
+      errors: [...left.errors, ...right.errors],
+      successfulWindows: left.successfulWindows + right.successfulWindows,
+    };
+  }
+
+  function formatSyncWindow(startMs: number, endMs: number, nowMs: number): string {
+    return `${toDuration(startMs, nowMs)} -> ${toDuration(endMs, nowMs)} ago`;
+  }
+
+  function canSplitWindow(startMs: number, endMs: number): boolean {
+    return endMs - startMs > config.alertSyncMinChunkMs;
+  }
+
+  function splitWindow(startMs: number, endMs: number): [number, number, number] {
+    const midpoint = Math.floor((startMs + endMs) / 2);
+    return [startMs, midpoint, endMs];
+  }
+
+  async function syncHistoricalWindow(startMs: number, endMs: number, nowMs: number): Promise<WindowSyncSummary> {
+    const windowLabel = formatSyncWindow(startMs, endMs, nowMs);
+    const sinceDuration = toDuration(startMs, nowMs);
+    const untilDuration = toDuration(endMs, nowMs);
+
+    try {
+      const alerts = await fetchAlertsForSync(sinceDuration, untilDuration, false, { requireComplete: true });
+      const decisionCount = countAlertDecisions(alerts);
+      const pruned = reconcileSyncedAlertWindow(
+        alerts,
+        new Date(startMs).toISOString(),
+        new Date(endMs).toISOString(),
+      );
+      if (alerts.length > 0) {
+        console.log(`  -> Imported ${alerts.length} alerts and ${decisionCount} decisions.`);
+      }
+      if (pruned.alerts > 0 || pruned.decisions > 0) {
+        console.log(`  -> Pruned ${pruned.alerts} stale alerts and ${pruned.decisions} stale decisions.`);
+      }
+
+      return {
+        alerts: alerts.length,
+        decisions: decisionCount,
+        errors: [],
+        successfulWindows: 1,
+      };
+    } catch (error: any) {
+      if (isTimeoutError(error) && canSplitWindow(startMs, endMs)) {
+        const [, midpoint] = splitWindow(startMs, endMs);
+        console.warn(`Historical sync window timed out (${windowLabel}); splitting into smaller windows.`);
+        const first = await syncHistoricalWindow(startMs, midpoint, nowMs);
+        const second = await syncHistoricalWindow(midpoint, endMs, nowMs);
+        return combineWindowSummaries(first, second);
+      }
+
+      const errorMessage = `Historical ${windowLabel}: ${error.message}`;
+      console.error('Failed to sync chunk:', error.message);
+      return {
+        alerts: 0,
+        decisions: 0,
+        errors: [errorMessage],
+        successfulWindows: 0,
+      };
+    }
+  }
+
+  async function fetchActiveDecisionWindow(startMs: number, endMs: number, nowMs: number): Promise<ActiveWindowSyncSummary> {
+    const windowLabel = formatSyncWindow(startMs, endMs, nowMs);
+    const sinceDuration = toDuration(startMs, nowMs);
+    const untilDuration = toDuration(endMs, nowMs);
+
+    try {
+      const alerts = await fetchAlertsForSync(sinceDuration, untilDuration, true, { requireComplete: true });
+      return {
+        alerts,
+        errors: [],
+        successfulWindows: 1,
+      };
+    } catch (error: any) {
+      if (isTimeoutError(error) && canSplitWindow(startMs, endMs)) {
+        const [, midpoint] = splitWindow(startMs, endMs);
+        console.warn(`Active-decision sync window timed out (${windowLabel}); splitting into smaller windows.`);
+        const first = await fetchActiveDecisionWindow(startMs, midpoint, nowMs);
+        const second = await fetchActiveDecisionWindow(midpoint, endMs, nowMs);
+        return combineActiveWindowSummaries(first, second);
+      }
+
+      const errorMessage = `Active decisions ${windowLabel}: ${error.message}`;
+      console.error('Failed to sync active decisions window:', error.message);
+      return {
+        alerts: [],
+        errors: [errorMessage],
+        successfulWindows: 0,
+      };
+    }
+  }
+
+  async function fetchActiveDecisionAlertsChunked(lookbackStart: number, now: number): Promise<ActiveWindowSyncSummary> {
+    let currentStart = lookbackStart;
+    let summary: ActiveWindowSyncSummary = {
+      alerts: [],
+      errors: [],
+      successfulWindows: 0,
+    };
+
+    while (currentStart < now) {
+      const currentEnd = Math.min(currentStart + config.alertSyncChunkMs, now);
+      const result = await fetchActiveDecisionWindow(currentStart, currentEnd, now);
+      summary = combineActiveWindowSummaries(summary, result);
+      currentStart = currentEnd;
+    }
+
+    return summary;
+  }
+
   async function syncHistory(): Promise<SyncHistorySummary> {
     const showOverlay = isFirstSync;
     isFirstSync = false;
@@ -1284,29 +1685,38 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       message: 'Starting historical data sync...',
       startedAt: new Date().toISOString(),
       completedAt: null,
+      state: 'syncing',
+      errors: [],
     });
 
     const now = Date.now();
     const lookbackStart = now - config.lookbackMs;
-    const chunkSizeMs = 6 * 60 * 60 * 1_000;
+    const chunkSizeMs = config.alertSyncChunkMs;
     const totalDuration = now - lookbackStart;
     let currentStart = lookbackStart;
     let totalAlerts = 0;
     let totalDecisions = 0;
+    let successfulWindows = 0;
+    const historicalErrors: string[] = [];
     let activeDecisionAlertsCount = 0;
     let activeDecisionsCount = 0;
     let activeNetCachedAlerts = 0;
     let activeNetCachedDecisions = 0;
     let activePrunedAlerts = 0;
     let activePrunedDecisions = 0;
-    let activeError: string | null = null;
+    let activeErrors: string[] = [];
+
+    const filterPruned = pruneCachedEntriesForCurrentAlertFilters();
+    if (filterPruned.alerts > 0 || filterPruned.decisions > 0) {
+      updateSyncStatus({
+        message: `Removed ${filterPruned.alerts} stale cached alerts and ${filterPruned.decisions} stale cached decisions before sync.`,
+      });
+    }
 
     while (currentStart < now) {
       const currentEnd = Math.min(currentStart + chunkSizeMs, now);
       const progress = Math.round(((currentEnd - lookbackStart) / totalDuration) * 100);
-      const sinceDuration = toDuration(currentStart);
-      const untilDuration = toDuration(currentEnd);
-      const progressMessage = `Syncing: ${sinceDuration} -> ${untilDuration} ago (${totalAlerts} alerts, ${totalDecisions} decisions)`;
+      const progressMessage = `Syncing: ${formatSyncWindow(currentStart, currentEnd, now)} (${totalAlerts} alerts, ${totalDecisions} decisions)`;
 
       updateSyncStatus({
         progress: Math.min(progress, 90),
@@ -1314,73 +1724,79 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       });
       console.log(progressMessage);
 
-      try {
-        const alerts = await fetchAlertsForSync(sinceDuration, untilDuration, false, { requireComplete: true });
-        const decisionCount = countAlertDecisions(alerts);
-        const pruned = reconcileSyncedAlertWindow(
-          alerts,
-          new Date(currentStart).toISOString(),
-          new Date(currentEnd).toISOString(),
-        );
-        if (alerts.length > 0) {
-          totalAlerts += alerts.length;
-          totalDecisions += decisionCount;
-          console.log(`  -> Imported ${alerts.length} alerts and ${decisionCount} decisions.`);
-        }
-        if (pruned.alerts > 0 || pruned.decisions > 0) {
-          console.log(`  -> Pruned ${pruned.alerts} stale alerts and ${pruned.decisions} stale decisions.`);
-        }
-      } catch (error: any) {
-        console.error('Failed to sync chunk:', error.message);
-      }
+      const result = await syncHistoricalWindow(currentStart, currentEnd, now);
+      totalAlerts += result.alerts;
+      totalDecisions += result.decisions;
+      successfulWindows += result.successfulWindows;
+      historicalErrors.push(...result.errors);
 
       currentStart = currentEnd;
       await delay(100);
     }
 
     updateSyncStatus({ progress: 95, message: 'Syncing active decisions...' });
-    try {
-      const activeDecisionAlerts = await fetchAlertsForSync(null, null, true, { requireComplete: true });
-      const activeDecisionCount = countAlertDecisions(activeDecisionAlerts);
-      const cachedAlertsBeforeActiveSync = database.countAlerts();
-      const cachedDecisionsBeforeActiveSync = database.countDecisions();
+    const activeWindowSummary = await fetchActiveDecisionAlertsChunked(lookbackStart, now);
+    const activeDecisionAlerts = mergeAlertRecords(activeWindowSummary.alerts);
+    const activeDecisionCount = countAlertDecisions(activeDecisionAlerts);
+    const cachedAlertsBeforeActiveSync = database.countAlerts();
+    const cachedDecisionsBeforeActiveSync = database.countDecisions();
+    activeDecisionAlertsCount = activeDecisionAlerts.length;
+    activeDecisionsCount = activeDecisionCount;
+    successfulWindows += activeWindowSummary.successfulWindows;
+    activeErrors = activeWindowSummary.errors;
+
+    if (activeErrors.length === 0) {
       const pruned = reconcileActiveDecisionAlerts(activeDecisionAlerts, new Date().toISOString());
-      activeDecisionAlertsCount = activeDecisionAlerts.length;
-      activeDecisionsCount = activeDecisionCount;
-      activeNetCachedAlerts = database.countAlerts() - cachedAlertsBeforeActiveSync;
-      activeNetCachedDecisions = database.countDecisions() - cachedDecisionsBeforeActiveSync;
       activePrunedAlerts = pruned.alerts;
       activePrunedDecisions = pruned.decisions;
-    } catch (error: any) {
-      activeError = error.message;
-      console.error('Failed to sync active decisions:', error.message);
+    } else if (activeDecisionAlerts.length > 0) {
+      persistSyncedAlerts(activeDecisionAlerts);
     }
+    activeNetCachedAlerts = database.countAlerts() - cachedAlertsBeforeActiveSync;
+    activeNetCachedDecisions = database.countDecisions() - cachedDecisionsBeforeActiveSync;
 
     const cachedAlerts = database.countAlerts();
     const cachedDecisions = database.countDecisions();
+    const errors = [...historicalErrors, ...activeErrors];
+    const state = errors.length === 0
+      ? 'complete'
+      : successfulWindows > 0
+        ? 'partial'
+        : 'failed';
+    const message = state === 'complete'
+      ? `Sync complete. ${cachedAlerts} alerts and ${cachedDecisions} decisions cached.`
+      : state === 'partial'
+        ? `Sync partially complete. ${cachedAlerts} alerts and ${cachedDecisions} decisions cached; ${errors.length} window${errors.length === 1 ? '' : 's'} failed.`
+        : `Sync failed: ${errors[0] || 'no alert windows could be synced'}`;
+
     updateSyncStatus({
       isSyncing: false,
-      progress: 100,
-      message: `Sync complete. ${cachedAlerts} alerts and ${cachedDecisions} decisions cached.`,
+      progress: state === 'failed' ? 0 : 100,
+      message,
       completedAt: new Date().toISOString(),
+      state,
+      errors,
     });
 
     return {
       historicalAlerts: totalAlerts,
       historicalDecisions: totalDecisions,
+      historicalErrors,
       activeDecisionAlerts: activeDecisionAlertsCount,
       activeDecisions: activeDecisionsCount,
       activeNetCachedAlerts,
       activeNetCachedDecisions,
       activePrunedAlerts,
       activePrunedDecisions,
-      activeError,
+      activeErrors,
+      errors,
+      state,
       cachedAlerts,
       cachedDecisions,
     };
   }
 
-  async function initializeCache(): Promise<boolean> {
+  async function initializeCache(): Promise<SyncHistorySummary | null> {
     if (initializationPromise) {
       console.log('Cache initialization already in progress, waiting...');
       return initializationPromise;
@@ -1391,31 +1807,43 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         console.log('Initializing cache with chunked data load...');
         const syncSummary = await syncHistory();
         cache.lastUpdate = new Date().toISOString();
-        cache.isInitialized = true;
-        lapiClient.updateStatus(true);
+        cache.isInitialized = syncSummary.state !== 'failed';
+        cache.isComplete = syncSummary.state === 'complete';
+        lapiClient.updateStatus(syncSummary.state === 'complete', syncSummary.errors[0] ? { message: syncSummary.errors[0] } : null);
         await runNotificationEvaluation('cache initialization');
         const activeDecisionChanged =
           syncSummary.activeNetCachedAlerts !== 0 ||
           syncSummary.activeNetCachedDecisions !== 0 ||
           syncSummary.activePrunedAlerts !== 0 ||
           syncSummary.activePrunedDecisions !== 0;
-        const activeDecisionSummary = syncSummary.activeError
-          ? `  Active decisions: failed (${syncSummary.activeError})`
+        const activeDecisionSummary = syncSummary.activeErrors.length > 0
+          ? `  Active decisions: incomplete (${syncSummary.activeErrors.length} failed window${syncSummary.activeErrors.length === 1 ? '' : 's'})`
           : activeDecisionChanged
             ? `  Active decisions:
     Checked:      ${syncSummary.activeDecisionAlerts} alerts and ${syncSummary.activeDecisions} decisions
     Cache change: ${formatSignedCount(syncSummary.activeNetCachedAlerts)} alerts and ${formatSignedCount(syncSummary.activeNetCachedDecisions)} decisions
     Pruned stale: ${syncSummary.activePrunedAlerts} alerts and ${syncSummary.activePrunedDecisions} decisions`
             : `  Active decisions: checked ${syncSummary.activeDecisionAlerts} alerts and ${syncSummary.activeDecisions} decisions; no cache changes`;
-        console.log(`Cache initialized successfully:
+        const errorSummary = syncSummary.errors.length > 0
+          ? `  Errors: ${syncSummary.errors.length} window${syncSummary.errors.length === 1 ? '' : 's'} failed
+`
+          : '';
+        const cacheSummary = `Cache ${syncSummary.state === 'complete' ? 'initialized successfully' : 'initialized partially'}:
   Historical: ${syncSummary.historicalAlerts} alerts and ${syncSummary.historicalDecisions} decisions fetched
 ${activeDecisionSummary}
   Cache: ${syncSummary.cachedAlerts} alerts and ${syncSummary.cachedDecisions} decisions
+${errorSummary}  Status: ${syncSummary.state}
   Refresh Interval: ${getIntervalName(refreshIntervalMs)}
-`);
-        return true;
+`;
+        if (syncSummary.state === 'complete') {
+          console.log(cacheSummary);
+        } else {
+          console.warn(cacheSummary);
+        }
+        return syncSummary;
       } catch (error: any) {
         cache.isInitialized = false;
+        cache.isComplete = false;
         lapiClient.updateStatus(false, error);
         console.error('Failed to initialize cache:', error.message);
         updateSyncStatus({
@@ -1423,8 +1851,10 @@ ${activeDecisionSummary}
           progress: 0,
           message: `Sync failed: ${error.message}`,
           completedAt: new Date().toISOString(),
+          state: 'failed',
+          errors: [error.message],
         });
-        return false;
+        return null;
       } finally {
         initializationPromise = null;
       }
@@ -1447,10 +1877,12 @@ ${activeDecisionSummary}
       const deltaStart = new Date(deltaStartedAt - diffSeconds * 1_000).toISOString();
       const deltaEnd = new Date(deltaStartedAt).toISOString();
       console.log(`Fetching delta updates (since: ${sinceDuration})...`);
-      const [newAlerts, activeDecisionAlerts] = await Promise.all([
+      const activeLookbackStart = deltaStartedAt - config.lookbackMs;
+      const [newAlerts, activeWindowSummary] = await Promise.all([
         fetchAlertsForSync(sinceDuration, null, false, { requireComplete: true }),
-        fetchAlertsForSync(null, null, true, { requireComplete: true }),
+        fetchActiveDecisionAlertsChunked(activeLookbackStart, deltaStartedAt),
       ]);
+      const activeDecisionAlerts = mergeAlertRecords(activeWindowSummary.alerts);
       const newDecisionCount = countAlertDecisions(newAlerts);
       const activeDecisionCount = countAlertDecisions(activeDecisionAlerts);
 
@@ -1461,11 +1893,19 @@ ${activeDecisionSummary}
         );
       }
 
-      const activePruned = reconcileActiveDecisionAlerts(activeDecisionAlerts, new Date().toISOString());
+      const activePruned = activeWindowSummary.errors.length === 0
+        ? reconcileActiveDecisionAlerts(activeDecisionAlerts, new Date().toISOString())
+        : { alerts: 0, decisions: 0 };
+      if (activeWindowSummary.errors.length > 0 && activeDecisionAlerts.length > 0) {
+        persistSyncedAlerts(activeDecisionAlerts);
+      }
       if (activeDecisionAlerts.length > 0 || activePruned.alerts > 0 || activePruned.decisions > 0) {
         console.log(
           `Active decision refresh: ${activeDecisionAlerts.length} alerts and ${activeDecisionCount} decisions synced, ${activePruned.alerts} stale alerts and ${activePruned.decisions} stale decisions pruned`,
         );
+      }
+      if (activeWindowSummary.errors.length > 0) {
+        throw new Error(`Active decision refresh incomplete: ${activeWindowSummary.errors.join('; ')}`);
       }
 
       cache.lastUpdate = new Date().toISOString();
@@ -1510,8 +1950,13 @@ ${activeDecisionSummary}
     }
   }
 
-  function scheduleBootstrapRetry(reason = 'retry requested'): void {
-    if (!lapiClient.hasAuthConfig() || !config.bootstrapRetryEnabled || cache.isInitialized || bootstrapRetryTimeout) {
+  function scheduleBootstrapRetry(reason = 'retry requested', options: { allowInitialized?: boolean } = {}): void {
+    if (
+      !lapiClient.hasAuthConfig() ||
+      !config.bootstrapRetryEnabled ||
+      (!options.allowInitialized && cache.isInitialized) ||
+      bootstrapRetryTimeout
+    ) {
       return;
     }
 
@@ -1527,7 +1972,11 @@ ${activeDecisionSummary}
       return false;
     }
 
-    if (cache.isInitialized) {
+    const shouldRetryIncompleteCache = cache.isInitialized && !cache.isComplete && source.includes('retry');
+    if (cache.isInitialized && !shouldRetryIncompleteCache) {
+      if (!cache.isComplete) {
+        scheduleBootstrapRetry(`cache is partially initialized during ${source}`, { allowInitialized: true });
+      }
       finalizeBootstrapRecovery();
       return true;
     }
@@ -1547,10 +1996,17 @@ ${activeDecisionSummary}
         }
       }
 
-      const initialized = await initializeCache();
-      if (initialized) {
+      const syncSummary = await initializeCache();
+      if (syncSummary?.state === 'complete') {
         finalizeBootstrapRecovery();
         console.log(`Bootstrap recovery completed successfully (${source}).`);
+        return true;
+      }
+
+      if (syncSummary?.state === 'partial') {
+        finalizeBootstrapRecovery();
+        console.warn(`Bootstrap recovery completed partially (${source}); retrying incomplete windows in the background.`);
+        scheduleBootstrapRetry(`partial cache initialization during ${source}`, { allowInitialized: true });
         return true;
       }
 
@@ -2281,58 +2737,102 @@ ${activeDecisionSummary}
     void ensureBootstrapReady('startup');
   }
 
-  function isMachineFeatureEnabled(): boolean {
-    if (config.alwaysShowMachine) {
-      return true;
-    }
+}
 
-    const since = new Date(Date.now() - config.lookbackMs).toISOString();
-    const machineIds = new Set<string>();
+function cloneDefaultTableColumnPreferences(): TableColumnPreferences {
+  return {
+    alerts: {
+      desktop: [...DEFAULT_TABLE_COLUMN_PREFERENCES.alerts.desktop],
+      mobile: [...DEFAULT_TABLE_COLUMN_PREFERENCES.alerts.mobile],
+    },
+    decisions: {
+      desktop: [...DEFAULT_TABLE_COLUMN_PREFERENCES.decisions.desktop],
+      mobile: [...DEFAULT_TABLE_COLUMN_PREFERENCES.decisions.mobile],
+    },
+  };
+}
 
-    for (const row of database.getAlertsSince(since)) {
-      try {
-        const alert = JSON.parse(row.raw_data) as AlertRecord;
-        const machineId = normalizeMachineId(alert.machine_id);
-        if (!machineId) continue;
+function getTableColumnIdSet(table: TableColumnPreferenceTable): Set<TableColumnId> {
+  return new Set(TABLE_COLUMN_DEFINITIONS[table].map((column) => column.id));
+}
 
-        machineIds.add(machineId);
-        if (machineIds.size > 1) {
-          return true;
-        }
-      } catch (error) {
-        console.error('Failed to parse cached alert while evaluating machine visibility:', error);
-      }
-    }
+function isTableColumnPreferenceTable(value: unknown): value is TableColumnPreferenceTable {
+  return value === 'alerts' || value === 'decisions';
+}
 
-    return false;
+function isTableColumnPreferenceViewport(value: unknown): value is TableColumnPreferenceViewport {
+  return value === 'desktop' || value === 'mobile';
+}
+
+function normalizeTableColumnIds(table: TableColumnPreferenceTable, value: unknown): TableColumnId[] | null {
+  if (!Array.isArray(value)) {
+    return null;
   }
 
-  function isOriginFeatureEnabled(): boolean {
-    if (config.alwaysShowOrigin) {
-      return true;
+  const validColumnIds = getTableColumnIdSet(table);
+  const seenColumnIds = new Set<string>();
+  const nextColumns: TableColumnId[] = [];
+  for (const columnId of value) {
+    if (typeof columnId !== 'string' || !validColumnIds.has(columnId as TableColumnId) || seenColumnIds.has(columnId)) {
+      continue;
+    }
+    seenColumnIds.add(columnId);
+    nextColumns.push(columnId as TableColumnId);
+  }
+  return nextColumns;
+}
+
+function normalizeTableColumnPreferences(value: unknown): TableColumnPreferences {
+  const preferences = cloneDefaultTableColumnPreferences();
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return preferences;
+  }
+
+  const input = value as Partial<Record<TableColumnPreferenceTable, unknown>>;
+  for (const table of ['alerts', 'decisions'] as const) {
+    const rawPreference = input[table];
+    if (Array.isArray(rawPreference)) {
+      const legacyColumns = normalizeTableColumnIds(table, rawPreference);
+      if (legacyColumns) {
+        preferences[table] = {
+          desktop: [...legacyColumns],
+          mobile: [...legacyColumns],
+        };
+      }
+      continue;
     }
 
-    const since = new Date(Date.now() - config.lookbackMs).toISOString();
-    const now = new Date().toISOString();
-    const origins = new Set<string>();
+    if (!rawPreference || typeof rawPreference !== 'object') {
+      continue;
+    }
 
-    for (const row of database.getDecisionsSince(since, now)) {
-      try {
-        const decision = JSON.parse(row.raw_data) as AlertDecision;
-        const origin = normalizeOrigin(decision.origin);
-        if (!origin) continue;
-
-        origins.add(origin);
-        if (origins.size > 1) {
-          return true;
-        }
-      } catch (error) {
-        console.error('Failed to parse cached decision while evaluating origin visibility:', error);
+    const viewportInput = rawPreference as Partial<Record<TableColumnPreferenceViewport, unknown>>;
+    for (const viewport of ['desktop', 'mobile'] as const) {
+      const columns = normalizeTableColumnIds(table, viewportInput[viewport]);
+      if (columns) {
+        preferences[table][viewport] = columns;
       }
     }
-
-    return false;
   }
+
+  return preferences;
+}
+
+function loadTableColumnPreferences(database: CrowdsecDatabase): TableColumnPreferences {
+  try {
+    const row = database.getMeta(TABLE_COLUMN_PREFERENCES_META_KEY);
+    if (!row?.value) {
+      return cloneDefaultTableColumnPreferences();
+    }
+    return normalizeTableColumnPreferences(JSON.parse(row.value));
+  } catch (error) {
+    console.error('Error loading table column preferences from database:', error);
+    return cloneDefaultTableColumnPreferences();
+  }
+}
+
+function saveTableColumnPreferences(database: CrowdsecDatabase, preferences: TableColumnPreferences): void {
+  database.setMeta(TABLE_COLUMN_PREFERENCES_META_KEY, JSON.stringify(normalizeTableColumnPreferences(preferences)));
 }
 
 function loadPersistedConfig(database: CrowdsecDatabase): PersistedConfig {
@@ -2912,7 +3412,7 @@ function parseTimezoneOffset(context: HonoContext): number {
   return Number.isFinite(value) ? value : 0;
 }
 
-function matchesAlertListFilters(alert: SlimAlert, filters: AlertListFilters, machineFeaturesEnabled: boolean): boolean {
+function matchesAlertListFilters(alert: SlimAlert, filters: AlertListFilters): boolean {
   if (!matchesSimulationFilter(alert.simulated === true, filters.simulation)) return false;
 
   const scenario = (alert.scenario || '').toLowerCase();
@@ -2941,7 +3441,7 @@ function matchesAlertListFilters(alert: SlimAlert, filters: AlertListFilters, ma
   return true;
 }
 
-function matchesDecisionListFilters(decision: DecisionListItem, filters: DecisionListFilters, _machineFeaturesEnabled: boolean): boolean {
+function matchesDecisionListFilters(decision: DecisionListItem, filters: DecisionListFilters): boolean {
   if (!filters.showDuplicates && decision.is_duplicate) return false;
   if (filters.alertId && String(decision.detail.alert_id) !== filters.alertId) return false;
   if (!matchesSimulationFilter(decision.simulated === true, filters.simulation)) return false;

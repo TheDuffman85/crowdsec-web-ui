@@ -41,8 +41,14 @@ export type {
   StatsAlert,
   StatsDecision,
   SyncStatus,
+  TableColumnId,
+  TableColumnPreferences,
+  TableColumnPreferenceTable,
+  TableColumnPreferenceViewport,
+  TableColumnViewportPreferences,
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
+  UpdateTableColumnsRequest,
   UpdateCheckResponse,
 } from '../../../shared/contracts';
 

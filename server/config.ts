@@ -20,14 +20,15 @@ export interface RuntimeConfig {
   legacyAlertOrigins: string[];
   legacyAlertExtraScenarios: string[];
   simulationsEnabled: boolean;
-  alwaysShowMachine: boolean;
-  alwaysShowOrigin: boolean;
   lookbackPeriod: string;
   lookbackMs: number;
   refreshIntervalMs: number;
   idleRefreshIntervalMs: number;
   idleThresholdMs: number;
   fullRefreshIntervalMs: number;
+  lapiRequestTimeoutMs: number;
+  alertSyncChunkMs: number;
+  alertSyncMinChunkMs: number;
   bootstrapRetryDelayMs: number;
   bootstrapRetryEnabled: boolean;
   dockerImageRef: string;
@@ -100,7 +101,17 @@ export function getIntervalName(intervalMs: number): string {
   if (intervalMs === 30_000) return '30s';
   if (intervalMs === 60_000) return '1m';
   if (intervalMs === 300_000) return '5m';
+  if (intervalMs % 86_400_000 === 0) return `${intervalMs / 86_400_000}d`;
+  if (intervalMs % 3_600_000 === 0) return `${intervalMs / 3_600_000}h`;
+  if (intervalMs % 60_000 === 0) return `${intervalMs / 60_000}m`;
+  if (intervalMs % 1_000 === 0) return `${intervalMs / 1_000}s`;
   return `${intervalMs}ms`;
+}
+
+function parsePositiveIntervalEnv(value: string | undefined, defaultValue: string): number {
+  const parsed = parseRefreshInterval(value || defaultValue);
+  if (parsed > 0) return parsed;
+  return parseRefreshInterval(defaultValue);
 }
 
 function parseAlertFilterConfig(env: NodeJS.ProcessEnv): Pick<
@@ -189,12 +200,26 @@ function parseAlertFilterConfig(env: NodeJS.ProcessEnv): Pick<
   };
 }
 
+function warnRemovedColumnVisibilityEnv(env: NodeJS.ProcessEnv): void {
+  const removedVars = [
+    env.CROWDSEC_ALWAYS_SHOW_MACHINE !== undefined ? 'CROWDSEC_ALWAYS_SHOW_MACHINE' : undefined,
+    env.CROWDSEC_ALWAYS_SHOW_ORIGIN !== undefined ? 'CROWDSEC_ALWAYS_SHOW_ORIGIN' : undefined,
+  ].filter((name): name is string => Boolean(name));
+
+  if (removedVars.length === 0) return;
+
+  console.warn(
+    `${removedVars.join(' and ')} ${removedVars.length === 1 ? 'is' : 'are'} deprecated and ignored. Use the table Columns dialog to configure Machine and Origin visibility.`,
+  );
+}
+
 export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig {
   const lookbackPeriod = env.CROWDSEC_LOOKBACK_PERIOD || '168h';
   const refreshIntervalMs = parseRefreshInterval(env.CROWDSEC_REFRESH_INTERVAL || '30s');
   const crowdsecAuth = createCrowdsecAuthConfig(env);
   const notificationSecretKey = env.NOTIFICATION_SECRET_KEY?.trim() || undefined;
   const alertFilterConfig = parseAlertFilterConfig(env);
+  warnRemovedColumnVisibilityEnv(env);
 
   return {
     port: Number(env.PORT || 3000),
@@ -207,14 +232,15 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
     crowdsecTlsCaCertPath: crowdsecAuth.mode === 'mtls' ? crowdsecAuth.caCertPath : undefined,
     ...alertFilterConfig,
     simulationsEnabled: parseBooleanEnv(env.CROWDSEC_SIMULATIONS_ENABLED, false),
-    alwaysShowMachine: parseBooleanEnv(env.CROWDSEC_ALWAYS_SHOW_MACHINE, false),
-    alwaysShowOrigin: parseBooleanEnv(env.CROWDSEC_ALWAYS_SHOW_ORIGIN, false),
     lookbackPeriod,
     lookbackMs: parseLookbackToMs(lookbackPeriod),
     refreshIntervalMs,
     idleRefreshIntervalMs: parseRefreshInterval(env.CROWDSEC_IDLE_REFRESH_INTERVAL || '5m'),
     idleThresholdMs: parseRefreshInterval(env.CROWDSEC_IDLE_THRESHOLD || '2m'),
     fullRefreshIntervalMs: parseRefreshInterval(env.CROWDSEC_FULL_REFRESH_INTERVAL || '5m'),
+    lapiRequestTimeoutMs: parsePositiveIntervalEnv(env.CROWDSEC_LAPI_REQUEST_TIMEOUT, '30s'),
+    alertSyncChunkMs: parsePositiveIntervalEnv(env.CROWDSEC_ALERT_SYNC_CHUNK, '6h'),
+    alertSyncMinChunkMs: parsePositiveIntervalEnv(env.CROWDSEC_ALERT_SYNC_MIN_CHUNK, '15m'),
     bootstrapRetryDelayMs: parseRefreshInterval(env.CROWDSEC_BOOTSTRAP_RETRY_DELAY || '30s'),
     bootstrapRetryEnabled: parseBooleanEnv(env.CROWDSEC_BOOTSTRAP_RETRY_ENABLED, true),
     dockerImageRef: (env.DOCKER_IMAGE_REF || 'theduffman85/crowdsec-web-ui').toLowerCase(),

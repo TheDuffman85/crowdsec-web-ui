@@ -1,21 +1,24 @@
 import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, type MouseEvent as ReactMouseEvent } from "react";
 import { useSearchParams, Link } from "react-router-dom";
-import { fetchAlertsPaginated, fetchAlert, deleteAlert, bulkDeleteAlerts, cleanupByIp, fetchConfig, fetchDecisionsPaginated } from "../lib/api";
+import { fetchAlertsPaginated, fetchAlert, deleteAlert, bulkDeleteAlerts, cleanupByIp, fetchConfig, fetchDecisionsPaginated, updateTableColumns } from "../lib/api";
 import { isSimulatedAlert, isSimulatedDecision, matchesSimulationFilter, parseSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
 import { HighlightedSearchInput } from "../components/HighlightedSearchInput";
 import { SearchSyntaxModal } from "../components/SearchSyntaxModal";
+import { TableColumnsModal } from "../components/TableColumnsModal";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { EventCard } from "../components/EventCard";
 import { getCountryName } from "../lib/utils";
+import { useTableColumnViewport } from "../lib/useTableColumnViewport";
+import { DEFAULT_TABLE_COLUMN_PREFERENCES, TABLE_COLUMN_DEFINITIONS } from "../../../shared/contracts";
 import { resolveMachineName } from "../../../shared/machine";
 import { collectDistinctOrigins, getOriginDisplayValue, getOriginTitle } from "../../../shared/origin";
 import { compileAlertSearch, getSearchHelpDefinition, type SearchParseError } from "../../../shared/search";
-import { Info, ExternalLink, Shield, ShieldBan, Trash2, X, AlertCircle } from "lucide-react";
-import type { AlertRecord, AlertSource, ApiPermissionError, BulkDeleteResult, DecisionListItem, SimulationFilter, SlimAlert } from '../types';
+import { Info, ExternalLink, Shield, ShieldBan, Trash2, X, AlertCircle, Columns3 } from "lucide-react";
+import type { AlertRecord, AlertSource, ApiPermissionError, BulkDeleteResult, DecisionListItem, SimulationFilter, SlimAlert, TableColumnId, TableColumnPreferences, TableColumnViewportPreferences } from '../types';
 
 type AlertListItem = SlimAlert;
 type AlertSelection = AlertListItem | AlertRecord;
@@ -89,8 +92,9 @@ export function Alerts() {
     const initialQueryParam = searchParams.get("q") ?? "";
     const [alerts, setAlerts] = useState<AlertListItem[]>([]);
     const [simulationsEnabled, setSimulationsEnabled] = useState(false);
-    const [machineFeaturesEnabled, setMachineFeaturesEnabled] = useState(false);
-    const [originFeaturesEnabled, setOriginFeaturesEnabled] = useState(false);
+    const [tableColumnPreferences, setTableColumnPreferences] = useState<TableColumnPreferences>(DEFAULT_TABLE_COLUMN_PREFERENCES);
+    const [showColumnsModal, setShowColumnsModal] = useState(false);
+    const [columnsSaving, setColumnsSaving] = useState(false);
     const [searchDraft, setSearchDraft] = useState(initialQueryParam);
     const [debouncedSearchDraft, setDebouncedSearchDraft] = useState(initialQueryParam);
     const [appliedQuery, setAppliedQuery] = useState(initialQueryParam.trim());
@@ -117,6 +121,7 @@ export function Alerts() {
     const [deleteInProgress, setDeleteInProgress] = useState(false);
     const [errorInfo, setErrorInfo] = useState<ErrorInfo | null>(null);
     const [showAllEvents, setShowAllEvents] = useState(false);
+    const tableColumnViewport = useTableColumnViewport();
     const currentSimulationFilter = simulationsEnabled ? parseSimulationFilter(searchParams.get("simulation")) : 'all';
     const alertIdParam = searchParams.get("id");
     const queryParam = searchParams.get("q");
@@ -146,8 +151,7 @@ export function Alerts() {
     const lastRefreshSignalRef = useRef(refreshSignal);
     const configRef = useRef<{
         simulationsEnabled: boolean;
-        machineFeaturesEnabled: boolean;
-        originFeaturesEnabled: boolean;
+        tableColumnPreferences: TableColumnPreferences;
     } | null>(null);
     const hasLoadedAlertsRef = useRef(false);
     const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -156,15 +160,23 @@ export function Alerts() {
     const pendingSearchFocusRef = useRef<number | null>(null);
     const skipSearchParamSyncRef = useRef<string | null>(null);
     const searchDebounceTimeoutRef = useRef<number | null>(null);
-    const searchValidationFeatures = useMemo(() => (
-        configRef.current
-            ? { machineEnabled: machineFeaturesEnabled, originEnabled: originFeaturesEnabled }
-            : { machineEnabled: true, originEnabled: true }
-    ), [machineFeaturesEnabled, originFeaturesEnabled]);
+    const searchValidationFeatures = useMemo(() => ({ machineEnabled: true, originEnabled: true }), []);
     const searchHelp = useMemo(
         () => getSearchHelpDefinition('alerts', searchValidationFeatures, { alerts }),
         [alerts, searchValidationFeatures],
     );
+    const visibleAlertColumns = tableColumnPreferences.alerts[tableColumnViewport];
+    const alertColumnDefinitionById = useMemo(
+        () => new Map<TableColumnId, (typeof TABLE_COLUMN_DEFINITIONS.alerts)[number]>(
+            TABLE_COLUMN_DEFINITIONS.alerts.map((column) => [column.id, column]),
+        ),
+        [],
+    );
+    const visibleAlertColumnCount = visibleAlertColumns.length;
+    const alertTableColSpan = visibleAlertColumnCount + 2;
+    const isAlertColumnVisible = useCallback((columnId: TableColumnId) => (
+        visibleAlertColumns.includes(columnId)
+    ), [visibleAlertColumns]);
     const cancelSearchDebounce = useCallback(() => {
         if (searchDebounceTimeoutRef.current !== null) {
             window.clearTimeout(searchDebounceTimeoutRef.current);
@@ -191,16 +203,43 @@ export function Alerts() {
         const configData = await fetchConfig();
         const nextConfig = {
             simulationsEnabled: configData.simulations_enabled === true,
-            machineFeaturesEnabled: configData.machine_features_enabled === true,
-            originFeaturesEnabled: configData.origin_features_enabled === true,
+            tableColumnPreferences: configData.table_column_preferences || DEFAULT_TABLE_COLUMN_PREFERENCES,
         };
 
         configRef.current = nextConfig;
         setSimulationsEnabled(nextConfig.simulationsEnabled);
-        setMachineFeaturesEnabled(nextConfig.machineFeaturesEnabled);
-        setOriginFeaturesEnabled(nextConfig.originFeaturesEnabled);
+        setTableColumnPreferences(nextConfig.tableColumnPreferences);
 
         return nextConfig;
+    }, []);
+
+    const saveAlertColumns = useCallback(async (visiblePreferences: TableColumnViewportPreferences) => {
+        setColumnsSaving(true);
+        try {
+            const [, mobileResult] = await Promise.all([
+                updateTableColumns({ table: 'alerts', viewport: 'desktop', visible_columns: visiblePreferences.desktop }),
+                updateTableColumns({ table: 'alerts', viewport: 'mobile', visible_columns: visiblePreferences.mobile }),
+            ]);
+            const nextPreferences = {
+                ...mobileResult.table_column_preferences,
+                alerts: {
+                    ...mobileResult.table_column_preferences.alerts,
+                    ...visiblePreferences,
+                },
+            };
+            setTableColumnPreferences(nextPreferences);
+            if (configRef.current) {
+                configRef.current = {
+                    ...configRef.current,
+                    tableColumnPreferences: nextPreferences,
+                };
+            }
+            setShowColumnsModal(false);
+        } catch (error) {
+            console.error(error);
+        } finally {
+            setColumnsSaving(false);
+        }
     }, []);
 
     const loadAlerts = useCallback(async ({
@@ -898,6 +937,15 @@ export function Alerts() {
                     >
                         <Info size={18} />
                     </button>
+                    <button
+                        type="button"
+                        onClick={() => setShowColumnsModal(true)}
+                        className="inline-flex items-center justify-center rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-gray-600 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
+                        aria-label="Choose alert table columns"
+                        title="Choose columns"
+                    >
+                        <Columns3 size={18} />
+                    </button>
                 </div>
                 {queryError && (
                     <p id="alerts-search-error" className="text-xs text-red-600 dark:text-red-400">
@@ -925,26 +973,26 @@ export function Alerts() {
                                         className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                                     />
                                 </th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Time</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Scenario</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Country</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">AS</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">IP / Range</th>
-                                {machineFeaturesEnabled && (
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Machine</th>
-                                )}
-                                {originFeaturesEnabled && (
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Origin</th>
-                                )}
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Decisions</th>
+                                {visibleAlertColumns.map((columnId) => {
+                                    const column = alertColumnDefinitionById.get(columnId);
+                                    if (!column) {
+                                        return null;
+                                    }
+
+                                    return (
+                                        <th key={columnId} className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                            {column.label}
+                                        </th>
+                                    );
+                                })}
                                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
                             </tr>
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                             {initialLoading && visibleAlerts.length === 0 ? (
-                                <tr><td colSpan={8 + (machineFeaturesEnabled ? 1 : 0) + (originFeaturesEnabled ? 1 : 0)} className="px-6 py-4 text-center text-sm text-gray-500">Loading alerts...</td></tr>
+                                <tr><td colSpan={alertTableColSpan} className="px-6 py-4 text-center text-sm text-gray-500">Loading alerts...</td></tr>
                             ) : visibleAlerts.length === 0 ? (
-                                <tr><td colSpan={8 + (machineFeaturesEnabled ? 1 : 0) + (originFeaturesEnabled ? 1 : 0)} className="px-6 py-4 text-center text-sm text-gray-500">No alerts found</td></tr>
+                                <tr><td colSpan={alertTableColSpan} className="px-6 py-4 text-center text-sm text-gray-500">No alerts found</td></tr>
                             ) : (
                                 visibleAlerts.map((alert, index) => {
                                     const isLastElement = index === visibleAlerts.length - 1;
@@ -969,88 +1017,120 @@ export function Alerts() {
                                                     className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                                                 />
                                             </td>
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
-                                                <TimeDisplay timestamp={alert.created_at} />
-                                            </td>
-                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={alert.scenario}>
-                                                <ScenarioName
-                                                    name={alert.scenario}
-                                                    reason={alert.reason}
-                                                    showLink={true}
-                                                    simulated={simulationsEnabled && isSimulatedAlert(alert)}
-                                                />
-                                            </td>
-                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 align-middle">
-                                                {alert.source?.cn && alert.source?.cn !== "Unknown" ? (
-                                                    <div className="flex items-center gap-2" title={alert.source.cn}>
-                                                        <span className={`fi fi-${alert.source.cn.toLowerCase()} flex-shrink-0`}></span>
-                                                        <span className="truncate max-w-[150px]">{getCountryName(alert.source.cn)}</span>
-                                                    </div>
-                                                ) : (
-                                                    "-"
-                                                )}
-                                            </td>
-                                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[150px] truncate" title={alert.source?.as_name}>
-                                                {alert.source?.as_name || "-"}
-                                            </td>
-                                            <td className="px-6 py-4 text-sm font-mono text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={sourceValue}>
-                                                {sourceValue || "-"}
-                                            </td>
-                                            {machineFeaturesEnabled && (
-                                                <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[120px] truncate" title={resolveMachineName(alert)}>
-                                                    {resolveMachineName(alert) || "-"}
-                                                </td>
-                                            )}
-                                            {originFeaturesEnabled && (
-                                                <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[140px] truncate" title={alertOriginTitle}>
-                                                    {alertOriginDisplay}
-                                                </td>
-                                            )}
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
-                                                {(() => {
-                                                    const visibleDecisions = simulationsEnabled && currentSimulationFilter !== 'all'
-                                                        ? alert.decisions.filter((decision) => matchesSimulationFilter(
-                                                            { simulated: isSimulatedDecision(decision) },
-                                                            currentSimulationFilter,
-                                                        ))
-                                                        : alert.decisions;
-                                                    const activeDecisions = visibleDecisions.filter((decision) => decision.expired !== true);
-                                                    const expiredDecisions = visibleDecisions.filter((decision) => decision.expired === true);
-                                                    const decisionFilter = simulationsEnabled && currentSimulationFilter !== 'all'
-                                                        ? currentSimulationFilter
-                                                        : undefined;
-
-                                                    if (activeDecisions.length > 0 || expiredDecisions.length > 0) {
+                                            {visibleAlertColumns.map((columnId) => {
+                                                switch (columnId) {
+                                                    case 'id':
                                                         return (
-                                                            <div className="flex flex-wrap gap-2">
-                                                                {activeDecisions.length > 0 && (
-                                                                    <Link
-                                                                        to={buildDecisionListHref(alert.id, { simulation: decisionFilter })}
-                                                                        className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors border border-primary-200 dark:border-primary-800"
-                                                                        title={`View ${activeDecisions.length} active decisions`}
-                                                                    >
-                                                                        <Shield size={14} className="fill-current" />
-                                                                        <span className="text-xs font-semibold">Active: {activeDecisions.length}</span>
-                                                                        <ExternalLink size={12} className="ml-0.5" />
-                                                                    </Link>
-                                                                )}
-                                                                {expiredDecisions.length > 0 && (
-                                                                    <Link
-                                                                        to={buildDecisionListHref(alert.id, { includeExpired: true, simulation: decisionFilter })}
-                                                                        className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-                                                                        title={`View ${expiredDecisions.length} expired decisions`}
-                                                                    >
-                                                                        <Shield size={14} className="opacity-50" />
-                                                                        <span className="text-xs font-medium">Inactive: {expiredDecisions.length}</span>
-                                                                    </Link>
-                                                                )}
-                                                            </div>
+                                                            <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-900 dark:text-gray-100">
+                                                                #{alert.id}
+                                                            </td>
                                                         );
-                                                    }
+                                                    case 'time':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                                                                <TimeDisplay timestamp={alert.created_at} />
+                                                            </td>
+                                                        );
+                                                    case 'scenario':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={alert.scenario}>
+                                                                <ScenarioName
+                                                                    name={alert.scenario}
+                                                                    reason={alert.reason}
+                                                                    showLink={true}
+                                                                    simulated={simulationsEnabled && isSimulatedAlert(alert)}
+                                                                />
+                                                            </td>
+                                                        );
+                                                    case 'country':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 align-middle">
+                                                                {alert.source?.cn && alert.source?.cn !== "Unknown" ? (
+                                                                    <div className="flex items-center gap-2" title={alert.source.cn}>
+                                                                        <span className={`fi fi-${alert.source.cn.toLowerCase()} flex-shrink-0`}></span>
+                                                                        <span className="truncate max-w-[150px]">{getCountryName(alert.source.cn)}</span>
+                                                                    </div>
+                                                                ) : (
+                                                                    "-"
+                                                                )}
+                                                            </td>
+                                                        );
+                                                    case 'as':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[150px] truncate" title={alert.source?.as_name}>
+                                                                {alert.source?.as_name || "-"}
+                                                            </td>
+                                                        );
+                                                    case 'source':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm font-mono text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={sourceValue}>
+                                                                {sourceValue || "-"}
+                                                            </td>
+                                                        );
+                                                    case 'machine':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[120px] truncate" title={resolveMachineName(alert)}>
+                                                                {resolveMachineName(alert) || "-"}
+                                                            </td>
+                                                        );
+                                                    case 'origin':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[140px] truncate" title={alertOriginTitle}>
+                                                                {alertOriginDisplay}
+                                                            </td>
+                                                        );
+                                                    case 'decisions':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
+                                                                {(() => {
+                                                                    const visibleDecisions = simulationsEnabled && currentSimulationFilter !== 'all'
+                                                                        ? alert.decisions.filter((decision) => matchesSimulationFilter(
+                                                                            { simulated: isSimulatedDecision(decision) },
+                                                                            currentSimulationFilter,
+                                                                        ))
+                                                                        : alert.decisions;
+                                                                    const activeDecisions = visibleDecisions.filter((decision) => decision.expired !== true);
+                                                                    const expiredDecisions = visibleDecisions.filter((decision) => decision.expired === true);
+                                                                    const decisionFilter = simulationsEnabled && currentSimulationFilter !== 'all'
+                                                                        ? currentSimulationFilter
+                                                                        : undefined;
 
-                                                    return <span className="text-gray-400">-</span>;
-                                                })()}
-                                            </td>
+                                                                    if (activeDecisions.length > 0 || expiredDecisions.length > 0) {
+                                                                        return (
+                                                                            <div className="flex flex-wrap gap-2">
+                                                                                {activeDecisions.length > 0 && (
+                                                                                    <Link
+                                                                                        to={buildDecisionListHref(alert.id, { simulation: decisionFilter })}
+                                                                                        className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors border border-primary-200 dark:border-primary-800"
+                                                                                        title={`View ${activeDecisions.length} active decisions`}
+                                                                                    >
+                                                                                        <Shield size={14} className="fill-current" />
+                                                                                        <span className="text-xs font-semibold">Active: {activeDecisions.length}</span>
+                                                                                        <ExternalLink size={12} className="ml-0.5" />
+                                                                                    </Link>
+                                                                                )}
+                                                                                {expiredDecisions.length > 0 && (
+                                                                                    <Link
+                                                                                        to={buildDecisionListHref(alert.id, { includeExpired: true, simulation: decisionFilter })}
+                                                                                        className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                                                                                        title={`View ${expiredDecisions.length} expired decisions`}
+                                                                                    >
+                                                                                        <Shield size={14} className="opacity-50" />
+                                                                                        <span className="text-xs font-medium">Inactive: {expiredDecisions.length}</span>
+                                                                                    </Link>
+                                                                                )}
+                                                                            </div>
+                                                                        );
+                                                                    }
+
+                                                                    return <span className="text-gray-400">-</span>;
+                                                                })()}
+                                                            </td>
+                                                        );
+                                                    default:
+                                                        return null;
+                                                }
+                                            })}
                                             <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                                                 <div className="flex items-center justify-end gap-2">
                                                     {sourceValue && (
@@ -1103,8 +1183,8 @@ export function Alerts() {
                         </p>
 
                         {/* Summary Cards */}
-                        <div className={`grid grid-cols-1 ${machineFeaturesEnabled ? 'md:grid-cols-4' : 'md:grid-cols-3'} gap-4`}>
-                            {machineFeaturesEnabled && (
+                        <div className={`grid grid-cols-1 ${isAlertColumnVisible('machine') ? 'md:grid-cols-4' : 'md:grid-cols-3'} gap-4`}>
+                            {isAlertColumnVisible('machine') && (
                                 <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
                                     <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Machine</h4>
                                     <div className="text-lg text-gray-900 dark:text-gray-100 font-medium">
@@ -1387,6 +1467,15 @@ export function Alerts() {
                 onClose={() => setShowSearchSyntaxModal(false)}
                 onSelectExample={applySearchExample}
                 onInsertSnippet={insertSearchSnippet}
+            />
+            <TableColumnsModal
+                isOpen={showColumnsModal}
+                table="alerts"
+                activeViewport={tableColumnViewport}
+                columnPreferences={tableColumnPreferences.alerts}
+                saving={columnsSaving}
+                onClose={() => setShowColumnsModal(false)}
+                onSave={saveAlertColumns}
             />
         </div >
     );

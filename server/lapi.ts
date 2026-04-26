@@ -27,6 +27,7 @@ export interface LapiClientOptions {
   auth: CrowdsecAuthConfig;
   simulationsEnabled?: boolean;
   lookbackPeriod: string;
+  requestTimeoutMs?: number;
   version: string;
   fetchImpl?: FetchLike;
 }
@@ -44,6 +45,7 @@ export class LapiClient {
   private readonly auth: CrowdsecAuthConfig;
   private readonly simulationsEnabled: boolean;
   private readonly version: string;
+  private readonly requestTimeoutMs: number;
   private readonly fetchImpl: FetchLike;
   private readonly dispatcher?: Dispatcher;
 
@@ -63,6 +65,7 @@ export class LapiClient {
     this.simulationsEnabled = options.simulationsEnabled ?? false;
     this.lookbackPeriod = options.lookbackPeriod;
     this.version = options.version;
+    this.requestTimeoutMs = options.requestTimeoutMs || 30_000;
     this.fetchImpl = options.fetchImpl || ((input, init) =>
       undiciFetch(
         input as Parameters<typeof undiciFetch>[0],
@@ -109,7 +112,7 @@ export class LapiClient {
 
   async fetchLapi<TData = unknown>(endpoint: string, options: FetchLapiOptions = {}, isRetry = false): Promise<FetchLapiResult<TData>> {
     const controller = new AbortController();
-    const timeout = options.timeout || 30_000;
+    const timeout = options.timeout ?? this.requestTimeoutMs;
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
     const url = `${this.crowdsecUrl}${endpoint}`;

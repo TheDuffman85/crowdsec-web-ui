@@ -88,6 +88,7 @@ export class CrowdsecDatabase {
   public readonly db: Database;
 
   private readonly insertAlertStatement: any;
+  private readonly getAllAlertsStatement: any;
   private readonly getAlertsStatement: any;
   private readonly getAlertsBetweenStatement: any;
   private readonly getAlertIdsBetweenStatement: any;
@@ -96,6 +97,7 @@ export class CrowdsecDatabase {
   private readonly deleteOldAlertsStatement: any;
   private readonly insertDecisionStatement: any;
   private readonly updateDecisionStatement: any;
+  private readonly getAllDecisionsStatement: any;
   private readonly getActiveDecisionsStatement: any;
   private readonly getActiveAlertIdsStatement: any;
   private readonly getDecisionsSinceStatement: any;
@@ -142,6 +144,10 @@ export class CrowdsecDatabase {
       VALUES ($id, $uuid, $created_at, $scenario, $source_ip, $message, $raw_data)
     `);
 
+    this.getAllAlertsStatement = this.db.query(`
+      SELECT raw_data FROM alerts
+      ORDER BY created_at DESC
+    `);
     this.getAlertsStatement = this.db.query(`
       SELECT raw_data FROM alerts
       WHERE created_at >= $since
@@ -171,6 +177,10 @@ export class CrowdsecDatabase {
       WHERE id = $id
     `);
 
+    this.getAllDecisionsStatement = this.db.query(`
+      SELECT raw_data, created_at, stop_at, alert_id FROM decisions
+      ORDER BY stop_at DESC
+    `);
     this.getActiveDecisionsStatement = this.db.query(`
       SELECT raw_data, created_at, alert_id FROM decisions
       WHERE stop_at > $now
@@ -306,6 +316,10 @@ export class CrowdsecDatabase {
     this.insertAlertStatement.run(params);
   }
 
+  getAllAlerts(): RowWithRawData[] {
+    return this.getAllAlertsStatement.all() as RowWithRawData[];
+  }
+
   getAlertsSince(since: string): RowWithRawData[] {
     return this.getAlertsStatement.all({ $since: since }) as RowWithRawData[];
   }
@@ -346,6 +360,10 @@ export class CrowdsecDatabase {
     this.updateDecisionStatement.run(params);
   }
 
+  getAllDecisions(): RowWithRawData[] {
+    return this.getAllDecisionsStatement.all() as RowWithRawData[];
+  }
+
   getActiveDecisions(now: string): RowWithRawData[] {
     return this.getActiveDecisionsStatement.all({ $now: now }) as RowWithRawData[];
   }
@@ -372,6 +390,17 @@ export class CrowdsecDatabase {
 
   deleteDecision(id: string | number): void {
     this.deleteDecisionStatement.run({ $id: String(id) });
+  }
+
+  deleteCachedAlerts(ids: Array<string | number>): { alerts: number; decisions: number } {
+    const normalizedIds = ids.map(String);
+    const decisions = runChunkedIdMutation(this.db, 'DELETE FROM decisions WHERE alert_id IN', normalizedIds);
+    const alerts = runChunkedIdMutation(this.db, 'DELETE FROM alerts WHERE id IN', normalizedIds);
+    return { alerts, decisions };
+  }
+
+  deleteCachedDecisions(ids: Array<string | number>): number {
+    return runChunkedIdMutation(this.db, 'DELETE FROM decisions WHERE id IN', ids.map(String));
   }
 
   getDecisionById(id: string | number): { raw_data: string; stop_at: string } | null {
