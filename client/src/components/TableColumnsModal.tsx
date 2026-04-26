@@ -232,8 +232,8 @@ function loadColumnOrders(
     const storedOrders = readStoredColumnOrders(table);
     if (storedOrders) {
         return {
-            desktop: mergeStoredColumnOrder(table, storedOrders.desktop, preferences.desktop),
-            mobile: mergeStoredColumnOrder(table, storedOrders.mobile, preferences.mobile),
+            desktop: mergeStoredColumnOrder(table, storedOrders.desktop),
+            mobile: mergeStoredColumnOrder(table, storedOrders.mobile),
         };
     }
 
@@ -300,7 +300,6 @@ function saveColumnOrders(table: TableColumnPreferenceTable, columnOrders: Table
 function mergeStoredColumnOrder(
     table: TableColumnPreferenceTable,
     storedColumns: TableColumnId[],
-    visibleColumns: TableColumnId[],
 ): TableColumnId[] {
     const validColumnIds = new Set(TABLE_COLUMN_DEFINITIONS[table].map((column) => column.id));
     const orderedColumns = storedColumns.filter((columnId) => validColumnIds.has(columnId));

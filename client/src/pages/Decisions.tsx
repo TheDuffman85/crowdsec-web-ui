@@ -136,9 +136,6 @@ export function Decisions() {
     );
     const visibleDecisionColumnCount = visibleDecisionColumns.length;
     const decisionTableColSpan = visibleDecisionColumnCount + 2;
-    const isDecisionColumnVisible = useCallback((columnId: TableColumnId) => (
-        visibleDecisionColumns.includes(columnId)
-    ), [visibleDecisionColumns]);
     const cancelSearchDebounce = useCallback(() => {
         if (searchDebounceTimeoutRef.current !== null) {
             window.clearTimeout(searchDebounceTimeoutRef.current);
