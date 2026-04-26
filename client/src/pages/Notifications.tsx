@@ -155,8 +155,14 @@ function syncStoredOrder(
   itemIds: string[],
   setOrder: Dispatch<SetStateAction<string[]>>,
 ): void {
+  if (itemIds.length === 0) {
+    return;
+  }
+
   setOrder((current) => {
-    const nextOrder = mergeStoredOrder(current, itemIds);
+    const storedOrder = readStoredOrder(storageKey);
+    const sourceOrder = storedOrder.length > 0 ? storedOrder : current;
+    const nextOrder = mergeStoredOrder(sourceOrder, itemIds);
     if (nextOrder.length === current.length && nextOrder.every((id, index) => id === current[index])) {
       return current;
     }
