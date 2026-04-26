@@ -266,7 +266,6 @@ describe('Decisions page', () => {
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
 
     await userEvent.click(screen.getByRole('button', { name: 'Choose decision table columns' }));
-    expect(screen.queryByRole('button', { name: 'Reset defaults' })).not.toBeInTheDocument();
     await userEvent.click(screen.getByLabelText('ID'));
     await userEvent.click(screen.getByLabelText('Machine'));
     await userEvent.click(screen.getByLabelText('Origin'));

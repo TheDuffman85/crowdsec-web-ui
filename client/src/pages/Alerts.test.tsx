@@ -333,7 +333,6 @@ describe('Alerts page', () => {
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
 
     await userEvent.click(screen.getByRole('button', { name: 'Choose alert table columns' }));
-    expect(screen.queryByRole('button', { name: 'Reset defaults' })).not.toBeInTheDocument();
     await userEvent.click(screen.getByLabelText('ID'));
     await userEvent.click(screen.getByLabelText('Machine'));
     await userEvent.click(screen.getByLabelText('Origin'));
@@ -415,6 +414,41 @@ describe('Alerts page', () => {
 
     expect(screen.getByLabelText('ID')).toBeChecked();
     expect(screen.getByRole('button', { name: 'Sync to desktop' })).toBeInTheDocument();
+  });
+
+  test('resets alert column visibility and order to defaults', async () => {
+    window.localStorage.setItem('crowdsec-web-ui:alerts:table-column-order', JSON.stringify({
+      desktop: ['source', 'id', 'machine', 'origin', 'time', 'scenario', 'country', 'as', 'decisions'],
+      mobile: ['source', 'id', 'machine', 'origin', 'time', 'scenario', 'country', 'as', 'decisions'],
+    }));
+
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole('button', { name: 'Choose alert table columns' }));
+    await userEvent.click(screen.getByLabelText('ID'));
+    await userEvent.click(screen.getByLabelText('Machine'));
+    await userEvent.click(screen.getByLabelText('Origin'));
+    expect(screen.getByLabelText('ID')).toBeChecked();
+    expect(screen.getByLabelText('Machine')).toBeChecked();
+    expect(screen.getByLabelText('Origin')).toBeChecked();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Reset defaults' }));
+
+    expect(screen.getByLabelText('ID')).not.toBeChecked();
+    expect(screen.getByLabelText('Machine')).not.toBeChecked();
+    expect(screen.getByLabelText('Origin')).not.toBeChecked();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(getVisibleColumnHeaderNames()).toEqual(['Time', 'Scenario', 'Country', 'AS', 'IP / Range', 'Decisions', 'Actions']));
+    expect(JSON.parse(window.localStorage.getItem('crowdsec-web-ui:alerts:table-column-order') || '{}').desktop)
+      .toEqual(['id', 'time', 'scenario', 'country', 'as', 'source', 'machine', 'origin', 'decisions']);
   });
 
   test('keeps saved order for hidden alert columns when they are enabled later', async () => {

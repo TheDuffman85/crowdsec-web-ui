@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Copy, GripVertical } from 'lucide-react';
+import { Copy, GripVertical, RotateCcw } from 'lucide-react';
 import Sortable from 'sortablejs';
-import { TABLE_COLUMN_DEFINITIONS } from '../../../shared/contracts';
+import { DEFAULT_TABLE_COLUMN_PREFERENCES, TABLE_COLUMN_DEFINITIONS } from '../../../shared/contracts';
 import type { TableColumnId, TableColumnPreferenceTable, TableColumnPreferenceViewport, TableColumnViewportPreferences } from '../types';
 import { Modal } from './ui/Modal';
 
@@ -130,11 +130,22 @@ function TableColumnsModalContent({
         }));
     };
 
+    const resetViewport = () => {
+        setDraftPreferences((current) => ({
+            ...current,
+            [selectedViewport]: [...DEFAULT_TABLE_COLUMN_PREFERENCES[table][selectedViewport]],
+        }));
+        setDraftColumnOrders((current) => ({
+            ...current,
+            [selectedViewport]: getDefaultColumnOrder(table),
+        }));
+    };
+
     return (
         <div className="space-y-5">
             <div className="space-y-2">
-                <div className="flex flex-wrap items-center gap-2">
-                    <div className="inline-flex rounded-md border border-gray-300 bg-gray-100 p-1 dark:border-gray-700 dark:bg-gray-900">
+                <div className="grid gap-2 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
+                    <div className="inline-flex w-fit rounded-md border border-gray-300 bg-gray-100 p-1 dark:border-gray-700 dark:bg-gray-900">
                         {(['desktop', 'mobile'] as const).map((viewport) => (
                             <button
                                 key={viewport}
@@ -150,15 +161,26 @@ function TableColumnsModalContent({
                             </button>
                         ))}
                     </div>
-                    <button
-                        type="button"
-                        onClick={syncViewport}
-                        disabled={saving}
-                        className="inline-flex items-center gap-2 rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
-                    >
-                        <Copy size={16} aria-hidden="true" />
-                        <span>Sync to {syncTargetViewport}</span>
-                    </button>
+                    <div className="grid grid-cols-2 gap-2">
+                        <button
+                            type="button"
+                            onClick={syncViewport}
+                            disabled={saving}
+                            className="inline-flex min-w-0 items-center justify-center gap-1.5 rounded-md border border-gray-300 px-2 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 sm:gap-2 sm:px-3 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+                        >
+                            <Copy size={16} className="shrink-0" aria-hidden="true" />
+                            <span className="truncate">Sync to {syncTargetViewport}</span>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={resetViewport}
+                            disabled={saving}
+                            className="inline-flex min-w-0 items-center justify-center gap-1.5 rounded-md border border-gray-300 px-2 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 sm:gap-2 sm:px-3 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+                        >
+                            <RotateCcw size={16} className="shrink-0" aria-hidden="true" />
+                            <span className="truncate">Reset defaults</span>
+                        </button>
+                    </div>
                 </div>
                 <p className="text-sm text-gray-500 dark:text-gray-400">
                     Column choices are saved separately for desktop and mobile; the app automatically uses the matching layout for your screen.
@@ -255,6 +277,10 @@ function buildVisiblePreferences(
 
 function getOtherViewport(viewport: TableColumnPreferenceViewport): TableColumnPreferenceViewport {
     return viewport === 'desktop' ? 'mobile' : 'desktop';
+}
+
+function getDefaultColumnOrder(table: TableColumnPreferenceTable): TableColumnId[] {
+    return TABLE_COLUMN_DEFINITIONS[table].map((column) => column.id);
 }
 
 function getColumnOrderStorageKey(table: TableColumnPreferenceTable): string {
