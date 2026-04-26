@@ -1,6 +1,7 @@
 import { type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Bell, Check, CheckCheck, Plus, Send, SendHorizontal, SquarePen, Trash2 } from 'lucide-react';
+import Sortable from 'sortablejs';
+import { Bell, Check, CheckCheck, GripVertical, Plus, Send, SendHorizontal, SquarePen, Trash2 } from 'lucide-react';
 import {
   bulkDeleteNotifications,
   createNotificationChannel,
@@ -88,6 +89,10 @@ const RULE_DEFAULTS: Record<NotificationRuleType, Record<string, string>> = {
   'lapi-availability': { outage_threshold_seconds: '60', notify_on_recovery: 'false' },
 };
 
+const NOTIFICATION_ORDER_STORAGE_KEY = 'crowdsec-web-ui:notifications:notification-order';
+const CHANNEL_ORDER_STORAGE_KEY = 'crowdsec-web-ui:notifications:destination-order';
+const RULE_ORDER_STORAGE_KEY = 'crowdsec-web-ui:notifications:rule-order';
+
 const defaultChannelForm = (type: NotificationChannelType = 'ntfy'): ChannelFormState => ({
   name: '',
   type,
@@ -107,6 +112,90 @@ const defaultRuleForm = (type: NotificationRuleType = 'alert-spike'): RuleFormSt
 
 function cloneConfig<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function readStoredOrder(storageKey: string): string[] {
+  if (typeof window === 'undefined') {
+    return [];
+  }
+
+  try {
+    const rawValue = window.localStorage.getItem(storageKey);
+    if (!rawValue) {
+      return [];
+    }
+    const parsedValue = JSON.parse(rawValue);
+    return Array.isArray(parsedValue) ? parsedValue.filter((value): value is string => typeof value === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveStoredOrder(storageKey: string, order: string[]): string[] {
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify(order));
+    } catch {
+      // List order is a local convenience; the backend remains the source of truth.
+    }
+  }
+
+  return order;
+}
+
+function mergeStoredOrder(storedOrder: string[], itemIds: string[]): string[] {
+  const itemIdSet = new Set(itemIds);
+  const orderedExistingIds = storedOrder.filter((id) => itemIdSet.has(id));
+  const orderedIdSet = new Set(orderedExistingIds);
+  return [...orderedExistingIds, ...itemIds.filter((id) => !orderedIdSet.has(id))];
+}
+
+function syncStoredOrder(
+  storageKey: string,
+  itemIds: string[],
+  setOrder: Dispatch<SetStateAction<string[]>>,
+): void {
+  setOrder((current) => {
+    const nextOrder = mergeStoredOrder(current, itemIds);
+    if (nextOrder.length === current.length && nextOrder.every((id, index) => id === current[index])) {
+      return current;
+    }
+
+    return saveStoredOrder(storageKey, nextOrder);
+  });
+}
+
+function applyStoredOrder<T>(items: T[], order: string[], getId: (item: T) => string): T[] {
+  if (items.length <= 1) {
+    return items;
+  }
+
+  const itemsById = new Map(items.map((item) => [getId(item), item]));
+  const orderedItems: T[] = [];
+  for (const id of order) {
+    const item = itemsById.get(id);
+    if (item) {
+      orderedItems.push(item);
+      itemsById.delete(id);
+    }
+  }
+
+  return [...orderedItems, ...itemsById.values()];
+}
+
+function moveItem<T>(items: T[], oldIndex: number, newIndex: number): T[] {
+  if (oldIndex < 0 || newIndex < 0 || oldIndex >= items.length || newIndex >= items.length) {
+    return items;
+  }
+
+  const nextItems = [...items];
+  const [item] = nextItems.splice(oldIndex, 1);
+  if (item === undefined) {
+    return items;
+  }
+
+  nextItems.splice(newIndex, 0, item);
+  return nextItems;
 }
 
 function buildRulePayload(ruleForm: RuleFormState): UpsertNotificationRuleRequest {
@@ -183,6 +272,9 @@ export function Notifications() {
   const [channels, setChannels] = useState<NotificationChannel[]>([]);
   const [rules, setRules] = useState<NotificationRule[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [notificationOrder, setNotificationOrder] = useState<string[]>(() => readStoredOrder(NOTIFICATION_ORDER_STORAGE_KEY));
+  const [channelOrder, setChannelOrder] = useState<string[]>(() => readStoredOrder(CHANNEL_ORDER_STORAGE_KEY));
+  const [ruleOrder, setRuleOrder] = useState<string[]>(() => readStoredOrder(RULE_ORDER_STORAGE_KEY));
   const [initialLoading, setInitialLoading] = useState(true);
   const [backgroundLoading, setBackgroundLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -372,12 +464,42 @@ export function Notifications() {
   const canMarkSelectedRead = selectedUnreadCount > 0 || (allNotificationsSelected && unreadCount > 0);
   const readNotificationCount = Math.max(0, totalNotifications - unreadCount);
   const tableBusy = initialLoading || backgroundLoading || loadingMore;
+  const orderedNotifications = applyStoredOrder(notifications, notificationOrder, (item) => item.id);
+  const orderedChannels = applyStoredOrder(channels, channelOrder, (channel) => channel.id);
+  const orderedRules = applyStoredOrder(rules, ruleOrder, (rule) => rule.id);
 
   useEffect(() => {
     if (selectAllNotificationsRef.current) {
       selectAllNotificationsRef.current.indeterminate = someNotificationsSelected;
     }
   }, [someNotificationsSelected]);
+
+  useEffect(() => {
+    syncStoredOrder(NOTIFICATION_ORDER_STORAGE_KEY, notifications.map((item) => item.id), setNotificationOrder);
+  }, [notifications]);
+
+  useEffect(() => {
+    syncStoredOrder(CHANNEL_ORDER_STORAGE_KEY, channels.map((channel) => channel.id), setChannelOrder);
+  }, [channels]);
+
+  useEffect(() => {
+    syncStoredOrder(RULE_ORDER_STORAGE_KEY, rules.map((rule) => rule.id), setRuleOrder);
+  }, [rules]);
+
+  const reorderNotifications = (oldIndex: number, newIndex: number) => {
+    const nextOrder = moveItem(orderedNotifications.map((item) => item.id), oldIndex, newIndex);
+    setNotificationOrder(saveStoredOrder(NOTIFICATION_ORDER_STORAGE_KEY, nextOrder));
+  };
+
+  const reorderChannels = (oldIndex: number, newIndex: number) => {
+    const nextOrder = moveItem(orderedChannels.map((channel) => channel.id), oldIndex, newIndex);
+    setChannelOrder(saveStoredOrder(CHANNEL_ORDER_STORAGE_KEY, nextOrder));
+  };
+
+  const reorderRules = (oldIndex: number, newIndex: number) => {
+    const nextOrder = moveItem(orderedRules.map((rule) => rule.id), oldIndex, newIndex);
+    setRuleOrder(saveStoredOrder(RULE_ORDER_STORAGE_KEY, nextOrder));
+  };
 
   const toggleNotificationSelection = (id: string) => {
     setSelectedNotificationIds((current) =>
@@ -640,20 +762,21 @@ export function Notifications() {
               className="max-h-[32rem] overflow-y-auto pr-1 [scrollbar-gutter:stable]"
               aria-busy={tableBusy}
             >
-              <div className="space-y-4">
-                {notifications.map((item, index) => (
+              <SortableList className="space-y-4" itemCount={orderedNotifications.length} onMove={reorderNotifications}>
+                {orderedNotifications.map((item, index) => (
                   <NotificationRow
                     key={item.id}
                     item={item}
+                    dragHandle={<DragHandle label={`Reorder notification ${item.id}`} />}
                     selected={selectedNotificationIds.includes(item.id)}
                     onSelect={() => toggleNotificationSelection(item.id)}
                     onMarkRead={() => void handleMarkRead(item.id)}
                     onDelete={() => setPendingDeleteAction({ kind: 'single', id: item.id })}
-                    rowRef={index === notifications.length - 1 ? lastNotificationElementRef : undefined}
+                    rowRef={index === orderedNotifications.length - 1 ? lastNotificationElementRef : undefined}
                   />
                 ))}
                 {loadingMore && <p className="py-2 text-center text-sm text-gray-500 dark:text-gray-400">Loading more notifications...</p>}
-              </div>
+              </SortableList>
             </div>
           )}
         </CardContent>
@@ -663,31 +786,41 @@ export function Notifications() {
         <ResourceCard title="Destinations" actionLabel="Add Destination" onAction={openCreateChannel}>
           {channels.length === 0
             ? <p className="text-sm text-gray-500 dark:text-gray-400">No outbound destinations configured yet.</p>
-            : channels.map((channel) => (
-              <ChannelRow
-                key={channel.id}
-                channel={channel}
-                hasAttachedRule={linkedChannelIds.has(channel.id)}
-                onEdit={() => openEditChannel(channel)}
-                onTest={() => void sendTestNotification(channel)}
-                onDelete={() => void deleteNotificationChannel(channel.id).then(() => loadData({ preserveLoadedPages: true })).catch((err) => setError(err instanceof Error ? err.message : 'Failed to delete destination'))}
-              />
-            ))}
+            : (
+              <SortableList className="space-y-4" itemCount={orderedChannels.length} onMove={reorderChannels}>
+                {orderedChannels.map((channel) => (
+                  <ChannelRow
+                    key={channel.id}
+                    channel={channel}
+                    dragHandle={<DragHandle label={`Reorder destination ${channel.name}`} />}
+                    hasAttachedRule={linkedChannelIds.has(channel.id)}
+                    onEdit={() => openEditChannel(channel)}
+                    onTest={() => void sendTestNotification(channel)}
+                    onDelete={() => void deleteNotificationChannel(channel.id).then(() => loadData({ preserveLoadedPages: true })).catch((err) => setError(err instanceof Error ? err.message : 'Failed to delete destination'))}
+                  />
+                ))}
+              </SortableList>
+            )}
         </ResourceCard>
 
         <ResourceCard title="Rules" actionLabel="Add Rule" onAction={openCreateRule}>
           {rules.length === 0
             ? <p className="text-sm text-gray-500 dark:text-gray-400">No notification rules configured yet.</p>
-            : rules.map((rule) => (
-              <RuleRow
-                key={rule.id}
-                rule={rule}
-                channels={channels}
-                hasDestinations={rule.channel_ids.length > 0}
-                onEdit={() => openEditRule(rule)}
-                onDelete={() => void deleteNotificationRule(rule.id).then(() => loadData({ preserveLoadedPages: true })).catch((err) => setError(err instanceof Error ? err.message : 'Failed to delete rule'))}
-              />
-            ))}
+            : (
+              <SortableList className="space-y-4" itemCount={orderedRules.length} onMove={reorderRules}>
+                {orderedRules.map((rule) => (
+                  <RuleRow
+                    key={rule.id}
+                    rule={rule}
+                    dragHandle={<DragHandle label={`Reorder rule ${rule.name}`} />}
+                    channels={channels}
+                    hasDestinations={rule.channel_ids.length > 0}
+                    onEdit={() => openEditRule(rule)}
+                    onDelete={() => void deleteNotificationRule(rule.id).then(() => loadData({ preserveLoadedPages: true })).catch((err) => setError(err instanceof Error ? err.message : 'Failed to delete rule'))}
+                  />
+                ))}
+              </SortableList>
+            )}
         </ResourceCard>
       </div>
 
@@ -782,8 +915,74 @@ function ResourceCard({ title, actionLabel, onAction, children }: { title: strin
   );
 }
 
+function SortableList({
+  className,
+  itemCount,
+  onMove,
+  children,
+}: {
+  className?: string;
+  itemCount: number;
+  onMove: (oldIndex: number, newIndex: number) => void;
+  children: ReactNode;
+}) {
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const sortableRef = useRef<Sortable | null>(null);
+
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list || itemCount <= 1) {
+      sortableRef.current?.destroy();
+      sortableRef.current = null;
+      return;
+    }
+
+    sortableRef.current?.destroy();
+    sortableRef.current = new Sortable(list, {
+      animation: 150,
+      handle: '.drag-handle',
+      ghostClass: 'sortable-ghost',
+      chosenClass: 'sortable-chosen',
+      onEnd: (event) => {
+        const oldIndex = event.oldIndex;
+        const newIndex = event.newIndex;
+        if (
+          oldIndex === undefined ||
+          newIndex === undefined ||
+          oldIndex === newIndex
+        ) {
+          return;
+        }
+
+        onMove(oldIndex, newIndex);
+      },
+    });
+
+    return () => {
+      sortableRef.current?.destroy();
+      sortableRef.current = null;
+    };
+  }, [itemCount, onMove]);
+
+  return <div ref={listRef} className={className}>{children}</div>;
+}
+
+function DragHandle({ label }: { label: string }) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      className="drag-handle mt-0.5 inline-flex h-8 w-8 shrink-0 cursor-grab items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 active:cursor-grabbing dark:text-gray-500 dark:hover:bg-gray-700/60 dark:hover:text-gray-300"
+    >
+      <GripVertical className="h-4 w-4" aria-hidden="true" />
+    </button>
+  );
+}
+
 function NotificationRow({
   item,
+  dragHandle,
   selected,
   onSelect,
   onMarkRead,
@@ -791,6 +990,7 @@ function NotificationRow({
   rowRef,
 }: {
   item: NotificationItem;
+  dragHandle?: ReactNode;
   selected: boolean;
   onSelect: () => void;
   onMarkRead: () => void;
@@ -803,6 +1003,7 @@ function NotificationRow({
       className={`rounded-xl border p-4 ${item.read_at ? 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800' : 'border-blue-200 bg-blue-50/70 dark:border-blue-900/40 dark:bg-blue-950/20'}`}
     >
       <div className="flex gap-3">
+        {dragHandle}
         <div className="pt-1">
           <input
             type="checkbox"
@@ -841,12 +1042,14 @@ function NotificationRow({
 
 function ChannelRow({
   channel,
+  dragHandle,
   hasAttachedRule,
   onEdit,
   onTest,
   onDelete,
 }: {
   channel: NotificationChannel;
+  dragHandle?: ReactNode;
   hasAttachedRule: boolean;
   onEdit: () => void;
   onTest: () => void;
@@ -854,7 +1057,9 @@ function ChannelRow({
 }) {
   return (
     <div className="rounded-xl border border-gray-200 p-4 dark:border-gray-700">
-      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+      <div className="flex gap-3">
+        {dragHandle}
+        <div className="flex min-w-0 flex-1 flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="font-semibold">{channel.name}</h3>
@@ -872,6 +1077,7 @@ function ChannelRow({
           <ActionIconButton label="Edit destination" icon={<SquarePen className="h-4 w-4" />} onClick={onEdit} />
           <ActionIconButton label="Delete destination" icon={<Trash2 className="h-4 w-4" />} onClick={onDelete} variant="danger" />
         </div>
+        </div>
       </div>
     </div>
   );
@@ -879,12 +1085,14 @@ function ChannelRow({
 
 function RuleRow({
   rule,
+  dragHandle,
   channels,
   hasDestinations,
   onEdit,
   onDelete,
 }: {
   rule: NotificationRule;
+  dragHandle?: ReactNode;
   channels: NotificationChannel[];
   hasDestinations: boolean;
   onEdit: () => void;
@@ -892,7 +1100,9 @@ function RuleRow({
 }) {
   return (
     <div className="rounded-xl border border-gray-200 p-4 dark:border-gray-700">
-      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+      <div className="flex gap-3">
+        {dragHandle}
+        <div className="flex min-w-0 flex-1 flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="font-semibold">{rule.name}</h3>
@@ -908,6 +1118,7 @@ function RuleRow({
         <div className="flex flex-wrap gap-2 md:self-start">
           <ActionIconButton label="Edit rule" icon={<SquarePen className="h-4 w-4" />} onClick={onEdit} />
           <ActionIconButton label="Delete rule" icon={<Trash2 className="h-4 w-4" />} onClick={onDelete} variant="danger" />
+        </div>
         </div>
       </div>
     </div>
