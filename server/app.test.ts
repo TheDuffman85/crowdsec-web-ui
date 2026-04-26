@@ -975,7 +975,7 @@ describe('createApp', () => {
       id: 2,
       uuid: 'alert-2',
       source: { ip: '5.6.7.8', value: '5.6.7.8', cn: 'US', as_name: 'AWS' },
-      decisions: [{ id: 20, value: '5.6.7.8', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'CAPI', simulated: false }],
+      decisions: [{ id: 20, value: '5.6.7.8', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'cscli', simulated: false }],
     }));
 
     const response = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
@@ -3420,6 +3420,83 @@ describe('createApp', () => {
     destroyTempDir();
   });
 
+  test('boot cleanup removes stale cached CAPI alerts and orphan decisions when CAPI is disabled', async () => {
+    const crowdsecAlert = sampleAlert({
+      id: 66,
+      uuid: 'alert-66',
+      decisions: [
+        {
+          id: 660,
+          type: 'ban',
+          value: '6.6.6.6',
+          duration: '30m',
+          origin: 'crowdsec',
+          scenario: 'crowdsecurity/ssh-bf',
+          simulated: false,
+        },
+      ],
+    });
+    const staleCapiAlert = sampleCapiAlert({ id: 67, uuid: 'alert-67' });
+
+    const { controller, database, fetchCalls } = createController({
+      env: {
+        CROWDSEC_ALERT_INCLUDE_CAPI: 'false',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (!url.includes('/v1/alerts?')) {
+          return undefined;
+        }
+        if (!url.includes('origin=') && url.includes('scope=ip')) {
+          return Response.json([crowdsecAlert]);
+        }
+        return Response.json([]);
+      },
+    });
+
+    seedAlert(database, staleCapiAlert);
+    seedAlert(database, crowdsecAlert);
+    database.insertDecision({
+      $id: '6700',
+      $uuid: '6700',
+      $alert_id: 6700,
+      $created_at: new Date().toISOString(),
+      $stop_at: new Date(Date.now() + 60 * 60 * 1_000).toISOString(),
+      $value: '7.7.7.7',
+      $type: 'ban',
+      $origin: 'CAPI',
+      $scenario: 'http:scan',
+      $raw_data: JSON.stringify({
+        id: 6700,
+        alert_id: 6700,
+        value: '7.7.7.7',
+        origin: 'CAPI',
+        stop_at: new Date(Date.now() + 60 * 60 * 1_000).toISOString(),
+      }),
+    });
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alertsResponse.status).toBe(200);
+
+    const alerts = await alertsResponse.json() as Array<{ id: number }>;
+    expect(alerts).toEqual([expect.objectContaining({ id: 66 })]);
+
+    const storedAlerts = database.db.query('SELECT id FROM alerts ORDER BY id').all() as Array<{ id: number }>;
+    expect(storedAlerts).toEqual([{ id: 66 }]);
+    const storedDecisions = database.db.query('SELECT origin FROM decisions ORDER BY id').all() as Array<{ origin: string }>;
+    expect(storedDecisions).toEqual([{ origin: 'crowdsec' }]);
+
+    const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
+    expect(alertRequests.every((call) => call.url.includes('include_capi=false'))).toBe(true);
+    expect(alertRequests.some((call) => call.url.includes('origin=CAPI'))).toBe(false);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
   test('include origins can fetch lists alerts with unscoped queries only', async () => {
     const listsAlert = sampleListsAlert();
 
@@ -3882,6 +3959,65 @@ describe('createApp', () => {
 
     const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
     expect(alertRequests.some((call) => !call.url.includes('origin=') && call.url.includes('include_capi=false'))).toBe(true);
+    expect(alertRequests.some((call) => call.url.includes('origin=CAPI'))).toBe(false);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('boot cleanup applies CAPI and non-CAPI exclude origins to cached rows', async () => {
+    const crowdsecAlert = sampleAlert({
+      id: 68,
+      uuid: 'alert-68',
+      decisions: [
+        {
+          id: 680,
+          type: 'ban',
+          value: '8.8.8.8',
+          duration: '30m',
+          origin: 'crowdsec',
+          scenario: 'crowdsecurity/ssh-bf',
+          simulated: false,
+        },
+      ],
+    });
+    const staleManualAlert = sampleManualWebUiAlert({ id: 69, uuid: 'alert-69' });
+    const staleCapiAlert = sampleCapiAlert({ id: 70, uuid: 'alert-70' });
+
+    const { controller, database, fetchCalls } = createController({
+      env: {
+        CROWDSEC_ALERT_INCLUDE_CAPI: 'true',
+        CROWDSEC_ALERT_EXCLUDE_ORIGINS: 'CAPI,cscli',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (!url.includes('/v1/alerts?')) {
+          return undefined;
+        }
+        if (!url.includes('origin=') && url.includes('scope=ip')) {
+          return Response.json([crowdsecAlert]);
+        }
+        return Response.json([]);
+      },
+    });
+
+    seedAlert(database, crowdsecAlert);
+    seedAlert(database, staleManualAlert);
+    seedAlert(database, staleCapiAlert);
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alertsResponse.status).toBe(200);
+    expect(await alertsResponse.json()).toEqual([expect.objectContaining({ id: 68 })]);
+
+    const storedAlerts = database.db.query('SELECT id FROM alerts ORDER BY id').all() as Array<{ id: number }>;
+    expect(storedAlerts).toEqual([{ id: 68 }]);
+    const storedDecisions = database.db.query('SELECT origin FROM decisions ORDER BY id').all() as Array<{ origin: string }>;
+    expect(storedDecisions).toEqual([{ origin: 'crowdsec' }]);
+
+    const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
     expect(alertRequests.some((call) => call.url.includes('origin=CAPI'))).toBe(false);
 
     controller.stopBackgroundTasks();

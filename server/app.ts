@@ -1142,6 +1142,173 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     return effectiveOrigins.some((origin) => config.alertExcludeOrigins.includes(origin));
   }
 
+  function hasLegacyUnfilteredNonCapiLane(): boolean {
+    return config.legacyAlertOrigins.some((origin) =>
+      LEGACY_UNFILTERED_ALERT_ORIGIN_TOKENS.has(origin.trim().toLowerCase()),
+    );
+  }
+
+  function hasLegacyDefaultNonCapiLane(): boolean {
+    return config.legacyAlertOrigins.length === 0 && config.legacyAlertExtraScenarios.length === 0;
+  }
+
+  function isLegacyCapiIncluded(): boolean {
+    return config.legacyAlertOrigins.some((origin) => origin.trim().toUpperCase() === CAPI_ALERT_ORIGIN);
+  }
+
+  function matchesLegacyExtraScenario(alert: AlertRecord): boolean {
+    if (!alert.scenario || config.legacyAlertExtraScenarios.length === 0) {
+      return false;
+    }
+    return config.legacyAlertExtraScenarios.includes(alert.scenario);
+  }
+
+  function isNonCapiOrigin(origin: string): boolean {
+    return origin !== CAPI_ALERT_ORIGIN;
+  }
+
+  function isCachedAlertAllowedByCurrentFilter(alert: AlertRecord): boolean {
+    const effectiveOrigins = getAlertFallbackOrigins(alert);
+
+    if (config.alertFilterMode === 'new') {
+      if (shouldExcludeAlertByOrigin(alert)) {
+        return false;
+      }
+
+      if (hasExplicitNewAlertIncludes()) {
+        return shouldIncludeAlertByOrigin(alert);
+      }
+
+      if (effectiveOrigins.length === 0) {
+        return !config.alertExcludeOriginEmpty;
+      }
+
+      return effectiveOrigins.some(isNonCapiOrigin) || config.alertIncludeCapi;
+    }
+
+    if (config.alertFilterMode === 'legacy') {
+      const legacyIncludesCapi = isLegacyCapiIncluded();
+      const hasUnfilteredNonCapiLane = hasLegacyUnfilteredNonCapiLane() || hasLegacyDefaultNonCapiLane();
+      const matchesExtraScenario = matchesLegacyExtraScenario(alert);
+
+      if (effectiveOrigins.length === 0) {
+        return hasUnfilteredNonCapiLane || matchesExtraScenario;
+      }
+
+      const hasCapiOrigin = effectiveOrigins.includes(CAPI_ALERT_ORIGIN);
+      const hasAllowedExplicitOrigin = effectiveOrigins.some((origin) =>
+        origin === CAPI_ALERT_ORIGIN
+          ? legacyIncludesCapi
+          : config.legacyAlertOrigins.includes(origin),
+      );
+      const hasAllowedUnfilteredOrigin = effectiveOrigins.some(isNonCapiOrigin) && (hasUnfilteredNonCapiLane || matchesExtraScenario);
+
+      return hasAllowedExplicitOrigin || hasAllowedUnfilteredOrigin || (!hasCapiOrigin && matchesExtraScenario);
+    }
+
+    if (effectiveOrigins.length === 0) {
+      return true;
+    }
+
+    return effectiveOrigins.some(isNonCapiOrigin);
+  }
+
+  function isDecisionOriginAllowedByCurrentFilter(origin: string | undefined): boolean {
+    if (!origin) {
+      if (config.alertFilterMode === 'new') {
+        return hasExplicitNewAlertIncludes()
+          ? config.alertIncludeOriginEmpty && !config.alertExcludeOriginEmpty
+          : !config.alertExcludeOriginEmpty;
+      }
+      if (config.alertFilterMode === 'legacy') {
+        return hasLegacyUnfilteredNonCapiLane() || hasLegacyDefaultNonCapiLane();
+      }
+      return true;
+    }
+
+    if (config.alertFilterMode === 'new') {
+      if (config.alertExcludeOrigins.includes(origin)) {
+        return false;
+      }
+      if (hasExplicitNewAlertIncludes()) {
+        return getEffectiveIncludedOrigins().has(origin);
+      }
+      return origin !== CAPI_ALERT_ORIGIN || config.alertIncludeCapi;
+    }
+
+    if (config.alertFilterMode === 'legacy') {
+      if (origin === CAPI_ALERT_ORIGIN) {
+        return isLegacyCapiIncluded();
+      }
+      return hasLegacyUnfilteredNonCapiLane() || hasLegacyDefaultNonCapiLane() || config.legacyAlertOrigins.includes(origin);
+    }
+
+    return origin !== CAPI_ALERT_ORIGIN;
+  }
+
+  function pruneCachedEntriesForCurrentAlertFilters(): { alerts: number; decisions: number } {
+    const cachedAlerts = database.getAllAlerts();
+    const allAlertIds = new Set<string>();
+    const staleAlertIds: string[] = [];
+    const staleAlertIdSet = new Set<string>();
+
+    for (const row of cachedAlerts) {
+      try {
+        const alert = JSON.parse(row.raw_data) as AlertRecord;
+        if (!alert?.id) {
+          continue;
+        }
+
+        const alertId = String(alert.id);
+        allAlertIds.add(alertId);
+        if (!isCachedAlertAllowedByCurrentFilter(alert)) {
+          staleAlertIds.push(alertId);
+          staleAlertIdSet.add(alertId);
+        }
+      } catch {
+        // Keep malformed cache rows; normal sync reconciliation can replace them.
+      }
+    }
+
+    const remainingAlertIds = new Set([...allAlertIds].filter((id) => !staleAlertIdSet.has(id)));
+    const prunedAlerts = database.deleteCachedAlerts(staleAlertIds);
+    const staleDecisionIds: string[] = [];
+
+    for (const row of database.getAllDecisions()) {
+      try {
+        const decision = JSON.parse(row.raw_data) as { id?: string | number; alert_id?: string | number; origin?: unknown };
+        if (decision.id === undefined || decision.id === null) {
+          continue;
+        }
+
+        const alertId = row.alert_id ?? decision.alert_id;
+        if (alertId !== undefined && alertId !== null && remainingAlertIds.has(String(alertId))) {
+          continue;
+        }
+
+        const origin = normalizeOrigin(decision.origin);
+        if (!isDecisionOriginAllowedByCurrentFilter(origin)) {
+          staleDecisionIds.push(String(decision.id));
+        }
+      } catch {
+        // Keep malformed decision rows for the same reason as malformed alert rows.
+      }
+    }
+
+    const orphanDecisions = database.deleteCachedDecisions(staleDecisionIds);
+    const pruned = {
+      alerts: prunedAlerts.alerts,
+      decisions: prunedAlerts.decisions + orphanDecisions,
+    };
+
+    if (pruned.alerts > 0 || pruned.decisions > 0) {
+      dashboardStatsCache = null;
+      console.log(`Alert filter cleanup: removed ${pruned.alerts} stale cached alerts and ${pruned.decisions} stale cached decisions.`);
+    }
+
+    return pruned;
+  }
+
   async function fetchAlertsForSync(
     since: string | null = null,
     until: string | null = null,
@@ -1477,6 +1644,13 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     let activePrunedAlerts = 0;
     let activePrunedDecisions = 0;
     let activeErrors: string[] = [];
+
+    const filterPruned = pruneCachedEntriesForCurrentAlertFilters();
+    if (filterPruned.alerts > 0 || filterPruned.decisions > 0) {
+      updateSyncStatus({
+        message: `Removed ${filterPruned.alerts} stale cached alerts and ${filterPruned.decisions} stale cached decisions before sync.`,
+      });
+    }
 
     while (currentStart < now) {
       const currentEnd = Math.min(currentStart + chunkSizeMs, now);
