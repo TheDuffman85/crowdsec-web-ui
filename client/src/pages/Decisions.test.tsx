@@ -134,6 +134,24 @@ vi.mock('../lib/api', () => {
       deleted_decisions: 0,
       failed: [],
     })),
+    updateTableColumns: vi.fn(async (data: { table: 'alerts' | 'decisions'; viewport?: 'desktop' | 'mobile'; visible_columns: string[] }) => {
+      const viewport = data.viewport || 'desktop';
+      const preferences = {
+        alerts: {
+          desktop: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
+          mobile: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
+        },
+        decisions: {
+          desktop: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
+          mobile: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
+        },
+      };
+      preferences[data.table][viewport] = data.visible_columns;
+      return {
+      success: true,
+      table_column_preferences: preferences,
+      };
+    }),
     fetchConfig: vi.fn(async () => ({
       lookback_period: '1h',
       lookback_hours: 1,
@@ -145,6 +163,16 @@ vi.mock('../lib/api', () => {
       simulations_enabled: true,
       machine_features_enabled: false,
       origin_features_enabled: false,
+      table_column_preferences: {
+        alerts: {
+          desktop: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
+          mobile: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
+        },
+        decisions: {
+          desktop: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
+          mobile: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
+        },
+      },
     })),
   };
 });
@@ -208,7 +236,7 @@ describe('Decisions page', () => {
     expect(screen.queryByText('Mode')).not.toBeInTheDocument();
   });
 
-  test('keeps machine column hidden when the feature flag is disabled', async () => {
+  test('keeps optional columns hidden by default', async () => {
     render(
       <MemoryRouter initialEntries={['/decisions']}>
         <Decisions />
@@ -216,8 +244,30 @@ describe('Decisions page', () => {
     );
 
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+    expect(screen.queryByRole('columnheader', { name: 'ID' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Machine' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Origin' })).not.toBeInTheDocument();
+  });
+
+  test('saves decision table columns from the modal', async () => {
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole('button', { name: 'Choose decision table columns' }));
+    expect(screen.queryByRole('button', { name: 'Reset defaults' })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByLabelText('ID'));
+    await userEvent.click(screen.getByLabelText('Machine'));
+    await userEvent.click(screen.getByLabelText('Origin'));
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(screen.getByRole('columnheader', { name: 'ID' })).toBeInTheDocument());
+    expect(screen.getByRole('columnheader', { name: 'Machine' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Origin' })).toBeInTheDocument();
   });
 
   test('shows machine column and allows filtering by machine when enabled', async () => {
@@ -232,6 +282,16 @@ describe('Decisions page', () => {
       simulations_enabled: true,
       machine_features_enabled: true,
       origin_features_enabled: true,
+      table_column_preferences: {
+        alerts: {
+          desktop: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
+          mobile: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
+        },
+        decisions: {
+          desktop: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'machine', 'origin', 'alert'],
+          mobile: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'machine', 'origin', 'alert'],
+        },
+      },
     });
 
     render(
@@ -261,6 +321,16 @@ describe('Decisions page', () => {
       simulations_enabled: true,
       machine_features_enabled: false,
       origin_features_enabled: true,
+      table_column_preferences: {
+        alerts: {
+          desktop: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
+          mobile: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
+        },
+        decisions: {
+          desktop: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'origin', 'alert'],
+          mobile: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'origin', 'alert'],
+        },
+      },
     });
 
     render(

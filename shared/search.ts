@@ -621,12 +621,8 @@ function getFieldMap(page: SearchPage, features: SearchFeatureFlags): FieldMap {
 }
 
 function isFieldAvailable(definition: SearchFieldDefinition, features: SearchFeatureFlags): boolean {
-  if (definition.availability === 'machine') {
-    return features.machineEnabled === true;
-  }
-  if (definition.availability === 'origin') {
-    return features.originEnabled === true;
-  }
+  void definition;
+  void features;
   return true;
 }
 

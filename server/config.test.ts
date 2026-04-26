@@ -55,8 +55,6 @@ describe('config helpers', () => {
       CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY: 'true',
       CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY: 'true',
       CROWDSEC_SIMULATIONS_ENABLED: 'false',
-      CROWDSEC_ALWAYS_SHOW_MACHINE: 'true',
-      CROWDSEC_ALWAYS_SHOW_ORIGIN: 'true',
       CROWDSEC_LOOKBACK_PERIOD: '2d',
       CROWDSEC_REFRESH_INTERVAL: '5s',
       CROWDSEC_IDLE_REFRESH_INTERVAL: '1m',
@@ -89,8 +87,6 @@ describe('config helpers', () => {
     expect(config.legacyAlertOrigins).toEqual([]);
     expect(config.legacyAlertExtraScenarios).toEqual([]);
     expect(config.simulationsEnabled).toBe(false);
-    expect(config.alwaysShowMachine).toBe(true);
-    expect(config.alwaysShowOrigin).toBe(true);
     expect(config.lookbackMs).toBe(172_800_000);
     expect(config.refreshIntervalMs).toBe(5_000);
     expect(config.lapiRequestTimeoutMs).toBe(120_000);
@@ -117,8 +113,6 @@ describe('config helpers', () => {
     expect(config.legacyAlertOrigins).toEqual([]);
     expect(config.legacyAlertExtraScenarios).toEqual([]);
     expect(config.simulationsEnabled).toBe(false);
-    expect(config.alwaysShowMachine).toBe(false);
-    expect(config.alwaysShowOrigin).toBe(false);
     expect(config.notificationSecretKey).toBeUndefined();
     expect(config.notificationAllowPrivateAddresses).toBe(true);
     expect(config.lapiRequestTimeoutMs).toBe(30_000);
@@ -209,6 +203,24 @@ describe('config helpers', () => {
       expect(config.legacyAlertExtraScenarios).toEqual(['manual/web-ui']);
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn.mock.calls[0]?.[0]).toMatch(/deprecated/i);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test('createRuntimeConfig warns when removed column visibility env vars are still set', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      createRuntimeConfig({
+        CROWDSEC_ALWAYS_SHOW_MACHINE: 'true',
+        CROWDSEC_ALWAYS_SHOW_ORIGIN: 'true',
+      });
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toContain('CROWDSEC_ALWAYS_SHOW_MACHINE');
+      expect(warn.mock.calls[0]?.[0]).toContain('CROWDSEC_ALWAYS_SHOW_ORIGIN');
+      expect(warn.mock.calls[0]?.[0]).toMatch(/deprecated and ignored/i);
+      expect(warn.mock.calls[0]?.[0]).toMatch(/Columns dialog/i);
     } finally {
       warn.mockRestore();
     }

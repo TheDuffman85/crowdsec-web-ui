@@ -16,6 +16,75 @@ export interface PaginatedResponse<T> {
   selectable_ids: Array<string | number>;
 }
 
+export type TableColumnPreferenceTable = 'alerts' | 'decisions';
+export type TableColumnPreferenceViewport = 'desktop' | 'mobile';
+export type AlertTableColumnId = 'id' | 'time' | 'scenario' | 'country' | 'as' | 'source' | 'machine' | 'origin' | 'decisions';
+export type DecisionTableColumnId = 'id' | 'time' | 'scenario' | 'country' | 'as' | 'source' | 'action' | 'expiration' | 'machine' | 'origin' | 'alert';
+export type TableColumnId = AlertTableColumnId | DecisionTableColumnId;
+
+export interface TableColumnDefinition {
+  id: TableColumnId;
+  label: string;
+  defaultVisible: boolean;
+}
+
+export type TableColumnViewportPreferences = Record<TableColumnPreferenceViewport, TableColumnId[]>;
+export type TableColumnPreferences = Record<TableColumnPreferenceTable, TableColumnViewportPreferences>;
+
+export const TABLE_COLUMN_DEFINITIONS: Record<TableColumnPreferenceTable, TableColumnDefinition[]> = {
+  alerts: [
+    { id: 'id', label: 'ID', defaultVisible: false },
+    { id: 'time', label: 'Time', defaultVisible: true },
+    { id: 'scenario', label: 'Scenario', defaultVisible: true },
+    { id: 'country', label: 'Country', defaultVisible: true },
+    { id: 'as', label: 'AS', defaultVisible: true },
+    { id: 'source', label: 'IP / Range', defaultVisible: true },
+    { id: 'machine', label: 'Machine', defaultVisible: false },
+    { id: 'origin', label: 'Origin', defaultVisible: false },
+    { id: 'decisions', label: 'Decisions', defaultVisible: true },
+  ],
+  decisions: [
+    { id: 'id', label: 'ID', defaultVisible: false },
+    { id: 'time', label: 'Time', defaultVisible: true },
+    { id: 'scenario', label: 'Scenario', defaultVisible: true },
+    { id: 'country', label: 'Country', defaultVisible: true },
+    { id: 'as', label: 'AS', defaultVisible: true },
+    { id: 'source', label: 'IP / Range', defaultVisible: true },
+    { id: 'action', label: 'Action', defaultVisible: true },
+    { id: 'expiration', label: 'Expiration', defaultVisible: true },
+    { id: 'machine', label: 'Machine', defaultVisible: false },
+    { id: 'origin', label: 'Origin', defaultVisible: false },
+    { id: 'alert', label: 'Alert', defaultVisible: true },
+  ],
+};
+
+const DEFAULT_ALERT_TABLE_COLUMNS = TABLE_COLUMN_DEFINITIONS.alerts
+  .filter((column) => column.defaultVisible)
+  .map((column) => column.id);
+const DEFAULT_DECISION_TABLE_COLUMNS = TABLE_COLUMN_DEFINITIONS.decisions
+  .filter((column) => column.defaultVisible)
+  .map((column) => column.id);
+
+export const DEFAULT_TABLE_COLUMN_PREFERENCES: TableColumnPreferences = {
+  alerts: {
+    desktop: [...DEFAULT_ALERT_TABLE_COLUMNS],
+    mobile: [...DEFAULT_ALERT_TABLE_COLUMNS],
+  },
+  decisions: {
+    desktop: [...DEFAULT_DECISION_TABLE_COLUMNS],
+    mobile: [...DEFAULT_DECISION_TABLE_COLUMNS],
+  },
+};
+
+export const LEGACY_DEFAULT_TABLE_COLUMN_PREFERENCES: Record<TableColumnPreferenceTable, TableColumnId[]> = {
+  alerts: TABLE_COLUMN_DEFINITIONS.alerts
+    .filter((column) => column.defaultVisible)
+    .map((column) => column.id),
+  decisions: TABLE_COLUMN_DEFINITIONS.decisions
+    .filter((column) => column.defaultVisible)
+    .map((column) => column.id),
+};
+
 export type AlertMetaValue =
   | string
   | number
@@ -360,6 +429,13 @@ export interface ConfigResponse {
   simulations_enabled: boolean;
   machine_features_enabled: boolean;
   origin_features_enabled: boolean;
+  table_column_preferences?: TableColumnPreferences;
+}
+
+export interface UpdateTableColumnsRequest {
+  table: TableColumnPreferenceTable;
+  viewport?: TableColumnPreferenceViewport;
+  visible_columns: TableColumnId[];
 }
 
 export interface AddDecisionRequest {

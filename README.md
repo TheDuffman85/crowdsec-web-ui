@@ -230,8 +230,6 @@ Choose exactly one auth mode: password auth or mTLS auth.
 | `CROWDSEC_BOOTSTRAP_RETRY_DELAY` | `30s` | Delay between background retries when initial CrowdSec bootstrap fails. |
 | `CROWDSEC_BOOTSTRAP_RETRY_ENABLED` | `true` | Enables background bootstrap retry after startup or login failures. |
 | `CROWDSEC_SIMULATIONS_ENABLED` | `false` | Include simulation-mode alerts and decisions from CrowdSec and expose the related UI indicators. |
-| `CROWDSEC_ALWAYS_SHOW_MACHINE` | `false` | Always show machine information, even before multiple machines have been observed. |
-| `CROWDSEC_ALWAYS_SHOW_ORIGIN` | `false` | Always show decision origin information, even before multiple origins have been observed. |
 | `CROWDSEC_ALERT_INCLUDE_ORIGINS` | empty | Comma-separated list of exact origins to include when syncing alerts. |
 | `CROWDSEC_ALERT_EXCLUDE_ORIGINS` | empty | Comma-separated list of exact origins to drop after alert results are merged. |
 | `CROWDSEC_ALERT_INCLUDE_CAPI` | `false` | Add the Central API / community-blocklist alert feed. |
@@ -405,23 +403,15 @@ CrowdSec can run scenarios in **simulation mode**, where alerts and decisions ar
 - When enabled, the UI shows simulation badges, simulation filters, and separate simulation counts on the dashboard.
 - When left unset or set to `false`, the UI hides simulated alerts/decisions and the backend stops requesting simulated data from the CrowdSec LAPI.
 
-### Machine Visibility
+### Table Column Visibility
 
-In multi-machine deployments, CrowdSec alerts can include `machine_id` and `machine_alias`. The Web UI can surface that information in the Alerts and Decisions tables, but it stays hidden for single-machine setups unless you explicitly force it on.
+The Alerts and Decisions tables include a Columns button that lets you choose which data columns are visible. Desktop and mobile layouts are saved separately in the application database and apply globally to the Web UI.
 
-- `CROWDSEC_ALWAYS_SHOW_MACHINE=false` by default.
-- When left unset or set to `false`, the UI enables machine visibility only after this app has observed more than one distinct non-empty `machine_id` during the current runtime.
-- Set `CROWDSEC_ALWAYS_SHOW_MACHINE=true` to always show the Machine column/card, even before multiple machines have been observed.
-- Displayed `machine` values prefer `machine_alias` and fall back to `machine_id`.
-
-### Origin Visibility
-
-CrowdSec decisions also carry an `origin`, which the Web UI can surface in the Alerts and Decisions tables when multiple distinct origins are present.
-
-- `CROWDSEC_ALWAYS_SHOW_ORIGIN=false` by default.
-- When left unset or set to `false`, the UI enables origin visibility only after this app has observed more than one distinct non-empty decision origin during the current lookback window.
-- Set `CROWDSEC_ALWAYS_SHOW_ORIGIN=true` to always show the Origin column, even before multiple origins have been observed.
-- Alerts with decisions from more than one origin display `Mixed`, while search still matches each underlying origin value.
+- `ID`, `Machine`, and `Origin` are hidden by default.
+- The app automatically uses the saved desktop or mobile column layout for the current screen size.
+- Machine values prefer `machine_alias` and fall back to `machine_id`.
+- Alerts with decisions from more than one origin display `Mixed` when the Origin column is visible.
+- Hidden columns remain searchable with the advanced search syntax, including `id:`, `machine:`, and `origin:`.
 
 ### Search Syntax
 

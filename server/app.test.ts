@@ -380,7 +380,6 @@ function createController(options: {
     BASE_PATH: '/crowdsec',
     CROWDSEC_URL: 'http://crowdsec:8080',
     CROWDSEC_SIMULATIONS_ENABLED: options.simulationsEnabled === false ? 'false' : 'true',
-    CROWDSEC_ALWAYS_SHOW_MACHINE: 'false',
     CROWDSEC_LOOKBACK_PERIOD: '1m',
     CROWDSEC_REFRESH_INTERVAL: '30s',
     VITE_VERSION: '1.0.0',
@@ -611,12 +610,23 @@ describe('createApp', () => {
       simulations_enabled: boolean;
       machine_features_enabled: boolean;
       origin_features_enabled: boolean;
+      table_column_preferences: { alerts: { desktop: string[]; mobile: string[] }; decisions: { desktop: string[]; mobile: string[] } };
     })).toEqual(
       expect.objectContaining({
         lookback_period: '1m',
         simulations_enabled: true,
-        machine_features_enabled: false,
+        machine_features_enabled: true,
         origin_features_enabled: true,
+        table_column_preferences: {
+          alerts: {
+            desktop: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
+            mobile: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
+          },
+          decisions: {
+            desktop: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
+            mobile: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
+          },
+        },
       }),
     );
 
@@ -703,6 +713,70 @@ describe('createApp', () => {
     );
     expect(refreshUpdate.status).toBe(200);
     expect(((await refreshUpdate.json()) as { new_interval_ms: number }).new_interval_ms).toBe(5000);
+
+    const columnUpdate = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/config/table-columns', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ table: 'alerts', visible_columns: ['id', 'time', 'machine', 'origin'] }),
+      }),
+    );
+    expect(columnUpdate.status).toBe(200);
+    expect((await columnUpdate.json()) as { table_column_preferences: { alerts: { desktop: string[] } } }).toEqual(
+      expect.objectContaining({
+        table_column_preferences: expect.objectContaining({
+          alerts: expect.objectContaining({
+            desktop: ['id', 'time', 'machine', 'origin'],
+          }),
+        }),
+      }),
+    );
+
+    const mobileColumnUpdate = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/config/table-columns', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ table: 'alerts', viewport: 'mobile', visible_columns: ['id', 'source'] }),
+      }),
+    );
+    expect(mobileColumnUpdate.status).toBe(200);
+    expect((await mobileColumnUpdate.json()) as { table_column_preferences: { alerts: { desktop: string[]; mobile: string[] } } }).toEqual(
+      expect.objectContaining({
+        table_column_preferences: expect.objectContaining({
+          alerts: expect.objectContaining({
+            desktop: ['id', 'time', 'machine', 'origin'],
+            mobile: ['id', 'source'],
+          }),
+        }),
+      }),
+    );
+
+    const invalidColumnUpdate = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/config/table-columns', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ table: 'alerts', visible_columns: ['time', 'alert'] }),
+      }),
+    );
+    expect(invalidColumnUpdate.status).toBe(400);
+
+    const invalidTableUpdate = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/config/table-columns', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ table: 'dashboard', visible_columns: ['time'] }),
+      }),
+    );
+    expect(invalidTableUpdate.status).toBe(400);
+
+    const invalidViewportUpdate = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/config/table-columns', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ table: 'alerts', viewport: 'tablet', visible_columns: ['time'] }),
+      }),
+    );
+    expect(invalidViewportUpdate.status).toBe(400);
 
     const addDecision = await controller.fetch(
       new Request('http://localhost/crowdsec/api/decisions', {
@@ -833,35 +907,7 @@ describe('createApp', () => {
     destroyTempDir();
   });
 
-  test('reports machine features enabled immediately when always-show override is configured', async () => {
-    const { controller } = createController({
-      env: {
-        CROWDSEC_ALWAYS_SHOW_MACHINE: 'true',
-      },
-    });
-
-    const response = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
-    expect(response.status).toBe(200);
-    expect(((await response.json()) as { machine_features_enabled: boolean }).machine_features_enabled).toBe(true);
-  });
-
-  test('reports origin features enabled immediately when always-show override is configured', async () => {
-    const { controller, database } = createController({
-      env: {
-        CROWDSEC_ALWAYS_SHOW_ORIGIN: 'true',
-      },
-    });
-
-    const response = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
-    expect(response.status).toBe(200);
-    expect(((await response.json()) as { origin_features_enabled: boolean }).origin_features_enabled).toBe(true);
-
-    controller.stopBackgroundTasks();
-    database.close();
-    destroyTempDir();
-  });
-
-  test('enables machine features after multiple machine ids are observed and includes machine in decision payloads', async () => {
+  test('reports table column defaults and includes machine in decision payloads', async () => {
     const firstAlert = sampleAlert({
       id: 101,
       uuid: 'alert-101',
@@ -916,7 +962,20 @@ describe('createApp', () => {
     expect(alertsResponse.status).toBe(200);
 
     const configResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
-    expect(((await configResponse.json()) as { machine_features_enabled: boolean }).machine_features_enabled).toBe(true);
+    expect((await configResponse.json()) as { table_column_preferences: { alerts: { desktop: string[]; mobile: string[] }; decisions: { desktop: string[]; mobile: string[] } } }).toEqual(
+      expect.objectContaining({
+        table_column_preferences: expect.objectContaining({
+          alerts: expect.objectContaining({
+            desktop: expect.not.arrayContaining(['id', 'machine', 'origin']),
+            mobile: expect.not.arrayContaining(['id', 'machine', 'origin']),
+          }),
+          decisions: expect.objectContaining({
+            desktop: expect.not.arrayContaining(['id', 'machine', 'origin']),
+            mobile: expect.not.arrayContaining(['id', 'machine', 'origin']),
+          }),
+        }),
+      }),
+    );
 
     const decisionsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions'));
     expect(decisionsResponse.status).toBe(200);
@@ -926,83 +985,6 @@ describe('createApp', () => {
         expect.objectContaining({ id: 1020, machine: 'machine-2' }),
       ]),
     );
-  });
-
-  test('keeps machine features disabled when only cached alerts use one machine id', async () => {
-    const cachedAlert = sampleAlert({
-      id: 1,
-      uuid: 'alert-1',
-      machine_id: 'machine-1',
-      machine_alias: 'localhost',
-      decisions: [
-        {
-          id: 10,
-          type: 'ban',
-          value: '1.2.3.4',
-          duration: '30m',
-          origin: 'manual',
-          simulated: false,
-        },
-      ],
-    });
-
-    const { controller, database } = createController({
-      alertDetailPayload: sampleAlert({
-        id: 1,
-        uuid: 'alert-1',
-        machine_id: 'machine-2',
-      }),
-    });
-
-    seedAlert(database, cachedAlert);
-
-    const detailResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts/1'));
-    expect(detailResponse.status).toBe(200);
-
-    const configResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
-    expect(((await configResponse.json()) as { machine_features_enabled: boolean }).machine_features_enabled).toBe(false);
-  });
-
-  test('enables origin features after multiple decision origins are observed', async () => {
-    const { controller, database } = createController();
-
-    seedAlert(database, sampleAlert({
-      id: 1,
-      uuid: 'alert-1',
-      decisions: [{ id: 10, value: '1.2.3.4', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'manual', simulated: false }],
-    }));
-    seedAlert(database, sampleAlert({
-      id: 2,
-      uuid: 'alert-2',
-      source: { ip: '5.6.7.8', value: '5.6.7.8', cn: 'US', as_name: 'AWS' },
-      decisions: [{ id: 20, value: '5.6.7.8', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'cscli', simulated: false }],
-    }));
-
-    const response = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
-    expect(response.status).toBe(200);
-    expect(((await response.json()) as { origin_features_enabled: boolean }).origin_features_enabled).toBe(true);
-
-    controller.stopBackgroundTasks();
-    database.close();
-    destroyTempDir();
-  });
-
-  test('keeps origin features disabled when only one cached decision origin exists', async () => {
-    const { controller, database } = createController();
-
-    seedAlert(database, sampleAlert({
-      id: 1,
-      uuid: 'alert-1',
-      decisions: [{ id: 10, value: '1.2.3.4', stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(), type: 'ban', origin: 'manual', simulated: false }],
-    }));
-
-    const response = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
-    expect(response.status).toBe(200);
-    expect(((await response.json()) as { origin_features_enabled: boolean }).origin_features_enabled).toBe(false);
-
-    controller.stopBackgroundTasks();
-    database.close();
-    destroyTempDir();
   });
 
   test('matches alert search queries against decision origins', async () => {
@@ -1066,9 +1048,6 @@ describe('createApp', () => {
       }),
     ];
     const { controller, database } = createController({
-      env: {
-        CROWDSEC_ALWAYS_SHOW_MACHINE: 'true',
-      },
       fetchResolver: (url) => {
         if (url.includes('/v1/alerts?')) {
           return Response.json(searchAlerts);
@@ -1128,10 +1107,6 @@ describe('createApp', () => {
       }),
     ];
     const { controller, database } = createController({
-      env: {
-        CROWDSEC_ALWAYS_SHOW_MACHINE: 'true',
-        CROWDSEC_ALWAYS_SHOW_ORIGIN: 'true',
-      },
       fetchResolver: (url) => {
         if (url.includes('/v1/alerts?')) {
           return Response.json(searchAlerts);
@@ -1168,11 +1143,7 @@ describe('createApp', () => {
   });
 
   test('returns a 400 for invalid advanced search queries', async () => {
-    const { controller, database } = createController({
-      env: {
-        CROWDSEC_ALWAYS_SHOW_ORIGIN: 'true',
-      },
-    });
+    const { controller, database } = createController();
 
     seedAlert(database, sampleAlert({
       id: 1,

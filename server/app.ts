@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { Hono } from 'hono';
 import { compress } from 'hono/compress';
 import { serveStatic } from '@hono/node-server/serve-static';
+import { DEFAULT_TABLE_COLUMN_PREFERENCES, TABLE_COLUMN_DEFINITIONS } from '../shared/contracts';
 import type {
   AddDecisionRequest,
   AlertDecision,
@@ -27,11 +28,16 @@ import type {
   StatsAlert,
   StatsDecision,
   SyncStatus,
+  TableColumnId,
+  TableColumnPreferences,
+  TableColumnPreferenceTable,
+  TableColumnPreferenceViewport,
+  UpdateTableColumnsRequest,
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
   UpdateCheckResponse,
 } from '../shared/contracts';
-import { normalizeMachineId, resolveMachineName } from '../shared/machine';
+import { resolveMachineName } from '../shared/machine';
 import { collectDistinctOrigins, normalizeOrigin } from '../shared/origin';
 import { compileAlertSearch, compileDecisionSearch, type SearchParseError } from '../shared/search';
 import { createRuntimeConfig, getIntervalName, parseRefreshInterval, type RuntimeConfig } from './config';
@@ -82,6 +88,8 @@ export interface AppController {
 interface PersistedConfig {
   refresh_interval_ms?: number;
 }
+
+const TABLE_COLUMN_PREFERENCES_META_KEY = 'table_column_preferences';
 
 interface CacheState {
   isInitialized: boolean;
@@ -355,7 +363,6 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   Alert Sync Min Chunk: ${getIntervalName(config.alertSyncMinChunkMs)}
   Auth Mode: ${config.crowdsecAuthMode}
   Simulations: ${config.simulationsEnabled ? 'Enabled' : 'Disabled'}
-  Always Show Machine: ${config.alwaysShowMachine ? 'Enabled' : 'Disabled'}
   Alert Filter Mode: ${config.alertFilterMode}
   Alert Include Origins: ${config.alertIncludeOrigins.length > 0 ? config.alertIncludeOrigins.join(', ') : 'Disabled'}
   Alert Exclude Origins: ${config.alertExcludeOrigins.length > 0 ? config.alertExcludeOrigins.join(', ') : 'Disabled'}
@@ -410,17 +417,15 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       const pageRequest = getPageRequest(context);
       if (pageRequest) {
         const filters = getAlertListFilters(context);
-        const machineFeaturesEnabled = isMachineFeatureEnabled();
-        const originFeaturesEnabled = isOriginFeatureEnabled();
         const compiledSearch = compileAlertSearch(filters.q, {
-          machineEnabled: machineFeaturesEnabled,
-          originEnabled: originFeaturesEnabled,
+          machineEnabled: true,
+          originEnabled: true,
         });
         if (!compiledSearch.ok) {
           return context.json(toSearchErrorResponse(compiledSearch.error), 400);
         }
         const filteredAlerts = alerts.filter((alert) =>
-          matchesAlertListFilters(alert, filters, machineFeaturesEnabled) &&
+          matchesAlertListFilters(alert, filters) &&
           compiledSearch.predicate(alert),
         );
         return context.json(toPaginatedResponse(
@@ -541,17 +546,15 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       const pageRequest = getPageRequest(context);
       if (pageRequest) {
         const filters = getDecisionListFilters(context);
-        const machineFeaturesEnabled = isMachineFeatureEnabled();
-        const originFeaturesEnabled = isOriginFeatureEnabled();
         const compiledSearch = compileDecisionSearch(filters.q, {
-          machineEnabled: machineFeaturesEnabled,
-          originEnabled: originFeaturesEnabled,
+          machineEnabled: true,
+          originEnabled: true,
         });
         if (!compiledSearch.ok) {
           return context.json(toSearchErrorResponse(compiledSearch.error), 400);
         }
         const filteredDecisions = decisions.filter((decision) =>
-          matchesDecisionListFilters(decision, filters, machineFeaturesEnabled) &&
+          matchesDecisionListFilters(decision, filters) &&
           compiledSearch.predicate(decision),
         );
         return context.json(toPaginatedResponse(
@@ -582,11 +585,55 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       lapi_status: lapiClient.getStatus(),
       sync_status: syncStatus,
       simulations_enabled: config.simulationsEnabled,
-      machine_features_enabled: isMachineFeatureEnabled(),
-      origin_features_enabled: isOriginFeatureEnabled(),
+      machine_features_enabled: true,
+      origin_features_enabled: true,
+      table_column_preferences: loadTableColumnPreferences(database),
     };
 
     return context.json(payload);
+  });
+
+  app.put(`${config.basePath}/api/config/table-columns`, ensureAuth, async (context) => {
+    try {
+      const body = await context.req.json<UpdateTableColumnsRequest>();
+      const table = body.table;
+      if (!isTableColumnPreferenceTable(table)) {
+        return context.json({ error: 'Invalid table. Must be one of: alerts, decisions' }, 400);
+      }
+      const viewport = body.viewport || 'desktop';
+      if (!isTableColumnPreferenceViewport(viewport)) {
+        return context.json({ error: 'Invalid viewport. Must be one of: desktop, mobile' }, 400);
+      }
+
+      if (!Array.isArray(body.visible_columns)) {
+        return context.json({ error: 'visible_columns must be an array' }, 400);
+      }
+
+      const validColumnIds = getTableColumnIdSet(table);
+      const visibleColumns: TableColumnId[] = [];
+      const seenColumnIds = new Set<string>();
+      for (const columnId of body.visible_columns) {
+        if (typeof columnId !== 'string' || !validColumnIds.has(columnId as TableColumnId)) {
+          return context.json({ error: `Invalid column for ${table}: ${String(columnId)}` }, 400);
+        }
+        if (!seenColumnIds.has(columnId)) {
+          seenColumnIds.add(columnId);
+          visibleColumns.push(columnId as TableColumnId);
+        }
+      }
+
+      const nextPreferences = loadTableColumnPreferences(database);
+      nextPreferences[table][viewport] = visibleColumns;
+      saveTableColumnPreferences(database, nextPreferences);
+
+      return context.json({
+        success: true,
+        table_column_preferences: nextPreferences,
+      });
+    } catch (error: any) {
+      console.error('Error updating table columns:', error.message);
+      return context.json({ error: 'Failed to update table columns' }, 500);
+    }
   });
 
   app.put(`${config.basePath}/api/config/refresh-interval`, ensureAuth, async (context) => {
@@ -2676,58 +2723,102 @@ ${errorSummary}  Status: ${syncSummary.state}
     void ensureBootstrapReady('startup');
   }
 
-  function isMachineFeatureEnabled(): boolean {
-    if (config.alwaysShowMachine) {
-      return true;
-    }
+}
 
-    const since = new Date(Date.now() - config.lookbackMs).toISOString();
-    const machineIds = new Set<string>();
+function cloneDefaultTableColumnPreferences(): TableColumnPreferences {
+  return {
+    alerts: {
+      desktop: [...DEFAULT_TABLE_COLUMN_PREFERENCES.alerts.desktop],
+      mobile: [...DEFAULT_TABLE_COLUMN_PREFERENCES.alerts.mobile],
+    },
+    decisions: {
+      desktop: [...DEFAULT_TABLE_COLUMN_PREFERENCES.decisions.desktop],
+      mobile: [...DEFAULT_TABLE_COLUMN_PREFERENCES.decisions.mobile],
+    },
+  };
+}
 
-    for (const row of database.getAlertsSince(since)) {
-      try {
-        const alert = JSON.parse(row.raw_data) as AlertRecord;
-        const machineId = normalizeMachineId(alert.machine_id);
-        if (!machineId) continue;
+function getTableColumnIdSet(table: TableColumnPreferenceTable): Set<TableColumnId> {
+  return new Set(TABLE_COLUMN_DEFINITIONS[table].map((column) => column.id));
+}
 
-        machineIds.add(machineId);
-        if (machineIds.size > 1) {
-          return true;
-        }
-      } catch (error) {
-        console.error('Failed to parse cached alert while evaluating machine visibility:', error);
-      }
-    }
+function isTableColumnPreferenceTable(value: unknown): value is TableColumnPreferenceTable {
+  return value === 'alerts' || value === 'decisions';
+}
 
-    return false;
+function isTableColumnPreferenceViewport(value: unknown): value is TableColumnPreferenceViewport {
+  return value === 'desktop' || value === 'mobile';
+}
+
+function normalizeTableColumnIds(table: TableColumnPreferenceTable, value: unknown): TableColumnId[] | null {
+  if (!Array.isArray(value)) {
+    return null;
   }
 
-  function isOriginFeatureEnabled(): boolean {
-    if (config.alwaysShowOrigin) {
-      return true;
+  const validColumnIds = getTableColumnIdSet(table);
+  const seenColumnIds = new Set<string>();
+  const nextColumns: TableColumnId[] = [];
+  for (const columnId of value) {
+    if (typeof columnId !== 'string' || !validColumnIds.has(columnId as TableColumnId) || seenColumnIds.has(columnId)) {
+      continue;
+    }
+    seenColumnIds.add(columnId);
+    nextColumns.push(columnId as TableColumnId);
+  }
+  return nextColumns;
+}
+
+function normalizeTableColumnPreferences(value: unknown): TableColumnPreferences {
+  const preferences = cloneDefaultTableColumnPreferences();
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return preferences;
+  }
+
+  const input = value as Partial<Record<TableColumnPreferenceTable, unknown>>;
+  for (const table of ['alerts', 'decisions'] as const) {
+    const rawPreference = input[table];
+    if (Array.isArray(rawPreference)) {
+      const legacyColumns = normalizeTableColumnIds(table, rawPreference);
+      if (legacyColumns) {
+        preferences[table] = {
+          desktop: [...legacyColumns],
+          mobile: [...legacyColumns],
+        };
+      }
+      continue;
     }
 
-    const since = new Date(Date.now() - config.lookbackMs).toISOString();
-    const now = new Date().toISOString();
-    const origins = new Set<string>();
+    if (!rawPreference || typeof rawPreference !== 'object') {
+      continue;
+    }
 
-    for (const row of database.getDecisionsSince(since, now)) {
-      try {
-        const decision = JSON.parse(row.raw_data) as AlertDecision;
-        const origin = normalizeOrigin(decision.origin);
-        if (!origin) continue;
-
-        origins.add(origin);
-        if (origins.size > 1) {
-          return true;
-        }
-      } catch (error) {
-        console.error('Failed to parse cached decision while evaluating origin visibility:', error);
+    const viewportInput = rawPreference as Partial<Record<TableColumnPreferenceViewport, unknown>>;
+    for (const viewport of ['desktop', 'mobile'] as const) {
+      const columns = normalizeTableColumnIds(table, viewportInput[viewport]);
+      if (columns) {
+        preferences[table][viewport] = columns;
       }
     }
-
-    return false;
   }
+
+  return preferences;
+}
+
+function loadTableColumnPreferences(database: CrowdsecDatabase): TableColumnPreferences {
+  try {
+    const row = database.getMeta(TABLE_COLUMN_PREFERENCES_META_KEY);
+    if (!row?.value) {
+      return cloneDefaultTableColumnPreferences();
+    }
+    return normalizeTableColumnPreferences(JSON.parse(row.value));
+  } catch (error) {
+    console.error('Error loading table column preferences from database:', error);
+    return cloneDefaultTableColumnPreferences();
+  }
+}
+
+function saveTableColumnPreferences(database: CrowdsecDatabase, preferences: TableColumnPreferences): void {
+  database.setMeta(TABLE_COLUMN_PREFERENCES_META_KEY, JSON.stringify(normalizeTableColumnPreferences(preferences)));
 }
 
 function loadPersistedConfig(database: CrowdsecDatabase): PersistedConfig {
@@ -3307,7 +3398,7 @@ function parseTimezoneOffset(context: HonoContext): number {
   return Number.isFinite(value) ? value : 0;
 }
 
-function matchesAlertListFilters(alert: SlimAlert, filters: AlertListFilters, machineFeaturesEnabled: boolean): boolean {
+function matchesAlertListFilters(alert: SlimAlert, filters: AlertListFilters): boolean {
   if (!matchesSimulationFilter(alert.simulated === true, filters.simulation)) return false;
 
   const scenario = (alert.scenario || '').toLowerCase();
@@ -3336,7 +3427,7 @@ function matchesAlertListFilters(alert: SlimAlert, filters: AlertListFilters, ma
   return true;
 }
 
-function matchesDecisionListFilters(decision: DecisionListItem, filters: DecisionListFilters, _machineFeaturesEnabled: boolean): boolean {
+function matchesDecisionListFilters(decision: DecisionListItem, filters: DecisionListFilters): boolean {
   if (!filters.showDuplicates && decision.is_duplicate) return false;
   if (filters.alertId && String(decision.detail.alert_id) !== filters.alertId) return false;
   if (!matchesSimulationFilter(decision.simulated === true, filters.simulation)) return false;

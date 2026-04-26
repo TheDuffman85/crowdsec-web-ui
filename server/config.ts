@@ -20,8 +20,6 @@ export interface RuntimeConfig {
   legacyAlertOrigins: string[];
   legacyAlertExtraScenarios: string[];
   simulationsEnabled: boolean;
-  alwaysShowMachine: boolean;
-  alwaysShowOrigin: boolean;
   lookbackPeriod: string;
   lookbackMs: number;
   refreshIntervalMs: number;
@@ -202,12 +200,26 @@ function parseAlertFilterConfig(env: NodeJS.ProcessEnv): Pick<
   };
 }
 
+function warnRemovedColumnVisibilityEnv(env: NodeJS.ProcessEnv): void {
+  const removedVars = [
+    env.CROWDSEC_ALWAYS_SHOW_MACHINE !== undefined ? 'CROWDSEC_ALWAYS_SHOW_MACHINE' : undefined,
+    env.CROWDSEC_ALWAYS_SHOW_ORIGIN !== undefined ? 'CROWDSEC_ALWAYS_SHOW_ORIGIN' : undefined,
+  ].filter((name): name is string => Boolean(name));
+
+  if (removedVars.length === 0) return;
+
+  console.warn(
+    `${removedVars.join(' and ')} ${removedVars.length === 1 ? 'is' : 'are'} deprecated and ignored. Use the table Columns dialog to configure Machine and Origin visibility.`,
+  );
+}
+
 export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig {
   const lookbackPeriod = env.CROWDSEC_LOOKBACK_PERIOD || '168h';
   const refreshIntervalMs = parseRefreshInterval(env.CROWDSEC_REFRESH_INTERVAL || '30s');
   const crowdsecAuth = createCrowdsecAuthConfig(env);
   const notificationSecretKey = env.NOTIFICATION_SECRET_KEY?.trim() || undefined;
   const alertFilterConfig = parseAlertFilterConfig(env);
+  warnRemovedColumnVisibilityEnv(env);
 
   return {
     port: Number(env.PORT || 3000),
@@ -220,8 +232,6 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
     crowdsecTlsCaCertPath: crowdsecAuth.mode === 'mtls' ? crowdsecAuth.caCertPath : undefined,
     ...alertFilterConfig,
     simulationsEnabled: parseBooleanEnv(env.CROWDSEC_SIMULATIONS_ENABLED, false),
-    alwaysShowMachine: parseBooleanEnv(env.CROWDSEC_ALWAYS_SHOW_MACHINE, false),
-    alwaysShowOrigin: parseBooleanEnv(env.CROWDSEC_ALWAYS_SHOW_ORIGIN, false),
     lookbackPeriod,
     lookbackMs: parseLookbackToMs(lookbackPeriod),
     refreshIntervalMs,

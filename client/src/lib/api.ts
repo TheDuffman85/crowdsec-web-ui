@@ -16,6 +16,8 @@ import type {
   SlimAlert,
   StatsAlert,
   StatsDecision,
+  TableColumnPreferences,
+  UpdateTableColumnsRequest,
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
 } from '../types';
@@ -193,6 +195,17 @@ export async function addDecision(data: AddDecisionRequest): Promise<unknown> {
 
 export async function fetchConfig(): Promise<ConfigResponse> {
     return fetchJson<ConfigResponse>('/api/config', undefined, 'Failed to fetch config');
+}
+
+export async function updateTableColumns(data: UpdateTableColumnsRequest): Promise<{
+    success: boolean;
+    table_column_preferences: TableColumnPreferences;
+}> {
+    return sendJson('/api/config/table-columns', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    }, 'Failed to update table columns');
 }
 
 async function sendJson<T>(input: string, init: RequestInit, defaultMsg: string): Promise<T> {
