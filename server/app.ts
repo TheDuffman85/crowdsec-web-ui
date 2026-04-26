@@ -1020,6 +1020,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
   });
 
+  app.use(`${config.basePath}/assets/*`, async (context, next) => {
+    context.header('Cache-Control', 'public, max-age=31536000, immutable');
+    await next();
+  });
+
   app.use(
     `${config.basePath}/assets/*`,
     serveStatic({
@@ -1027,6 +1032,12 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       rewriteRequestPath: (requestPath) => (config.basePath ? requestPath.replace(config.basePath, '') : requestPath),
     }),
   );
+
+  app.get(`${config.basePath}/assets/*`, (context) => {
+    context.header('Cache-Control', 'no-store, no-cache, must-revalidate');
+    context.header('Pragma', 'no-cache');
+    return context.text('Not Found', 404);
+  });
 
   staticFiles.forEach((file) => {
     app.use(
@@ -1066,6 +1077,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         html = html.replace(/src="\.\//g, `src="${config.basePath}/`);
       }
 
+      context.header('Cache-Control', 'no-store, no-cache, must-revalidate');
+      context.header('Pragma', 'no-cache');
+      context.header('Expires', '0');
       return context.html(html);
     } catch {
       return context.text('Not Found', 404);

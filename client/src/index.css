@@ -37,3 +37,11 @@ g:focus,
 path:focus {
   outline: none !important;
 }
+
+.sortable-ghost {
+  @apply opacity-40;
+}
+
+.sortable-chosen {
+  @apply bg-primary-50 dark:bg-primary-900/20;
+}

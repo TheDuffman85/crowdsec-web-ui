@@ -234,6 +234,7 @@ vi.mock('../lib/api', () => {
 
 afterEach(() => {
   refreshSignalMock = 0;
+  window.localStorage.clear();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -290,6 +291,12 @@ async function flushAlertSearchDebounce(): Promise<void> {
   });
 }
 
+function getVisibleColumnHeaderNames(): string[] {
+  return screen.getAllByRole('columnheader')
+    .map((header) => header.textContent?.trim() || '')
+    .filter(Boolean);
+}
+
 describe('Alerts page', () => {
   test('shows simulated alerts with an inline scenario badge and standard decision actions', async () => {
     render(
@@ -333,8 +340,43 @@ describe('Alerts page', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(screen.getByRole('columnheader', { name: 'ID' })).toBeInTheDocument());
+    expect(getVisibleColumnHeaderNames()[0]).toBe('ID');
     expect(screen.getByRole('columnheader', { name: 'Machine' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Origin' })).toBeInTheDocument();
+  });
+
+  test('uses saved alert column order', async () => {
+    vi.mocked(api.fetchConfig).mockResolvedValue({
+      lookback_period: '1h',
+      lookback_hours: 1,
+      lookback_days: 1,
+      refresh_interval: 30000,
+      current_interval_name: '30s',
+      lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
+      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+      simulations_enabled: true,
+      machine_features_enabled: true,
+      origin_features_enabled: true,
+      table_column_preferences: {
+        alerts: {
+          desktop: ['source', 'time', 'decisions', 'scenario'],
+          mobile: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
+        },
+        decisions: {
+          desktop: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
+          mobile: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
+        },
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+    expect(getVisibleColumnHeaderNames()).toEqual(['IP / Range', 'Time', 'Decisions', 'Scenario', 'Actions']);
   });
 
   test('keeps unsaved column edits while switching modal layouts', async () => {
@@ -355,6 +397,48 @@ describe('Alerts page', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'desktop' }));
     expect(screen.getByLabelText('ID')).toBeChecked();
+  });
+
+  test('syncs alert modal columns from desktop to mobile', async () => {
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole('button', { name: 'Choose alert table columns' }));
+    await userEvent.click(screen.getByLabelText('ID'));
+    await userEvent.click(screen.getByRole('button', { name: 'Sync to mobile' }));
+    await userEvent.click(screen.getByRole('button', { name: 'mobile' }));
+
+    expect(screen.getByLabelText('ID')).toBeChecked();
+    expect(screen.getByRole('button', { name: 'Sync to desktop' })).toBeInTheDocument();
+  });
+
+  test('keeps saved order for hidden alert columns when they are enabled later', async () => {
+    window.localStorage.setItem('crowdsec-web-ui:alerts:table-column-order', JSON.stringify({
+      desktop: ['time', 'scenario', 'country', 'as', 'source', 'id', 'decisions', 'machine', 'origin'],
+      mobile: ['time', 'scenario', 'country', 'as', 'source', 'decisions', 'id', 'machine', 'origin'],
+    }));
+
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole('button', { name: 'Choose alert table columns' }));
+    await userEvent.click(screen.getByLabelText('ID'));
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(screen.getByRole('columnheader', { name: 'ID' })).toBeInTheDocument());
+    const headers = getVisibleColumnHeaderNames();
+    expect(headers.indexOf('IP / Range')).toBeLessThan(headers.indexOf('ID'));
+    expect(headers.indexOf('ID')).toBeLessThan(headers.indexOf('Decisions'));
   });
 
   test('uses separate alert column preferences for mobile and desktop', async () => {

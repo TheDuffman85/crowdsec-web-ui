@@ -13,12 +13,12 @@ import { TimeDisplay } from "../components/TimeDisplay";
 import { EventCard } from "../components/EventCard";
 import { getCountryName } from "../lib/utils";
 import { useTableColumnViewport } from "../lib/useTableColumnViewport";
-import { DEFAULT_TABLE_COLUMN_PREFERENCES } from "../../../shared/contracts";
+import { DEFAULT_TABLE_COLUMN_PREFERENCES, TABLE_COLUMN_DEFINITIONS } from "../../../shared/contracts";
 import { resolveMachineName } from "../../../shared/machine";
 import { collectDistinctOrigins, getOriginDisplayValue, getOriginTitle } from "../../../shared/origin";
 import { compileAlertSearch, getSearchHelpDefinition, type SearchParseError } from "../../../shared/search";
 import { Info, ExternalLink, Shield, ShieldBan, Trash2, X, AlertCircle, Columns3 } from "lucide-react";
-import type { AlertRecord, AlertSource, ApiPermissionError, BulkDeleteResult, DecisionListItem, SimulationFilter, SlimAlert, TableColumnId, TableColumnPreferenceViewport, TableColumnPreferences } from '../types';
+import type { AlertRecord, AlertSource, ApiPermissionError, BulkDeleteResult, DecisionListItem, SimulationFilter, SlimAlert, TableColumnId, TableColumnPreferences, TableColumnViewportPreferences } from '../types';
 
 type AlertListItem = SlimAlert;
 type AlertSelection = AlertListItem | AlertRecord;
@@ -166,6 +166,12 @@ export function Alerts() {
         [alerts, searchValidationFeatures],
     );
     const visibleAlertColumns = tableColumnPreferences.alerts[tableColumnViewport];
+    const alertColumnDefinitionById = useMemo(
+        () => new Map<TableColumnId, (typeof TABLE_COLUMN_DEFINITIONS.alerts)[number]>(
+            TABLE_COLUMN_DEFINITIONS.alerts.map((column) => [column.id, column]),
+        ),
+        [],
+    );
     const visibleAlertColumnCount = visibleAlertColumns.length;
     const alertTableColSpan = visibleAlertColumnCount + 2;
     const isAlertColumnVisible = useCallback((columnId: TableColumnId) => (
@@ -207,15 +213,25 @@ export function Alerts() {
         return nextConfig;
     }, []);
 
-    const saveAlertColumns = useCallback(async (viewport: TableColumnPreferenceViewport, visibleColumns: TableColumnId[]) => {
+    const saveAlertColumns = useCallback(async (visiblePreferences: TableColumnViewportPreferences) => {
         setColumnsSaving(true);
         try {
-            const result = await updateTableColumns({ table: 'alerts', viewport, visible_columns: visibleColumns });
-            setTableColumnPreferences(result.table_column_preferences);
+            const [, mobileResult] = await Promise.all([
+                updateTableColumns({ table: 'alerts', viewport: 'desktop', visible_columns: visiblePreferences.desktop }),
+                updateTableColumns({ table: 'alerts', viewport: 'mobile', visible_columns: visiblePreferences.mobile }),
+            ]);
+            const nextPreferences = {
+                ...mobileResult.table_column_preferences,
+                alerts: {
+                    ...mobileResult.table_column_preferences.alerts,
+                    ...visiblePreferences,
+                },
+            };
+            setTableColumnPreferences(nextPreferences);
             if (configRef.current) {
                 configRef.current = {
                     ...configRef.current,
-                    tableColumnPreferences: result.table_column_preferences,
+                    tableColumnPreferences: nextPreferences,
                 };
             }
             setShowColumnsModal(false);
@@ -957,33 +973,18 @@ export function Alerts() {
                                         className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                                     />
                                 </th>
-                                {isAlertColumnVisible('id') && (
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">ID</th>
-                                )}
-                                {isAlertColumnVisible('time') && (
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Time</th>
-                                )}
-                                {isAlertColumnVisible('scenario') && (
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Scenario</th>
-                                )}
-                                {isAlertColumnVisible('country') && (
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Country</th>
-                                )}
-                                {isAlertColumnVisible('as') && (
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">AS</th>
-                                )}
-                                {isAlertColumnVisible('source') && (
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">IP / Range</th>
-                                )}
-                                {isAlertColumnVisible('machine') && (
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Machine</th>
-                                )}
-                                {isAlertColumnVisible('origin') && (
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Origin</th>
-                                )}
-                                {isAlertColumnVisible('decisions') && (
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Decisions</th>
-                                )}
+                                {visibleAlertColumns.map((columnId) => {
+                                    const column = alertColumnDefinitionById.get(columnId);
+                                    if (!column) {
+                                        return null;
+                                    }
+
+                                    return (
+                                        <th key={columnId} className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                            {column.label}
+                                        </th>
+                                    );
+                                })}
                                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
                             </tr>
                         </thead>
@@ -1016,105 +1017,120 @@ export function Alerts() {
                                                     className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                                                 />
                                             </td>
-                                            {isAlertColumnVisible('id') && (
-                                                <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-900 dark:text-gray-100">
-                                                    #{alert.id}
-                                                </td>
-                                            )}
-                                            {isAlertColumnVisible('time') && (
-                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
-                                                    <TimeDisplay timestamp={alert.created_at} />
-                                                </td>
-                                            )}
-                                            {isAlertColumnVisible('scenario') && (
-                                                <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={alert.scenario}>
-                                                    <ScenarioName
-                                                        name={alert.scenario}
-                                                        reason={alert.reason}
-                                                        showLink={true}
-                                                        simulated={simulationsEnabled && isSimulatedAlert(alert)}
-                                                    />
-                                                </td>
-                                            )}
-                                            {isAlertColumnVisible('country') && (
-                                                <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 align-middle">
-                                                    {alert.source?.cn && alert.source?.cn !== "Unknown" ? (
-                                                        <div className="flex items-center gap-2" title={alert.source.cn}>
-                                                            <span className={`fi fi-${alert.source.cn.toLowerCase()} flex-shrink-0`}></span>
-                                                            <span className="truncate max-w-[150px]">{getCountryName(alert.source.cn)}</span>
-                                                        </div>
-                                                    ) : (
-                                                        "-"
-                                                    )}
-                                                </td>
-                                            )}
-                                            {isAlertColumnVisible('as') && (
-                                                <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[150px] truncate" title={alert.source?.as_name}>
-                                                    {alert.source?.as_name || "-"}
-                                                </td>
-                                            )}
-                                            {isAlertColumnVisible('source') && (
-                                                <td className="px-6 py-4 text-sm font-mono text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={sourceValue}>
-                                                    {sourceValue || "-"}
-                                                </td>
-                                            )}
-                                            {isAlertColumnVisible('machine') && (
-                                                <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[120px] truncate" title={resolveMachineName(alert)}>
-                                                    {resolveMachineName(alert) || "-"}
-                                                </td>
-                                            )}
-                                            {isAlertColumnVisible('origin') && (
-                                                <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[140px] truncate" title={alertOriginTitle}>
-                                                    {alertOriginDisplay}
-                                                </td>
-                                            )}
-                                            {isAlertColumnVisible('decisions') && (
-                                                <td className="px-6 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
-                                                    {(() => {
-                                                    const visibleDecisions = simulationsEnabled && currentSimulationFilter !== 'all'
-                                                        ? alert.decisions.filter((decision) => matchesSimulationFilter(
-                                                            { simulated: isSimulatedDecision(decision) },
-                                                            currentSimulationFilter,
-                                                        ))
-                                                        : alert.decisions;
-                                                    const activeDecisions = visibleDecisions.filter((decision) => decision.expired !== true);
-                                                    const expiredDecisions = visibleDecisions.filter((decision) => decision.expired === true);
-                                                    const decisionFilter = simulationsEnabled && currentSimulationFilter !== 'all'
-                                                        ? currentSimulationFilter
-                                                        : undefined;
-
-                                                    if (activeDecisions.length > 0 || expiredDecisions.length > 0) {
+                                            {visibleAlertColumns.map((columnId) => {
+                                                switch (columnId) {
+                                                    case 'id':
                                                         return (
-                                                            <div className="flex flex-wrap gap-2">
-                                                                {activeDecisions.length > 0 && (
-                                                                    <Link
-                                                                        to={buildDecisionListHref(alert.id, { simulation: decisionFilter })}
-                                                                        className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors border border-primary-200 dark:border-primary-800"
-                                                                        title={`View ${activeDecisions.length} active decisions`}
-                                                                    >
-                                                                        <Shield size={14} className="fill-current" />
-                                                                        <span className="text-xs font-semibold">Active: {activeDecisions.length}</span>
-                                                                        <ExternalLink size={12} className="ml-0.5" />
-                                                                    </Link>
-                                                                )}
-                                                                {expiredDecisions.length > 0 && (
-                                                                    <Link
-                                                                        to={buildDecisionListHref(alert.id, { includeExpired: true, simulation: decisionFilter })}
-                                                                        className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-                                                                        title={`View ${expiredDecisions.length} expired decisions`}
-                                                                    >
-                                                                        <Shield size={14} className="opacity-50" />
-                                                                        <span className="text-xs font-medium">Inactive: {expiredDecisions.length}</span>
-                                                                    </Link>
-                                                                )}
-                                                            </div>
+                                                            <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-900 dark:text-gray-100">
+                                                                #{alert.id}
+                                                            </td>
                                                         );
-                                                    }
+                                                    case 'time':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                                                                <TimeDisplay timestamp={alert.created_at} />
+                                                            </td>
+                                                        );
+                                                    case 'scenario':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={alert.scenario}>
+                                                                <ScenarioName
+                                                                    name={alert.scenario}
+                                                                    reason={alert.reason}
+                                                                    showLink={true}
+                                                                    simulated={simulationsEnabled && isSimulatedAlert(alert)}
+                                                                />
+                                                            </td>
+                                                        );
+                                                    case 'country':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 align-middle">
+                                                                {alert.source?.cn && alert.source?.cn !== "Unknown" ? (
+                                                                    <div className="flex items-center gap-2" title={alert.source.cn}>
+                                                                        <span className={`fi fi-${alert.source.cn.toLowerCase()} flex-shrink-0`}></span>
+                                                                        <span className="truncate max-w-[150px]">{getCountryName(alert.source.cn)}</span>
+                                                                    </div>
+                                                                ) : (
+                                                                    "-"
+                                                                )}
+                                                            </td>
+                                                        );
+                                                    case 'as':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[150px] truncate" title={alert.source?.as_name}>
+                                                                {alert.source?.as_name || "-"}
+                                                            </td>
+                                                        );
+                                                    case 'source':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm font-mono text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={sourceValue}>
+                                                                {sourceValue || "-"}
+                                                            </td>
+                                                        );
+                                                    case 'machine':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[120px] truncate" title={resolveMachineName(alert)}>
+                                                                {resolveMachineName(alert) || "-"}
+                                                            </td>
+                                                        );
+                                                    case 'origin':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[140px] truncate" title={alertOriginTitle}>
+                                                                {alertOriginDisplay}
+                                                            </td>
+                                                        );
+                                                    case 'decisions':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
+                                                                {(() => {
+                                                                    const visibleDecisions = simulationsEnabled && currentSimulationFilter !== 'all'
+                                                                        ? alert.decisions.filter((decision) => matchesSimulationFilter(
+                                                                            { simulated: isSimulatedDecision(decision) },
+                                                                            currentSimulationFilter,
+                                                                        ))
+                                                                        : alert.decisions;
+                                                                    const activeDecisions = visibleDecisions.filter((decision) => decision.expired !== true);
+                                                                    const expiredDecisions = visibleDecisions.filter((decision) => decision.expired === true);
+                                                                    const decisionFilter = simulationsEnabled && currentSimulationFilter !== 'all'
+                                                                        ? currentSimulationFilter
+                                                                        : undefined;
 
-                                                    return <span className="text-gray-400">-</span>;
-                                                    })()}
-                                                </td>
-                                            )}
+                                                                    if (activeDecisions.length > 0 || expiredDecisions.length > 0) {
+                                                                        return (
+                                                                            <div className="flex flex-wrap gap-2">
+                                                                                {activeDecisions.length > 0 && (
+                                                                                    <Link
+                                                                                        to={buildDecisionListHref(alert.id, { simulation: decisionFilter })}
+                                                                                        className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors border border-primary-200 dark:border-primary-800"
+                                                                                        title={`View ${activeDecisions.length} active decisions`}
+                                                                                    >
+                                                                                        <Shield size={14} className="fill-current" />
+                                                                                        <span className="text-xs font-semibold">Active: {activeDecisions.length}</span>
+                                                                                        <ExternalLink size={12} className="ml-0.5" />
+                                                                                    </Link>
+                                                                                )}
+                                                                                {expiredDecisions.length > 0 && (
+                                                                                    <Link
+                                                                                        to={buildDecisionListHref(alert.id, { includeExpired: true, simulation: decisionFilter })}
+                                                                                        className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                                                                                        title={`View ${expiredDecisions.length} expired decisions`}
+                                                                                    >
+                                                                                        <Shield size={14} className="opacity-50" />
+                                                                                        <span className="text-xs font-medium">Inactive: {expiredDecisions.length}</span>
+                                                                                    </Link>
+                                                                                )}
+                                                                            </div>
+                                                                        );
+                                                                    }
+
+                                                                    return <span className="text-gray-400">-</span>;
+                                                                })()}
+                                                            </td>
+                                                        );
+                                                    default:
+                                                        return null;
+                                                }
+                                            })}
                                             <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                                                 <div className="flex items-center justify-end gap-2">
                                                     {sourceValue && (

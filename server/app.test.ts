@@ -338,6 +338,7 @@ function createTestDistRoot(): string {
   const distRoot = path.join(tempDir, 'dist');
   mkdirSync(path.join(distRoot, 'assets'), { recursive: true });
   writeFileSync(path.join(distRoot, 'index.html'), '<!doctype html><html><head></head><body><div id="root"></div></body></html>');
+  writeFileSync(path.join(distRoot, 'assets', 'app.js'), 'console.log("ok");');
   writeFileSync(path.join(distRoot, 'world-50m.json'), '{"type":"Topology"}');
   writeFileSync(path.join(distRoot, 'logo.svg'), '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
   return distRoot;
@@ -807,6 +808,18 @@ describe('createApp', () => {
     const logo = await controller.fetch(new Request('http://localhost/crowdsec/logo.svg'));
     expect(logo.status).toBe(200);
     expect((await logo.text()).includes('<svg')).toBe(true);
+
+    const asset = await controller.fetch(new Request('http://localhost/crowdsec/assets/app.js'));
+    expect(asset.status).toBe(200);
+    expect(asset.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+
+    const missingAsset = await controller.fetch(new Request('http://localhost/crowdsec/assets/Notifications-old.js'));
+    expect(missingAsset.status).toBe(404);
+    expect(await missingAsset.text()).toBe('Not Found');
+
+    const route = await controller.fetch(new Request('http://localhost/crowdsec/alerts'));
+    expect(route.status).toBe(200);
+    expect(route.headers.get('cache-control')).toBe('no-store, no-cache, must-revalidate');
 
     const redirect = await controller.fetch(new Request('http://localhost/'));
     expect(redirect.status).toBe(302);

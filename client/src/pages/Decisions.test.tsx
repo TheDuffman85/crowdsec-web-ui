@@ -179,6 +179,7 @@ vi.mock('../lib/api', () => {
 
 afterEach(() => {
   refreshSignalMock = 0;
+  window.localStorage.clear();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -220,6 +221,12 @@ async function flushDecisionSearchDebounce(): Promise<void> {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 350));
   });
+}
+
+function getVisibleColumnHeaderNames(): string[] {
+  return screen.getAllByRole('columnheader')
+    .map((header) => header.textContent?.trim() || '')
+    .filter(Boolean);
 }
 
 describe('Decisions page', () => {
@@ -266,8 +273,61 @@ describe('Decisions page', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(screen.getByRole('columnheader', { name: 'ID' })).toBeInTheDocument());
+    expect(getVisibleColumnHeaderNames()[0]).toBe('ID');
     expect(screen.getByRole('columnheader', { name: 'Machine' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Origin' })).toBeInTheDocument();
+  });
+
+  test('syncs decision modal columns from desktop to mobile', async () => {
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole('button', { name: 'Choose decision table columns' }));
+    await userEvent.click(screen.getByLabelText('ID'));
+    await userEvent.click(screen.getByRole('button', { name: 'Sync to mobile' }));
+    await userEvent.click(screen.getByRole('button', { name: 'mobile' }));
+
+    expect(screen.getByLabelText('ID')).toBeChecked();
+    expect(screen.getByRole('button', { name: 'Sync to desktop' })).toBeInTheDocument();
+  });
+
+  test('uses saved decision column order', async () => {
+    vi.mocked(api.fetchConfig).mockResolvedValue({
+      lookback_period: '1h',
+      lookback_hours: 1,
+      lookback_days: 1,
+      refresh_interval: 30000,
+      current_interval_name: '30s',
+      lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
+      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+      simulations_enabled: true,
+      machine_features_enabled: true,
+      origin_features_enabled: true,
+      table_column_preferences: {
+        alerts: {
+          desktop: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
+          mobile: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
+        },
+        decisions: {
+          desktop: ['source', 'action', 'time', 'alert'],
+          mobile: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
+        },
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+    expect(getVisibleColumnHeaderNames()).toEqual(['IP / Range', 'Action', 'Time', 'Alert', 'Actions']);
   });
 
   test('shows machine column and allows filtering by machine when enabled', async () => {
