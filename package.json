@@ -62,7 +62,7 @@
     "flag-icons": "^7.5.0",
     "globals": "^17.5.0",
     "jsdom": "^29.0.2",
-    "lucide-react": "^1.8.0",
+    "lucide-react": "^1.14.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.14.2",
