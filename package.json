@@ -34,7 +34,7 @@
     "verify": "pnpm run test && pnpm run coverage && pnpm run typecheck && pnpm run lint && pnpm run build"
   },
   "dependencies": {
-    "@hono/node-server": "2.0.0",
+    "@hono/node-server": "2.0.1",
     "@types/sortablejs": "^1.15.9",
     "better-sqlite3": "12.9.0",
     "hono": "4.12.14",
