@@ -368,7 +368,10 @@ export function Dashboard() {
 
     useEffect(() => {
         const controller = new AbortController();
-        loadData(false, controller.signal);
+        queueMicrotask(() => {
+            void loadData(false, controller.signal);
+        });
+
         return () => controller.abort();
     }, [loadData]);
 

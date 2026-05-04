@@ -427,12 +427,20 @@ export function Notifications() {
   }, [loadNotifications, loadSettings]);
 
   useEffect(() => {
-    void loadData();
+    const timeoutId = window.setTimeout(() => {
+      void loadData();
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
   }, [loadData]);
 
   useEffect(() => {
     if (refreshSignal > 0) {
-      void loadData({ preserveLoadedPages: true });
+      const timeoutId = window.setTimeout(() => {
+        void loadData({ preserveLoadedPages: true });
+      }, 0);
+
+      return () => window.clearTimeout(timeoutId);
     }
   }, [refreshSignal, loadData]);
 

@@ -32,7 +32,11 @@ export function RefreshProvider({ children }: WithChildren) {
 
     // Fetch initial config from backend
     useEffect(() => {
-        updateConfig();
+        const timeoutId = window.setTimeout(() => {
+            void updateConfig();
+        }, 0);
+
+        return () => window.clearTimeout(timeoutId);
     }, [updateConfig]);
 
     // Poll more frequently while syncing

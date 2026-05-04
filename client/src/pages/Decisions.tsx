@@ -71,10 +71,9 @@ export function Decisions() {
     const [columnsSaving, setColumnsSaving] = useState(false);
     const [searchDraft, setSearchDraft] = useState(initialQueryParam);
     const [debouncedSearchDraft, setDebouncedSearchDraft] = useState(initialQueryParam);
-    const [appliedQuery, setAppliedQuery] = useState(initialQueryParam.trim());
-    const [queryError, setQueryError] = useState<SearchParseError | null>(null);
     const [showSearchSyntaxModal, setShowSearchSyntaxModal] = useState(false);
     const [initialLoading, setInitialLoading] = useState(true);
+    const [hasLoadedDecisions, setHasLoadedDecisions] = useState(false);
     const [backgroundLoading, setBackgroundLoading] = useState(false);
     const [loadingMore, setLoadingMore] = useState(false);
     const [showAddModal, setShowAddModal] = useState(false);
@@ -90,6 +89,8 @@ export function Decisions() {
     const [errorInfo, setErrorInfo] = useState<ErrorInfo | null>(null);
     const tableColumnViewport = useTableColumnViewport();
     const alertIdFilter = searchParams.get("alert_id");
+    const queryParam = searchParams.get("q");
+    const appliedQuery = queryParam?.trim() ?? "";
     const includeExpiredParam = searchParams.get("include_expired") === "true";
     const simulationFilter = simulationsEnabled ? parseSimulationFilter(searchParams.get("simulation")) : 'all';
     // Default: hide duplicates unless explicitly set to false OR viewing a specific alert's decisions
@@ -123,6 +124,11 @@ export function Decisions() {
     const skipSearchParamSyncRef = useRef<string | null>(null);
     const searchDebounceTimeoutRef = useRef<number | null>(null);
     const searchValidationFeatures = useMemo(() => ({ machineEnabled: true, originEnabled: true }), []);
+    const compiledSearch = useMemo(
+        () => compileDecisionSearch(debouncedSearchDraft, searchValidationFeatures),
+        [debouncedSearchDraft, searchValidationFeatures],
+    );
+    const queryError: SearchParseError | null = compiledSearch.ok ? null : compiledSearch.error;
     const searchHelp = useMemo(
         () => getSearchHelpDefinition('decisions', searchValidationFeatures, { decisions }),
         [decisions, searchValidationFeatures],
@@ -272,8 +278,11 @@ export function Decisions() {
             setTotalPages(decisionsResult.pagination.total_pages);
             setTotalDecisions(decisionsResult.pagination.total);
             setTotalUnfilteredDecisions(decisionsResult.pagination.unfiltered_total);
-            setSelectableDecisionIds(decisionsResult.selectable_ids.map(String));
+            const nextSelectableIds = decisionsResult.selectable_ids.map(String);
+            setSelectableDecisionIds(nextSelectableIds);
+            setSelectedDecisionIds((current) => current.filter((id) => nextSelectableIds.includes(id)));
             hasLoadedDecisionsRef.current = true;
+            setHasLoadedDecisions(true);
 
             setLastUpdated(new Date());
             completedSuccessfully = true;
@@ -372,7 +381,11 @@ export function Decisions() {
     }, [updateSearchSelection]);
 
     useEffect(() => {
-        void loadDecisions({ refreshConfig: true });
+        const timeoutId = window.setTimeout(() => {
+            void loadDecisions({ refreshConfig: true });
+        }, 0);
+
+        return () => window.clearTimeout(timeoutId);
     }, [loadDecisions]);
 
     useEffect(() => {
@@ -405,22 +418,12 @@ export function Decisions() {
     }, [cancelSearchDebounce, debouncedSearchDraft, searchDraft]);
 
     useEffect(() => {
-        const compiledSearch = compileDecisionSearch(debouncedSearchDraft, searchValidationFeatures);
         if (!compiledSearch.ok) {
-            setQueryError((current) => (
-                current?.message === compiledSearch.error.message &&
-                current.position === compiledSearch.error.position &&
-                current.length === compiledSearch.error.length
-                    ? current
-                    : compiledSearch.error
-            ));
             return;
         }
 
         const nextQuery = debouncedSearchDraft.trim();
         const currentQuery = searchParams.get("q") ?? "";
-        setQueryError(null);
-        setAppliedQuery((current) => current === nextQuery ? current : nextQuery);
 
         if (currentQuery === nextQuery) {
             return;
@@ -436,7 +439,7 @@ export function Decisions() {
             skipSearchParamSyncRef.current = nextQuery;
             setSearchParams(nextParams);
         }
-    }, [debouncedSearchDraft, searchParams, searchValidationFeatures, setSearchParams]);
+    }, [compiledSearch, debouncedSearchDraft, searchParams, setSearchParams]);
 
     const handleAddDecision = async (e: FormEvent<HTMLFormElement>) => {
         e.preventDefault();
@@ -513,8 +516,6 @@ export function Decisions() {
         searchDraftRef.current = query;
         setSearchDraft(query);
         setDebouncedSearchDraft(query);
-        setAppliedQuery(query.trim());
-        setQueryError(null);
         pendingSearchFocusRef.current = query.length;
         setShowSearchSyntaxModal(false);
     }, [cancelSearchDebounce]);
@@ -530,7 +531,6 @@ export function Decisions() {
         searchSelectionRef.current = { start: nextCaretPosition, end: nextCaretPosition };
         setSearchDraft(nextQuery);
         setDebouncedSearchDraft(nextQuery);
-        setQueryError(null);
         pendingSearchFocusRef.current = nextCaretPosition;
         setShowSearchSyntaxModal(false);
     }, [cancelSearchDebounce, getSearchInsertionRange]);
@@ -540,8 +540,6 @@ export function Decisions() {
         searchDraftRef.current = "";
         setSearchDraft("");
         setDebouncedSearchDraft("");
-        setAppliedQuery("");
-        setQueryError(null);
         pendingSearchFocusRef.current = null;
         searchSelectionRef.current = { start: 0, end: 0 };
         skipSearchParamSyncRef.current = "";
@@ -568,15 +566,9 @@ export function Decisions() {
     };
 
     const filteredDecisions = decisions;
-    const eligibleFilteredDecisionIdsKey = selectableDecisionIds.join("|");
     const selectedFilteredDecisionIds = selectableDecisionIds.filter((id) => selectedDecisionIds.includes(id));
     const allFilteredDecisionsSelected = selectableDecisionIds.length > 0 && selectedFilteredDecisionIds.length === selectableDecisionIds.length;
     const someFilteredDecisionsSelected = selectedFilteredDecisionIds.length > 0 && !allFilteredDecisionsSelected;
-
-    useEffect(() => {
-        const validIds = new Set(eligibleFilteredDecisionIdsKey ? eligibleFilteredDecisionIdsKey.split("|") : []);
-        setSelectedDecisionIds((prev) => prev.filter((id) => validIds.has(id)));
-    }, [eligibleFilteredDecisionIdsKey]);
 
     useEffect(() => {
         if (selectAllDecisionsRef.current) {
@@ -605,7 +597,7 @@ export function Decisions() {
                 : "Delete";
     const pendingDecisionId = pendingDeleteAction?.kind === "single" ? pendingDeleteAction.decisionId : null;
     const pendingIp = pendingDeleteAction?.kind === "ip" ? pendingDeleteAction.ip : null;
-    const summaryText = initialLoading && !hasLoadedDecisionsRef.current
+    const summaryText = initialLoading && !hasLoadedDecisions
         ? "Loading decisions..."
         : totalDecisions !== totalUnfilteredDecisions
             ? `Showing ${visibleDecisions.length} of ${totalDecisions} decisions (${totalUnfilteredDecisions} total before filters)`
@@ -690,8 +682,6 @@ export function Decisions() {
                                     cancelSearchDebounce();
                                     setSearchDraft("");
                                     setDebouncedSearchDraft("");
-                                    setAppliedQuery("");
-                                    setQueryError(null);
                                     setSearchParams(nextParams);
                                 }}
                                 className="ml-1 hover:text-red-500"
