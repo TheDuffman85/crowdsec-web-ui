@@ -243,6 +243,101 @@ describe('Dashboard page', () => {
     expect((decisionsCard as HTMLElement).getAttribute('href')).not.toContain('scenario=');
   });
 
+  test('shows restored stale scenario filter as a selected zero-count row', async () => {
+    localStorage.setItem('dashboard_filters', JSON.stringify({
+      dateRange: null,
+      dateRangeSticky: false,
+      country: null,
+      scenario: 'crowdsecurity/stale-scenario',
+      as: null,
+      ip: null,
+      target: null,
+      simulation: 'all',
+    }));
+    fetchDashboardStatsMock.mockResolvedValue({
+      ...buildDashboardStatsResponse(),
+      filteredTotals: {
+        alerts: 0,
+        decisions: 0,
+        simulatedAlerts: 0,
+        simulatedDecisions: 0,
+      },
+      globalTotal: 2,
+      topTargets: [],
+      topCountries: [],
+      allCountries: [],
+      topScenarios: [],
+      topAS: [],
+    });
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    const scenarioCard = await screen.findByText('Top Scenarios');
+    const scenarioRow = screen.getByText('stale-scenario').closest('.cursor-pointer');
+    expect(scenarioCard).toBeInTheDocument();
+    expect(scenarioRow).not.toBeNull();
+    expect(within(scenarioRow as HTMLElement).getByText('crowdsecurity')).toBeInTheDocument();
+    expect(within(scenarioRow as HTMLElement).getByText('0')).toBeInTheDocument();
+    expect(within(scenarioRow as HTMLElement).getByText('0.0%')).toBeInTheDocument();
+  });
+
+  test('shows restored stale country filter as a selected zero-count row and clears it on click', async () => {
+    localStorage.setItem('dashboard_filters', JSON.stringify({
+      dateRange: null,
+      dateRangeSticky: false,
+      country: 'FR',
+      scenario: null,
+      as: null,
+      ip: null,
+      target: null,
+      simulation: 'all',
+    }));
+    fetchDashboardStatsMock.mockImplementation(async (filters?: Record<string, string>) => ({
+      ...buildDashboardStatsResponse(filters),
+      filteredTotals: {
+        alerts: 0,
+        decisions: 0,
+        simulatedAlerts: 0,
+        simulatedDecisions: 0,
+      },
+      globalTotal: 2,
+      topTargets: [],
+      topCountries: [],
+      allCountries: [],
+      topScenarios: [],
+      topAS: [],
+    }));
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ country: 'FR' }),
+      expect.any(Object),
+    ));
+
+    const countryRow = await screen.findByText('FR');
+    const countryRowContainer = countryRow.closest('.cursor-pointer');
+    expect(countryRowContainer).not.toBeNull();
+    expect(within(countryRowContainer as HTMLElement).getByText('0')).toBeInTheDocument();
+    expect(within(countryRowContainer as HTMLElement).getByText('0.0%')).toBeInTheDocument();
+
+    fetchDashboardStatsMock.mockClear();
+    await userEvent.click(countryRow);
+
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ country: expect.any(String) }),
+      expect.any(Object),
+    ));
+  });
+
   test('hides simulation labels and series when simulations are disabled', async () => {
     fetchConfigMock.mockResolvedValue({
       lookback_period: '7d',

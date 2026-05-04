@@ -30,6 +30,7 @@ type Granularity = 'day' | 'hour';
 type ScaleMode = 'linear' | 'symlog';
 type PercentageBasis = 'filtered' | 'global';
 type FilterKey = 'country' | 'scenario' | 'as' | 'ip' | 'target' | 'simulation';
+type DashboardStatListItem = DashboardStatsResponse['topCountries'][number];
 
 interface DashboardCountState {
     alerts: number;
@@ -202,6 +203,28 @@ function buildDashboardDrilldownHref(pathname: '/alerts' | '/decisions', query: 
     return `${pathname}?${params.toString()}`;
 }
 
+function withSelectedZeroItem<TItem extends DashboardStatListItem>(
+    items: TItem[],
+    selectedValue: string | null,
+    createItem: (selectedValue: string) => TItem,
+): TItem[] {
+    if (!selectedValue) {
+        return items;
+    }
+
+    const hasSelectedItem = items.some((item) =>
+        item.value === selectedValue ||
+        item.label === selectedValue ||
+        item.countryCode === selectedValue
+    );
+
+    if (hasSelectedItem) {
+        return items;
+    }
+
+    return [createItem(selectedValue), ...items];
+}
+
 export function Dashboard() {
     const navigate = useNavigate();
     const { refreshSignal, setLastUpdated } = useRefresh();
@@ -366,11 +389,32 @@ export function Dashboard() {
 
     const statistics = useMemo(() => {
         return {
-            topTargets: dashboardData.topTargets,
-            topCountries: dashboardData.topCountries,
+            topTargets: withSelectedZeroItem(
+                dashboardData.topTargets,
+                filters.target,
+                (target) => ({ label: target, count: 0 }),
+            ),
+            topCountries: withSelectedZeroItem(
+                dashboardData.topCountries,
+                filters.country,
+                (countryCode) => ({
+                    label: dashboardData.allCountries.find((country) => country.countryCode === countryCode)?.label ?? countryCode,
+                    value: countryCode,
+                    countryCode,
+                    count: 0,
+                }),
+            ),
             allCountries: dashboardData.allCountries,
-            topScenarios: dashboardData.topScenarios,
-            topAS: dashboardData.topAS,
+            topScenarios: withSelectedZeroItem(
+                dashboardData.topScenarios,
+                filters.scenario,
+                (scenario) => ({ label: scenario, count: 0 }),
+            ),
+            topAS: withSelectedZeroItem(
+                dashboardData.topAS,
+                filters.as,
+                (asName) => ({ label: asName, count: 0 }),
+            ),
             alertsHistory: toActivitySeries(dashboardData.series.alertsHistory),
             simulatedAlertsHistory: toActivitySeries(dashboardData.series.simulatedAlertsHistory),
             decisionsHistory: toActivitySeries(dashboardData.series.decisionsHistory),
@@ -380,7 +424,7 @@ export function Dashboard() {
             unfilteredDecisionsHistory: toActivitySeries(dashboardData.series.unfilteredDecisionsHistory),
             unfilteredSimulatedDecisionsHistory: toActivitySeries(dashboardData.series.unfilteredSimulatedDecisionsHistory),
         };
-    }, [dashboardData]);
+    }, [dashboardData, filters.as, filters.country, filters.scenario, filters.target]);
     
 
     // Handle Filters
