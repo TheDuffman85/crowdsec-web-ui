@@ -386,6 +386,8 @@ export function ActivityBarChart({
         ? (startIndex / sliderBucketCount) * 100
         : 0;
     const sliderSelectionRightPercent = sliderSelectionLeftPercent + sliderSelectionWidthPercent;
+    const sliderSelectionCenterPercent = sliderSelectionLeftPercent + (sliderSelectionWidthPercent / 2);
+    const isCompactSliderSelection = startIndex === endIndex;
     const showSelectionSummary = sliderBucketCount > 0 && (selectedDateRange !== null || isDraggingState);
     const sliderStartLabel = sliderData[startIndex]?.label ?? '';
     const sliderEndLabel = sliderData[endIndex]?.label ?? '';
@@ -773,27 +775,46 @@ export function ActivityBarChart({
                             </>
                         )}
                         <div
+                            className={`absolute top-1/2 h-11 min-w-11 -translate-x-1/2 -translate-y-1/2 rounded-md ${isCompactSliderSelection ? 'z-30' : 'z-10'} ${isDraggingState ? 'cursor-grabbing' : 'cursor-grab'}`}
+                            style={{
+                                left: `${sliderSelectionCenterPercent}%`,
+                                width: `max(${sliderSelectionWidthPercent}%, 44px)`,
+                            }}
+                            onPointerDown={(event) => startSliderDrag('move', event)}
+                            aria-label="Move activity time range"
+                        />
+                        <div
                             data-testid="activity-range-selection"
                             data-start-index={startIndex}
                             data-end-index={endIndex}
-                            className={`absolute top-0 bottom-0 border border-slate-500/90 bg-slate-500/20 dark:border-gray-300/80 dark:bg-gray-300/25 ${isDraggingState ? 'cursor-grabbing' : 'cursor-grab'}`}
+                            className="pointer-events-none absolute top-0 bottom-0 z-0 border border-slate-500/90 bg-slate-500/20 dark:border-gray-300/80 dark:bg-gray-300/25"
                             style={{
                                 left: `${sliderSelectionLeftPercent}%`,
                                 width: `${sliderSelectionWidthPercent}%`,
                             }}
-                            onPointerDown={(event) => startSliderDrag('move', event)}
+                        />
+                        <div
+                            data-testid="activity-range-start-handle"
+                            className="absolute top-1/2 z-20 h-11 w-11 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize"
+                            style={{ left: `${sliderSelectionLeftPercent}%` }}
+                            onPointerDown={(event) => startSliderDrag('start', event)}
+                            aria-label="Adjust activity time range start"
                         >
                             <div
-                                data-testid="activity-range-start-handle"
-                                className="absolute left-0 top-0 bottom-0 w-[6px] bg-slate-500 cursor-ew-resize dark:bg-gray-200/90"
-                                onPointerDown={(event) => startSliderDrag('start', event)}
+                                className="pointer-events-none absolute left-1/2 top-1/2 h-10 w-[6px] -translate-x-1/2 -translate-y-1/2 bg-slate-500 dark:bg-gray-200/90"
                             >
                                 <span className="absolute left-1/2 top-1/2 h-4 w-px -translate-x-1/2 -translate-y-1/2 bg-slate-100/90 dark:bg-gray-600/80 pointer-events-none" />
                             </div>
+                        </div>
+                        <div
+                            data-testid="activity-range-end-handle"
+                            className="absolute top-1/2 z-20 h-11 w-11 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize"
+                            style={{ left: `${sliderSelectionRightPercent}%` }}
+                            onPointerDown={(event) => startSliderDrag('end', event)}
+                            aria-label="Adjust activity time range end"
+                        >
                             <div
-                                data-testid="activity-range-end-handle"
-                                className="absolute right-0 top-0 bottom-0 w-[6px] bg-slate-500 cursor-ew-resize dark:bg-gray-200/90"
-                                onPointerDown={(event) => startSliderDrag('end', event)}
+                                className="pointer-events-none absolute left-1/2 top-1/2 h-10 w-[6px] -translate-x-1/2 -translate-y-1/2 bg-slate-500 dark:bg-gray-200/90"
                             >
                                 <span className="absolute left-1/2 top-1/2 h-4 w-px -translate-x-1/2 -translate-y-1/2 bg-slate-100/90 dark:bg-gray-600/80 pointer-events-none" />
                             </div>

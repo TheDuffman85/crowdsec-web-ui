@@ -97,10 +97,9 @@ export function Alerts() {
     const [columnsSaving, setColumnsSaving] = useState(false);
     const [searchDraft, setSearchDraft] = useState(initialQueryParam);
     const [debouncedSearchDraft, setDebouncedSearchDraft] = useState(initialQueryParam);
-    const [appliedQuery, setAppliedQuery] = useState(initialQueryParam.trim());
-    const [queryError, setQueryError] = useState<SearchParseError | null>(null);
     const [showSearchSyntaxModal, setShowSearchSyntaxModal] = useState(false);
     const [initialLoading, setInitialLoading] = useState(true);
+    const [hasLoadedAlerts, setHasLoadedAlerts] = useState(false);
     const [backgroundLoading, setBackgroundLoading] = useState(false);
     const [loadingMore, setLoadingMore] = useState(false);
     const [selectedAlert, setSelectedAlert] = useState<AlertSelection | null>(null);
@@ -125,6 +124,7 @@ export function Alerts() {
     const currentSimulationFilter = simulationsEnabled ? parseSimulationFilter(searchParams.get("simulation")) : 'all';
     const alertIdParam = searchParams.get("id");
     const queryParam = searchParams.get("q");
+    const appliedQuery = queryParam?.trim() ?? "";
 
     // Ref to track selected alert ID for auto-refresh (avoids stale closure issues)
     const selectedAlertIdRef = useRef<string | number | null>(null);
@@ -161,6 +161,11 @@ export function Alerts() {
     const skipSearchParamSyncRef = useRef<string | null>(null);
     const searchDebounceTimeoutRef = useRef<number | null>(null);
     const searchValidationFeatures = useMemo(() => ({ machineEnabled: true, originEnabled: true }), []);
+    const compiledSearch = useMemo(
+        () => compileAlertSearch(debouncedSearchDraft, searchValidationFeatures),
+        [debouncedSearchDraft, searchValidationFeatures],
+    );
+    const queryError: SearchParseError | null = compiledSearch.ok ? null : compiledSearch.error;
     const searchHelp = useMemo(
         () => getSearchHelpDefinition('alerts', searchValidationFeatures, { alerts }),
         [alerts, searchValidationFeatures],
@@ -313,8 +318,11 @@ export function Alerts() {
             setTotalPages(alertsResult.pagination.total_pages);
             setTotalAlerts(alertsResult.pagination.total);
             setTotalUnfilteredAlerts(alertsResult.pagination.unfiltered_total);
-            setSelectableAlertIds(alertsResult.selectable_ids.map(String));
+            const nextSelectableIds = alertsResult.selectable_ids.map(String);
+            setSelectableAlertIds(nextSelectableIds);
+            setSelectedAlertIds((current) => current.filter((id) => nextSelectableIds.includes(id)));
             hasLoadedAlertsRef.current = true;
+            setHasLoadedAlerts(true);
 
             // Check if there's an alert ID in the URL
             if (alertIdParam) {
@@ -381,7 +389,11 @@ export function Alerts() {
     }, [backgroundLoading, currentPage, hasMoreAlerts, initialLoading, loadAlerts, loadingMore]);
 
     useEffect(() => {
-        void loadAlerts({ refreshConfig: true });
+        const timeoutId = window.setTimeout(() => {
+            void loadAlerts({ refreshConfig: true });
+        }, 0);
+
+        return () => window.clearTimeout(timeoutId);
     }, [loadAlerts]);
 
 
@@ -476,22 +488,11 @@ export function Alerts() {
     }, [cancelSearchDebounce, debouncedSearchDraft, searchDraft]);
 
     useEffect(() => {
-        const compiledSearch = compileAlertSearch(debouncedSearchDraft, searchValidationFeatures);
         if (!compiledSearch.ok) {
-            setQueryError((current) => (
-                current?.message === compiledSearch.error.message &&
-                current.position === compiledSearch.error.position &&
-                current.length === compiledSearch.error.length
-                    ? current
-                    : compiledSearch.error
-            ));
             return;
         }
 
         const nextQuery = debouncedSearchDraft.trim();
-        setQueryError(null);
-        setAppliedQuery((current) => current === nextQuery ? current : nextQuery);
-
         if (queryParam === nextQuery) {
             return;
         }
@@ -506,7 +507,7 @@ export function Alerts() {
             skipSearchParamSyncRef.current = nextQuery;
             setSearchParams(nextParams);
         }
-    }, [debouncedSearchDraft, queryParam, searchParams, searchValidationFeatures, setSearchParams]);
+    }, [compiledSearch, debouncedSearchDraft, queryParam, searchParams, setSearchParams]);
 
     // Keep ref in sync with selectedAlert for auto-refresh
     useEffect(() => {
@@ -591,32 +592,36 @@ export function Alerts() {
     }, [modalDecisionsPage]);
 
     useEffect(() => {
-        if (!selectedAlertId) {
-            modalDecisionsLoadRef.current = { alertId: null, page: null };
-            setModalDecisions([]);
-            setModalDecisionsPage(1);
-            setModalDecisionsTotalPages(1);
-            setModalDecisionsTotal(0);
-            modalSelectedAlertIdRef.current = null;
-            return;
-        }
+        const timeoutId = window.setTimeout(() => {
+            if (!selectedAlertId) {
+                modalDecisionsLoadRef.current = { alertId: null, page: null };
+                setModalDecisions([]);
+                setModalDecisionsPage(1);
+                setModalDecisionsTotalPages(1);
+                setModalDecisionsTotal(0);
+                modalSelectedAlertIdRef.current = null;
+                return;
+            }
 
-        const selectedAlertChanged = modalSelectedAlertIdRef.current !== selectedAlertId;
-        modalSelectedAlertIdRef.current = selectedAlertId;
-        if (selectedAlertChanged) {
-            modalDecisionsLoadRef.current = { alertId: null, page: null };
-            setModalDecisions([]);
-            setModalDecisionsPage(1);
-            setModalDecisionsTotalPages(1);
-            setModalDecisionsTotal(0);
-            void loadModalDecisions(selectedAlertId, 1, { forceRefresh: true });
-            return;
-        }
+            const selectedAlertChanged = modalSelectedAlertIdRef.current !== selectedAlertId;
+            modalSelectedAlertIdRef.current = selectedAlertId;
+            if (selectedAlertChanged) {
+                modalDecisionsLoadRef.current = { alertId: null, page: null };
+                setModalDecisions([]);
+                setModalDecisionsPage(1);
+                setModalDecisionsTotalPages(1);
+                setModalDecisionsTotal(0);
+                void loadModalDecisions(selectedAlertId, 1, { forceRefresh: true });
+                return;
+            }
 
-        void loadModalDecisions(selectedAlertId, 1, {
-            preserveLoadedPages: true,
-            forceRefresh: true,
-        });
+            void loadModalDecisions(selectedAlertId, 1, {
+                preserveLoadedPages: true,
+                forceRefresh: true,
+            });
+        }, 0);
+
+        return () => window.clearTimeout(timeoutId);
     }, [loadModalDecisions, modalDecisionsRefreshToken, selectedAlertId]);
 
     const lastModalDecisionElementRef = useCallback((node: HTMLTableRowElement | null) => {
@@ -653,8 +658,6 @@ export function Alerts() {
         searchDraftRef.current = query;
         setSearchDraft(query);
         setDebouncedSearchDraft(query);
-        setAppliedQuery(query.trim());
-        setQueryError(null);
         pendingSearchFocusRef.current = query.length;
         setShowSearchSyntaxModal(false);
     }, [cancelSearchDebounce]);
@@ -670,7 +673,6 @@ export function Alerts() {
         searchSelectionRef.current = { start: nextCaretPosition, end: nextCaretPosition };
         setSearchDraft(nextQuery);
         setDebouncedSearchDraft(nextQuery);
-        setQueryError(null);
         pendingSearchFocusRef.current = nextCaretPosition;
         setShowSearchSyntaxModal(false);
     }, [cancelSearchDebounce, getSearchInsertionRange]);
@@ -680,8 +682,6 @@ export function Alerts() {
         searchDraftRef.current = "";
         setSearchDraft("");
         setDebouncedSearchDraft("");
-        setAppliedQuery("");
-        setQueryError(null);
         pendingSearchFocusRef.current = null;
         searchSelectionRef.current = { start: 0, end: 0 };
         skipSearchParamSyncRef.current = "";
@@ -753,15 +753,9 @@ export function Alerts() {
     };
 
     const filteredAlerts = alerts;
-    const filteredAlertIdsKey = selectableAlertIds.join("|");
     const selectedFilteredAlertIds = selectableAlertIds.filter((id) => selectedAlertIds.includes(id));
     const allFilteredAlertsSelected = selectableAlertIds.length > 0 && selectedFilteredAlertIds.length === selectableAlertIds.length;
     const someFilteredAlertsSelected = selectedFilteredAlertIds.length > 0 && !allFilteredAlertsSelected;
-
-    useEffect(() => {
-        const validIds = new Set(filteredAlertIdsKey ? filteredAlertIdsKey.split("|") : []);
-        setSelectedAlertIds((prev) => prev.filter((id) => validIds.has(id)));
-    }, [filteredAlertIdsKey]);
 
     useEffect(() => {
         if (selectAllAlertsRef.current) {
@@ -793,7 +787,7 @@ export function Alerts() {
     const selectedAlertCount = selectedFilteredAlertIds.length;
     const pendingSingleAlertId = pendingDeleteAction?.kind === "single" ? pendingDeleteAction.alertId : null;
     const pendingIp = pendingDeleteAction?.kind === "ip" ? pendingDeleteAction.ip : null;
-    const summaryText = initialLoading && !hasLoadedAlertsRef.current
+    const summaryText = initialLoading && !hasLoadedAlerts
         ? "Loading alerts..."
         : totalAlerts !== totalUnfilteredAlerts
             ? `Showing ${visibleAlerts.length} of ${totalAlerts} alerts (${totalUnfilteredAlerts} total before filters)`
@@ -871,8 +865,6 @@ export function Alerts() {
                                     cancelSearchDebounce();
                                     setSearchDraft("");
                                     setDebouncedSearchDraft("");
-                                    setAppliedQuery("");
-                                    setQueryError(null);
                                     setSearchParams(nextParams);
                                 }}
                                 className="ml-1 hover:text-red-500"

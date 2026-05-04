@@ -30,6 +30,7 @@ type Granularity = 'day' | 'hour';
 type ScaleMode = 'linear' | 'symlog';
 type PercentageBasis = 'filtered' | 'global';
 type FilterKey = 'country' | 'scenario' | 'as' | 'ip' | 'target' | 'simulation';
+type DashboardStatListItem = DashboardStatsResponse['topCountries'][number];
 
 interface DashboardCountState {
     alerts: number;
@@ -202,6 +203,46 @@ function buildDashboardDrilldownHref(pathname: '/alerts' | '/decisions', query: 
     return `${pathname}?${params.toString()}`;
 }
 
+function withSelectedZeroItem<TItem extends DashboardStatListItem>(
+    items: TItem[],
+    selectedValue: string | null,
+    createItem: (selectedValue: string) => TItem,
+): TItem[] {
+    if (!selectedValue) {
+        return items;
+    }
+
+    const hasSelectedItem = items.some((item) =>
+        item.value === selectedValue ||
+        item.label === selectedValue ||
+        item.countryCode === selectedValue
+    );
+
+    if (hasSelectedItem) {
+        return items;
+    }
+
+    return [createItem(selectedValue), ...items];
+}
+
+function statItemMatchesValue(item: DashboardStatListItem, value: string): boolean {
+    return item.value === value ||
+        item.label === value ||
+        item.countryCode === value;
+}
+
+function scopeStaleStatItemsToSelected<TItem extends DashboardStatListItem>(
+    items: TItem[],
+    selectedValue: string | null,
+    shouldScope: boolean,
+): TItem[] {
+    if (!shouldScope || !selectedValue) {
+        return items;
+    }
+
+    return items.filter((item) => statItemMatchesValue(item, selectedValue));
+}
+
 export function Dashboard() {
     const navigate = useNavigate();
     const { refreshSignal, setLastUpdated } = useRefresh();
@@ -218,6 +259,7 @@ export function Dashboard() {
 
     const [isOnline, setIsOnline] = useState(true);
     const [dashboardStats, setDashboardStats] = useState<DashboardStatsResponse | null>(null);
+    const [dashboardStatsLoadKey, setDashboardStatsLoadKey] = useState<string | null>(null);
     const dashboardStatsRef = useRef<DashboardStatsResponse | null>(null);
     const loadDataRef = useRef<(isBackground?: boolean, signal?: AbortSignal) => Promise<void>>(async () => {});
     const lastRefreshSignalRef = useRef(refreshSignal);
@@ -301,13 +343,14 @@ export function Dashboard() {
                 fetchConfig(),
                 fetchDashboardStats(requestFilters, { signal }),
             ]);
-            if (signal?.aborted) {
+            if (signal?.aborted || requestId !== nextLoadRequestIdRef.current) {
                 return;
             }
 
             setConfig(configData);
             dashboardStatsRef.current = dashboardStatsData;
             setDashboardStats(dashboardStatsData);
+            setDashboardStatsLoadKey(loadKey);
 
             // Check LAPI status from config
             if (configData.lapi_status) {
@@ -345,7 +388,10 @@ export function Dashboard() {
 
     useEffect(() => {
         const controller = new AbortController();
-        loadData(false, controller.signal);
+        queueMicrotask(() => {
+            void loadData(false, controller.signal);
+        });
+
         return () => controller.abort();
     }, [loadData]);
 
@@ -363,14 +409,37 @@ export function Dashboard() {
 
     const dashboardData = dashboardStats ?? EMPTY_DASHBOARD_STATS;
     const stats = dashboardData.totals;
+    const currentDashboardStatsLoadKey = useMemo(() => JSON.stringify(buildDashboardStatsFilters()), [buildDashboardStatsFilters]);
+    const isDashboardStatsStaleForFilters = dashboardStatsLoadKey !== null && dashboardStatsLoadKey !== currentDashboardStatsLoadKey;
 
     const statistics = useMemo(() => {
         return {
-            topTargets: dashboardData.topTargets,
-            topCountries: dashboardData.topCountries,
+            topTargets: withSelectedZeroItem(
+                scopeStaleStatItemsToSelected(dashboardData.topTargets, filters.target, isDashboardStatsStaleForFilters),
+                filters.target,
+                (target) => ({ label: target, count: 0 }),
+            ),
+            topCountries: withSelectedZeroItem(
+                scopeStaleStatItemsToSelected(dashboardData.topCountries, filters.country, isDashboardStatsStaleForFilters),
+                filters.country,
+                (countryCode) => ({
+                    label: dashboardData.allCountries.find((country) => country.countryCode === countryCode)?.label ?? countryCode,
+                    value: countryCode,
+                    countryCode,
+                    count: 0,
+                }),
+            ),
             allCountries: dashboardData.allCountries,
-            topScenarios: dashboardData.topScenarios,
-            topAS: dashboardData.topAS,
+            topScenarios: withSelectedZeroItem(
+                scopeStaleStatItemsToSelected(dashboardData.topScenarios, filters.scenario, isDashboardStatsStaleForFilters),
+                filters.scenario,
+                (scenario) => ({ label: scenario, count: 0 }),
+            ),
+            topAS: withSelectedZeroItem(
+                scopeStaleStatItemsToSelected(dashboardData.topAS, filters.as, isDashboardStatsStaleForFilters),
+                filters.as,
+                (asName) => ({ label: asName, count: 0 }),
+            ),
             alertsHistory: toActivitySeries(dashboardData.series.alertsHistory),
             simulatedAlertsHistory: toActivitySeries(dashboardData.series.simulatedAlertsHistory),
             decisionsHistory: toActivitySeries(dashboardData.series.decisionsHistory),
@@ -380,7 +449,7 @@ export function Dashboard() {
             unfilteredDecisionsHistory: toActivitySeries(dashboardData.series.unfilteredDecisionsHistory),
             unfilteredSimulatedDecisionsHistory: toActivitySeries(dashboardData.series.unfilteredSimulatedDecisionsHistory),
         };
-    }, [dashboardData]);
+    }, [dashboardData, filters.as, filters.country, filters.scenario, filters.target, isDashboardStatsStaleForFilters]);
     
 
     // Handle Filters

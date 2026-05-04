@@ -155,4 +155,28 @@ describe('WorldMapCard', () => {
       }),
     );
   });
+
+  test('outlines the selected country even when map data is empty', async () => {
+    render(
+      <WorldMapCard
+        data={[]}
+        onCountrySelect={vi.fn()}
+        selectedCountry="DE"
+        simulationsEnabled={true}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('choropleth')).toBeInTheDocument());
+
+    const selectedPath = document.querySelector('path[data-feature-id="DE"]') as SVGPathElement | null;
+    const otherPath = document.querySelector('path[data-feature-id="US"]') as SVGPathElement | null;
+    expect(selectedPath).not.toBeNull();
+    expect(otherPath).not.toBeNull();
+
+    await waitFor(() => expect(selectedPath?.getAttribute('data-status')).toBe('active'));
+    expect(selectedPath?.style.stroke).toBe('rgb(56, 189, 248)');
+    expect(selectedPath?.style.strokeWidth).toBe('2.5');
+    expect(otherPath?.getAttribute('data-status')).toBe('dimmed');
+    expect(otherPath?.style.opacity).toBe('0.3');
+  });
 });

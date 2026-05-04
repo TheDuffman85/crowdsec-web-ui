@@ -376,13 +376,25 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
                     if (feature.id === selectedCountry) {
                         path.setAttribute('data-status', 'active');
                         path.style.opacity = '1';
+                        path.style.stroke = '#38bdf8';
+                        path.style.strokeWidth = '2.5';
+                        path.style.strokeLinejoin = 'round';
+                        path.style.filter = 'drop-shadow(0 0 4px rgba(56, 189, 248, 0.65))';
                     } else {
                         path.setAttribute('data-status', 'dimmed');
                         path.style.opacity = '0.3';
+                        path.style.stroke = '';
+                        path.style.strokeWidth = '';
+                        path.style.strokeLinejoin = '';
+                        path.style.filter = '';
                     }
                 } else {
                     path.removeAttribute('data-status');
                     path.style.opacity = '1';
+                    path.style.stroke = '';
+                    path.style.strokeWidth = '';
+                    path.style.strokeLinejoin = '';
+                    path.style.filter = '';
                 }
             });
         }, 150); // Increased delay slightly to be safe
@@ -410,7 +422,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
                     >
                         <style>{`
                             .world-map-container path {
-                                transition: opacity 0.2s ease, filter 0.15s ease;
+                                transition: opacity 0.2s ease, filter 0.15s ease, stroke-width 0.15s ease;
                                 cursor: pointer;
                                 outline: none !important;
                             }

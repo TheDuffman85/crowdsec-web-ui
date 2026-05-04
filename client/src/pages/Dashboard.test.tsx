@@ -243,6 +243,156 @@ describe('Dashboard page', () => {
     expect((decisionsCard as HTMLElement).getAttribute('href')).not.toContain('scenario=');
   });
 
+  test('shows restored stale scenario filter as a selected zero-count row', async () => {
+    localStorage.setItem('dashboard_filters', JSON.stringify({
+      dateRange: null,
+      dateRangeSticky: false,
+      country: null,
+      scenario: 'crowdsecurity/stale-scenario',
+      as: null,
+      ip: null,
+      target: null,
+      simulation: 'all',
+    }));
+    fetchDashboardStatsMock.mockResolvedValue({
+      ...buildDashboardStatsResponse(),
+      filteredTotals: {
+        alerts: 0,
+        decisions: 0,
+        simulatedAlerts: 0,
+        simulatedDecisions: 0,
+      },
+      globalTotal: 2,
+      topTargets: [],
+      topCountries: [],
+      allCountries: [],
+      topScenarios: [],
+      topAS: [],
+    });
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    const scenarioCard = await screen.findByText('Top Scenarios');
+    const scenarioRow = screen.getByText('stale-scenario').closest('.cursor-pointer');
+    expect(scenarioCard).toBeInTheDocument();
+    expect(scenarioRow).not.toBeNull();
+    expect(within(scenarioRow as HTMLElement).getByText('crowdsecurity')).toBeInTheDocument();
+    expect(within(scenarioRow as HTMLElement).getByText('0')).toBeInTheDocument();
+    expect(within(scenarioRow as HTMLElement).getByText('0.0%')).toBeInTheDocument();
+  });
+
+  test('shows restored stale country filter as a selected zero-count row and clears it on click', async () => {
+    localStorage.setItem('dashboard_filters', JSON.stringify({
+      dateRange: null,
+      dateRangeSticky: false,
+      country: 'FR',
+      scenario: null,
+      as: null,
+      ip: null,
+      target: null,
+      simulation: 'all',
+    }));
+    fetchDashboardStatsMock.mockImplementation(async (filters?: Record<string, string>) => ({
+      ...buildDashboardStatsResponse(filters),
+      filteredTotals: {
+        alerts: 0,
+        decisions: 0,
+        simulatedAlerts: 0,
+        simulatedDecisions: 0,
+      },
+      globalTotal: 2,
+      topTargets: [],
+      topCountries: [],
+      allCountries: [],
+      topScenarios: [],
+      topAS: [],
+    }));
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ country: 'FR' }),
+      expect.any(Object),
+    ));
+
+    const countryRow = await screen.findByText('FR');
+    const countryRowContainer = countryRow.closest('.cursor-pointer');
+    expect(countryRowContainer).not.toBeNull();
+    expect(within(countryRowContainer as HTMLElement).getByText('0')).toBeInTheDocument();
+    expect(within(countryRowContainer as HTMLElement).getByText('0.0%')).toBeInTheDocument();
+
+    fetchDashboardStatsMock.mockClear();
+    await userEvent.click(countryRow);
+
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ country: expect.any(String) }),
+      expect.any(Object),
+    ));
+  });
+
+  test('scopes a stale scenario list to the selected scenario while filtered stats load', async () => {
+    const pendingScenarioStats = createDeferred<ReturnType<typeof buildDashboardStatsResponse>>();
+    fetchDashboardStatsMock.mockImplementation((filters?: Record<string, string>) => {
+      if (filters?.scenario === 'crowdsecurity/vpatch-env-access') {
+        return pendingScenarioStats.promise;
+      }
+
+      return Promise.resolve({
+        ...buildDashboardStatsResponse(filters),
+        filteredTotals: {
+          alerts: 896,
+          decisions: 0,
+          simulatedAlerts: 0,
+          simulatedDecisions: 0,
+        },
+        globalTotal: 896,
+        topScenarios: [
+          { label: 'crowdsecurity/vpatch-env-access', count: 894 },
+          { label: 'crowdsecurity/vpatch-git-config', count: 2 },
+        ],
+      });
+    });
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('vpatch-env-access');
+    expect(screen.getByText('vpatch-git-config')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByText('vpatch-env-access'));
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ scenario: 'crowdsecurity/vpatch-env-access' }),
+      expect.any(Object),
+    ));
+
+    expect(screen.getByText('vpatch-env-access')).toBeInTheDocument();
+    expect(screen.queryByText('vpatch-git-config')).not.toBeInTheDocument();
+
+    pendingScenarioStats.resolve({
+      ...buildDashboardStatsResponse({ scenario: 'crowdsecurity/vpatch-env-access' }),
+      filteredTotals: {
+        alerts: 894,
+        decisions: 0,
+        simulatedAlerts: 0,
+        simulatedDecisions: 0,
+      },
+      globalTotal: 896,
+      topScenarios: [{ label: 'crowdsecurity/vpatch-env-access', count: 894 }],
+    });
+    await waitFor(() => expect(screen.queryByText('vpatch-git-config')).not.toBeInTheDocument());
+  });
+
   test('hides simulation labels and series when simulations are disabled', async () => {
     fetchConfigMock.mockResolvedValue({
       lookback_period: '7d',
@@ -339,6 +489,60 @@ describe('Dashboard page', () => {
       const alertsCard = screen.getByText('Total Alerts').closest('a');
       expect(alertsCard).not.toBeNull();
       expect(within(alertsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('1');
+    });
+  });
+
+  test('ignores an older dashboard request that resolves after a filter change', async () => {
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Total Alerts')).toBeInTheDocument());
+
+    const staleLiveRefresh = createDeferred<ReturnType<typeof buildDashboardStatsResponse>>();
+    fetchDashboardStatsMock.mockImplementation((filters?: Record<string, string>) => {
+      if (filters?.simulation === 'live') {
+        return staleLiveRefresh.promise;
+      }
+      if (filters?.simulation === 'simulated') {
+        return Promise.resolve({
+          ...buildDashboardStatsResponse(filters),
+          topScenarios: [{ label: 'crowdsecurity/simulated-only', count: 1 }],
+        });
+      }
+
+      return Promise.resolve(buildDashboardStatsResponse(filters));
+    });
+    fetchDashboardStatsMock.mockClear();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Live' }));
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ simulation: 'live' }),
+      expect.any(Object),
+    ));
+
+    await userEvent.click(screen.getByRole('button', { name: 'Simulation' }));
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ simulation: 'simulated' }),
+      expect.any(Object),
+    ));
+    await screen.findByText('simulated-only');
+
+    staleLiveRefresh.resolve({
+      ...buildDashboardStatsResponse({ simulation: 'live' }),
+      topScenarios: [
+        { label: 'crowdsecurity/ssh-bf', count: 1 },
+        { label: 'crowdsecurity/stale-scenario', count: 99 },
+      ],
+    });
+
+    await waitFor(() => {
+      const alertsCard = screen.getByText('Total Alerts').closest('a');
+      expect(alertsCard).not.toBeNull();
+      expect(within(alertsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('1');
+      expect(screen.queryByText('stale-scenario')).not.toBeInTheDocument();
     });
   });
 
