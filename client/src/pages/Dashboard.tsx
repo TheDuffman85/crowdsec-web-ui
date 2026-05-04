@@ -225,6 +225,24 @@ function withSelectedZeroItem<TItem extends DashboardStatListItem>(
     return [createItem(selectedValue), ...items];
 }
 
+function statItemMatchesValue(item: DashboardStatListItem, value: string): boolean {
+    return item.value === value ||
+        item.label === value ||
+        item.countryCode === value;
+}
+
+function scopeStaleStatItemsToSelected<TItem extends DashboardStatListItem>(
+    items: TItem[],
+    selectedValue: string | null,
+    shouldScope: boolean,
+): TItem[] {
+    if (!shouldScope || !selectedValue) {
+        return items;
+    }
+
+    return items.filter((item) => statItemMatchesValue(item, selectedValue));
+}
+
 export function Dashboard() {
     const navigate = useNavigate();
     const { refreshSignal, setLastUpdated } = useRefresh();
@@ -241,6 +259,7 @@ export function Dashboard() {
 
     const [isOnline, setIsOnline] = useState(true);
     const [dashboardStats, setDashboardStats] = useState<DashboardStatsResponse | null>(null);
+    const [dashboardStatsLoadKey, setDashboardStatsLoadKey] = useState<string | null>(null);
     const dashboardStatsRef = useRef<DashboardStatsResponse | null>(null);
     const loadDataRef = useRef<(isBackground?: boolean, signal?: AbortSignal) => Promise<void>>(async () => {});
     const lastRefreshSignalRef = useRef(refreshSignal);
@@ -324,13 +343,14 @@ export function Dashboard() {
                 fetchConfig(),
                 fetchDashboardStats(requestFilters, { signal }),
             ]);
-            if (signal?.aborted) {
+            if (signal?.aborted || requestId !== nextLoadRequestIdRef.current) {
                 return;
             }
 
             setConfig(configData);
             dashboardStatsRef.current = dashboardStatsData;
             setDashboardStats(dashboardStatsData);
+            setDashboardStatsLoadKey(loadKey);
 
             // Check LAPI status from config
             if (configData.lapi_status) {
@@ -389,16 +409,18 @@ export function Dashboard() {
 
     const dashboardData = dashboardStats ?? EMPTY_DASHBOARD_STATS;
     const stats = dashboardData.totals;
+    const currentDashboardStatsLoadKey = useMemo(() => JSON.stringify(buildDashboardStatsFilters()), [buildDashboardStatsFilters]);
+    const isDashboardStatsStaleForFilters = dashboardStatsLoadKey !== null && dashboardStatsLoadKey !== currentDashboardStatsLoadKey;
 
     const statistics = useMemo(() => {
         return {
             topTargets: withSelectedZeroItem(
-                dashboardData.topTargets,
+                scopeStaleStatItemsToSelected(dashboardData.topTargets, filters.target, isDashboardStatsStaleForFilters),
                 filters.target,
                 (target) => ({ label: target, count: 0 }),
             ),
             topCountries: withSelectedZeroItem(
-                dashboardData.topCountries,
+                scopeStaleStatItemsToSelected(dashboardData.topCountries, filters.country, isDashboardStatsStaleForFilters),
                 filters.country,
                 (countryCode) => ({
                     label: dashboardData.allCountries.find((country) => country.countryCode === countryCode)?.label ?? countryCode,
@@ -409,12 +431,12 @@ export function Dashboard() {
             ),
             allCountries: dashboardData.allCountries,
             topScenarios: withSelectedZeroItem(
-                dashboardData.topScenarios,
+                scopeStaleStatItemsToSelected(dashboardData.topScenarios, filters.scenario, isDashboardStatsStaleForFilters),
                 filters.scenario,
                 (scenario) => ({ label: scenario, count: 0 }),
             ),
             topAS: withSelectedZeroItem(
-                dashboardData.topAS,
+                scopeStaleStatItemsToSelected(dashboardData.topAS, filters.as, isDashboardStatsStaleForFilters),
                 filters.as,
                 (asName) => ({ label: asName, count: 0 }),
             ),
@@ -427,7 +449,7 @@ export function Dashboard() {
             unfilteredDecisionsHistory: toActivitySeries(dashboardData.series.unfilteredDecisionsHistory),
             unfilteredSimulatedDecisionsHistory: toActivitySeries(dashboardData.series.unfilteredSimulatedDecisionsHistory),
         };
-    }, [dashboardData, filters.as, filters.country, filters.scenario, filters.target]);
+    }, [dashboardData, filters.as, filters.country, filters.scenario, filters.target, isDashboardStatsStaleForFilters]);
     
 
     // Handle Filters

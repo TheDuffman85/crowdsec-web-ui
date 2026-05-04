@@ -338,6 +338,61 @@ describe('Dashboard page', () => {
     ));
   });
 
+  test('scopes a stale scenario list to the selected scenario while filtered stats load', async () => {
+    const pendingScenarioStats = createDeferred<ReturnType<typeof buildDashboardStatsResponse>>();
+    fetchDashboardStatsMock.mockImplementation((filters?: Record<string, string>) => {
+      if (filters?.scenario === 'crowdsecurity/vpatch-env-access') {
+        return pendingScenarioStats.promise;
+      }
+
+      return Promise.resolve({
+        ...buildDashboardStatsResponse(filters),
+        filteredTotals: {
+          alerts: 896,
+          decisions: 0,
+          simulatedAlerts: 0,
+          simulatedDecisions: 0,
+        },
+        globalTotal: 896,
+        topScenarios: [
+          { label: 'crowdsecurity/vpatch-env-access', count: 894 },
+          { label: 'crowdsecurity/vpatch-git-config', count: 2 },
+        ],
+      });
+    });
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('vpatch-env-access');
+    expect(screen.getByText('vpatch-git-config')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByText('vpatch-env-access'));
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ scenario: 'crowdsecurity/vpatch-env-access' }),
+      expect.any(Object),
+    ));
+
+    expect(screen.getByText('vpatch-env-access')).toBeInTheDocument();
+    expect(screen.queryByText('vpatch-git-config')).not.toBeInTheDocument();
+
+    pendingScenarioStats.resolve({
+      ...buildDashboardStatsResponse({ scenario: 'crowdsecurity/vpatch-env-access' }),
+      filteredTotals: {
+        alerts: 894,
+        decisions: 0,
+        simulatedAlerts: 0,
+        simulatedDecisions: 0,
+      },
+      globalTotal: 896,
+      topScenarios: [{ label: 'crowdsecurity/vpatch-env-access', count: 894 }],
+    });
+    await waitFor(() => expect(screen.queryByText('vpatch-git-config')).not.toBeInTheDocument());
+  });
+
   test('hides simulation labels and series when simulations are disabled', async () => {
     fetchConfigMock.mockResolvedValue({
       lookback_period: '7d',
@@ -434,6 +489,60 @@ describe('Dashboard page', () => {
       const alertsCard = screen.getByText('Total Alerts').closest('a');
       expect(alertsCard).not.toBeNull();
       expect(within(alertsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('1');
+    });
+  });
+
+  test('ignores an older dashboard request that resolves after a filter change', async () => {
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Total Alerts')).toBeInTheDocument());
+
+    const staleLiveRefresh = createDeferred<ReturnType<typeof buildDashboardStatsResponse>>();
+    fetchDashboardStatsMock.mockImplementation((filters?: Record<string, string>) => {
+      if (filters?.simulation === 'live') {
+        return staleLiveRefresh.promise;
+      }
+      if (filters?.simulation === 'simulated') {
+        return Promise.resolve({
+          ...buildDashboardStatsResponse(filters),
+          topScenarios: [{ label: 'crowdsecurity/simulated-only', count: 1 }],
+        });
+      }
+
+      return Promise.resolve(buildDashboardStatsResponse(filters));
+    });
+    fetchDashboardStatsMock.mockClear();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Live' }));
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ simulation: 'live' }),
+      expect.any(Object),
+    ));
+
+    await userEvent.click(screen.getByRole('button', { name: 'Simulation' }));
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ simulation: 'simulated' }),
+      expect.any(Object),
+    ));
+    await screen.findByText('simulated-only');
+
+    staleLiveRefresh.resolve({
+      ...buildDashboardStatsResponse({ simulation: 'live' }),
+      topScenarios: [
+        { label: 'crowdsecurity/ssh-bf', count: 1 },
+        { label: 'crowdsecurity/stale-scenario', count: 99 },
+      ],
+    });
+
+    await waitFor(() => {
+      const alertsCard = screen.getByText('Total Alerts').closest('a');
+      expect(alertsCard).not.toBeNull();
+      expect(within(alertsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('1');
+      expect(screen.queryByText('stale-scenario')).not.toBeInTheDocument();
     });
   });
 

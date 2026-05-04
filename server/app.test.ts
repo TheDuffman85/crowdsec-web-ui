@@ -920,6 +920,78 @@ describe('createApp', () => {
     destroyTempDir();
   });
 
+  test('dashboard scenario filters only include exact scenario matches', async () => {
+    const envAccessAlert = sampleAlert({
+      id: 201,
+      uuid: 'dashboard-vpatch-env-access',
+      scenario: 'crowdsecurity/vpatch-env-access',
+      decisions: [
+        {
+          id: 2010,
+          type: 'ban',
+          value: '1.2.3.4',
+          duration: '30m',
+          stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(),
+          origin: 'crowdsec',
+          scenario: 'crowdsecurity/vpatch-env-access',
+          simulated: false,
+        },
+      ],
+    });
+    const gitConfigAlert = sampleAlert({
+      id: 202,
+      uuid: 'dashboard-vpatch-git-config',
+      scenario: 'crowdsecurity/vpatch-git-config',
+      source: {
+        ip: '5.6.7.8',
+        value: '5.6.7.8',
+        cn: 'US',
+        as_name: 'AWS',
+      },
+      decisions: [
+        {
+          id: 2020,
+          type: 'ban',
+          value: '5.6.7.8',
+          duration: '30m',
+          stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(),
+          origin: 'crowdsec',
+          scenario: 'crowdsecurity/vpatch-git-config',
+          simulated: false,
+        },
+      ],
+    });
+    const dashboardAlerts = [envAccessAlert, gitConfigAlert];
+    const { controller, database, lapiClient } = createController({
+      fetchResolver: (url) => {
+        if (url.includes('/v1/alerts?')) {
+          return Response.json(dashboardAlerts);
+        }
+        return undefined;
+      },
+    });
+
+    for (const alert of dashboardAlerts) {
+      seedAlert(database, alert);
+    }
+    await lapiClient.login();
+
+    const filteredResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats?granularity=day&scenario=crowdsecurity/vpatch-env-access'));
+    expect(filteredResponse.status).toBe(200);
+    const filteredStats = await filteredResponse.json() as {
+      filteredTotals: { alerts: number; decisions: number };
+      topScenarios: Array<{ label: string; count: number }>;
+    };
+    expect(filteredStats.filteredTotals).toEqual(expect.objectContaining({ alerts: 1, decisions: 1 }));
+    expect(filteredStats.topScenarios).toEqual([
+      expect.objectContaining({ label: 'crowdsecurity/vpatch-env-access', count: 1 }),
+    ]);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
   test('reports table column defaults and includes machine in decision payloads', async () => {
     const firstAlert = sampleAlert({
       id: 101,
