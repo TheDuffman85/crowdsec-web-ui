@@ -89,7 +89,6 @@ const RULE_DEFAULTS: Record<NotificationRuleType, Record<string, string>> = {
   'lapi-availability': { outage_threshold_seconds: '60', notify_on_recovery: 'false' },
 };
 
-const NOTIFICATION_ORDER_STORAGE_KEY = 'crowdsec-web-ui:notifications:notification-order';
 const CHANNEL_ORDER_STORAGE_KEY = 'crowdsec-web-ui:notifications:destination-order';
 const RULE_ORDER_STORAGE_KEY = 'crowdsec-web-ui:notifications:rule-order';
 
@@ -189,6 +188,10 @@ function applyStoredOrder<T>(items: T[], order: string[], getId: (item: T) => st
   return [...orderedItems, ...itemsById.values()];
 }
 
+function sortNotificationsNewestFirst(items: NotificationItem[]): NotificationItem[] {
+  return [...items].sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
+}
+
 function moveItem<T>(items: T[], oldIndex: number, newIndex: number): T[] {
   if (oldIndex < 0 || newIndex < 0 || oldIndex >= items.length || newIndex >= items.length) {
     return items;
@@ -278,7 +281,6 @@ export function Notifications() {
   const [channels, setChannels] = useState<NotificationChannel[]>([]);
   const [rules, setRules] = useState<NotificationRule[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [notificationOrder, setNotificationOrder] = useState<string[]>(() => readStoredOrder(NOTIFICATION_ORDER_STORAGE_KEY));
   const [channelOrder, setChannelOrder] = useState<string[]>(() => readStoredOrder(CHANNEL_ORDER_STORAGE_KEY));
   const [ruleOrder, setRuleOrder] = useState<string[]>(() => readStoredOrder(RULE_ORDER_STORAGE_KEY));
   const [initialLoading, setInitialLoading] = useState(true);
@@ -387,7 +389,7 @@ export function Notifications() {
       }
 
       const nextSelectableIds = notificationPage.selectable_ids.map(String);
-      setNotifications((current) => append ? [...current, ...notificationPage.data] : nextNotifications);
+      setNotifications((current) => sortNotificationsNewestFirst(append ? [...current, ...notificationPage.data] : nextNotifications));
       currentPageRef.current = append ? notificationPage.pagination.page : nextPage;
       setCurrentPage(currentPageRef.current);
       setTotalPages(notificationPage.pagination.total_pages);
@@ -478,7 +480,6 @@ export function Notifications() {
   const canMarkSelectedRead = selectedUnreadCount > 0 || (allNotificationsSelected && unreadCount > 0);
   const readNotificationCount = Math.max(0, totalNotifications - unreadCount);
   const tableBusy = initialLoading || backgroundLoading || loadingMore;
-  const orderedNotifications = applyStoredOrder(notifications, notificationOrder, (item) => item.id);
   const orderedChannels = applyStoredOrder(channels, channelOrder, (channel) => channel.id);
   const orderedRules = applyStoredOrder(rules, ruleOrder, (rule) => rule.id);
 
@@ -489,21 +490,12 @@ export function Notifications() {
   }, [someNotificationsSelected]);
 
   useEffect(() => {
-    syncStoredOrder(NOTIFICATION_ORDER_STORAGE_KEY, notifications.map((item) => item.id), setNotificationOrder);
-  }, [notifications]);
-
-  useEffect(() => {
     syncStoredOrder(CHANNEL_ORDER_STORAGE_KEY, channels.map((channel) => channel.id), setChannelOrder);
   }, [channels]);
 
   useEffect(() => {
     syncStoredOrder(RULE_ORDER_STORAGE_KEY, rules.map((rule) => rule.id), setRuleOrder);
   }, [rules]);
-
-  const reorderNotifications = (oldIndex: number, newIndex: number) => {
-    const nextOrder = moveItem(orderedNotifications.map((item) => item.id), oldIndex, newIndex);
-    setNotificationOrder(saveStoredOrder(NOTIFICATION_ORDER_STORAGE_KEY, nextOrder));
-  };
 
   const reorderChannels = (oldIndex: number, newIndex: number) => {
     const nextOrder = moveItem(orderedChannels.map((channel) => channel.id), oldIndex, newIndex);
@@ -776,21 +768,20 @@ export function Notifications() {
               className="max-h-[32rem] overflow-y-auto pr-1 [scrollbar-gutter:stable]"
               aria-busy={tableBusy}
             >
-              <SortableList className="space-y-4" itemCount={orderedNotifications.length} onMove={reorderNotifications}>
-                {orderedNotifications.map((item, index) => (
+              <div className="space-y-4">
+                {notifications.map((item, index) => (
                   <NotificationRow
                     key={item.id}
                     item={item}
-                    dragHandle={<DragHandle label={`Reorder notification ${item.id}`} />}
                     selected={selectedNotificationIds.includes(item.id)}
                     onSelect={() => toggleNotificationSelection(item.id)}
                     onMarkRead={() => void handleMarkRead(item.id)}
                     onDelete={() => setPendingDeleteAction({ kind: 'single', id: item.id })}
-                    rowRef={index === orderedNotifications.length - 1 ? lastNotificationElementRef : undefined}
+                    rowRef={index === notifications.length - 1 ? lastNotificationElementRef : undefined}
                   />
                 ))}
                 {loadingMore && <p className="py-2 text-center text-sm text-gray-500 dark:text-gray-400">Loading more notifications...</p>}
-              </SortableList>
+              </div>
             </div>
           )}
         </CardContent>

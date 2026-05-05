@@ -28,6 +28,41 @@ interface ErrorInfo {
     helpText?: string;
 }
 
+function ErrorBanner({ errorInfo, onDismiss }: { errorInfo: ErrorInfo; onDismiss?: () => void }) {
+    return (
+        <div role="alert" className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md p-4 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-red-700 dark:text-red-300">
+                <AlertCircle size={16} className="flex-shrink-0" />
+                <span className="text-sm">
+                    {errorInfo.message}
+                    {errorInfo.helpLink && (
+                        <>
+                            {' See README: '}
+                            <a
+                                href={errorInfo.helpLink}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="underline hover:text-red-900 dark:hover:text-red-100"
+                            >
+                                {errorInfo.helpText || 'Learn more'}
+                            </a>
+                        </>
+                    )}
+                </span>
+            </div>
+            {onDismiss && (
+                <button
+                    onClick={onDismiss}
+                    className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-200"
+                    aria-label="Dismiss error message"
+                >
+                    <X size={16} />
+                </button>
+            )}
+        </div>
+    );
+}
+
 function toErrorInfo(error: unknown, fallbackMessage: string): ErrorInfo {
     const apiError = error as Partial<ApiPermissionError> | undefined;
 
@@ -87,6 +122,9 @@ export function Decisions() {
     const [deleteInProgress, setDeleteInProgress] = useState(false);
     const [newDecision, setNewDecision] = useState<AddDecisionRequest>({ ip: "", duration: "4h", reason: "manual" });
     const [errorInfo, setErrorInfo] = useState<ErrorInfo | null>(null);
+    const [pendingDeleteErrorInfo, setPendingDeleteErrorInfo] = useState<ErrorInfo | null>(null);
+    const [addDecisionErrorInfo, setAddDecisionErrorInfo] = useState<ErrorInfo | null>(null);
+    const [addDecisionInProgress, setAddDecisionInProgress] = useState(false);
     const tableColumnViewport = useTableColumnViewport();
     const alertIdFilter = searchParams.get("alert_id");
     const queryParam = searchParams.get("q");
@@ -444,21 +482,40 @@ export function Decisions() {
     const handleAddDecision = async (e: FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         const decisionData = { ...newDecision };
-        setShowAddModal(false);
-        setNewDecision({ ip: "", duration: "4h", reason: "manual" });
+        setAddDecisionInProgress(true);
         setErrorInfo(null);
+        setAddDecisionErrorInfo(null);
         try {
             await addDecision(decisionData);
+            setShowAddModal(false);
+            setNewDecision({ ip: "", duration: "4h", reason: "manual" });
             await loadDecisions({ page: 1, refreshConfig: true });
         } catch (error) {
             console.error("Failed to add decision", error);
-            setErrorInfo(toErrorInfo(error, "Failed to add decision. Please try again."));
+            setAddDecisionErrorInfo(toErrorInfo(error, "Failed to add decision. Please try again."));
+        } finally {
+            setAddDecisionInProgress(false);
         }
+    };
+
+    const openAddDecision = () => {
+        setAddDecisionErrorInfo(null);
+        setShowAddModal(true);
+    };
+
+    const closeAddDecision = () => {
+        if (addDecisionInProgress) {
+            return;
+        }
+
+        setAddDecisionErrorInfo(null);
+        setShowAddModal(false);
     };
 
 
     // Trigger modal instead of window.confirm
     const requestDelete = (id: string | number) => {
+        setPendingDeleteErrorInfo(null);
         setPendingDeleteAction({ kind: "single", decisionId: id });
     };
 
@@ -466,6 +523,7 @@ export function Decisions() {
         if (!pendingDeleteAction) return;
         setDeleteInProgress(true);
         setErrorInfo(null);
+        setPendingDeleteErrorInfo(null);
         try {
             let resultMessage: string | null = null;
 
@@ -486,6 +544,7 @@ export function Decisions() {
             }
 
             setPendingDeleteAction(null);
+            setPendingDeleteErrorInfo(null);
             await loadDecisions({ page: 1, refreshConfig: true });
             if (resultMessage) {
                 setErrorInfo({ message: resultMessage });
@@ -497,10 +556,15 @@ export function Decisions() {
                     ? "Failed to delete selected decisions. Please try again."
                     : "Failed to delete alerts and decisions for this IP. Please try again.";
             console.error("Failed to delete decision entries", error);
-            setErrorInfo(toErrorInfo(error, fallbackMessage));
+            setPendingDeleteErrorInfo(toErrorInfo(error, fallbackMessage));
         } finally {
             setDeleteInProgress(false);
         }
+    };
+
+    const cancelPendingDelete = () => {
+        setPendingDeleteAction(null);
+        setPendingDeleteErrorInfo(null);
     };
 
     const toggleDecisionSelection = (decisionId: string) => {
@@ -622,14 +686,17 @@ export function Decisions() {
             
             <div className="flex items-center gap-3">
                 <button
-                    onClick={() => setShowAddModal(true)}
+                    onClick={openAddDecision}
                     className="bg-primary-600 hover:bg-primary-700 text-white font-medium py-2 px-4 rounded-md transition-colors flex items-center gap-2 text-sm"
                 >
                     <Gavel size={16} />
                     Add Decision
                 </button>
                 <button
-                    onClick={() => setPendingDeleteAction({ kind: "selected", ids: selectedFilteredDecisionIds })}
+                    onClick={() => {
+                        setPendingDeleteErrorInfo(null);
+                        setPendingDeleteAction({ kind: "selected", ids: selectedFilteredDecisionIds });
+                    }}
                     disabled={selectedDecisionCount === 0}
                     className="rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
@@ -639,33 +706,7 @@ export function Decisions() {
 
             {/* Error Message */}
             {errorInfo && (
-                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md p-4 flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-red-700 dark:text-red-300">
-                        <AlertCircle size={16} className="flex-shrink-0" />
-                        <span className="text-sm">
-                            {errorInfo.message}
-                            {errorInfo.helpLink && (
-                                <>
-                                    {' See README: '}
-                                    <a
-                                        href={errorInfo.helpLink}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="underline hover:text-red-900 dark:hover:text-red-100"
-                                    >
-                                        {errorInfo.helpText || 'Learn more'}
-                                    </a>
-                                </>
-                            )}
-                        </span>
-                    </div>
-                    <button
-                        onClick={() => setErrorInfo(null)}
-                        className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-200"
-                    >
-                        <X size={16} />
-                    </button>
-                </div>
+                <ErrorBanner errorInfo={errorInfo} onDismiss={() => setErrorInfo(null)} />
             )}
 
             {/* Show active filters */}
@@ -966,7 +1007,10 @@ export function Decisions() {
                                                 <div className="flex items-center justify-end gap-2">
                                                     {decision.value && (
                                                         <button
-                                                            onClick={() => setPendingDeleteAction({ kind: "ip", ip: decision.value || "" })}
+                                                            onClick={() => {
+                                                                setPendingDeleteErrorInfo(null);
+                                                                setPendingDeleteAction({ kind: "ip", ip: decision.value || "" });
+                                                            }}
                                                             className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
                                                             title={`Delete all alerts and decisions for ${decision.value}`}
                                                             aria-label={`Delete all alerts and decisions for ${decision.value}`}
@@ -999,7 +1043,11 @@ export function Decisions() {
             {/* Delete Confirmation Modal */}
             <Modal
                 isOpen={!!pendingDeleteAction}
-                onClose={() => !deleteInProgress && setPendingDeleteAction(null)}
+                onClose={() => {
+                    if (!deleteInProgress) {
+                        cancelPendingDelete();
+                    }
+                }}
                 title={deleteActionTitle}
                 maxWidth="max-w-sm"
                 showCloseButton={false}
@@ -1017,9 +1065,14 @@ export function Decisions() {
                         <>Are you sure you want to delete {selectedFilteredDecisionIds.length} selected decision{selectedFilteredDecisionIds.length === 1 ? "" : "s"}? This action cannot be undone.</>
                     )}
                 </p>
+                {pendingDeleteErrorInfo && (
+                    <div className="mb-6">
+                        <ErrorBanner errorInfo={pendingDeleteErrorInfo} />
+                    </div>
+                )}
                 <div className="flex justify-end gap-3">
                     <button
-                        onClick={() => setPendingDeleteAction(null)}
+                        onClick={cancelPendingDelete}
                         disabled={deleteInProgress}
                         className="px-4 py-2 text-sm font-medium text-gray-700 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 disabled:cursor-not-allowed disabled:opacity-50"
                     >
@@ -1038,7 +1091,7 @@ export function Decisions() {
             {/* Add Decision Modal */}
             <Modal
                 isOpen={showAddModal}
-                onClose={() => setShowAddModal(false)}
+                onClose={closeAddDecision}
                 title="Add Manual Decision"
                 maxWidth="max-w-md"
             >
@@ -1048,6 +1101,7 @@ export function Decisions() {
                         <input
                             type="text"
                             required
+                            disabled={addDecisionInProgress}
                             className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
                             placeholder="1.2.3.4"
                             value={newDecision.ip}
@@ -1058,6 +1112,7 @@ export function Decisions() {
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Duration</label>
                         <input
                             type="text"
+                            disabled={addDecisionInProgress}
                             className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
                             placeholder="4h"
                             value={newDecision.duration}
@@ -1069,25 +1124,31 @@ export function Decisions() {
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Reason</label>
                         <input
                             type="text"
+                            disabled={addDecisionInProgress}
                             className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
                             placeholder="Manual ban"
                             value={newDecision.reason}
                             onChange={e => setNewDecision({ ...newDecision, reason: e.target.value })}
                         />
                     </div>
+                    {addDecisionErrorInfo && (
+                        <ErrorBanner errorInfo={addDecisionErrorInfo} />
+                    )}
                     <div className="flex justify-end gap-3 mt-6">
                         <button
                             type="button"
-                            onClick={() => setShowAddModal(false)}
-                            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600"
+                            onClick={closeAddDecision}
+                            disabled={addDecisionInProgress}
+                            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                             Cancel
                         </button>
                         <button
                             type="submit"
-                            className="px-4 py-2 text-sm font-medium text-white bg-primary-600 border border-transparent rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+                            disabled={addDecisionInProgress}
+                            className="px-4 py-2 text-sm font-medium text-white bg-primary-600 border border-transparent rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                            Add Decision
+                            {addDecisionInProgress ? "Adding..." : "Add Decision"}
                         </button>
                     </div>
                 </form>

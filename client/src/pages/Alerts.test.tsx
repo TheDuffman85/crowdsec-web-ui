@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StrictMode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -1302,5 +1302,47 @@ describe('Alerts page', () => {
     await waitFor(() => expect(bulkDeleteAlertsMock).toHaveBeenCalledWith(
       Array.from({ length: 55 }, (_, index) => String(index + 1)),
     ));
+  });
+
+  test('shows delete permission guidance inside the confirmation modal', async () => {
+    const alerts: SlimAlert[] = [{
+      id: 1,
+      created_at: '2026-03-23T10:00:00.000Z',
+      scenario: 'crowdsecurity/ssh-bf',
+      machine_id: 'machine-1',
+      machine_alias: 'host-a',
+      source: { ip: '1.2.3.4', value: '1.2.3.4', cn: 'DE', as_name: 'Hetzner' },
+      target: 'ssh',
+      meta_search: 'ssh',
+      decisions: [{ id: 10, value: '1.2.3.4', type: 'ban', origin: 'manual', simulated: false, expired: false }],
+    }];
+    const permissionError = Object.assign(new Error('Permission denied.'), {
+      helpLink: 'https://github.com/TheDuffman85/crowdsec-web-ui#trusted-ips-for-delete-operations-optional',
+      helpText: 'Trusted IPs for Delete Operations',
+    });
+    vi.mocked(api.fetchAlertsPaginated).mockImplementation(async (page, pageSize) =>
+      toPaginatedAlerts(alerts, page, pageSize),
+    );
+    vi.mocked(api.deleteAlert).mockRejectedValueOnce(permissionError);
+
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+
+    await userEvent.click(screen.getAllByTitle('Delete Alert')[0]);
+    let deleteDialog = screen.getByRole('dialog', { name: 'Delete Alert?' });
+    await userEvent.click(within(deleteDialog).getByRole('button', { name: 'Delete' }));
+
+    deleteDialog = screen.getByRole('dialog', { name: 'Delete Alert?' });
+    const modalAlert = await within(deleteDialog).findByRole('alert');
+    expect(modalAlert).toHaveTextContent('Permission denied.');
+    expect(within(modalAlert).getByRole('link', { name: 'Trusted IPs for Delete Operations' })).toHaveAttribute(
+      'href',
+      'https://github.com/TheDuffman85/crowdsec-web-ui#trusted-ips-for-delete-operations-optional',
+    );
   });
 });

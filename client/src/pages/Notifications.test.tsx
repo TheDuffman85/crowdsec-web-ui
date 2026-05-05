@@ -207,8 +207,8 @@ describe('Notifications page', () => {
     expect(screen.getByText(/no outbound destinations exist yet/i)).toBeInTheDocument();
   });
 
-  test('restores saved notification, destination, and rule order after remounting', async () => {
-    window.localStorage.setItem('crowdsec-web-ui:notifications:notification-order', JSON.stringify(['notif-2', 'notif-1']));
+  test('keeps recent notifications newest-first while restoring destination and rule order after remounting', async () => {
+    window.localStorage.setItem('crowdsec-web-ui:notifications:notification-order', JSON.stringify(['notif-1', 'notif-2']));
     window.localStorage.setItem('crowdsec-web-ui:notifications:destination-order', JSON.stringify(['channel-2', 'channel-1']));
     window.localStorage.setItem('crowdsec-web-ui:notifications:rule-order', JSON.stringify(['rule-2', 'rule-1']));
 
@@ -319,7 +319,8 @@ describe('Notifications page', () => {
 
     await waitFor(() => expect(screen.getByText('Saved order notification')).toBeInTheDocument());
 
-    expect(screen.getByLabelText('Reorder notification notif-2').compareDocumentPosition(screen.getByLabelText('Reorder notification notif-1')) & 4).toBeTruthy();
+    expect(screen.queryByLabelText('Reorder notification notif-2')).not.toBeInTheDocument();
+    expect(screen.getByText('Saved order notification').compareDocumentPosition(screen.getByText('First server notification')) & 4).toBeTruthy();
     expect(screen.getByLabelText('Reorder destination Security Email').compareDocumentPosition(screen.getByLabelText('Reorder destination Ops MQTT')) & 4).toBeTruthy();
     expect(screen.getByLabelText('Reorder rule New CVE').compareDocumentPosition(screen.getByLabelText('Reorder rule Alert Threshold')) & 4).toBeTruthy();
   });
