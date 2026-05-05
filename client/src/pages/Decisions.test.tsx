@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StrictMode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -836,5 +836,64 @@ describe('Decisions page', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Delete' }));
 
     await waitFor(() => expect(cleanupByIpMock).toHaveBeenCalledWith('1.2.3.4'));
+  });
+
+  test('shows add permission guidance inside the add decision modal', async () => {
+    const permissionError = Object.assign(new Error('Permission denied.'), {
+      helpLink: 'https://github.com/TheDuffman85/crowdsec-web-ui#trusted-ips-for-delete-operations-optional',
+      helpText: 'Trusted IPs for Write Operations',
+    });
+    vi.mocked(api.addDecision).mockRejectedValueOnce(permissionError);
+
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add Decision' }));
+    let addDialog = screen.getByRole('dialog', { name: 'Add Manual Decision' });
+    const ipInput = within(addDialog).getByPlaceholderText('1.2.3.4');
+    await userEvent.type(ipInput, '203.0.113.10');
+    await userEvent.click(within(addDialog).getByRole('button', { name: 'Add Decision' }));
+
+    addDialog = screen.getByRole('dialog', { name: 'Add Manual Decision' });
+    const modalAlert = await within(addDialog).findByRole('alert');
+    expect(modalAlert).toHaveTextContent('Permission denied.');
+    expect(within(modalAlert).getByRole('link', { name: 'Trusted IPs for Write Operations' })).toHaveAttribute(
+      'href',
+      'https://github.com/TheDuffman85/crowdsec-web-ui#trusted-ips-for-delete-operations-optional',
+    );
+    expect(within(addDialog).getByPlaceholderText('1.2.3.4')).toHaveValue('203.0.113.10');
+  });
+
+  test('shows delete permission guidance inside the confirmation modal', async () => {
+    const permissionError = Object.assign(new Error('Permission denied.'), {
+      helpLink: 'https://github.com/TheDuffman85/crowdsec-web-ui#trusted-ips-for-delete-operations-optional',
+      helpText: 'Trusted IPs for Delete Operations',
+    });
+    vi.mocked(api.deleteDecision).mockRejectedValueOnce(permissionError);
+
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+
+    await userEvent.click(screen.getAllByTitle('Delete Decision')[0]);
+    let deleteDialog = screen.getByRole('dialog', { name: 'Delete Decision?' });
+    await userEvent.click(within(deleteDialog).getByRole('button', { name: 'Delete' }));
+
+    deleteDialog = screen.getByRole('dialog', { name: 'Delete Decision?' });
+    const modalAlert = await within(deleteDialog).findByRole('alert');
+    expect(modalAlert).toHaveTextContent('Permission denied.');
+    expect(within(modalAlert).getByRole('link', { name: 'Trusted IPs for Delete Operations' })).toHaveAttribute(
+      'href',
+      'https://github.com/TheDuffman85/crowdsec-web-ui#trusted-ips-for-delete-operations-optional',
+    );
   });
 });

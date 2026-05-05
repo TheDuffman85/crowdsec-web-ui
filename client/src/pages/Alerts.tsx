@@ -33,6 +33,41 @@ interface ErrorInfo {
     helpText?: string;
 }
 
+function ErrorBanner({ errorInfo, onDismiss }: { errorInfo: ErrorInfo; onDismiss?: () => void }) {
+    return (
+        <div role="alert" className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md p-4 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-red-700 dark:text-red-300">
+                <AlertCircle size={16} className="flex-shrink-0" />
+                <span className="text-sm">
+                    {errorInfo.message}
+                    {errorInfo.helpLink && (
+                        <>
+                            {' See README: '}
+                            <a
+                                href={errorInfo.helpLink}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="underline hover:text-red-900 dark:hover:text-red-100"
+                            >
+                                {errorInfo.helpText || 'Learn more'}
+                            </a>
+                        </>
+                    )}
+                </span>
+            </div>
+            {onDismiss && (
+                <button
+                    onClick={onDismiss}
+                    className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-200"
+                    aria-label="Dismiss error message"
+                >
+                    <X size={16} />
+                </button>
+            )}
+        </div>
+    );
+}
+
 function toErrorInfo(error: unknown, fallbackMessage: string): ErrorInfo {
     const apiError = error as Partial<ApiPermissionError> | undefined;
 
@@ -120,6 +155,7 @@ export function Alerts() {
     const [selectedAlertIds, setSelectedAlertIds] = useState<string[]>([]);
     const [deleteInProgress, setDeleteInProgress] = useState(false);
     const [errorInfo, setErrorInfo] = useState<ErrorInfo | null>(null);
+    const [pendingDeleteErrorInfo, setPendingDeleteErrorInfo] = useState<ErrorInfo | null>(null);
     const [showAllEvents, setShowAllEvents] = useState(false);
     const tableColumnViewport = useTableColumnViewport();
     const currentSimulationFilter = simulationsEnabled ? parseSimulationFilter(searchParams.get("simulation")) : 'all';
@@ -691,6 +727,7 @@ export function Alerts() {
     // Delete handlers
     const requestDelete = (id: string | number, event: ReactMouseEvent<HTMLButtonElement>) => {
         event.stopPropagation();
+        setPendingDeleteErrorInfo(null);
         setPendingDeleteAction({ kind: "single", alertId: id });
     };
 
@@ -698,6 +735,7 @@ export function Alerts() {
         if (!pendingDeleteAction) return;
         setDeleteInProgress(true);
         setErrorInfo(null);
+        setPendingDeleteErrorInfo(null);
         try {
             let resultMessage: string | null = null;
 
@@ -727,6 +765,7 @@ export function Alerts() {
             }
 
             setPendingDeleteAction(null);
+            setPendingDeleteErrorInfo(null);
             await loadAlerts({ page: 1, refreshConfig: true });
             if (resultMessage) {
                 setErrorInfo({ message: resultMessage });
@@ -738,10 +777,15 @@ export function Alerts() {
                     ? "Failed to delete selected alerts. Please try again."
                     : "Failed to delete alerts and decisions for this IP. Please try again.";
             console.error("Failed to delete alert entries", error);
-            setErrorInfo(toErrorInfo(error, fallbackMessage));
+            setPendingDeleteErrorInfo(toErrorInfo(error, fallbackMessage));
         } finally {
             setDeleteInProgress(false);
         }
+    };
+
+    const cancelPendingDelete = () => {
+        setPendingDeleteAction(null);
+        setPendingDeleteErrorInfo(null);
     };
 
     const toggleAlertSelection = (alertId: string) => {
@@ -818,7 +862,10 @@ export function Alerts() {
 
             <div className="flex items-center gap-3">
                 <button
-                    onClick={() => setPendingDeleteAction({ kind: "selected", ids: selectedFilteredAlertIds })}
+                    onClick={() => {
+                        setPendingDeleteErrorInfo(null);
+                        setPendingDeleteAction({ kind: "selected", ids: selectedFilteredAlertIds });
+                    }}
                     disabled={selectedAlertCount === 0}
                     className="rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
@@ -828,33 +875,7 @@ export function Alerts() {
 
             {/* Error Message */}
             {errorInfo && (
-                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md p-4 flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-red-700 dark:text-red-300">
-                        <AlertCircle size={16} className="flex-shrink-0" />
-                        <span className="text-sm">
-                            {errorInfo.message}
-                            {errorInfo.helpLink && (
-                                <>
-                                    {' See README: '}
-                                    <a
-                                        href={errorInfo.helpLink}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="underline hover:text-red-900 dark:hover:text-red-100"
-                                    >
-                                        {errorInfo.helpText || 'Learn more'}
-                                    </a>
-                                </>
-                            )}
-                        </span>
-                    </div>
-                    <button
-                        onClick={() => setErrorInfo(null)}
-                        className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-200"
-                    >
-                        <X size={16} />
-                    </button>
-                </div>
+                <ErrorBanner errorInfo={errorInfo} onDismiss={() => setErrorInfo(null)} />
             )}
 
             {/* Show active filters */}
@@ -1137,6 +1158,7 @@ export function Alerts() {
                                                         <button
                                                             onClick={(e) => {
                                                                 e.stopPropagation();
+                                                                setPendingDeleteErrorInfo(null);
                                                                 setPendingDeleteAction({ kind: "ip", ip: sourceValue });
                                                             }}
                                                             className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
@@ -1425,7 +1447,11 @@ export function Alerts() {
             {/* Delete Confirmation Modal */}
             <Modal
                 isOpen={!!pendingDeleteAction}
-                onClose={() => !deleteInProgress && setPendingDeleteAction(null)}
+                onClose={() => {
+                    if (!deleteInProgress) {
+                        cancelPendingDelete();
+                    }
+                }}
                 title={deleteActionTitle}
                 maxWidth="max-w-sm"
                 showCloseButton={false}
@@ -1443,9 +1469,14 @@ export function Alerts() {
                         <>Are you sure you want to delete {selectedFilteredAlertIds.length} selected alert{selectedFilteredAlertIds.length === 1 ? "" : "s"}? This will also remove associated decisions from the cache.</>
                     )}
                 </p>
+                {pendingDeleteErrorInfo && (
+                    <div className="mb-6">
+                        <ErrorBanner errorInfo={pendingDeleteErrorInfo} />
+                    </div>
+                )}
                 <div className="flex justify-end gap-3">
                     <button
-                        onClick={() => setPendingDeleteAction(null)}
+                        onClick={cancelPendingDelete}
                         disabled={deleteInProgress}
                         className="px-4 py-2 text-sm font-medium text-gray-700 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 disabled:cursor-not-allowed disabled:opacity-50"
                     >
