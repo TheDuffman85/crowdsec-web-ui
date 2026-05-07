@@ -17,6 +17,44 @@ interface SidebarProps {
     toggleTheme: () => void;
 }
 
+function normalizeUpdateStatus(status: UpdateCheckResponse): UpdateCheckResponse {
+    if (!status.update_available || !status.remote_version) {
+        return status;
+    }
+
+    const currentVersion = import.meta.env.VITE_VERSION?.replace(/^v/i, '').trim();
+    const remoteVersion = status.remote_version.replace(/^v/i, '').trim();
+    if (!currentVersion || compareReleaseVersions(remoteVersion, currentVersion) > 0) {
+        return status;
+    }
+
+    return {
+        ...status,
+        update_available: false,
+    };
+}
+
+function compareReleaseVersions(left: string, right: string): number {
+    const leftParts = left.split('.').map((part) => Number(part));
+    const rightParts = right.split('.').map((part) => Number(part));
+    const canCompareNumerically = leftParts.every(Number.isFinite) && rightParts.every(Number.isFinite);
+
+    if (!canCompareNumerically) {
+        return left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' });
+    }
+
+    const maxLength = Math.max(leftParts.length, rightParts.length);
+    for (let index = 0; index < maxLength; index += 1) {
+        const leftPart = leftParts[index] || 0;
+        const rightPart = rightParts[index] || 0;
+        if (leftPart !== rightPart) {
+            return leftPart > rightPart ? 1 : -1;
+        }
+    }
+
+    return 0;
+}
+
 export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: SidebarProps) {
     const { intervalMs, setIntervalMs, lastUpdated, refreshSignal } = useRefresh();
     const { unreadCount } = useNotificationUnreadCount();
@@ -34,14 +72,18 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
 
         const checkUpdates = async () => {
             try {
-                const response = await fetch(apiUrl('/api/update-check'), { cache: 'no-store' });
+                const params = new URLSearchParams();
+                if (import.meta.env.VITE_VERSION) params.set('version', import.meta.env.VITE_VERSION);
+                if (import.meta.env.VITE_BRANCH) params.set('branch', import.meta.env.VITE_BRANCH);
+                if (import.meta.env.VITE_COMMIT_HASH) params.set('commit_hash', import.meta.env.VITE_COMMIT_HASH);
+                const response = await fetch(apiUrl(`/api/update-check${params.size ? `?${params.toString()}` : ''}`), { cache: 'no-store' });
                 if (!response.ok || cancelled) {
                     return;
                 }
 
-                const status = await response.json();
+                const status: UpdateCheckResponse = await response.json();
                 if (!cancelled) {
-                    setUpdateStatus(status);
+                    setUpdateStatus(normalizeUpdateStatus(status));
                 }
             } catch (error) {
                 if (!cancelled) {

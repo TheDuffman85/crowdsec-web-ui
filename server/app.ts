@@ -47,7 +47,7 @@ import { createNotificationService } from './notifications';
 import type { MqttPublishConfig } from './notifications/mqtt-client';
 import { createNotificationOutboundGuard } from './notifications/outbound-guard';
 import { createNotificationSecretStore } from './notifications/secret-store';
-import { createUpdateChecker } from './update-check';
+import { createUpdateChecker, type UpdateCheckOverrides, type UpdateChecker } from './update-check';
 import { getAlertSourceValue, getAlertTarget, resolveAlertReason, resolveAlertScenario, toSlimAlert } from './utils/alerts';
 import { parseGoDuration, toDuration } from './utils/duration';
 
@@ -68,7 +68,7 @@ export interface CreateAppOptions {
   lapiClient?: LapiClient;
   distRoot?: string;
   startBackgroundTasks?: boolean;
-  updateChecker?: () => Promise<UpdateCheckResponse>;
+  updateChecker?: UpdateChecker;
   notificationFetchImpl?: FetchLike;
   mqttPublishImpl?: (config: MqttPublishConfig, payload: string) => Promise<void>;
 }
@@ -280,6 +280,21 @@ function formatSignedCount(count: number): string {
   return count > 0 ? `+${count}` : String(count);
 }
 
+function readUpdateCheckOverrides(query: Record<string, string | string[]>): UpdateCheckOverrides {
+  return {
+    branch: readSingleQueryValue(query.branch),
+    commitHash: readSingleQueryValue(query.commit_hash),
+    version: readSingleQueryValue(query.version),
+  };
+}
+
+function readSingleQueryValue(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+  return value;
+}
+
 export function createApp(options: CreateAppOptions = {}): AppController {
   const config = options.config || createRuntimeConfig();
   const database = options.database || new CrowdsecDatabase({ dbDir: config.dbDir });
@@ -311,6 +326,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     getLapiStatus: () => lapiClient.getStatus(),
     outboundGuard: notificationOutboundGuard,
     secretStore: notificationSecretStore,
+    debugPayloads: config.notificationDebugPayloads,
   });
 
   const app = new Hono();
@@ -1008,7 +1024,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
   app.get(`${config.basePath}/api/update-check`, ensureAuth, async (context) => {
     try {
-      const status = await checkForUpdates();
+      const status = await checkForUpdates(readUpdateCheckOverrides(context.req.query()));
       context.header('Cache-Control', 'no-store, no-cache, must-revalidate');
       context.header('Pragma', 'no-cache');
       return context.json(status);

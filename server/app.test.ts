@@ -2703,7 +2703,7 @@ describe('createApp', () => {
     destroyTempDir();
   });
 
-  test('does not expose remote notification response bodies to clients', async () => {
+  test('exposes truncated remote notification response snippets to clients', async () => {
     const { controller, database } = createController({
       notificationFetchResolver: (url) => {
         if (url.includes('198.51.100.10')) {
@@ -2736,7 +2736,7 @@ describe('createApp', () => {
     const testChannel = await controller.fetch(new Request(`http://localhost/crowdsec/api/notification-channels/${channelPayload.id}/test`, { method: 'POST' }));
     expect(testChannel.status).toBe(400);
     expect((await testChannel.json()) as { error: string }).toEqual({
-      error: 'Webhook request failed with status 500',
+      error: 'Webhook request failed with status 500: internal token leaked',
     });
 
     controller.stopBackgroundTasks();
@@ -2834,7 +2834,8 @@ describe('createApp', () => {
     expect(testChannel.status).toBe(200);
     expect(mqttPublishes).toHaveLength(2);
     expect(JSON.parse(mqttPublishes[1]?.payload || '{}')).toEqual(expect.objectContaining({
-      rule_name: null,
+      rule_name: 'Test notification',
+      rule_type: 'test',
       severity: 'info',
     }));
 

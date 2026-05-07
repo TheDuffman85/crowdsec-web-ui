@@ -80,6 +80,74 @@ describe('update checker', () => {
     });
   });
 
+  test('does not report a release update when local version is equal or newer', async () => {
+    let remoteVersion = 'v2026.5.2';
+    const check = createUpdateChecker({
+      dockerImageRef: 'owner/repo',
+      branch: 'main',
+      commitHash: 'abc123',
+      version: '2026.5.2',
+      enabled: true,
+      fetchImpl: async () =>
+        Response.json({
+          tag_name: remoteVersion,
+          html_url: 'https://example.com/release',
+        }),
+    });
+
+    await expect(check()).resolves.toEqual({
+      update_available: false,
+      local_version: '2026.5.2',
+      remote_version: '2026.5.2',
+      release_url: 'https://example.com/release',
+      tag: 'latest',
+    });
+
+    remoteVersion = '2026.5.9';
+    await expect(check({ version: '2026.5.10' })).resolves.toEqual({
+      update_available: false,
+      local_version: '2026.5.10',
+      remote_version: '2026.5.9',
+      release_url: 'https://example.com/release',
+      tag: 'latest',
+    });
+  });
+
+  test('keys the cache by effective local build metadata', async () => {
+    let fetchCount = 0;
+    const check = createUpdateChecker({
+      dockerImageRef: 'owner/repo',
+      branch: 'main',
+      commitHash: 'abc123',
+      version: '1.0.0',
+      enabled: true,
+      fetchImpl: async () => {
+        fetchCount += 1;
+        return Response.json({
+          tag_name: '2.0.0',
+          html_url: 'https://example.com/release',
+        });
+      },
+    });
+
+    await expect(check()).resolves.toMatchObject({
+      update_available: true,
+      local_version: '1.0.0',
+      remote_version: '2.0.0',
+    });
+    await expect(check()).resolves.toMatchObject({
+      update_available: true,
+      local_version: '1.0.0',
+      remote_version: '2.0.0',
+    });
+    await expect(check({ version: '2.0.0' })).resolves.toMatchObject({
+      update_available: false,
+      local_version: '2.0.0',
+      remote_version: '2.0.0',
+    });
+    expect(fetchCount).toBe(2);
+  });
+
   test('falls back to workflow runs when GHCR lookup misses and handles errors', async () => {
     const check = createUpdateChecker({
       dockerImageRef: 'owner/repo',

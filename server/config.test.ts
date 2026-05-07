@@ -72,6 +72,7 @@ describe('config helpers', () => {
       DB_DIR: '/tmp/app',
       NOTIFICATION_SECRET_KEY: 'notif-secret',
       NOTIFICATION_ALLOW_PRIVATE_ADDRESSES: 'true',
+      NOTIFICATION_DEBUG_PAYLOADS: 'true',
     });
 
     expect(config.port).toBe(4000);
@@ -98,6 +99,7 @@ describe('config helpers', () => {
     expect(config.dbDir).toBe('/tmp/app');
     expect(config.notificationSecretKey).toBe('notif-secret');
     expect(config.notificationAllowPrivateAddresses).toBe(true);
+    expect(config.notificationDebugPayloads).toBe(true);
   });
 
   test('createRuntimeConfig disables simulations by default', () => {
@@ -115,6 +117,7 @@ describe('config helpers', () => {
     expect(config.simulationsEnabled).toBe(false);
     expect(config.notificationSecretKey).toBeUndefined();
     expect(config.notificationAllowPrivateAddresses).toBe(true);
+    expect(config.notificationDebugPayloads).toBe(false);
     expect(config.lapiRequestTimeoutMs).toBe(30_000);
     expect(config.alertSyncChunkMs).toBe(21_600_000);
     expect(config.alertSyncMinChunkMs).toBe(900_000);

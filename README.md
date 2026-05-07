@@ -237,6 +237,7 @@ Choose exactly one auth mode: password auth or mTLS auth.
 | `CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY` | `false` | Drop alerts whose effective origin is empty. |
 | `NOTIFICATION_SECRET_KEY` | auto-generated and persisted | Optional fixed encryption key for saved notification secrets. If unset, the app generates one and stores it in app metadata. |
 | `NOTIFICATION_ALLOW_PRIVATE_ADDRESSES` | `true` | Allow notification destinations on private, loopback, and link-local addresses. Set to `false` to block them. |
+| `NOTIFICATION_DEBUG_PAYLOADS` | `false` | When enabled, failed notification deliveries log a truncated rendered request body for troubleshooting. Use carefully because payloads may contain sensitive data. |
 | `NODE_EXTRA_CA_CERTS` | none | Optional Node.js trust bundle for HTTPS connections, useful when using password auth against a private or self-signed CrowdSec CA. |
 
 ### Build and Image Metadata
@@ -618,7 +619,7 @@ Each notification publishes a JSON payload to the configured topic containing:
 -   `rule_name`
 -   `rule_type`
 
-For test sends, the rule fields are `null`.
+For test sends, rule fields use a synthetic context: `rule_id` is `test`, `rule_name` is `Test notification`, and `rule_type` is `test`.
 
 #### Webhook
 
@@ -639,17 +640,39 @@ Webhook settings:
 Webhook templates support simple dotted variables rooted at `event.*`. The body and templated fields can reference values such as:
 
 -   `{{event.title}}`
+-   `{{event.titleJson}}`
 -   `{{event.message}}`
+-   `{{event.messageJson}}`
 -   `{{event.severity}}`
+-   `{{event.severityJson}}`
 -   `{{event.metadata}}`
+-   `{{event.metadataJson}}`
 -   `{{event.sent_at}}`
+-   `{{event.sent_atJson}}`
 -   `{{event.channel_name}}`
+-   `{{event.channel_nameJson}}`
+-   `{{event.rule_id}}`
+-   `{{event.rule_idJson}}`
+-   `{{event.rule_idOrUnknown}}`
+-   `{{event.rule_idOrUnknownJson}}`
 -   `{{event.rule_name}}`
+-   `{{event.rule_nameJson}}`
+-   `{{event.rule_nameOrUnknown}}`
+-   `{{event.rule_nameOrUnknownJson}}`
+-   `{{event.rule_type}}`
+-   `{{event.rule_typeJson}}`
+-   `{{event.rule_typeOrUnknown}}`
+-   `{{event.rule_typeOrUnknownJson}}`
+
+Use the `*Json` variables when placing values inside JSON templates without surrounding quotes. Nullable rule fields also provide `OrUnknown` aliases for destinations that reject JSON `null` values.
+
+Failed webhook deliveries include the HTTP status and a truncated response body in the delivery error and server warning logs. Set `NOTIFICATION_DEBUG_PAYLOADS=true` to also include a truncated rendered request body in warning logs; sensitive form fields are redacted, but JSON/text bodies may still contain secrets.
 
 ### Notification Security Controls
 
 -   `NOTIFICATION_SECRET_KEY`: optional override for the notification encryption key. If unset, the backend auto-generates one on first start and persists it in application metadata so encrypted destinations continue working across restarts.
 -   `NOTIFICATION_ALLOW_PRIVATE_ADDRESSES=true` by default. Set it to `false` if you want to block private, loopback, and link-local destinations.
+-   `NOTIFICATION_DEBUG_PAYLOADS=false` by default. Set it to `true` only while troubleshooting failed deliveries, then turn it back off.
 
 ### Current Scope
 

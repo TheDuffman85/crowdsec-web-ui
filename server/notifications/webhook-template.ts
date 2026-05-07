@@ -28,6 +28,11 @@ function json(value: unknown): string {
   return JSON.stringify(value ?? null);
 }
 
+function fallbackText(value: string | null, fallback = 'unknown'): string {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  return trimmed || fallback;
+}
+
 function getPathValue(source: Record<string, unknown>, path: string): unknown {
   const segments = path.split('.');
   let current: unknown = source;
@@ -57,6 +62,10 @@ export function validateTemplate(template: string): string | null {
 }
 
 export function buildWebhookTemplateView(event: WebhookTemplateEvent): { event: Record<string, unknown> } {
+  const ruleIdOrUnknown = fallbackText(event.rule_id);
+  const ruleNameOrUnknown = fallbackText(event.rule_name);
+  const ruleTypeOrUnknown = fallbackText(event.rule_type);
+
   return {
     event: {
       ...event,
@@ -71,6 +80,12 @@ export function buildWebhookTemplateView(event: WebhookTemplateEvent): { event: 
       rule_idJson: json(event.rule_id),
       rule_nameJson: json(event.rule_name),
       rule_typeJson: json(event.rule_type),
+      rule_idOrUnknown: ruleIdOrUnknown,
+      rule_idOrUnknownJson: json(ruleIdOrUnknown),
+      rule_nameOrUnknown: ruleNameOrUnknown,
+      rule_nameOrUnknownJson: json(ruleNameOrUnknown),
+      rule_typeOrUnknown: ruleTypeOrUnknown,
+      rule_typeOrUnknownJson: json(ruleTypeOrUnknown),
       json: json(event),
     },
   };
