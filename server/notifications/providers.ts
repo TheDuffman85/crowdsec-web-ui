@@ -25,7 +25,7 @@ export interface NotificationProviderPayload {
   channel_type: NotificationChannelType;
   rule_id: string | null;
   rule_name: string | null;
-  rule_type: NotificationRuleType | null;
+  rule_type: NotificationRuleType | 'test' | null;
 }
 
 export interface NotificationProviderContext {
@@ -61,6 +61,9 @@ interface WebhookHeader {
 
 interface NotificationSendError extends Error {
   retriable?: boolean;
+  status?: number;
+  responseSnippet?: string;
+  requestBodySnippet?: string;
 }
 
 interface WebhookQuery {
@@ -92,6 +95,7 @@ interface WebhookConfig {
 
 const HTTP_METHODS = new Set(['POST', 'PUT', 'PATCH']);
 const NTFY_PRIORITIES = new Set(['auto', 'min', 'low', 'default', 'high', 'urgent']);
+const WEBHOOK_ERROR_BODY_SNIPPET_LIMIT = 500;
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -179,6 +183,14 @@ function severityToGotifyPriority(severity: NotificationSeverity): number {
   if (severity === 'critical') return 10;
   if (severity === 'warning') return 7;
   return 5;
+}
+
+function truncateForLog(value: string, limit = WEBHOOK_ERROR_BODY_SNIPPET_LIMIT): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= limit) {
+    return normalized;
+  }
+  return `${normalized.slice(0, limit)}...`;
 }
 
 function appendPrefix(prefix: string, value: string): string {
@@ -422,30 +434,38 @@ function getWebhookConfiguredSecrets(config: WebhookConfig): string[] {
 
 function buildWebhookRequestBody(config: WebhookConfig, payload: NotificationProviderPayload): {
   body: string | undefined;
+  debugBody: string | undefined;
   headers: Record<string, string>;
 } {
   const headers: Record<string, string> = {};
 
   if (config.body.mode === 'form') {
     const params = new URLSearchParams();
+    const debugParams = new URLSearchParams();
     for (const field of config.body.fields) {
-      params.append(field.name, renderTemplate(field.value, payload));
+      const rendered = renderTemplate(field.value, payload);
+      params.append(field.name, rendered);
+      debugParams.append(field.name, field.sensitive ? '(redacted)' : rendered);
     }
     headers['Content-Type'] = 'application/x-www-form-urlencoded';
-    return { body: params.toString(), headers };
+    return { body: params.toString(), debugBody: debugParams.toString(), headers };
   }
 
   if (config.body.mode === 'json') {
     headers['Content-Type'] = 'application/json';
+    const rendered = renderTemplate(config.body.template, payload);
     return {
-      body: renderTemplate(config.body.template, payload),
+      body: rendered,
+      debugBody: rendered,
       headers,
     };
   }
 
   headers['Content-Type'] = 'text/plain; charset=utf-8';
+  const rendered = renderTemplate(config.body.template, payload);
   return {
-    body: renderTemplate(config.body.template, payload),
+    body: rendered,
+    debugBody: rendered,
     headers,
   };
 }
@@ -464,10 +484,25 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function createNotificationSendError(message: string, retriable = false): NotificationSendError {
+function createNotificationSendError(
+  message: string,
+  retriable = false,
+  details: Pick<NotificationSendError, 'status' | 'responseSnippet' | 'requestBodySnippet'> = {},
+): NotificationSendError {
   const error = new Error(message) as NotificationSendError;
   error.retriable = retriable;
+  error.status = details.status;
+  error.responseSnippet = details.responseSnippet;
+  error.requestBodySnippet = details.requestBodySnippet;
   return error;
+}
+
+async function readResponseSnippet(response: Response): Promise<string> {
+  try {
+    return truncateForLog(await response.text());
+  } catch {
+    return '';
+  }
 }
 
 async function sendWebhookRequest(
@@ -504,7 +539,15 @@ async function sendWebhookRequest(
 
   const response = await context.fetchImpl(requestUrl.toString(), init);
   if (!response.ok) {
-    throw createNotificationSendError(`Webhook request failed with status ${response.status}`, response.status >= 500 || response.status === 429);
+    const responseSnippet = await readResponseSnippet(response);
+    const message = responseSnippet
+      ? `Webhook request failed with status ${response.status}: ${responseSnippet}`
+      : `Webhook request failed with status ${response.status}`;
+    throw createNotificationSendError(message, response.status >= 500 || response.status === 429, {
+      status: response.status,
+      responseSnippet,
+      requestBodySnippet: body.debugBody ? truncateForLog(body.debugBody) : undefined,
+    });
   }
 }
 

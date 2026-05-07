@@ -39,6 +39,7 @@ export interface RuntimeConfig {
   dbDir: string;
   notificationSecretKey?: string;
   notificationAllowPrivateAddresses: boolean;
+  notificationDebugPayloads: boolean;
 }
 
 export function parseRefreshInterval(intervalStr: string | undefined | null): number {
@@ -251,5 +252,6 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
     dbDir: env.DB_DIR || '/app/data',
     notificationSecretKey,
     notificationAllowPrivateAddresses: parseBooleanEnv(env.NOTIFICATION_ALLOW_PRIVATE_ADDRESSES, true),
+    notificationDebugPayloads: parseBooleanEnv(env.NOTIFICATION_DEBUG_PAYLOADS, false),
   };
 }

@@ -326,6 +326,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     getLapiStatus: () => lapiClient.getStatus(),
     outboundGuard: notificationOutboundGuard,
     secretStore: notificationSecretStore,
+    debugPayloads: config.notificationDebugPayloads,
   });
 
   const app = new Hono();

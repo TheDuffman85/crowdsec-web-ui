@@ -42,6 +42,7 @@ export interface NotificationServiceOptions {
   getLapiStatus?: () => LapiStatus;
   outboundGuard: NotificationOutboundGuard;
   secretStore: NotificationSecretStore;
+  debugPayloads?: boolean;
 }
 
 interface NotificationCandidate {
@@ -58,6 +59,18 @@ interface NotificationIncidentState {
   firstSeenAt: string;
   lastSeenAt: string;
   resolvedAt: string | null;
+}
+
+interface NotificationDeliveryRuleContext {
+  id: string;
+  name: string;
+  type: NotificationRuleType | 'test';
+}
+
+interface NotificationDeliveryError extends Error {
+  status?: number;
+  responseSnippet?: string;
+  requestBodySnippet?: string;
 }
 
 export interface NotificationService {
@@ -87,6 +100,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
   const getLapiStatus = options.getLapiStatus;
   const outboundGuard = options.outboundGuard;
   const secretStore = options.secretStore;
+  const debugPayloads = options.debugPayloads === true;
 
   return {
     listSettings,
@@ -240,7 +254,11 @@ export function createNotificationService(options: NotificationServiceOptions): 
       message: `Test sent at ${new Date().toLocaleString()}.`,
       metadata: { kind: 'test' },
       dedupeKey: `test:${Date.now()}`,
-    }, 'info');
+    }, 'info', {
+      id: 'test',
+      name: 'Test notification',
+      type: 'test',
+    });
     if (result.status !== 'delivered') {
       throw new Error(result.error || 'Test notification failed');
     }
@@ -743,7 +761,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
     channel: NotificationChannel,
     candidate: NotificationCandidate,
     severity: NotificationSeverity,
-    rule?: Pick<NotificationRule, 'id' | 'name' | 'type'>,
+    rule?: NotificationDeliveryRuleContext,
   ): Promise<NotificationDeliveryResult> {
     const attemptedAt = new Date().toISOString();
     try {
@@ -776,6 +794,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
         attempted_at: attemptedAt,
       };
     } catch (error) {
+      logNotificationDeliveryFailure(channel, rule, error);
       return {
         channel_id: channel.id,
         channel_name: channel.name,
@@ -785,6 +804,34 @@ export function createNotificationService(options: NotificationServiceOptions): 
         error: error instanceof Error ? error.message : 'Unknown error',
       };
     }
+  }
+
+  function logNotificationDeliveryFailure(
+    channel: NotificationChannel,
+    rule: NotificationDeliveryRuleContext | undefined,
+    error: unknown,
+  ): void {
+    const deliveryError = error instanceof Error ? error as NotificationDeliveryError : null;
+    const contextLabel = rule?.type === 'test'
+      ? 'test notification'
+      : rule
+        ? `rule "${rule.name}" (${rule.type})`
+        : 'notification';
+    const details: string[] = [];
+    if (deliveryError?.status) {
+      details.push(`status=${deliveryError.status}`);
+    }
+    if (deliveryError?.responseSnippet) {
+      details.push(`response="${deliveryError.responseSnippet}"`);
+    }
+    if (debugPayloads && deliveryError?.requestBodySnippet) {
+      details.push(`request_body="${deliveryError.requestBodySnippet}"`);
+    }
+    const message = deliveryError?.message || String(error);
+    const suffix = details.length > 0 ? ` (${details.join(', ')})` : '';
+    console.warn(
+      `Notification delivery failed for ${contextLabel} to "${channel.name}" (${channel.type}): ${message}${suffix}`,
+    );
   }
 }
 

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
@@ -59,6 +59,7 @@ function createService(options: {
   fetchImpl?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
   updateChecker?: () => Promise<UpdateCheckResponse>;
   getLapiStatus?: () => LapiStatus;
+  debugPayloads?: boolean;
 } = {}) {
   const database = createTestDatabase();
   const service = createNotificationService({
@@ -71,6 +72,7 @@ function createService(options: {
       assertUrlAllowed: async () => {},
     },
     secretStore: createNotificationSecretStore(),
+    debugPayloads: options.debugPayloads,
   });
 
   return { database, service };
@@ -124,6 +126,95 @@ describe('notification incident deduplication', () => {
     expect(service.listNotifications().data).toEqual([]);
 
     database.close();
+  });
+
+  test('test webhooks render synthetic non-null rule fields', async () => {
+    const sentBodies: string[] = [];
+    const { database, service } = createService({
+      fetchImpl: async (_input, init) => {
+        sentBodies.push(String(init?.body || ''));
+        return Response.json({ ok: true });
+      },
+    });
+
+    const channel = service.createChannel({
+      name: 'Fluxer webhook',
+      type: 'webhook',
+      enabled: true,
+      config: {
+        url: 'https://example.com/webhook',
+        method: 'POST',
+        body: {
+          mode: 'json',
+          template: '{"rule":{{event.rule_nameJson}},"rule_type":{{event.rule_typeJson}}}',
+        },
+        retryAttempts: 0,
+      },
+    });
+
+    await service.testChannel(channel.id);
+
+    expect(sentBodies).toHaveLength(1);
+    expect(JSON.parse(sentBodies[0] || '{}')).toEqual({
+      rule: 'Test notification',
+      rule_type: 'test',
+    });
+
+    database.close();
+  });
+
+  test('failed webhook deliveries store response snippets and log debug payloads when enabled', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { database, service } = createService({
+      debugPayloads: true,
+      fetchImpl: async () => new Response('{"error":"Rule must not be null"}', { status: 400 }),
+    });
+
+    try {
+      const channel = service.createChannel({
+        name: 'Fluxer webhook',
+        type: 'webhook',
+        enabled: true,
+        config: {
+          url: 'https://example.com/webhook',
+          method: 'POST',
+          body: {
+            mode: 'json',
+            template: '{"title":{{event.titleJson}},"rule":{{event.rule_nameJson}}}',
+          },
+          retryAttempts: 0,
+        },
+      });
+
+      service.createRule({
+        name: 'Threshold',
+        type: 'alert-threshold',
+        enabled: true,
+        severity: 'warning',
+        channel_ids: [channel.id],
+        config: {
+          window_minutes: 60,
+          alert_threshold: 1,
+          filters: {},
+        },
+      });
+      insertAlert(database, createAlert(1, '2026-03-28T11:55:00.000Z'));
+
+      await service.evaluateRules(new Date('2026-03-28T12:00:00.000Z'));
+
+      const notification = service.listNotifications().data[0];
+      expect(notification?.deliveries[0]).toEqual(expect.objectContaining({
+        status: 'failed',
+        error: 'Webhook request failed with status 400: {"error":"Rule must not be null"}',
+      }));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('Notification delivery failed for rule "Threshold" (alert-threshold) to "Fluxer webhook" (webhook)'));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('status=400'));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('response="{\"error\":\"Rule must not be null\"}"'));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('request_body="{\"title\":\"Threshold: threshold exceeded\",\"rule\":\"Threshold\"}"'));
+    } finally {
+      warn.mockRestore();
+      database.close();
+    }
   });
 
   test('threshold rules fire once while active, resolve, and fire again after re-breach', async () => {

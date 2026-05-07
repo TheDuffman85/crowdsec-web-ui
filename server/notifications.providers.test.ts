@@ -89,6 +89,62 @@ describe('notification providers', () => {
     }));
   });
 
+  test('webhook provider includes truncated response body snippets on failed responses', async () => {
+    const provider = getNotificationProvider('webhook');
+    const config = provider.normalizeConfig({
+      url: 'https://example.com/webhook',
+      method: 'POST',
+      body: {
+        mode: 'json',
+        template: '{"rule":{{event.rule_nameJson}}}',
+      },
+      retryAttempts: 0,
+    });
+
+    await expect(provider.send(createChannel('webhook', config), {
+      ...basePayload,
+      channel_type: 'webhook',
+    }, {
+      fetchImpl: async () => new Response('{"error":"rule field must be a string"}', { status: 400 }),
+      assertHostAllowed: async () => {},
+      assertUrlAllowed: async () => {},
+    })).rejects.toThrow('Webhook request failed with status 400: {"error":"rule field must be a string"}');
+  });
+
+  test('webhook provider redacts sensitive form fields from failure debug snippets', async () => {
+    const provider = getNotificationProvider('webhook');
+    const config = provider.normalizeConfig({
+      url: 'https://example.com/webhook',
+      method: 'POST',
+      body: {
+        mode: 'form',
+        fields: [
+          { name: 'token', value: 'secret-token', sensitive: true },
+          { name: 'title', value: '{{event.title}}', sensitive: false },
+        ],
+      },
+      retryAttempts: 0,
+    });
+
+    try {
+      await provider.send(createChannel('webhook', config), {
+        ...basePayload,
+        channel_type: 'webhook',
+      }, {
+        fetchImpl: async () => new Response('bad request', { status: 400 }),
+        assertHostAllowed: async () => {},
+        assertUrlAllowed: async () => {},
+      });
+      throw new Error('Expected webhook send to fail');
+    } catch (error) {
+      expect(error).toEqual(expect.objectContaining({
+        requestBodySnippet: expect.stringContaining('token=%28redacted%29'),
+      }));
+      expect((error as { requestBodySnippet?: string }).requestBodySnippet).toContain('title=Alert+threshold+exceeded');
+      expect((error as { requestBodySnippet?: string }).requestBodySnippet).not.toContain('secret-token');
+    }
+  });
+
   test('mqtt provider validates config and publishes the expected payload', async () => {
     const provider = getNotificationProvider('mqtt');
     const config = provider.normalizeConfig({
