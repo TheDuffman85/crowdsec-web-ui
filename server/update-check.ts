@@ -10,21 +10,36 @@ export interface UpdateCheckOptions {
   fetchImpl?: FetchLike;
 }
 
+export interface UpdateCheckOverrides {
+  branch?: string;
+  commitHash?: string;
+  version?: string;
+}
+
+export type UpdateChecker = (overrides?: UpdateCheckOverrides) => Promise<UpdateCheckResponse>;
+
 export function createUpdateChecker(options: UpdateCheckOptions) {
   const fetchImpl: FetchLike = options.fetchImpl || ((input, init) => fetch(input, init as RequestInit));
   const cacheDurationMs = 6 * 60 * 60 * 1_000;
-  let cached: { lastCheck: number; data: UpdateCheckResponse | null } = {
+  let cached: { key: string; lastCheck: number; data: UpdateCheckResponse | null } = {
+    key: '',
     lastCheck: 0,
     data: null,
   };
 
-  return async function checkForUpdates(): Promise<UpdateCheckResponse> {
+  return async function checkForUpdates(overrides: UpdateCheckOverrides = {}): Promise<UpdateCheckResponse> {
     if (!options.enabled) {
       return { update_available: false, reason: 'no_local_hash' };
     }
 
+    const local = {
+      branch: normalizeLocalValue(overrides.branch) || options.branch,
+      commitHash: normalizeLocalValue(overrides.commitHash) || options.commitHash,
+      version: normalizeLocalValue(overrides.version) || options.version,
+    };
+    const cacheKey = JSON.stringify([options.dockerImageRef, local.branch, local.commitHash, local.version]);
     const now = Date.now();
-    if (cached.data && now - cached.lastCheck < cacheDurationMs) {
+    if (cached.data && cached.key === cacheKey && now - cached.lastCheck < cacheDurationMs) {
       return cached.data;
     }
 
@@ -44,11 +59,11 @@ export function createUpdateChecker(options: UpdateCheckOptions) {
     try {
       let result: UpdateCheckResponse;
 
-      if (options.branch === 'dev') {
+      if (local.branch === 'dev') {
         const remoteVersion = await resolveLatestDevBuild(owner, repo, fetchImpl);
         result = {
-          update_available: Boolean(options.version && remoteVersion > options.version),
-          local_version: options.version || options.commitHash,
+          update_available: Boolean(local.version && remoteVersion > local.version),
+          local_version: local.version || local.commitHash,
           remote_version: remoteVersion,
           tag: 'dev',
         };
@@ -67,24 +82,49 @@ export function createUpdateChecker(options: UpdateCheckOptions) {
 
         const release = await response.json() as { tag_name: string; html_url: string };
         const remoteVersion = release.tag_name.replace(/^v/i, '').trim();
-        const currentVersion = options.version ? options.version.replace(/^v/i, '').trim() : null;
+        const currentVersion = local.version ? local.version.replace(/^v/i, '').trim() : null;
 
         result = {
-          update_available: Boolean(currentVersion && remoteVersion !== currentVersion),
-          local_version: options.version || null,
+          update_available: Boolean(currentVersion && compareReleaseVersions(remoteVersion, currentVersion) > 0),
+          local_version: local.version || null,
           remote_version: remoteVersion,
           release_url: release.html_url,
           tag: 'latest',
         };
       }
 
-      cached = { lastCheck: now, data: result };
+      cached = { key: cacheKey, lastCheck: now, data: result };
       return result;
     } catch (error) {
       console.error('Update check failed:', error);
       return { update_available: false, error: 'Update check failed' };
     }
   };
+}
+
+function normalizeLocalValue(value: string | undefined): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function compareReleaseVersions(left: string, right: string): number {
+  const leftParts = left.split('.').map((part) => Number(part));
+  const rightParts = right.split('.').map((part) => Number(part));
+  const canCompareNumerically = leftParts.every(Number.isFinite) && rightParts.every(Number.isFinite);
+
+  if (!canCompareNumerically) {
+    return left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' });
+  }
+
+  const maxLength = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < maxLength; index += 1) {
+    const leftPart = leftParts[index] || 0;
+    const rightPart = rightParts[index] || 0;
+    if (leftPart !== rightPart) {
+      return leftPart > rightPart ? 1 : -1;
+    }
+  }
+
+  return 0;
 }
 
 async function resolveLatestDevBuild(owner: string, repo: string, fetchImpl: FetchLike): Promise<string> {

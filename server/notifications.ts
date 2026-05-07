@@ -20,7 +20,6 @@ import type {
   NotificationSettingsResponse,
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
-  UpdateCheckResponse,
 } from '../shared/contracts';
 import { CrowdsecDatabase } from './database';
 import type { MqttPublishConfig } from './notifications/mqtt-client';
@@ -30,6 +29,7 @@ import {
 } from './notifications/providers';
 import type { NotificationOutboundGuard } from './notifications/outbound-guard';
 import type { NotificationSecretStore } from './notifications/secret-store';
+import type { UpdateChecker } from './update-check';
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 type RuleConfigInput = NotificationRuleConfig | Record<string, AlertMetaValue>;
@@ -38,7 +38,7 @@ export interface NotificationServiceOptions {
   database: CrowdsecDatabase;
   fetchImpl?: FetchLike;
   mqttPublishImpl?: (config: MqttPublishConfig, payload: string) => Promise<void>;
-  updateChecker?: () => Promise<UpdateCheckResponse>;
+  updateChecker?: UpdateChecker;
   getLapiStatus?: () => LapiStatus;
   outboundGuard: NotificationOutboundGuard;
   secretStore: NotificationSecretStore;
