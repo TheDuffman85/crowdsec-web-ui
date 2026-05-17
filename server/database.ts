@@ -304,7 +304,11 @@ export class CrowdsecDatabase {
   }
 
   close(): void {
-    this.db.close();
+    try {
+      this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    } finally {
+      this.db.close();
+    }
   }
 
   clearSyncData(): void {

@@ -33,7 +33,9 @@ if (controller.config.basePath) {
 function shutdown(signal: NodeJS.Signals): void {
   console.log(`Received ${signal}, shutting down...`);
   controller.stopBackgroundTasks();
-  server.close();
+  server.close(() => {
+    controller.database.close();
+  });
 }
 
 process.once('SIGINT', () => shutdown('SIGINT'));
