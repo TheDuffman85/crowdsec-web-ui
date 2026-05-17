@@ -695,7 +695,7 @@ A Helm chart for deploying `crowdsec-web-ui` on Kubernetes is available (maintai
 
 ## Persistence & Alert History
 
-All data is stored in a single SQLite database at `/app/data/crowdsec.db`. To persist data across container restarts, mount the `/app/data` directory.
+All data is stored in SQLite under `/app/data`. To persist data across container restarts, mount the `/app/data` directory rather than only the `crowdsec.db` file, because SQLite also uses `crowdsec.db-wal` and `crowdsec.db-shm` sidecar files.
 
 **Docker Run:**
 Add `-v $(pwd)/data:/app/data` to your command.

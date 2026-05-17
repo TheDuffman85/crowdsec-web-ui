@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, test } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
 import { CrowdsecDatabase } from './database';
@@ -378,6 +378,44 @@ describe('CrowdsecDatabase', () => {
     expect(db.listNotificationChannels()).toHaveLength(0);
 
     db.close();
+  });
+
+  test('checkpoints WAL data on close so settings survive container recreation', () => {
+    const dbPath = createTestDatabasePath();
+    const db = new CrowdsecDatabase({ dbPath });
+
+    db.upsertNotificationChannel({
+      $id: 'channel-persisted',
+      $created_at: '2026-05-14T15:00:00.000Z',
+      $updated_at: '2026-05-14T15:00:00.000Z',
+      $name: 'Persisted ntfy',
+      $type: 'ntfy',
+      $enabled: 1,
+      $config_json: JSON.stringify({ topic: 'crowdsec' }),
+    });
+
+    db.close();
+
+    const walPath = `${dbPath}-wal`;
+    if (existsSync(walPath)) {
+      expect(statSync(walPath).size).toBe(0);
+    }
+
+    const reopened = new CrowdsecDatabase({ dbPath });
+    expect(reopened.listNotificationChannels()).toEqual([
+      expect.objectContaining({
+        id: 'channel-persisted',
+        name: 'Persisted ntfy',
+      }),
+    ]);
+    reopened.close();
+  });
+
+  test('docker entrypoint preserves SQLite WAL files for restart recovery', () => {
+    const entrypoint = readFileSync(path.resolve(process.cwd(), 'docker-entrypoint.sh'), 'utf8');
+
+    expect(entrypoint).not.toContain('rm -f /app/data/crowdsec.db-wal');
+    expect(entrypoint).not.toContain('rm -f /app/data/crowdsec.db-shm');
   });
 
   test('migrates legacy notification rules, notifications, and seeds incidents from history', () => {

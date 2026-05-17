@@ -15,16 +15,9 @@ if [ -d "/app/data" ]; then
         exit 1
     fi
 
-    # Clean up stale SQLite WAL/SHM files to prevent locking/compatibility issues
-    # when switching between local/dev runtimes or container rebuilds.
-    if [ -f "/app/data/crowdsec.db-wal" ]; then
-        echo "Removing stale WAL file..."
-        rm -f /app/data/crowdsec.db-wal
-    fi
-    if [ -f "/app/data/crowdsec.db-shm" ]; then
-        echo "Removing stale SHM file..."
-        rm -f /app/data/crowdsec.db-shm
-    fi
+    # Keep SQLite WAL/SHM files intact. They can contain committed writes that
+    # have not been checkpointed into crowdsec.db yet, especially after a
+    # container restart.
 fi
 
 # Switch to 'node' user and execute the command (if root)
