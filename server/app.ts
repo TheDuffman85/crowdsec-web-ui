@@ -367,6 +367,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   let lastFullRefreshTime = Date.now();
   let schedulerTimeout: ReturnType<typeof setTimeout> | null = null;
   let isSchedulerRunning = false;
+  let heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
+  let isHeartbeatSchedulerRunning = false;
+  let heartbeatPromise: Promise<void> | null = null;
+  let heartbeatFailureLogged = false;
   let bootstrapRetryTimeout: ReturnType<typeof setTimeout> | null = null;
   let bootstrapPromise: Promise<boolean> | null = null;
   let bootstrapWaitLogged = false;
@@ -377,6 +381,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   LAPI Request Timeout: ${getIntervalName(config.lapiRequestTimeoutMs)}
   Alert Sync Chunk: ${getIntervalName(config.alertSyncChunkMs)}
   Alert Sync Min Chunk: ${getIntervalName(config.alertSyncMinChunkMs)}
+  Machine Heartbeat: ${config.heartbeatIntervalMs > 0 ? getIntervalName(config.heartbeatIntervalMs) : 'Disabled'}
   Auth Mode: ${config.crowdsecAuthMode}
   Simulations: ${config.simulationsEnabled ? 'Enabled' : 'Disabled'}
   Alert Filter Mode: ${config.alertFilterMode}
@@ -2121,6 +2126,74 @@ ${errorSummary}  Status: ${syncSummary.state}
     }
   }
 
+  async function sendMachineHeartbeat(): Promise<void> {
+    if (!lapiClient.hasAuthConfig()) {
+      return;
+    }
+
+    if (heartbeatPromise) {
+      return heartbeatPromise;
+    }
+
+    heartbeatPromise = (async () => {
+      try {
+        await lapiClient.heartbeat();
+        await lapiClient.sendUsageMetrics();
+        if (heartbeatFailureLogged) {
+          console.log('CrowdSec machine heartbeat restored.');
+        }
+        heartbeatFailureLogged = false;
+      } catch (error: any) {
+        const message = error?.message || 'Unknown error';
+        if (!heartbeatFailureLogged) {
+          console.warn(`CrowdSec machine heartbeat or metrics update failed: ${message}`);
+        }
+        heartbeatFailureLogged = true;
+      } finally {
+        heartbeatPromise = null;
+      }
+    })();
+
+    return heartbeatPromise;
+  }
+
+  async function runHeartbeatLoop(): Promise<void> {
+    if (!isHeartbeatSchedulerRunning) return;
+
+    await sendMachineHeartbeat();
+
+    if (!isHeartbeatSchedulerRunning || config.heartbeatIntervalMs <= 0) return;
+
+    heartbeatTimeout = setTimeout(() => {
+      void runHeartbeatLoop();
+    }, config.heartbeatIntervalMs);
+  }
+
+  function startHeartbeatScheduler(): void {
+    stopHeartbeatScheduler(false);
+    if (config.heartbeatIntervalMs <= 0) {
+      console.log('CrowdSec machine heartbeat disabled.');
+      return;
+    }
+
+    console.log(`Starting CrowdSec machine heartbeat (${getIntervalName(config.heartbeatIntervalMs)})...`);
+    isHeartbeatSchedulerRunning = true;
+    heartbeatTimeout = setTimeout(() => {
+      void runHeartbeatLoop();
+    }, 0);
+  }
+
+  function stopHeartbeatScheduler(logStop = true): void {
+    if (logStop && (isHeartbeatSchedulerRunning || heartbeatTimeout)) {
+      console.log('Stopping CrowdSec machine heartbeat...');
+    }
+    isHeartbeatSchedulerRunning = false;
+    if (heartbeatTimeout) {
+      clearTimeout(heartbeatTimeout);
+      heartbeatTimeout = null;
+    }
+  }
+
   async function activityTrackerMiddleware(context: HonoContext, next: HonoNext): Promise<void> {
     const now = Date.now();
     const wasIdle = now - lastRequestTime > config.idleThresholdMs;
@@ -2739,7 +2812,10 @@ ${errorSummary}  Status: ${syncSummary.state}
     database,
     lapiClient,
     startBackgroundTasks,
-    stopBackgroundTasks: () => stopRefreshScheduler(),
+    stopBackgroundTasks: () => {
+      stopRefreshScheduler();
+      stopHeartbeatScheduler();
+    },
     getSyncStatus: () => ({ ...syncStatus }),
     getLapiStatus: () => lapiClient.getStatus(),
   };
@@ -2749,6 +2825,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       console.warn('Cache initialization skipped - CrowdSec LAPI authentication not configured');
       return;
     }
+    startHeartbeatScheduler();
     startRefreshScheduler();
     void ensureBootstrapReady('startup');
   }

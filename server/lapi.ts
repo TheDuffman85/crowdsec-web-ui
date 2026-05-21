@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import { Agent, fetch as undiciFetch, type Dispatcher } from 'undici';
 import type { LapiStatus } from '../shared/contracts';
 import type { CrowdsecAuthConfig } from './auth';
@@ -29,6 +30,7 @@ export interface LapiClientOptions {
   lookbackPeriod: string;
   requestTimeoutMs?: number;
   version: string;
+  machineInfo?: MachineInfo;
   fetchImpl?: FetchLike;
 }
 
@@ -40,11 +42,73 @@ export interface FetchAlertsFilters {
   requireAllScopes?: boolean;
 }
 
+interface MachineInfo {
+  os: {
+    name: string;
+    family?: string;
+    version: string;
+  };
+}
+
+function parseOsReleaseValue(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    return trimmed.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+  }
+  return trimmed;
+}
+
+function parseOsRelease(content: string): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const separatorIndex = trimmed.indexOf('=');
+    if (separatorIndex <= 0) continue;
+    const key = trimmed.slice(0, separatorIndex);
+    const value = parseOsReleaseValue(trimmed.slice(separatorIndex + 1));
+    if (value) {
+      values[key] = value;
+    }
+  }
+  return values;
+}
+
+function detectMachineInfo(): MachineInfo {
+  let osName: string = os.platform();
+  let osFamily: string = os.type();
+  let osVersion: string = os.release();
+
+  try {
+    const release = parseOsRelease(fs.readFileSync('/etc/os-release', 'utf8'));
+    osName = release.ID || release.NAME || osName;
+    osFamily = release.ID_LIKE || release.ID || osFamily;
+    osVersion = release.VERSION_ID || release.VERSION || osVersion;
+  } catch {
+    // Fall back to Node's platform details when distro metadata is unavailable.
+  }
+
+  if (fs.existsSync('/.dockerenv') || fs.existsSync('/run/.containerenv')) {
+    osName = `${osName} (docker)`;
+  }
+
+  return {
+    os: {
+      name: osName,
+      family: osFamily,
+      version: osVersion,
+    },
+  };
+}
+
 export class LapiClient {
   private readonly crowdsecUrl: string;
   private readonly auth: CrowdsecAuthConfig;
   private readonly simulationsEnabled: boolean;
   private readonly version: string;
+  private readonly machineInfo: MachineInfo;
+  private readonly startupTimestamp: number;
   private readonly requestTimeoutMs: number;
   private readonly fetchImpl: FetchLike;
   private readonly dispatcher?: Dispatcher;
@@ -65,6 +129,8 @@ export class LapiClient {
     this.simulationsEnabled = options.simulationsEnabled ?? false;
     this.lookbackPeriod = options.lookbackPeriod;
     this.version = options.version;
+    this.machineInfo = options.machineInfo || detectMachineInfo();
+    this.startupTimestamp = Math.floor(Date.now() / 1_000);
     this.requestTimeoutMs = options.requestTimeoutMs || 30_000;
     this.fetchImpl = options.fetchImpl || ((input, init) =>
       undiciFetch(
@@ -225,6 +291,37 @@ export class LapiClient {
     })();
 
     return this.loginPromise;
+  }
+
+  async heartbeat(): Promise<void> {
+    try {
+      await this.fetchLapi('/v1/heartbeat');
+      this.updateStatus(true);
+    } catch (error: any) {
+      this.updateStatus(false, error);
+      throw error;
+    }
+  }
+
+  async sendUsageMetrics(): Promise<void> {
+    const payload = {
+      log_processors: [
+        {
+          version: this.version || '0.0.0',
+          os: this.machineInfo.os,
+          utc_startup_timestamp: this.startupTimestamp,
+          metrics: [],
+          feature_flags: [],
+          datasources: {},
+          hub_items: {},
+        },
+      ],
+    };
+
+    await this.fetchLapi('/v1/usage-metrics', {
+      method: 'POST',
+      body: payload,
+    });
   }
 
   async fetchAlerts(

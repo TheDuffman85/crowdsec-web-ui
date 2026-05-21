@@ -225,6 +225,7 @@ Choose exactly one auth mode: password auth or mTLS auth.
 | `CROWDSEC_IDLE_THRESHOLD` | `2m` | Inactivity period before the app switches to idle refresh behavior. |
 | `CROWDSEC_FULL_REFRESH_INTERVAL` | `5m` | Interval for full cache refreshes while active. |
 | `CROWDSEC_LAPI_REQUEST_TIMEOUT` | `30s` | Timeout for individual CrowdSec LAPI requests. Increase this for high-latency or very large CrowdSec datasets. |
+| `CROWDSEC_HEARTBEAT_INTERVAL` | `30s` | Interval for updating the Web UI machine heartbeat in CrowdSec. Use `0` or `manual` to disable heartbeat updates. |
 | `CROWDSEC_ALERT_SYNC_CHUNK` | `6h` | Window size used when syncing historical and active-decision alerts from LAPI. Smaller chunks reduce per-request payload size. |
 | `CROWDSEC_ALERT_SYNC_MIN_CHUNK` | `15m` | Smallest window size used when retrying timed-out alert sync windows. |
 | `CROWDSEC_BOOTSTRAP_RETRY_DELAY` | `30s` | Delay between background retries when initial CrowdSec bootstrap fails. |

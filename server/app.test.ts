@@ -411,6 +411,9 @@ function createController(options: {
     if (url.endsWith('/v1/watchers/login')) {
       return Response.json({ code: 200, token: 'token' });
     }
+    if (url.endsWith('/v1/usage-metrics') && init?.method === 'POST') {
+      return Response.json({ ok: true }, { status: 201 });
+    }
     if (url.includes('/v1/alerts?')) {
       return Response.json([]);
     }
@@ -1692,6 +1695,54 @@ describe('createApp', () => {
     controller.stopBackgroundTasks();
     database.close();
     destroyTempDir();
+  });
+
+  test('starts a CrowdSec machine heartbeat with background tasks', async () => {
+    const { controller, database, lapiClient, fetchCalls } = createController({
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: 'manual',
+        CROWDSEC_HEARTBEAT_INTERVAL: '5s',
+      },
+    });
+
+    await lapiClient.login();
+    vi.useFakeTimers();
+
+    try {
+      controller.startBackgroundTasks();
+      await vi.advanceTimersByTimeAsync(0);
+
+      const heartbeatRequest = fetchCalls.find((call) => call.url.endsWith('/v1/heartbeat'));
+      const usageMetricsRequest = fetchCalls.find((call) => call.url.endsWith('/v1/usage-metrics'));
+      expect(heartbeatRequest).toEqual(expect.objectContaining({
+        method: 'GET',
+      }));
+      expect(heartbeatRequest?.headers).toEqual(expect.objectContaining({
+        Authorization: 'Bearer token',
+      }));
+      expect(usageMetricsRequest).toEqual(expect.objectContaining({
+        method: 'POST',
+        body: expect.objectContaining({
+          log_processors: [
+            expect.objectContaining({
+              os: expect.objectContaining({
+                name: expect.any(String),
+                version: expect.any(String),
+              }),
+              version: '1.0.0',
+            }),
+          ],
+        }),
+      }));
+      expect(usageMetricsRequest?.headers).toEqual(expect.objectContaining({
+        Authorization: 'Bearer token',
+      }));
+    } finally {
+      controller.stopBackgroundTasks();
+      vi.useRealTimers();
+      database.close();
+      destroyTempDir();
+    }
   });
 
   test('normalizes array-shaped alert detail payloads to a single alert', async () => {

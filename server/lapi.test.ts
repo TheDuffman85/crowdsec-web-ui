@@ -260,6 +260,106 @@ describe('LapiClient', () => {
     expect(calls.some((call) => call.url.endsWith('/v1/decisions/10') && call.method === 'DELETE')).toBe(true);
   });
 
+  test('sends machine heartbeats with the stored watcher token', async () => {
+    const calls: Array<{ url: string; method: string; authorization?: string }> = [];
+    const client = new LapiClient({
+      crowdsecUrl: 'http://crowdsec:8080',
+      auth: passwordAuth,
+      simulationsEnabled: true,
+      lookbackPeriod: '1h',
+      version: '1.0.0',
+      fetchImpl: async (input, init) => {
+        const headers = init?.headers as Record<string, string> | undefined;
+        calls.push({
+          url: String(input),
+          method: init?.method || 'GET',
+          authorization: headers?.Authorization,
+        });
+
+        if (String(input).endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'heartbeat-token' });
+        }
+
+        return Response.json({});
+      },
+    });
+
+    await client.login();
+    await client.heartbeat();
+
+    expect(calls).toEqual([
+      expect.objectContaining({
+        url: 'http://crowdsec:8080/v1/watchers/login',
+        method: 'POST',
+      }),
+      {
+        url: 'http://crowdsec:8080/v1/heartbeat',
+        method: 'GET',
+        authorization: 'Bearer heartbeat-token',
+      },
+    ]);
+    expect(client.getStatus().isConnected).toBe(true);
+  });
+
+  test('sends usage metrics with machine OS details', async () => {
+    const calls: Array<{ url: string; method: string; authorization?: string; body?: unknown }> = [];
+    const client = new LapiClient({
+      crowdsecUrl: 'http://crowdsec:8080',
+      auth: passwordAuth,
+      simulationsEnabled: true,
+      lookbackPeriod: '1h',
+      version: '1.2.3',
+      machineInfo: {
+        os: {
+          name: 'debian (docker)',
+          family: 'debian',
+          version: '12.13',
+        },
+      },
+      fetchImpl: async (input, init) => {
+        const headers = init?.headers as Record<string, string> | undefined;
+        calls.push({
+          url: String(input),
+          method: init?.method || 'GET',
+          authorization: headers?.Authorization,
+          body: init?.body ? JSON.parse(String(init.body)) : undefined,
+        });
+
+        if (String(input).endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'metrics-token' });
+        }
+
+        return Response.json({ ok: true }, { status: String(input).endsWith('/v1/usage-metrics') ? 201 : 200 });
+      },
+    });
+
+    await client.login();
+    await client.sendUsageMetrics();
+
+    expect(calls[1]).toEqual({
+      url: 'http://crowdsec:8080/v1/usage-metrics',
+      method: 'POST',
+      authorization: 'Bearer metrics-token',
+      body: {
+        log_processors: [
+          {
+            version: '1.2.3',
+            os: {
+              name: 'debian (docker)',
+              family: 'debian',
+              version: '12.13',
+            },
+            utc_startup_timestamp: expect.any(Number),
+            metrics: [],
+            feature_flags: [],
+            datasources: {},
+            hub_items: {},
+          },
+        ],
+      },
+    });
+  });
+
   test('throws when all alert scope requests fail', async () => {
     const client = new LapiClient({
       crowdsecUrl: 'http://crowdsec:8080',
