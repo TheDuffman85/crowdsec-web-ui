@@ -3,7 +3,7 @@
 # ==========================================
 # Stage 0: Node + pnpm
 # ==========================================
-FROM node:24.15.0-trixie-slim AS node-pnpm
+FROM node:26.2.0-trixie-slim AS node-pnpm
 
 RUN npm config set fetch-retries 5 \
     && npm config set fetch-retry-factor 2 \
