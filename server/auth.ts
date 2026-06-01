@@ -1,3 +1,5 @@
+import { resolveSecretEnv } from './env-secrets';
+
 export interface PasswordCrowdsecAuthConfig {
   mode: 'password';
   user: string;
@@ -27,7 +29,7 @@ function normalizeEnvValue(value: string | undefined): string | undefined {
 
 export function createCrowdsecAuthConfig(env: NodeJS.ProcessEnv = process.env): CrowdsecAuthConfig {
   const user = normalizeEnvValue(env.CROWDSEC_USER);
-  const password = normalizeEnvValue(env.CROWDSEC_PASSWORD);
+  const password = normalizeEnvValue(resolveSecretEnv('CROWDSEC_PASSWORD', env));
   const certPath = normalizeEnvValue(env.CROWDSEC_TLS_CERT_PATH);
   const keyPath = normalizeEnvValue(env.CROWDSEC_TLS_KEY_PATH);
   const caCertPath = normalizeEnvValue(env.CROWDSEC_TLS_CA_CERT_PATH);
@@ -39,12 +41,12 @@ export function createCrowdsecAuthConfig(env: NodeJS.ProcessEnv = process.env): 
 
   if (hasPasswordAuth && hasMtlsAuth) {
     throw new Error(
-      'CrowdSec authentication is misconfigured: choose either CROWDSEC_USER/CROWDSEC_PASSWORD or CROWDSEC_TLS_CERT_PATH/CROWDSEC_TLS_KEY_PATH, but not both.',
+      'CrowdSec authentication is misconfigured: choose either CROWDSEC_USER with CROWDSEC_PASSWORD or CROWDSEC_PASSWORD_FILE, or CROWDSEC_TLS_CERT_PATH/CROWDSEC_TLS_KEY_PATH, but not both.',
     );
   }
 
   if (hasPasswordAuthInput && !hasPasswordAuth) {
-    throw new Error('CrowdSec password authentication requires both CROWDSEC_USER and CROWDSEC_PASSWORD.');
+    throw new Error('CrowdSec password authentication requires CROWDSEC_USER and either CROWDSEC_PASSWORD or CROWDSEC_PASSWORD_FILE.');
   }
 
   if (hasMtlsAuthInput && !hasMtlsAuth) {

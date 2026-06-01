@@ -1,5 +1,24 @@
-import { describe, expect, test, vi } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { createRuntimeConfig, getIntervalName, parseBooleanEnv, parseCsvEnv, parseLookbackToMs, parseRefreshInterval } from './config';
+
+const tempDirs: string[] = [];
+
+function createTempSecret(contents: string): string {
+  const dir = mkdtempSync(join(tmpdir(), 'crowdsec-web-ui-config-test-'));
+  tempDirs.push(dir);
+  const filePath = join(dir, 'secret.txt');
+  writeFileSync(filePath, contents, 'utf8');
+  return filePath;
+}
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 describe('config helpers', () => {
   test('parseRefreshInterval handles supported inputs', () => {
@@ -146,13 +165,49 @@ describe('config helpers', () => {
     expect(config.crowdsecTlsCaCertPath).toBe('/certs/ca.pem');
   });
 
+  test('createRuntimeConfig reads CrowdSec password authentication from CROWDSEC_PASSWORD_FILE', () => {
+    const config = createRuntimeConfig({
+      CROWDSEC_USER: 'watcher',
+      CROWDSEC_PASSWORD_FILE: createTempSecret('secret-from-file\n'),
+    });
+
+    expect(config.crowdsecAuth).toEqual({
+      mode: 'password',
+      user: 'watcher',
+      password: 'secret-from-file',
+    });
+  });
+
+  test('createRuntimeConfig rejects direct and file-backed CrowdSec passwords together', () => {
+    expect(() => createRuntimeConfig({
+      CROWDSEC_USER: 'watcher',
+      CROWDSEC_PASSWORD: 'direct-secret',
+      CROWDSEC_PASSWORD_FILE: '/run/secrets/crowdsec-password',
+    })).toThrow(/both CROWDSEC_PASSWORD and CROWDSEC_PASSWORD_FILE are set/i);
+  });
+
+  test('createRuntimeConfig reads NOTIFICATION_SECRET_KEY_FILE', () => {
+    const config = createRuntimeConfig({
+      NOTIFICATION_SECRET_KEY_FILE: createTempSecret('notification-secret-from-file\n'),
+    });
+
+    expect(config.notificationSecretKey).toBe('notification-secret-from-file');
+  });
+
+  test('createRuntimeConfig rejects direct and file-backed notification secret keys together', () => {
+    expect(() => createRuntimeConfig({
+      NOTIFICATION_SECRET_KEY: 'direct-secret',
+      NOTIFICATION_SECRET_KEY_FILE: '/run/secrets/notification-secret-key',
+    })).toThrow(/both NOTIFICATION_SECRET_KEY and NOTIFICATION_SECRET_KEY_FILE are set/i);
+  });
+
   test('createRuntimeConfig rejects mixed password and mTLS authentication', () => {
     expect(() => createRuntimeConfig({
       CROWDSEC_USER: 'watcher',
       CROWDSEC_PASSWORD: 'secret',
       CROWDSEC_TLS_CERT_PATH: '/certs/agent.pem',
       CROWDSEC_TLS_KEY_PATH: '/certs/agent-key.pem',
-    })).toThrow(/choose either CROWDSEC_USER\/CROWDSEC_PASSWORD or CROWDSEC_TLS_CERT_PATH\/CROWDSEC_TLS_KEY_PATH/i);
+    })).toThrow(/choose either CROWDSEC_USER with CROWDSEC_PASSWORD or CROWDSEC_PASSWORD_FILE, or CROWDSEC_TLS_CERT_PATH\/CROWDSEC_TLS_KEY_PATH/i);
   });
 
   test('createRuntimeConfig rejects partial mTLS authentication', () => {

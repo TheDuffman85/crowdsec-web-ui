@@ -10,6 +10,7 @@ export default defineConfig({
       reportsDirectory: './coverage/server',
       include: [
         'server/config.ts',
+        'server/env-secrets.ts',
         'server/lapi.ts',
         'server/update-check.ts',
         'server/utils/**/*.ts',

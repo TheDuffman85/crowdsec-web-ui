@@ -115,7 +115,7 @@ Create notification rules for alert spikes, alert thresholds, recent CVE activit
 
 > [!IMPORTANT]
 > Choose exactly one auth mode:
-> - Password auth: `CROWDSEC_USER` + `CROWDSEC_PASSWORD`
+> - Password auth: `CROWDSEC_USER` + either `CROWDSEC_PASSWORD` or `CROWDSEC_PASSWORD_FILE`
 > - mTLS auth: `CROWDSEC_TLS_CERT_PATH` + `CROWDSEC_TLS_KEY_PATH` with optional `CROWDSEC_TLS_CA_CERT_PATH`
 >
 > Do not set both modes at the same time. The container will fail fast on mixed or partial auth configuration.
@@ -174,6 +174,34 @@ services:
 
 The repository also ships a minimal [`docker-compose.yml`](docker-compose.yml) that builds the image locally and reads the same runtime inputs from `.env`.
 
+### Docker Compose Example (Docker Secrets)
+
+Use `CROWDSEC_PASSWORD_FILE` instead of `CROWDSEC_PASSWORD` to read the CrowdSec watcher password from a Docker secret:
+
+```yaml
+services:
+  crowdsec-web-ui:
+    image: ghcr.io/theduffman85/crowdsec-web-ui:latest
+    container_name: crowdsec_web_ui
+    ports:
+      - "3000:3000"
+    environment:
+      - CROWDSEC_URL=http://crowdsec:8080
+      - CROWDSEC_USER=crowdsec-web-ui
+      - CROWDSEC_PASSWORD_FILE=/run/secrets/crowdsec_password
+    secrets:
+      - crowdsec_password
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
+secrets:
+  crowdsec_password:
+    file: ./secrets/crowdsec_password.txt
+```
+
+Create `./secrets/crowdsec_password.txt` before starting the container. Do not set both `CROWDSEC_PASSWORD` and `CROWDSEC_PASSWORD_FILE`.
+
 ### Docker Compose Example (mTLS Authentication)
 
 ```yaml
@@ -206,8 +234,9 @@ Choose exactly one auth mode: password auth or mTLS auth.
 | Variable | Default | Required | Description |
 | --- | --- | --- | --- |
 | `CROWDSEC_URL` | `http://crowdsec:8080` | Usually | CrowdSec LAPI base URL. Use `https://...` when TLS is enabled. |
-| `CROWDSEC_USER` | none | Password auth only | CrowdSec machine/user name for watcher-password login. Must be set together with `CROWDSEC_PASSWORD`. |
+| `CROWDSEC_USER` | none | Password auth only | CrowdSec machine/user name for watcher-password login. Must be set together with `CROWDSEC_PASSWORD` or `CROWDSEC_PASSWORD_FILE`. |
 | `CROWDSEC_PASSWORD` | none | Password auth only | CrowdSec watcher password. Must be set together with `CROWDSEC_USER`. |
+| `CROWDSEC_PASSWORD_FILE` | none | No | Optional Docker Secrets alternative: read `CROWDSEC_PASSWORD` from a file. Do not set both variables. |
 | `CROWDSEC_TLS_CERT_PATH` | none | mTLS only | Path inside the container or host process to the client certificate used for CrowdSec mTLS auth. |
 | `CROWDSEC_TLS_KEY_PATH` | none | mTLS only | Path to the client private key used for CrowdSec mTLS auth. |
 | `CROWDSEC_TLS_CA_CERT_PATH` | none | No | Optional CA bundle used to verify the CrowdSec LAPI server certificate during mTLS connections. |
@@ -237,9 +266,14 @@ Choose exactly one auth mode: password auth or mTLS auth.
 | `CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY` | `false` | Keep alerts whose effective origin is empty when using explicit include filters. |
 | `CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY` | `false` | Drop alerts whose effective origin is empty. |
 | `NOTIFICATION_SECRET_KEY` | auto-generated and persisted | Optional fixed encryption key for saved notification secrets. If unset, the app generates one and stores it in app metadata. |
+| `NOTIFICATION_SECRET_KEY_FILE` | auto-generated and persisted | Optional Docker Secrets alternative: read `NOTIFICATION_SECRET_KEY` from a file. Do not set both variables. |
 | `NOTIFICATION_ALLOW_PRIVATE_ADDRESSES` | `true` | Allow notification destinations on private, loopback, and link-local addresses. Set to `false` to block them. |
 | `NOTIFICATION_DEBUG_PAYLOADS` | `false` | When enabled, failed notification deliveries log a truncated rendered request body for troubleshooting. Use carefully because payloads may contain sensitive data. |
 | `NODE_EXTRA_CA_CERTS` | none | Optional Node.js trust bundle for HTTPS connections, useful when using password auth against a private or self-signed CrowdSec CA. |
+
+### File-Backed Secrets
+
+`CROWDSEC_PASSWORD_FILE` and `NOTIFICATION_SECRET_KEY_FILE` read their values from UTF-8 files, including Docker Secrets mounts under `/run/secrets`. For either setting, configure the direct variable or its `_FILE` alternative, not both. The app fails fast when both are set or when a configured file cannot be read. File-backed secrets are loaded during startup, so restart the app after rotating a mounted secret.
 
 ### Build and Image Metadata
 
@@ -672,6 +706,7 @@ Failed webhook deliveries include the HTTP status and a truncated response body 
 ### Notification Security Controls
 
 -   `NOTIFICATION_SECRET_KEY`: optional override for the notification encryption key. If unset, the backend auto-generates one on first start and persists it in application metadata so encrypted destinations continue working across restarts.
+-   `NOTIFICATION_SECRET_KEY_FILE`: optional Docker Secrets alternative for loading `NOTIFICATION_SECRET_KEY` from a mounted file.
 -   `NOTIFICATION_ALLOW_PRIVATE_ADDRESSES=true` by default. Set it to `false` if you want to block private, loopback, and link-local destinations.
 -   `NOTIFICATION_DEBUG_PAYLOADS=false` by default. Set it to `true` only while troubleshooting failed deliveries, then turn it back off.
 
