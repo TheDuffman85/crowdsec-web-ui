@@ -36,7 +36,7 @@
   "dependencies": {
     "@hono/node-server": "2.0.1",
     "@types/sortablejs": "^1.15.9",
-    "better-sqlite3": "12.9.0",
+    "better-sqlite3": "12.10.0",
     "hono": "4.12.16",
     "mqtt": "^5.15.1",
     "sortablejs": "^1.15.7",
