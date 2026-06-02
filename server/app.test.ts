@@ -1676,7 +1676,7 @@ describe('createApp', () => {
         CROWDSEC_TLS_CERT_PATH: '/certs/agent.pem',
         CROWDSEC_TLS_KEY_PATH: '/certs/agent-key.pem',
       },
-    })).toThrow(/choose either CROWDSEC_USER\/CROWDSEC_PASSWORD or CROWDSEC_TLS_CERT_PATH\/CROWDSEC_TLS_KEY_PATH/i);
+    })).toThrow(/choose either CROWDSEC_USER with CROWDSEC_PASSWORD or CROWDSEC_PASSWORD_FILE, or CROWDSEC_TLS_CERT_PATH\/CROWDSEC_TLS_KEY_PATH/i);
 
     destroyTempDir();
   });

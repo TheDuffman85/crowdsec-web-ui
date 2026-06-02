@@ -397,7 +397,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
   if (!lapiClient.hasAuthConfig()) {
     console.warn(
-      'WARNING: CrowdSec LAPI authentication is not configured. Set CROWDSEC_USER/CROWDSEC_PASSWORD or CROWDSEC_TLS_CERT_PATH/CROWDSEC_TLS_KEY_PATH for full functionality.',
+      'WARNING: CrowdSec LAPI authentication is not configured. Set CROWDSEC_USER with CROWDSEC_PASSWORD or CROWDSEC_PASSWORD_FILE, or CROWDSEC_TLS_CERT_PATH/CROWDSEC_TLS_KEY_PATH for full functionality.',
     );
   }
 

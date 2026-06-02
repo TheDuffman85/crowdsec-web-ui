@@ -1,4 +1,5 @@
 import { createCrowdsecAuthConfig, type CrowdsecAuthConfig } from './auth';
+import { resolveSecretEnv } from './env-secrets';
 
 export type AlertFilterMode = 'default' | 'new' | 'legacy';
 
@@ -219,7 +220,7 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
   const lookbackPeriod = env.CROWDSEC_LOOKBACK_PERIOD || '168h';
   const refreshIntervalMs = parseRefreshInterval(env.CROWDSEC_REFRESH_INTERVAL || '30s');
   const crowdsecAuth = createCrowdsecAuthConfig(env);
-  const notificationSecretKey = env.NOTIFICATION_SECRET_KEY?.trim() || undefined;
+  const notificationSecretKey = resolveSecretEnv('NOTIFICATION_SECRET_KEY', env)?.trim() || undefined;
   const alertFilterConfig = parseAlertFilterConfig(env);
   warnRemovedColumnVisibilityEnv(env);
 
