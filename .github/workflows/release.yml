@@ -17,6 +17,7 @@ jobs:
     permissions:
       contents: write
       packages: write
+      pull-requests: read
 
     steps:
       - name: Checkout repository
@@ -48,6 +49,7 @@ jobs:
           PREFIX="${YEAR}.${MONTH}."
 
           git fetch --tags
+          PREVIOUS_TAG=$(git tag -l "[0-9]*.[0-9]*.[0-9]*" --sort=-v:refname | head -1)
           LATEST_N=$(git tag -l "${PREFIX}*" --sort=-v:refname | head -1 | sed "s/^${PREFIX}//")
 
           if [ -z "$LATEST_N" ]; then
@@ -58,6 +60,7 @@ jobs:
 
           VERSION="${YEAR}.${MONTH}.${NEXT_N}"
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "previous_tag=${PREVIOUS_TAG}" >> $GITHUB_OUTPUT
           echo "date=$(date -u +'%Y-%m-%d')" >> $GITHUB_OUTPUT
           echo "sha8=$(echo ${GITHUB_SHA} | cut -c1-8)" >> $GITHUB_OUTPUT
           echo "Calculated version: ${VERSION}"
@@ -104,18 +107,130 @@ jobs:
           git tag -a "${{ steps.version.outputs.version }}" -m "Release ${{ steps.version.outputs.version }}"
           git push origin "${{ steps.version.outputs.version }}"
 
+      - name: Build release notes
+        uses: actions/github-script@v7
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PREVIOUS_TAG: ${{ steps.version.outputs.previous_tag }}
+          REPOSITORY: ${{ github.repository }}
+        with:
+          script: |
+            const fs = require("fs");
+            const { execFileSync } = require("child_process");
+
+            const version = process.env.VERSION;
+            const previousTag = process.env.PREVIOUS_TAG;
+            const repository = process.env.REPOSITORY;
+            const [owner, repo] = repository.split("/");
+
+            const git = (args) =>
+              execFileSync("git", args, { encoding: "utf8" }).trim();
+            const shortSha = (sha) => sha.slice(0, 7);
+            const commitUrl = (sha) =>
+              `https://github.com/${repository}/commit/${sha}`;
+            const prUrl = (number) =>
+              `https://github.com/${repository}/pull/${number}`;
+
+            const range = previousTag ? `${previousTag}..HEAD` : "HEAD";
+            const log = git(["log", "--reverse", "--format=%H%x1f%s", range]);
+            const commits = log
+              ? log.split("\n").map((line) => {
+                  const [sha, subject] = line.split("\x1f");
+                  return { sha, subject };
+                })
+              : [];
+
+            const prNumbers = [];
+            const pullRequests = new Map();
+            const directCommits = [];
+
+            for (const commit of commits) {
+              const { data: pulls } =
+                await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                  owner,
+                  repo,
+                  commit_sha: commit.sha,
+                });
+              const pullRequest = pulls.find((pull) => pull.merged_at) || pulls[0];
+
+              if (!pullRequest) {
+                directCommits.push(commit);
+                continue;
+              }
+
+              if (!pullRequests.has(pullRequest.number)) {
+                prNumbers.push(pullRequest.number);
+                pullRequests.set(pullRequest.number, pullRequest);
+              }
+            }
+
+            const lines = ["## Changes", ""];
+
+            if (prNumbers.length === 0 && directCommits.length === 0) {
+              lines.push("- No code changes detected for this release.", "");
+            }
+
+            for (const number of prNumbers) {
+              const pullRequest = pullRequests.get(number);
+              const prCommits = await github.paginate(github.rest.pulls.listCommits, {
+                owner,
+                repo,
+                pull_number: number,
+                per_page: 100,
+              });
+
+              lines.push(
+                `### ${pullRequest.title} ([#${number}](${prUrl(number)}))`,
+                ""
+              );
+
+              for (const commit of prCommits) {
+                const subject = commit.commit.message.split("\n")[0];
+                const url = commit.html_url || commitUrl(commit.sha);
+                lines.push(
+                  `- ${subject} ([${shortSha(commit.sha)}](${url}))`
+                );
+              }
+
+              lines.push("");
+            }
+
+            if (directCommits.length > 0) {
+              lines.push("### Direct commits", "");
+
+              for (const commit of directCommits) {
+                lines.push(
+                  `- ${commit.subject} ([${shortSha(commit.sha)}](${commitUrl(commit.sha)}))`
+                );
+              }
+
+              lines.push("");
+            }
+
+            if (previousTag) {
+              lines.push(
+                `[Full changelog](https://github.com/${repository}/compare/${previousTag}...${version})`,
+                ""
+              );
+            }
+
+            lines.push(
+              "## Docker",
+              "",
+              "```bash",
+              `docker pull ghcr.io/${repository}:${version}`,
+              "```",
+              ""
+            );
+
+            fs.writeFileSync("release-notes.md", lines.join("\n"));
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.version }}
           name: ${{ steps.version.outputs.version }}
-          generate_release_notes: true
-          body: |
-            ## Docker
-
-            ```bash
-            docker pull ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
-            ```
+          body_path: release-notes.md
 
       - name: Delete untagged images
         uses: dataaxiom/ghcr-cleanup-action@v1
