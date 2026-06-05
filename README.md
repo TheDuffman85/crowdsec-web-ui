@@ -64,17 +64,26 @@ Ban IPs directly from the UI with custom duration and reason.
   <img src="screenshots/add_decision.png" alt="Add Decision" width="50%">
 </a>
 
-### Update Notifications
-Automatically detects new container images on GitHub Container Registry (GHCR). A badge appears in the sidebar when an update is available for your current tag.
-
 ### Notification Center
 Create notification rules for alert spikes, alert thresholds, recent CVE activity, and application updates, then deliver them to one or more outbound destinations such as Email, Gotify, MQTT, ntfy, or Webhooks.
+
+<a href="screenshots/notifications.png">
+  <img src="screenshots/notifications.png" alt="Notification Center" width="50%">
+</a>
+
+<a href="screenshots/notification_rule.png">
+  <img src="screenshots/notification_rule.png" alt="Notification Rule" width="50%">
+</a>
 
 ### Unified Search
 -   **Free-text first**: The Alerts and Decisions search bars still support normal free-text queries.
 -   **Advanced syntax**: Power users can refine searches with quoted phrases, `field:value`, `AND`, `OR`, `NOT`, unary `-`, and parentheses.
 -   **Inline field search**: Mix free text and fielded terms in the same query, for example `country:germany ssh`.
 -   **Built-in help**: Use the `Info` button next to each search bar to open the page-specific syntax reference and examples.
+
+<a href="screenshots/search_syntax.png">
+  <img src="screenshots/search_syntax.png" alt="Search Syntax" width="50%">
+</a>
 
 ### Modern UI
 -   **Dark/Light Mode**: Full support for both themes.
