@@ -127,6 +127,8 @@ jobs:
               execFileSync("git", args, { encoding: "utf8" }).trim();
             const prUrl = (number) =>
               `https://github.com/${repository}/pull/${number}`;
+            const commitUrl = (sha) =>
+              `https://github.com/${repository}/commit/${sha}`;
             const contributors = new Map();
             const addContributor = (user) => {
               if (!user?.login || user.type === "Bot") return;
@@ -186,24 +188,26 @@ jobs:
               });
 
               lines.push(
-                `### ${pullRequest.title} ([#${number}](${prUrl(number)}))`,
-                ""
+                `- ${pullRequest.title} ([#${number}](${prUrl(number)}))`
               );
 
               for (const commit of prCommits) {
-                const subject = commit.commit.message.split("\n")[0];
-                lines.push(`- ${subject}`);
                 addContributor(commit.author);
               }
 
-              lines.push("");
+              if (prCommits.length > 1) {
+                for (const commit of prCommits) {
+                  const subject = commit.commit.message.split("\n")[0];
+                  lines.push(`  - ${subject}`);
+                }
+              }
             }
 
             if (directCommits.length > 0) {
-              lines.push("### Direct commits", "");
-
               for (const commit of directCommits) {
-                lines.push(`- ${commit.subject}`);
+                lines.push(
+                  `- ${commit.subject} ([${commit.sha.slice(0, 7)}](${commitUrl(commit.sha)}))`
+                );
                 const { data: directCommit } = await github.rest.repos.getCommit({
                   owner,
                   repo,
@@ -211,9 +215,9 @@ jobs:
                 });
                 addContributor(directCommit.author);
               }
-
-              lines.push("");
             }
+
+            lines.push("");
 
             if (contributors.size > 0) {
               lines.push("## Contributors", "");
