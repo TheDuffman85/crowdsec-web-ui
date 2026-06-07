@@ -65,7 +65,7 @@ Ban IPs directly from the UI with custom duration and reason.
 </a>
 
 ### Notification Center
-Create notification rules for alert spikes, alert thresholds, recent CVE activity, and application updates, then deliver them to one or more outbound destinations such as Email, Gotify, MQTT, ntfy, or Webhooks.
+Create notification rules for alert spikes, alert thresholds, IP bans, recent CVE activity, LAPI availability, and application updates, then deliver them to one or more outbound destinations such as Email, Gotify, MQTT, ntfy, or Webhooks.
 
 <a href="screenshots/notifications.png">
   <img src="screenshots/notifications.png" alt="Notification Center" width="50%">
@@ -559,13 +559,15 @@ Each rule has:
 -   incident-based deduplication so the same condition only fires once until it clears and reappears
 -   one or more destination channels
 
-Alert-based rules can also use optional filters for scenario text, target text, and whether simulated alerts should be included.
+Alert-based rules can also use optional filters for scenario text, target text, and whether simulated alerts should be included. IP Ban rules can additionally filter exact IPs and CIDR ranges.
 
 Available rule types:
 
 -   `Alert Spike`: compares the current window with the previous window and triggers when the percentage increase and minimum alert count are exceeded
 -   `Alert Threshold`: triggers when the number of matching alerts in the configured time window reaches the threshold
+-   `IP Ban`: triggers once for each active ban decision that appears in the configured time window. It supports exact IP and CIDR range filters, and deduplicates duplicate active decision rows for the same ban.
 -   `Recent CVE`: extracts CVE IDs from matching alerts and checks publication age before notifying
+-   `LAPI Availability`: triggers when CrowdSec LAPI stays unavailable longer than the configured outage threshold, with optional recovery notifications
 -   `Application Update`: uses the built-in update check and triggers when a newer CrowdSec Web UI version is available
 
 > [!NOTE]

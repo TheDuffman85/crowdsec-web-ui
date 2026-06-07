@@ -2495,7 +2495,7 @@ describe('createApp', () => {
     const { controller, database } = createController({
       env: {
         CROWDSEC_REFRESH_INTERVAL: '0',
-        CROWDSEC_LOOKBACK_PERIOD: '168h',
+        CROWDSEC_LOOKBACK_PERIOD: '1m',
       },
       fetchResolver: (url) => {
         if (url.endsWith('/v1/watchers/login')) {
@@ -2513,6 +2513,9 @@ describe('createApp', () => {
         return undefined;
       },
     });
+
+    const bootstrap = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(bootstrap.status).toBe(200);
 
     const createChannel = await controller.fetch(
       new Request('http://localhost/crowdsec/api/notification-channels', {
@@ -2585,6 +2588,273 @@ describe('createApp', () => {
 
     const deleteRule = await controller.fetch(new Request('http://localhost/crowdsec/api/notification-rules/not-real', { method: 'DELETE' }));
     expect(deleteRule.status).toBe(200);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('runs IP ban notification evaluation after adding a manual decision', async () => {
+    const manualAlert = sampleManualWebUiAlert({
+      id: 377,
+      uuid: 'alert-377',
+      created_at: new Date().toISOString(),
+      source: {
+        ip: '203.0.113.10',
+        value: '203.0.113.10',
+      },
+      decisions: [
+        {
+          id: 3770,
+          type: 'ban',
+          value: '203.0.113.10',
+          duration: '4h',
+          stop_at: new Date(Date.now() + 4 * 60 * 60 * 1_000).toISOString(),
+          origin: 'cscli',
+          scenario: 'manual/web-ui',
+          simulated: false,
+        },
+      ],
+    });
+
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '0',
+        CROWDSEC_LOOKBACK_PERIOD: '1m',
+      },
+      fetchResolver: (url, init) => {
+        if (url.endsWith('/v1/alerts') && init?.method === 'POST') {
+          return Response.json({ ok: true });
+        }
+        if (url.includes('/v1/alerts?')) {
+          return Response.json([manualAlert]);
+        }
+        return undefined;
+      },
+    });
+
+    const createRule = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Manual bans',
+          type: 'ip-ban',
+          enabled: true,
+          severity: 'warning',
+          channel_ids: [],
+          config: {
+            window_minutes: 60,
+            filters: {
+              values: ['203.0.113.10'],
+            },
+          },
+        }),
+      }),
+    );
+    expect(createRule.status).toBe(201);
+
+    const addDecision = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/decisions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ip: '203.0.113.10',
+          type: 'ban',
+          duration: '4h',
+          reason: 'manual test',
+        }),
+      }),
+    );
+    expect(addDecision.status).toBe(200);
+
+    const notifications = await controller.fetch(new Request('http://localhost/crowdsec/api/notifications'));
+    expect(notifications.status).toBe(200);
+    expect((await notifications.json()) as {
+      data: Array<{ rule_type: string; metadata: Record<string, unknown> }>;
+    }).toEqual(expect.objectContaining({
+      data: [
+        expect.objectContaining({
+          rule_type: 'ip-ban',
+          metadata: expect.objectContaining({
+            decision_id: '3770',
+            value: '203.0.113.10',
+          }),
+        }),
+      ],
+    }));
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('does not wait for outbound IP ban notification delivery when adding a manual decision', async () => {
+    const manualAlert = sampleManualWebUiAlert({
+      id: 399,
+      uuid: 'alert-399',
+      created_at: new Date().toISOString(),
+      source: {
+        ip: '1.2.3.4',
+        value: '1.2.3.4',
+      },
+      decisions: [
+        {
+          id: 3990,
+          type: 'ban',
+          value: '1.2.3.4',
+          duration: '4h',
+          stop_at: new Date(Date.now() + 4 * 60 * 60 * 1_000).toISOString(),
+          origin: 'cscli',
+          scenario: 'manual/web-ui',
+          simulated: false,
+        },
+      ],
+    });
+    let releaseNotification!: () => void;
+    let notificationStarted = false;
+    let notificationFinished = false;
+    const notificationGate = new Promise<void>((resolve) => {
+      releaseNotification = resolve;
+    });
+
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '0',
+        CROWDSEC_LOOKBACK_PERIOD: '168h',
+      },
+      fetchResolver: (url, init) => {
+        if (url.endsWith('/v1/alerts') && init?.method === 'POST') {
+          return Response.json({ ok: true });
+        }
+        if (url.includes('/v1/alerts?')) {
+          return Response.json([manualAlert]);
+        }
+        return undefined;
+      },
+      notificationFetchResolver: async () => {
+        notificationStarted = true;
+        await notificationGate;
+        notificationFinished = true;
+        return Response.json({ ok: true });
+      },
+    });
+
+    const bootstrap = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(bootstrap.status).toBe(200);
+
+    const createChannel = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Slow webhook',
+          type: 'webhook',
+          enabled: true,
+          config: {
+            url: 'https://example.com/webhook',
+            method: 'POST',
+            retryAttempts: 0,
+          },
+        }),
+      }),
+    );
+    expect(createChannel.status).toBe(201);
+    const channelPayload = await createChannel.json() as { id: string };
+
+    const createRule = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/notification-rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'CrowdSec: IP Ban',
+          type: 'ip-ban',
+          enabled: true,
+          severity: 'warning',
+          channel_ids: [channelPayload.id],
+          config: {
+            window_minutes: 60,
+            filters: {
+              values: ['1.2.3.4'],
+            },
+          },
+        }),
+      }),
+    );
+    expect(createRule.status).toBe(201);
+
+    const addDecision = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/decisions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ip: '1.2.3.4',
+          type: 'ban',
+          duration: '4h',
+          reason: 'manual test',
+        }),
+      }),
+    );
+
+    expect(addDecision.status).toBe(200);
+    expect(notificationFinished).toBe(false);
+
+    for (let index = 0; index < 10 && !notificationStarted; index += 1) {
+      await Promise.resolve();
+    }
+    expect(notificationStarted).toBe(true);
+
+    releaseNotification();
+    for (let index = 0; index < 10 && !notificationFinished; index += 1) {
+      await Promise.resolve();
+    }
+    expect(notificationFinished).toBe(true);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('keeps duration-only decision expiration stable across cache refreshes', async () => {
+    const createdAt = new Date(Date.now() - 5 * 60 * 1_000).toISOString();
+    const expectedStopAt = new Date(Date.parse(createdAt) + 4 * 60 * 60 * 1_000).toISOString();
+    const durationOnlyAlert = sampleManualWebUiAlert({
+      id: 388,
+      uuid: 'alert-388',
+      created_at: createdAt,
+      decisions: [
+        {
+          id: 3880,
+          type: 'ban',
+          value: '1.2.3.4',
+          duration: '4h',
+          origin: 'cscli',
+          scenario: 'manual/web-ui',
+          simulated: false,
+        },
+      ],
+    });
+
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '0',
+        CROWDSEC_LOOKBACK_PERIOD: '168h',
+      },
+      fetchResolver: (url) => {
+        if (url.includes('/v1/alerts?')) {
+          return Response.json([durationOnlyAlert]);
+        }
+        return undefined;
+      },
+    });
+
+    const firstRefresh = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(firstRefresh.status).toBe(200);
+    expect(database.getDecisionById('3880')?.stop_at).toBe(expectedStopAt);
+
+    const secondRefresh = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(secondRefresh.status).toBe(200);
+    expect(database.getDecisionById('3880')?.stop_at).toBe(expectedStopAt);
 
     controller.stopBackgroundTasks();
     database.close();

@@ -67,7 +67,7 @@ type RuleFormState = {
   enabled: boolean;
   severity: NotificationSeverity;
   channel_ids: string[];
-  filters: { scenario: string; target: string; include_simulated: boolean };
+  filters: { scenario: string; target: string; include_simulated: boolean; values: string };
   config: Record<string, string>;
 };
 
@@ -85,6 +85,7 @@ const RULE_DEFAULTS: Record<NotificationRuleType, Record<string, string>> = {
   'alert-spike': { window_minutes: '60', percent_increase: '100', minimum_current_alerts: '10' },
   'alert-threshold': { window_minutes: '60', alert_threshold: '25' },
   'new-cve': { max_cve_age_days: '14' },
+  'ip-ban': { window_minutes: '60' },
   'application-update': {},
   'lapi-availability': { outage_threshold_seconds: '60', notify_on_recovery: 'false' },
 };
@@ -105,7 +106,7 @@ const defaultRuleForm = (type: NotificationRuleType = 'alert-spike'): RuleFormSt
   enabled: true,
   severity: 'warning',
   channel_ids: [],
-  filters: { scenario: '', target: '', include_simulated: false },
+  filters: { scenario: '', target: '', include_simulated: false, values: '' },
   config: { ...RULE_DEFAULTS[type] },
 });
 
@@ -207,6 +208,10 @@ function moveItem<T>(items: T[], oldIndex: number, newIndex: number): T[] {
   return nextItems;
 }
 
+function splitIpRangeFilterValues(value: string): string[] {
+  return value.split(/[\s,]+/).map((entry) => entry.trim()).filter(Boolean);
+}
+
 function buildRulePayload(ruleForm: RuleFormState): UpsertNotificationRuleRequest {
   const basePayload = {
     name: ruleForm.name,
@@ -251,6 +256,20 @@ function buildRulePayload(ruleForm: RuleFormState): UpsertNotificationRuleReques
       ...basePayload,
       type: 'application-update',
       config: {},
+    };
+  }
+
+  if (ruleForm.type === 'ip-ban') {
+    return {
+      ...basePayload,
+      type: 'ip-ban',
+      config: {
+        window_minutes: Number(ruleForm.config.window_minutes || '0'),
+        filters: {
+          ...filters,
+          values: splitIpRangeFilterValues(ruleForm.filters.values),
+        },
+      },
     };
   }
 
@@ -555,6 +574,7 @@ export function Notifications() {
         scenario: filters?.scenario || '',
         target: filters?.target || '',
         include_simulated: filters?.include_simulated === true,
+        values: Array.isArray(filters?.values) ? filters.values.join(', ') : '',
       },
       config: Object.fromEntries(
         Object.entries(rule.config)
@@ -1254,6 +1274,7 @@ function RuleModal({
   onSetForm: Dispatch<SetStateAction<RuleFormState>>;
 }) {
   const supportsAlertFilters = form.type !== 'application-update' && form.type !== 'lapi-availability';
+  const simulatedFilterLabel = form.type === 'ip-ban' ? 'Include simulated decisions' : 'Include simulated alerts';
 
   return (
     <Modal isOpen={open} onClose={onClose} title={editingRule ? 'Edit Rule' : 'New Rule'} maxWidth="max-w-3xl">
@@ -1270,6 +1291,7 @@ function RuleModal({
               <option value="alert-spike">Alert Spike</option>
               <option value="alert-threshold">Alert Threshold</option>
               <option value="new-cve">Recent CVE</option>
+              <option value="ip-ban">IP Ban</option>
               <option value="application-update">Application Update</option>
               <option value="lapi-availability">LAPI Availability</option>
             </select>
@@ -1319,11 +1341,14 @@ function RuleModal({
         </div>
         {supportsAlertFilters && (
           <div className="grid gap-4 md:grid-cols-3">
+            {form.type === 'ip-ban' && (
+              <LabeledInput label="IP / Range Filter" value={form.filters.values} onChange={(value) => onSetForm((current) => ({ ...current, filters: { ...current.filters, values: value } }))} />
+            )}
             <LabeledInput label="Scenario Contains" value={form.filters.scenario} onChange={(value) => onSetForm((current) => ({ ...current, filters: { ...current.filters, scenario: value } }))} />
             <LabeledInput label="Target Contains" value={form.filters.target} onChange={(value) => onSetForm((current) => ({ ...current, filters: { ...current.filters, target: value } }))} />
             <div className="flex items-center gap-3 pt-7">
               <Switch id="rule-include-simulated" checked={form.filters.include_simulated} onCheckedChange={(checked) => onSetForm((current) => ({ ...current, filters: { ...current.filters, include_simulated: checked } }))} />
-              <label htmlFor="rule-include-simulated" className="text-sm font-medium">Include simulated alerts</label>
+              <label htmlFor="rule-include-simulated" className="text-sm font-medium">{simulatedFilterLabel}</label>
             </div>
           </div>
         )}
@@ -1774,6 +1799,7 @@ function RuleConfigFields({
   const input = (key: string, label: string) => <LabeledInput key={key} label={label} value={form.config[key] || ''} onChange={(value) => onChange(key, value)} />;
   if (form.type === 'alert-spike') return <div className="grid gap-4 md:grid-cols-3">{input('window_minutes', 'Window Minutes')}{input('percent_increase', 'Percent Increase')}{input('minimum_current_alerts', 'Minimum Alerts')}</div>;
   if (form.type === 'alert-threshold') return <div className="grid gap-4 md:grid-cols-2">{input('window_minutes', 'Window Minutes')}{input('alert_threshold', 'Alert Threshold')}</div>;
+  if (form.type === 'ip-ban') return <div className="grid gap-4 md:grid-cols-2">{input('window_minutes', 'Window Minutes')}</div>;
   if (form.type === 'application-update') {
     return (
       <div className="rounded-xl border border-blue-200 bg-blue-50/80 p-4 text-sm text-blue-900 dark:border-blue-900/40 dark:bg-blue-950/20 dark:text-blue-200">

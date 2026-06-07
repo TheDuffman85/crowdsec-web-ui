@@ -367,6 +367,40 @@ describe('Notifications page', () => {
     }));
   });
 
+  test('shows and submits the IP ban rule with IP range filters', async () => {
+    const user = userEvent.setup();
+    render(<Notifications />);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /add rule/i })).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /add rule/i }));
+    await user.selectOptions(screen.getByLabelText('Rule Type'), 'ip-ban');
+
+    expect(screen.getByLabelText('Window Minutes')).toHaveValue('60');
+    expect(screen.getByLabelText('IP / Range Filter')).toBeInTheDocument();
+    expect(screen.getByText(/include simulated decisions/i)).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText('Name'), 'Ban watch');
+    await user.type(screen.getByLabelText('IP / Range Filter'), '203.0.113.10, 10.0.0.0/24');
+    await user.type(screen.getByLabelText('Scenario Contains'), 'ssh');
+    await user.type(screen.getByLabelText('Target Contains'), 'sshd');
+    await user.click(screen.getAllByRole('switch')[1]);
+    await user.click(screen.getByRole('button', { name: /save rule/i }));
+
+    expect(createNotificationRule).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'Ban watch',
+      type: 'ip-ban',
+      config: {
+        window_minutes: 60,
+        filters: {
+          scenario: 'ssh',
+          target: 'sshd',
+          include_simulated: true,
+          values: ['203.0.113.10', '10.0.0.0/24'],
+        },
+      },
+    }));
+  });
+
   test('supports adding webhook query, header, and form fields from the destination modal', async () => {
     const user = userEvent.setup();
     render(<Notifications />);

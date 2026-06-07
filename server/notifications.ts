@@ -1,9 +1,12 @@
+import { isIP } from 'node:net';
 import type {
+  AlertDecision,
   AlertMetaValue,
   AlertSpikeRuleConfig,
   ApplicationUpdateRuleConfig,
   AlertRecord,
   AlertThresholdRuleConfig,
+  IpBanRuleConfig,
   LapiAvailabilityRuleConfig,
   LapiStatus,
   NewCveRuleConfig,
@@ -273,7 +276,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
     const activeChannels = loadChannels(false).filter((channel) => channel.enabled);
     const timestamp = now.toISOString();
     for (const rule of rules) {
-      const candidates = await evaluateRule(rule, now);
+      const candidates = dedupeCandidates(await evaluateRule(rule, now));
       const activeIncidents = loadActiveIncidents(rule.id);
       const candidateKeys = new Set(candidates.map((candidate) => candidate.dedupeKey));
 
@@ -327,6 +330,17 @@ export function createNotificationService(options: NotificationServiceOptions): 
         });
       }
     }
+  }
+
+  function dedupeCandidates(candidates: NotificationCandidate[]): NotificationCandidate[] {
+    const seenKeys = new Set<string>();
+    return candidates.filter((candidate) => {
+      if (seenKeys.has(candidate.dedupeKey)) {
+        return false;
+      }
+      seenKeys.add(candidate.dedupeKey);
+      return true;
+    });
   }
 
   function getStoredChannel(id: string): NotificationChannel | null {
@@ -533,6 +547,9 @@ export function createNotificationService(options: NotificationServiceOptions): 
     if (rule.type === 'lapi-availability') {
       return evaluateLapiAvailabilityRule(rule, now);
     }
+    if (rule.type === 'ip-ban') {
+      return evaluateIpBanRule(rule, now);
+    }
     return evaluateNewCveRule(rule, now);
   }
 
@@ -632,6 +649,49 @@ export function createNotificationService(options: NotificationServiceOptions): 
     return candidates;
   }
 
+  async function evaluateIpBanRule(rule: NotificationRule, now: Date): Promise<NotificationCandidate[]> {
+    const config = normalizeRuleConfig('ip-ban', rule.config);
+    const windowStart = now.getTime() - config.window_minutes * 60_000;
+    return database
+      .getActiveDecisions(now.toISOString())
+      .map((row) => parseDecisionRow(row.raw_data))
+      .filter((decision): decision is AlertDecision & Record<string, unknown> => decision !== null)
+      .filter((decision) => {
+        const createdAt = Date.parse(String(decision.created_at || ''));
+        return Number.isFinite(createdAt) && createdAt >= windowStart && createdAt <= now.getTime();
+      })
+      .filter((decision) => normalizeDecisionType(decision) === 'ban')
+      .filter((decision) => matchesDecisionFilters(decision, config.filters))
+      .map((decision) => {
+        const decisionId = String(decision.id);
+        const value = String(decision.value || 'unknown');
+        const stopAt = typeof decision.stop_at === 'string' ? decision.stop_at : null;
+        const scenario = typeof decision.scenario === 'string' ? decision.scenario : null;
+        const origin = typeof decision.origin === 'string' ? decision.origin : null;
+        const target = typeof decision.target === 'string' ? decision.target : null;
+        const alertId = typeof decision.alert_id === 'string' || typeof decision.alert_id === 'number' ? decision.alert_id : null;
+
+        return {
+          dedupeKey: buildIpBanDedupeKey(decision),
+          title: `${rule.name}: IP banned`,
+          message: `${value} was banned${scenario ? ` by ${scenario}` : ''}${stopAt ? ` until ${stopAt}` : ''}.`,
+          incidentStartedAt: typeof decision.created_at === 'string' ? decision.created_at : undefined,
+          metadata: {
+            decision_id: decisionId,
+            value,
+            type: normalizeDecisionType(decision),
+            origin,
+            scenario,
+            target,
+            alert_id: alertId,
+            created_at: typeof decision.created_at === 'string' ? decision.created_at : null,
+            stop_at: stopAt,
+            filters: toMetaRecord(config.filters),
+          },
+        } satisfies NotificationCandidate;
+      });
+  }
+
   async function evaluateApplicationUpdateRule(rule: NotificationRule): Promise<NotificationCandidate[]> {
     if (!updateChecker) {
       return [];
@@ -724,6 +784,15 @@ export function createNotificationService(options: NotificationServiceOptions): 
       .getAlertsBetween(start.toISOString(), end.toISOString())
       .map((row) => JSON.parse(row.raw_data) as AlertRecord)
       .filter((alert) => matchesAlertFilters(alert, filters));
+  }
+
+  function parseDecisionRow(rawData: string): (AlertDecision & Record<string, unknown>) | null {
+    try {
+      const parsed = JSON.parse(rawData) as AlertDecision & Record<string, unknown>;
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+      return null;
+    }
   }
 
   async function getCvePublishedAt(cveId: string): Promise<Date | null> {
@@ -838,6 +907,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
 function normalizeRuleConfig(type: 'alert-spike', config: RuleConfigInput): AlertSpikeRuleConfig;
 function normalizeRuleConfig(type: 'alert-threshold', config: RuleConfigInput): AlertThresholdRuleConfig;
 function normalizeRuleConfig(type: 'new-cve', config: RuleConfigInput): NewCveRuleConfig;
+function normalizeRuleConfig(type: 'ip-ban', config: RuleConfigInput): IpBanRuleConfig;
 function normalizeRuleConfig(type: 'application-update', config: RuleConfigInput): ApplicationUpdateRuleConfig;
 function normalizeRuleConfig(type: 'lapi-availability', config: RuleConfigInput): LapiAvailabilityRuleConfig;
 function normalizeRuleConfig(type: NotificationRuleType, config: RuleConfigInput): NotificationRuleConfig;
@@ -868,6 +938,13 @@ function normalizeRuleConfig(type: NotificationRuleType, config: RuleConfigInput
     return {};
   }
 
+  if (type === 'ip-ban') {
+    return {
+      window_minutes: normalizePositiveNumber(safeConfig.window_minutes, 60),
+      filters,
+    };
+  }
+
   if (type === 'lapi-availability') {
     return {
       outage_threshold_seconds: normalizePositiveNumber(safeConfig.outage_threshold_seconds, 60),
@@ -889,15 +966,18 @@ function normalizeFilters(filters: NotificationFilter | undefined): Notification
   if (!filters || typeof filters !== 'object') {
     return undefined;
   }
-  const scenario = typeof filters.scenario === 'string' ? filters.scenario.trim() : '';
-  const target = typeof filters.target === 'string' ? filters.target.trim() : '';
-  if (!scenario && !target && filters.include_simulated !== true) {
+  const rawFilters = filters as Record<string, unknown>;
+  const scenario = typeof rawFilters.scenario === 'string' ? rawFilters.scenario.trim() : '';
+  const target = typeof rawFilters.target === 'string' ? rawFilters.target.trim() : '';
+  const values = normalizeIpRangeFilterValues(rawFilters.values);
+  if (!scenario && !target && filters.include_simulated !== true && values.length === 0) {
     return undefined;
   }
   return {
     scenario: scenario || undefined,
     target: target || undefined,
     include_simulated: filters.include_simulated === true,
+    values: values.length > 0 ? values : undefined,
   };
 }
 
@@ -912,6 +992,36 @@ function matchesAlertFilters(alert: AlertRecord, filters?: NotificationFilter): 
     return false;
   }
   return true;
+}
+
+function matchesDecisionFilters(decision: AlertDecision & Record<string, unknown>, filters?: NotificationFilter): boolean {
+  if (filters?.include_simulated !== true && decision.simulated === true) {
+    return false;
+  }
+  if (filters?.scenario && !String(decision.scenario || '').toLowerCase().includes(filters.scenario.toLowerCase())) {
+    return false;
+  }
+  if (filters?.target && !String(decision.target || '').toLowerCase().includes(filters.target.toLowerCase())) {
+    return false;
+  }
+  if (filters?.values && filters.values.length > 0 && !matchesIpRangeFilters(String(decision.value || ''), filters.values)) {
+    return false;
+  }
+  return true;
+}
+
+function normalizeDecisionType(decision: AlertDecision & Record<string, unknown>): string {
+  return String(decision.type || decision.action || '').trim().toLowerCase();
+}
+
+function buildIpBanDedupeKey(decision: AlertDecision & Record<string, unknown>): string {
+  return [
+    'ip-ban',
+    String(decision.value || '').trim().toLowerCase(),
+    String(decision.origin || '').trim().toLowerCase(),
+    String(decision.scenario || '').trim().toLowerCase(),
+    String(decision.target || '').trim().toLowerCase(),
+  ].map(encodeURIComponent).join(':');
 }
 
 function extractCveIds(alert: AlertRecord): string[] {
@@ -940,7 +1050,14 @@ function normalizeChannelType(value: unknown): NotificationChannelType {
 }
 
 function normalizeRuleType(value: unknown): NotificationRuleType {
-  if (value === 'alert-spike' || value === 'alert-threshold' || value === 'new-cve' || value === 'application-update' || value === 'lapi-availability') return value;
+  if (
+    value === 'alert-spike' ||
+    value === 'alert-threshold' ||
+    value === 'new-cve' ||
+    value === 'ip-ban' ||
+    value === 'application-update' ||
+    value === 'lapi-availability'
+  ) return value;
   throw new Error('Invalid notification rule type');
 }
 
@@ -951,6 +1068,144 @@ function normalizeSeverity(value: unknown): NotificationItem['severity'] {
 function normalizePositiveNumber(value: unknown, fallback: number): number {
   const numeric = Number(value);
   return Number.isFinite(numeric) && numeric > 0 ? Math.round(numeric) : fallback;
+}
+
+function normalizeIpRangeFilterValues(value: unknown): string[] {
+  const rawEntries = Array.isArray(value)
+    ? value.flatMap((entry) => (typeof entry === 'string' ? splitIpRangeFilterValue(entry) : []))
+    : typeof value === 'string'
+      ? splitIpRangeFilterValue(value)
+      : [];
+  const values = [...new Set(rawEntries.map((entry) => entry.trim()).filter(Boolean))];
+  const invalidValue = values.find((entry) => !isValidIpOrCidr(entry));
+  if (invalidValue) {
+    throw new Error(`Invalid IP/range filter value: ${invalidValue}`);
+  }
+  return values;
+}
+
+function splitIpRangeFilterValue(value: string): string[] {
+  return value.split(/[\s,]+/).map((entry) => entry.trim()).filter(Boolean);
+}
+
+function isValidIpOrCidr(value: string): boolean {
+  const [address, prefix, extra] = value.split('/');
+  const version = isIP(address || '');
+  if (version === 0 || extra !== undefined) {
+    return false;
+  }
+  if (prefix === undefined) {
+    return true;
+  }
+  if (!/^\d+$/.test(prefix)) {
+    return false;
+  }
+  const numericPrefix = Number(prefix);
+  const maxPrefix = version === 4 ? 32 : 128;
+  return Number.isInteger(numericPrefix) && numericPrefix >= 0 && numericPrefix <= maxPrefix;
+}
+
+function matchesIpRangeFilters(value: string, filters: string[]): boolean {
+  const normalizedValue = value.trim();
+  if (!normalizedValue) {
+    return false;
+  }
+
+  for (const filter of filters) {
+    if (normalizedValue === filter) {
+      return true;
+    }
+    if (filter.includes('/') && !normalizedValue.includes('/') && cidrContainsIp(filter, normalizedValue)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function cidrContainsIp(cidr: string, value: string): boolean {
+  const [networkAddress, prefixText] = cidr.split('/');
+  const version = isIP(networkAddress || '');
+  if (version === 0 || isIP(value) !== version) {
+    return false;
+  }
+  const ipVersion = version === 4 ? 4 : 6;
+  const prefix = Number(prefixText);
+  const bits = ipVersion === 4 ? 32 : 128;
+  const network = parseIpAddress(networkAddress || '', ipVersion);
+  const address = parseIpAddress(value, ipVersion);
+  if (network === null || address === null || !Number.isInteger(prefix) || prefix < 0 || prefix > bits) {
+    return false;
+  }
+
+  const hostBits = BigInt(bits - prefix);
+  const mask = hostBits === BigInt(bits)
+    ? 0n
+    : ((1n << BigInt(bits)) - 1n) ^ ((1n << hostBits) - 1n);
+  return (network & mask) === (address & mask);
+}
+
+function parseIpAddress(value: string, version: 4 | 6): bigint | null {
+  return version === 4 ? parseIpv4Address(value) : parseIpv6Address(value);
+}
+
+function parseIpv4Address(value: string): bigint | null {
+  const parts = value.split('.');
+  if (parts.length !== 4) {
+    return null;
+  }
+  let result = 0n;
+  for (const part of parts) {
+    if (!/^\d+$/.test(part)) {
+      return null;
+    }
+    const octet = Number(part);
+    if (!Number.isInteger(octet) || octet < 0 || octet > 255) {
+      return null;
+    }
+    result = (result << 8n) + BigInt(octet);
+  }
+  return result;
+}
+
+function parseIpv6Address(value: string): bigint | null {
+  const normalized = value.toLowerCase();
+  const [leftText, rightText, extraText] = normalized.split('::');
+  if (extraText !== undefined) {
+    return null;
+  }
+
+  const leftParts = splitIpv6Parts(leftText || '');
+  const rightParts = rightText === undefined ? [] : splitIpv6Parts(rightText || '');
+  if (!leftParts || !rightParts) {
+    return null;
+  }
+
+  const missingParts = 8 - leftParts.length - rightParts.length;
+  if (rightText === undefined ? missingParts !== 0 : missingParts < 1) {
+    return null;
+  }
+
+  const parts = [...leftParts, ...Array.from({ length: missingParts }, () => 0), ...rightParts];
+  if (parts.length !== 8) {
+    return null;
+  }
+
+  return parts.reduce((result, part) => (result << 16n) + BigInt(part), 0n);
+}
+
+function splitIpv6Parts(value: string): number[] | null {
+  if (!value) {
+    return [];
+  }
+  const parts = value.split(':');
+  const parsed: number[] = [];
+  for (const part of parts) {
+    if (!/^[0-9a-f]{1,4}$/.test(part)) {
+      return null;
+    }
+    parsed.push(Number.parseInt(part, 16));
+  }
+  return parsed;
 }
 
 function shouldResetIncidentState(existing: NotificationRule, next: NotificationRule): boolean {

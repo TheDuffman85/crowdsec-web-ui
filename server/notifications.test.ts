@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
-import type { AlertRecord, LapiStatus, UpdateCheckResponse } from '../shared/contracts';
+import type { AlertDecision, AlertRecord, LapiStatus, UpdateCheckResponse } from '../shared/contracts';
 import { CrowdsecDatabase } from './database';
 import { createNotificationService } from './notifications';
 import { createNotificationSecretStore } from './notifications/secret-store';
@@ -52,6 +52,37 @@ function insertAlert(database: CrowdsecDatabase, alert: AlertRecord): void {
     $source_ip: alert.source?.ip || alert.source?.value || '',
     $message: alert.message || '',
     $raw_data: JSON.stringify(alert),
+  });
+}
+
+function createDecision(id: string, createdAt: string, overrides: Partial<AlertDecision & Record<string, unknown>> = {}): AlertDecision & Record<string, unknown> {
+  return {
+    id,
+    created_at: createdAt,
+    stop_at: '2026-03-28T13:00:00.000Z',
+    value: '1.2.3.4',
+    type: 'ban',
+    origin: 'crowdsec',
+    scenario: 'crowdsecurity/ssh-bf',
+    target: 'ssh',
+    alert_id: 1,
+    simulated: false,
+    ...overrides,
+  };
+}
+
+function insertDecision(database: CrowdsecDatabase, decision: AlertDecision & Record<string, unknown>): void {
+  database.insertDecision({
+    $id: String(decision.id),
+    $uuid: String(decision.id),
+    $alert_id: typeof decision.alert_id === 'string' || typeof decision.alert_id === 'number' ? decision.alert_id : 1,
+    $created_at: String(decision.created_at || ''),
+    $stop_at: String(decision.stop_at || ''),
+    $value: typeof decision.value === 'string' ? decision.value : undefined,
+    $type: typeof decision.type === 'string' ? decision.type : undefined,
+    $origin: typeof decision.origin === 'string' ? decision.origin : undefined,
+    $scenario: typeof decision.scenario === 'string' ? decision.scenario : undefined,
+    $raw_data: JSON.stringify(decision),
   });
 }
 
@@ -352,6 +383,216 @@ describe('notification incident deduplication', () => {
 
     await service.evaluateRules(new Date('2026-03-28T13:00:00.000Z'));
     expect(service.listNotifications().data).toHaveLength(2);
+
+    database.close();
+  });
+
+  test('IP ban rules notify once per active ban decision with decision metadata', async () => {
+    const { database, service } = createService();
+    const rule = service.createRule({
+      name: 'Ban watch',
+      type: 'ip-ban',
+      enabled: true,
+      severity: 'critical',
+      channel_ids: [],
+      config: {
+        window_minutes: 60,
+        filters: {},
+      },
+    });
+
+    insertDecision(database, createDecision('decision-1', '2026-03-28T11:55:00.000Z', {
+      value: '10.20.30.40',
+      origin: 'manual',
+      alert_id: 123,
+    }));
+
+    await service.evaluateRules(new Date('2026-03-28T12:00:00.000Z'));
+    await service.evaluateRules(new Date('2026-03-28T12:05:00.000Z'));
+
+    expect(service.listNotifications().data).toEqual([
+      expect.objectContaining({
+        rule_type: 'ip-ban',
+        severity: 'critical',
+        title: 'Ban watch: IP banned',
+        message: '10.20.30.40 was banned by crowdsecurity/ssh-bf until 2026-03-28T13:00:00.000Z.',
+        metadata: expect.objectContaining({
+          decision_id: 'decision-1',
+          value: '10.20.30.40',
+          type: 'ban',
+          origin: 'manual',
+          scenario: 'crowdsecurity/ssh-bf',
+          target: 'ssh',
+          alert_id: 123,
+          created_at: '2026-03-28T11:55:00.000Z',
+          stop_at: '2026-03-28T13:00:00.000Z',
+        }),
+      }),
+    ]);
+    expect(database.listNotificationIncidentsByRule(rule.id)).toEqual([
+      expect.objectContaining({
+        incident_key: 'ip-ban:10.20.30.40:manual:crowdsecurity%2Fssh-bf:ssh',
+        first_seen_at: '2026-03-28T11:55:00.000Z',
+        resolved_at: null,
+      }),
+    ]);
+
+    await service.evaluateRules(new Date('2026-03-28T13:01:00.000Z'));
+    expect(database.listNotificationIncidentsByRule(rule.id)[0]).toEqual(expect.objectContaining({
+      resolved_at: '2026-03-28T13:01:00.000Z',
+    }));
+
+    database.close();
+  });
+
+  test('IP ban rules do not refire when the same ban is resynced with volatile ids and timestamps', async () => {
+    const { database, service } = createService();
+    service.createRule({
+      name: 'Stable bans',
+      type: 'ip-ban',
+      enabled: true,
+      severity: 'warning',
+      channel_ids: [],
+      config: {
+        window_minutes: 60,
+        filters: {},
+      },
+    });
+
+    insertDecision(database, createDecision('decision-a', '2026-03-28T11:55:00.000Z', {
+      value: '1.2.3.4',
+      stop_at: '2026-03-28T13:00:00.000Z',
+    }));
+    await service.evaluateRules(new Date('2026-03-28T12:00:00.000Z'));
+
+    database.deleteDecision('decision-a');
+    insertDecision(database, createDecision('decision-b', '2026-03-28T11:56:00.000Z', {
+      value: '1.2.3.4',
+      stop_at: '2026-03-28T13:01:00.000Z',
+    }));
+    await service.evaluateRules(new Date('2026-03-28T12:05:00.000Z'));
+
+    expect(service.listNotifications().data).toHaveLength(1);
+
+    database.close();
+  });
+
+  test('IP ban rules collapse duplicate active decisions in the same evaluation', async () => {
+    const { database, service } = createService();
+    service.createRule({
+      name: 'Duplicate bans',
+      type: 'ip-ban',
+      enabled: true,
+      severity: 'warning',
+      channel_ids: [],
+      config: {
+        window_minutes: 60,
+        filters: {},
+      },
+    });
+
+    insertDecision(database, createDecision('decision-a', '2026-03-28T11:55:00.000Z', {
+      value: '3.4.5.6',
+      stop_at: '2026-03-28T13:00:00.000Z',
+    }));
+    insertDecision(database, createDecision('decision-b', '2026-03-28T11:56:00.000Z', {
+      value: '3.4.5.6',
+      stop_at: '2026-03-28T13:01:00.000Z',
+    }));
+
+    await service.evaluateRules(new Date('2026-03-28T12:00:00.000Z'));
+
+    expect(service.listNotifications().data).toHaveLength(1);
+
+    database.close();
+  });
+
+  test('IP ban rules resolve when an active decision is deleted from the cache', async () => {
+    const { database, service } = createService();
+    const rule = service.createRule({
+      name: 'Deleted bans',
+      type: 'ip-ban',
+      enabled: true,
+      severity: 'warning',
+      channel_ids: [],
+      config: {
+        window_minutes: 60,
+        filters: {},
+      },
+    });
+
+    insertDecision(database, createDecision('decision-a', '2026-03-28T11:55:00.000Z', {
+      value: '2.3.4.5',
+      stop_at: '2026-03-28T13:00:00.000Z',
+    }));
+    await service.evaluateRules(new Date('2026-03-28T12:00:00.000Z'));
+
+    database.deleteDecision('decision-a');
+    await service.evaluateRules(new Date('2026-03-28T12:05:00.000Z'));
+
+    expect(database.listNotificationIncidentsByRule(rule.id)[0]).toEqual(expect.objectContaining({
+      incident_key: 'ip-ban:2.3.4.5:crowdsec:crowdsecurity%2Fssh-bf:ssh',
+      resolved_at: '2026-03-28T12:05:00.000Z',
+    }));
+
+    database.close();
+  });
+
+  test('IP ban rules respect window, decision type, simulation, scenario, target, exact IP, and CIDR filters', async () => {
+    const { database, service } = createService();
+    service.createRule({
+      name: 'Filtered bans',
+      type: 'ip-ban',
+      enabled: true,
+      severity: 'warning',
+      channel_ids: [],
+      config: {
+        window_minutes: 30,
+        filters: {
+          scenario: 'ssh',
+          target: 'ssh',
+          include_simulated: true,
+          values: ['203.0.113.10', '10.0.0.0/24', '2001:db8::/32'],
+        },
+      },
+    });
+
+    insertDecision(database, createDecision('exact', '2026-03-28T11:50:00.000Z', { value: '203.0.113.10' }));
+    insertDecision(database, createDecision('cidr-v4', '2026-03-28T11:51:00.000Z', { value: '10.0.0.42' }));
+    insertDecision(database, createDecision('cidr-v6', '2026-03-28T11:52:00.000Z', { value: '2001:db8::42', simulated: true }));
+    insertDecision(database, createDecision('captcha', '2026-03-28T11:53:00.000Z', { value: '10.0.0.43', type: 'captcha' }));
+    insertDecision(database, createDecision('outside-cidr', '2026-03-28T11:54:00.000Z', { value: '10.0.1.42' }));
+    insertDecision(database, createDecision('wrong-scenario', '2026-03-28T11:55:00.000Z', { value: '10.0.0.44', scenario: 'crowdsecurity/http-probing' }));
+    insertDecision(database, createDecision('wrong-target', '2026-03-28T11:56:00.000Z', { value: '10.0.0.45', target: 'http' }));
+    insertDecision(database, createDecision('old-ban', '2026-03-28T11:20:00.000Z', { value: '10.0.0.46' }));
+
+    await service.evaluateRules(new Date('2026-03-28T12:00:00.000Z'));
+
+    expect(service.listNotifications().data.map((notification) => notification.metadata.decision_id).sort()).toEqual([
+      'cidr-v4',
+      'cidr-v6',
+      'exact',
+    ]);
+
+    database.close();
+  });
+
+  test('IP ban rules reject invalid IP and range filter values', () => {
+    const { database, service } = createService();
+
+    expect(() => service.createRule({
+      name: 'Invalid bans',
+      type: 'ip-ban',
+      enabled: true,
+      severity: 'warning',
+      channel_ids: [],
+      config: {
+        window_minutes: 60,
+        filters: {
+          values: ['not-an-ip'],
+        },
+      },
+    })).toThrow('Invalid IP/range filter value: not-an-ip');
 
     database.close();
   });

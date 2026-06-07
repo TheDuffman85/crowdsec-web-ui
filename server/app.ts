@@ -476,6 +476,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       }
 
       const result = await deleteAlertsByIds(ids);
+      if (result.deleted_decisions > 0) {
+        void runNotificationEvaluation('bulk alert delete');
+      }
       return context.json(result);
     };
 
@@ -705,6 +708,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       }
 
       const result = await deleteEntriesByIp(ip);
+      if (result.deleted_decisions > 0) {
+        void runNotificationEvaluation('cleanup by ip');
+      }
       return context.json(result);
     };
 
@@ -974,6 +980,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       const result = await lapiClient.addDecision(ip, type, duration, reason.slice(0, 256));
       console.log('Refreshing cache after adding decision...');
       await updateCacheDelta();
+      void runNotificationEvaluation('manual decision add');
       return context.json({ message: 'Decision added (via Alert)', result });
     };
 
@@ -996,6 +1003,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       }
 
       const result = await deleteDecisionsByIds(ids);
+      if (result.deleted_decisions > 0) {
+        void runNotificationEvaluation('bulk decision delete');
+      }
       return context.json(result);
     };
 
@@ -1017,6 +1027,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       console.log(`Removing decision ${decisionId} from local cache...`);
       database.deleteDecision(decisionId);
       dashboardStatsCache = null;
+      void runNotificationEvaluation('decision delete');
       return context.json((result as object) || { message: 'Deleted' });
     };
 
@@ -1467,9 +1478,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     for (const decision of normalizedDecisions) {
       currentDecisionIds.push(String(decision.id));
       const createdAt = decision.created_at || alert.created_at;
-      const stopAt = decision.duration
-        ? new Date(Date.now() + parseGoDuration(decision.duration)).toISOString()
-        : decision.stop_at || createdAt;
+      const stopAt = resolveDecisionStopAt(decision, createdAt);
 
       const enrichedDecision = {
         ...decision,
@@ -1509,6 +1518,19 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
 
     database.deleteDecisionsByAlertIdExcept(alert.id, currentDecisionIds);
+  }
+
+  function resolveDecisionStopAt(decision: AlertDecision, createdAt: string): string {
+    if (decision.stop_at) {
+      return decision.stop_at;
+    }
+    if (decision.duration) {
+      const createdAtMs = Date.parse(createdAt);
+      if (Number.isFinite(createdAtMs)) {
+        return new Date(createdAtMs + parseGoDuration(decision.duration)).toISOString();
+      }
+    }
+    return createdAt;
   }
 
   function reconcileSyncedAlertWindow(alerts: AlertRecord[], start: string, end: string): { alerts: number; decisions: number } {

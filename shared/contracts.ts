@@ -305,7 +305,7 @@ export interface UpdateCheckResponse {
 }
 
 export type NotificationChannelType = 'ntfy' | 'gotify' | 'email' | 'mqtt' | 'webhook';
-export type NotificationRuleType = 'alert-spike' | 'alert-threshold' | 'new-cve' | 'application-update' | 'lapi-availability';
+export type NotificationRuleType = 'alert-spike' | 'alert-threshold' | 'new-cve' | 'ip-ban' | 'application-update' | 'lapi-availability';
 export type NotificationSeverity = 'info' | 'warning' | 'critical';
 export type NotificationDeliveryStatus = 'delivered' | 'failed' | 'skipped';
 
@@ -313,6 +313,7 @@ export interface NotificationFilter {
   scenario?: string;
   target?: string;
   include_simulated?: boolean;
+  values?: string[];
 }
 
 export interface AlertSpikeRuleConfig {
@@ -333,6 +334,11 @@ export interface NewCveRuleConfig {
   filters?: NotificationFilter;
 }
 
+export interface IpBanRuleConfig {
+  window_minutes: number;
+  filters?: NotificationFilter;
+}
+
 export interface ApplicationUpdateRuleConfig {}
 
 export interface LapiAvailabilityRuleConfig {
@@ -344,6 +350,7 @@ export type NotificationRuleConfig =
   | AlertSpikeRuleConfig
   | AlertThresholdRuleConfig
   | NewCveRuleConfig
+  | IpBanRuleConfig
   | ApplicationUpdateRuleConfig
   | LapiAvailabilityRuleConfig;
 
