@@ -1329,7 +1329,7 @@ function matchesSimulationTerm(isSimulated: boolean, value: string): boolean {
 }
 
 function isDecisionExpired(decision: DecisionListItem): boolean {
-  return decision.expired === true || (decision.detail.duration || '').startsWith('-');
+  return decision.expired === true;
 }
 
 function matchesDecisionStatus(decision: DecisionListItem, value: string): boolean {

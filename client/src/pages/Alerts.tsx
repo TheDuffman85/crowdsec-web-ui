@@ -1339,10 +1339,6 @@ export function Alerts() {
                                                     if (decision.detail.expiration) {
                                                         return new Date(decision.detail.expiration) > new Date();
                                                     }
-                                                    // If stop_at is missing, check if duration implies expiration
-                                                    if (decision.detail.duration && decision.detail.duration.startsWith('-')) {
-                                                        return false;
-                                                    }
                                                     return true; // Assume active if no stop_at and not definitely expired
                                                 })();
                                                 return (
@@ -1354,7 +1350,7 @@ export function Alerts() {
                                                         <td className="px-4 py-2 text-sm"><Badge variant="danger">{decision.detail.type || decision.detail.action || "ban"}</Badge></td>
                                                         <td className="px-4 py-2 text-sm font-mono">{decision.value}</td>
                                                         <td className="px-4 py-2 text-sm">
-                                                            {(decision.detail.duration || "").startsWith('-') ? "0s" : decision.detail.duration}
+                                                            {isActive ? decision.detail.duration : "0s"}
                                                             {!isActive && <span className="ml-2 text-xs text-red-500 dark:text-red-400">(Expired)</span>}
                                                         </td>
                                                         <td className="px-4 py-2 text-sm">{decision.detail.origin || "-"}</td>

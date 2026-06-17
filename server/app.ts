@@ -1475,10 +1475,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
 
     const currentDecisionIds: string[] = [];
+    const observedAt = new Date().toISOString();
     for (const decision of normalizedDecisions) {
       currentDecisionIds.push(String(decision.id));
       const createdAt = decision.created_at || alert.created_at;
-      const stopAt = resolveDecisionStopAt(decision, createdAt);
+      const stopAt = resolveDecisionStopAt(decision, createdAt, observedAt);
 
       const enrichedDecision = {
         ...decision,
@@ -1520,14 +1521,14 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     database.deleteDecisionsByAlertIdExcept(alert.id, currentDecisionIds);
   }
 
-  function resolveDecisionStopAt(decision: AlertDecision, createdAt: string): string {
+  function resolveDecisionStopAt(decision: AlertDecision, createdAt: string, observedAt: string): string {
     if (decision.stop_at) {
       return decision.stop_at;
     }
     if (decision.duration) {
-      const createdAtMs = Date.parse(createdAt);
-      if (Number.isFinite(createdAtMs)) {
-        return new Date(createdAtMs + parseGoDuration(decision.duration)).toISOString();
+      const observedAtMs = Date.parse(observedAt);
+      if (Number.isFinite(observedAtMs)) {
+        return new Date(observedAtMs + parseGoDuration(decision.duration)).toISOString();
       }
     }
     return createdAt;
@@ -3592,8 +3593,7 @@ function matchesSimulationFilter(isSimulated: boolean, filter: string): boolean 
 }
 
 function isDecisionListItemExpired(decision: DecisionListItem): boolean {
-  const decisionDuration = decision.detail.duration ?? '';
-  return Boolean(decision.expired || decisionDuration.startsWith('-'));
+  return decision.expired === true;
 }
 
 function getDateFilterKey(isoString: string, includeHour: boolean, timezoneOffsetMinutes: number): string {

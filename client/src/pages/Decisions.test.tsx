@@ -27,7 +27,7 @@ function toPaginatedDecisions(
       unfiltered_total: unfilteredTotal,
     },
     selectable_ids: decisions
-      .filter((decision) => !decision.expired && !(decision.detail.duration || '').startsWith('-'))
+      .filter((decision) => !decision.expired)
       .map((decision) => decision.id),
   };
 }
@@ -96,7 +96,7 @@ vi.mock('../lib/api', () => {
       unfiltered_total: unfilteredTotal,
     },
     selectable_ids: decisions
-      .filter((decision) => !decision.expired && !(decision.detail.duration || '').startsWith('-'))
+      .filter((decision) => !decision.expired)
       .map((decision) => decision.id),
   });
 

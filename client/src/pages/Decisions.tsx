@@ -74,8 +74,7 @@ function toErrorInfo(error: unknown, fallbackMessage: string): ErrorInfo {
 }
 
 function isDecisionExpired(decision: DecisionListItem): boolean {
-    const decisionDuration = decision.detail.duration ?? '';
-    return Boolean(decision.expired || decisionDuration.startsWith("-"));
+    return decision.expired === true;
 }
 
 function summarizeDeleteResult(result: BulkDeleteResult): string | null {
@@ -965,7 +964,7 @@ export function Decisions() {
                                                     case 'expiration':
                                                         return (
                                                             <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 whitespace-nowrap">
-                                                                {decisionDuration.startsWith("-") ? "0s" : decisionDuration}
+                                                                {isExpired ? "0s" : decisionDuration}
                                                                 {isExpired && <span className="ml-2 text-xs text-red-500 dark:text-red-400">(Expired)</span>}
                                                             </td>
                                                         );
