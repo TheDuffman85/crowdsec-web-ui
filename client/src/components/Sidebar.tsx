@@ -5,6 +5,7 @@ import { useNotificationUnreadCount } from "../contexts/useNotificationUnreadCou
 import { useRefresh } from "../contexts/useRefresh";
 import { useState, useEffect } from "react";
 import { apiUrl, assetUrl } from "../lib/basePath";
+import { useTranslation } from "react-i18next";
 import type { UpdateCheckResponse } from '../types';
 
 type ThemeMode = 'light' | 'dark';
@@ -56,15 +57,16 @@ function compareReleaseVersions(left: string, right: string): number {
 }
 
 export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: SidebarProps) {
+    const { t } = useTranslation();
     const { intervalMs, setIntervalMs, lastUpdated, refreshSignal } = useRefresh();
     const { unreadCount } = useNotificationUnreadCount();
     const [updateStatus, setUpdateStatus] = useState<UpdateCheckResponse | null>(null);
 
     const links = [
-        { to: "/", label: "Dashboard", icon: LayoutDashboard },
-        { to: "/alerts", label: "Alerts", icon: ShieldAlert },
-        { to: "/decisions", label: "Decisions", icon: Gavel },
-        { to: "/notifications", label: "Notifications", icon: Bell },
+        { to: "/", label: t('sidebar.nav_dashboard'), icon: LayoutDashboard },
+        { to: "/alerts", label: t('sidebar.nav_alerts'), icon: ShieldAlert },
+        { to: "/decisions", label: t('sidebar.nav_decisions'), icon: Gavel },
+        { to: "/notifications", label: t('sidebar.nav_notifications'), icon: Bell },
     ];
 
     useEffect(() => {
@@ -111,7 +113,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
 
         return (
             <Badge
-                aria-label={`${unreadCount} unread notifications`}
+                aria-label={t('sidebar.unread_notifications', { count: unreadCount })}
                 className={compact
                     ? "absolute right-1.5 top-1.5 min-h-5 min-w-5 justify-center rounded-full bg-primary-500 px-1.5 text-white dark:bg-primary-500 dark:text-white"
                     : "ml-auto min-w-6 justify-center rounded-full bg-primary-500 text-white dark:bg-primary-500 dark:text-white"
@@ -141,18 +143,18 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                 <div className="flex items-center gap-2 lg:gap-3">
                     <img
                         src={assetUrl('/logo.svg')}
-                        alt="CrowdSec Logo"
+                        alt={t('sidebar.aria_logo')}
                         className="w-10 h-10 flex-shrink-0"
                     />
                     <h1 className="text-xl lg:text-2xl font-bold bg-gradient-to-r from-primary-600 to-primary-400 bg-clip-text text-transparent leading-tight whitespace-nowrap">
-                        CrowdSec Web UI
+                        {t('sidebar.title')}
                     </h1>
                 </div>
                 {/* Close button on mobile */}
                 <button
                     onClick={onClose}
                     className="lg:hidden p-2 rounded-md text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700 flex-shrink-0"
-                    aria-label="Close Menu"
+                    aria-label={t('layout.aria_close_menu')}
                 >
                     <X size={20} />
                 </button>
@@ -160,7 +162,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                 <button
                     onClick={onToggle}
                     className="hidden lg:flex p-2 rounded-md text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700 flex-shrink-0"
-                    aria-label="Collapse Menu"
+                    aria-label={t('sidebar.aria_collapse_menu')}
                 >
                     <PanelLeftClose size={20} />
                 </button>
@@ -198,7 +200,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                 <div className="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-3 space-y-2">
                     <div className="flex items-center justify-between">
                         <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                            Refresh
+                            {t('sidebar.refresh_label')}
                         </label>
                         {lastUpdated && (
                             <span className="text-[10px] items-center text-gray-400 font-mono">
@@ -211,11 +213,11 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                         onChange={(e) => setIntervalMs(Number(e.target.value))}
                         className="w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs rounded-md px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary-500 cursor-pointer"
                     >
-                        <option value={0}>Off</option>
-                        <option value={5000}>Every 5s</option>
-                        <option value={30000}>Every 30s</option>
-                        <option value={60000}>Every 1m</option>
-                        <option value={300000}>Every 5m</option>
+                        <option value={0}>{t('sidebar.refresh_off')}</option>
+                        <option value={5000}>{t('sidebar.refresh_5s')}</option>
+                        <option value={30000}>{t('sidebar.refresh_30s')}</option>
+                        <option value={60000}>{t('sidebar.refresh_1m')}</option>
+                        <option value={300000}>{t('sidebar.refresh_5m')}</option>
                     </select>
                 </div>
                 <button
@@ -224,7 +226,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                 >
                     {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
                     <span className="text-sm font-medium">
-                        {theme === "light" ? "Dark Mode" : "Light Mode"}
+                        {theme === "light" ? t('sidebar.dark_mode') : t('sidebar.light_mode')}
                     </span>
                 </button>
 
@@ -235,7 +237,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                             <ArrowUpCircle className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
                             <div className="flex-1 min-w-0">
                                 <p className="text-sm font-medium text-blue-800 dark:text-blue-200 mb-1">
-                                    Update Available
+                                    {t('sidebar.update_available')}
                                 </p>
                                 <p className="text-xs text-blue-600 dark:text-blue-400">
                                     {updateStatus.release_url ? (
@@ -248,7 +250,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                                             v{updateStatus.remote_version}
                                         </a>
                                     ) : updateStatus.remote_version ? (
-                                        <>New version: <span className="font-mono bg-blue-100 dark:bg-blue-800 px-1 rounded">dev-{updateStatus.remote_version}</span></>
+                                        <>{t('sidebar.new_version')} <span className="font-mono bg-blue-100 dark:bg-blue-800 px-1 rounded">dev-{updateStatus.remote_version}</span></>
                                     ) : (
                                         <>New version available for tag <span className="font-mono bg-blue-100 dark:bg-blue-800 px-1 rounded">{updateStatus.tag}</span></>
                                     )}
@@ -277,7 +279,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                         </>
                     ) : (
                         <>
-                            <span>Development</span>
+                            <span>{t('sidebar.development')}</span>
                             {import.meta.env.VITE_COMMIT_HASH && (
                                 <a
                                     href={`${import.meta.env.VITE_REPO_URL}/commit/${import.meta.env.VITE_COMMIT_HASH}`}
@@ -312,14 +314,14 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
             <div className="p-4 flex flex-col items-center gap-3">
                 <img
                     src={assetUrl('/logo.svg')}
-                    alt="CrowdSec Logo"
+                    alt={t('sidebar.aria_logo')}
                     className="w-8 h-8"
                 />
                 <button
                     onClick={onToggle}
                     className="p-2 rounded-md text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700"
-                    aria-label="Expand Menu"
-                    title="Expand Menu"
+                    aria-label={t('sidebar.aria_expand_menu')}
+                    title={t('sidebar.expand_menu')}
                 >
                     <Menu size={20} />
                 </button>

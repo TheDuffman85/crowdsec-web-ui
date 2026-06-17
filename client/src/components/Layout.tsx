@@ -1,8 +1,10 @@
 import { Outlet, useLocation } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 
 export function Layout() {
+    const { t } = useTranslation();
     const [theme, setTheme] = useState<'light' | 'dark'>(() => {
         if (typeof window !== 'undefined') {
             const savedTheme = localStorage.getItem("theme");
@@ -52,15 +54,15 @@ export function Layout() {
     const getPageTitle = (): string => {
         switch (location.pathname) {
             case '/':
-                return 'Dashboard';
+                return t('layout.page_title_dashboard');
             case '/alerts':
-                return 'Alerts';
+                return t('layout.page_title_alerts');
             case '/decisions':
-                return 'Decisions';
+                return t('layout.page_title_decisions');
             case '/notifications':
-                return 'Notifications';
+                return t('layout.page_title_notifications');
             default:
-                return 'Dashboard';
+                return t('layout.page_title_dashboard');
         }
     };
 
@@ -88,7 +90,7 @@ export function Layout() {
                             <button
                                 onClick={toggleMenu}
                                 className="lg:hidden p-2 rounded-lg bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 shadow-sm transition-colors border border-gray-200 dark:border-gray-700"
-                                aria-label="Open Menu"
+                                aria-label={t('layout.aria_open_menu')}
                             >
                                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" x2="20" y1="12" y2="12" /><line x1="4" x2="20" y1="6" y2="6" /><line x1="4" x2="20" y1="18" y2="18" /></svg>
                             </button>

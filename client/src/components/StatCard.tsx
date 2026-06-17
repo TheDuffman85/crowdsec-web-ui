@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import type { ComponentType, ReactNode } from 'react';
 import type { LucideProps } from 'lucide-react';
 import type { StatListItem } from '../types';
+import { useTranslation } from 'react-i18next';
 
 interface StatCardProps<TItem extends StatListItem> {
     title: string;
@@ -24,13 +25,15 @@ export function StatCard<TItem extends StatListItem>({
     title,
     icon: Icon,
     items,
-    emptyMessage = "No data available",
-    onSelect, // Changed from getLink to generic onSelect
-    selectedValue, // The currently selected value for highlighting
-    renderLabel, // Optional function to render custom label content
+    emptyMessage,
+    onSelect,
+    selectedValue,
+    renderLabel,
     getExternalLink,
-    total // Optional total count to calculate percentages against global total instead of visible items
+    total
 }: StatCardProps<TItem>) {
+    const { t } = useTranslation();
+    const defaultEmptyMessage = t('stat_card.no_data');
     // Calculate total for percentages
     const denominator = useMemo(() => {
         if (total !== undefined) return total;
@@ -48,7 +51,7 @@ export function StatCard<TItem extends StatListItem>({
             <CardContent>
                 {items.length === 0 ? (
                     <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">
-                        {emptyMessage}
+                        {emptyMessage ?? defaultEmptyMessage}
                     </p>
                 ) : (
                     <div className="space-y-2">

@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, type MouseEvent as ReactMouseEvent } from "react";
 import { useSearchParams, Link } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { fetchAlertsPaginated, fetchAlert, deleteAlert, bulkDeleteAlerts, cleanupByIp, fetchConfig, fetchDecisionsPaginated, updateTableColumns } from "../lib/api";
 import { isSimulatedAlert, isSimulatedDecision, matchesSimulationFilter, parseSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
@@ -42,14 +43,14 @@ function ErrorBanner({ errorInfo, onDismiss }: { errorInfo: ErrorInfo; onDismiss
                     {errorInfo.message}
                     {errorInfo.helpLink && (
                         <>
-                            {' See README: '}
+                            {t('common.see_readme')}
                             <a
                                 href={errorInfo.helpLink}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="underline hover:text-red-900 dark:hover:text-red-100"
                             >
-                                {errorInfo.helpText || 'Learn more'}
+                                {errorInfo.helpText || t('common.learn_more')}
                             </a>
                         </>
                     )}
@@ -59,7 +60,7 @@ function ErrorBanner({ errorInfo, onDismiss }: { errorInfo: ErrorInfo; onDismiss
                 <button
                     onClick={onDismiss}
                     className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-200"
-                    aria-label="Dismiss error message"
+                    aria-label={t('alerts.aria_dismiss_error')}
                 >
                     <X size={16} />
                 </button>
@@ -122,6 +123,7 @@ function summarizeDeleteResult(result: BulkDeleteResult): string | null {
 }
 
 export function Alerts() {
+    const { t } = useTranslation();
     const { refreshSignal, setLastUpdated } = useRefresh();
     const [searchParams, setSearchParams] = useSearchParams();
     const initialQueryParam = searchParams.get("q") ?? "";
@@ -832,10 +834,10 @@ export function Alerts() {
     const pendingSingleAlertId = pendingDeleteAction?.kind === "single" ? pendingDeleteAction.alertId : null;
     const pendingIp = pendingDeleteAction?.kind === "ip" ? pendingDeleteAction.ip : null;
     const summaryText = initialLoading && !hasLoadedAlerts
-        ? "Loading alerts..."
+        ? t('alerts.loading_alerts')
         : totalAlerts !== totalUnfilteredAlerts
-            ? `Showing ${visibleAlerts.length} of ${totalAlerts} alerts (${totalUnfilteredAlerts} total before filters)`
-            : `Showing ${visibleAlerts.length} of ${totalAlerts} alerts`;
+            ? t('alerts.summary_filtered', { count: visibleAlerts.length, total: totalAlerts, unfiltered: totalUnfilteredAlerts })
+            : t('alerts.summary', { count: visibleAlerts.length, total: totalAlerts });
     const tableBusy = initialLoading || backgroundLoading || loadingMore;
 
     return (
@@ -850,7 +852,7 @@ export function Alerts() {
                     aria-live="polite"
                 >
                     <span className="h-2 w-2 rounded-full bg-primary-500 animate-pulse" aria-hidden="true" />
-                    Refreshing...
+                    {t('common.refreshing')}
                 </span>
             </div>
 
@@ -863,7 +865,7 @@ export function Alerts() {
                     disabled={selectedAlertCount === 0}
                     className="rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                    Delete selected
+                    {t('alerts.delete_selected')}
                 </button>
             </div>
 
@@ -877,7 +879,7 @@ export function Alerts() {
                 <div className="flex flex-wrap gap-2">
                     {appliedQuery && (
                         <Badge variant="secondary" className="flex items-center gap-1 max-w-full">
-                            <span className="font-semibold">Search:</span>
+                            <span className="font-semibold">{t('alerts.search')}</span>
                             <span className="font-mono text-xs truncate max-w-[320px]">{appliedQuery}</span>
                             <button
                                 onClick={() => {
@@ -896,7 +898,7 @@ export function Alerts() {
                     )}
                     {simulationsEnabled && searchParams.get("simulation") && (
                         <Badge variant="secondary" className="flex items-center gap-1">
-                            <span className="font-semibold">Simulation:</span> {searchParams.get("simulation")}
+                            <span className="font-semibold">{t('alerts.simulation_badge')}</span> {searchParams.get("simulation")}
                             <button
                                 onClick={() => {
                                     const newParams = new URLSearchParams(searchParams);
@@ -913,7 +915,7 @@ export function Alerts() {
                         onClick={clearAllFilters}
                         className="text-xs text-gray-500 hover:text-gray-900 dark:hover:text-gray-300 underline"
                     >
-                        Reset all filters
+                        {t('alerts.reset_all_filters')}
                     </button>
                 </div>
             )
@@ -926,7 +928,7 @@ export function Alerts() {
                             ref={searchInputRef}
                             searchPage="alerts"
                             searchFeatures={searchValidationFeatures}
-                            placeholder="Filter alerts..."
+                            placeholder={t('alerts.filter_alerts')}
                             value={searchDraft}
                             error={queryError}
                             onChange={(e) => {
@@ -945,8 +947,8 @@ export function Alerts() {
                         type="button"
                         onClick={() => setShowSearchSyntaxModal(true)}
                         className="inline-flex items-center justify-center rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-gray-600 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
-                        aria-label="Search syntax help"
-                        title="Search syntax help"
+                        aria-label={t('alerts.aria_search_help')}
+                        title={t('alerts.aria_search_help')}
                     >
                         <Info size={18} />
                     </button>
@@ -954,15 +956,15 @@ export function Alerts() {
                         type="button"
                         onClick={() => setShowColumnsModal(true)}
                         className="inline-flex items-center justify-center rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-gray-600 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
-                        aria-label="Choose alert table columns"
-                        title="Choose columns"
+                        aria-label={t('alerts.aria_columns')}
+                        title={t('alerts.aria_columns')}
                     >
                         <Columns3 size={18} />
                     </button>
                 </div>
                 {queryError && (
                     <p id="alerts-search-error" className="text-xs text-red-600 dark:text-red-400">
-                        Search syntax error at character {queryError.position + 1}: {queryError.message}
+                        {t('alerts.search_syntax_error', { position: queryError.position + 1, message: queryError.message })}
                     </p>
                 )}
             </div>
@@ -979,7 +981,7 @@ export function Alerts() {
                                     <input
                                         ref={selectAllAlertsRef}
                                         type="checkbox"
-                                        aria-label="Select all filtered alerts"
+                                        aria-label={t('alerts.aria_select_all')}
                                         checked={allFilteredAlertsSelected}
                                         disabled={selectableAlertIds.length === 0}
                                         onChange={toggleAllFilteredAlerts}
@@ -998,14 +1000,14 @@ export function Alerts() {
                                         </th>
                                     );
                                 })}
-                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
+                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('alerts.actions')}</th>
                             </tr>
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                             {initialLoading && visibleAlerts.length === 0 ? (
-                                <tr><td colSpan={alertTableColSpan} className="px-6 py-4 text-center text-sm text-gray-500">Loading alerts...</td></tr>
+                                <tr><td colSpan={alertTableColSpan} className="px-6 py-4 text-center text-sm text-gray-500">{t('alerts.loading_alerts')}</td></tr>
                             ) : visibleAlerts.length === 0 ? (
-                                <tr><td colSpan={alertTableColSpan} className="px-6 py-4 text-center text-sm text-gray-500">No alerts found</td></tr>
+                                <tr><td colSpan={alertTableColSpan} className="px-6 py-4 text-center text-sm text-gray-500">{t('alerts.no_alerts')}</td></tr>
                             ) : (
                                 visibleAlerts.map((alert, index) => {
                                     const isLastElement = index === visibleAlerts.length - 1;
@@ -1024,7 +1026,7 @@ export function Alerts() {
                                             <td className="px-6 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
                                                 <input
                                                     type="checkbox"
-                                                    aria-label={`Select alert ${alert.id}`}
+                                                    aria-label={t('alerts.aria_select_alert', { id: alert.id })}
                                                     checked={isSelected}
                                                     onChange={() => toggleAlertSelection(String(alert.id))}
                                                     className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
@@ -1118,7 +1120,7 @@ export function Alerts() {
                                                                                         title={`View ${activeDecisions.length} active decisions`}
                                                                                     >
                                                                                         <Shield size={14} className="fill-current" />
-                                                                                        <span className="text-xs font-semibold">Active: {activeDecisions.length}</span>
+                                                                                        <span className="text-xs font-semibold">{t('alerts.active')}: {activeDecisions.length}</span>
                                                                                         <ExternalLink size={12} className="ml-0.5" />
                                                                                     </Link>
                                                                                 )}
@@ -1129,7 +1131,7 @@ export function Alerts() {
                                                                                         title={`View ${expiredDecisions.length} expired decisions`}
                                                                                     >
                                                                                         <Shield size={14} className="opacity-50" />
-                                                                                        <span className="text-xs font-medium">Inactive: {expiredDecisions.length}</span>
+                                                                                        <span className="text-xs font-medium">{t('alerts.inactive_label')}: {expiredDecisions.length}</span>
                                                                                     </Link>
                                                                                 )}
                                                                             </div>
@@ -1154,8 +1156,8 @@ export function Alerts() {
                                                                 setPendingDeleteAction({ kind: "ip", ip: sourceValue });
                                                             }}
                                                             className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
-                                                            title={`Delete all alerts and decisions for ${sourceValue}`}
-                                                            aria-label={`Delete all alerts and decisions for ${sourceValue}`}
+                                                            title={t('alerts.aria_delete_all_ip', { value: sourceValue })}
+                                                            aria-label={t('alerts.aria_delete_all_ip', { value: sourceValue })}
                                                         >
                                                             <ShieldBan size={16} aria-hidden="true" />
                                                         </button>
@@ -1163,7 +1165,7 @@ export function Alerts() {
                                                     <button
                                                         onClick={(e) => requestDelete(alert.id, e)}
                                                         className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
-                                                        title="Delete Alert"
+                                                        title={t('alerts.aria_delete_alert')}
                                                     >
                                                         <Trash2 size={16} />
                                                     </button>
@@ -1187,27 +1189,27 @@ export function Alerts() {
                     newParams.delete("id");
                     setSearchParams(newParams);
                 }}
-                title={selectedAlert ? `Alert Details #${selectedAlert.id}` : "Alert Details"}
+                title={selectedAlert ? t('alerts.alert_details_id', { id: selectedAlert.id }) : t('alerts.alert_details')}
                 maxWidth="max-w-6xl"
             >
                 {selectedAlert && (
                     <div className="space-y-6">
                         <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2 mb-4">
-                            Captured at {new Date(selectedAlert.created_at).toLocaleString()}
+                            {t('alerts.captured_at', { time: new Date(selectedAlert.created_at).toLocaleString() })}
                         </p>
 
                         {/* Summary Cards */}
                         <div className={`grid grid-cols-1 ${isAlertColumnVisible('machine') ? 'md:grid-cols-4' : 'md:grid-cols-3'} gap-4`}>
                             {isAlertColumnVisible('machine') && (
                                 <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
-                                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Machine</h4>
+                                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{t('alerts.machine')}</h4>
                                     <div className="text-lg text-gray-900 dark:text-gray-100 font-medium">
                                         {resolveMachineName(selectedAlert) || "-"}
                                     </div>
                                 </div>
                             )}
                             <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
-                                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Scenario</h4>
+                                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{t('alerts.scenario')}</h4>
                                 <div className="font-medium text-gray-900 dark:text-gray-100 break-words">
                                     <ScenarioName
                                         name={selectedAlert.scenario}
@@ -1219,7 +1221,7 @@ export function Alerts() {
                                 </div>
                             </div>
                             <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
-                                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Location</h4>
+                                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{t('alerts.location')}</h4>
                                 <div className="text-lg text-gray-900 dark:text-gray-100 font-medium flex items-center gap-2">
                                     {selectedAlert.source?.cn && (
                                         <span className={`fi fi-${selectedAlert.source.cn.toLowerCase()} flex-shrink-0`} title={selectedAlert.source.cn}></span>
@@ -1242,7 +1244,7 @@ export function Alerts() {
                                 )}
                             </div>
                             <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
-                                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">IP / Range</h4>
+                                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{t('alerts.ip_range')}</h4>
                                 <div className="flex items-center gap-2">
                                     {selectedAlertSourceValue ? (
                                         <a
