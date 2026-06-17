@@ -7,6 +7,7 @@ import { useState, useEffect } from "react";
 import { apiUrl, assetUrl } from "../lib/basePath";
 import { useTranslation } from "react-i18next";
 import type { UpdateCheckResponse } from '../types';
+import { Languages } from "lucide-react";
 
 type ThemeMode = 'light' | 'dark';
 
@@ -57,7 +58,7 @@ function compareReleaseVersions(left: string, right: string): number {
 }
 
 export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: SidebarProps) {
-    const { t } = useTranslation();
+    const { t, i18n } = useTranslation();
     const { intervalMs, setIntervalMs, lastUpdated, refreshSignal } = useRefresh();
     const { unreadCount } = useNotificationUnreadCount();
     const [updateStatus, setUpdateStatus] = useState<UpdateCheckResponse | null>(null);
@@ -229,6 +230,23 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                         {theme === "light" ? t('sidebar.dark_mode') : t('sidebar.light_mode')}
                     </span>
                 </button>
+
+                {/* Language Switcher */}
+                <div className="flex items-center gap-2 bg-gray-50 dark:bg-gray-900/50 rounded-lg p-1">
+                    <Languages size={16} className="text-gray-400 ml-1" />
+                    <button
+                        onClick={() => i18n.changeLanguage(i18n.language === 'zh' ? 'en' : 'zh')}
+                        className={`flex-1 text-xs font-medium px-2 py-1.5 rounded-md transition-colors ${i18n.language === 'zh' ? 'bg-primary-600 text-white' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}
+                    >
+                        中文
+                    </button>
+                    <button
+                        onClick={() => i18n.changeLanguage('en')}
+                        className={`flex-1 text-xs font-medium px-2 py-1.5 rounded-md transition-colors ${i18n.language === 'en' ? 'bg-primary-600 text-white' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}
+                    >
+                        EN
+                    </button>
+                </div>
 
                 {/* Update Notification */}
                 {updateStatus?.update_available && (

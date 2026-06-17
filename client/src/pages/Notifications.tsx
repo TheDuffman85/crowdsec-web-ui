@@ -1,5 +1,6 @@
 import { type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import Sortable from 'sortablejs';
 import { Bell, Check, CheckCheck, GripVertical, Plus, Send, SendHorizontal, SquarePen, Trash2 } from 'lucide-react';
 import {
@@ -295,6 +296,7 @@ function buildRulePayload(ruleForm: RuleFormState): UpsertNotificationRuleReques
 }
 
 export function Notifications() {
+  const { t } = useTranslation();
   const { refreshSignal } = useRefresh();
   const { unreadCount, setUnreadCount } = useNotificationUnreadCount();
   const [channels, setChannels] = useState<NotificationChannel[]>([]);
@@ -443,7 +445,7 @@ export function Notifications() {
       ]);
     } catch (err) {
       console.error(err);
-      setError(err instanceof Error ? err.message : 'Failed to load notifications');
+      setError(err instanceof Error ? err.message : t('notifications.failed_to_load'));
     }
   }, [loadNotifications, loadSettings]);
 
@@ -689,16 +691,16 @@ export function Notifications() {
   };
 
   if (initialLoading) {
-    return <div className="p-8 text-center text-gray-500">Loading notifications...</div>;
+    return <div className="p-8 text-center text-gray-500">{t('notifications.loading')}</div>;
   }
 
   const deleteActionTitle = pendingDeleteAction?.kind === 'single'
-    ? 'Delete Notification?'
+    ? t('notifications.delete_notification_title')
     : pendingDeleteAction?.kind === 'selected'
-      ? 'Delete Selected Notifications?'
+      ? t('notifications.delete_selected_title')
       : pendingDeleteAction?.kind === 'read'
-        ? 'Delete All Read Notifications?'
-        : 'Delete';
+        ? t('notifications.delete_read_title')
+        : t('common.delete');
   const pendingSingleNotificationId = pendingDeleteAction?.kind === 'single' ? pendingDeleteAction.id : null;
 
   return (
@@ -711,24 +713,24 @@ export function Notifications() {
       )}
 
       <div className="grid grid-cols-3 gap-3 sm:gap-4 lg:gap-6">
-        <SummaryCard icon={<Bell className="h-6 w-6" />} label="Unread Notifications" value={String(unreadCount)} />
+        <SummaryCard icon={<Bell className="h-6 w-6" />} label={t('notifications.unread_title')} value={String(unreadCount)} />
         <SummaryCard
           icon={<Send className="h-6 w-6" />}
-          label="Destinations"
+          label={t('notifications.destinations')}
           value={String(channels.length)}
-          sublabel={`${channels.filter((channel) => channel.enabled).length} active`}
+          sublabel={t('notifications.active_count', { count: channels.filter((channel) => channel.enabled).length })}
         />
         <SummaryCard
           icon={<CheckCheck className="h-6 w-6" />}
-          label="Rules"
+          label={t('notifications.rules')}
           value={String(rules.length)}
-          sublabel={`${rules.filter((rule) => rule.enabled).length} active`}
+          sublabel={t('notifications.active_count', { count: rules.filter((rule) => rule.enabled).length })}
         />
       </div>
 
       <Card>
         <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <CardTitle>Recent Notifications</CardTitle>
+          <CardTitle>{t('notifications.recent_notifications')}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -736,13 +738,13 @@ export function Notifications() {
               <input
                 ref={selectAllNotificationsRef}
                 type="checkbox"
-                aria-label="Select all notifications"
+                aria-label={t('notifications.select_all')}
                 checked={allNotificationsSelected}
                 disabled={selectableNotificationIds.length === 0}
                 onChange={toggleAllNotifications}
                 className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
               />
-              Select all
+              {t('notifications.select_all')}
             </label>
             <button
               type="button"
@@ -751,7 +753,7 @@ export function Notifications() {
               className="inline-flex items-center gap-2 rounded-lg bg-gray-100 px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-gray-700 dark:text-gray-100 dark:hover:bg-gray-600"
             >
               <CheckCheck className="h-4 w-4" />
-              Mark Selected Read
+              {t('notifications.mark_selected_read')}
             </button>
             <button
               type="button"
@@ -760,7 +762,7 @@ export function Notifications() {
               className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Trash2 className="h-4 w-4" />
-              Delete Selected
+              {t('notifications.delete_selected')}
             </button>
             <button
               type="button"
@@ -769,19 +771,19 @@ export function Notifications() {
               className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-100 px-3 py-2 text-sm font-medium text-red-700 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:bg-gray-700 dark:text-red-300 dark:hover:bg-red-900/20"
             >
               <Trash2 className="h-4 w-4" />
-              Delete All Read
+              {t('notifications.delete_all_read')}
             </button>
             <span
               className={`ml-auto inline-flex items-center gap-2 text-xs text-gray-500 transition-opacity dark:text-gray-400 ${backgroundLoading ? 'opacity-100' : 'opacity-0'}`}
               aria-live="polite"
             >
               <span className="h-2 w-2 animate-pulse rounded-full bg-primary-500" aria-hidden="true" />
-              Refreshing...
+              {t('common.refreshing')}
             </span>
           </div>
 
           {notifications.length === 0 ? (
-            <p className="text-sm text-gray-500 dark:text-gray-400">No notifications yet.</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400">{t('notifications.no_notifications')}</p>
           ) : (
             <div
               ref={notificationScrollRef}
@@ -800,7 +802,7 @@ export function Notifications() {
                     rowRef={index === notifications.length - 1 ? lastNotificationElementRef : undefined}
                   />
                 ))}
-                {loadingMore && <p className="py-2 text-center text-sm text-gray-500 dark:text-gray-400">Loading more notifications...</p>}
+                {loadingMore && <p className="py-2 text-center text-sm text-gray-500 dark:text-gray-400">{t('common.loading')}</p>}
               </div>
             </div>
           )}
@@ -808,9 +810,9 @@ export function Notifications() {
       </Card>
 
       <div className="grid gap-6 xl:grid-cols-2">
-        <ResourceCard title="Destinations" actionLabel="Add Destination" onAction={openCreateChannel}>
+        <ResourceCard title={t('notifications.destinations_title')} actionLabel={t('notifications.add_destination')} onAction={openCreateChannel}>
           {channels.length === 0
-            ? <p className="text-sm text-gray-500 dark:text-gray-400">No outbound destinations configured yet.</p>
+            ? <p className="text-sm text-gray-500 dark:text-gray-400">{t('notifications.no_destinations')}</p>
             : (
               <SortableList className="space-y-4" itemCount={orderedChannels.length} onMove={reorderChannels}>
                 {orderedChannels.map((channel) => (
@@ -828,9 +830,9 @@ export function Notifications() {
             )}
         </ResourceCard>
 
-        <ResourceCard title="Rules" actionLabel="Add Rule" onAction={openCreateRule}>
+        <ResourceCard title={t('notifications.rules_title')} actionLabel={t('notifications.add_rule')} onAction={openCreateRule}>
           {rules.length === 0
-            ? <p className="text-sm text-gray-500 dark:text-gray-400">No notification rules configured yet.</p>
+            ? <p className="text-sm text-gray-500 dark:text-gray-400">{t('notifications.no_rules')}</p>
             : (
               <SortableList className="space-y-4" itemCount={orderedRules.length} onMove={reorderRules}>
                 {orderedRules.map((rule) => (
