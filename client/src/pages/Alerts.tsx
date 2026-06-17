@@ -35,6 +35,7 @@ interface ErrorInfo {
 }
 
 function ErrorBanner({ errorInfo, onDismiss }: { errorInfo: ErrorInfo; onDismiss?: () => void }) {
+    const { t } = useTranslation();
     return (
         <div role="alert" className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md p-4 flex items-center justify-between">
             <div className="flex items-center gap-2 text-red-700 dark:text-red-300">
