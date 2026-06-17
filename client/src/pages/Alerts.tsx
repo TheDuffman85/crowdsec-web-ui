@@ -824,12 +824,12 @@ export function Alerts() {
     const selectedAlertIsSimulated = selectedAlert ? isSimulatedAlert(selectedAlert) : false;
     const selectedAlertSourceValue = getAlertSourceValue(selectedAlert?.source);
     const deleteActionTitle = pendingDeleteAction?.kind === "single"
-        ? "Delete Alert?"
+        ? t('alerts.delete_alert')
         : pendingDeleteAction?.kind === "selected"
-            ? "Delete Selected Alerts?"
+            ? t('alerts.delete_selected_modal_title')
             : pendingDeleteAction?.kind === "ip"
-                ? "Delete All for this IP?"
-                : "Delete";
+                ? t('alerts.delete_all_ip_modal_title')
+                : t('common.delete');
     const selectedAlertCount = selectedFilteredAlertIds.length;
     const pendingSingleAlertId = pendingDeleteAction?.kind === "single" ? pendingDeleteAction.alertId : null;
     const pendingIp = pendingDeleteAction?.kind === "ip" ? pendingDeleteAction.ip : null;
@@ -1302,10 +1302,10 @@ export function Alerts() {
                         {(modalDecisionsLoading || modalDecisionsTotal > 0) && (
                             <div>
                                 <div className="flex items-center justify-between gap-3 mb-3">
-                                    <h4 className="text-lg font-semibold text-gray-900 dark:text-white">Decisions Taken</h4>
+                                    <h4 className="text-lg font-semibold text-gray-900 dark:text-white">{t('alerts.decisions_taken')}</h4>
                                     {(modalDecisionsLoading || modalDecisions.length < modalDecisionsTotal) && (
                                         <span className="text-xs text-gray-500 dark:text-gray-400">
-                                            Showing {modalDecisions.length} of {modalDecisionsTotal}
+                                            {t('alerts.showing_decisions', { count: modalDecisions.length, total: modalDecisionsTotal })}
                                         </span>
                                     )}
                                 </div>
@@ -1316,19 +1316,19 @@ export function Alerts() {
                                     <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                                         <thead className="bg-gray-50 dark:bg-gray-900">
                                             <tr>
-                                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
-                                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
-                                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Value</th>
-                                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Expiration</th>
-                                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Origin</th>
-                                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">View</th>
+                                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{t('table_columns.id')}</th>
+                                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{t('table_columns.action')}</th>
+                                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{t('table_columns.source')}</th>
+                                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{t('table_columns.expiration')}</th>
+                                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{t('table_columns.origin')}</th>
+                                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">{t('alerts.view') ?? 'View'}</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-800">
                                             {modalDecisionsLoading && modalDecisions.length === 0 ? (
                                                 <tr>
                                                     <td colSpan={6} className="px-4 py-4 text-sm text-center text-gray-500">
-                                                        Loading decisions...
+                                                        {t('decisions.loading_decisions')}
                                                     </td>
                                                 </tr>
                                             ) : modalDecisions.map((decision, idx) => {
@@ -1397,7 +1397,7 @@ export function Alerts() {
                                             {modalDecisionsLoadingMore && (
                                                 <tr>
                                                     <td colSpan={6} className="px-4 py-4 text-sm text-center text-gray-500">
-                                                        Loading more decisions...
+                                                        {t('common.loading')}
                                                     </td>
                                                 </tr>
                                             )}
@@ -1410,7 +1410,7 @@ export function Alerts() {
                         {/* Events Breakdown */}
                         <div>
                             <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">
-                                Events ({selectedAlertEvents.length})
+                                {t('alerts.events_title', { count: selectedAlertEvents.length })}
                             </h4>
                             <div className="space-y-2">
                                 {(showAllEvents
@@ -1429,7 +1429,7 @@ export function Alerts() {
                                     onClick={() => setShowAllEvents(true)}
                                     className="mt-3 w-full py-2 text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 bg-gray-50 dark:bg-gray-900/30 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors cursor-pointer"
                                 >
-                                    Show all {selectedAlertEvents.length} events ({selectedAlertEvents.length - 10} more)
+                                    {t('alerts.show_all_events', { total: selectedAlertEvents.length, remaining: selectedAlertEvents.length - 10 })}
                                 </button>
                             )}
                         </div>
@@ -1453,14 +1453,14 @@ export function Alerts() {
                 <p className="text-gray-600 dark:text-gray-300 mb-6">
                     {pendingSingleAlertId ? (
                         <>
-                            Are you sure you want to delete alert <span className="font-mono text-sm font-bold">#{pendingSingleAlertId}</span>? This will also delete all associated decisions. This action cannot be undone.
+                            {t('alerts.delete_alert_confirm', { id: pendingSingleAlertId })}
                         </>
                     ) : pendingIp ? (
                         <>
-                            Are you sure you want to delete all alerts and decisions for <span className="font-mono text-sm font-bold">{pendingIp}</span>? This action cannot be undone.
+                            {t('alerts.delete_ip_confirm', { ip: pendingIp })}
                         </>
                     ) : (
-                        <>Are you sure you want to delete {selectedFilteredAlertIds.length} selected alert{selectedFilteredAlertIds.length === 1 ? "" : "s"}? This will also remove associated decisions from the cache.</>
+                        <>{t('alerts.delete_selected_confirm', { count: selectedFilteredAlertIds.length })}</>
                     )}
                 </p>
                 {pendingDeleteErrorInfo && (
@@ -1474,14 +1474,14 @@ export function Alerts() {
                         disabled={deleteInProgress}
                         className="px-4 py-2 text-sm font-medium text-gray-700 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                        Cancel
+                        {t('common.cancel')}
                     </button>
                     <button
                         onClick={confirmDelete}
                         disabled={deleteInProgress}
                         className="px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                        {deleteInProgress ? "Deleting..." : "Delete"}
+                        {deleteInProgress ? t('common.deleting') : t('common.delete')}
                     </button>
                 </div>
             </Modal>

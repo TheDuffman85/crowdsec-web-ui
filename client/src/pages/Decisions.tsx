@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, type FormEvent } from "react";
 import { useSearchParams, Link } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { deleteDecision, bulkDeleteDecisions, cleanupByIp, addDecision, fetchConfig, fetchDecisionsPaginated, updateTableColumns } from "../lib/api";
 import { isSimulatedDecision, parseSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
@@ -96,6 +97,7 @@ function summarizeDeleteResult(result: BulkDeleteResult): string | null {
 }
 
 export function Decisions() {
+    const { t } = useTranslation();
     const { refreshSignal, setLastUpdated } = useRefresh();
     const [searchParams, setSearchParams] = useSearchParams();
     const initialQueryParam = searchParams.get("q") ?? "";
@@ -653,19 +655,19 @@ export function Decisions() {
     const visibleDecisions = filteredDecisions;
     const selectedDecisionCount = selectedFilteredDecisionIds.length;
     const deleteActionTitle = pendingDeleteAction?.kind === "single"
-        ? "Delete Decision?"
+        ? t('decisions.delete_decision')
         : pendingDeleteAction?.kind === "selected"
-            ? "Delete Selected Decisions?"
+            ? t('decisions.delete_selected_modal_title')
             : pendingDeleteAction?.kind === "ip"
-                ? "Delete All for this IP?"
-                : "Delete";
+                ? t('decisions.delete_all_ip_modal_title')
+                : t('common.delete');
     const pendingDecisionId = pendingDeleteAction?.kind === "single" ? pendingDeleteAction.decisionId : null;
     const pendingIp = pendingDeleteAction?.kind === "ip" ? pendingDeleteAction.ip : null;
     const summaryText = initialLoading && !hasLoadedDecisions
-        ? "Loading decisions..."
+        ? t('decisions.loading_decisions')
         : totalDecisions !== totalUnfilteredDecisions
-            ? `Showing ${visibleDecisions.length} of ${totalDecisions} decisions (${totalUnfilteredDecisions} total before filters)`
-            : `Showing ${visibleDecisions.length} of ${totalDecisions} decisions`;
+            ? t('decisions.summary_filtered', { count: visibleDecisions.length, total: totalDecisions, unfiltered: totalUnfilteredDecisions })
+            : t('decisions.summary', { count: visibleDecisions.length, total: totalDecisions });
     const tableBusy = initialLoading || backgroundLoading || loadingMore;
 
     return (
@@ -690,7 +692,7 @@ export function Decisions() {
                     className="bg-primary-600 hover:bg-primary-700 text-white font-medium py-2 px-4 rounded-md transition-colors flex items-center gap-2 text-sm"
                 >
                     <Gavel size={16} />
-                    Add Decision
+                    {t('decisions.add_decision')}
                 </button>
                 <button
                     onClick={() => {
@@ -700,7 +702,7 @@ export function Decisions() {
                     disabled={selectedDecisionCount === 0}
                     className="rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                    Delete selected
+                    {t('decisions.delete_selected')}
                 </button>
             </div>
 
@@ -714,7 +716,7 @@ export function Decisions() {
                 <div className="flex flex-wrap gap-2">
                     {appliedQuery && (
                         <Badge variant="secondary" className="flex items-center gap-1 max-w-full">
-                            <span className="font-semibold">Search:</span>
+                            <span className="font-semibold">{t('decisions.search')}</span>
                             <span className="font-mono text-xs truncate max-w-[320px]">{appliedQuery}</span>
                             <button
                                 onClick={() => {
@@ -733,7 +735,7 @@ export function Decisions() {
                     )}
                     {!includeExpiredParam && (
                         <Badge variant="secondary" className="flex items-center gap-1">
-                            <span className="font-semibold">Hide:</span> Inactive
+                            <span className="font-semibold">{t('decisions.hide_inactive')}</span>
                             <button
                                 onClick={toggleExpired}
                                 className="ml-1 hover:text-red-500"
@@ -744,7 +746,7 @@ export function Decisions() {
                     )}
                     {!showDuplicates && (
                         <Badge variant="secondary" className="flex items-center gap-1">
-                            <span className="font-semibold">Hide:</span> Duplicates
+                            <span className="font-semibold">{t('decisions.hide_duplicates')}</span>
                             <button
                                 onClick={() => {
                                     const newParams = new URLSearchParams(searchParams);
@@ -759,7 +761,7 @@ export function Decisions() {
                     )}
                     {alertIdFilter && (
                         <Badge variant="secondary" className="flex items-center gap-1">
-                            <span className="font-semibold">Alert:</span> #{alertIdFilter}
+                            <span className="font-semibold">{t('decisions.alert_filter')}</span> #{alertIdFilter}
                             <button
                                 onClick={() => removeParam("alert_id")}
                                 className="ml-1 hover:text-red-500"
@@ -770,7 +772,7 @@ export function Decisions() {
                     )}
                     {simulationsEnabled && simulationFilter !== 'all' && (
                         <Badge variant="secondary" className="flex items-center gap-1">
-                            <span className="font-semibold">Simulation:</span> {simulationFilter}
+                            <span className="font-semibold">{t('decisions.simulation')}</span> {simulationFilter}
                             <button
                                 onClick={() => removeParam("simulation")}
                                 className="ml-1 hover:text-red-500"
@@ -786,7 +788,7 @@ export function Decisions() {
                             onClick={clearFilter}
                             className="text-xs text-gray-500 hover:text-gray-900 dark:hover:text-gray-300 underline"
                         >
-                            Reset all filters
+                            {t('decisions.reset_all_filters')}
                         </button>
                     )}
                 </div>
@@ -799,7 +801,7 @@ export function Decisions() {
                             ref={searchInputRef}
                             searchPage="decisions"
                             searchFeatures={searchValidationFeatures}
-                            placeholder="Filter decisions..."
+                            placeholder={t('decisions.filter_decisions')}
                             value={searchDraft}
                             error={queryError}
                             onChange={(e) => {
@@ -818,8 +820,8 @@ export function Decisions() {
                         type="button"
                         onClick={() => setShowSearchSyntaxModal(true)}
                         className="inline-flex items-center justify-center rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-gray-600 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
-                        aria-label="Search syntax help"
-                        title="Search syntax help"
+                        aria-label={t('decisions.aria_search_help')}
+                        title={t('decisions.aria_search_help')}
                     >
                         <Info size={18} />
                     </button>
@@ -827,15 +829,15 @@ export function Decisions() {
                         type="button"
                         onClick={() => setShowColumnsModal(true)}
                         className="inline-flex items-center justify-center rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-gray-600 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
-                        aria-label="Choose decision table columns"
-                        title="Choose columns"
+                        aria-label={t('decisions.aria_columns')}
+                        title={t('decisions.aria_columns')}
                     >
                         <Columns3 size={18} />
                     </button>
                 </div>
                 {queryError && (
                     <p id="decisions-search-error" className="text-xs text-red-600 dark:text-red-400">
-                        Search syntax error at character {queryError.position + 1}: {queryError.message}
+                        {t('decisions.search_syntax_error', { position: queryError.position + 1, message: queryError.message })}
                     </p>
                 )}
             </div>
@@ -853,7 +855,7 @@ export function Decisions() {
                                     <input
                                         ref={selectAllDecisionsRef}
                                         type="checkbox"
-                                        aria-label="Select all filtered decisions"
+                                        aria-label={t('decisions.aria_select_all')}
                                         checked={allFilteredDecisionsSelected}
                                         disabled={selectableDecisionIds.length === 0}
                                         onChange={toggleAllFilteredDecisions}
@@ -872,14 +874,14 @@ export function Decisions() {
                                         </th>
                                     );
                                 })}
-                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
+                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('decisions.actions')}</th>
                             </tr>
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                             {initialLoading && visibleDecisions.length === 0 ? (
-                                <tr><td colSpan={decisionTableColSpan} className="px-6 py-4 text-center text-sm text-gray-500">Loading decisions...</td></tr>
+                                <tr><td colSpan={decisionTableColSpan} className="px-6 py-4 text-center text-sm text-gray-500">{t('decisions.loading_decisions')}</td></tr>
                             ) : visibleDecisions.length === 0 ? (
-                                <tr><td colSpan={decisionTableColSpan} className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? "No decisions for this alert" : "No decisions found"}</td></tr>
+                                <tr><td colSpan={decisionTableColSpan} className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? t('decisions.no_decisions_for_alert') : t('decisions.no_decisions')}</td></tr>
                             ) : (
                                 visibleDecisions.map((decision, index) => {
                                     const decisionDuration = decision.detail.duration ?? '';
@@ -900,7 +902,7 @@ export function Decisions() {
                                             <td className="px-6 py-4 whitespace-nowrap text-sm">
                                                 <input
                                                     type="checkbox"
-                                                    aria-label={`Select decision ${decision.id}`}
+                                                    aria-label={t('decisions.aria_select_decision', { id: decision.id })}
                                                     checked={isSelected}
                                                     disabled={isExpired}
                                                     onChange={() => toggleDecisionSelection(String(decision.id))}
@@ -966,7 +968,7 @@ export function Decisions() {
                                                         return (
                                                             <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 whitespace-nowrap">
                                                                 {decisionDuration.startsWith("-") ? "0s" : decisionDuration}
-                                                                {isExpired && <span className="ml-2 text-xs text-red-500 dark:text-red-400">(Expired)</span>}
+                                                                {isExpired && <span className="ml-2 text-xs text-red-500 dark:text-red-400">{t('decisions.expired')}</span>}
                                                             </td>
                                                         );
                                                     case 'machine':
@@ -1012,8 +1014,8 @@ export function Decisions() {
                                                                 setPendingDeleteAction({ kind: "ip", ip: decision.value || "" });
                                                             }}
                                                             className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
-                                                            title={`Delete all alerts and decisions for ${decision.value}`}
-                                                            aria-label={`Delete all alerts and decisions for ${decision.value}`}
+                                                            title={t('decisions.aria_delete_all_ip', { value: decision.value })}
+                                                            aria-label={t('decisions.aria_delete_all_ip', { value: decision.value })}
                                                         >
                                                             <ShieldBan size={16} aria-hidden="true" />
                                                         </button>
@@ -1025,7 +1027,7 @@ export function Decisions() {
                                                         }}
                                                         disabled={isExpired}
                                                         className={`transition-colors p-2 rounded-full relative z-10 cursor-pointer ${isExpired ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed bg-gray-100 dark:bg-gray-800' : 'text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20'}`}
-                                                        title={isExpired ? "Decision already expired" : "Delete Decision"}
+                                                        title={isExpired ? t('decisions.decision_expired') : t('decisions.aria_delete_decision')}
                                                     >
                                                         <Trash2 size={16} />
                                                     </button>
@@ -1055,14 +1057,14 @@ export function Decisions() {
                 <p className="text-gray-600 dark:text-gray-300 mb-6">
                     {pendingDecisionId ? (
                         <>
-                            Are you sure you want to delete decision <span className="font-mono text-sm font-bold">#{pendingDecisionId}</span>? This action cannot be undone.
+                            {t('decisions.delete_decision_confirm', { id: pendingDecisionId })}
                         </>
                     ) : pendingIp ? (
                         <>
-                            Are you sure you want to delete all alerts and decisions for <span className="font-mono text-sm font-bold">{pendingIp}</span>? This action cannot be undone.
+                            {t('decisions.delete_ip_confirm', { ip: pendingIp })}
                         </>
                     ) : (
-                        <>Are you sure you want to delete {selectedFilteredDecisionIds.length} selected decision{selectedFilteredDecisionIds.length === 1 ? "" : "s"}? This action cannot be undone.</>
+                        <>{t('decisions.delete_selected_confirm', { count: selectedFilteredDecisionIds.length })}</>
                     )}
                 </p>
                 {pendingDeleteErrorInfo && (
@@ -1076,14 +1078,14 @@ export function Decisions() {
                         disabled={deleteInProgress}
                         className="px-4 py-2 text-sm font-medium text-gray-700 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                        Cancel
+                        {t('common.cancel')}
                     </button>
                     <button
                         onClick={confirmDelete}
                         disabled={deleteInProgress}
                         className="px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                        {deleteInProgress ? "Deleting..." : "Delete"}
+                        {deleteInProgress ? t('common.deleting') : t('common.delete')}
                     </button>
                 </div>
             </Modal>
@@ -1092,41 +1094,41 @@ export function Decisions() {
             <Modal
                 isOpen={showAddModal}
                 onClose={closeAddDecision}
-                title="Add Manual Decision"
+                title={t('decisions.add_manual_decision')}
                 maxWidth="max-w-md"
             >
                 <form onSubmit={handleAddDecision} className="space-y-4">
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">IP / Range</label>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('decisions.ip_range')}</label>
                         <input
                             type="text"
                             required
                             disabled={addDecisionInProgress}
                             className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-                            placeholder="1.2.3.4"
+                            placeholder={t('decisions.placeholder_ip')}
                             value={newDecision.ip}
                             onChange={e => setNewDecision({ ...newDecision, ip: e.target.value })}
                         />
                     </div>
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Duration</label>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('decisions.duration')}</label>
                         <input
                             type="text"
                             disabled={addDecisionInProgress}
                             className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-                            placeholder="4h"
+                            placeholder={t('decisions.placeholder_duration')}
                             value={newDecision.duration}
                             onChange={e => setNewDecision({ ...newDecision, duration: e.target.value })}
                         />
-                        <p className="text-xs text-gray-500 mt-1">e.g. 4h, 1d, 30m</p>
+                        <p className="text-xs text-gray-500 mt-1">{t('decisions.duration_hint')}</p>
                     </div>
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Reason</label>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('decisions.reason')}</label>
                         <input
                             type="text"
                             disabled={addDecisionInProgress}
                             className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-                            placeholder="Manual ban"
+                            placeholder={t('decisions.placeholder_reason')}
                             value={newDecision.reason}
                             onChange={e => setNewDecision({ ...newDecision, reason: e.target.value })}
                         />
@@ -1141,14 +1143,14 @@ export function Decisions() {
                             disabled={addDecisionInProgress}
                             className="px-4 py-2 text-sm font-medium text-gray-700 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                            Cancel
+                            {t('common.cancel')}
                         </button>
                         <button
                             type="submit"
                             disabled={addDecisionInProgress}
                             className="px-4 py-2 text-sm font-medium text-white bg-primary-600 border border-transparent rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                            {addDecisionInProgress ? "Adding..." : "Add Decision"}
+                            {addDecisionInProgress ? t('decisions.adding') : t('decisions.add_decision')}
                         </button>
                     </div>
                 </form>
