@@ -13,6 +13,7 @@ import { assetUrl } from '../lib/basePath';
 import type { WorldMapDatum } from '../types';
 import { DASHBOARD_COLORS } from '../lib/dashboardColors';
 import { useI18n } from '../lib/i18n';
+import { getCountryName } from '../lib/utils';
 
 // Using local Natural Earth data which has proper ISO properties
 const geoUrl = assetUrl("/world-50m.json");
@@ -60,7 +61,7 @@ interface WorldMapCardProps {
  * Shows all countries with alerts colored in red gradient based on intensity
  */
 export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulationsEnabled = false }: WorldMapCardProps) {
-    const { t } = useI18n();
+    const { language, t } = useI18n();
     const [geoFeatures, setGeoFeatures] = useState<GeoFeature[]>([]);
     const [isLoadingStats, setIsLoadingStats] = useState(true);
     const containerRef = useRef<HTMLDivElement | null>(null);
@@ -164,7 +165,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
                 }}
             >
                 <div className="font-medium mb-2">
-                    {feature.label || featureId}
+                    {getCountryName(featureId, language) ?? feature.label ?? featureId}
                 </div>
                 <div className="flex items-center gap-2">
                     <ShieldAlert className="w-4 h-4" style={{ color: DASHBOARD_COLORS.liveAlerts }} />

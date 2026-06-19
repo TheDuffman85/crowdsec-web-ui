@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { I18nContext, type I18nContextValue } from '../lib/i18n';
 import { WorldMapCard } from './WorldMapCard';
 
 const { choroplethMountSpy, choroplethUnmountSpy, transformWrapperPropsSpy } = vi.hoisted(() => ({
@@ -12,7 +13,15 @@ vi.mock('@nivo/geo', async () => {
   const React = await import('react');
 
   return {
-    Choropleth: ({ features }: { features?: Array<{ id: string }> }) => {
+    Choropleth: ({
+      data,
+      features,
+      tooltip: Tooltip,
+    }: {
+      data?: Array<Record<string, unknown>>;
+      features?: Array<{ id: string; properties?: { NAME?: string } }>;
+      tooltip?: React.ComponentType<{ feature: Record<string, unknown> }>;
+    }) => {
       React.useEffect(() => {
         choroplethMountSpy();
         return () => {
@@ -20,11 +29,25 @@ vi.mock('@nivo/geo', async () => {
         };
       }, []);
 
+      const firstFeature = features?.[0];
+      const firstFeatureData = data?.find((item) => item.id === firstFeature?.id);
+
       return (
         <svg data-testid="choropleth">
           {features?.map((feature) => (
             <path key={feature.id} data-feature-id={feature.id} fill="#ccc" />
           ))}
+          {Tooltip && firstFeature ? (
+            <Tooltip
+              feature={{
+                label: firstFeature.properties?.NAME,
+                data: {
+                  id: firstFeature.id,
+                  ...firstFeatureData,
+                },
+              }}
+            />
+          ) : null}
         </svg>
       );
     },
@@ -178,5 +201,37 @@ describe('WorldMapCard', () => {
     expect(selectedPath?.style.strokeWidth).toBe('2.5');
     expect(otherPath?.getAttribute('data-status')).toBe('dimmed');
     expect(otherPath?.style.opacity).toBe('0.3');
+  });
+
+  test('localizes country names in the tooltip', async () => {
+    const i18nValue: I18nContextValue = {
+      language: 'zh',
+      preference: 'zh',
+      browserLanguage: 'en',
+      setLanguagePreference: () => undefined,
+      t: (key) => ({
+        'components.worldMap.alerts': '告警',
+        'components.worldMap.simulationAlerts': '模拟告警',
+        'components.worldMap.title': '世界地图',
+        'components.worldMap.zoomIn': '放大',
+        'components.worldMap.zoomOut': '缩小',
+        'components.worldMap.resetView': '重置视图',
+        'common.loadingMap': '正在加载地图...',
+      }[key] ?? key),
+    };
+
+    render(
+      <I18nContext.Provider value={i18nValue}>
+        <WorldMapCard
+          data={[{ label: 'Germany', countryCode: 'DE', count: 2, liveCount: 2, simulatedCount: 0 }]}
+          onCountrySelect={vi.fn()}
+          selectedCountry={null}
+          simulationsEnabled={true}
+        />
+      </I18nContext.Provider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('德国')).toBeInTheDocument());
+    expect(screen.queryByText('Germany')).not.toBeInTheDocument();
   });
 });
