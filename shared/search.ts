@@ -16,6 +16,7 @@ export interface SearchFieldDefinition {
   name: string;
   aliases: string[];
   description: string;
+  descriptionKey?: string;
   availability?: 'always' | 'machine' | 'origin';
   valueType?: SearchFieldValueType;
 }
@@ -23,19 +24,28 @@ export interface SearchFieldDefinition {
 export interface SearchHelpExample {
   query: string;
   description: string;
+  descriptionKey?: string;
 }
 
 export interface SearchHelpOperatorDefinition {
   label: string;
   insertText: string;
   description: string;
+  descriptionKey?: string;
+}
+
+export interface SearchHelpTip {
+  text: string;
+  translationKey: string;
 }
 
 export interface SearchHelpDefinition {
   page: SearchPage;
   title: string;
+  titleKey: string;
   summary: string;
-  tips: string[];
+  summaryKey: string;
+  tips: SearchHelpTip[];
   operators: SearchHelpOperatorDefinition[];
   examples: SearchHelpExample[];
   fields: SearchFieldDefinition[];
@@ -120,67 +130,67 @@ export type DecisionSearchCompileResult = SearchCompileSuccess<DecisionListItem>
 const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
 
 const alertFieldDefinitions: SearchFieldDefinition[] = [
-  { name: 'id', aliases: [], description: 'Exact alert ID' },
-  { name: 'scenario', aliases: [], description: 'Scenario name' },
-  { name: 'message', aliases: [], description: 'Alert message text' },
-  { name: 'ip', aliases: ['source'], description: 'Source IP, value, or range' },
-  { name: 'country', aliases: [], description: 'Country code or name' },
-  { name: 'as', aliases: [], description: 'Autonomous system / provider name' },
-  { name: 'target', aliases: [], description: 'Alert target' },
-  { name: 'date', aliases: ['created', 'created_at', 'time'], description: 'Alert creation date or ISO timestamp', valueType: 'date' },
-  { name: 'sim', aliases: ['simulation'], description: 'Simulation state (`live` or `simulated`)' },
-  { name: 'machine', aliases: [], description: 'Machine alias or ID', availability: 'machine' },
-  { name: 'origin', aliases: [], description: 'Decision origin', availability: 'origin' },
+  { name: 'id', aliases: [], description: 'Exact alert ID', descriptionKey: 'components.searchSyntax.fields.alerts.id' },
+  { name: 'scenario', aliases: [], description: 'Scenario name', descriptionKey: 'components.searchSyntax.fields.alerts.scenario' },
+  { name: 'message', aliases: [], description: 'Alert message text', descriptionKey: 'components.searchSyntax.fields.alerts.message' },
+  { name: 'ip', aliases: ['source'], description: 'Source IP, value, or range', descriptionKey: 'components.searchSyntax.fields.alerts.ip' },
+  { name: 'country', aliases: [], description: 'Country code or name', descriptionKey: 'components.searchSyntax.fields.country' },
+  { name: 'as', aliases: [], description: 'Autonomous system / provider name', descriptionKey: 'components.searchSyntax.fields.as' },
+  { name: 'target', aliases: [], description: 'Alert target', descriptionKey: 'components.searchSyntax.fields.alerts.target' },
+  { name: 'date', aliases: ['created', 'created_at', 'time'], description: 'Alert creation date or ISO timestamp', descriptionKey: 'components.searchSyntax.fields.alerts.date', valueType: 'date' },
+  { name: 'sim', aliases: ['simulation'], description: 'Simulation state (`live` or `simulated`)', descriptionKey: 'components.searchSyntax.fields.sim' },
+  { name: 'machine', aliases: [], description: 'Machine alias or ID', descriptionKey: 'components.searchSyntax.fields.machine', availability: 'machine' },
+  { name: 'origin', aliases: [], description: 'Decision origin', descriptionKey: 'components.searchSyntax.fields.origin', availability: 'origin' },
 ];
 
 const decisionFieldDefinitions: SearchFieldDefinition[] = [
-  { name: 'id', aliases: [], description: 'Exact decision ID' },
-  { name: 'alert', aliases: ['alert_id'], description: 'Linked alert ID' },
-  { name: 'scenario', aliases: ['reason'], description: 'Decision scenario / reason' },
-  { name: 'ip', aliases: ['value'], description: 'Decision IP or range' },
-  { name: 'country', aliases: [], description: 'Country code or name' },
-  { name: 'as', aliases: [], description: 'Autonomous system / provider name' },
-  { name: 'target', aliases: [], description: 'Decision target' },
-  { name: 'date', aliases: ['created', 'created_at', 'time'], description: 'Decision creation date or ISO timestamp', valueType: 'date' },
-  { name: 'action', aliases: [], description: 'Decision action' },
-  { name: 'type', aliases: [], description: 'Decision type' },
-  { name: 'status', aliases: [], description: 'Decision status (`active` or `expired`)' },
-  { name: 'duplicate', aliases: [], description: 'Duplicate state (`true` or `false`)' },
-  { name: 'sim', aliases: ['simulation'], description: 'Simulation state (`live` or `simulated`)' },
-  { name: 'machine', aliases: [], description: 'Machine alias or ID', availability: 'machine' },
-  { name: 'origin', aliases: [], description: 'Decision origin', availability: 'origin' },
+  { name: 'id', aliases: [], description: 'Exact decision ID', descriptionKey: 'components.searchSyntax.fields.decisions.id' },
+  { name: 'alert', aliases: ['alert_id'], description: 'Linked alert ID', descriptionKey: 'components.searchSyntax.fields.decisions.alert' },
+  { name: 'scenario', aliases: ['reason'], description: 'Decision scenario / reason', descriptionKey: 'components.searchSyntax.fields.decisions.scenario' },
+  { name: 'ip', aliases: ['value'], description: 'Decision IP or range', descriptionKey: 'components.searchSyntax.fields.decisions.ip' },
+  { name: 'country', aliases: [], description: 'Country code or name', descriptionKey: 'components.searchSyntax.fields.country' },
+  { name: 'as', aliases: [], description: 'Autonomous system / provider name', descriptionKey: 'components.searchSyntax.fields.as' },
+  { name: 'target', aliases: [], description: 'Decision target', descriptionKey: 'components.searchSyntax.fields.decisions.target' },
+  { name: 'date', aliases: ['created', 'created_at', 'time'], description: 'Decision creation date or ISO timestamp', descriptionKey: 'components.searchSyntax.fields.decisions.date', valueType: 'date' },
+  { name: 'action', aliases: [], description: 'Decision action', descriptionKey: 'components.searchSyntax.fields.decisions.action' },
+  { name: 'type', aliases: [], description: 'Decision type', descriptionKey: 'components.searchSyntax.fields.decisions.type' },
+  { name: 'status', aliases: [], description: 'Decision status (`active` or `expired`)', descriptionKey: 'components.searchSyntax.fields.decisions.status' },
+  { name: 'duplicate', aliases: [], description: 'Duplicate state (`true` or `false`)', descriptionKey: 'components.searchSyntax.fields.decisions.duplicate' },
+  { name: 'sim', aliases: ['simulation'], description: 'Simulation state (`live` or `simulated`)', descriptionKey: 'components.searchSyntax.fields.sim' },
+  { name: 'machine', aliases: [], description: 'Machine alias or ID', descriptionKey: 'components.searchSyntax.fields.machine', availability: 'machine' },
+  { name: 'origin', aliases: [], description: 'Decision origin', descriptionKey: 'components.searchSyntax.fields.origin', availability: 'origin' },
 ];
 
 const fallbackAlertExamples: SearchHelpExample[] = [
-  { query: 'ssh hetzner', description: 'Normal free-text search across the existing alert fields' },
-  { query: '"nginx bf"', description: 'Find an exact phrase' },
-  { query: 'country:germany ssh', description: 'Mix fielded search with normal free-text terms' },
-  { query: 'date>=2026-03-24 AND date<2026-03-25', description: 'Filter alerts by date or timestamp ranges' },
-  { query: 'country:(germany OR france) AND -sim:simulated', description: 'Use grouping, boolean logic, and negation' },
-  { query: 'ip:1.2.3.4 AND target:ssh', description: 'Match a specific IP and target' },
+  { query: 'ssh hetzner', description: 'Normal free-text search across the existing alert fields', descriptionKey: 'components.searchSyntax.examples.alerts.freeText' },
+  { query: '"nginx bf"', description: 'Find an exact phrase', descriptionKey: 'components.searchSyntax.examples.alerts.phrase' },
+  { query: 'country:germany ssh', description: 'Mix fielded search with normal free-text terms', descriptionKey: 'components.searchSyntax.examples.alerts.mixedField' },
+  { query: 'date>=2026-03-24 AND date<2026-03-25', description: 'Filter alerts by date or timestamp ranges', descriptionKey: 'components.searchSyntax.examples.alerts.dateRange' },
+  { query: 'country:(germany OR france) AND -sim:simulated', description: 'Use grouping, boolean logic, and negation', descriptionKey: 'components.searchSyntax.examples.alerts.boolean' },
+  { query: 'ip:1.2.3.4 AND target:ssh', description: 'Match a specific IP and target', descriptionKey: 'components.searchSyntax.examples.alerts.specificField' },
 ];
 
 const fallbackDecisionExamples: SearchHelpExample[] = [
-  { query: 'ssh ban', description: 'Normal free-text search across the existing decision fields' },
-  { query: 'status:active AND action:ban', description: 'Filter semantic decision fields' },
-  { query: 'date>=2026-03-24 AND action:ban', description: 'Combine date filters with semantic decision fields' },
-  { query: 'alert:123 OR ip:"192.168.5.0/24"', description: 'Search by linked alert or a quoted IP/range' },
-  { query: 'country:(germany OR france) AND -duplicate:true', description: 'Exclude duplicates while grouping countries' },
-  { query: 'target:ssh AND sim:live', description: 'Limit results to one target and simulation state' },
+  { query: 'ssh ban', description: 'Normal free-text search across the existing decision fields', descriptionKey: 'components.searchSyntax.examples.decisions.freeText' },
+  { query: 'status:active AND action:ban', description: 'Filter semantic decision fields', descriptionKey: 'components.searchSyntax.examples.decisions.semantic' },
+  { query: 'date>=2026-03-24 AND action:ban', description: 'Combine date filters with semantic decision fields', descriptionKey: 'components.searchSyntax.examples.decisions.dateAction' },
+  { query: 'alert:123 OR ip:"192.168.5.0/24"', description: 'Search by linked alert or a quoted IP/range', descriptionKey: 'components.searchSyntax.examples.decisions.linkedRecord' },
+  { query: 'country:(germany OR france) AND -duplicate:true', description: 'Exclude duplicates while grouping countries', descriptionKey: 'components.searchSyntax.examples.decisions.boolean' },
+  { query: 'target:ssh AND sim:live', description: 'Limit results to one target and simulation state', descriptionKey: 'components.searchSyntax.examples.decisions.simulation' },
 ];
 
 const searchHelpOperators: SearchHelpOperatorDefinition[] = [
-  { label: 'AND', insertText: ' AND ', description: 'Both expressions must match' },
-  { label: 'OR', insertText: ' OR ', description: 'Either expression may match' },
-  { label: 'NOT', insertText: 'NOT ', description: 'Negate the next expression' },
-  { label: '-', insertText: '-', description: 'Short negation for a single term or field' },
-  { label: ':', insertText: ':', description: 'Broad field match, for example `country:germany`' },
-  { label: '=', insertText: '=', description: 'Exact match, for example `country=DE` or `date=2026-03-24`' },
-  { label: '<>', insertText: '<>', description: 'Exclude a value, for example `sim<>simulated`' },
-  { label: '>', insertText: '>', description: 'Date is after the supplied value, for example `date>2026-03-24`' },
-  { label: '>=', insertText: '>=', description: 'Date is on or after the supplied value, for example `date>=2026-03-24`' },
-  { label: '<', insertText: '<', description: 'Date is before the supplied value, for example `date<2026-03-24`' },
-  { label: '<=', insertText: '<=', description: 'Date is on or before the supplied value, for example `date<=2026-03-24`' },
+  { label: 'AND', insertText: ' AND ', description: 'Both expressions must match', descriptionKey: 'components.searchSyntax.operators.and' },
+  { label: 'OR', insertText: ' OR ', description: 'Either expression may match', descriptionKey: 'components.searchSyntax.operators.or' },
+  { label: 'NOT', insertText: 'NOT ', description: 'Negate the next expression', descriptionKey: 'components.searchSyntax.operators.not' },
+  { label: '-', insertText: '-', description: 'Short negation for a single term or field', descriptionKey: 'components.searchSyntax.operators.minus' },
+  { label: ':', insertText: ':', description: 'Broad field match, for example `country:germany`', descriptionKey: 'components.searchSyntax.operators.contains' },
+  { label: '=', insertText: '=', description: 'Exact match, for example `country=DE` or `date=2026-03-24`', descriptionKey: 'components.searchSyntax.operators.equals' },
+  { label: '<>', insertText: '<>', description: 'Exclude a value, for example `sim<>simulated`', descriptionKey: 'components.searchSyntax.operators.notEquals' },
+  { label: '>', insertText: '>', description: 'Date is after the supplied value, for example `date>2026-03-24`', descriptionKey: 'components.searchSyntax.operators.greaterThan' },
+  { label: '>=', insertText: '>=', description: 'Date is on or after the supplied value, for example `date>=2026-03-24`', descriptionKey: 'components.searchSyntax.operators.greaterOrEqual' },
+  { label: '<', insertText: '<', description: 'Date is before the supplied value, for example `date<2026-03-24`', descriptionKey: 'components.searchSyntax.operators.lessThan' },
+  { label: '<=', insertText: '<=', description: 'Date is on or before the supplied value, for example `date<=2026-03-24`', descriptionKey: 'components.searchSyntax.operators.lessOrEqual' },
 ];
 
 const EXAMPLE_STOP_WORDS = new Set(['crowdsecurity', 'crowdsec', 'manual', 'web', 'ui']);
@@ -193,24 +203,31 @@ function getSearchHelpExamples(page: SearchPage, samples?: SearchHelpSampleData)
 
 function buildAlertExamples(alerts?: SlimAlert[]): SearchHelpExample[] {
   return [
-    { query: findAlertFreeTextExample(alerts) ?? fallbackAlertExamples[0].query, description: fallbackAlertExamples[0].description },
-    { query: findAlertPhraseExample(alerts) ?? fallbackAlertExamples[1].query, description: fallbackAlertExamples[1].description },
-    { query: findAlertMixedFieldExample(alerts) ?? fallbackAlertExamples[2].query, description: fallbackAlertExamples[2].description },
-    { query: findAlertDateExample(alerts) ?? fallbackAlertExamples[3].query, description: fallbackAlertExamples[3].description },
-    { query: findAlertBooleanExample(alerts) ?? fallbackAlertExamples[4].query, description: fallbackAlertExamples[4].description },
-    { query: findAlertSpecificFieldExample(alerts) ?? fallbackAlertExamples[5].query, description: fallbackAlertExamples[5].description },
+    buildSearchHelpExample(fallbackAlertExamples[0], findAlertFreeTextExample(alerts)),
+    buildSearchHelpExample(fallbackAlertExamples[1], findAlertPhraseExample(alerts)),
+    buildSearchHelpExample(fallbackAlertExamples[2], findAlertMixedFieldExample(alerts)),
+    buildSearchHelpExample(fallbackAlertExamples[3], findAlertDateExample(alerts)),
+    buildSearchHelpExample(fallbackAlertExamples[4], findAlertBooleanExample(alerts)),
+    buildSearchHelpExample(fallbackAlertExamples[5], findAlertSpecificFieldExample(alerts)),
   ];
 }
 
 function buildDecisionExamples(decisions?: DecisionListItem[]): SearchHelpExample[] {
   return [
-    { query: findDecisionFreeTextExample(decisions) ?? fallbackDecisionExamples[0].query, description: fallbackDecisionExamples[0].description },
-    { query: findDecisionSemanticExample(decisions) ?? fallbackDecisionExamples[1].query, description: fallbackDecisionExamples[1].description },
-    { query: findDecisionDateExample(decisions) ?? fallbackDecisionExamples[2].query, description: fallbackDecisionExamples[2].description },
-    { query: findDecisionLinkedRecordExample(decisions) ?? fallbackDecisionExamples[3].query, description: fallbackDecisionExamples[3].description },
-    { query: findDecisionBooleanExample(decisions) ?? fallbackDecisionExamples[4].query, description: fallbackDecisionExamples[4].description },
-    { query: findDecisionSimulationExample(decisions) ?? fallbackDecisionExamples[5].query, description: fallbackDecisionExamples[5].description },
+    buildSearchHelpExample(fallbackDecisionExamples[0], findDecisionFreeTextExample(decisions)),
+    buildSearchHelpExample(fallbackDecisionExamples[1], findDecisionSemanticExample(decisions)),
+    buildSearchHelpExample(fallbackDecisionExamples[2], findDecisionDateExample(decisions)),
+    buildSearchHelpExample(fallbackDecisionExamples[3], findDecisionLinkedRecordExample(decisions)),
+    buildSearchHelpExample(fallbackDecisionExamples[4], findDecisionBooleanExample(decisions)),
+    buildSearchHelpExample(fallbackDecisionExamples[5], findDecisionSimulationExample(decisions)),
   ];
+}
+
+function buildSearchHelpExample(fallbackExample: SearchHelpExample, query: string | null): SearchHelpExample {
+  return {
+    ...fallbackExample,
+    query: query ?? fallbackExample.query,
+  };
 }
 
 function findAlertFreeTextExample(alerts?: SlimAlert[]): string | null {
@@ -525,12 +542,26 @@ export function getSearchHelpDefinition(
   return {
     page,
     title: page === 'alerts' ? 'Alert Search Syntax' : 'Decision Search Syntax',
+    titleKey: page === 'alerts' ? 'components.searchSyntax.alerts.title' : 'components.searchSyntax.decisions.title',
     summary: 'Start with normal free-text search, then add exact phrases, field filters, and date comparisons only when you need them. Use `field:value` for broad matches, `=` / `<>` for exact field checks, and `date>=2026-03-24` style comparisons for time-based filters.',
+    summaryKey: 'components.searchSyntax.summary',
     tips: [
-      'Click any field or operator below to insert it into the search box.',
-      'Use the `date` field with `YYYY-MM-DD` or a full ISO timestamp such as `2026-03-24T10:00:00Z`.',
-      'If you want literal text such as `AND`, `OR`, `NOT`, or `date`, wrap it in double quotes like `"AND"`.',
-      'Boolean operators, unary `-`, and parentheses can be combined with fielded and date searches.',
+      {
+        text: 'Click any field or operator below to insert it into the search box.',
+        translationKey: 'components.searchSyntax.tips.insert',
+      },
+      {
+        text: 'Use the `date` field with `YYYY-MM-DD` or a full ISO timestamp such as `2026-03-24T10:00:00Z`.',
+        translationKey: 'components.searchSyntax.tips.date',
+      },
+      {
+        text: 'If you want literal text such as `AND`, `OR`, `NOT`, or `date`, wrap it in double quotes like `"AND"`.',
+        translationKey: 'components.searchSyntax.tips.literal',
+      },
+      {
+        text: 'Boolean operators, unary `-`, and parentheses can be combined with fielded and date searches.',
+        translationKey: 'components.searchSyntax.tips.boolean',
+      },
     ],
     operators: searchHelpOperators,
     fields: getFieldDefinitions(page, features),

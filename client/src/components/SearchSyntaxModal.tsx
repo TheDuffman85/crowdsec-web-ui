@@ -31,16 +31,22 @@ export function SearchSyntaxModal({
     onSelectExample?.(query);
   };
 
+  const translateHelpText = (translationKey: string | undefined, fallback: string) => (
+    translationKey ? t(translationKey, { defaultValue: fallback }) : fallback
+  );
+  const title = translateHelpText(help.titleKey, help.title);
+  const summary = translateHelpText(help.summaryKey, help.summary);
+
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={help.title} maxWidth="max-w-3xl">
+    <Modal isOpen={isOpen} onClose={onClose} title={title} maxWidth="max-w-3xl">
       <div className="space-y-6 text-sm text-gray-700 dark:text-gray-200">
         <div className="space-y-3">
-          <p className="leading-6">{renderInlineCode(help.summary, help.page, searchFeatures)}</p>
+          <p className="leading-6">{renderInlineCode(summary, help.page, searchFeatures)}</p>
           <ul className="space-y-2 text-sm text-gray-600 dark:text-gray-300">
             {help.tips.map((tip) => (
-              <li key={tip} className="flex gap-2">
+              <li key={tip.translationKey} className="flex gap-2">
                 <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-primary-500" aria-hidden="true" />
-                <span>{renderInlineCode(tip, help.page, searchFeatures)}</span>
+                <span>{renderInlineCode(translateHelpText(tip.translationKey, tip.text), help.page, searchFeatures)}</span>
               </li>
             ))}
           </ul>
@@ -60,7 +66,11 @@ export function SearchSyntaxModal({
                   {operator.label}
                 </span>
                 <span className="text-sm text-gray-600 dark:text-gray-300">
-                  {renderInlineCode(operator.description, help.page, searchFeatures)}
+                  {renderInlineCode(
+                    translateHelpText(operator.descriptionKey, operator.description),
+                    help.page,
+                    searchFeatures,
+                  )}
                 </span>
               </button>
             ))}
@@ -82,7 +92,11 @@ export function SearchSyntaxModal({
                   {field.name}
                 </span>
                 <span className="text-sm text-gray-600 dark:text-gray-300">
-                  {renderInlineCode(field.description, help.page, searchFeatures)}
+                  {renderInlineCode(
+                    translateHelpText(field.descriptionKey, field.description),
+                    help.page,
+                    searchFeatures,
+                  )}
                   {field.aliases.length > 0 && (
                     <span className="text-xs text-gray-500 dark:text-gray-400">
                       {' '}{t('components.searchSyntax.aliases')}:{' '}
@@ -121,7 +135,11 @@ export function SearchSyntaxModal({
                   className="font-mono text-xs leading-5 whitespace-pre-wrap break-words"
                 />
                 <div className="mt-1 text-sm text-gray-600 dark:text-gray-300">
-                  {renderInlineCode(example.description, help.page, searchFeatures)}
+                  {renderInlineCode(
+                    translateHelpText(example.descriptionKey, example.description),
+                    help.page,
+                    searchFeatures,
+                  )}
                 </div>
               </button>
             ))}
