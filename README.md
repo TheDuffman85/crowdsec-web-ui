@@ -76,7 +76,7 @@ Create notification rules for alert spikes, alert thresholds, IP bans, recent CV
 </a>
 
 ### Localization
-CrowdSec Web UI includes Arabic, English, German, French, Hindi, Spanish, Russian, and Chinese translations. The language selector can follow the browser language for the UI, or it can be set explicitly. When a language is set explicitly, server-generated text such as sync status messages, notification titles, notification bodies, and notification test messages uses that saved language too. With **Browser default**, server-generated messages use English because background jobs and outbound notifications do not have access to a browser locale.
+CrowdSec Web UI includes Arabic, English, German, French, Hindi, Japanese, Portuguese, Spanish, Russian, and Chinese translations. The language selector can follow the browser language for the UI, or it can be set explicitly. When a language is set explicitly, server-generated text such as sync status messages, notification titles, notification bodies, and notification test messages uses that saved language too. With **Browser default**, server-generated messages use English because background jobs and outbound notifications do not have access to a browser locale.
 
 ### Unified Search
 -   **Free-text first**: The Alerts and Decisions search bars still support normal free-text queries.

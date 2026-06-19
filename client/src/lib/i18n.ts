@@ -7,6 +7,8 @@ import en from '../locales/en.json';
 import es from '../locales/es.json';
 import fr from '../locales/fr.json';
 import hi from '../locales/hi.json';
+import ja from '../locales/ja.json';
+import pt from '../locales/pt.json';
 import ru from '../locales/ru.json';
 import zh from '../locales/zh.json';
 
@@ -19,6 +21,8 @@ export const SUPPORTED_LANGUAGES = [
   { code: 'de', labelKey: 'languages.de' },
   { code: 'fr', labelKey: 'languages.fr' },
   { code: 'hi', labelKey: 'languages.hi' },
+  { code: 'ja', labelKey: 'languages.ja' },
+  { code: 'pt', labelKey: 'languages.pt' },
   { code: 'es', labelKey: 'languages.es' },
   { code: 'ru', labelKey: 'languages.ru' },
   { code: 'zh', labelKey: 'languages.zh' },
@@ -46,6 +50,12 @@ export const i18nResources = {
   },
   hi: {
     translation: hi,
+  },
+  ja: {
+    translation: ja,
+  },
+  pt: {
+    translation: pt,
   },
   ru: {
     translation: ru,
