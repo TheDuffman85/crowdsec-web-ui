@@ -1,12 +1,15 @@
 import { createPortal } from "react-dom";
 import { RefreshCw, Database } from "lucide-react";
 import type { SyncStatus } from "../types";
+import { useI18n } from "../lib/i18n";
 
 interface SyncOverlayProps {
     syncStatus: SyncStatus | null;
 }
 
 export function SyncOverlay({ syncStatus }: SyncOverlayProps) {
+    const { t } = useI18n();
+
     if (!syncStatus?.isSyncing) return null;
 
     const progress = syncStatus.progress || 0;
@@ -24,10 +27,10 @@ export function SyncOverlay({ syncStatus }: SyncOverlayProps) {
 
                 {/* Title */}
                 <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-2">
-                    Syncing Historical Data
+                    {t('components.syncOverlay.title')}
                 </h2>
                 <p className="text-gray-600 dark:text-gray-400 text-sm mb-6">
-                    Please wait while fetching data...
+                    {t('components.syncOverlay.description')}
                 </p>
 
                 {/* Progress bar */}
@@ -49,7 +52,7 @@ export function SyncOverlay({ syncStatus }: SyncOverlayProps) {
                 <div className="flex justify-between items-center text-sm">
                     <span className="text-gray-500 dark:text-gray-400 flex items-center gap-2">
                         <RefreshCw className="w-4 h-4 animate-spin" />
-                        {syncStatus.message || 'Synchronizing...'}
+                        {syncStatus.message || t('components.syncOverlay.synchronizing')}
                     </span>
                     <span className="font-semibold text-blue-600 dark:text-blue-400">
                         {progress}%

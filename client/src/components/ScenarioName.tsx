@@ -1,6 +1,7 @@
 import { getHubUrl } from "../lib/utils";
 import { ExternalLink } from "lucide-react";
 import { Badge } from "./ui/Badge";
+import { useI18n } from "../lib/i18n";
 
 interface ScenarioNameProps {
     name?: string | null;
@@ -19,6 +20,8 @@ export function ScenarioName({
     className = "",
     simulated = false,
 }: ScenarioNameProps) {
+    const { t } = useI18n();
+
     if (!name) return null;
 
     // Split by first slash
@@ -40,7 +43,7 @@ export function ScenarioName({
                 <span className="font-medium truncate text-gray-900 dark:text-gray-200 text-sm leading-tight min-w-0">{shortName}</span>
                 {simulated && (
                     <Badge variant="warning" className="flex-shrink-0">
-                        Simulation
+                        {t('pages.dashboard.simulation')}
                     </Badge>
                 )}
                 {showLink && hubUrl && (
@@ -49,7 +52,7 @@ export function ScenarioName({
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors flex-shrink-0"
-                        title="View on CrowdSec Hub"
+                        title={t('components.statCard.viewOnHub')}
                         onClick={(event) => event.stopPropagation()}
                     >
                         <ExternalLink size={14} />

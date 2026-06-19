@@ -16,6 +16,7 @@ import { DEFAULT_TABLE_COLUMN_PREFERENCES, TABLE_COLUMN_DEFINITIONS } from "../.
 import { compileDecisionSearch, getSearchHelpDefinition, type SearchParseError } from "../../../shared/search";
 import { Trash2, Gavel, X, ExternalLink, Shield, ShieldBan, AlertCircle, Info, Columns3 } from "lucide-react";
 import type { AddDecisionRequest, ApiPermissionError, BulkDeleteResult, DecisionListItem, TableColumnId, TableColumnPreferences, TableColumnViewportPreferences } from '../types';
+import { useI18n, type I18nContextValue } from "../lib/i18n";
 
 type DecisionDeleteAction =
     | { kind: "single"; decisionId: string | number }
@@ -29,6 +30,8 @@ interface ErrorInfo {
 }
 
 function ErrorBanner({ errorInfo, onDismiss }: { errorInfo: ErrorInfo; onDismiss?: () => void }) {
+    const { t } = useI18n();
+
     return (
         <div role="alert" className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md p-4 flex items-center justify-between">
             <div className="flex items-center gap-2 text-red-700 dark:text-red-300">
@@ -37,14 +40,14 @@ function ErrorBanner({ errorInfo, onDismiss }: { errorInfo: ErrorInfo; onDismiss
                     {errorInfo.message}
                     {errorInfo.helpLink && (
                         <>
-                            {' See README: '}
+                            {' '}{t('common.seeReadme')}{' '}
                             <a
                                 href={errorInfo.helpLink}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="underline hover:text-red-900 dark:hover:text-red-100"
                             >
-                                {errorInfo.helpText || 'Learn more'}
+                                {errorInfo.helpText || t('common.learnMore')}
                             </a>
                         </>
                     )}
@@ -54,7 +57,7 @@ function ErrorBanner({ errorInfo, onDismiss }: { errorInfo: ErrorInfo; onDismiss
                 <button
                     onClick={onDismiss}
                     className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-200"
-                    aria-label="Dismiss error message"
+                    aria-label={t('common.dismissError')}
                 >
                     <X size={16} />
                 </button>
@@ -77,24 +80,25 @@ function isDecisionExpired(decision: DecisionListItem): boolean {
     return decision.expired === true;
 }
 
-function summarizeDeleteResult(result: BulkDeleteResult): string | null {
+function summarizeDeleteResult(result: BulkDeleteResult, t: I18nContextValue['t']): string | null {
     if (result.failed.length === 0) {
         return null;
     }
 
     const deletedParts: string[] = [];
     if (result.deleted_alerts > 0) {
-        deletedParts.push(`${result.deleted_alerts} alert${result.deleted_alerts === 1 ? "" : "s"}`);
+        deletedParts.push(t('pages.alerts.deletedAlerts', { count: result.deleted_alerts }));
     }
     if (result.deleted_decisions > 0) {
-        deletedParts.push(`${result.deleted_decisions} decision${result.deleted_decisions === 1 ? "" : "s"}`);
+        deletedParts.push(t('pages.alerts.deletedDecisions', { count: result.deleted_decisions }));
     }
 
-    const deletedText = deletedParts.length > 0 ? `Deleted ${deletedParts.join(" and ")}. ` : "";
-    return `${deletedText}${result.failed.length} item${result.failed.length === 1 ? "" : "s"} failed to delete.`;
+    const deletedText = deletedParts.length > 0 ? t('pages.alerts.deletedSummaryPrefix', { items: deletedParts.join(` ${t('common.and')} `) }) : "";
+    return `${deletedText}${t('pages.alerts.itemsFailedToDelete', { count: result.failed.length })}`;
 }
 
 export function Decisions() {
+    const { t } = useI18n();
     const { refreshSignal, setLastUpdated } = useRefresh();
     const [searchParams, setSearchParams] = useSearchParams();
     const initialQueryParam = searchParams.get("q") ?? "";
@@ -491,7 +495,7 @@ export function Decisions() {
             await loadDecisions({ page: 1, refreshConfig: true });
         } catch (error) {
             console.error("Failed to add decision", error);
-            setAddDecisionErrorInfo(toErrorInfo(error, "Failed to add decision. Please try again."));
+            setAddDecisionErrorInfo(toErrorInfo(error, t('pages.decisions.addFailed')));
         } finally {
             setAddDecisionInProgress(false);
         }
@@ -531,14 +535,14 @@ export function Decisions() {
                 setSelectedDecisionIds((prev) => prev.filter((id) => id !== String(pendingDeleteAction.decisionId)));
             } else if (pendingDeleteAction.kind === "selected") {
                 const result = await bulkDeleteDecisions(pendingDeleteAction.ids);
-                resultMessage = summarizeDeleteResult(result);
+                resultMessage = summarizeDeleteResult(result, t);
                 setSelectedDecisionIds([]);
             } else {
                 const result = await cleanupByIp(pendingDeleteAction.ip);
-                resultMessage = summarizeDeleteResult(result);
+                resultMessage = summarizeDeleteResult(result, t);
                 setSelectedDecisionIds([]);
                 if (result.deleted_alerts === 0 && result.deleted_decisions === 0 && result.failed.length === 0) {
-                    resultMessage = `No alerts or decisions found for ${pendingDeleteAction.ip}.`;
+                    resultMessage = t('pages.alerts.noAlertsOrDecisionsForIp', { ip: pendingDeleteAction.ip });
                 }
             }
 
@@ -550,10 +554,10 @@ export function Decisions() {
             }
         } catch (error) {
             const fallbackMessage = pendingDeleteAction.kind === "single"
-                ? "Failed to delete decision. Please try again."
+                ? t('pages.decisions.deleteFailed')
                 : pendingDeleteAction.kind === "selected"
-                    ? "Failed to delete selected decisions. Please try again."
-                    : "Failed to delete alerts and decisions for this IP. Please try again.";
+                    ? t('pages.decisions.deleteSelectedFailed')
+                    : t('pages.alerts.deleteIpFailed');
             console.error("Failed to delete decision entries", error);
             setPendingDeleteErrorInfo(toErrorInfo(error, fallbackMessage));
         } finally {
@@ -652,19 +656,19 @@ export function Decisions() {
     const visibleDecisions = filteredDecisions;
     const selectedDecisionCount = selectedFilteredDecisionIds.length;
     const deleteActionTitle = pendingDeleteAction?.kind === "single"
-        ? "Delete Decision?"
+        ? t('pages.decisions.deleteDecisionTitle')
         : pendingDeleteAction?.kind === "selected"
-            ? "Delete Selected Decisions?"
+            ? t('pages.decisions.deleteSelectedTitle')
             : pendingDeleteAction?.kind === "ip"
-                ? "Delete All for this IP?"
-                : "Delete";
+                ? t('pages.alerts.deleteAllIpTitle')
+                : t('common.delete');
     const pendingDecisionId = pendingDeleteAction?.kind === "single" ? pendingDeleteAction.decisionId : null;
     const pendingIp = pendingDeleteAction?.kind === "ip" ? pendingDeleteAction.ip : null;
     const summaryText = initialLoading && !hasLoadedDecisions
-        ? "Loading decisions..."
+        ? t('pages.decisions.loading')
         : totalDecisions !== totalUnfilteredDecisions
-            ? `Showing ${visibleDecisions.length} of ${totalDecisions} decisions (${totalUnfilteredDecisions} total before filters)`
-            : `Showing ${visibleDecisions.length} of ${totalDecisions} decisions`;
+            ? t('pages.decisions.summaryFiltered', { count: visibleDecisions.length, total: totalDecisions, unfiltered: totalUnfilteredDecisions })
+            : t('pages.decisions.summary', { count: visibleDecisions.length, total: totalDecisions });
     const tableBusy = initialLoading || backgroundLoading || loadingMore;
 
     return (
@@ -679,7 +683,7 @@ export function Decisions() {
                     aria-live="polite"
                 >
                     <span className="h-2 w-2 rounded-full bg-primary-500 animate-pulse" aria-hidden="true" />
-                    Refreshing...
+                    {t('common.refreshing')}
                 </span>
             </div>
             
@@ -689,7 +693,7 @@ export function Decisions() {
                     className="bg-primary-600 hover:bg-primary-700 text-white font-medium py-2 px-4 rounded-md transition-colors flex items-center gap-2 text-sm"
                 >
                     <Gavel size={16} />
-                    Add Decision
+                    {t('pages.decisions.addDecision')}
                 </button>
                 <button
                     onClick={() => {
@@ -699,7 +703,7 @@ export function Decisions() {
                     disabled={selectedDecisionCount === 0}
                     className="rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                    Delete selected
+                    {t('pages.decisions.deleteSelected')}
                 </button>
             </div>
 
@@ -713,7 +717,7 @@ export function Decisions() {
                 <div className="flex flex-wrap gap-2">
                     {appliedQuery && (
                         <Badge variant="secondary" className="flex items-center gap-1 max-w-full">
-                            <span className="font-semibold">Search:</span>
+                            <span className="font-semibold">{t('common.search')}:</span>
                             <span className="font-mono text-xs truncate max-w-[320px]">{appliedQuery}</span>
                             <button
                                 onClick={() => {
@@ -732,7 +736,7 @@ export function Decisions() {
                     )}
                     {!includeExpiredParam && (
                         <Badge variant="secondary" className="flex items-center gap-1">
-                            <span className="font-semibold">Hide:</span> Inactive
+                            <span className="font-semibold">{t('common.hide')}:</span> {t('common.inactive')}
                             <button
                                 onClick={toggleExpired}
                                 className="ml-1 hover:text-red-500"
@@ -743,7 +747,7 @@ export function Decisions() {
                     )}
                     {!showDuplicates && (
                         <Badge variant="secondary" className="flex items-center gap-1">
-                            <span className="font-semibold">Hide:</span> Duplicates
+                            <span className="font-semibold">{t('common.hide')}:</span> {t('pages.decisions.duplicates')}
                             <button
                                 onClick={() => {
                                     const newParams = new URLSearchParams(searchParams);
@@ -758,7 +762,7 @@ export function Decisions() {
                     )}
                     {alertIdFilter && (
                         <Badge variant="secondary" className="flex items-center gap-1">
-                            <span className="font-semibold">Alert:</span> #{alertIdFilter}
+                            <span className="font-semibold">{t('tableColumns.alert')}:</span> #{alertIdFilter}
                             <button
                                 onClick={() => removeParam("alert_id")}
                                 className="ml-1 hover:text-red-500"
@@ -769,7 +773,7 @@ export function Decisions() {
                     )}
                     {simulationsEnabled && simulationFilter !== 'all' && (
                         <Badge variant="secondary" className="flex items-center gap-1">
-                            <span className="font-semibold">Simulation:</span> {simulationFilter}
+                            <span className="font-semibold">{t('pages.dashboard.simulation')}:</span> {simulationFilter}
                             <button
                                 onClick={() => removeParam("simulation")}
                                 className="ml-1 hover:text-red-500"
@@ -785,7 +789,7 @@ export function Decisions() {
                             onClick={clearFilter}
                             className="text-xs text-gray-500 hover:text-gray-900 dark:hover:text-gray-300 underline"
                         >
-                            Reset all filters
+                            {t('common.resetAllFilters')}
                         </button>
                     )}
                 </div>
@@ -798,7 +802,7 @@ export function Decisions() {
                             ref={searchInputRef}
                             searchPage="decisions"
                             searchFeatures={searchValidationFeatures}
-                            placeholder="Filter decisions..."
+                            placeholder={t('pages.decisions.filterPlaceholder')}
                             value={searchDraft}
                             error={queryError}
                             onChange={(e) => {
@@ -817,8 +821,8 @@ export function Decisions() {
                         type="button"
                         onClick={() => setShowSearchSyntaxModal(true)}
                         className="inline-flex items-center justify-center rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-gray-600 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
-                        aria-label="Search syntax help"
-                        title="Search syntax help"
+                        aria-label={t('components.searchSyntax.help')}
+                        title={t('components.searchSyntax.help')}
                     >
                         <Info size={18} />
                     </button>
@@ -826,15 +830,15 @@ export function Decisions() {
                         type="button"
                         onClick={() => setShowColumnsModal(true)}
                         className="inline-flex items-center justify-center rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-gray-600 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
-                        aria-label="Choose decision table columns"
-                        title="Choose columns"
+                        aria-label={t('components.tableColumns.chooseDecisionColumns')}
+                        title={t('components.tableColumns.chooseColumns')}
                     >
                         <Columns3 size={18} />
                     </button>
                 </div>
                 {queryError && (
                     <p id="decisions-search-error" className="text-xs text-red-600 dark:text-red-400">
-                        Search syntax error at character {queryError.position + 1}: {queryError.message}
+                        {t('common.searchSyntaxError', { position: queryError.position + 1, message: queryError.message })}
                     </p>
                 )}
             </div>
@@ -852,7 +856,7 @@ export function Decisions() {
                                     <input
                                         ref={selectAllDecisionsRef}
                                         type="checkbox"
-                                        aria-label="Select all filtered decisions"
+                                        aria-label={t('pages.decisions.selectAllFiltered')}
                                         checked={allFilteredDecisionsSelected}
                                         disabled={selectableDecisionIds.length === 0}
                                         onChange={toggleAllFilteredDecisions}
@@ -867,18 +871,18 @@ export function Decisions() {
 
                                     return (
                                         <th key={columnId} className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                                            {column.label}
+                                            {t(`tableColumns.${column.id}`, { defaultValue: column.label })}
                                         </th>
                                     );
                                 })}
-                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
+                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('tableColumns.actions')}</th>
                             </tr>
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                             {initialLoading && visibleDecisions.length === 0 ? (
-                                <tr><td colSpan={decisionTableColSpan} className="px-6 py-4 text-center text-sm text-gray-500">Loading decisions...</td></tr>
+                                <tr><td colSpan={decisionTableColSpan} className="px-6 py-4 text-center text-sm text-gray-500">{t('pages.decisions.loading')}</td></tr>
                             ) : visibleDecisions.length === 0 ? (
-                                <tr><td colSpan={decisionTableColSpan} className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? "No decisions for this alert" : "No decisions found"}</td></tr>
+                                <tr><td colSpan={decisionTableColSpan} className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? t('pages.decisions.noDecisionsForAlert') : t('pages.decisions.noDecisions')}</td></tr>
                             ) : (
                                 visibleDecisions.map((decision, index) => {
                                     const decisionDuration = decision.detail.duration ?? '';
@@ -899,7 +903,7 @@ export function Decisions() {
                                             <td className="px-6 py-4 whitespace-nowrap text-sm">
                                                 <input
                                                     type="checkbox"
-                                                    aria-label={`Select decision ${decision.id}`}
+                                                    aria-label={t('pages.decisions.selectDecision', { id: decision.id })}
                                                     checked={isSelected}
                                                     disabled={isExpired}
                                                     onChange={() => toggleDecisionSelection(String(decision.id))}
@@ -965,7 +969,7 @@ export function Decisions() {
                                                         return (
                                                             <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 whitespace-nowrap">
                                                                 {isExpired ? "0s" : decisionDuration}
-                                                                {isExpired && <span className="ml-2 text-xs text-red-500 dark:text-red-400">(Expired)</span>}
+                                                                {isExpired && <span className="ml-2 text-xs text-red-500 dark:text-red-400">{t('pages.decisions.expired')}</span>}
                                                             </td>
                                                         );
                                                     case 'machine':
@@ -987,10 +991,10 @@ export function Decisions() {
                                                                     <Link
                                                                         to={`/alerts?id=${decision.detail.alert_id}`}
                                                                         className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors border border-primary-200 dark:border-primary-800"
-                                                                        title={`View Alert #${decision.detail.alert_id}`}
+                                                                        title={t('pages.decisions.viewAlert', { id: decision.detail.alert_id })}
                                                                     >
                                                                         <Shield size={14} className="fill-current" />
-                                                                        <span className="text-xs font-semibold">Alert</span>
+                                                                        <span className="text-xs font-semibold">{t('tableColumns.alert')}</span>
                                                                         <ExternalLink size={12} className="ml-0.5" />
                                                                     </Link>
                                                                 ) : (
@@ -1011,8 +1015,8 @@ export function Decisions() {
                                                                 setPendingDeleteAction({ kind: "ip", ip: decision.value || "" });
                                                             }}
                                                             className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
-                                                            title={`Delete all alerts and decisions for ${decision.value}`}
-                                                            aria-label={`Delete all alerts and decisions for ${decision.value}`}
+                                                            title={t('common.deleteAllForIp', { value: decision.value })}
+                                                            aria-label={t('common.deleteAllForIp', { value: decision.value })}
                                                         >
                                                             <ShieldBan size={16} aria-hidden="true" />
                                                         </button>
@@ -1024,7 +1028,8 @@ export function Decisions() {
                                                         }}
                                                         disabled={isExpired}
                                                         className={`transition-colors p-2 rounded-full relative z-10 cursor-pointer ${isExpired ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed bg-gray-100 dark:bg-gray-800' : 'text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20'}`}
-                                                        title={isExpired ? "Decision already expired" : "Delete Decision"}
+                                                        title={isExpired ? t('pages.decisions.alreadyExpired') : t('pages.decisions.deleteDecision')}
+                                                        aria-label={isExpired ? t('pages.decisions.alreadyExpired') : t('pages.decisions.deleteDecision')}
                                                     >
                                                         <Trash2 size={16} />
                                                     </button>
@@ -1054,14 +1059,14 @@ export function Decisions() {
                 <p className="text-gray-600 dark:text-gray-300 mb-6">
                     {pendingDecisionId ? (
                         <>
-                            Are you sure you want to delete decision <span className="font-mono text-sm font-bold">#{pendingDecisionId}</span>? This action cannot be undone.
+                            {t('pages.decisions.deleteDecisionConfirmPrefix')} <span className="font-mono text-sm font-bold">#{pendingDecisionId}</span>? {t('common.actionCannotBeUndone')}
                         </>
                     ) : pendingIp ? (
                         <>
-                            Are you sure you want to delete all alerts and decisions for <span className="font-mono text-sm font-bold">{pendingIp}</span>? This action cannot be undone.
+                            {t('common.deleteIpConfirmPrefix')} <span className="font-mono text-sm font-bold">{pendingIp}</span>? {t('common.actionCannotBeUndone')}
                         </>
                     ) : (
-                        <>Are you sure you want to delete {selectedFilteredDecisionIds.length} selected decision{selectedFilteredDecisionIds.length === 1 ? "" : "s"}? This action cannot be undone.</>
+                        <>{t('pages.decisions.deleteSelectedConfirm', { count: selectedFilteredDecisionIds.length })}</>
                     )}
                 </p>
                 {pendingDeleteErrorInfo && (
@@ -1075,14 +1080,14 @@ export function Decisions() {
                         disabled={deleteInProgress}
                         className="px-4 py-2 text-sm font-medium text-gray-700 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                        Cancel
+                        {t('common.cancel')}
                     </button>
                     <button
                         onClick={confirmDelete}
                         disabled={deleteInProgress}
                         className="px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                        {deleteInProgress ? "Deleting..." : "Delete"}
+                        {deleteInProgress ? t('common.deleting') : t('common.delete')}
                     </button>
                 </div>
             </Modal>
@@ -1091,12 +1096,12 @@ export function Decisions() {
             <Modal
                 isOpen={showAddModal}
                 onClose={closeAddDecision}
-                title="Add Manual Decision"
+                title={t('pages.decisions.addManualDecision')}
                 maxWidth="max-w-md"
             >
                 <form onSubmit={handleAddDecision} className="space-y-4">
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">IP / Range</label>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('tableColumns.source')}</label>
                         <input
                             type="text"
                             required
@@ -1108,7 +1113,7 @@ export function Decisions() {
                         />
                     </div>
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Duration</label>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('pages.decisions.duration')}</label>
                         <input
                             type="text"
                             disabled={addDecisionInProgress}
@@ -1117,15 +1122,15 @@ export function Decisions() {
                             value={newDecision.duration}
                             onChange={e => setNewDecision({ ...newDecision, duration: e.target.value })}
                         />
-                        <p className="text-xs text-gray-500 mt-1">e.g. 4h, 1d, 30m</p>
+                        <p className="text-xs text-gray-500 mt-1">{t('pages.decisions.durationHint')}</p>
                     </div>
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Reason</label>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('pages.decisions.reason')}</label>
                         <input
                             type="text"
                             disabled={addDecisionInProgress}
                             className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-                            placeholder="Manual ban"
+                            placeholder={t('pages.decisions.placeholderReason')}
                             value={newDecision.reason}
                             onChange={e => setNewDecision({ ...newDecision, reason: e.target.value })}
                         />
@@ -1140,14 +1145,14 @@ export function Decisions() {
                             disabled={addDecisionInProgress}
                             className="px-4 py-2 text-sm font-medium text-gray-700 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                            Cancel
+                            {t('common.cancel')}
                         </button>
                         <button
                             type="submit"
                             disabled={addDecisionInProgress}
                             className="px-4 py-2 text-sm font-medium text-white bg-primary-600 border border-transparent rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                            {addDecisionInProgress ? "Adding..." : "Add Decision"}
+                            {addDecisionInProgress ? t('pages.decisions.adding') : t('pages.decisions.addDecision')}
                         </button>
                     </div>
                 </form>

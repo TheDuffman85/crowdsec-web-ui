@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { Switch } from "../components/ui/Switch";
 import { DASHBOARD_COLORS } from "../lib/dashboardColors";
+import { getCountryName } from "../lib/utils";
 import type {
     ConfigResponse,
     DashboardFilters,
@@ -25,6 +26,7 @@ import type {
     DashboardStatsResponse,
     SimulationFilter,
 } from '../types';
+import { useI18n } from "../lib/i18n";
 
 type Granularity = 'day' | 'hour';
 type ScaleMode = 'linear' | 'symlog';
@@ -244,6 +246,7 @@ function scopeStaleStatItemsToSelected<TItem extends DashboardStatListItem>(
 }
 
 export function Dashboard() {
+    const { language, t } = useI18n();
     const navigate = useNavigate();
     const { refreshSignal, setLastUpdated } = useRefresh();
     const [initialLoading, setInitialLoading] = useState(true);
@@ -517,7 +520,7 @@ export function Dashboard() {
         filters.simulation !== 'all';
 
     if (initialLoading) {
-        return <div className="text-center p-8 text-gray-500">Loading dashboard...</div>;
+        return <div className="text-center p-8 text-gray-500">{t('common.loadingDashboard')}</div>;
     }
 
     return (
@@ -531,7 +534,7 @@ export function Dashboard() {
                                 <ShieldAlert className="h-5 w-5 sm:h-6 sm:w-6 lg:h-8 lg:w-8" />
                             </div>
                             <div className="min-w-0">
-                                <p className="text-[11px] font-medium leading-tight text-gray-500 dark:text-gray-400 sm:text-sm">Total Alerts</p>
+                                <p className="text-[11px] font-medium leading-tight text-gray-500 dark:text-gray-400 sm:text-sm">{t('pages.dashboard.totalAlerts')}</p>
                                 <div className="flex items-baseline justify-center gap-1 sm:justify-start sm:gap-2">
                                     <h3 className="text-lg font-bold text-gray-900 dark:text-white sm:text-2xl">{modeAwareAlertsTotal}</h3>
                                     {hasActiveFilters && (
@@ -543,7 +546,7 @@ export function Dashboard() {
                                 {showSimulationBreakout && stats.simulatedAlerts > 0 && (
                                     <div className="mt-2 sm:mt-3">
                                         <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400 sm:text-[11px]">
-                                            Simulation
+                                            {t('pages.dashboard.simulation')}
                                         </p>
                                         <div className="flex items-baseline justify-center gap-1 sm:justify-start sm:gap-2">
                                             <span className="text-sm font-semibold text-gray-900 dark:text-gray-100 sm:text-lg">
@@ -569,7 +572,7 @@ export function Dashboard() {
                                 <Gavel className="h-5 w-5 sm:h-6 sm:w-6 lg:h-8 lg:w-8" />
                             </div>
                             <div className="min-w-0">
-                                <p className="text-[11px] font-medium leading-tight text-gray-500 dark:text-gray-400 sm:text-sm">Active Decisions</p>
+                                <p className="text-[11px] font-medium leading-tight text-gray-500 dark:text-gray-400 sm:text-sm">{t('pages.dashboard.activeDecisions')}</p>
                                 <div className="flex items-baseline justify-center gap-1 sm:justify-start sm:gap-2">
                                     <h3 className="text-lg font-bold text-gray-900 dark:text-white sm:text-2xl">{modeAwareDecisionsTotal}</h3>
                                     {hasActiveFilters && (
@@ -581,7 +584,7 @@ export function Dashboard() {
                                 {showSimulationBreakout && stats.simulatedDecisions > 0 && (
                                     <div className="mt-2 sm:mt-3">
                                         <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400 sm:text-[11px]">
-                                            Simulation
+                                            {t('pages.dashboard.simulation')}
                                         </p>
                                         <div className="flex items-baseline justify-center gap-1 sm:justify-start sm:gap-2">
                                             <span className="text-sm font-semibold text-gray-900 dark:text-gray-100 sm:text-lg">
@@ -612,11 +615,11 @@ export function Dashboard() {
                                 }`} />
                         </div>
                         <div className="min-w-0">
-                            <p className="text-[11px] font-medium leading-tight text-gray-500 dark:text-gray-400 sm:text-sm">CrowdSec LAPI</p>
+                            <p className="text-[11px] font-medium leading-tight text-gray-500 dark:text-gray-400 sm:text-sm">{t('pages.dashboard.crowdsecLapi')}</p>
                             <h3 className={`text-lg font-bold sm:text-2xl ${isOnline
                                 ? 'text-gray-900 dark:text-white'
                                 : 'text-red-600 dark:text-red-400'
-                                }`}>{isOnline ? 'Online' : 'Offline'}</h3>
+                                }`}>{isOnline ? t('common.online') : t('common.offline')}</h3>
                         </div>
                     </CardContent>
                 </Card>
@@ -629,13 +632,13 @@ export function Dashboard() {
                         <div className="flex items-center gap-2">
                         <TrendingUp className="w-6 h-6 text-primary-600 dark:text-primary-400" />
                         <h3 className="text-2xl font-bold text-gray-900 dark:text-white">
-                            Last {config?.lookback_days ?? 7} Days Statistics
+                            {t('pages.dashboard.lastDaysStats', { days: config?.lookback_days ?? 7 })}
                         </h3>
                     </div>
                         <div className="min-h-[1.25rem] text-sm text-gray-500" aria-live="polite">
                             <span className={`inline-flex items-center gap-2 transition-opacity ${backgroundRefreshing ? 'opacity-100' : 'opacity-0'}`}>
                                 <span className="h-2 w-2 rounded-full bg-primary-500 animate-pulse" aria-hidden="true" />
-                                Refreshing dashboard...
+                                {t('common.refreshingDashboard')}
                             </span>
                         </div>
                     </div>
@@ -648,24 +651,24 @@ export function Dashboard() {
                                     className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
                                 >
                                     <Filter className="w-4 h-4" />
-                                    <span className="hidden sm:inline">View Alerts</span>
-                                    <span className="sm:hidden">Alerts</span>
+                                    <span className="hidden sm:inline">{t('pages.dashboard.viewAlerts')}</span>
+                                    <span className="sm:hidden">{t('pages.alerts.title')}</span>
                                 </button>
                                 <button
                                     onClick={() => navigate(decisionsLink)}
                                     className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
                                 >
                                     <Filter className="w-4 h-4" />
-                                    <span className="hidden sm:inline">View Decisions</span>
-                                    <span className="sm:hidden">Decisions</span>
+                                    <span className="hidden sm:inline">{t('pages.dashboard.viewDecisions')}</span>
+                                    <span className="sm:hidden">{t('pages.decisions.title')}</span>
                                 </button>
                                 <button
                                     onClick={clearFilters}
                                     className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
                                 >
                                     <FilterX className="w-4 h-4" />
-                                    <span className="hidden sm:inline">Reset Filters</span>
-                                    <span className="sm:hidden">Reset</span>
+                                    <span className="hidden sm:inline">{t('pages.dashboard.resetFilters')}</span>
+                                    <span className="sm:hidden">{t('common.reset')}</span>
                                 </button>
                             </div>
                         </div>
@@ -676,19 +679,19 @@ export function Dashboard() {
                             </div>
 
                             <div className="flex items-center gap-2">
-                                <span className={`text-xs font-medium ${percentageBasis === 'filtered' ? 'text-primary-600' : 'text-gray-500'}`}>Filtered</span>
+                                <span className={`text-xs font-medium ${percentageBasis === 'filtered' ? 'text-primary-600' : 'text-gray-500'}`}>{t('pages.dashboard.filtered')}</span>
                                 <Switch
                                     id="percentage-basis"
                                     checked={percentageBasis === 'global'}
                                     onCheckedChange={(checked) => setPercentageBasis(checked ? 'global' : 'filtered')}
                                 />
-                                <span className={`text-xs font-medium ${percentageBasis === 'global' ? 'text-primary-600' : 'text-gray-500'}`}>Global</span>
+                                <span className={`text-xs font-medium ${percentageBasis === 'global' ? 'text-primary-600' : 'text-gray-500'}`}>{t('pages.dashboard.global')}</span>
                             </div>
                         </div>
 
                         {simulationsEnabled && (
                             <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-                                <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Mode</span>
+                                <span className="text-xs font-medium text-gray-500 dark:text-gray-400">{t('pages.dashboard.mode')}</span>
                                 {(['all', 'live', 'simulated'] as SimulationFilter[]).map((value) => (
                                     <button
                                         key={value}
@@ -698,7 +701,7 @@ export function Dashboard() {
                                             : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600'
                                             }`}
                                     >
-                                        {value === 'all' ? 'All' : value === 'live' ? 'Live' : 'Simulation'}
+                                        {value === 'all' ? t('common.all') : value === 'live' ? t('common.live') : t('pages.dashboard.simulation')}
                                     </button>
                                 ))}
                             </div>
@@ -710,7 +713,7 @@ export function Dashboard() {
                 <div className="grid gap-8 md:grid-cols-2" aria-busy={backgroundRefreshing}>
                     {/* Activity Chart - Left */}
                     <div className="h-[450px]">
-                        <Suspense fallback={<div className="text-center p-8 text-gray-500">Loading chart...</div>}>
+                        <Suspense fallback={<div className="text-center p-8 text-gray-500">{t('common.loadingChart')}</div>}>
                             <ActivityBarChart
                                 alertsData={statistics.alertsHistory}
                                 decisionsData={statistics.decisionsHistory}
@@ -738,7 +741,7 @@ export function Dashboard() {
 
                     {/* World Map - Right */}
                     <div className="h-[450px]">
-                        <Suspense fallback={<div className="text-center p-8 text-gray-500">Loading map...</div>}>
+                        <Suspense fallback={<div className="text-center p-8 text-gray-500">{t('common.loadingMap')}</div>}>
                             <WorldMapCard
                                 data={statistics.allCountries}
                                 onCountrySelect={(code) => toggleFilter('country', code)}
@@ -752,14 +755,19 @@ export function Dashboard() {
                 {/* Top Statistics Grid */}
                 <div className="grid gap-8 md:grid-cols-2 xl:grid-cols-4" aria-busy={backgroundRefreshing}>
                     <StatCard
-                        title="Top Countries"
+                        title={t('pages.dashboard.topCountries')}
                         items={statistics.topCountries}
                         onSelect={(item) => toggleFilter('country', item.countryCode)}
                         selectedValue={filters.country}
+                        renderLabel={(item) => (
+                            <span className="text-sm truncate font-medium text-gray-900 dark:text-gray-100" title={item.count === 0 && item.label === item.countryCode ? item.label : getCountryName(item.countryCode, language) ?? item.label}>
+                                {item.count === 0 && item.label === item.countryCode ? item.label : getCountryName(item.countryCode, language) ?? item.label}
+                            </span>
+                        )}
                         total={percentageBasis === 'global' ? dashboardData.globalTotal : filteredTotals.alerts}
                     />
                     <StatCard
-                        title="Top Scenarios"
+                        title={t('pages.dashboard.topScenarios')}
                         items={statistics.topScenarios}
                         onSelect={(item) => toggleFilter('scenario', item.label)}
                         selectedValue={filters.scenario}
@@ -769,14 +777,14 @@ export function Dashboard() {
                         total={percentageBasis === 'global' ? dashboardData.globalTotal : filteredTotals.alerts}
                     />
                     <StatCard
-                        title="Top AS"
+                        title={t('pages.dashboard.topAs')}
                         items={statistics.topAS}
                         onSelect={(item) => toggleFilter('as', item.label)}
                         selectedValue={filters.as}
                         total={percentageBasis === 'global' ? dashboardData.globalTotal : filteredTotals.alerts}
                     />
                     <StatCard
-                        title="Top Targets"
+                        title={t('pages.dashboard.topTargets')}
                         items={statistics.topTargets}
                         onSelect={(item) => toggleFilter('target', item.label)}
                         selectedValue={filters.target}

@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import type { ComponentType, ReactNode } from 'react';
 import type { LucideProps } from 'lucide-react';
 import type { StatListItem } from '../types';
+import { useI18n } from '../lib/i18n';
 
 interface StatCardProps<TItem extends StatListItem> {
     title: string;
@@ -24,13 +25,16 @@ export function StatCard<TItem extends StatListItem>({
     title,
     icon: Icon,
     items,
-    emptyMessage = "No data available",
+    emptyMessage,
     onSelect, // Changed from getLink to generic onSelect
     selectedValue, // The currently selected value for highlighting
     renderLabel, // Optional function to render custom label content
     getExternalLink,
     total // Optional total count to calculate percentages against global total instead of visible items
 }: StatCardProps<TItem>) {
+    const { t } = useI18n();
+    const resolvedEmptyMessage = emptyMessage ?? t('common.noDataAvailable');
+
     // Calculate total for percentages
     const denominator = useMemo(() => {
         if (total !== undefined) return total;
@@ -48,7 +52,7 @@ export function StatCard<TItem extends StatListItem>({
             <CardContent>
                 {items.length === 0 ? (
                     <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">
-                        {emptyMessage}
+                        {resolvedEmptyMessage}
                     </p>
                 ) : (
                     <div className="space-y-2">
@@ -99,7 +103,7 @@ export function StatCard<TItem extends StatListItem>({
                                                 rel="noopener noreferrer"
                                                 onClick={(e) => e.stopPropagation()}
                                                 className="ml-1 p-1 text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors flex-shrink-0"
-                                                title="View on CrowdSec Hub"
+                                                title={t('components.statCard.viewOnHub')}
                                             >
                                                 <ExternalLink size={12} />
                                             </a>

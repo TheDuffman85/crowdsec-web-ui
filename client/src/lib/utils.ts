@@ -19,10 +19,10 @@ export function getHubUrl(scenarioName?: string | null): string | null {
     return null;
 }
 
-export function getCountryName(code?: string | null): string | null {
+export function getCountryName(code?: string | null, locale = 'en'): string | null {
     if (!code) return null;
     try {
-        const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
+        const regionNames = new Intl.DisplayNames([locale], { type: 'region' });
         return regionNames.of(code.toUpperCase()) || code;
     } catch {
         return code;

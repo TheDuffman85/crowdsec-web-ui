@@ -4,6 +4,7 @@ import Sortable from 'sortablejs';
 import { DEFAULT_TABLE_COLUMN_PREFERENCES, TABLE_COLUMN_DEFINITIONS } from '../../../shared/contracts';
 import type { TableColumnId, TableColumnPreferenceTable, TableColumnPreferenceViewport, TableColumnViewportPreferences } from '../types';
 import { Modal } from './ui/Modal';
+import { useI18n } from '../lib/i18n';
 
 interface TableColumnsModalProps {
     isOpen: boolean;
@@ -24,8 +25,10 @@ export function TableColumnsModal({
     onClose,
     onSave,
 }: TableColumnsModalProps) {
+    const { t } = useI18n();
+
     return (
-        <Modal isOpen={isOpen} onClose={onClose} title="Table columns" maxWidth="max-w-lg">
+        <Modal isOpen={isOpen} onClose={onClose} title={t('components.tableColumns.title')} maxWidth="max-w-lg">
             <TableColumnsModalContent
                 table={table}
                 activeViewport={activeViewport}
@@ -46,6 +49,7 @@ function TableColumnsModalContent({
     onClose,
     onSave,
 }: Omit<TableColumnsModalProps, 'isOpen'>) {
+    const { t } = useI18n();
     const [selectedViewport, setSelectedViewport] = useState<TableColumnPreferenceViewport>(activeViewport);
     const [draftPreferences, setDraftPreferences] = useState<TableColumnViewportPreferences>(columnPreferences);
     const [draftColumnOrders, setDraftColumnOrders] = useState<TableColumnViewportPreferences>(() => loadColumnOrders(table, columnPreferences));
@@ -141,6 +145,9 @@ function TableColumnsModalContent({
         }));
     };
 
+    const getColumnLabel = (columnId: TableColumnId, fallback: string) =>
+        t(`tableColumns.${columnId}`, { defaultValue: fallback });
+
     return (
         <div className="space-y-5">
             <div className="space-y-2">
@@ -157,7 +164,7 @@ function TableColumnsModalContent({
                                         : 'text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-white'
                                 }`}
                             >
-                                {viewport}
+                                {t(`components.tableColumns.${viewport}`)}
                             </button>
                         ))}
                     </div>
@@ -169,7 +176,9 @@ function TableColumnsModalContent({
                             className="inline-flex min-w-0 items-center justify-center gap-1.5 rounded-md border border-gray-300 px-2 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 sm:gap-2 sm:px-3 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
                         >
                             <Copy size={16} className="shrink-0" aria-hidden="true" />
-                            <span className="truncate">Sync to {syncTargetViewport}</span>
+                            <span className="truncate">
+                                {t('components.tableColumns.syncTo', { viewport: t(`components.tableColumns.${syncTargetViewport}`) })}
+                            </span>
                         </button>
                         <button
                             type="button"
@@ -178,12 +187,12 @@ function TableColumnsModalContent({
                             className="inline-flex min-w-0 items-center justify-center gap-1.5 rounded-md border border-gray-300 px-2 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 sm:gap-2 sm:px-3 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
                         >
                             <RotateCcw size={16} className="shrink-0" aria-hidden="true" />
-                            <span className="truncate">Reset defaults</span>
+                            <span className="truncate">{t('components.tableColumns.resetDefaults')}</span>
                         </button>
                     </div>
                 </div>
                 <p className="text-sm text-gray-500 dark:text-gray-400">
-                    Column choices are saved separately for desktop and mobile; the app automatically uses the matching layout for your screen.
+                    {t('components.tableColumns.description')}
                 </p>
             </div>
             <div ref={listRef} className="grid grid-cols-1 gap-2">
@@ -204,8 +213,8 @@ function TableColumnsModalContent({
                                         ? 'cursor-not-allowed opacity-40'
                                         : 'cursor-grab hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-700 dark:hover:text-gray-200'
                                 }`}
-                                title="Drag to reorder"
-                                aria-label={`Drag to reorder ${column.label}`}
+                                title={t('components.tableColumns.dragToReorder')}
+                                aria-label={t('components.tableColumns.dragToReorderColumn', { column: getColumnLabel(column.id, column.label) })}
                             >
                                 <GripVertical size={16} aria-hidden="true" />
                             </span>
@@ -217,7 +226,7 @@ function TableColumnsModalContent({
                                 className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                             />
                             <label htmlFor={checkboxId} className="flex-1 cursor-pointer">
-                                {column.label}
+                                {getColumnLabel(column.id, column.label)}
                             </label>
                         </div>
                     );
@@ -229,7 +238,7 @@ function TableColumnsModalContent({
                     onClick={onClose}
                     className="rounded-md border border-gray-300 dark:border-gray-600 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
                 >
-                    Cancel
+                    {t('common.cancel')}
                 </button>
                 <button
                     type="button"
@@ -240,7 +249,7 @@ function TableColumnsModalContent({
                     disabled={saving}
                     className="rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                    {saving ? 'Saving...' : 'Save'}
+                    {saving ? t('common.saving') : t('common.save')}
                 </button>
             </div>
         </div>

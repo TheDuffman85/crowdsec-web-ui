@@ -12,6 +12,7 @@ import { Globe, ZoomIn, ZoomOut, RotateCcw, ShieldAlert } from 'lucide-react';
 import { assetUrl } from '../lib/basePath';
 import type { WorldMapDatum } from '../types';
 import { DASHBOARD_COLORS } from '../lib/dashboardColors';
+import { useI18n } from '../lib/i18n';
 
 // Using local Natural Earth data which has proper ISO properties
 const geoUrl = assetUrl("/world-50m.json");
@@ -59,6 +60,7 @@ interface WorldMapCardProps {
  * Shows all countries with alerts colored in red gradient based on intensity
  */
 export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulationsEnabled = false }: WorldMapCardProps) {
+    const { t } = useI18n();
     const [geoFeatures, setGeoFeatures] = useState<GeoFeature[]>([]);
     const [isLoadingStats, setIsLoadingStats] = useState(true);
     const containerRef = useRef<HTMLDivElement | null>(null);
@@ -167,14 +169,14 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
                 <div className="flex items-center gap-2">
                     <ShieldAlert className="w-4 h-4" style={{ color: DASHBOARD_COLORS.liveAlerts }} />
                     <span style={{ color: DASHBOARD_COLORS.liveAlerts }}>
-                        Alerts: {Number(feature.data?.liveCount || 0).toLocaleString()}
+                        {t('components.worldMap.alerts')}: {Number(feature.data?.liveCount || 0).toLocaleString()}
                     </span>
                 </div>
                 {simulationsEnabled && Number(feature.data?.simulatedCount || 0) > 0 && (
                     <div className="mt-1 flex items-center gap-2">
                         <ShieldAlert className="w-4 h-4" style={{ color: DASHBOARD_COLORS.simulatedAlerts }} />
                         <span style={{ color: DASHBOARD_COLORS.simulatedAlerts }}>
-                            Simulation Alerts: {Number(feature.data?.simulatedCount || 0).toLocaleString()}
+                            {t('components.worldMap.simulationAlerts')}: {Number(feature.data?.simulatedCount || 0).toLocaleString()}
                         </span>
                     </div>
                 )}
@@ -407,13 +409,13 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
             <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                     <Globe className="w-5 h-5 text-primary-600 dark:text-primary-400" />
-                    World Map
+                    {t('components.worldMap.title')}
                 </CardTitle>
             </CardHeader>
             <CardContent className="flex-1 flex flex-col overflow-hidden relative !p-0">
                 {isLoadingStats ? (
                     <div className="w-full h-full flex items-center justify-center text-gray-500">
-                        Loading map...
+                        {t('common.loadingMap')}
                     </div>
                 ) : (
                     <div
@@ -496,15 +498,17 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
                             {(controls: ReactZoomPanPinchContentRef) => (
                                 <>
                                     <div className="absolute top-2 right-2 z-10 flex flex-col gap-1">
-                                        <button onClick={() => controls.zoomIn()} className="p-1.5 bg-white dark:bg-gray-800 rounded shadow-md border dark:border-gray-600">
+                                        <button onClick={() => controls.zoomIn()} className="p-1.5 bg-white dark:bg-gray-800 rounded shadow-md border dark:border-gray-600" aria-label={t('components.worldMap.zoomIn')} title={t('components.worldMap.zoomIn')}>
                                             <ZoomIn className="w-4 h-4 text-gray-600 dark:text-gray-300" />
                                         </button>
-                                        <button onClick={() => controls.zoomOut()} className="p-1.5 bg-white dark:bg-gray-800 rounded shadow-md border dark:border-gray-600">
+                                        <button onClick={() => controls.zoomOut()} className="p-1.5 bg-white dark:bg-gray-800 rounded shadow-md border dark:border-gray-600" aria-label={t('components.worldMap.zoomOut')} title={t('components.worldMap.zoomOut')}>
                                             <ZoomOut className="w-4 h-4 text-gray-600 dark:text-gray-300" />
                                         </button>
                                         <button
                                             onClick={() => controls.centerView(initialScale, 300)}
                                             className="p-1.5 bg-white dark:bg-gray-800 rounded shadow-md border dark:border-gray-600"
+                                            aria-label={t('components.worldMap.resetView')}
+                                            title={t('components.worldMap.resetView')}
                                         >
                                             <RotateCcw className="w-4 h-4 text-gray-600 dark:text-gray-300" />
                                         </button>

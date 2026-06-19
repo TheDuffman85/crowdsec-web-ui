@@ -13,6 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { BarChart3, ShieldAlert, Gavel } from 'lucide-react';
 import type { ActivityChartSeriesPoint, DateRangeSelection } from '../types';
 import { DASHBOARD_COLORS } from '../lib/dashboardColors';
+import { useI18n } from '../lib/i18n';
 import {
     type BrushWindow,
     getBrushSelectionPayload,
@@ -155,8 +156,15 @@ interface ActivityBarChartProps {
  * Custom Tooltip Component for better dark mode support
  */
 const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
+    const { t } = useI18n();
+
     if (active && payload && payload.length) {
-        const tooltipOrder = ['Alerts', 'Decisions', 'Simulation Alerts', 'Simulation Decisions'];
+        const tooltipOrder = [
+            t('components.dashboardCharts.alerts'),
+            t('components.dashboardCharts.decisions'),
+            t('components.dashboardCharts.simulationAlerts'),
+            t('components.dashboardCharts.simulationDecisions'),
+        ];
         const sortedPayload = [...payload].sort((left, right) => {
             const leftIndex = tooltipOrder.indexOf(left.name || '');
             const rightIndex = tooltipOrder.indexOf(right.name || '');
@@ -173,7 +181,7 @@ const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
                         <div key={index} className="flex items-center gap-2 mb-1 last:mb-0">
                             <Icon className="w-4 h-4" style={{ color: entry.color }} />
                             <span className="text-sm" style={{ color: entry.color }}>
-                                {entry.name || 'Value'}: {entry.value ?? 0}
+                                {entry.name || t('components.dashboardCharts.value')}: {entry.value ?? 0}
                             </span>
                         </div>
                     );
@@ -205,6 +213,8 @@ export function ActivityBarChart({
     selectedDateRange,
     isSticky,
 }: ActivityBarChartProps) {
+    const { t } = useI18n();
+
     // -------------------------------------------------------------------------
     // 1. Process Filtered Data (Main Chart)
     // -------------------------------------------------------------------------
@@ -609,15 +619,23 @@ export function ActivityBarChart({
                 <div className="flex w-full flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <CardTitle className="flex items-center gap-2">
                         <BarChart3 className="w-5 h-5 text-primary-600 dark:text-primary-400" />
-                        Activity History
+                        {t('components.dashboardCharts.activityHistory')}
                         {showSelectionSummary && (
                             <span className="ml-2 text-sm font-normal text-gray-500 dark:text-gray-400">
-                                {endIndex === sliderData.length - 1 ? 'Last' : 'Selected'} {endIndex - startIndex + 1} {granularity === 'day' ? 'Days' : 'Hours'}
+                                {t(
+                                    endIndex === sliderData.length - 1
+                                        ? 'components.dashboardCharts.lastRange'
+                                        : 'components.dashboardCharts.selectedRange',
+                                    {
+                                        count: endIndex - startIndex + 1,
+                                        unit: t(granularity === 'day' ? 'components.dashboardCharts.days' : 'components.dashboardCharts.hours'),
+                                    },
+                                )}
                             </span>
                         )}
                     </CardTitle>
                     <div className="flex w-full items-center justify-between gap-2 sm:w-auto sm:justify-start sm:gap-3">
-                        <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-lg" role="group" aria-label="Activity chart scale">
+                        <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-lg" role="group" aria-label={t('components.dashboardCharts.scaleAria')}>
                             {scaleModes.map((mode) => (
                                 <button
                                     key={mode}
@@ -630,11 +648,11 @@ export function ActivityBarChart({
                                         : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-300'
                                         }`}
                                 >
-                                    {mode === 'linear' ? 'Linear' : 'Symlog'}
+                                    {t(mode === 'linear' ? 'components.dashboardCharts.linear' : 'components.dashboardCharts.symlog')}
                                 </button>
                             ))}
                         </div>
-                        <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-lg" role="group" aria-label="Activity chart granularity">
+                        <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-lg" role="group" aria-label={t('components.dashboardCharts.granularityAria')}>
                             {granularities.map((g) => (
                                 <button
                                     key={g}
@@ -647,7 +665,7 @@ export function ActivityBarChart({
                                         : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-300'
                                         }`}
                                 >
-                                    {g.charAt(0).toUpperCase() + g.slice(1)}
+                                    {t(g === 'day' ? 'components.dashboardCharts.day' : 'components.dashboardCharts.hour')}
                                 </button>
                             ))}
                         </div>
@@ -681,7 +699,7 @@ export function ActivityBarChart({
                             <Bar
                                 isAnimationActive={false}
                                 dataKey="alerts"
-                                name="Alerts"
+                                name={t('components.dashboardCharts.alerts')}
                                 fill={DASHBOARD_COLORS.liveAlerts}
                                 stroke="none"
                                 radius={[4, 4, 0, 0]}
@@ -693,7 +711,7 @@ export function ActivityBarChart({
                                 <Bar
                                     isAnimationActive={false}
                                     dataKey="simulatedAlerts"
-                                    name="Simulation Alerts"
+                                    name={t('components.dashboardCharts.simulationAlerts')}
                                     fill={DASHBOARD_COLORS.simulatedAlerts}
                                     stroke="none"
                                     radius={[4, 4, 0, 0]}
@@ -705,7 +723,7 @@ export function ActivityBarChart({
                             <Bar
                                 isAnimationActive={false}
                                 dataKey="decisions"
-                                name="Decisions"
+                                name={t('components.dashboardCharts.decisions')}
                                 fill={DASHBOARD_COLORS.liveDecisions}
                                 stroke="none"
                                 radius={[4, 4, 0, 0]}
@@ -716,8 +734,8 @@ export function ActivityBarChart({
                             {simulationsEnabled && (
                                 <Bar
                                     isAnimationActive={false}
-                                    dataKey="simulatedDecisions"
-                                    name="Simulation Decisions"
+                                   dataKey="simulatedDecisions"
+                                    name={t('components.dashboardCharts.simulationDecisions')}
                                     fill={DASHBOARD_COLORS.simulatedDecisions}
                                     stroke="none"
                                     radius={[4, 4, 0, 0]}
@@ -781,7 +799,7 @@ export function ActivityBarChart({
                                 width: `max(${sliderSelectionWidthPercent}%, 44px)`,
                             }}
                             onPointerDown={(event) => startSliderDrag('move', event)}
-                            aria-label="Move activity time range"
+                            aria-label={t('components.dashboardCharts.moveRange')}
                         />
                         <div
                             data-testid="activity-range-selection"
@@ -798,7 +816,7 @@ export function ActivityBarChart({
                             className="absolute top-1/2 z-20 h-11 w-11 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize"
                             style={{ left: `${sliderSelectionLeftPercent}%` }}
                             onPointerDown={(event) => startSliderDrag('start', event)}
-                            aria-label="Adjust activity time range start"
+                            aria-label={t('components.dashboardCharts.adjustRangeStart')}
                         >
                             <div
                                 className="pointer-events-none absolute left-1/2 top-1/2 h-10 w-[6px] -translate-x-1/2 -translate-y-1/2 bg-slate-500 dark:bg-gray-200/90"
@@ -811,7 +829,7 @@ export function ActivityBarChart({
                             className="absolute top-1/2 z-20 h-11 w-11 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize"
                             style={{ left: `${sliderSelectionRightPercent}%` }}
                             onPointerDown={(event) => startSliderDrag('end', event)}
-                            aria-label="Adjust activity time range end"
+                            aria-label={t('components.dashboardCharts.adjustRangeEnd')}
                         >
                             <div
                                 className="pointer-events-none absolute left-1/2 top-1/2 h-10 w-[6px] -translate-x-1/2 -translate-y-1/2 bg-slate-500 dark:bg-gray-200/90"

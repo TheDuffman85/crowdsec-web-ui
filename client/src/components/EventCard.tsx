@@ -3,6 +3,7 @@ import { Collapsible } from "./ui/Collapsible";
 import { getHubUrl } from "../lib/utils";
 import { ExternalLink, Shield } from "lucide-react";
 import type { AlertEvent, AlertMetaValue } from '../types';
+import { useI18n } from "../lib/i18n";
 
 interface EventCardProps {
     event: AlertEvent;
@@ -34,6 +35,7 @@ const STYLED_META_KEYS = new Set([
 const EXCLUDED_META_KEYS = new Set(['context']);
 
 export function EventCard({ event, index }: EventCardProps) {
+    const { t } = useI18n();
     const getMeta = (key: string): AlertMetaValue | undefined => event.meta?.find((meta) => meta.key === key)?.value;
 
     const isAppSecEvent = event.meta?.some((meta) =>
@@ -82,12 +84,12 @@ export function EventCard({ event, index }: EventCardProps) {
                 {/* Timestamp and Service */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                     <div>
-                        <span className="text-gray-500">Timestamp:</span>{' '}
+                        <span className="text-gray-500">{t('components.eventCard.timestamp')}:</span>{' '}
                         <span className="font-mono text-xs">{event.timestamp || '-'}</span>
                     </div>
                     {service && (
                         <div>
-                            <span className="text-gray-500">Service:</span> {service}
+                            <span className="text-gray-500">{t('components.eventCard.service')}:</span> {service}
                         </div>
                     )}
                 </div>
@@ -95,7 +97,7 @@ export function EventCard({ event, index }: EventCardProps) {
                 {/* Target FQDN/Host */}
                 {(targetFqdn || targetHost) && (
                     <div>
-                        <span className="text-gray-500">Target:</span>{' '}
+                        <span className="text-gray-500">{t('components.eventCard.target')}:</span>{' '}
                         <span className="font-mono text-xs">{targetFqdn || targetHost}</span>
                     </div>
                 )}
@@ -103,7 +105,7 @@ export function EventCard({ event, index }: EventCardProps) {
                 {/* Traefik Router */}
                 {traefikRouter && (
                     <div>
-                        <span className="text-gray-500">Router:</span>{' '}
+                        <span className="text-gray-500">{t('components.eventCard.router')}:</span>{' '}
                         <span className="font-mono text-xs">{traefikRouter}</span>
                     </div>
                 )}
@@ -111,7 +113,7 @@ export function EventCard({ event, index }: EventCardProps) {
                 {/* AppSec Rule Info */}
                 {isAppSecEvent && ruleName && (
                     <div>
-                        <span className="text-gray-500">Rule:</span>{' '}
+                        <span className="text-gray-500">{t('components.eventCard.rule')}:</span>{' '}
                         {(() => {
                             const hubUrl = getHubUrl(ruleName);
                             return hubUrl ? (
@@ -136,13 +138,13 @@ export function EventCard({ event, index }: EventCardProps) {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                         {matchedZones && (
                             <div>
-                                <span className="text-gray-500">Matched Zone:</span>{' '}
+                                <span className="text-gray-500">{t('components.eventCard.matchedZone')}:</span>{' '}
                                 <Badge variant="outline" className="ml-1">{matchedZones}</Badge>
                             </div>
                         )}
                         {ruleIds && (
                             <div>
-                                <span className="text-gray-500">Rule ID:</span>{' '}
+                                <span className="text-gray-500">{t('components.eventCard.ruleId')}:</span>{' '}
                                 <span className="font-mono text-xs">{ruleIds}</span>
                             </div>
                         )}
@@ -163,7 +165,7 @@ export function EventCard({ event, index }: EventCardProps) {
                         {httpPath || targetUri || '/'}
                         {(httpStatus || httpUserAgent) && (
                             <div className="text-gray-400 mt-1">
-                                {httpStatus && `Status: ${httpStatus}`}
+                                {httpStatus && `${t('components.eventCard.status')}: ${httpStatus}`}
                                 {httpStatus && httpUserAgent && ' | '}
                                 {httpUserAgent && `UA: ${httpUserAgent}`}
                             </div>
@@ -176,7 +178,7 @@ export function EventCard({ event, index }: EventCardProps) {
                     <Collapsible
                         trigger={
                             <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
-                                Additional Metadata ({additionalMeta.length})
+                                {t('components.eventCard.additionalMetadata', { count: additionalMeta.length })}
                             </span>
                         }
                         defaultOpen={false}
