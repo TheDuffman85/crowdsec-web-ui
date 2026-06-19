@@ -208,6 +208,17 @@ export async function updateTableColumns(data: UpdateTableColumnsRequest): Promi
     }, 'Failed to update table columns');
 }
 
+export async function updateLanguagePreference(language: string): Promise<{
+    success: boolean;
+    language: string;
+}> {
+    return sendJson('/api/config/language', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ language }),
+    }, 'Failed to update language preference');
+}
+
 async function sendJson<T>(input: string, init: RequestInit, defaultMsg: string): Promise<T> {
     const response = await fetch(apiUrl(input), init);
     if (!response.ok) {

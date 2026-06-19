@@ -48,6 +48,7 @@ import type { MqttPublishConfig } from './notifications/mqtt-client';
 import { createNotificationOutboundGuard } from './notifications/outbound-guard';
 import { createNotificationSecretStore } from './notifications/secret-store';
 import { createUpdateChecker, type UpdateCheckOverrides, type UpdateChecker } from './update-check';
+import { getServerTranslator, normalizeLanguagePreference, saveLanguagePreference } from './i18n';
 import { getAlertSourceValue, getAlertTarget, resolveAlertReason, resolveAlertScenario, toSlimAlert } from './utils/alerts';
 import { parseGoDuration, toDuration } from './utils/duration';
 
@@ -691,6 +692,26 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     } catch (error: any) {
       console.error('Error updating refresh interval:', error.message);
       return context.json({ error: 'Failed to update refresh interval' }, 500);
+    }
+  });
+
+  app.put(`${config.basePath}/api/config/language`, ensureAuth, async (context) => {
+    try {
+      const body = await context.req.json<{ language?: string }>();
+      const language = body.language;
+      const normalizedLanguage = normalizeLanguagePreference(language);
+      if (language !== normalizedLanguage && normalizedLanguage === 'browser') {
+        return context.json({ error: 'Invalid language preference' }, 400);
+      }
+
+      saveLanguagePreference(database, normalizedLanguage);
+      return context.json({
+        success: true,
+        language: normalizedLanguage,
+      });
+    } catch (error: any) {
+      console.error('Error updating language preference:', error.message);
+      return context.json({ error: 'Failed to update language preference' }, 500);
     }
   });
 
@@ -1721,12 +1742,13 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   async function syncHistory(): Promise<SyncHistorySummary> {
     const showOverlay = isFirstSync;
     isFirstSync = false;
+    const t = getServerTranslator(database);
     console.log('Starting historical data sync...');
 
     updateSyncStatus({
       isSyncing: showOverlay,
       progress: 0,
-      message: 'Starting historical data sync...',
+      message: t('components.syncOverlay.statusStarting'),
       startedAt: new Date().toISOString(),
       completedAt: null,
       state: 'syncing',
@@ -1753,20 +1775,29 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     const filterPruned = pruneCachedEntriesForCurrentAlertFilters();
     if (filterPruned.alerts > 0 || filterPruned.decisions > 0) {
       updateSyncStatus({
-        message: `Removed ${filterPruned.alerts} stale cached alerts and ${filterPruned.decisions} stale cached decisions before sync.`,
+        message: t('components.syncOverlay.statusRemovedStale', {
+          alerts: filterPruned.alerts,
+          decisions: filterPruned.decisions,
+        }),
       });
     }
 
     while (currentStart < now) {
       const currentEnd = Math.min(currentStart + chunkSizeMs, now);
       const progress = Math.round(((currentEnd - lookbackStart) / totalDuration) * 100);
-      const progressMessage = `Syncing: ${formatSyncWindow(currentStart, currentEnd, now)} (${totalAlerts} alerts, ${totalDecisions} decisions)`;
+      const windowLabel = formatSyncWindow(currentStart, currentEnd, now);
+      const progressMessage = t('components.syncOverlay.statusSyncingWindow', {
+        window: windowLabel,
+        alerts: totalAlerts,
+        decisions: totalDecisions,
+      });
+      const progressLogMessage = `Syncing: ${windowLabel} (${totalAlerts} alerts, ${totalDecisions} decisions)`;
 
       updateSyncStatus({
         progress: Math.min(progress, 90),
         message: progressMessage,
       });
-      console.log(progressMessage);
+      console.log(progressLogMessage);
 
       const result = await syncHistoricalWindow(currentStart, currentEnd, now);
       totalAlerts += result.alerts;
@@ -1778,7 +1809,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       await delay(100);
     }
 
-    updateSyncStatus({ progress: 95, message: 'Syncing active decisions...' });
+    updateSyncStatus({ progress: 95, message: t('components.syncOverlay.statusActiveDecisions') });
+    console.log('Syncing active decisions...');
     const activeWindowSummary = await fetchActiveDecisionAlertsChunked(lookbackStart, now);
     const activeDecisionAlerts = mergeAlertRecords(activeWindowSummary.alerts);
     const activeDecisionCount = countAlertDecisions(activeDecisionAlerts);
@@ -1808,10 +1840,16 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         ? 'partial'
         : 'failed';
     const message = state === 'complete'
+      ? t('server.sync.complete', { alerts: cachedAlerts, decisions: cachedDecisions })
+      : state === 'partial'
+        ? t('server.sync.partial', { alerts: cachedAlerts, decisions: cachedDecisions, failures: errors.length })
+        : t('server.sync.failed', { reason: errors[0] || t('server.sync.failedNoWindows') });
+    const logMessage = state === 'complete'
       ? `Sync complete. ${cachedAlerts} alerts and ${cachedDecisions} decisions cached.`
       : state === 'partial'
         ? `Sync partially complete. ${cachedAlerts} alerts and ${cachedDecisions} decisions cached; ${errors.length} window${errors.length === 1 ? '' : 's'} failed.`
         : `Sync failed: ${errors[0] || 'no alert windows could be synced'}`;
+    console.log(logMessage);
 
     updateSyncStatus({
       isSyncing: false,
@@ -1828,13 +1866,13 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       historicalErrors,
       activeDecisionAlerts: activeDecisionAlertsCount,
       activeDecisions: activeDecisionsCount,
+      activeErrors,
       activeNetCachedAlerts,
       activeNetCachedDecisions,
       activePrunedAlerts,
       activePrunedDecisions,
-      activeErrors,
-      errors,
       state,
+      errors,
       cachedAlerts,
       cachedDecisions,
     };

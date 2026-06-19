@@ -201,6 +201,12 @@ function encodeBasicAuth(username: string, password: string): string {
   return `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
 }
 
+function encodeHeaderValue(value: string): string {
+  return /[^\x00-\x7F]/.test(value)
+    ? `=?UTF-8?B?${Buffer.from(value, 'utf8').toString('base64')}?=`
+    : value;
+}
+
 function createLegacyWebhookTemplate(): string {
   return JSON.stringify(
     {
@@ -871,14 +877,14 @@ const providers: Record<NotificationChannelType, NotificationProvider> = {
       const baseUrl = stringValue(config.ntfyUrl).replace(/\/+$/, '');
       await context.assertUrlAllowed(baseUrl, 'ntfy URL');
       const headers: Record<string, string> = {
-        Title: appendPrefix(rawStringValue(config.titlePrefix), payload.title),
+        Title: encodeHeaderValue(appendPrefix(rawStringValue(config.titlePrefix), payload.title)),
         Priority: rawStringValue(config.ntfyPriorityOverride) === 'auto'
           ? severityToNtfyPriority(payload.severity)
           : rawStringValue(config.ntfyPriorityOverride),
       };
       const tags = rawStringValue(config.tags);
       if (tags) {
-        headers.Tags = tags;
+        headers.Tags = encodeHeaderValue(tags);
       }
       if (rawStringValue(config.ntfyToken)) {
         headers.Authorization = `Bearer ${rawStringValue(config.ntfyToken)}`;

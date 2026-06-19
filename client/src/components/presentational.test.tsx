@@ -4,6 +4,7 @@ import { SyncOverlay } from './SyncOverlay';
 import { TimeDisplay } from './TimeDisplay';
 import { Badge } from './ui/Badge';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
+import { I18nContext, type I18nContextValue } from '../lib/i18n';
 
 describe('presentational components', () => {
   test('renders badges and card wrappers', () => {
@@ -84,5 +85,35 @@ describe('presentational components', () => {
 
     expect(screen.getByText('0%')).toBeInTheDocument();
     expect(screen.getByText('Synchronizing...')).toBeInTheDocument();
+  });
+
+  test('translates known server sync status messages', () => {
+    const i18nValue: I18nContextValue = {
+      language: 'de',
+      preference: 'de',
+      browserLanguage: 'de',
+      setLanguagePreference: () => undefined,
+      t: (key) => ({
+        'components.syncOverlay.description': 'Bitte warten',
+        'components.syncOverlay.statusActiveDecisions': 'Aktive Entscheidungen werden synchronisiert...',
+        'components.syncOverlay.title': 'Historische Daten werden synchronisiert',
+      })[key] ?? key,
+    };
+
+    render(
+      <I18nContext.Provider value={i18nValue}>
+        <SyncOverlay
+          syncStatus={{
+            isSyncing: true,
+            progress: 95,
+            message: 'Syncing active decisions...',
+            startedAt: null,
+            completedAt: null,
+          }}
+        />
+      </I18nContext.Provider>,
+    );
+
+    expect(screen.getByText('Aktive Entscheidungen werden synchronisiert...')).toBeInTheDocument();
   });
 });

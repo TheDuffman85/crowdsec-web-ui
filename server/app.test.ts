@@ -718,6 +718,17 @@ describe('createApp', () => {
     expect(refreshUpdate.status).toBe(200);
     expect(((await refreshUpdate.json()) as { new_interval_ms: number }).new_interval_ms).toBe(5000);
 
+    const languageUpdate = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/config/language', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ language: 'de' }),
+      }),
+    );
+    expect(languageUpdate.status).toBe(200);
+    expect(((await languageUpdate.json()) as { language: string }).language).toBe('de');
+    expect(database.getMeta('language')?.value).toBe('de');
+
     const columnUpdate = await controller.fetch(
       new Request('http://localhost/crowdsec/api/config/table-columns', {
         method: 'PUT',

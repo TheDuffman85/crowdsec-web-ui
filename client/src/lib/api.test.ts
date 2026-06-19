@@ -29,6 +29,7 @@ import {
   markNotificationsRead,
   testNotificationChannel,
   updateNotificationChannel,
+  updateLanguagePreference,
   updateNotificationRule,
 } from './api';
 
@@ -213,6 +214,7 @@ describe('api helpers', () => {
     await expect(addDecision({ ip: '1.2.3.4' })).resolves.toEqual({ message: 'Created' });
     await expect(createNotificationChannel({ name: 'ntfy', type: 'ntfy', enabled: true, config: {} })).resolves.toEqual({ message: 'Created' });
     await expect(updateNotificationChannel('1', { name: 'ntfy', type: 'ntfy', enabled: true, config: {} })).resolves.toEqual({ message: 'Created' });
+    await expect(updateLanguagePreference('de')).resolves.toEqual({ message: 'Created' });
     await expect(createNotificationRule({ name: 'rule', type: 'alert-threshold', enabled: true, severity: 'warning', channel_ids: [], config: { window_minutes: 60, alert_threshold: 10 } })).resolves.toEqual({ message: 'Created' });
     await expect(updateNotificationRule('1', { name: 'rule', type: 'alert-threshold', enabled: true, severity: 'warning', channel_ids: [], config: { window_minutes: 60, alert_threshold: 10 } })).resolves.toEqual({ message: 'Created' });
   });

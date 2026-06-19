@@ -296,6 +296,33 @@ describe('notification incident deduplication', () => {
     database.close();
   });
 
+  test('uses the explicit server language for notification content', async () => {
+    const { database, service } = createService();
+    database.setMeta('language', 'de');
+    service.createRule({
+      name: 'Schwelle',
+      type: 'alert-threshold',
+      enabled: true,
+      severity: 'warning',
+      channel_ids: [],
+      config: {
+        window_minutes: 60,
+        alert_threshold: 1,
+        filters: {},
+      },
+    });
+
+    insertAlert(database, createAlert(1, '2026-03-28T11:55:00.000Z'));
+    await service.evaluateRules(new Date('2026-03-28T12:00:00.000Z'));
+
+    expect(service.listNotifications().data[0]).toEqual(expect.objectContaining({
+      title: 'Schwelle: Schwellenwert überschritten',
+      message: '1 Alarme wurden in den letzten 60 Minuten gefunden und überschreiten den Schwellenwert von 1.',
+    }));
+
+    database.close();
+  });
+
   test('spike rules stay deduplicated while active, then fire again after clearing', async () => {
     const { database, service } = createService();
     const rule = service.createRule({

@@ -75,6 +75,9 @@ Create notification rules for alert spikes, alert thresholds, IP bans, recent CV
   <img src="screenshots/notification_rule.png" alt="Notification Rule" width="50%">
 </a>
 
+### Localization
+CrowdSec Web UI includes Arabic, English, German, French, Hindi, Spanish, Russian, and Chinese translations. The language selector can follow the browser language for the UI, or it can be set explicitly. When a language is set explicitly, server-generated text such as sync status messages, notification titles, notification bodies, and notification test messages uses that saved language too. With **Browser default**, server-generated messages use English because background jobs and outbound notifications do not have access to a browser locale.
+
 ### Unified Search
 -   **Free-text first**: The Alerts and Decisions search bars still support normal free-text queries.
 -   **Advanced syntax**: Power users can refine searches with quoted phrases, `field:value`, `AND`, `OR`, `NOT`, unary `-`, and parentheses.
@@ -667,6 +670,8 @@ Each notification publishes a JSON payload to the configured topic containing:
 
 For test sends, rule fields use a synthetic context: `rule_id` is `test`, `rule_name` is `Test notification`, and `rule_type` is `test`.
 
+Notification titles and bodies are localized when the global language selector is set to a specific language. If the selector is set to **Browser default**, outbound notification content is generated in English because notification jobs run on the server without access to the browser's locale.
+
 #### Webhook
 
 Webhook delivery supports custom integrations such as automation tools, internal APIs, chat bridges, and other HTTP endpoints.
@@ -846,6 +851,10 @@ The Web UI maintains its own local history of alerts and decisions. Data fetched
     CROWDSEC_MTLS_KEEP=1 pnpm run test:mtls:crowdsec
     CROWDSEC_MTLS_CONTAINER=my-crowdsec-test pnpm run test:mtls:crowdsec
     ```
+
+## Translations
+
+CrowdSec Web UI translations live in `client/src/locales/`. Keep the same keys as `client/src/locales/en.json` when correcting wording or adding a new language. Server-side localization reuses these locale files, so notification and sync-message keys should be updated alongside UI text.
 
 ## Star History
 

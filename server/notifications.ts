@@ -33,6 +33,7 @@ import {
 import type { NotificationOutboundGuard } from './notifications/outbound-guard';
 import type { NotificationSecretStore } from './notifications/secret-store';
 import type { UpdateChecker } from './update-check';
+import { getServerTranslator, type Translator } from './i18n';
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 type RuleConfigInput = NotificationRuleConfig | Record<string, AlertMetaValue>;
@@ -251,15 +252,16 @@ export function createNotificationService(options: NotificationServiceOptions): 
     if (!channel.enabled) {
       throw new Error('Enable the notification channel before testing it');
     }
+    const t = getServerTranslator(database);
 
     const result = await sendToChannel(channel, {
-      title: 'CrowdSec notification test',
-      message: `Test sent at ${new Date().toLocaleString()}.`,
+      title: t('server.notifications.test.title'),
+      message: t('server.notifications.test.message', { timestamp: new Date().toLocaleString() }),
       metadata: { kind: 'test' },
       dedupeKey: `test:${Date.now()}`,
     }, 'info', {
       id: 'test',
-      name: 'Test notification',
+      name: t('server.notifications.test.ruleName'),
       type: 'test',
     });
     if (result.status !== 'delivered') {
@@ -275,8 +277,9 @@ export function createNotificationService(options: NotificationServiceOptions): 
 
     const activeChannels = loadChannels(false).filter((channel) => channel.enabled);
     const timestamp = now.toISOString();
+    const t = getServerTranslator(database);
     for (const rule of rules) {
-      const candidates = dedupeCandidates(await evaluateRule(rule, now));
+      const candidates = dedupeCandidates(await evaluateRule(rule, now, t));
       const activeIncidents = loadActiveIncidents(rule.id);
       const candidateKeys = new Set(candidates.map((candidate) => candidate.dedupeKey));
 
@@ -534,26 +537,26 @@ export function createNotificationService(options: NotificationServiceOptions): 
     };
   }
 
-  async function evaluateRule(rule: NotificationRule, now: Date): Promise<NotificationCandidate[]> {
+  async function evaluateRule(rule: NotificationRule, now: Date, t: Translator): Promise<NotificationCandidate[]> {
     if (rule.type === 'alert-spike') {
-      return evaluateAlertSpikeRule(rule, now);
+      return evaluateAlertSpikeRule(rule, now, t);
     }
     if (rule.type === 'alert-threshold') {
-      return evaluateAlertThresholdRule(rule, now);
+      return evaluateAlertThresholdRule(rule, now, t);
     }
     if (rule.type === 'application-update') {
-      return evaluateApplicationUpdateRule(rule);
+      return evaluateApplicationUpdateRule(rule, t);
     }
     if (rule.type === 'lapi-availability') {
-      return evaluateLapiAvailabilityRule(rule, now);
+      return evaluateLapiAvailabilityRule(rule, now, t);
     }
     if (rule.type === 'ip-ban') {
-      return evaluateIpBanRule(rule, now);
+      return evaluateIpBanRule(rule, now, t);
     }
-    return evaluateNewCveRule(rule, now);
+    return evaluateNewCveRule(rule, now, t);
   }
 
-  async function evaluateAlertSpikeRule(rule: NotificationRule, now: Date): Promise<NotificationCandidate[]> {
+  async function evaluateAlertSpikeRule(rule: NotificationRule, now: Date, t: Translator): Promise<NotificationCandidate[]> {
     const config = normalizeRuleConfig('alert-spike', rule.config);
     const windowMs = config.window_minutes * 60_000;
     const currentStart = now.getTime() - windowMs;
@@ -573,8 +576,13 @@ export function createNotificationService(options: NotificationServiceOptions): 
 
     return [{
       dedupeKey: 'spike:active',
-      title: `${rule.name}: alert spike detected`,
-      message: `${currentAlerts.length} alerts in the last ${config.window_minutes} minutes, up ${Math.round(increasePercent)}% from the previous window (${previousAlerts.length}).`,
+      title: t('server.notifications.alertSpike.title', { ruleName: rule.name }),
+      message: t('server.notifications.alertSpike.message', {
+        count: currentAlerts.length,
+        minutes: config.window_minutes,
+        percent: Math.round(increasePercent),
+        previousCount: previousAlerts.length,
+      }),
       metadata: {
         current_count: currentAlerts.length,
         previous_count: previousAlerts.length,
@@ -585,7 +593,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
     }];
   }
 
-  async function evaluateAlertThresholdRule(rule: NotificationRule, now: Date): Promise<NotificationCandidate[]> {
+  async function evaluateAlertThresholdRule(rule: NotificationRule, now: Date, t: Translator): Promise<NotificationCandidate[]> {
     const config = normalizeRuleConfig('alert-threshold', rule.config);
     const windowMs = config.window_minutes * 60_000;
     const alerts = getAlertsBetween(new Date(now.getTime() - windowMs), now, config.filters);
@@ -596,8 +604,12 @@ export function createNotificationService(options: NotificationServiceOptions): 
 
     return [{
       dedupeKey: 'threshold:active',
-      title: `${rule.name}: threshold exceeded`,
-      message: `${alerts.length} alerts matched in the last ${config.window_minutes} minutes, crossing the threshold of ${config.alert_threshold}.`,
+      title: t('server.notifications.alertThreshold.title', { ruleName: rule.name }),
+      message: t('server.notifications.alertThreshold.message', {
+        count: alerts.length,
+        minutes: config.window_minutes,
+        threshold: config.alert_threshold,
+      }),
       metadata: {
         matched_alerts: alerts.length,
         threshold: config.alert_threshold,
@@ -607,7 +619,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
     }];
   }
 
-  async function evaluateNewCveRule(rule: NotificationRule, now: Date): Promise<NotificationCandidate[]> {
+  async function evaluateNewCveRule(rule: NotificationRule, now: Date, t: Translator): Promise<NotificationCandidate[]> {
     const config = normalizeRuleConfig('new-cve', rule.config);
     const alerts = getAlertsBetween(new Date(now.getTime() - 7 * 86_400_000), now, config.filters);
     const matches = new Map<string, AlertRecord[]>();
@@ -634,8 +646,12 @@ export function createNotificationService(options: NotificationServiceOptions): 
 
       candidates.push({
         dedupeKey: `cve:${cveId}`,
-        title: `${rule.name}: recent CVE activity`,
-        message: `${cveId} was published ${ageDays} day${ageDays === 1 ? '' : 's'} ago and appeared in ${matchedAlerts.length} alert${matchedAlerts.length === 1 ? '' : 's'}.`,
+        title: t('server.notifications.newCve.title', { ruleName: rule.name }),
+        message: t('server.notifications.newCve.message', {
+          cveId,
+          ageDays,
+          count: matchedAlerts.length,
+        }),
         metadata: {
           cve_id: cveId,
           age_days: ageDays,
@@ -649,7 +665,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
     return candidates;
   }
 
-  async function evaluateIpBanRule(rule: NotificationRule, now: Date): Promise<NotificationCandidate[]> {
+  async function evaluateIpBanRule(rule: NotificationRule, now: Date, t: Translator): Promise<NotificationCandidate[]> {
     const config = normalizeRuleConfig('ip-ban', rule.config);
     const windowStart = now.getTime() - config.window_minutes * 60_000;
     return database
@@ -673,8 +689,12 @@ export function createNotificationService(options: NotificationServiceOptions): 
 
         return {
           dedupeKey: buildIpBanDedupeKey(decision),
-          title: `${rule.name}: IP banned`,
-          message: `${value} was banned${scenario ? ` by ${scenario}` : ''}${stopAt ? ` until ${stopAt}` : ''}.`,
+          title: t('server.notifications.ipBan.title', { ruleName: rule.name }),
+          message: t('server.notifications.ipBan.message', {
+            value,
+            scenarioDetail: scenario ? t('server.notifications.ipBan.scenarioDetail', { scenario }) : '',
+            stopAtDetail: stopAt ? t('server.notifications.ipBan.stopAtDetail', { stopAt }) : '',
+          }),
           incidentStartedAt: typeof decision.created_at === 'string' ? decision.created_at : undefined,
           metadata: {
             decision_id: decisionId,
@@ -692,7 +712,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
       });
   }
 
-  async function evaluateApplicationUpdateRule(rule: NotificationRule): Promise<NotificationCandidate[]> {
+  async function evaluateApplicationUpdateRule(rule: NotificationRule, t: Translator): Promise<NotificationCandidate[]> {
     if (!updateChecker) {
       return [];
     }
@@ -703,12 +723,12 @@ export function createNotificationService(options: NotificationServiceOptions): 
     }
 
     const targetVersion = status.tag === 'dev' ? `dev-${status.remote_version}` : status.remote_version;
-    const currentVersion = status.local_version || 'current version';
+    const currentVersion = status.local_version || t('server.notifications.currentVersion');
 
     return [{
       dedupeKey: `application-update:${targetVersion}`,
-      title: `${rule.name}: application update available`,
-      message: `A newer CrowdSec Web UI version is available: ${currentVersion} -> ${targetVersion}.`,
+      title: t('server.notifications.applicationUpdate.title', { ruleName: rule.name }),
+      message: t('server.notifications.applicationUpdate.message', { currentVersion, targetVersion }),
       metadata: {
         update_available: true,
         local_version: status.local_version || null,
@@ -719,7 +739,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
     }];
   }
 
-  async function evaluateLapiAvailabilityRule(rule: NotificationRule, now: Date): Promise<NotificationCandidate[]> {
+  async function evaluateLapiAvailabilityRule(rule: NotificationRule, now: Date, t: Translator): Promise<NotificationCandidate[]> {
     if (!getLapiStatus) {
       return [];
     }
@@ -737,8 +757,8 @@ export function createNotificationService(options: NotificationServiceOptions): 
       if (outageDurationSeconds >= config.outage_threshold_seconds) {
         candidates.push({
           dedupeKey: 'lapi-availability:offline',
-          title: `${rule.name}: LAPI unavailable`,
-          message: `CrowdSec LAPI has been unavailable for ${outageDurationSeconds} seconds.`,
+          title: t('server.notifications.lapiUnavailable.title', { ruleName: rule.name }),
+          message: t('server.notifications.lapiUnavailable.message', { seconds: outageDurationSeconds }),
           incidentStartedAt: status.offline_since,
           metadata: {
             offline_since: status.offline_since,
@@ -762,8 +782,8 @@ export function createNotificationService(options: NotificationServiceOptions): 
       );
       candidates.push({
         dedupeKey: `lapi-availability:recovery:${recoveredAt}`,
-        title: `${rule.name}: LAPI recovered`,
-        message: `CrowdSec LAPI connectivity has recovered after ${outageDurationSeconds} seconds of downtime.`,
+        title: t('server.notifications.lapiRecovered.title', { ruleName: rule.name }),
+        message: t('server.notifications.lapiRecovered.message', { seconds: outageDurationSeconds }),
         metadata: {
           offline_since: offlineSince,
           recovered_at: recoveredAt,

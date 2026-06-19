@@ -7,12 +7,46 @@ interface SyncOverlayProps {
     syncStatus: SyncStatus | null;
 }
 
+function translateSyncMessage(message: string | undefined, t: (key: string, values?: Record<string, string | number>) => string) {
+    if (!message) {
+        return t('components.syncOverlay.synchronizing');
+    }
+
+    if (message === 'Starting historical data sync...') {
+        return t('components.syncOverlay.statusStarting');
+    }
+
+    if (message === 'Syncing active decisions...') {
+        return t('components.syncOverlay.statusActiveDecisions');
+    }
+
+    const removedMatch = message.match(/^Removed (\d+) stale cached alerts and (\d+) stale cached decisions before sync\.$/);
+    if (removedMatch) {
+        return t('components.syncOverlay.statusRemovedStale', {
+            alerts: Number(removedMatch[1]),
+            decisions: Number(removedMatch[2]),
+        });
+    }
+
+    const syncingMatch = message.match(/^Syncing: (.+) \((\d+) alerts, (\d+) decisions\)$/);
+    if (syncingMatch) {
+        return t('components.syncOverlay.statusSyncingWindow', {
+            window: syncingMatch[1],
+            alerts: Number(syncingMatch[2]),
+            decisions: Number(syncingMatch[3]),
+        });
+    }
+
+    return message;
+}
+
 export function SyncOverlay({ syncStatus }: SyncOverlayProps) {
     const { t } = useI18n();
 
     if (!syncStatus?.isSyncing) return null;
 
     const progress = syncStatus.progress || 0;
+    const statusMessage = translateSyncMessage(syncStatus.message, t);
 
     return createPortal(
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -52,7 +86,7 @@ export function SyncOverlay({ syncStatus }: SyncOverlayProps) {
                 <div className="flex justify-between items-center text-sm">
                     <span className="text-gray-500 dark:text-gray-400 flex items-center gap-2">
                         <RefreshCw className="w-4 h-4 animate-spin" />
-                        {syncStatus.message || t('components.syncOverlay.synchronizing')}
+                        {statusMessage}
                     </span>
                     <span className="font-semibold text-blue-600 dark:text-blue-400">
                         {progress}%

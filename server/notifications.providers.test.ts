@@ -145,6 +145,37 @@ describe('notification providers', () => {
     }
   });
 
+  test('ntfy provider encodes non-ASCII headers for localized notifications', async () => {
+    const provider = getNotificationProvider('ntfy');
+    const config = provider.normalizeConfig({
+      ntfyUrl: 'https://ntfy.sh',
+      ntfyTopic: 'crowdsec_alerts',
+      tags: '警告',
+    });
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+
+    await provider.send(createChannel('ntfy', config), {
+      ...basePayload,
+      title: '阈值已超过',
+      message: '过去 60 分钟内匹配到 25 条告警。',
+      channel_type: 'ntfy',
+    }, {
+      fetchImpl: async (input, init) => {
+        requests.push({ url: String(input), init });
+        return Response.json({ id: 'message' });
+      },
+      assertHostAllowed: async () => {},
+      assertUrlAllowed: async () => {},
+    });
+
+    expect(requests[0]?.url).toBe('https://ntfy.sh/crowdsec_alerts');
+    expect(requests[0]?.init?.headers).toEqual(expect.objectContaining({
+      Title: `=?UTF-8?B?${Buffer.from('CrowdSec: 阈值已超过', 'utf8').toString('base64')}?=`,
+      Tags: `=?UTF-8?B?${Buffer.from('警告', 'utf8').toString('base64')}?=`,
+    }));
+    expect(requests[0]?.init?.body).toBe('过去 60 分钟内匹配到 25 条告警。');
+  });
+
   test('mqtt provider validates config and publishes the expected payload', async () => {
     const provider = getNotificationProvider('mqtt');
     const config = provider.normalizeConfig({
