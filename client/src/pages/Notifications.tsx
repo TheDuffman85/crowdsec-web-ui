@@ -48,6 +48,7 @@ import type {
   AlertMetaValue,
   NotificationChannel,
   NotificationChannelType,
+  NotificationDeliveryStatus,
   NotificationItem,
   NotificationRule,
   NotificationRuleType,
@@ -93,6 +94,27 @@ const RULE_DEFAULTS: Record<NotificationRuleType, Record<string, string>> = {
 
 const CHANNEL_ORDER_STORAGE_KEY = 'crowdsec-web-ui:notifications:destination-order';
 const RULE_ORDER_STORAGE_KEY = 'crowdsec-web-ui:notifications:rule-order';
+
+const RULE_TYPE_LABEL_KEYS: Record<NotificationRuleType, string> = {
+  'alert-spike': 'pages.notifications.ruleTypes.alertSpike',
+  'alert-threshold': 'pages.notifications.ruleTypes.alertThreshold',
+  'new-cve': 'pages.notifications.ruleTypes.recentCve',
+  'ip-ban': 'pages.notifications.ruleTypes.ipBan',
+  'application-update': 'pages.notifications.ruleTypes.applicationUpdate',
+  'lapi-availability': 'pages.notifications.ruleTypes.lapiAvailability',
+};
+
+const SEVERITY_LABEL_KEYS: Record<NotificationSeverity, string> = {
+  info: 'pages.notifications.severityInfo',
+  warning: 'pages.notifications.severityWarning',
+  critical: 'pages.notifications.severityCritical',
+};
+
+const DELIVERY_STATUS_LABEL_KEYS: Record<NotificationDeliveryStatus, string> = {
+  delivered: 'pages.notifications.deliveryStatuses.delivered',
+  failed: 'pages.notifications.deliveryStatuses.failed',
+  skipped: 'pages.notifications.deliveryStatuses.skipped',
+};
 
 const defaultChannelForm = (type: NotificationChannelType = 'ntfy'): ChannelFormState => ({
   name: '',
@@ -207,6 +229,123 @@ function moveItem<T>(items: T[], oldIndex: number, newIndex: number): T[] {
 
   nextItems.splice(newIndex, 0, item);
   return nextItems;
+}
+
+function translateRuleType(type: NotificationRuleType, t: (key: string) => string): string {
+  return t(RULE_TYPE_LABEL_KEYS[type]);
+}
+
+function translateSeverity(severity: NotificationSeverity, t: (key: string) => string): string {
+  return t(SEVERITY_LABEL_KEYS[severity]);
+}
+
+function translateDeliveryStatus(status: NotificationDeliveryStatus, t: (key: string) => string): string {
+  return t(DELIVERY_STATUS_LABEL_KEYS[status]);
+}
+
+function getMetadataString(item: NotificationItem, key: string): string | null {
+  const value = item.metadata[key];
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function getMetadataNumber(item: NotificationItem, key: string): number | null {
+  const value = item.metadata[key];
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const numericValue = Number(value);
+    return Number.isFinite(numericValue) ? numericValue : null;
+  }
+  return null;
+}
+
+function localizeNotificationText(
+  item: NotificationItem,
+  t: (key: string, values?: Record<string, string | number | boolean | null | undefined>) => string,
+): { title: string; message: string } {
+  const titleValues = { ruleName: item.rule_name };
+
+  if (item.rule_type === 'alert-spike') {
+    const count = getMetadataNumber(item, 'current_count');
+    const minutes = getMetadataNumber(item, 'window_minutes');
+    const percent = getMetadataNumber(item, 'increase_percent');
+    const previousCount = getMetadataNumber(item, 'previous_count');
+    if (count !== null && minutes !== null && percent !== null && previousCount !== null) {
+      return {
+        title: t('server.notifications.alertSpike.title', titleValues),
+        message: t('server.notifications.alertSpike.message', { count, minutes, percent, previousCount }),
+      };
+    }
+  }
+
+  if (item.rule_type === 'alert-threshold') {
+    const count = getMetadataNumber(item, 'matched_alerts');
+    const minutes = getMetadataNumber(item, 'window_minutes');
+    const threshold = getMetadataNumber(item, 'threshold');
+    if (count !== null && minutes !== null && threshold !== null) {
+      return {
+        title: t('server.notifications.alertThreshold.title', titleValues),
+        message: t('server.notifications.alertThreshold.message', { count, minutes, threshold }),
+      };
+    }
+  }
+
+  if (item.rule_type === 'new-cve') {
+    const cveId = getMetadataString(item, 'cve_id');
+    const ageDays = getMetadataNumber(item, 'age_days');
+    const count = getMetadataNumber(item, 'matched_alerts');
+    if (cveId && ageDays !== null && count !== null) {
+      return {
+        title: t('server.notifications.newCve.title', titleValues),
+        message: t('server.notifications.newCve.message', { cveId, ageDays, count }),
+      };
+    }
+  }
+
+  if (item.rule_type === 'ip-ban') {
+    const value = getMetadataString(item, 'value');
+    if (value) {
+      const scenario = getMetadataString(item, 'scenario');
+      const stopAt = getMetadataString(item, 'stop_at');
+      return {
+        title: t('server.notifications.ipBan.title', titleValues),
+        message: t('server.notifications.ipBan.message', {
+          value,
+          scenarioDetail: scenario ? t('server.notifications.ipBan.scenarioDetail', { scenario }) : '',
+          stopAtDetail: stopAt ? t('server.notifications.ipBan.stopAtDetail', { stopAt }) : '',
+        }),
+      };
+    }
+  }
+
+  if (item.rule_type === 'application-update') {
+    const targetVersion = getMetadataString(item, 'remote_version');
+    if (targetVersion) {
+      const localVersion = getMetadataString(item, 'local_version');
+      const tag = getMetadataString(item, 'tag');
+      return {
+        title: t('server.notifications.applicationUpdate.title', titleValues),
+        message: t('server.notifications.applicationUpdate.message', {
+          currentVersion: localVersion || t('server.notifications.currentVersion'),
+          targetVersion: tag === 'dev' ? `dev-${targetVersion}` : targetVersion,
+        }),
+      };
+    }
+  }
+
+  if (item.rule_type === 'lapi-availability') {
+    const seconds = getMetadataNumber(item, 'outage_duration_seconds');
+    if (seconds !== null) {
+      const recovered = Boolean(getMetadataString(item, 'recovered_at'));
+      return {
+        title: t(recovered ? 'server.notifications.lapiRecovered.title' : 'server.notifications.lapiUnavailable.title', titleValues),
+        message: t(recovered ? 'server.notifications.lapiRecovered.message' : 'server.notifications.lapiUnavailable.message', { seconds }),
+      };
+    }
+  }
+
+  return { title: item.title, message: item.message };
 }
 
 function splitIpRangeFilterValues(value: string): string[] {
@@ -1025,6 +1164,7 @@ function NotificationRow({
   rowRef?: (node: HTMLDivElement | null) => void;
 }) {
   const { t } = useI18n();
+  const localizedText = localizeNotificationText(item, t);
 
   return (
     <div
@@ -1045,16 +1185,16 @@ function NotificationRow({
         <div className="flex min-w-0 flex-1 flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div className="min-w-0 space-y-2">
             <div className="flex flex-wrap items-center gap-2">
-              <h3 className="font-semibold">{item.title}</h3>
-              <Badge variant={item.severity === 'critical' ? 'danger' : item.severity === 'warning' ? 'warning' : 'info'}>{item.severity}</Badge>
+              <h3 className="font-semibold">{localizedText.title}</h3>
+              <Badge variant={item.severity === 'critical' ? 'danger' : item.severity === 'warning' ? 'warning' : 'info'}>{translateSeverity(item.severity, t)}</Badge>
               {!item.read_at && <Badge variant="secondary">{t('pages.notifications.unread')}</Badge>}
             </div>
-            <p className="text-sm text-gray-700 dark:text-gray-300">{item.message}</p>
+            <p className="text-sm text-gray-700 dark:text-gray-300">{localizedText.message}</p>
             <p className="text-xs text-gray-500 dark:text-gray-400">{t('pages.notifications.ruleWithTime', { rule: item.rule_name, time: new Date(item.created_at).toLocaleString() })}</p>
             <div className="flex flex-wrap gap-2">
               {item.deliveries.map((delivery, index) => (
-                <Badge key={`${delivery.channel_id}-${index}`} variant={delivery.status === 'delivered' ? 'success' : 'danger'}>
-                  {delivery.channel_name}: {delivery.status}
+                <Badge key={`${delivery.channel_id}-${index}`} variant={delivery.status === 'delivered' ? 'success' : delivery.status === 'failed' ? 'danger' : 'warning'}>
+                  {delivery.channel_name}: {translateDeliveryStatus(delivery.status, t)}
                 </Badge>
               ))}
             </div>
@@ -1140,8 +1280,8 @@ function RuleRow({
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="font-semibold">{rule.name}</h3>
             <Badge variant={rule.enabled ? 'success' : 'secondary'}>{rule.enabled ? t('common.enabled') : t('common.disabled')}</Badge>
-            <Badge variant="outline">{rule.type}</Badge>
-            <Badge variant={rule.severity === 'critical' ? 'danger' : rule.severity === 'warning' ? 'warning' : 'info'}>{rule.severity}</Badge>
+            <Badge variant="outline">{translateRuleType(rule.type, t)}</Badge>
+            <Badge variant={rule.severity === 'critical' ? 'danger' : rule.severity === 'warning' ? 'warning' : 'info'}>{translateSeverity(rule.severity, t)}</Badge>
             {!hasDestinations && <Badge variant="warning">{t('pages.notifications.noDestinationsBadge')}</Badge>}
           </div>
           <p className="text-xs text-gray-500 dark:text-gray-400">

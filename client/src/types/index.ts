@@ -25,6 +25,7 @@ export type {
   NotificationChannelType,
   DeleteResourceKind,
   NotificationDeliveryResult,
+  NotificationDeliveryStatus,
   NotificationFilter,
   NotificationItem,
   NotificationListResponse,

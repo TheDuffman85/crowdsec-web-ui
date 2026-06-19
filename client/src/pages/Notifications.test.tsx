@@ -1,7 +1,11 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { NotificationChannel, NotificationItem, NotificationListResponse, NotificationRule, NotificationSettingsResponse } from '../types';
+import { I18nContext, type I18nContextValue } from '../lib/i18n';
+import en from '../locales/en.json';
+import zh from '../locales/zh.json';
 import { Notifications } from './Notifications';
 
 vi.mock('../contexts/useRefresh', () => ({
@@ -129,6 +133,33 @@ function installControlledIntersectionObserver() {
   });
 
   return () => callbacks.forEach((callback) => callback());
+}
+
+function createTestTranslator(messages: Record<string, string>) {
+  const fallbackMessages = en as Record<string, string>;
+  return (key: string, values: Record<string, string | number | boolean | null | undefined> = {}) => {
+    let template = messages[key] ?? fallbackMessages[key] ?? key;
+    for (const [name, value] of Object.entries(values)) {
+      template = template.replaceAll(`{${name}}`, String(value ?? ''));
+    }
+    return template;
+  };
+}
+
+function renderWithChineseLocale(children: ReactNode) {
+  const i18nValue: I18nContextValue = {
+    language: 'zh',
+    preference: 'zh',
+    browserLanguage: 'zh',
+    setLanguagePreference: () => undefined,
+    t: createTestTranslator(zh as Record<string, string>),
+  };
+
+  return render(
+    <I18nContext.Provider value={i18nValue}>
+      {children}
+    </I18nContext.Provider>,
+  );
 }
 
 describe('Notifications page', () => {
@@ -469,6 +500,70 @@ describe('Notifications page', () => {
 
     await waitFor(() => expect(screen.getByText('No rule attached')).toBeInTheDocument());
     expect(screen.getByText('No destinations')).toBeInTheDocument();
+  });
+
+  test('localizes notification badges, rule types, delivery statuses, and stored server messages', async () => {
+    vi.mocked(fetchNotificationSettings).mockResolvedValueOnce(buildSettings({
+      rules: [
+        {
+          id: 'rule-1',
+          name: 'IP Ban',
+          type: 'ip-ban',
+          enabled: true,
+          severity: 'warning',
+          channel_ids: ['channel-1'],
+          config: {
+            window_minutes: 60,
+            filters: {},
+          },
+          created_at: '2026-06-08T01:49:55.034Z',
+          updated_at: '2026-06-08T01:49:55.034Z',
+        },
+      ],
+    }));
+    vi.mocked(fetchNotificationsPaginated).mockResolvedValueOnce(buildNotificationPage({
+      data: [
+        {
+          id: 'notif-1',
+          rule_id: 'rule-1',
+          rule_name: 'IP Ban',
+          rule_type: 'ip-ban',
+          severity: 'warning',
+          title: 'IP Ban: IP banned',
+          message: '1.2.3.4 was banned by manual/web-ui until 2026-06-08T01:49:55.034Z.',
+          created_at: '2026-06-08T01:49:55.034Z',
+          read_at: null,
+          metadata: {
+            value: '1.2.3.4',
+            scenario: 'manual/web-ui',
+            stop_at: '2026-06-08T01:49:55.034Z',
+          },
+          deliveries: [
+            {
+              channel_id: 'channel-1',
+              channel_name: 'bbb',
+              channel_type: 'mqtt',
+              status: 'failed',
+              attempted_at: '2026-06-08T01:49:56.034Z',
+            },
+          ],
+        },
+      ],
+      selectable_ids: ['notif-1'],
+      unread_count: 1,
+      total: 1,
+    }));
+
+    renderWithChineseLocale(<Notifications />);
+
+    expect(await screen.findByText('IP Ban：IP 已封禁')).toBeInTheDocument();
+    expect(screen.getByText('1.2.3.4 已被封禁，由 manual/web-ui 触发，直到 2026-06-08T01:49:55.034Z。')).toBeInTheDocument();
+    expect(screen.getAllByText('警告')).toHaveLength(2);
+    expect(screen.getByText('IP 封禁')).toBeInTheDocument();
+    expect(screen.getByText('bbb: 失败')).toBeInTheDocument();
+    expect(screen.queryByText('warning')).not.toBeInTheDocument();
+    expect(screen.queryByText('ip-ban')).not.toBeInTheDocument();
+    expect(screen.queryByText('bbb: failed')).not.toBeInTheDocument();
   });
 
   test('shows a success toast when sending a test notification', async () => {
