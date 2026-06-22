@@ -27,6 +27,7 @@ import type {
     SimulationFilter,
 } from '../types';
 import { useI18n } from "../lib/i18n";
+import { useDateTime } from "../lib/dateTime";
 
 type Granularity = 'day' | 'hour';
 type ScaleMode = 'linear' | 'symlog';
@@ -116,24 +117,17 @@ function parseStoredFilters(value: string | null): DashboardFilters {
     }
 }
 
-function formatDashboardBucketLabel(bucketKey: string): string {
-    const [datePart, hourPart] = bucketKey.split('T');
-    const [year, month, day] = datePart.split('-').map(Number);
-    const date = new Date(year, month - 1, day, hourPart === undefined ? 0 : Number(hourPart));
-    const dateStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-
-    if (hourPart !== undefined) {
-        return `${dateStr}, ${String(date.getHours()).padStart(2, '0')}:00`;
-    }
-
-    return dateStr;
-}
-
-function toActivitySeries(buckets: DashboardStatsBucket[]) {
+function toActivitySeries(
+    buckets: DashboardStatsBucket[],
+    formatDate: (value: Date | string | number, options?: Intl.DateTimeFormatOptions) => string,
+    formatTime: (value: Date | string | number, options?: Intl.DateTimeFormatOptions) => string,
+) {
     return buckets.map((bucket) => ({
         date: bucket.date,
         count: bucket.count,
-        label: formatDashboardBucketLabel(bucket.date),
+        label: bucket.date.includes('T')
+            ? `${formatDate(bucket.fullDate, { month: 'short', day: 'numeric' })}, ${formatTime(bucket.fullDate, { hour: '2-digit', minute: '2-digit' })}`
+            : formatDate(bucket.fullDate, { month: 'short', day: 'numeric' }),
         fullDate: bucket.fullDate,
     }));
 }
@@ -146,36 +140,6 @@ function quoteSearchValue(value: string): string {
     return `"${value.replace(/"/g, '')}"`;
 }
 
-function toSearchDateValue(bucketKey: string): string {
-    if (/^\d{4}-\d{2}-\d{2}T\d{2}$/.test(bucketKey)) {
-        return `${bucketKey}:00:00`;
-    }
-
-    return bucketKey;
-}
-
-function padDatePart(value: number): string {
-    return String(value).padStart(2, '0');
-}
-
-function addDashboardBucketToSearchEnd(bucketKey: string): string | null {
-    const hourMatch = /^(\d{4})-(\d{2})-(\d{2})T(\d{2})$/.exec(bucketKey);
-    if (hourMatch) {
-        const [, year, month, day, hour] = hourMatch;
-        const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour) + 1));
-        return `${date.getUTCFullYear()}-${padDatePart(date.getUTCMonth() + 1)}-${padDatePart(date.getUTCDate())}T${padDatePart(date.getUTCHours())}:00:00`;
-    }
-
-    const dayMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(bucketKey);
-    if (dayMatch) {
-        const [, year, month, day] = dayMatch;
-        const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day) + 1));
-        return `${date.getUTCFullYear()}-${padDatePart(date.getUTCMonth() + 1)}-${padDatePart(date.getUTCDate())}`;
-    }
-
-    return null;
-}
-
 function buildDashboardDrilldownQuery(filters: DashboardFilters, simulationsEnabled: boolean): string {
     const clauses: string[] = [];
 
@@ -184,11 +148,6 @@ function buildDashboardDrilldownQuery(filters: DashboardFilters, simulationsEnab
     if (filters.as) clauses.push(`as:${quoteSearchValue(filters.as)}`);
     if (filters.ip) clauses.push(`ip:${quoteSearchValue(filters.ip)}`);
     if (filters.target) clauses.push(`target:${quoteSearchValue(filters.target)}`);
-    if (filters.dateRange) {
-        const exclusiveEnd = addDashboardBucketToSearchEnd(filters.dateRange.end);
-        clauses.push(`date>=${toSearchDateValue(filters.dateRange.start)}`);
-        clauses.push(exclusiveEnd ? `date<${exclusiveEnd}` : `date<=${toSearchDateValue(filters.dateRange.end)}`);
-    }
     if (simulationsEnabled && filters.simulation !== 'all') {
         clauses.push(`sim:${filters.simulation}`);
     }
@@ -196,12 +155,17 @@ function buildDashboardDrilldownQuery(filters: DashboardFilters, simulationsEnab
     return clauses.join(' AND ');
 }
 
-function buildDashboardDrilldownHref(pathname: '/alerts' | '/decisions', query: string): string {
-    if (!query) {
+function buildDashboardDrilldownHref(pathname: '/alerts' | '/decisions', query: string, dateRange: DashboardFilters['dateRange']): string {
+    if (!query && !dateRange) {
         return pathname;
     }
 
-    const params = new URLSearchParams({ q: query });
+    const params = new URLSearchParams();
+    if (query) params.set('q', query);
+    if (dateRange) {
+        params.set('dateStart', dateRange.start);
+        params.set('dateEnd', dateRange.end);
+    }
     return `${pathname}?${params.toString()}`;
 }
 
@@ -247,6 +211,7 @@ function scopeStaleStatItemsToSelected<TItem extends DashboardStatListItem>(
 
 export function Dashboard() {
     const { language, t } = useI18n();
+    const { formatDate, formatTime } = useDateTime();
     const navigate = useNavigate();
     const { refreshSignal, setLastUpdated } = useRefresh();
     const [initialLoading, setInitialLoading] = useState(true);
@@ -443,16 +408,16 @@ export function Dashboard() {
                 filters.as,
                 (asName) => ({ label: asName, count: 0 }),
             ),
-            alertsHistory: toActivitySeries(dashboardData.series.alertsHistory),
-            simulatedAlertsHistory: toActivitySeries(dashboardData.series.simulatedAlertsHistory),
-            decisionsHistory: toActivitySeries(dashboardData.series.decisionsHistory),
-            simulatedDecisionsHistory: toActivitySeries(dashboardData.series.simulatedDecisionsHistory),
-            unfilteredAlertsHistory: toActivitySeries(dashboardData.series.unfilteredAlertsHistory),
-            unfilteredSimulatedAlertsHistory: toActivitySeries(dashboardData.series.unfilteredSimulatedAlertsHistory),
-            unfilteredDecisionsHistory: toActivitySeries(dashboardData.series.unfilteredDecisionsHistory),
-            unfilteredSimulatedDecisionsHistory: toActivitySeries(dashboardData.series.unfilteredSimulatedDecisionsHistory),
+            alertsHistory: toActivitySeries(dashboardData.series.alertsHistory, formatDate, formatTime),
+            simulatedAlertsHistory: toActivitySeries(dashboardData.series.simulatedAlertsHistory, formatDate, formatTime),
+            decisionsHistory: toActivitySeries(dashboardData.series.decisionsHistory, formatDate, formatTime),
+            simulatedDecisionsHistory: toActivitySeries(dashboardData.series.simulatedDecisionsHistory, formatDate, formatTime),
+            unfilteredAlertsHistory: toActivitySeries(dashboardData.series.unfilteredAlertsHistory, formatDate, formatTime),
+            unfilteredSimulatedAlertsHistory: toActivitySeries(dashboardData.series.unfilteredSimulatedAlertsHistory, formatDate, formatTime),
+            unfilteredDecisionsHistory: toActivitySeries(dashboardData.series.unfilteredDecisionsHistory, formatDate, formatTime),
+            unfilteredSimulatedDecisionsHistory: toActivitySeries(dashboardData.series.unfilteredSimulatedDecisionsHistory, formatDate, formatTime),
         };
-    }, [dashboardData, filters.as, filters.country, filters.scenario, filters.target, isDashboardStatsStaleForFilters]);
+    }, [dashboardData, filters.as, filters.country, filters.scenario, filters.target, formatDate, formatTime, isDashboardStatsStaleForFilters]);
     
 
     // Handle Filters
@@ -481,8 +446,8 @@ export function Dashboard() {
 
     const simulationsEnabled = config?.simulations_enabled === true;
     const drilldownQuery = buildDashboardDrilldownQuery(filters, simulationsEnabled);
-    const alertsLink = buildDashboardDrilldownHref('/alerts', drilldownQuery);
-    const decisionsLink = buildDashboardDrilldownHref('/decisions', drilldownQuery);
+    const alertsLink = buildDashboardDrilldownHref('/alerts', drilldownQuery, filters.dateRange);
+    const decisionsLink = buildDashboardDrilldownHref('/decisions', drilldownQuery, filters.dateRange);
     const filteredTotals = dashboardData.filteredTotals;
     const filteredSimulationAlertsCount = filteredTotals.simulatedAlerts;
     const filteredSimulationDecisionsCount = filteredTotals.simulatedDecisions;

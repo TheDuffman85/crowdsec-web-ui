@@ -20,6 +20,7 @@ import { compileAlertSearch, getSearchHelpDefinition, type SearchParseError } fr
 import { Info, ExternalLink, Shield, ShieldBan, Trash2, X, AlertCircle, Columns3 } from "lucide-react";
 import type { AlertRecord, AlertSource, ApiPermissionError, BulkDeleteResult, DecisionListItem, SimulationFilter, SlimAlert, TableColumnId, TableColumnPreferences, TableColumnViewportPreferences } from '../types';
 import { useI18n, type I18nContextValue } from "../lib/i18n";
+import { useDateTime } from "../lib/dateTime";
 
 type AlertListItem = SlimAlert;
 type AlertSelection = AlertListItem | AlertRecord;
@@ -126,6 +127,7 @@ function summarizeDeleteResult(result: BulkDeleteResult, t: I18nContextValue['t'
 
 export function Alerts() {
     const { t } = useI18n();
+    const { formatDateTime } = useDateTime();
     const { refreshSignal, setLastUpdated } = useRefresh();
     const [searchParams, setSearchParams] = useSearchParams();
     const initialQueryParam = searchParams.get("q") ?? "";
@@ -165,6 +167,8 @@ export function Alerts() {
     const alertIdParam = searchParams.get("id");
     const queryParam = searchParams.get("q");
     const appliedQuery = queryParam?.trim() ?? "";
+    const dateStartParam = searchParams.get("dateStart") ?? "";
+    const dateEndParam = searchParams.get("dateEnd") ?? "";
 
     // Ref to track selected alert ID for auto-refresh (avoids stale closure issues)
     const selectedAlertIdRef = useRef<string | number | null>(null);
@@ -234,11 +238,13 @@ export function Alerts() {
             tz_offset: String(new Date().getTimezoneOffset()),
         };
         if (appliedQuery) filters.q = appliedQuery;
+        if (dateStartParam) filters.dateStart = dateStartParam;
+        if (dateEndParam) filters.dateEnd = dateEndParam;
         if (simulationFilter !== 'all') {
             filters.simulation = simulationFilter;
         }
         return filters;
-    }, [appliedQuery, currentSimulationFilter]);
+    }, [appliedQuery, currentSimulationFilter, dateEndParam, dateStartParam]);
 
     const loadConfig = useCallback(async (refresh = false) => {
         if (!refresh && configRef.current) {
@@ -1198,7 +1204,7 @@ export function Alerts() {
                 {selectedAlert && (
                     <div className="space-y-6">
                         <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2 mb-4">
-                            {t('pages.alerts.capturedAt', { time: new Date(selectedAlert.created_at).toLocaleString() })}
+                            {t('pages.alerts.capturedAt', { time: formatDateTime(selectedAlert.created_at) })}
                         </p>
 
                         {/* Summary Cards */}

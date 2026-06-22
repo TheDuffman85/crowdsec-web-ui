@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { createRuntimeConfig, getIntervalName, parseBooleanEnv, parseCsvEnv, parseLookbackToMs, parseRefreshInterval } from './config';
+import { createRuntimeConfig, getIntervalName, parseBooleanEnv, parseCsvEnv, parseLookbackToMs, parseRefreshInterval, parseTimeFormat, parseTimeZone } from './config';
 
 const tempDirs: string[] = [];
 
@@ -61,6 +61,22 @@ describe('config helpers', () => {
     expect(getIntervalName(12_345)).toBe('12345ms');
   });
 
+  test('date and time configuration validates and normalizes supported values', () => {
+    expect(parseTimeZone(undefined)).toBeNull();
+    expect(parseTimeZone(' Europe/Berlin ')).toBe('Europe/Berlin');
+    expect(parseTimeZone('UTC')).toBe('UTC');
+    expect(() => parseTimeZone('Not/A_Timezone')).toThrow(/Invalid TZ value/);
+    expect(parseTimeFormat(undefined)).toBe('browser');
+    expect(parseTimeFormat('24H')).toBe('24h');
+    expect(() => parseTimeFormat('auto')).toThrow(/CROWDSEC_TIME_FORMAT/);
+  });
+
+  test('uses the browser clock format when only TZ is configured', () => {
+    const config = createRuntimeConfig({ TZ: 'Europe/Berlin' });
+    expect(config.timeZone).toBe('Europe/Berlin');
+    expect(config.timeFormat).toBe('browser');
+  });
+
   test('createRuntimeConfig reads relevant environment values', () => {
     const config = createRuntimeConfig({
       PORT: '4000',
@@ -93,6 +109,8 @@ describe('config helpers', () => {
       NOTIFICATION_SECRET_KEY: 'notif-secret',
       NOTIFICATION_ALLOW_PRIVATE_ADDRESSES: 'true',
       NOTIFICATION_DEBUG_PAYLOADS: 'true',
+      TZ: 'Europe/Berlin',
+      CROWDSEC_TIME_FORMAT: '24h',
     });
 
     expect(config.port).toBe(4000);
@@ -121,6 +139,8 @@ describe('config helpers', () => {
     expect(config.notificationSecretKey).toBe('notif-secret');
     expect(config.notificationAllowPrivateAddresses).toBe(true);
     expect(config.notificationDebugPayloads).toBe(true);
+    expect(config.timeZone).toBe('Europe/Berlin');
+    expect(config.timeFormat).toBe('24h');
   });
 
   test('createRuntimeConfig disables simulations by default', () => {
@@ -139,6 +159,8 @@ describe('config helpers', () => {
     expect(config.notificationSecretKey).toBeUndefined();
     expect(config.notificationAllowPrivateAddresses).toBe(true);
     expect(config.notificationDebugPayloads).toBe(false);
+    expect(config.timeZone).toBeNull();
+    expect(config.timeFormat).toBe('browser');
     expect(config.lapiRequestTimeoutMs).toBe(30_000);
     expect(config.heartbeatIntervalMs).toBe(30_000);
     expect(config.alertSyncChunkMs).toBe(21_600_000);

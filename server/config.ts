@@ -2,6 +2,7 @@ import { createCrowdsecAuthConfig, type CrowdsecAuthConfig } from './auth';
 import { resolveSecretEnv } from './env-secrets';
 
 export type AlertFilterMode = 'default' | 'new' | 'legacy';
+export type TimeFormat = 'browser' | '12h' | '24h';
 
 export interface RuntimeConfig {
   port: number;
@@ -42,6 +43,26 @@ export interface RuntimeConfig {
   notificationSecretKey?: string;
   notificationAllowPrivateAddresses: boolean;
   notificationDebugPayloads: boolean;
+  timeZone: string | null;
+  timeFormat: TimeFormat;
+}
+
+export function parseTimeZone(value: string | undefined): string | null {
+  const timeZone = value?.trim();
+  if (!timeZone) return null;
+
+  try {
+    return new Intl.DateTimeFormat('en', { timeZone }).resolvedOptions().timeZone;
+  } catch {
+    throw new Error(`Invalid TZ value "${timeZone}". Use an IANA time zone such as Europe/Berlin or UTC.`);
+  }
+}
+
+export function parseTimeFormat(value: string | undefined): TimeFormat {
+  const timeFormat = value?.trim().toLowerCase();
+  if (!timeFormat) return 'browser';
+  if (timeFormat === '12h' || timeFormat === '24h') return timeFormat;
+  throw new Error('Invalid CROWDSEC_TIME_FORMAT value. Must be one of: 12h, 24h.');
 }
 
 export function parseRefreshInterval(intervalStr: string | undefined | null): number {
@@ -256,5 +277,7 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
     notificationSecretKey,
     notificationAllowPrivateAddresses: parseBooleanEnv(env.NOTIFICATION_ALLOW_PRIVATE_ADDRESSES, true),
     notificationDebugPayloads: parseBooleanEnv(env.NOTIFICATION_DEBUG_PAYLOADS, false),
+    timeZone: parseTimeZone(env.TZ),
+    timeFormat: parseTimeFormat(env.CROWDSEC_TIME_FORMAT),
   };
 }

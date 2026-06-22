@@ -41,6 +41,7 @@ import { resolveMachineName } from '../shared/machine';
 import { collectDistinctOrigins, normalizeOrigin } from '../shared/origin';
 import { compileAlertSearch, compileDecisionSearch, type SearchParseError } from '../shared/search';
 import { createRuntimeConfig, getIntervalName, parseRefreshInterval, type RuntimeConfig } from './config';
+import { getDateTimeKey, getTimeZoneOffsetMs, getZonedHourlyBucketKeys } from './utils/date-time';
 import { CrowdsecDatabase, type AlertInsertParams, type DecisionInsertParams } from './database';
 import { LapiClient } from './lapi';
 import { createNotificationService } from './notifications';
@@ -169,6 +170,7 @@ interface AlertListFilters {
   target: string;
   simulation: string;
   timezoneOffsetMinutes: number;
+  timeZone: string | null;
 }
 
 interface DecisionListFilters {
@@ -184,6 +186,7 @@ interface DecisionListFilters {
   simulation: string;
   showDuplicates: boolean;
   timezoneOffsetMinutes: number;
+  timeZone: string | null;
 }
 
 interface DashboardStatsFilters {
@@ -197,6 +200,7 @@ interface DashboardStatsFilters {
   simulation: DashboardSimulationFilter;
   granularity: DashboardGranularity;
   timezoneOffsetMinutes: number;
+  timeZone: string | null;
 }
 
 interface DashboardStatsCache {
@@ -328,6 +332,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     outboundGuard: notificationOutboundGuard,
     secretStore: notificationSecretStore,
     debugPayloads: config.notificationDebugPayloads,
+    timeZone: config.timeZone,
+    timeFormat: config.timeFormat,
   });
 
   const app = new Hono();
@@ -394,6 +400,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   Bootstrap Retry: ${config.bootstrapRetryEnabled ? getIntervalName(config.bootstrapRetryDelayMs) : 'Disabled'}
   Notification Secret Storage: Encrypted (${config.notificationSecretKey ? 'configured key' : 'auto-generated key'})
   Notification Private Destinations: ${config.notificationAllowPrivateAddresses ? 'Allowed' : 'Blocked'}
+  Time Zone: ${config.timeZone || 'Browser local'}
+  Time Format: ${config.timeFormat}
 `);
 
   if (!lapiClient.hasAuthConfig()) {
@@ -438,7 +446,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
       const pageRequest = getPageRequest(context);
       if (pageRequest) {
-        const filters = getAlertListFilters(context);
+        const filters = getAlertListFilters(context, config.timeZone);
         const compiledSearch = compileAlertSearch(filters.q, {
           machineEnabled: true,
           originEnabled: true,
@@ -570,7 +578,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
       const pageRequest = getPageRequest(context);
       if (pageRequest) {
-        const filters = getDecisionListFilters(context);
+        const filters = getDecisionListFilters(context, config.timeZone);
         const compiledSearch = compileDecisionSearch(filters.q, {
           machineEnabled: true,
           originEnabled: true,
@@ -613,6 +621,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       machine_features_enabled: true,
       origin_features_enabled: true,
       table_column_preferences: loadTableColumnPreferences(database),
+      time_zone: config.timeZone,
+      time_format: config.timeFormat,
     };
 
     return context.json(payload);
@@ -966,7 +976,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         await ensureBootstrapReady('dashboard stats request');
       }
 
-      return context.json(buildDashboardStats(getDashboardStatsFilters(context)));
+      return context.json(buildDashboardStats(getDashboardStatsFilters(context, config.timeZone)));
     } catch (error: any) {
       console.error('Error serving dashboard statistics from database:', error.message);
       return context.json({ error: 'Failed to retrieve dashboard statistics' }, 500);
@@ -3233,7 +3243,7 @@ function toPaginatedResponse<T>(
   };
 }
 
-function getAlertListFilters(context: HonoContext): AlertListFilters {
+function getAlertListFilters(context: HonoContext, timeZone: string | null): AlertListFilters {
   return {
     q: context.req.query('q') || '',
     ip: lowerQuery(context, 'ip'),
@@ -3246,10 +3256,11 @@ function getAlertListFilters(context: HonoContext): AlertListFilters {
     target: lowerQuery(context, 'target'),
     simulation: context.req.query('simulation') || 'all',
     timezoneOffsetMinutes: parseTimezoneOffset(context),
+    timeZone,
   };
 }
 
-function getDecisionListFilters(context: HonoContext): DecisionListFilters {
+function getDecisionListFilters(context: HonoContext, timeZone: string | null): DecisionListFilters {
   const alertId = context.req.query('alert_id') || '';
   return {
     q: context.req.query('q') || '',
@@ -3264,10 +3275,11 @@ function getDecisionListFilters(context: HonoContext): DecisionListFilters {
     simulation: context.req.query('simulation') || 'all',
     showDuplicates: context.req.query('hide_duplicates') === 'false' || Boolean(alertId),
     timezoneOffsetMinutes: parseTimezoneOffset(context),
+    timeZone,
   };
 }
 
-function getDashboardStatsFilters(context: HonoContext): DashboardStatsFilters {
+function getDashboardStatsFilters(context: HonoContext, timeZone: string | null): DashboardStatsFilters {
   return {
     country: context.req.query('country') || '',
     scenario: context.req.query('scenario') || '',
@@ -3279,6 +3291,7 @@ function getDashboardStatsFilters(context: HonoContext): DashboardStatsFilters {
     simulation: parseDashboardSimulationFilter(context.req.query('simulation')),
     granularity: context.req.query('granularity') === 'hour' ? 'hour' : 'day',
     timezoneOffsetMinutes: parseTimezoneOffset(context),
+    timeZone,
   };
 }
 
@@ -3363,10 +3376,11 @@ function matchesDashboardDateRange(isoString: string, filters: DashboardStatsFil
     return true;
   }
 
-  const itemKey = getDateFilterKey(
+  const itemKey = getDateTimeKey(
     isoString,
     filters.granularity === 'hour' || filters.dateStart.includes('T') || filters.dateEnd.includes('T'),
     filters.timezoneOffsetMinutes,
+    filters.timeZone,
   );
 
   if (filters.dateStart && itemKey < filters.dateStart) return false;
@@ -3462,7 +3476,7 @@ function dashboardBuckets(
   return bucketKeys.map((date) => ({
     date,
     count: counts.get(date) || 0,
-    fullDate: getDashboardBucketFullDate(date, filters.timezoneOffsetMinutes),
+    fullDate: getDashboardBucketFullDate(date, filters.timezoneOffsetMinutes, filters.timeZone),
   }));
 }
 
@@ -3474,30 +3488,41 @@ function getDashboardBucketKeys(
   const keys: string[] = [];
   const useExplicitRange = !ignoreDateRange && Boolean(filters.dateStart && filters.dateEnd);
 
+  if (filters.timeZone && filters.granularity === 'hour') {
+    const endKey = useExplicitRange
+      ? filters.dateEnd
+      : getDateTimeKey(new Date().toISOString(), true, filters.timezoneOffsetMinutes, filters.timeZone);
+    let startKey = useExplicitRange ? filters.dateStart : endKey;
+    if (!useExplicitRange) {
+      const startWallDate = parseDashboardWallKey(endKey);
+      startWallDate.setUTCDate(startWallDate.getUTCDate() - (lookbackDays - 1));
+      startWallDate.setUTCHours(0, 0, 0, 0);
+      startKey = formatDashboardClientBucketKey(startWallDate, 'hour');
+    }
+    return getZonedHourlyBucketKeys(startKey, endKey, filters.timeZone);
+  }
+
   if (useExplicitRange) {
-    let cursor = parseDashboardBucketKey(filters.dateStart, filters.timezoneOffsetMinutes);
-    const end = parseDashboardBucketKey(filters.dateEnd, filters.timezoneOffsetMinutes);
+    let cursor = parseDashboardWallKey(filters.dateStart);
+    const end = parseDashboardWallKey(filters.dateEnd);
     while (cursor <= end) {
-      keys.push(formatDashboardBucketKey(cursor, filters));
+      keys.push(formatDashboardClientBucketKey(cursor, filters.granularity));
       cursor = addDashboardBucketInterval(cursor, filters.granularity);
     }
     return keys;
   }
 
-  const clientNow = new Date(Date.now() - filters.timezoneOffsetMinutes * 60_000);
-  const end = new Date(Date.UTC(
-    clientNow.getUTCFullYear(),
-    clientNow.getUTCMonth(),
-    clientNow.getUTCDate(),
-    filters.granularity === 'hour' ? clientNow.getUTCHours() : 0,
-    0,
-    0,
-    0,
-  ));
+  const nowKey = getDateTimeKey(
+    new Date().toISOString(),
+    filters.granularity === 'hour',
+    filters.timezoneOffsetMinutes,
+    filters.timeZone,
+  );
+  const end = parseDashboardWallKey(nowKey);
   let cursor = new Date(Date.UTC(
-    clientNow.getUTCFullYear(),
-    clientNow.getUTCMonth(),
-    clientNow.getUTCDate() - (lookbackDays - 1),
+    end.getUTCFullYear(),
+    end.getUTCMonth(),
+    end.getUTCDate() - (lookbackDays - 1),
     0,
     0,
     0,
@@ -3513,14 +3538,28 @@ function getDashboardBucketKeys(
 }
 
 function getDashboardBucketKey(isoString: string, filters: DashboardStatsFilters): string {
-  return getDateFilterKey(isoString, filters.granularity === 'hour', filters.timezoneOffsetMinutes);
+  return getDateTimeKey(isoString, filters.granularity === 'hour', filters.timezoneOffsetMinutes, filters.timeZone);
 }
 
-function parseDashboardBucketKey(key: string, timezoneOffsetMinutes: number): Date {
+function parseDashboardWallKey(key: string): Date {
   const [datePart, timePart] = key.split('T');
   const [year, month, day] = datePart.split('-').map(Number);
   const hour = timePart === undefined ? 0 : Number(timePart);
-  return new Date(Date.UTC(year, month - 1, day, hour, 0, 0, 0) + timezoneOffsetMinutes * 60_000);
+  return new Date(Date.UTC(year, month - 1, day, hour, 0, 0, 0));
+}
+
+function parseDashboardBucketKey(key: string, timezoneOffsetMinutes: number, timeZone: string | null): Date {
+  const wallDate = parseDashboardWallKey(key);
+  if (!timeZone) {
+    return new Date(wallDate.getTime() + timezoneOffsetMinutes * 60_000);
+  }
+
+  const wallTime = wallDate.getTime();
+  let instant = new Date(wallTime);
+  for (let iteration = 0; iteration < 3; iteration += 1) {
+    instant = new Date(wallTime - getTimeZoneOffsetMs(instant, timeZone));
+  }
+  return instant;
 }
 
 function formatDashboardClientBucketKey(date: Date, granularity: DashboardGranularity): string {
@@ -3533,10 +3572,6 @@ function formatDashboardClientBucketKey(date: Date, granularity: DashboardGranul
   return `${year}-${month}-${day}`;
 }
 
-function formatDashboardBucketKey(date: Date, filters: DashboardStatsFilters): string {
-  return getDateFilterKey(date.toISOString(), filters.granularity === 'hour', filters.timezoneOffsetMinutes);
-}
-
 function addDashboardBucketInterval(date: Date, granularity: DashboardGranularity): Date {
   const next = new Date(date);
   if (granularity === 'hour') {
@@ -3547,8 +3582,8 @@ function addDashboardBucketInterval(date: Date, granularity: DashboardGranularit
   return next;
 }
 
-function getDashboardBucketFullDate(key: string, timezoneOffsetMinutes: number): string {
-  return parseDashboardBucketKey(key, timezoneOffsetMinutes).toISOString();
+function getDashboardBucketFullDate(key: string, timezoneOffsetMinutes: number, timeZone: string | null): string {
+  return parseDashboardBucketKey(key, timezoneOffsetMinutes, timeZone).toISOString();
 }
 function lowerQuery(context: HonoContext, key: string): string {
   return (context.req.query(key) || '').toLowerCase();
@@ -3583,10 +3618,11 @@ function matchesAlertListFilters(alert: SlimAlert, filters: AlertListFilters): b
   if (filters.date && !(alert.created_at && alert.created_at.startsWith(filters.date))) return false;
 
   if (filters.dateStart || filters.dateEnd) {
-    const itemKey = getDateFilterKey(
+    const itemKey = getDateTimeKey(
       alert.created_at,
       filters.dateStart.includes('T') || filters.dateEnd.includes('T'),
       filters.timezoneOffsetMinutes,
+      filters.timeZone,
     );
     if (filters.dateStart && itemKey < filters.dateStart) return false;
     if (filters.dateEnd && itemKey > filters.dateEnd) return false;
@@ -3612,10 +3648,11 @@ function matchesDecisionListFilters(decision: DecisionListItem, filters: Decisio
 
   if (filters.dateStart || filters.dateEnd) {
     if (!decision.created_at) return false;
-    const itemKey = getDateFilterKey(
+    const itemKey = getDateTimeKey(
       decision.created_at,
       filters.dateStart.includes('T') || filters.dateEnd.includes('T'),
       filters.timezoneOffsetMinutes,
+      filters.timeZone,
     );
     if (filters.dateStart && itemKey < filters.dateStart) return false;
     if (filters.dateEnd && itemKey > filters.dateEnd) return false;
@@ -3634,20 +3671,6 @@ function isDecisionListItemExpired(decision: DecisionListItem): boolean {
   return decision.expired === true;
 }
 
-function getDateFilterKey(isoString: string, includeHour: boolean, timezoneOffsetMinutes: number): string {
-  const source = new Date(isoString);
-  const localDate = new Date(source.getTime() - timezoneOffsetMinutes * 60_000);
-  const year = localDate.getUTCFullYear();
-  const month = String(localDate.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(localDate.getUTCDate()).padStart(2, '0');
-
-  if (includeHour) {
-    const hour = String(localDate.getUTCHours()).padStart(2, '0');
-    return `${year}-${month}-${day}T${hour}`;
-  }
-
-  return `${year}-${month}-${day}`;
-}
 
 function getCountryName(code?: string | null): string | null {
   if (!code) return null;

@@ -38,6 +38,7 @@ import {
   type WebhookField,
 } from '../lib/notification-config';
 import { useNotificationUnreadCount } from '../contexts/useNotificationUnreadCount';
+import { useDateTime } from '../lib/dateTime';
 import { useRefresh } from '../contexts/useRefresh';
 import { Badge } from '../components/ui/Badge';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
@@ -1164,6 +1165,7 @@ function NotificationRow({
   rowRef?: (node: HTMLDivElement | null) => void;
 }) {
   const { t } = useI18n();
+  const { formatDateTime } = useDateTime();
   const localizedText = localizeNotificationText(item, t);
 
   return (
@@ -1190,7 +1192,7 @@ function NotificationRow({
               {!item.read_at && <Badge variant="secondary">{t('pages.notifications.unread')}</Badge>}
             </div>
             <p className="text-sm text-gray-700 dark:text-gray-300">{localizedText.message}</p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">{t('pages.notifications.ruleWithTime', { rule: item.rule_name, time: new Date(item.created_at).toLocaleString() })}</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">{t('pages.notifications.ruleWithTime', { rule: item.rule_name, time: formatDateTime(item.created_at) })}</p>
             <div className="flex flex-wrap gap-2">
               {item.deliveries.map((delivery, index) => (
                 <Badge key={`${delivery.channel_id}-${index}`} variant={delivery.status === 'delivered' ? 'success' : delivery.status === 'failed' ? 'danger' : 'warning'}>
@@ -1225,6 +1227,7 @@ function ChannelRow({
   onDelete: () => void;
 }) {
   const { t } = useI18n();
+  const { formatDateTime } = useDateTime();
 
   return (
     <div className="rounded-xl border border-gray-200 p-4 dark:border-gray-700">
@@ -1238,7 +1241,7 @@ function ChannelRow({
             <Badge variant="outline">{channel.type}</Badge>
             {!hasAttachedRule && <Badge variant="warning">{t('pages.notifications.noRuleAttached')}</Badge>}
           </div>
-          <p className="text-xs text-gray-500 dark:text-gray-400">{t('pages.notifications.updatedAt', { time: new Date(channel.updated_at).toLocaleString() })}</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400">{t('pages.notifications.updatedAt', { time: formatDateTime(channel.updated_at) })}</p>
           {channel.configured_secrets.length > 0 && (
             <p className="text-xs text-gray-500 dark:text-gray-400">{t('pages.notifications.savedSecrets', { secrets: channel.configured_secrets.join(', ') })}</p>
           )}

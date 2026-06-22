@@ -4,6 +4,7 @@ import { getHubUrl } from "../lib/utils";
 import { ExternalLink, Shield } from "lucide-react";
 import type { AlertEvent, AlertMetaValue } from '../types';
 import { useI18n } from "../lib/i18n";
+import { useDateTime } from "../lib/dateTime";
 
 interface EventCardProps {
     event: AlertEvent;
@@ -36,6 +37,7 @@ const EXCLUDED_META_KEYS = new Set(['context']);
 
 export function EventCard({ event, index }: EventCardProps) {
     const { t } = useI18n();
+    const { formatDateTime } = useDateTime();
     const getMeta = (key: string): AlertMetaValue | undefined => event.meta?.find((meta) => meta.key === key)?.value;
 
     const isAppSecEvent = event.meta?.some((meta) =>
@@ -85,7 +87,7 @@ export function EventCard({ event, index }: EventCardProps) {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                     <div>
                         <span className="text-gray-500">{t('components.eventCard.timestamp')}:</span>{' '}
-                        <span className="font-mono text-xs">{event.timestamp || '-'}</span>
+                        <span className="font-mono text-xs">{event.timestamp ? formatDateTime(event.timestamp) : '-'}</span>
                     </div>
                     {service && (
                         <div>

@@ -243,6 +243,33 @@ describe('Dashboard page', () => {
     expect((decisionsCard as HTMLElement).getAttribute('href')).not.toContain('scenario=');
   });
 
+  test('keeps dashboard date ranges as timezone-aware drilldown parameters', async () => {
+    localStorage.setItem('dashboard_filters', JSON.stringify({
+      dateRange: { start: '2026-03-29T01', end: '2026-03-29T03' },
+      dateRangeSticky: true,
+      country: null,
+      scenario: null,
+      as: null,
+      ip: null,
+      target: null,
+      simulation: 'all',
+    }));
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Top Countries')).toBeInTheDocument());
+    const alertsCard = screen.getByText('Total Alerts').closest('a');
+    const params = new URLSearchParams((alertsCard as HTMLElement).getAttribute('href')?.split('?')[1] ?? '');
+
+    expect(params.get('dateStart')).toBe('2026-03-29T01');
+    expect(params.get('dateEnd')).toBe('2026-03-29T03');
+    expect(params.get('q')).toBeNull();
+  });
+
   test('shows restored stale scenario filter as a selected zero-count row', async () => {
     localStorage.setItem('dashboard_filters', JSON.stringify({
       dateRange: null,

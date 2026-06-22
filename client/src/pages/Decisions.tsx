@@ -132,6 +132,8 @@ export function Decisions() {
     const alertIdFilter = searchParams.get("alert_id");
     const queryParam = searchParams.get("q");
     const appliedQuery = queryParam?.trim() ?? "";
+    const dateStartParam = searchParams.get("dateStart") ?? "";
+    const dateEndParam = searchParams.get("dateEnd") ?? "";
     const includeExpiredParam = searchParams.get("include_expired") === "true";
     const simulationFilter = simulationsEnabled ? parseSimulationFilter(searchParams.get("simulation")) : 'all';
     // Default: hide duplicates unless explicitly set to false OR viewing a specific alert's decisions
@@ -195,12 +197,14 @@ export function Decisions() {
             tz_offset: String(new Date().getTimezoneOffset()),
         };
         if (appliedQuery) filters.q = appliedQuery;
+        if (dateStartParam) filters.dateStart = dateStartParam;
+        if (dateEndParam) filters.dateEnd = dateEndParam;
         if (alertIdFilter) filters.alert_id = alertIdFilter;
         if (includeExpiredParam) filters.include_expired = 'true';
         if (requestedSimulationFilter !== 'all') filters.simulation = requestedSimulationFilter;
         if (showDuplicates) filters.hide_duplicates = 'false';
         return filters;
-    }, [alertIdFilter, appliedQuery, includeExpiredParam, showDuplicates, simulationFilter]);
+    }, [alertIdFilter, appliedQuery, dateEndParam, dateStartParam, includeExpiredParam, showDuplicates, simulationFilter]);
 
     const loadConfig = useCallback(async (refresh = false) => {
         if (!refresh && configRef.current) {

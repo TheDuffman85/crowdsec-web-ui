@@ -179,6 +179,9 @@ services:
       - CROWDSEC_URL=http://crowdsec:8080
       - CROWDSEC_USER=crowdsec-web-ui
       - CROWDSEC_PASSWORD=<generated_password>
+      # Optional deployment-wide date/time display settings
+      # - TZ=Europe/Berlin
+      # - CROWDSEC_TIME_FORMAT=24h
     volumes:
       - ./data:/app/data
     restart: unless-stopped
@@ -260,6 +263,8 @@ Choose exactly one auth mode: password auth or mTLS auth.
 | `PORT` | `3000` | HTTP listen port. If you change this in Docker, also update port mappings and the container health check to match. |
 | `BASE_PATH` | empty | Serve the UI under a path prefix such as `/crowdsec`. Start with `/` and omit the trailing slash. |
 | `DB_DIR` | `/app/data` | Directory that stores the SQLite database and other persisted app data. If you change it, update your volume mounts too. |
+| `TZ` | browser local | Optional deployment-wide IANA timezone, such as `Europe/Berlin` or `UTC`. When set, the UI, dashboard grouping, filters, and server-generated timestamps all use it. |
+| `CROWDSEC_TIME_FORMAT` | browser locale | Optional deployment-wide clock format. Accepts `12h` or `24h`. When omitted, each browser's locale determines whether the UI uses a 12- or 24-hour clock. |
 | `CROWDSEC_LOOKBACK_PERIOD` | `168h` | Alert/history retention window used for sync and cleanup. Accepts values like `12h`, `7d`, or `30m`. |
 | `CROWDSEC_REFRESH_INTERVAL` | `30s` | Normal background refresh interval. Accepts `0`, `manual`, `5s`, `30s`, `1m`, `5m`, or other `s`/`m`/`h`/`d` values. |
 | `CROWDSEC_IDLE_REFRESH_INTERVAL` | `5m` | Refresh interval used when the app considers itself idle. |

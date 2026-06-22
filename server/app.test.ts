@@ -1006,6 +1006,55 @@ describe('createApp', () => {
     destroyTempDir();
   });
 
+  test('uses configured TZ for dashboard buckets and date filters', async () => {
+    const createdAt = new Date().toISOString();
+    const berlinParts = new Intl.DateTimeFormat('en', {
+      timeZone: 'Europe/Berlin',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(new Date(createdAt));
+    const berlinPart = (type: Intl.DateTimeFormatPartTypes) => berlinParts.find((part) => part.type === type)?.value;
+    const berlinHour = `${berlinPart('year')}-${berlinPart('month')}-${berlinPart('day')}T${berlinPart('hour')}`;
+    const alert = sampleAlert({
+      id: 1801,
+      uuid: 'configured-timezone-alert',
+      created_at: createdAt,
+      decisions: [],
+    });
+    const { controller, database, lapiClient } = createController({
+      env: {
+        TZ: 'Europe/Berlin',
+        CROWDSEC_TIME_FORMAT: '24h',
+      },
+      fetchResolver: (url) => url.includes('/v1/alerts?') ? Response.json([alert]) : undefined,
+    });
+    seedAlert(database, alert);
+    await lapiClient.login();
+
+    const configResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
+    expect(await configResponse.json()).toEqual(expect.objectContaining({
+      time_zone: 'Europe/Berlin',
+      time_format: '24h',
+    }));
+
+    const hourOne = await controller.fetch(new Request(
+      `http://localhost/crowdsec/api/dashboard/stats?granularity=hour&dateStart=${berlinHour}&dateEnd=${berlinHour}&tz_offset=720`,
+    ));
+    expect(await hourOne.json()).toEqual(expect.objectContaining({
+      filteredTotals: expect.objectContaining({ alerts: 1 }),
+      series: expect.objectContaining({
+        alertsHistory: [expect.objectContaining({ date: berlinHour, count: 1 })],
+      }),
+    }));
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
   test('reports table column defaults and includes machine in decision payloads', async () => {
     const firstAlert = sampleAlert({
       id: 101,

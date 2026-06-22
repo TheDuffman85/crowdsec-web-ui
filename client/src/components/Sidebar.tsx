@@ -13,6 +13,7 @@ import {
     useI18n,
     type LanguagePreference,
 } from "../lib/i18n";
+import { useDateTime } from "../lib/dateTime";
 
 type ThemeMode = 'light' | 'dark';
 
@@ -66,6 +67,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
     const { intervalMs, setIntervalMs, lastUpdated, refreshSignal } = useRefresh();
     const { unreadCount } = useNotificationUnreadCount();
     const { browserLanguage, preference, setLanguagePreference, t } = useI18n();
+    const { formatTime } = useDateTime();
     const [updateStatus, setUpdateStatus] = useState<UpdateCheckResponse | null>(null);
 
     const links = [
@@ -107,9 +109,9 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
         };
     }, [refreshSignal]);
 
-    const formatTime = (date: Date | null) => {
+    const formatLastUpdatedTime = (date: Date | null) => {
         if (!date) return "";
-        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        return formatTime(date, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     };
 
     const renderUnreadBadge = (compact = false) => {
@@ -210,7 +212,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                         </label>
                         {lastUpdated && (
                             <span className="text-[10px] items-center text-gray-400 font-mono">
-                                {formatTime(lastUpdated)}
+                                {formatLastUpdatedTime(lastUpdated)}
                             </span>
                         )}
                     </div>

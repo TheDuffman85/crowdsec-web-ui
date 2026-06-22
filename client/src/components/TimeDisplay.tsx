@@ -1,3 +1,5 @@
+import { useDateTime } from '../lib/dateTime';
+
 /**
  * TimeDisplay component - shows date small above, time larger below
  * Similar layout pattern to ScenarioName component
@@ -8,19 +10,23 @@ interface TimeDisplayProps {
 }
 
 export function TimeDisplay({ timestamp, className = "" }: TimeDisplayProps) {
+    const { formatDate, formatTime } = useDateTime();
     if (!timestamp) return null;
 
     const date = new Date(timestamp);
+    if (!Number.isFinite(date.getTime())) {
+        return <span className={className}>{timestamp}</span>;
+    }
 
     // Format date as "Dec 16, 2025"
-    const dateStr = date.toLocaleDateString(undefined, {
+    const dateStr = formatDate(date, {
         month: 'short',
         day: 'numeric',
         year: 'numeric'
     });
 
     // Format time as "15:30:45"
-    const timeStr = date.toLocaleTimeString(undefined, {
+    const timeStr = formatTime(date, {
         hour: '2-digit',
         minute: '2-digit',
         second: '2-digit'

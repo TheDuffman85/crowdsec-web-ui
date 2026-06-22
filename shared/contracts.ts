@@ -437,6 +437,8 @@ export interface ConfigResponse {
   machine_features_enabled: boolean;
   origin_features_enabled: boolean;
   table_column_preferences?: TableColumnPreferences;
+  time_zone?: string | null;
+  time_format?: 'browser' | '12h' | '24h';
 }
 
 export interface UpdateTableColumnsRequest {
