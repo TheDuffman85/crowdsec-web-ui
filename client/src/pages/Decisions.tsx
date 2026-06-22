@@ -98,7 +98,7 @@ function summarizeDeleteResult(result: BulkDeleteResult, t: I18nContextValue['t'
 }
 
 export function Decisions() {
-    const { t } = useI18n();
+    const { language, t } = useI18n();
     const { refreshSignal, setLastUpdated } = useRefresh();
     const [searchParams, setSearchParams] = useSearchParams();
     const initialQueryParam = searchParams.get("q") ?? "";
@@ -944,7 +944,7 @@ export function Decisions() {
                                                                 {decision.detail.country && decision.detail.country !== "Unknown" ? (
                                                                     <div className="flex items-center gap-2" title={decision.detail.country}>
                                                                         <span className={`fi fi-${decision.detail.country.toLowerCase()} flex-shrink-0`}></span>
-                                                                        <span>{getCountryName(decision.detail.country)}</span>
+                                                                        <span>{getCountryName(decision.detail.country, language)}</span>
                                                                     </div>
                                                                 ) : (
                                                                     "-"

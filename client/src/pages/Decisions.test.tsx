@@ -7,9 +7,18 @@ import type { DecisionListItem, PaginatedResponse } from '../types';
 import * as api from '../lib/api';
 import { Decisions } from './Decisions';
 import { compileDecisionSearch } from '../../../shared/search';
+import { I18nContext, type I18nContextValue } from '../lib/i18n';
 
 const setLastUpdatedMock = vi.fn();
 let refreshSignalMock = 0;
+
+const chineseI18nValue: I18nContextValue = {
+  language: 'zh',
+  preference: 'zh',
+  browserLanguage: 'zh',
+  setLanguagePreference: () => undefined,
+  t: (key) => key,
+};
 
 function toPaginatedDecisions(
   decisions: DecisionListItem[],
@@ -230,6 +239,21 @@ function getVisibleColumnHeaderNames(): string[] {
 }
 
 describe('Decisions page', () => {
+  test('localizes country names in the decisions table', async () => {
+    render(
+      <I18nContext.Provider value={chineseI18nValue}>
+        <MemoryRouter initialEntries={['/decisions']}>
+          <Decisions />
+        </MemoryRouter>
+      </I18nContext.Provider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('德国')).toBeInTheDocument());
+    expect(screen.getByText('美国')).toBeInTheDocument();
+    expect(screen.queryByText('Germany')).not.toBeInTheDocument();
+    expect(screen.queryByText('United States')).not.toBeInTheDocument();
+  });
+
   test('filters to simulated decisions and shows the simulation badge inline in the scenario column', async () => {
     render(
       <MemoryRouter initialEntries={['/decisions?simulation=simulated']}>

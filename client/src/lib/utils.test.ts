@@ -18,6 +18,7 @@ describe('utils', () => {
 
   test('getCountryName resolves display names and falls back safely', () => {
     expect(getCountryName('de')).toBe('Germany');
+    expect(getCountryName('DE', 'zh')).toBe('德国');
     expect(getCountryName(null)).toBeNull();
   });
 

@@ -126,7 +126,7 @@ function summarizeDeleteResult(result: BulkDeleteResult, t: I18nContextValue['t'
 }
 
 export function Alerts() {
-    const { t } = useI18n();
+    const { language, t } = useI18n();
     const { formatDateTime } = useDateTime();
     const { refreshSignal, setLastUpdated } = useRefresh();
     const [searchParams, setSearchParams] = useSearchParams();
@@ -1071,7 +1071,7 @@ export function Alerts() {
                                                                 {alert.source?.cn && alert.source?.cn !== "Unknown" ? (
                                                                     <div className="flex items-center gap-2" title={alert.source.cn}>
                                                                         <span className={`fi fi-${alert.source.cn.toLowerCase()} flex-shrink-0`}></span>
-                                                                        <span className="truncate max-w-[150px]">{getCountryName(alert.source.cn)}</span>
+                                                                        <span className="truncate max-w-[150px]">{getCountryName(alert.source.cn, language)}</span>
                                                                     </div>
                                                                 ) : (
                                                                     "-"
@@ -1235,7 +1235,7 @@ export function Alerts() {
                                     {selectedAlert.source?.cn && (
                                         <span className={`fi fi-${selectedAlert.source.cn.toLowerCase()} flex-shrink-0`} title={selectedAlert.source.cn}></span>
                                     )}
-                                    {getCountryName(selectedAlert.source?.cn) || "-"}
+                                    {getCountryName(selectedAlert.source?.cn, language) || "-"}
                                 </div>
                                 {selectedAlert.source?.latitude && selectedAlert.source?.longitude && (
                                     <div className="text-xs text-gray-400 font-mono mt-1">

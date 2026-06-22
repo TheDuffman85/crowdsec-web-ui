@@ -7,6 +7,8 @@ import type { DecisionListItem, PaginatedResponse, SlimAlert } from '../types';
 import * as api from '../lib/api';
 import { Alerts } from './Alerts';
 import { compileAlertSearch } from '../../../shared/search';
+import { I18nContext, type I18nContextValue, type TranslationValues } from '../lib/i18n';
+import en from '../locales/en.json';
 
 const largeDecisionList = Array.from({ length: 75 }, (_, index) => ({
   id: 1000 + index,
@@ -20,6 +22,22 @@ const largeDecisionList = Array.from({ length: 75 }, (_, index) => ({
 
 const setLastUpdatedMock = vi.fn();
 let refreshSignalMock = 0;
+
+function translateEnglish(key: string, values: TranslationValues = {}): string {
+  let message = (en as Record<string, string>)[key] ?? key;
+  for (const [name, value] of Object.entries(values)) {
+    message = message.replaceAll(`{${name}}`, String(value ?? ''));
+  }
+  return message;
+}
+
+const chineseI18nValue: I18nContextValue = {
+  language: 'zh',
+  preference: 'zh',
+  browserLanguage: 'zh',
+  setLanguagePreference: () => undefined,
+  t: translateEnglish,
+};
 
 function toPaginatedAlerts(
   alerts: SlimAlert[],
@@ -298,6 +316,22 @@ function getVisibleColumnHeaderNames(): string[] {
 }
 
 describe('Alerts page', () => {
+  test('localizes country names in the alert table and alert details', async () => {
+    render(
+      <I18nContext.Provider value={chineseI18nValue}>
+        <MemoryRouter initialEntries={['/alerts?id=2']}>
+          <Alerts />
+        </MemoryRouter>
+      </I18nContext.Provider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Alert Details #2')).toBeInTheDocument());
+    expect(screen.getByText('德国')).toBeInTheDocument();
+    expect(screen.getAllByText('美国')).toHaveLength(2);
+    expect(screen.queryByText('Germany')).not.toBeInTheDocument();
+    expect(screen.queryByText('United States')).not.toBeInTheDocument();
+  });
+
   test('shows simulated alerts with an inline scenario badge and standard decision actions', async () => {
     render(
       <MemoryRouter initialEntries={['/alerts?simulation=simulated']}>
