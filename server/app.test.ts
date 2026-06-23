@@ -857,7 +857,17 @@ describe('createApp', () => {
         scenario: 'crowdsecurity/ssh-bf',
         source: { ip: '1.2.3.4', value: '1.2.3.4', cn: 'DE', as_name: 'Hetzner' },
         target: 'ssh',
-        decisions: [{ id: 1010, value: '1.2.3.4', stop_at: stopAt, type: 'ban', origin: 'manual', simulated: false }],
+        decisions: [
+          { id: 1010, value: '1.2.3.4', stop_at: stopAt, type: 'ban', origin: 'manual', simulated: false },
+          {
+            id: 1099,
+            value: '1.2.3.4',
+            stop_at: new Date(Date.now() - 60_000).toISOString(),
+            type: 'ban',
+            origin: 'manual',
+            simulated: false,
+          },
+        ],
         simulated: false,
       }),
       sampleAlert({
@@ -893,7 +903,6 @@ describe('createApp', () => {
     for (const alert of dashboardAlerts) {
       seedAlert(database, alert);
     }
-
     await lapiClient.login();
 
     const countryResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats?country=DE'));
@@ -901,9 +910,16 @@ describe('createApp', () => {
     expect((await countryResponse.json()) as {
       filteredTotals: { alerts: number; decisions: number; simulatedAlerts: number; simulatedDecisions: number };
       topCountries: Array<{ countryCode?: string; count: number }>;
+      allCountries: Array<{ countryCode: string; liveDecisionCount?: number; activeLiveDecisionCount?: number }>;
+      series: { decisionsHistory: Array<{ count: number }>; activeDecisionsHistory: Array<{ count: number }> };
     }).toEqual(expect.objectContaining({
       filteredTotals: { alerts: 2, decisions: 2, simulatedAlerts: 0, simulatedDecisions: 0 },
       topCountries: [expect.objectContaining({ countryCode: 'DE', count: 2 })],
+      allCountries: [expect.objectContaining({ countryCode: 'DE', liveDecisionCount: 3, activeLiveDecisionCount: 2 })],
+      series: expect.objectContaining({
+        decisionsHistory: expect.arrayContaining([expect.objectContaining({ count: 3 })]),
+        activeDecisionsHistory: expect.arrayContaining([expect.objectContaining({ count: 2 })]),
+      }),
     }));
 
     const combinedResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats?country=DE&scenario=crowdsecurity/ssh-bf&target=ssh'));

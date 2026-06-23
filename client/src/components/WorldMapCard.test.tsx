@@ -39,12 +39,14 @@ vi.mock('@nivo/geo', async () => {
           ))}
           {Tooltip && firstFeature ? (
             <Tooltip
-              feature={{
+              feature={firstFeatureData ? {
+                id: firstFeature.id,
                 label: firstFeature.properties?.NAME,
-                data: {
-                  id: firstFeature.id,
-                  ...firstFeatureData,
-                },
+                data: { id: firstFeature.id, ...firstFeatureData },
+              } : {
+                id: firstFeature.id,
+                label: firstFeature.properties?.NAME,
+                properties: firstFeature.properties,
               }}
             />
           ) : null}
@@ -233,5 +235,43 @@ describe('WorldMapCard', () => {
 
     await waitFor(() => expect(screen.getByText('德国')).toBeInTheDocument());
     expect(screen.queryByText('Germany')).not.toBeInTheDocument();
+  });
+
+  test('shows active decisions in the tooltip', async () => {
+    render(
+      <WorldMapCard
+        data={[{
+          label: 'Germany',
+          countryCode: 'DE',
+          count: 2,
+          liveCount: 2,
+          simulatedCount: 0,
+          liveDecisionCount: 3,
+          simulatedDecisionCount: 0,
+          activeLiveDecisionCount: 2,
+          activeSimulatedDecisionCount: 0,
+        }]}
+        onCountrySelect={vi.fn()}
+        selectedCountry={null}
+        simulationsEnabled={true}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText(/Decisions: 3 \(2 active\)/)).toBeInTheDocument());
+  });
+
+  test('uses the geographic feature id for a country without stats', async () => {
+    render(
+      <WorldMapCard
+        data={[]}
+        onCountrySelect={vi.fn()}
+        selectedCountry="DE"
+        simulationsEnabled={true}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText('Germany')).toBeInTheDocument());
+    expect(screen.getByText(/Alerts: 0/)).toBeInTheDocument();
+    expect(screen.getByText(/Decisions: 0 \(0 active\)/)).toBeInTheDocument();
   });
 });

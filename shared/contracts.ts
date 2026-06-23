@@ -262,6 +262,10 @@ export interface DashboardWorldMapDatum {
   countryCode: string;
   simulatedCount?: number;
   liveCount?: number;
+  liveDecisionCount?: number;
+  simulatedDecisionCount?: number;
+  activeLiveDecisionCount?: number;
+  activeSimulatedDecisionCount?: number;
 }
 
 export interface DashboardStatsTotals {
@@ -276,6 +280,8 @@ export interface DashboardStatsSeries {
   simulatedAlertsHistory: DashboardStatsBucket[];
   decisionsHistory: DashboardStatsBucket[];
   simulatedDecisionsHistory: DashboardStatsBucket[];
+  activeDecisionsHistory: DashboardStatsBucket[];
+  activeSimulatedDecisionsHistory: DashboardStatsBucket[];
   unfilteredAlertsHistory: DashboardStatsBucket[];
   unfilteredSimulatedAlertsHistory: DashboardStatsBucket[];
   unfilteredDecisionsHistory: DashboardStatsBucket[];

@@ -88,6 +88,8 @@ function buildDashboardStatsResponse(filters?: Record<string, string>) {
       simulatedAlertsHistory: [{ ...bucket, count: simulatedAlertCount }],
       decisionsHistory: [{ ...bucket, count: liveDecisionCount }],
       simulatedDecisionsHistory: [{ ...bucket, count: simulatedDecisionCount }],
+      activeDecisionsHistory: [{ ...bucket, count: liveDecisionCount }],
+      activeSimulatedDecisionsHistory: [{ ...bucket, count: simulatedDecisionCount }],
       unfilteredAlertsHistory: [{ ...bucket, count: liveAlertCount }],
       unfilteredSimulatedAlertsHistory: [{ ...bucket, count: simulatedAlertCount }],
       unfilteredDecisionsHistory: [{ ...bucket, count: liveDecisionCount }],
@@ -170,10 +172,14 @@ describe('Dashboard page', () => {
       simulationsEnabled?: boolean;
       simulatedAlertsData?: Array<{ count: number }>;
       simulatedDecisionsData?: Array<{ count: number }>;
+      activeDecisionsData?: Array<{ count: number }>;
+      activeSimulatedDecisionsData?: Array<{ count: number }>;
     };
     expect(chartProps.simulationsEnabled).toBe(true);
     expect(chartProps.simulatedAlertsData?.some((item) => item.count === 1)).toBe(true);
     expect(chartProps.simulatedDecisionsData?.some((item) => item.count === 1)).toBe(true);
+    expect(chartProps.activeDecisionsData?.some((item) => item.count === 1)).toBe(true);
+    expect(chartProps.activeSimulatedDecisionsData?.some((item) => item.count === 1)).toBe(true);
 
     const mapProps = mapSpy.mock.calls.at(-1)?.[0] as {
       simulationsEnabled?: boolean;
