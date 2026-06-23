@@ -9,6 +9,7 @@ import type {
   IpBanRuleConfig,
   LapiAvailabilityRuleConfig,
   LapiStatus,
+  NewAlertDecisionRuleConfig,
   NewCveRuleConfig,
   NotificationChannel,
   NotificationChannelType,
@@ -550,6 +551,9 @@ export function createNotificationService(options: NotificationServiceOptions): 
     if (rule.type === 'alert-threshold') {
       return evaluateAlertThresholdRule(rule, now, t);
     }
+    if (rule.type === 'new-alert-decision') {
+      return evaluateNewAlertDecisionRule(rule, now, t);
+    }
     if (rule.type === 'application-update') {
       return evaluateApplicationUpdateRule(rule, t);
     }
@@ -623,6 +627,99 @@ export function createNotificationService(options: NotificationServiceOptions): 
         filters: toMetaRecord(config.filters),
       },
     }];
+  }
+
+  async function evaluateNewAlertDecisionRule(rule: NotificationRule, now: Date, t: Translator): Promise<NotificationCandidate[]> {
+    const config = normalizeRuleConfig('new-alert-decision', rule.config);
+    const windowStart = new Date(now.getTime() - config.window_minutes * 60_000);
+    const candidates: NotificationCandidate[] = [];
+
+    if (config.event_type === 'alert' || config.event_type === 'both') {
+      for (const alert of getAlertsBetween(windowStart, now, config.filters)) {
+        const alertId = String(alert.id);
+        const source = getAlertSourceValue(alert);
+        const scenario = String(alert.scenario || alert.reason || '—');
+        const target = String(alert.target || '—');
+        const description = String(alert.message || '—');
+
+        candidates.push({
+          dedupeKey: `new-alert:${encodeURIComponent(alertId)}`,
+          title: t('server.notifications.newEvent.alertTitle', { ruleName: rule.name }),
+          message: t('server.notifications.newEvent.alertMessage', {
+            id: alertId,
+            scenario,
+            source,
+            target,
+            createdAt: alert.created_at,
+            description,
+          }),
+          incidentStartedAt: alert.created_at,
+          metadata: {
+            event_type: 'alert',
+            alert_id: alertId,
+            uuid: typeof alert.uuid === 'string' ? alert.uuid : null,
+            scenario,
+            source,
+            target,
+            created_at: alert.created_at,
+            message: description,
+            simulated: alert.simulated === true,
+            machine: alert.machine_alias || alert.machine_id || null,
+            events_count: typeof alert.events_count === 'number' ? alert.events_count : null,
+            decision_count: Array.isArray(alert.decisions) ? alert.decisions.length : 0,
+            filters: toMetaRecord(config.filters),
+          },
+        });
+      }
+    }
+
+    if (config.event_type === 'decision' || config.event_type === 'both') {
+      for (const row of database.getAllDecisions()) {
+        const decision = parseDecisionRow(row.raw_data);
+        if (!decision || !matchesDecisionFilters(decision, config.filters)) continue;
+        const createdAt = String(decision.created_at || '');
+        const createdAtMs = Date.parse(createdAt);
+        if (!Number.isFinite(createdAtMs) || createdAtMs < windowStart.getTime() || createdAtMs > now.getTime()) continue;
+
+        const decisionId = String(decision.id);
+        const value = String(decision.value || '—');
+        const decisionType = String(decision.type || decision.action || '—');
+        const scenario = String(decision.scenario || decision.reason || '—');
+        const target = String(decision.target || '—');
+        const stopAt = String(decision.stop_at || '—');
+
+        candidates.push({
+          dedupeKey: `new-decision:${encodeURIComponent(decisionId)}`,
+          title: t('server.notifications.newEvent.decisionTitle', { ruleName: rule.name }),
+          message: t('server.notifications.newEvent.decisionMessage', {
+            id: decisionId,
+            type: decisionType,
+            value,
+            scenario,
+            target,
+            createdAt,
+            stopAt,
+          }),
+          incidentStartedAt: createdAt,
+          metadata: {
+            event_type: 'decision',
+            decision_id: decisionId,
+            alert_id: typeof decision.alert_id === 'string' || typeof decision.alert_id === 'number' ? decision.alert_id : null,
+            type: decisionType,
+            value,
+            scenario,
+            target,
+            origin: typeof decision.origin === 'string' ? decision.origin : null,
+            created_at: createdAt,
+            stop_at: stopAt,
+            simulated: decision.simulated === true,
+            filters: toMetaRecord(config.filters),
+          },
+        });
+      }
+    }
+
+    return candidates;
   }
 
   async function evaluateNewCveRule(rule: NotificationRule, now: Date, t: Translator): Promise<NotificationCandidate[]> {
@@ -932,6 +1029,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
 
 function normalizeRuleConfig(type: 'alert-spike', config: RuleConfigInput): AlertSpikeRuleConfig;
 function normalizeRuleConfig(type: 'alert-threshold', config: RuleConfigInput): AlertThresholdRuleConfig;
+function normalizeRuleConfig(type: 'new-alert-decision', config: RuleConfigInput): NewAlertDecisionRuleConfig;
 function normalizeRuleConfig(type: 'new-cve', config: RuleConfigInput): NewCveRuleConfig;
 function normalizeRuleConfig(type: 'ip-ban', config: RuleConfigInput): IpBanRuleConfig;
 function normalizeRuleConfig(type: 'application-update', config: RuleConfigInput): ApplicationUpdateRuleConfig;
@@ -956,6 +1054,14 @@ function normalizeRuleConfig(type: NotificationRuleType, config: RuleConfigInput
     return {
       window_minutes: normalizePositiveNumber(safeConfig.window_minutes, 60),
       alert_threshold: normalizePositiveNumber(safeConfig.alert_threshold, 25),
+      filters,
+    };
+  }
+
+  if (type === 'new-alert-decision') {
+    return {
+      window_minutes: normalizePositiveNumber(safeConfig.window_minutes, 5),
+      event_type: normalizeNewAlertDecisionEventType(safeConfig.event_type),
       filters,
     };
   }
@@ -1017,7 +1123,14 @@ function matchesAlertFilters(alert: AlertRecord, filters?: NotificationFilter): 
   if (filters?.target && !String(alert.target || '').toLowerCase().includes(filters.target.toLowerCase())) {
     return false;
   }
+  if (filters?.values && filters.values.length > 0 && !matchesIpRangeFilters(getAlertSourceValue(alert), filters.values)) {
+    return false;
+  }
   return true;
+}
+
+function getAlertSourceValue(alert: AlertRecord): string {
+  return String(alert.source?.ip || alert.source?.range || alert.source?.value || '—');
 }
 
 function matchesDecisionFilters(decision: AlertDecision & Record<string, unknown>, filters?: NotificationFilter): boolean {
@@ -1079,12 +1192,17 @@ function normalizeRuleType(value: unknown): NotificationRuleType {
   if (
     value === 'alert-spike' ||
     value === 'alert-threshold' ||
+    value === 'new-alert-decision' ||
     value === 'new-cve' ||
     value === 'ip-ban' ||
     value === 'application-update' ||
     value === 'lapi-availability'
   ) return value;
   throw new Error('Invalid notification rule type');
+}
+
+function normalizeNewAlertDecisionEventType(value: unknown): NewAlertDecisionRuleConfig['event_type'] {
+  return value === 'alert' || value === 'decision' || value === 'both' ? value : 'both';
 }
 
 function normalizeSeverity(value: unknown): NotificationItem['severity'] {

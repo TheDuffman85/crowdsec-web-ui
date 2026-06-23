@@ -82,6 +82,8 @@ const EMPTY_DASHBOARD_STATS: DashboardStatsResponse = {
         simulatedAlertsHistory: [],
         decisionsHistory: [],
         simulatedDecisionsHistory: [],
+        activeDecisionsHistory: [],
+        activeSimulatedDecisionsHistory: [],
         unfilteredAlertsHistory: [],
         unfilteredSimulatedAlertsHistory: [],
         unfilteredDecisionsHistory: [],
@@ -412,6 +414,8 @@ export function Dashboard() {
             simulatedAlertsHistory: toActivitySeries(dashboardData.series.simulatedAlertsHistory, formatDate, formatTime),
             decisionsHistory: toActivitySeries(dashboardData.series.decisionsHistory, formatDate, formatTime),
             simulatedDecisionsHistory: toActivitySeries(dashboardData.series.simulatedDecisionsHistory, formatDate, formatTime),
+            activeDecisionsHistory: toActivitySeries(dashboardData.series.activeDecisionsHistory, formatDate, formatTime),
+            activeSimulatedDecisionsHistory: toActivitySeries(dashboardData.series.activeSimulatedDecisionsHistory, formatDate, formatTime),
             unfilteredAlertsHistory: toActivitySeries(dashboardData.series.unfilteredAlertsHistory, formatDate, formatTime),
             unfilteredSimulatedAlertsHistory: toActivitySeries(dashboardData.series.unfilteredSimulatedAlertsHistory, formatDate, formatTime),
             unfilteredDecisionsHistory: toActivitySeries(dashboardData.series.unfilteredDecisionsHistory, formatDate, formatTime),
@@ -682,8 +686,10 @@ export function Dashboard() {
                             <ActivityBarChart
                                 alertsData={statistics.alertsHistory}
                                 decisionsData={statistics.decisionsHistory}
+                                activeDecisionsData={statistics.activeDecisionsHistory}
                                 simulatedAlertsData={statistics.simulatedAlertsHistory}
                                 simulatedDecisionsData={statistics.simulatedDecisionsHistory}
+                                activeSimulatedDecisionsData={statistics.activeSimulatedDecisionsHistory}
                                 unfilteredAlertsData={statistics.unfilteredAlertsHistory}
                                 unfilteredDecisionsData={statistics.unfilteredDecisionsHistory}
                                 unfilteredSimulatedAlertsData={statistics.unfilteredSimulatedAlertsHistory}

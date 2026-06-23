@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -238,6 +238,17 @@ describe('Notifications page', () => {
     expect(screen.getByText(/no outbound destinations exist yet/i)).toBeInTheDocument();
   });
 
+  test('shows destination type badges in the rule modal', async () => {
+    const user = userEvent.setup();
+    render(<Notifications />);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /add rule/i })).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /add rule/i }));
+
+    const modal = screen.getByRole('dialog', { name: 'New Rule' });
+    expect(within(modal).getByText('mqtt')).toBeInTheDocument();
+  });
+
   test('keeps recent notifications newest-first while restoring destination and rule order after remounting', async () => {
     window.localStorage.setItem('crowdsec-web-ui:notifications:notification-order', JSON.stringify(['notif-1', 'notif-2']));
     window.localStorage.setItem('crowdsec-web-ui:notifications:destination-order', JSON.stringify(['channel-2', 'channel-1']));
@@ -427,6 +438,41 @@ describe('Notifications page', () => {
           target: 'sshd',
           include_simulated: true,
           values: ['203.0.113.10', '10.0.0.0/24'],
+        },
+      },
+    }));
+  });
+
+  test('configures per-record alerts and decisions with filters', async () => {
+    const user = userEvent.setup();
+    render(<Notifications />);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /add rule/i })).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /add rule/i }));
+    await user.selectOptions(screen.getByLabelText('Rule Type'), 'new-alert-decision');
+
+    expect(screen.getByLabelText('Window Minutes')).toHaveValue('5');
+    expect(screen.getByRole('checkbox', { name: 'Alerts' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Decisions' })).toBeChecked();
+    expect(screen.getByLabelText('IP / Range Filter')).toBeInTheDocument();
+    expect(screen.getByText(/include simulated alerts and decisions/i)).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText('Name'), 'Every decision');
+    await user.click(screen.getByRole('checkbox', { name: 'Alerts' }));
+    await user.type(screen.getByLabelText('IP / Range Filter'), '10.0.0.0/24');
+    await user.click(screen.getByRole('button', { name: /save rule/i }));
+
+    expect(createNotificationRule).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'Every decision',
+      type: 'new-alert-decision',
+      config: {
+        window_minutes: 5,
+        event_type: 'decision',
+        filters: {
+          scenario: '',
+          target: '',
+          include_simulated: false,
+          values: ['10.0.0.0/24'],
         },
       },
     }));

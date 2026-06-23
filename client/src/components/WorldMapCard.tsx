@@ -8,7 +8,7 @@ import {
     type ReactZoomPanPinchRef,
 } from 'react-zoom-pan-pinch';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
-import { Globe, ZoomIn, ZoomOut, RotateCcw, ShieldAlert } from 'lucide-react';
+import { Globe, ZoomIn, ZoomOut, RotateCcw, ShieldAlert, Gavel } from 'lucide-react';
 import { assetUrl } from '../lib/basePath';
 import type { WorldMapDatum } from '../types';
 import { DASHBOARD_COLORS } from '../lib/dashboardColors';
@@ -54,6 +54,12 @@ interface WorldMapCardProps {
     onCountrySelect: (countryCode: string) => void;
     selectedCountry: string | null;
     simulationsEnabled?: boolean;
+}
+
+function getFeatureCountryCode(feature: ChoroplethBoundFeature): string {
+    const dataId = feature.data && typeof feature.data.id === 'string' ? feature.data.id : '';
+    const featureId = 'id' in feature && typeof feature.id === 'string' ? feature.id : '';
+    return (dataId || featureId).toUpperCase();
 }
 
 /**
@@ -150,7 +156,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
         if (!feature) return null;
 
         // Find alert data locally since Nivo only passes the feature props
-        const featureId = typeof feature.data?.id === 'string' ? feature.data.id : '';
+        const featureId = getFeatureCountryCode(feature);
 
         return createPortal(
             <div
@@ -173,11 +179,27 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
                         {t('components.worldMap.alerts')}: {Number(feature.data?.liveCount || 0).toLocaleString()}
                     </span>
                 </div>
+                <div className="mt-1 flex items-center gap-2">
+                    <Gavel className="w-4 h-4" style={{ color: DASHBOARD_COLORS.liveDecisions }} />
+                    <span style={{ color: DASHBOARD_COLORS.liveDecisions }}>
+                        {t('components.dashboardCharts.decisions')}: {Number(feature.data?.liveDecisionCount || 0).toLocaleString()}
+                        {' '}({Number(feature.data?.activeLiveDecisionCount || 0).toLocaleString()} {t('common.active').toLocaleLowerCase(language)})
+                    </span>
+                </div>
                 {simulationsEnabled && Number(feature.data?.simulatedCount || 0) > 0 && (
                     <div className="mt-1 flex items-center gap-2">
                         <ShieldAlert className="w-4 h-4" style={{ color: DASHBOARD_COLORS.simulatedAlerts }} />
                         <span style={{ color: DASHBOARD_COLORS.simulatedAlerts }}>
                             {t('components.worldMap.simulationAlerts')}: {Number(feature.data?.simulatedCount || 0).toLocaleString()}
+                        </span>
+                    </div>
+                )}
+                {simulationsEnabled && Number(feature.data?.simulatedDecisionCount || 0) > 0 && (
+                    <div className="mt-1 flex items-center gap-2">
+                        <Gavel className="w-4 h-4" style={{ color: DASHBOARD_COLORS.simulatedDecisions }} />
+                        <span style={{ color: DASHBOARD_COLORS.simulatedDecisions }}>
+                            {t('components.dashboardCharts.simulationDecisions')}: {Number(feature.data?.simulatedDecisionCount || 0).toLocaleString()}
+                            {' '}({Number(feature.data?.activeSimulatedDecisionCount || 0).toLocaleString()} {t('common.active').toLocaleLowerCase(language)})
                         </span>
                     </div>
                 )}
@@ -336,6 +358,10 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
             value: item.count || 0,
             liveCount: item.liveCount ?? Math.max((item.count || 0) - (item.simulatedCount || 0), 0),
             simulatedCount: item.simulatedCount || 0,
+            liveDecisionCount: item.liveDecisionCount || 0,
+            simulatedDecisionCount: item.simulatedDecisionCount || 0,
+            activeLiveDecisionCount: item.activeLiveDecisionCount || 0,
+            activeSimulatedDecisionCount: item.activeSimulatedDecisionCount || 0,
         }));
     }, [data]);
 
@@ -535,7 +561,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
                                                 borderWidth={0.5}
                                                 borderColor="#ffffff"
                                                 onClick={(feature) => {
-                                                    const featureId = typeof feature.data?.id === 'string' ? feature.data.id : null;
+                                                    const featureId = getFeatureCountryCode(feature);
                                                     if (featureId) {
                                                         onCountrySelect(featureId);
                                                     }

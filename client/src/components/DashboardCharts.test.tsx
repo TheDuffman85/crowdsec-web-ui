@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, test, vi } from 'vitest';
-import { ActivityBarChart } from './DashboardCharts';
+import { ActivityBarChart, CustomTooltip } from './DashboardCharts';
 import { getBrushSelectionPayload, getDraggedBrushWindow } from './DashboardCharts.helpers';
 
 vi.mock('recharts', () => {
@@ -85,6 +85,34 @@ const createDomRect = (width: number, height = 20): DOMRect => ({
 } as DOMRect);
 
 describe('ActivityBarChart', () => {
+  test('shows the active decision count beside the bucket total', () => {
+    render(
+      <CustomTooltip
+        active
+        label="Jan 1"
+        payload={[{
+          name: 'Decisions',
+          value: 4,
+          color: '#2563eb',
+          dataKey: 'decisions',
+          payload: {
+            date: '2025-01-01',
+            bucketKey: '2025-01-01',
+            label: 'Jan 1',
+            alerts: 0,
+            simulatedAlerts: 0,
+            decisions: 4,
+            simulatedDecisions: 0,
+            activeDecisions: 2,
+            activeSimulatedDecisions: 0,
+          },
+        }]}
+      />,
+    );
+
+    expect(screen.getByText(/Decisions: 4 \(2 active\)/)).toBeInTheDocument();
+  });
+
   test('builds the selected brush payload from slider buckets', () => {
     expect(
       getBrushSelectionPayload(

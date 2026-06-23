@@ -604,6 +604,98 @@ describe('notification incident deduplication', () => {
     database.close();
   });
 
+  test('new alert or decision rules notify once per matching record with event details', async () => {
+    const { database, service } = createService();
+    service.createRule({
+      name: 'New security activity',
+      type: 'new-alert-decision',
+      enabled: true,
+      severity: 'info',
+      channel_ids: [],
+      config: {
+        window_minutes: 5,
+        event_type: 'both',
+        filters: {
+          scenario: 'ssh',
+          target: 'ssh',
+          values: ['10.0.0.0/24'],
+        },
+      },
+    });
+
+    insertAlert(database, createAlert(10, '2026-03-28T11:58:00.000Z', {
+      source: { ip: '10.0.0.10' },
+      events_count: 4,
+      machine_alias: 'gateway',
+    }));
+    insertAlert(database, createAlert(11, '2026-03-28T11:59:00.000Z', {
+      source: { ip: '192.0.2.10' },
+    }));
+    insertDecision(database, createDecision('decision-10', '2026-03-28T11:59:00.000Z', {
+      value: '10.0.0.20',
+    }));
+    insertDecision(database, createDecision('decision-simulated', '2026-03-28T11:59:30.000Z', {
+      value: '10.0.0.21',
+      simulated: true,
+    }));
+
+    await service.evaluateRules(new Date('2026-03-28T12:00:00.000Z'));
+    await service.evaluateRules(new Date('2026-03-28T12:01:00.000Z'));
+
+    const notifications = service.listNotifications().data;
+    expect(notifications).toHaveLength(2);
+    expect(notifications).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        rule_type: 'new-alert-decision',
+        title: 'New security activity: new alert',
+        message: expect.stringContaining('Alert #10'),
+        metadata: expect.objectContaining({
+          event_type: 'alert',
+          alert_id: '10',
+          source: '10.0.0.10',
+          machine: 'gateway',
+          events_count: 4,
+        }),
+      }),
+      expect.objectContaining({
+        rule_type: 'new-alert-decision',
+        title: 'New security activity: new decision',
+        message: expect.stringContaining('Decision #decision-10'),
+        metadata: expect.objectContaining({
+          event_type: 'decision',
+          decision_id: 'decision-10',
+          value: '10.0.0.20',
+          type: 'ban',
+        }),
+      }),
+    ]));
+
+    for (const eventType of ['alert', 'decision'] as const) {
+      service.createRule({
+        name: `${eventType}-only`,
+        type: 'new-alert-decision',
+        enabled: true,
+        severity: 'info',
+        channel_ids: [],
+        config: {
+          window_minutes: 5,
+          event_type: eventType,
+          filters: { values: ['10.0.0.0/24'] },
+        },
+      });
+    }
+
+    await service.evaluateRules(new Date('2026-03-28T12:02:00.000Z'));
+    expect(service.listNotifications().data.filter((item) => item.rule_name === 'alert-only')).toEqual([
+      expect.objectContaining({ metadata: expect.objectContaining({ event_type: 'alert' }) }),
+    ]);
+    expect(service.listNotifications().data.filter((item) => item.rule_name === 'decision-only')).toEqual([
+      expect.objectContaining({ metadata: expect.objectContaining({ event_type: 'decision' }) }),
+    ]);
+
+    database.close();
+  });
+
   test('IP ban rules reject invalid IP and range filter values', () => {
     const { database, service } = createService();
 

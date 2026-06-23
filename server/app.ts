@@ -227,6 +227,7 @@ interface DashboardDecisionStatsRecord {
   timestamp: number;
   stopTimestamp: number;
   value?: string;
+  country?: string;
   simulated: boolean;
 }
 
@@ -245,8 +246,16 @@ interface DashboardStatsAccumulator {
 interface DashboardDecisionAccumulator {
   decisions: number;
   simulatedDecisions: number;
+  countries: Map<string, {
+    liveDecisionCount: number;
+    simulatedDecisionCount: number;
+    activeLiveDecisionCount: number;
+    activeSimulatedDecisionCount: number;
+  }>;
   liveDecisionBuckets: Map<string, number>;
   simulatedDecisionBuckets: Map<string, number>;
+  activeLiveDecisionBuckets: Map<string, number>;
+  activeSimulatedDecisionBuckets: Map<string, number>;
 }
 const NOTIFICATION_SECRET_KEY_META_KEY = 'notification_secret_key';
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -2756,6 +2765,7 @@ ${errorSummary}  Status: ${syncSummary.state}
             timestamp,
             stopTimestamp: Number.isFinite(stopTimestamp) ? stopTimestamp : 0,
             value: typeof decision.value === 'string' ? decision.value : undefined,
+            country: typeof decision.country === 'string' ? decision.country : undefined,
             simulated: normalizeDecisionSimulated(decision as AlertDecision & Record<string, unknown>),
           }];
         } catch {
@@ -2783,10 +2793,15 @@ ${errorSummary}  Status: ${syncSummary.state}
     const filteredAlertAccumulator = createDashboardStatsAccumulator();
     const chartAlertAccumulator = createDashboardStatsAccumulator();
     const sliderAlertAccumulator = createDashboardStatsAccumulator();
+    const alertCountryByIp = new Map<string, string>();
     const filteredAlertIps = new Set<string>();
     const sliderAlertIps = new Set<string>();
 
     for (const alert of statsIndex.alerts) {
+      if (alert.ip && alert.country && alert.country !== 'Unknown') {
+        alertCountryByIp.set(alert.ip, alert.country);
+      }
+
       if (!matchesDashboardSimulationFilter(alert.simulated, filters.simulation)) {
         continue;
       }
@@ -2816,13 +2831,17 @@ ${errorSummary}  Status: ${syncSummary.state}
         continue;
       }
 
+      const isActive = decision.stopTimestamp > nowTimestamp;
       if (matchesDashboardDecisionFilters(decision, filters, sliderAlertIps, false)) {
-        addDashboardDecision(sliderDecisionAccumulator, decision, filters);
+        addDashboardDecision(sliderDecisionAccumulator, decision, filters, isActive);
       }
 
       if (matchesDashboardDecisionFilters(decision, filters, filteredAlertIps, true)) {
-        addDashboardDecision(chartDecisionAccumulator, decision, filters);
-        if (decision.stopTimestamp > nowTimestamp) {
+        addDashboardDecision(chartDecisionAccumulator, decision, filters, isActive);
+        const country = normalizeDashboardCountryCode(decision.country)
+          || (decision.value ? alertCountryByIp.get(decision.value) : undefined);
+        addDashboardDecisionCountry(filteredDecisionAccumulator, decision, country, isActive);
+        if (isActive) {
           if (decision.simulated) {
             filteredDecisionAccumulator.simulatedDecisions += 1;
           } else {
@@ -2843,7 +2862,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       globalTotal: statsIndex.alerts.filter((alert) => matchesDashboardSimulationFilter(alert.simulated, filters.simulation)).length,
       topTargets: topDashboardEntries(filteredAlertAccumulator.targets),
       topCountries: dashboardCountryList(filteredAlertAccumulator.countries, 10),
-      allCountries: dashboardWorldMapData(filteredAlertAccumulator.countries),
+      allCountries: dashboardWorldMapData(filteredAlertAccumulator.countries, filteredDecisionAccumulator.countries),
       topScenarios: topDashboardEntries(filteredAlertAccumulator.scenarios),
       topAS: topDashboardEntries(filteredAlertAccumulator.asNames),
       series: {
@@ -2851,6 +2870,8 @@ ${errorSummary}  Status: ${syncSummary.state}
         simulatedAlertsHistory: dashboardBuckets(chartAlertAccumulator.simulatedAlertBuckets, filters, lookbackDays),
         decisionsHistory: dashboardBuckets(chartDecisionAccumulator.liveDecisionBuckets, filters, lookbackDays),
         simulatedDecisionsHistory: dashboardBuckets(chartDecisionAccumulator.simulatedDecisionBuckets, filters, lookbackDays),
+        activeDecisionsHistory: dashboardBuckets(chartDecisionAccumulator.activeLiveDecisionBuckets, filters, lookbackDays),
+        activeSimulatedDecisionsHistory: dashboardBuckets(chartDecisionAccumulator.activeSimulatedDecisionBuckets, filters, lookbackDays),
         unfilteredAlertsHistory: dashboardBuckets(sliderAlertAccumulator.liveAlertBuckets, filters, lookbackDays, true),
         unfilteredSimulatedAlertsHistory: dashboardBuckets(sliderAlertAccumulator.simulatedAlertBuckets, filters, lookbackDays, true),
         unfilteredDecisionsHistory: dashboardBuckets(sliderDecisionAccumulator.liveDecisionBuckets, filters, lookbackDays, true),
@@ -3321,8 +3342,11 @@ function createDashboardDecisionAccumulator(): DashboardDecisionAccumulator {
   return {
     decisions: 0,
     simulatedDecisions: 0,
+    countries: new Map(),
     liveDecisionBuckets: new Map(),
     simulatedDecisionBuckets: new Map(),
+    activeLiveDecisionBuckets: new Map(),
+    activeSimulatedDecisionBuckets: new Map(),
   };
 }
 
@@ -3424,9 +3448,51 @@ function addDashboardAlert(accumulator: DashboardStatsAccumulator, alert: Dashbo
   }
 }
 
-function addDashboardDecision(accumulator: DashboardDecisionAccumulator, decision: DashboardDecisionStatsRecord, filters: DashboardStatsFilters): void {
+function addDashboardDecision(
+  accumulator: DashboardDecisionAccumulator,
+  decision: DashboardDecisionStatsRecord,
+  filters: DashboardStatsFilters,
+  isActive: boolean,
+): void {
   const bucketMap = decision.simulated ? accumulator.simulatedDecisionBuckets : accumulator.liveDecisionBuckets;
-  incrementCount(bucketMap, getDashboardBucketKey(decision.createdAt, filters));
+  const bucketKey = getDashboardBucketKey(decision.createdAt, filters);
+  incrementCount(bucketMap, bucketKey);
+  if (isActive) {
+    const activeBucketMap = decision.simulated
+      ? accumulator.activeSimulatedDecisionBuckets
+      : accumulator.activeLiveDecisionBuckets;
+    incrementCount(activeBucketMap, bucketKey);
+  }
+}
+
+function normalizeDashboardCountryCode(country: string | undefined): string | undefined {
+  const normalized = country?.trim().toUpperCase();
+  return normalized && /^[A-Z]{2}$/.test(normalized) ? normalized : undefined;
+}
+
+function addDashboardDecisionCountry(
+  accumulator: DashboardDecisionAccumulator,
+  decision: DashboardDecisionStatsRecord,
+  country: string | undefined,
+  isActive: boolean,
+): void {
+  const countryCode = normalizeDashboardCountryCode(country);
+  if (!countryCode) return;
+
+  const current = accumulator.countries.get(countryCode) || {
+    liveDecisionCount: 0,
+    simulatedDecisionCount: 0,
+    activeLiveDecisionCount: 0,
+    activeSimulatedDecisionCount: 0,
+  };
+  if (decision.simulated) {
+    current.simulatedDecisionCount += 1;
+    if (isActive) current.activeSimulatedDecisionCount += 1;
+  } else {
+    current.liveDecisionCount += 1;
+    if (isActive) current.activeLiveDecisionCount += 1;
+  }
+  accumulator.countries.set(countryCode, current);
 }
 
 function incrementCount(map: Map<string, number>, key: string): void {
@@ -3455,15 +3521,27 @@ function dashboardCountryList(
     }));
 }
 
-function dashboardWorldMapData(countries: DashboardStatsAccumulator['countries']): DashboardWorldMapDatum[] {
-  return Array.from(countries.entries())
-    .map(([code, summary]) => ({
-      label: getCountryName(code) || code,
-      count: summary.count,
-      countryCode: code,
-      simulatedCount: summary.simulatedCount,
-      liveCount: summary.liveCount,
-    }));
+function dashboardWorldMapData(
+  countries: DashboardStatsAccumulator['countries'],
+  decisionCountries: DashboardDecisionAccumulator['countries'],
+): DashboardWorldMapDatum[] {
+  const countryCodes = new Set([...countries.keys(), ...decisionCountries.keys()]);
+  return Array.from(countryCodes)
+    .map((code) => {
+      const summary = countries.get(code);
+      const decisionSummary = decisionCountries.get(code);
+      return {
+        label: getCountryName(code) || code,
+        count: summary?.count || 0,
+        countryCode: code,
+        simulatedCount: summary?.simulatedCount || 0,
+        liveCount: summary?.liveCount || 0,
+        liveDecisionCount: decisionSummary?.liveDecisionCount || 0,
+        simulatedDecisionCount: decisionSummary?.simulatedDecisionCount || 0,
+        activeLiveDecisionCount: decisionSummary?.activeLiveDecisionCount || 0,
+        activeSimulatedDecisionCount: decisionSummary?.activeSimulatedDecisionCount || 0,
+      };
+    });
 }
 
 function dashboardBuckets(

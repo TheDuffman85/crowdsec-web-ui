@@ -87,6 +87,7 @@ type NotificationDeleteAction =
 const RULE_DEFAULTS: Record<NotificationRuleType, Record<string, string>> = {
   'alert-spike': { window_minutes: '60', percent_increase: '100', minimum_current_alerts: '10' },
   'alert-threshold': { window_minutes: '60', alert_threshold: '25' },
+  'new-alert-decision': { window_minutes: '5', event_type: 'both' },
   'new-cve': { max_cve_age_days: '14' },
   'ip-ban': { window_minutes: '60' },
   'application-update': {},
@@ -99,6 +100,7 @@ const RULE_ORDER_STORAGE_KEY = 'crowdsec-web-ui:notifications:rule-order';
 const RULE_TYPE_LABEL_KEYS: Record<NotificationRuleType, string> = {
   'alert-spike': 'pages.notifications.ruleTypes.alertSpike',
   'alert-threshold': 'pages.notifications.ruleTypes.alertThreshold',
+  'new-alert-decision': 'pages.notifications.ruleTypes.newAlertDecision',
   'new-cve': 'pages.notifications.ruleTypes.recentCve',
   'ip-ban': 'pages.notifications.ruleTypes.ipBan',
   'application-update': 'pages.notifications.ruleTypes.applicationUpdate',
@@ -292,6 +294,41 @@ function localizeNotificationText(
     }
   }
 
+  if (item.rule_type === 'new-alert-decision') {
+    const eventType = getMetadataString(item, 'event_type');
+    const id = getMetadataString(item, eventType === 'alert' ? 'alert_id' : 'decision_id');
+    const scenario = getMetadataString(item, 'scenario');
+    const target = getMetadataString(item, 'target');
+    const createdAt = getMetadataString(item, 'created_at');
+    if (eventType === 'alert' && id && scenario && target && createdAt) {
+      return {
+        title: t('server.notifications.newEvent.alertTitle', titleValues),
+        message: t('server.notifications.newEvent.alertMessage', {
+          id,
+          scenario,
+          source: getMetadataString(item, 'source') || '—',
+          target,
+          createdAt,
+          description: getMetadataString(item, 'message') || '—',
+        }),
+      };
+    }
+    if (eventType === 'decision' && id && scenario && target && createdAt) {
+      return {
+        title: t('server.notifications.newEvent.decisionTitle', titleValues),
+        message: t('server.notifications.newEvent.decisionMessage', {
+          id,
+          type: getMetadataString(item, 'type') || '—',
+          value: getMetadataString(item, 'value') || '—',
+          scenario,
+          target,
+          createdAt,
+          stopAt: getMetadataString(item, 'stop_at') || '—',
+        }),
+      };
+    }
+  }
+
   if (item.rule_type === 'new-cve') {
     const cveId = getMetadataString(item, 'cve_id');
     const ageDays = getMetadataNumber(item, 'age_days');
@@ -388,6 +425,23 @@ function buildRulePayload(ruleForm: RuleFormState): UpsertNotificationRuleReques
         window_minutes: Number(ruleForm.config.window_minutes || '0'),
         alert_threshold: Number(ruleForm.config.alert_threshold || '0'),
         filters,
+      },
+    };
+  }
+
+  if (ruleForm.type === 'new-alert-decision') {
+    return {
+      ...basePayload,
+      type: 'new-alert-decision',
+      config: {
+        window_minutes: Number(ruleForm.config.window_minutes || '0'),
+        event_type: ruleForm.config.event_type === 'alert' || ruleForm.config.event_type === 'decision'
+          ? ruleForm.config.event_type
+          : 'both',
+        filters: {
+          ...filters,
+          values: splitIpRangeFilterValues(ruleForm.filters.values),
+        },
       },
     };
   }
@@ -1428,7 +1482,9 @@ function RuleModal({
 }) {
   const { t } = useI18n();
   const supportsAlertFilters = form.type !== 'application-update' && form.type !== 'lapi-availability';
-  const simulatedFilterLabel = form.type === 'ip-ban' ? t('pages.notifications.includeSimulatedDecisions') : t('pages.notifications.includeSimulatedAlerts');
+  const simulatedFilterLabel = form.type === 'ip-ban'
+    ? t('pages.notifications.includeSimulatedDecisions')
+    : t('pages.notifications.includeSimulatedAlerts');
 
   return (
     <Modal isOpen={open} onClose={onClose} title={editingRule ? t('pages.notifications.editRuleTitle') : t('pages.notifications.newRuleTitle')} maxWidth="max-w-3xl">
@@ -1444,6 +1500,7 @@ function RuleModal({
             >
               <option value="alert-spike">{t('pages.notifications.ruleTypes.alertSpike')}</option>
               <option value="alert-threshold">{t('pages.notifications.ruleTypes.alertThreshold')}</option>
+              <option value="new-alert-decision">{t('pages.notifications.ruleTypes.newAlertDecision')}</option>
               <option value="new-cve">{t('pages.notifications.ruleTypes.recentCve')}</option>
               <option value="ip-ban">{t('pages.notifications.ruleTypes.ipBan')}</option>
               <option value="application-update">{t('pages.notifications.ruleTypes.applicationUpdate')}</option>
@@ -1486,7 +1543,8 @@ function RuleModal({
                         checked={form.channel_ids.includes(channel.id)}
                         onChange={(event) => onSetForm((current) => ({ ...current, channel_ids: event.target.checked ? [...current.channel_ids, channel.id] : current.channel_ids.filter((value) => value !== channel.id) }))}
                       />
-                      <span>{channel.name}</span>
+                      <span className="min-w-0 flex-1 truncate">{channel.name}</span>
+                      <Badge variant="outline" className="shrink-0">{channel.type}</Badge>
                     </label>
                   ))}
                 </div>
@@ -1495,15 +1553,17 @@ function RuleModal({
         </div>
         {supportsAlertFilters && (
           <div className="grid gap-4 md:grid-cols-3">
-            {form.type === 'ip-ban' && (
+            {(form.type === 'ip-ban' || form.type === 'new-alert-decision') && (
               <LabeledInput label={t('pages.notifications.ipRangeFilter')} value={form.filters.values} onChange={(value) => onSetForm((current) => ({ ...current, filters: { ...current.filters, values: value } }))} />
             )}
             <LabeledInput label={t('pages.notifications.scenarioContains')} value={form.filters.scenario} onChange={(value) => onSetForm((current) => ({ ...current, filters: { ...current.filters, scenario: value } }))} />
             <LabeledInput label={t('pages.notifications.targetContains')} value={form.filters.target} onChange={(value) => onSetForm((current) => ({ ...current, filters: { ...current.filters, target: value } }))} />
-            <div className="flex items-center gap-3 pt-7">
-              <Switch id="rule-include-simulated" checked={form.filters.include_simulated} onCheckedChange={(checked) => onSetForm((current) => ({ ...current, filters: { ...current.filters, include_simulated: checked } }))} />
-              <label htmlFor="rule-include-simulated" className="text-sm font-medium">{simulatedFilterLabel}</label>
-            </div>
+            {form.type !== 'new-alert-decision' && (
+              <div className="flex items-center gap-3 pt-7">
+                <Switch id="rule-include-simulated" checked={form.filters.include_simulated} onCheckedChange={(checked) => onSetForm((current) => ({ ...current, filters: { ...current.filters, include_simulated: checked } }))} />
+                <label htmlFor="rule-include-simulated" className="text-sm font-medium">{simulatedFilterLabel}</label>
+              </div>
+            )}
           </div>
         )}
         <RuleConfigFields
@@ -1967,6 +2027,64 @@ function RuleConfigFields({
   const input = (key: string, label: string) => <LabeledInput key={key} label={label} value={form.config[key] || ''} onChange={(value) => onChange(key, value)} />;
   if (form.type === 'alert-spike') return <div className="grid gap-4 md:grid-cols-3">{input('window_minutes', t('pages.notifications.windowMinutes'))}{input('percent_increase', t('pages.notifications.percentIncrease'))}{input('minimum_current_alerts', t('pages.notifications.minimumAlerts'))}</div>;
   if (form.type === 'alert-threshold') return <div className="grid gap-4 md:grid-cols-2">{input('window_minutes', t('pages.notifications.windowMinutes'))}{input('alert_threshold', t('pages.notifications.alertThreshold'))}</div>;
+  if (form.type === 'new-alert-decision') {
+    const eventType = form.config.event_type || 'both';
+    const includesAlerts = eventType !== 'decision';
+    const includesDecisions = eventType !== 'alert';
+    const setEventTypeEnabled = (type: 'alert' | 'decision', enabled: boolean) => {
+      const nextIncludesAlerts = type === 'alert' ? enabled : includesAlerts;
+      const nextIncludesDecisions = type === 'decision' ? enabled : includesDecisions;
+      if (!nextIncludesAlerts && !nextIncludesDecisions) return;
+      onChange(
+        'event_type',
+        nextIncludesAlerts && nextIncludesDecisions
+          ? 'both'
+          : nextIncludesAlerts
+            ? 'alert'
+            : 'decision',
+      );
+    };
+
+    return (
+      <div className="space-y-4">
+        <fieldset className="space-y-2 text-sm">
+          <legend className="font-medium">{t('pages.notifications.eventType')}</legend>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="flex items-center gap-3 rounded-lg border border-gray-200 bg-white/60 p-3 dark:border-gray-700 dark:bg-gray-900/50">
+              <input
+                type="checkbox"
+                checked={includesAlerts}
+                onChange={(event) => setEventTypeEnabled('alert', event.target.checked)}
+              />
+              <span>{t('pages.notifications.eventTypes.alerts')}</span>
+            </label>
+            <label className="flex items-center gap-3 rounded-lg border border-gray-200 bg-white/60 p-3 dark:border-gray-700 dark:bg-gray-900/50">
+              <input
+                type="checkbox"
+                checked={includesDecisions}
+                onChange={(event) => setEventTypeEnabled('decision', event.target.checked)}
+              />
+              <span>{t('pages.notifications.eventTypes.decisions')}</span>
+            </label>
+          </div>
+        </fieldset>
+        <div className="grid items-end gap-4 md:grid-cols-2">
+          {input('window_minutes', t('pages.notifications.windowMinutes'))}
+          <div className="flex min-h-10 items-center gap-3 rounded-lg border border-gray-200 bg-white/60 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900/50">
+            <Switch
+              id="rule-include-simulated"
+              checked={form.filters.include_simulated}
+              onCheckedChange={(checked) => onSetForm((current) => ({
+                ...current,
+                filters: { ...current.filters, include_simulated: checked },
+              }))}
+            />
+            <label htmlFor="rule-include-simulated" className="font-medium">{t('pages.notifications.includeSimulatedAlertsAndDecisions')}</label>
+          </div>
+        </div>
+      </div>
+    );
+  }
   if (form.type === 'ip-ban') return <div className="grid gap-4 md:grid-cols-2">{input('window_minutes', t('pages.notifications.windowMinutes'))}</div>;
   if (form.type === 'application-update') {
     return (

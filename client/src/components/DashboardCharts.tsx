@@ -33,12 +33,16 @@ interface ChartDatum {
     simulatedAlerts: number;
     decisions: number;
     simulatedDecisions: number;
+    activeDecisions: number;
+    activeSimulatedDecisions: number;
 }
 
 interface CustomTooltipEntry {
     name?: string;
     value?: string | number;
     color?: string;
+    dataKey?: string;
+    payload?: ChartDatum;
 }
 
 interface CustomTooltipProps {
@@ -136,8 +140,10 @@ const getSymlogTicks = (maxValue: number, targetTickCount = SYMLOG_TICK_TARGET) 
 interface ActivityBarChartProps {
     alertsData: ActivityChartSeriesPoint[];
     decisionsData: ActivityChartSeriesPoint[];
+    activeDecisionsData?: ActivityChartSeriesPoint[];
     simulatedAlertsData?: ActivityChartSeriesPoint[];
     simulatedDecisionsData?: ActivityChartSeriesPoint[];
+    activeSimulatedDecisionsData?: ActivityChartSeriesPoint[];
     unfilteredAlertsData: ActivityChartSeriesPoint[];
     unfilteredDecisionsData: ActivityChartSeriesPoint[];
     unfilteredSimulatedAlertsData?: ActivityChartSeriesPoint[];
@@ -155,8 +161,8 @@ interface ActivityBarChartProps {
 /**
  * Custom Tooltip Component for better dark mode support
  */
-const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
-    const { t } = useI18n();
+export const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
+    const { language, t } = useI18n();
 
     if (active && payload && payload.length) {
         const tooltipOrder = [
@@ -177,11 +183,19 @@ const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
                 {sortedPayload.map((entry, index) => {
                     const isAlert = entry.name?.toLowerCase().includes('alert');
                     const Icon = isAlert ? ShieldAlert : Gavel;
+                    const activeDecisionCount = entry.dataKey === 'decisions'
+                        ? entry.payload?.activeDecisions
+                        : entry.dataKey === 'simulatedDecisions'
+                            ? entry.payload?.activeSimulatedDecisions
+                            : undefined;
                     return (
                         <div key={index} className="flex items-center gap-2 mb-1 last:mb-0">
                             <Icon className="w-4 h-4" style={{ color: entry.color }} />
                             <span className="text-sm" style={{ color: entry.color }}>
                                 {entry.name || t('components.dashboardCharts.value')}: {entry.value ?? 0}
+                                {activeDecisionCount !== undefined && (
+                                    <> ({activeDecisionCount.toLocaleString()} {t('common.active').toLocaleLowerCase(language)})</>
+                                )}
                             </span>
                         </div>
                     );
@@ -198,8 +212,10 @@ const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
 export function ActivityBarChart({
     alertsData,
     decisionsData,
+    activeDecisionsData = [],
     simulatedAlertsData = [],
     simulatedDecisionsData = [],
+    activeSimulatedDecisionsData = [],
     unfilteredAlertsData,
     unfilteredDecisionsData,
     unfilteredSimulatedAlertsData = [],
@@ -230,6 +246,8 @@ export function ActivityBarChart({
                 simulatedAlerts: 0,
                 decisions: 0,
                 simulatedDecisions: 0,
+                activeDecisions: 0,
+                activeSimulatedDecisions: 0,
                 label: item.label
             };
         });
@@ -243,9 +261,15 @@ export function ActivityBarChart({
                 simulatedAlerts: 0,
                 decisions: 0,
                 simulatedDecisions: 0,
+                activeDecisions: 0,
+                activeSimulatedDecisions: 0,
                 label: item.label
             };
             merged[item.date].decisions = item.count;
+        });
+
+        activeDecisionsData.forEach(item => {
+            if (merged[item.date]) merged[item.date].activeDecisions = item.count;
         });
 
         simulatedAlertsData.forEach(item => {
@@ -257,6 +281,8 @@ export function ActivityBarChart({
                     simulatedAlerts: 0,
                     decisions: 0,
                     simulatedDecisions: 0,
+                    activeDecisions: 0,
+                    activeSimulatedDecisions: 0,
                     label: item.label,
                 };
             }
@@ -272,14 +298,20 @@ export function ActivityBarChart({
                     simulatedAlerts: 0,
                     decisions: 0,
                     simulatedDecisions: 0,
+                    activeDecisions: 0,
+                    activeSimulatedDecisions: 0,
                     label: item.label,
                 };
             }
             merged[item.date].simulatedDecisions = item.count;
         });
 
+        activeSimulatedDecisionsData.forEach(item => {
+            if (merged[item.date]) merged[item.date].activeSimulatedDecisions = item.count;
+        });
+
         return Object.values(merged).sort((left, right) => left.date.localeCompare(right.date));
-    }, [alertsData, decisionsData, simulatedAlertsData, simulatedDecisionsData]);
+    }, [alertsData, decisionsData, activeDecisionsData, simulatedAlertsData, simulatedDecisionsData, activeSimulatedDecisionsData]);
 
 
     // -------------------------------------------------------------------------
@@ -297,6 +329,8 @@ export function ActivityBarChart({
                     simulatedAlerts: 0,
                     decisions: 0,
                     simulatedDecisions: 0,
+                    activeDecisions: 0,
+                    activeSimulatedDecisions: 0,
                 };
             });
         }
@@ -310,6 +344,8 @@ export function ActivityBarChart({
                     simulatedAlerts: 0,
                     decisions: 0,
                     simulatedDecisions: 0,
+                    activeDecisions: 0,
+                    activeSimulatedDecisions: 0,
                 };
                 merged[item.date].decisions = item.count; // Include counts
             });
@@ -325,6 +361,8 @@ export function ActivityBarChart({
                         simulatedAlerts: 0,
                         decisions: 0,
                         simulatedDecisions: 0,
+                        activeDecisions: 0,
+                        activeSimulatedDecisions: 0,
                     };
                 }
                 merged[item.date].simulatedAlerts = item.count;
@@ -341,6 +379,8 @@ export function ActivityBarChart({
                         simulatedAlerts: 0,
                         decisions: 0,
                         simulatedDecisions: 0,
+                        activeDecisions: 0,
+                        activeSimulatedDecisions: 0,
                     };
                 }
                 merged[item.date].simulatedDecisions = item.count;

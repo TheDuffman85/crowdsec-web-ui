@@ -91,6 +91,10 @@ export interface WorldMapDatum {
   countryCode: string;
   simulatedCount?: number;
   liveCount?: number;
+  liveDecisionCount?: number;
+  simulatedDecisionCount?: number;
+  activeLiveDecisionCount?: number;
+  activeSimulatedDecisionCount?: number;
 }
 
 export type ActivityChartSeriesPoint = AggregatedChartPoint;
