@@ -1740,22 +1740,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
   }
 
-  async function fetchActiveDecisionAlertsChunked(lookbackStart: number, now: number): Promise<ActiveWindowSyncSummary> {
-    let currentStart = lookbackStart;
-    let summary: ActiveWindowSyncSummary = {
-      alerts: [],
-      errors: [],
-      successfulWindows: 0,
-    };
-
-    while (currentStart < now) {
-      const currentEnd = Math.min(currentStart + config.alertSyncChunkMs, now);
-      const result = await fetchActiveDecisionWindow(currentStart, currentEnd, now);
-      summary = combineActiveWindowSummaries(summary, result);
-      currentStart = currentEnd;
-    }
-
-    return summary;
+  async function fetchActiveDecisionAlerts(lookbackStart: number, now: number): Promise<ActiveWindowSyncSummary> {
+    return fetchActiveDecisionWindow(lookbackStart, now, now);
   }
 
   async function syncHistory(): Promise<SyncHistorySummary> {
@@ -1830,7 +1816,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
     updateSyncStatus({ progress: 95, message: t('components.syncOverlay.statusActiveDecisions') });
     console.log('Syncing active decisions...');
-    const activeWindowSummary = await fetchActiveDecisionAlertsChunked(lookbackStart, now);
+    const activeWindowSummary = await fetchActiveDecisionAlerts(lookbackStart, now);
     const activeDecisionAlerts = mergeAlertRecords(activeWindowSummary.alerts);
     const activeDecisionCount = countAlertDecisions(activeDecisionAlerts);
     const cachedAlertsBeforeActiveSync = database.countAlerts();
@@ -1981,7 +1967,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       const activeLookbackStart = deltaStartedAt - config.lookbackMs;
       const [newAlerts, activeWindowSummary] = await Promise.all([
         fetchAlertsForSync(sinceDuration, null, false, { requireComplete: true }),
-        fetchActiveDecisionAlertsChunked(activeLookbackStart, deltaStartedAt),
+        fetchActiveDecisionAlerts(activeLookbackStart, deltaStartedAt),
       ]);
       const activeDecisionAlerts = mergeAlertRecords(activeWindowSummary.alerts);
       const newDecisionCount = countAlertDecisions(newAlerts);

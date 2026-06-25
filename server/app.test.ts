@@ -1608,7 +1608,7 @@ describe('createApp', () => {
     }
   });
 
-  test('syncs active decisions in configured windows instead of one full-lookback request', async () => {
+  test('syncs active decisions with one lookback request unless timeout splitting is needed', async () => {
     const { controller, database, fetchCalls } = createController({
       env: {
         CROWDSEC_LOOKBACK_PERIOD: '2h',
@@ -1628,9 +1628,13 @@ describe('createApp', () => {
     const activeRequests = fetchCalls.filter((call) =>
       call.url.includes('/v1/alerts?') && call.url.includes('has_active_decision=true'),
     );
-    expect(activeRequests).toHaveLength(6);
+    expect(activeRequests).toHaveLength(3);
     expect(activeRequests.every((call) => call.url.includes('until='))).toBe(true);
-    expect(activeRequests.every((call) => !call.url.includes('since=2h') || !call.url.includes('until=0h'))).toBe(true);
+    expect(activeRequests.every((call) => call.url.includes('since=2h'))).toBe(true);
+    expect(activeRequests.every((call) => call.url.includes('until=0h'))).toBe(true);
+    expect(activeRequests.some((call) => !call.url.includes('scope='))).toBe(true);
+    expect(activeRequests.some((call) => call.url.includes('scope=ip'))).toBe(true);
+    expect(activeRequests.some((call) => call.url.includes('scope=range'))).toBe(true);
 
     controller.stopBackgroundTasks();
     database.close();
