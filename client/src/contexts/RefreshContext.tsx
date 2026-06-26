@@ -91,6 +91,7 @@ export function RefreshProvider({ children }: WithChildren) {
             setIntervalMsState(data.new_interval_ms);
         } catch (error) {
             console.error('Error updating refresh interval:', error);
+            throw error;
         }
     };
 

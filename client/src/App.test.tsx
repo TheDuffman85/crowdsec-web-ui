@@ -29,6 +29,10 @@ vi.mock('./pages/Notifications', () => ({
   Notifications: () => <div>Notifications Page</div>,
 }));
 
+vi.mock('./pages/Settings', () => ({
+  Settings: () => <div>Settings Page</div>,
+}));
+
 describe('App lazy routes', () => {
   beforeEach(() => {
     vi.stubGlobal(
@@ -62,5 +66,11 @@ describe('App lazy routes', () => {
     window.history.pushState({}, '', '/notifications');
     render(<App />);
     await waitFor(() => expect(screen.getByText('Notifications Page')).toBeInTheDocument());
+  });
+
+  test('renders the lazy settings route', async () => {
+    window.history.pushState({}, '', '/settings');
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Settings Page')).toBeInTheDocument());
   });
 });
