@@ -5,6 +5,7 @@ import { useNotificationUnreadCount } from "../contexts/useNotificationUnreadCou
 import { useRefresh } from "../contexts/useRefresh";
 import { useState, useEffect } from "react";
 import { apiUrl, assetUrl } from "../lib/basePath";
+import { fetchConfig } from "../lib/api";
 import type { UpdateCheckResponse } from '../types';
 import {
     BROWSER_LANGUAGE_SETTING,
@@ -69,6 +70,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
     const { browserLanguage, preference, setLanguagePreference, t } = useI18n();
     const { formatTime } = useDateTime();
     const [updateStatus, setUpdateStatus] = useState<UpdateCheckResponse | null>(null);
+    const [canManageSettings, setCanManageSettings] = useState(false);
 
     const links = [
         { to: "/", label: "components.sidebar.nav.dashboard", icon: LayoutDashboard },
@@ -79,6 +81,19 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
 
     useEffect(() => {
         let cancelled = false;
+
+        const loadPermissions = async () => {
+            try {
+                const config = await fetchConfig();
+                if (!cancelled) {
+                    setCanManageSettings(config.permissions?.can_manage_settings !== false);
+                }
+            } catch (error) {
+                if (!cancelled) {
+                    console.error("Failed to load permissions", error);
+                }
+            }
+        };
 
         const checkUpdates = async () => {
             try {
@@ -102,6 +117,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
             }
         };
 
+        void loadPermissions();
         void checkUpdates();
         // Check on mount and when refresh signal triggers
         return () => {
@@ -204,30 +220,31 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
             </nav>
             <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex flex-col gap-4">
 
-                {/* Refresh Settings */}
-                <div className="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-3 space-y-2">
-                    <div className="flex items-center justify-between">
-                        <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                            {t('components.sidebar.refresh')}
-                        </label>
-                        {lastUpdated && (
-                            <span className="text-[10px] items-center text-gray-400 font-mono">
-                                {formatLastUpdatedTime(lastUpdated)}
-                            </span>
-                        )}
+                {canManageSettings && (
+                    <div className="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                                {t('components.sidebar.refresh')}
+                            </label>
+                            {lastUpdated && (
+                                <span className="text-[10px] items-center text-gray-400 font-mono">
+                                    {formatLastUpdatedTime(lastUpdated)}
+                                </span>
+                            )}
+                        </div>
+                        <select
+                            value={intervalMs}
+                            onChange={(e) => setIntervalMs(Number(e.target.value))}
+                            className="w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs rounded-md px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary-500 cursor-pointer"
+                        >
+                            <option value={0}>{t('components.sidebar.refresh.off')}</option>
+                            <option value={5000}>{t('components.sidebar.refresh.every5Seconds')}</option>
+                            <option value={30000}>{t('components.sidebar.refresh.every30Seconds')}</option>
+                            <option value={60000}>{t('components.sidebar.refresh.every1Minute')}</option>
+                            <option value={300000}>{t('components.sidebar.refresh.every5Minutes')}</option>
+                        </select>
                     </div>
-                    <select
-                        value={intervalMs}
-                        onChange={(e) => setIntervalMs(Number(e.target.value))}
-                        className="w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs rounded-md px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary-500 cursor-pointer"
-                    >
-                        <option value={0}>{t('components.sidebar.refresh.off')}</option>
-                        <option value={5000}>{t('components.sidebar.refresh.every5Seconds')}</option>
-                        <option value={30000}>{t('components.sidebar.refresh.every30Seconds')}</option>
-                        <option value={60000}>{t('components.sidebar.refresh.every1Minute')}</option>
-                        <option value={300000}>{t('components.sidebar.refresh.every5Minutes')}</option>
-                    </select>
-                </div>
+                )}
                 <div className="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-3 space-y-2">
                     <label htmlFor="language-select" className="flex items-center gap-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">
                         <Globe2 size={14} />

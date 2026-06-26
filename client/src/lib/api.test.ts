@@ -180,6 +180,29 @@ describe('api helpers', () => {
     });
   });
 
+  test('delete and add helpers surface read-only 403 messages without permission metadata', async () => {
+    mockFetch(vi.fn(async () => Response.json({ error: 'Read-only mode is enabled', code: 'READ_ONLY' }, { status: 403 })));
+
+    await expect(deleteAlert(1)).rejects.toMatchObject({
+      message: 'Read-only mode is enabled',
+    });
+    await expect(deleteDecision(1)).rejects.toMatchObject({
+      message: 'Read-only mode is enabled',
+    });
+    await expect(bulkDeleteAlerts([1, 2])).rejects.toMatchObject({
+      message: 'Read-only mode is enabled',
+    });
+    await expect(bulkDeleteDecisions([1, 2])).rejects.toMatchObject({
+      message: 'Read-only mode is enabled',
+    });
+    await expect(cleanupByIp('1.2.3.4')).rejects.toMatchObject({
+      message: 'Read-only mode is enabled',
+    });
+    await expect(addDecision({ ip: '1.2.3.4' })).rejects.toMatchObject({
+      message: 'Read-only mode is enabled',
+    });
+  });
+
   test('handles generic fetch failures and 204 deletes', async () => {
     mockFetch(
       vi.fn(async (_input, init) => {

@@ -45,6 +45,7 @@ export interface RuntimeConfig {
   notificationDebugPayloads: boolean;
   timeZone: string | null;
   timeFormat: TimeFormat;
+  readOnly: boolean;
 }
 
 export function parseTimeZone(value: string | undefined): string | null {
@@ -279,5 +280,6 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
     notificationDebugPayloads: parseBooleanEnv(env.NOTIFICATION_DEBUG_PAYLOADS, false),
     timeZone: parseTimeZone(env.TZ),
     timeFormat: parseTimeFormat(env.CROWDSEC_TIME_FORMAT),
+    readOnly: parseBooleanEnv(env.PERMISSION_READ_ONLY, false),
   };
 }

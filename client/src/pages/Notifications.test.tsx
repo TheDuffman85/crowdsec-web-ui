@@ -33,6 +33,7 @@ vi.mock('../lib/api', () => ({
   deleteReadNotifications: vi.fn(),
   markNotificationRead: vi.fn(),
   markNotificationsRead: vi.fn(),
+  fetchConfig: vi.fn(),
 }));
 
 import {
@@ -40,8 +41,10 @@ import {
   createNotificationRule,
   deleteNotification,
   deleteReadNotifications,
+  fetchConfig,
   fetchNotificationSettings,
   fetchNotificationsPaginated,
+  markNotificationRead,
   markNotificationsRead,
   testNotificationChannel,
 } from '../lib/api';
@@ -179,11 +182,104 @@ describe('Notifications page', () => {
     vi.mocked(fetchNotificationSettings).mockResolvedValue(buildSettings());
 
     vi.mocked(fetchNotificationsPaginated).mockResolvedValue(buildNotificationPage());
+    vi.mocked(fetchConfig).mockResolvedValue({
+      lookback_period: '1h',
+      lookback_hours: 1,
+      lookback_days: 1,
+      refresh_interval: 30000,
+      current_interval_name: '30s',
+      lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
+      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+      simulations_enabled: true,
+      machine_features_enabled: false,
+      origin_features_enabled: false,
+      permissions: {
+        mode: 'admin',
+        can_manage_enforcement: true,
+        can_manage_settings: true,
+      },
+    });
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  test('hides notification management controls when read-only but keeps mark-read available', async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchConfig).mockResolvedValueOnce({
+      lookback_period: '1h',
+      lookback_hours: 1,
+      lookback_days: 1,
+      refresh_interval: 30000,
+      current_interval_name: '30s',
+      lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
+      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+      simulations_enabled: true,
+      machine_features_enabled: false,
+      origin_features_enabled: false,
+      permissions: {
+        mode: 'read-only',
+        can_manage_enforcement: false,
+        can_manage_settings: false,
+      },
+    });
+    vi.mocked(fetchNotificationSettings).mockResolvedValue(buildSettings({
+      rules: [
+        {
+          id: 'rule-1',
+          name: 'Threshold',
+          type: 'alert-threshold',
+          enabled: true,
+          severity: 'warning',
+          channel_ids: ['channel-1'],
+          config: {
+            window_minutes: 60,
+            alert_threshold: 5,
+          },
+          created_at: '2026-03-28T12:00:00.000Z',
+          updated_at: '2026-03-28T12:00:00.000Z',
+        },
+      ],
+    }));
+    vi.mocked(fetchNotificationsPaginated).mockResolvedValue(buildNotificationPage({
+      data: [
+        {
+          id: 'notif-1',
+          rule_id: 'rule-1',
+          rule_name: 'Threshold',
+          rule_type: 'alert-threshold',
+          severity: 'warning',
+          title: 'Threshold breached',
+          message: 'Alert volume is elevated',
+          created_at: '2026-03-28T12:00:00.000Z',
+          read_at: null,
+          metadata: {},
+          deliveries: [],
+        },
+      ],
+      selectable_ids: ['notif-1'],
+      unread_count: 1,
+      total: 1,
+    }));
+
+    render(<Notifications />);
+
+    await waitFor(() => expect(screen.getByText('Threshold breached')).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: /add destination/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /add rule/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /delete selected/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /delete all read/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete notification' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Send test notification' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit destination' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete destination' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit rule' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete rule' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Mark read' }));
+    await waitFor(() => expect(markNotificationRead).toHaveBeenCalledWith('notif-1'));
   });
 
   test('renders typed destination fields for MQTT and webhook', async () => {

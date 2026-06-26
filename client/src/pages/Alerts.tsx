@@ -133,6 +133,7 @@ export function Alerts() {
     const initialQueryParam = searchParams.get("q") ?? "";
     const [alerts, setAlerts] = useState<AlertListItem[]>([]);
     const [simulationsEnabled, setSimulationsEnabled] = useState(false);
+    const [canManageEnforcement, setCanManageEnforcement] = useState(false);
     const [tableColumnPreferences, setTableColumnPreferences] = useState<TableColumnPreferences>(DEFAULT_TABLE_COLUMN_PREFERENCES);
     const [showColumnsModal, setShowColumnsModal] = useState(false);
     const [columnsSaving, setColumnsSaving] = useState(false);
@@ -195,6 +196,7 @@ export function Alerts() {
     const lastRefreshSignalRef = useRef(refreshSignal);
     const configRef = useRef<{
         simulationsEnabled: boolean;
+        canManageEnforcement: boolean;
         tableColumnPreferences: TableColumnPreferences;
     } | null>(null);
     const hasLoadedAlertsRef = useRef(false);
@@ -222,7 +224,7 @@ export function Alerts() {
         [],
     );
     const visibleAlertColumnCount = visibleAlertColumns.length;
-    const alertTableColSpan = visibleAlertColumnCount + 2;
+    const alertTableColSpan = visibleAlertColumnCount + (canManageEnforcement ? 2 : 0);
     const isAlertColumnVisible = useCallback((columnId: TableColumnId) => (
         visibleAlertColumns.includes(columnId)
     ), [visibleAlertColumns]);
@@ -254,11 +256,13 @@ export function Alerts() {
         const configData = await fetchConfig();
         const nextConfig = {
             simulationsEnabled: configData.simulations_enabled === true,
+            canManageEnforcement: configData.permissions?.can_manage_enforcement !== false,
             tableColumnPreferences: configData.table_column_preferences || DEFAULT_TABLE_COLUMN_PREFERENCES,
         };
 
         configRef.current = nextConfig;
         setSimulationsEnabled(nextConfig.simulationsEnabled);
+        setCanManageEnforcement(nextConfig.canManageEnforcement);
         setTableColumnPreferences(nextConfig.tableColumnPreferences);
 
         return nextConfig;
@@ -864,18 +868,20 @@ export function Alerts() {
                 </span>
             </div>
 
-            <div className="flex items-center gap-3">
-                <button
-                    onClick={() => {
-                        setPendingDeleteErrorInfo(null);
-                        setPendingDeleteAction({ kind: "selected", ids: selectedFilteredAlertIds });
-                    }}
-                    disabled={selectedAlertCount === 0}
-                    className="rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                    {t('pages.alerts.deleteSelected')}
-                </button>
-            </div>
+            {canManageEnforcement && (
+                <div className="flex items-center gap-3">
+                    <button
+                        onClick={() => {
+                            setPendingDeleteErrorInfo(null);
+                            setPendingDeleteAction({ kind: "selected", ids: selectedFilteredAlertIds });
+                        }}
+                        disabled={selectedAlertCount === 0}
+                        className="rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        {t('pages.alerts.deleteSelected')}
+                    </button>
+                </div>
+            )}
 
             {/* Error Message */}
             {errorInfo && (
@@ -985,17 +991,19 @@ export function Alerts() {
                     <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 transition-opacity duration-200">
                         <thead className="bg-gray-50 dark:bg-gray-900/50">
                             <tr>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                                    <input
-                                        ref={selectAllAlertsRef}
-                                        type="checkbox"
-                                        aria-label={t('pages.alerts.selectAllFiltered')}
-                                        checked={allFilteredAlertsSelected}
-                                        disabled={selectableAlertIds.length === 0}
-                                        onChange={toggleAllFilteredAlerts}
-                                        className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                                    />
-                                </th>
+                                {canManageEnforcement && (
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                        <input
+                                            ref={selectAllAlertsRef}
+                                            type="checkbox"
+                                            aria-label={t('pages.alerts.selectAllFiltered')}
+                                            checked={allFilteredAlertsSelected}
+                                            disabled={selectableAlertIds.length === 0}
+                                            onChange={toggleAllFilteredAlerts}
+                                            className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                                        />
+                                    </th>
+                                )}
                                 {visibleAlertColumns.map((columnId) => {
                                     const column = alertColumnDefinitionById.get(columnId);
                                     if (!column) {
@@ -1008,7 +1016,9 @@ export function Alerts() {
                                         </th>
                                     );
                                 })}
-                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('tableColumns.actions')}</th>
+                                {canManageEnforcement && (
+                                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('tableColumns.actions')}</th>
+                                )}
                             </tr>
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
@@ -1031,15 +1041,17 @@ export function Alerts() {
                                             onClick={() => handleAlertClick(alert)}
                                             className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors cursor-pointer"
                                         >
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
-                                                <input
-                                                    type="checkbox"
-                                                    aria-label={t('pages.alerts.selectAlert', { id: alert.id })}
-                                                    checked={isSelected}
-                                                    onChange={() => toggleAlertSelection(String(alert.id))}
-                                                    className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                                                />
-                                            </td>
+                                            {canManageEnforcement && (
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
+                                                    <input
+                                                        type="checkbox"
+                                                        aria-label={t('pages.alerts.selectAlert', { id: alert.id })}
+                                                        checked={isSelected}
+                                                        onChange={() => toggleAlertSelection(String(alert.id))}
+                                                        className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                                                    />
+                                                </td>
+                                            )}
                                             {visibleAlertColumns.map((columnId) => {
                                                 switch (columnId) {
                                                     case 'id':
@@ -1154,32 +1166,34 @@ export function Alerts() {
                                                         return null;
                                                 }
                                             })}
-                                            <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                                <div className="flex items-center justify-end gap-2">
-                                                    {sourceValue && (
+                                            {canManageEnforcement && (
+                                                <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                                    <div className="flex items-center justify-end gap-2">
+                                                        {sourceValue && (
+                                                            <button
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    setPendingDeleteErrorInfo(null);
+                                                                    setPendingDeleteAction({ kind: "ip", ip: sourceValue });
+                                                                }}
+                                                                className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
+                                                                title={t('common.deleteAllForIp', { value: sourceValue })}
+                                                                aria-label={t('common.deleteAllForIp', { value: sourceValue })}
+                                                            >
+                                                                <ShieldBan size={16} aria-hidden="true" />
+                                                            </button>
+                                                        )}
                                                         <button
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                setPendingDeleteErrorInfo(null);
-                                                                setPendingDeleteAction({ kind: "ip", ip: sourceValue });
-                                                            }}
+                                                            onClick={(e) => requestDelete(alert.id, e)}
                                                             className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
-                                                            title={t('common.deleteAllForIp', { value: sourceValue })}
-                                                            aria-label={t('common.deleteAllForIp', { value: sourceValue })}
+                                                            title={t('pages.alerts.deleteAlert')}
+                                                            aria-label={t('pages.alerts.deleteAlert')}
                                                         >
-                                                            <ShieldBan size={16} aria-hidden="true" />
+                                                            <Trash2 size={16} />
                                                         </button>
-                                                    )}
-                                                    <button
-                                                        onClick={(e) => requestDelete(alert.id, e)}
-                                                        className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
-                                                        title={t('pages.alerts.deleteAlert')}
-                                                        aria-label={t('pages.alerts.deleteAlert')}
-                                                    >
-                                                        <Trash2 size={16} />
-                                                    </button>
-                                                </div>
-                                            </td>
+                                                    </div>
+                                                </td>
+                                            )}
                                         </tr>
                                     );
                                 })

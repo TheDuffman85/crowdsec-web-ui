@@ -104,6 +104,7 @@ export function Decisions() {
     const initialQueryParam = searchParams.get("q") ?? "";
     const [decisions, setDecisions] = useState<DecisionListItem[]>([]);
     const [simulationsEnabled, setSimulationsEnabled] = useState(false);
+    const [canManageEnforcement, setCanManageEnforcement] = useState(false);
     const [tableColumnPreferences, setTableColumnPreferences] = useState<TableColumnPreferences>(DEFAULT_TABLE_COLUMN_PREFERENCES);
     const [showColumnsModal, setShowColumnsModal] = useState(false);
     const [columnsSaving, setColumnsSaving] = useState(false);
@@ -157,6 +158,7 @@ export function Decisions() {
     const lastRefreshSignalRef = useRef(refreshSignal);
     const configRef = useRef<{
         simulationsEnabled: boolean;
+        canManageEnforcement: boolean;
         tableColumnPreferences: TableColumnPreferences;
     } | null>(null);
     const hasLoadedDecisionsRef = useRef(false);
@@ -184,7 +186,7 @@ export function Decisions() {
         [],
     );
     const visibleDecisionColumnCount = visibleDecisionColumns.length;
-    const decisionTableColSpan = visibleDecisionColumnCount + 2;
+    const decisionTableColSpan = visibleDecisionColumnCount + (canManageEnforcement ? 2 : 0);
     const cancelSearchDebounce = useCallback(() => {
         if (searchDebounceTimeoutRef.current !== null) {
             window.clearTimeout(searchDebounceTimeoutRef.current);
@@ -214,11 +216,13 @@ export function Decisions() {
         const configData = await fetchConfig();
         const nextConfig = {
             simulationsEnabled: configData.simulations_enabled === true,
+            canManageEnforcement: configData.permissions?.can_manage_enforcement !== false,
             tableColumnPreferences: configData.table_column_preferences || DEFAULT_TABLE_COLUMN_PREFERENCES,
         };
 
         configRef.current = nextConfig;
         setSimulationsEnabled(nextConfig.simulationsEnabled);
+        setCanManageEnforcement(nextConfig.canManageEnforcement);
         setTableColumnPreferences(nextConfig.tableColumnPreferences);
 
         return nextConfig;
@@ -691,25 +695,27 @@ export function Decisions() {
                 </span>
             </div>
             
-            <div className="flex items-center gap-3">
-                <button
-                    onClick={openAddDecision}
-                    className="bg-primary-600 hover:bg-primary-700 text-white font-medium py-2 px-4 rounded-md transition-colors flex items-center gap-2 text-sm"
-                >
-                    <Gavel size={16} />
-                    {t('pages.decisions.addDecision')}
-                </button>
-                <button
-                    onClick={() => {
-                        setPendingDeleteErrorInfo(null);
-                        setPendingDeleteAction({ kind: "selected", ids: selectedFilteredDecisionIds });
-                    }}
-                    disabled={selectedDecisionCount === 0}
-                    className="rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                    {t('pages.decisions.deleteSelected')}
-                </button>
-            </div>
+            {canManageEnforcement && (
+                <div className="flex items-center gap-3">
+                    <button
+                        onClick={openAddDecision}
+                        className="bg-primary-600 hover:bg-primary-700 text-white font-medium py-2 px-4 rounded-md transition-colors flex items-center gap-2 text-sm"
+                    >
+                        <Gavel size={16} />
+                        {t('pages.decisions.addDecision')}
+                    </button>
+                    <button
+                        onClick={() => {
+                            setPendingDeleteErrorInfo(null);
+                            setPendingDeleteAction({ kind: "selected", ids: selectedFilteredDecisionIds });
+                        }}
+                        disabled={selectedDecisionCount === 0}
+                        className="rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        {t('pages.decisions.deleteSelected')}
+                    </button>
+                </div>
+            )}
 
             {/* Error Message */}
             {errorInfo && (
@@ -856,17 +862,19 @@ export function Decisions() {
                     <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                         <thead className="bg-gray-50 dark:bg-gray-900/50">
                             <tr>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                                    <input
-                                        ref={selectAllDecisionsRef}
-                                        type="checkbox"
-                                        aria-label={t('pages.decisions.selectAllFiltered')}
-                                        checked={allFilteredDecisionsSelected}
-                                        disabled={selectableDecisionIds.length === 0}
-                                        onChange={toggleAllFilteredDecisions}
-                                        className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                                    />
-                                </th>
+                                {canManageEnforcement && (
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                        <input
+                                            ref={selectAllDecisionsRef}
+                                            type="checkbox"
+                                            aria-label={t('pages.decisions.selectAllFiltered')}
+                                            checked={allFilteredDecisionsSelected}
+                                            disabled={selectableDecisionIds.length === 0}
+                                            onChange={toggleAllFilteredDecisions}
+                                            className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                                        />
+                                    </th>
+                                )}
                                 {visibleDecisionColumns.map((columnId) => {
                                     const column = decisionColumnDefinitionById.get(columnId);
                                     if (!column) {
@@ -879,7 +887,9 @@ export function Decisions() {
                                         </th>
                                     );
                                 })}
-                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('tableColumns.actions')}</th>
+                                {canManageEnforcement && (
+                                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('tableColumns.actions')}</th>
+                                )}
                             </tr>
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
@@ -904,16 +914,18 @@ export function Decisions() {
                                             className={rowClasses}
                                             ref={isLastElement ? lastDecisionElementRef : null}
                                         >
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm">
-                                                <input
-                                                    type="checkbox"
-                                                    aria-label={t('pages.decisions.selectDecision', { id: decision.id })}
-                                                    checked={isSelected}
-                                                    disabled={isExpired}
-                                                    onChange={() => toggleDecisionSelection(String(decision.id))}
-                                                    className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
-                                                />
-                                            </td>
+                                            {canManageEnforcement && (
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                                    <input
+                                                        type="checkbox"
+                                                        aria-label={t('pages.decisions.selectDecision', { id: decision.id })}
+                                                        checked={isSelected}
+                                                        disabled={isExpired}
+                                                        onChange={() => toggleDecisionSelection(String(decision.id))}
+                                                        className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
+                                                    />
+                                                </td>
+                                            )}
                                             {visibleDecisionColumns.map((columnId) => {
                                                 switch (columnId) {
                                                     case 'id':
@@ -1010,35 +1022,37 @@ export function Decisions() {
                                                         return null;
                                                 }
                                             })}
-                                            <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                                <div className="flex items-center justify-end gap-2">
-                                                    {decision.value && (
+                                            {canManageEnforcement && (
+                                                <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                                    <div className="flex items-center justify-end gap-2">
+                                                        {decision.value && (
+                                                            <button
+                                                                onClick={() => {
+                                                                    setPendingDeleteErrorInfo(null);
+                                                                    setPendingDeleteAction({ kind: "ip", ip: decision.value || "" });
+                                                                }}
+                                                                className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
+                                                                title={t('common.deleteAllForIp', { value: decision.value })}
+                                                                aria-label={t('common.deleteAllForIp', { value: decision.value })}
+                                                            >
+                                                                <ShieldBan size={16} aria-hidden="true" />
+                                                            </button>
+                                                        )}
                                                         <button
-                                                            onClick={() => {
-                                                                setPendingDeleteErrorInfo(null);
-                                                                setPendingDeleteAction({ kind: "ip", ip: decision.value || "" });
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                requestDelete(decision.id);
                                                             }}
-                                                            className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
-                                                            title={t('common.deleteAllForIp', { value: decision.value })}
-                                                            aria-label={t('common.deleteAllForIp', { value: decision.value })}
+                                                            disabled={isExpired}
+                                                            className={`transition-colors p-2 rounded-full relative z-10 cursor-pointer ${isExpired ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed bg-gray-100 dark:bg-gray-800' : 'text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20'}`}
+                                                            title={isExpired ? t('pages.decisions.alreadyExpired') : t('pages.decisions.deleteDecision')}
+                                                            aria-label={isExpired ? t('pages.decisions.alreadyExpired') : t('pages.decisions.deleteDecision')}
                                                         >
-                                                            <ShieldBan size={16} aria-hidden="true" />
+                                                            <Trash2 size={16} />
                                                         </button>
-                                                    )}
-                                                    <button
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            requestDelete(decision.id);
-                                                        }}
-                                                        disabled={isExpired}
-                                                        className={`transition-colors p-2 rounded-full relative z-10 cursor-pointer ${isExpired ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed bg-gray-100 dark:bg-gray-800' : 'text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20'}`}
-                                                        title={isExpired ? t('pages.decisions.alreadyExpired') : t('pages.decisions.deleteDecision')}
-                                                        aria-label={isExpired ? t('pages.decisions.alreadyExpired') : t('pages.decisions.deleteDecision')}
-                                                    >
-                                                        <Trash2 size={16} />
-                                                    </button>
-                                                </div>
-                                            </td>
+                                                    </div>
+                                                </td>
+                                            )}
                                         </tr>
                                     );
                                 })

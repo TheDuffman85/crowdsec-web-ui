@@ -97,10 +97,23 @@ export async function fetchDecisionsPaginated(
     return fetchJson<PaginatedResponse<DecisionListItem>>(`/api/decisions?${params.toString()}`, undefined, 'Failed to fetch decisions');
 }
 
+async function parseErrorPayload(res: Response): Promise<{ error?: string; code?: string }> {
+    try {
+        return await res.clone().json() as { error?: string; code?: string };
+    } catch {
+        return {};
+    }
+}
+
 // Helper to handle API errors with specific 403 guidance
-function handleApiError(res: Response, defaultMsg: string, operationName = 'Delete Operations'): void {
+async function handleApiError(res: Response, defaultMsg: string, operationName = 'Delete Operations'): Promise<void> {
     if (!res.ok) {
         if (res.status === 403) {
+            const payload = await parseErrorPayload(res);
+            if (payload.code === 'READ_ONLY') {
+                throw new Error(payload.error || 'Read-only mode is enabled');
+            }
+
             const repoUrl = import.meta.env.VITE_REPO_URL || 'https://github.com/TheDuffman85/crowdsec-web-ui';
             const error = new Error('Permission denied.') as ApiPermissionError;
             error.helpLink = `${repoUrl}#trusted-ips-for-delete-operations-optional`;
@@ -113,7 +126,7 @@ function handleApiError(res: Response, defaultMsg: string, operationName = 'Dele
 
 export async function deleteAlert(id: string | number): Promise<unknown> {
   const res = await fetch(apiUrl(`/api/alerts/${id}`), { method: 'DELETE' });
-  handleApiError(res, 'Failed to delete alert');
+  await handleApiError(res, 'Failed to delete alert');
   if (res.status === 204) return null;
   return res.json();
 }
@@ -124,7 +137,7 @@ async function postDestructiveJson<TResponse, TBody>(input: string, body: TBody,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  handleApiError(res, defaultMsg);
+  await handleApiError(res, defaultMsg);
   return res.json() as Promise<TResponse>;
 }
 
@@ -162,7 +175,7 @@ export async function fetchDashboardStats(
 
 export async function deleteDecision(id: string | number): Promise<unknown> {
   const res = await fetch(apiUrl(`/api/decisions/${id}`), { method: 'DELETE' });
-  handleApiError(res, 'Failed to delete decision');
+  await handleApiError(res, 'Failed to delete decision');
   if (res.status === 204) return null;
   return res.json();
 }
@@ -189,7 +202,7 @@ export async function addDecision(data: AddDecisionRequest): Promise<unknown> {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
     });
-    handleApiError(res, 'Failed to add decision', 'Write Operations');
+    await handleApiError(res, 'Failed to add decision', 'Write Operations');
     return res.json();
 }
 

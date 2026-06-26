@@ -141,6 +141,7 @@ describe('config helpers', () => {
     expect(config.notificationDebugPayloads).toBe(true);
     expect(config.timeZone).toBe('Europe/Berlin');
     expect(config.timeFormat).toBe('24h');
+    expect(config.readOnly).toBe(false);
   });
 
   test('createRuntimeConfig disables simulations by default', () => {
@@ -165,6 +166,12 @@ describe('config helpers', () => {
     expect(config.heartbeatIntervalMs).toBe(30_000);
     expect(config.alertSyncChunkMs).toBe(21_600_000);
     expect(config.alertSyncMinChunkMs).toBe(900_000);
+    expect(config.readOnly).toBe(false);
+  });
+
+  test('createRuntimeConfig enables read-only mode from environment', () => {
+    const config = createRuntimeConfig({ PERMISSION_READ_ONLY: 'true' });
+    expect(config.readOnly).toBe(true);
   });
 
   test('createRuntimeConfig supports mTLS authentication', () => {

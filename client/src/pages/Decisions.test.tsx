@@ -2,8 +2,8 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event';
 import { StrictMode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
-import { afterEach, describe, expect, test, vi } from 'vitest';
-import type { DecisionListItem, PaginatedResponse } from '../types';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import type { ConfigResponse, DecisionListItem, PaginatedResponse } from '../types';
 import * as api from '../lib/api';
 import { Decisions } from './Decisions';
 import { compileDecisionSearch } from '../../../shared/search';
@@ -11,6 +11,36 @@ import { I18nContext, type I18nContextValue } from '../lib/i18n';
 
 const setLastUpdatedMock = vi.fn();
 let refreshSignalMock = 0;
+
+function createDefaultConfigResponse(): ConfigResponse {
+  return {
+    lookback_period: '1h',
+    lookback_hours: 1,
+    lookback_days: 1,
+    refresh_interval: 30000,
+    current_interval_name: '30s',
+    lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
+    sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+    simulations_enabled: true,
+    machine_features_enabled: false,
+    origin_features_enabled: false,
+    permissions: {
+      mode: 'admin',
+      can_manage_enforcement: true,
+      can_manage_settings: true,
+    },
+    table_column_preferences: {
+      alerts: {
+        desktop: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
+        mobile: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
+      },
+      decisions: {
+        desktop: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
+        mobile: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
+      },
+    },
+  };
+}
 
 const chineseI18nValue: I18nContextValue = {
   language: 'zh',
@@ -161,29 +191,12 @@ vi.mock('../lib/api', () => {
       table_column_preferences: preferences,
       };
     }),
-    fetchConfig: vi.fn(async () => ({
-      lookback_period: '1h',
-      lookback_hours: 1,
-      lookback_days: 1,
-      refresh_interval: 30000,
-      current_interval_name: '30s',
-      lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
-      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
-      simulations_enabled: true,
-      machine_features_enabled: false,
-      origin_features_enabled: false,
-      table_column_preferences: {
-        alerts: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-        },
-        decisions: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-        },
-      },
-    })),
+    fetchConfig: vi.fn(async () => createDefaultConfigResponse()),
   };
+});
+
+beforeEach(() => {
+  vi.mocked(api.fetchConfig).mockResolvedValue(createDefaultConfigResponse());
 });
 
 afterEach(() => {
@@ -239,6 +252,53 @@ function getVisibleColumnHeaderNames(): string[] {
 }
 
 describe('Decisions page', () => {
+  test('hides enforcement actions in read-only mode', async () => {
+    vi.mocked(api.fetchConfig).mockResolvedValue({
+      lookback_period: '1h',
+      lookback_hours: 1,
+      lookback_days: 1,
+      refresh_interval: 30000,
+      current_interval_name: '30s',
+      lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
+      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+      simulations_enabled: true,
+      machine_features_enabled: false,
+      origin_features_enabled: false,
+      permissions: {
+        mode: 'read-only',
+        can_manage_enforcement: false,
+      },
+      table_column_preferences: {
+        alerts: {
+          desktop: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
+          mobile: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
+        },
+        decisions: {
+          desktop: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
+          mobile: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
+        },
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Add Decision' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete selected' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Choose decision table columns' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Add Decision' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete selected' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Choose decision table columns' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete Decision' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Delete all alerts and decisions for/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Actions' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Select all filtered decisions')).not.toBeInTheDocument();
+  });
+
   test('localizes country names in the decisions table', async () => {
     render(
       <I18nContext.Provider value={chineseI18nValue}>

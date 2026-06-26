@@ -454,6 +454,11 @@ export interface ConfigResponse {
   table_column_preferences?: TableColumnPreferences;
   time_zone?: string | null;
   time_format?: 'browser' | '12h' | '24h';
+  permissions?: {
+    mode: 'admin' | 'read-only';
+    can_manage_enforcement: boolean;
+    can_manage_settings?: boolean;
+  };
 }
 
 export interface UpdateTableColumnsRequest {

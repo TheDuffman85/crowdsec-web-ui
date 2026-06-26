@@ -3,6 +3,15 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { Sidebar } from './Sidebar';
 import { useNotificationUnreadCount } from '../contexts/useNotificationUnreadCount';
+import { fetchConfig } from '../lib/api';
+
+vi.mock('../lib/api', () => ({
+  fetchConfig: vi.fn(async () => ({
+    permissions: {
+      can_manage_settings: true,
+    },
+  })),
+}));
 
 vi.mock('../contexts/useRefresh', () => ({
   useRefresh: () => ({
@@ -41,6 +50,23 @@ describe('Sidebar', () => {
     vi.stubEnv('VITE_COMMIT_HASH', 'abc123');
     fetchMock = vi.fn(async () => Response.json({ update_available: false }));
     vi.stubGlobal('fetch', fetchMock);
+    vi.mocked(fetchConfig).mockResolvedValue({
+      lookback_period: '1h',
+      lookback_hours: 1,
+      lookback_days: 1,
+      refresh_interval: 30000,
+      current_interval_name: '30s',
+      lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
+      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+      simulations_enabled: true,
+      machine_features_enabled: false,
+      origin_features_enabled: false,
+      permissions: {
+        mode: 'admin',
+        can_manage_enforcement: true,
+        can_manage_settings: true,
+      },
+    });
   });
 
   afterEach(() => {
@@ -91,5 +117,36 @@ describe('Sidebar', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/api/update-check?version=2026.5.2&branch=main&commit_hash=abc123');
     expect(screen.queryByText('Update Available')).not.toBeInTheDocument();
+  });
+
+  test('hides refresh controls but keeps language controls when read-only', async () => {
+    vi.mocked(useNotificationUnreadCount).mockReturnValue({
+      unreadCount: 0,
+      setUnreadCount: vi.fn(),
+      refreshUnreadCount: vi.fn(),
+    });
+    vi.mocked(fetchConfig).mockResolvedValueOnce({
+      lookback_period: '1h',
+      lookback_hours: 1,
+      lookback_days: 1,
+      refresh_interval: 30000,
+      current_interval_name: '30s',
+      lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
+      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+      simulations_enabled: true,
+      machine_features_enabled: false,
+      origin_features_enabled: false,
+      permissions: {
+        mode: 'read-only',
+        can_manage_enforcement: false,
+        can_manage_settings: false,
+      },
+    });
+
+    renderSidebar();
+
+    await waitFor(() => expect(fetchConfig).toHaveBeenCalled());
+    expect(screen.queryByText('Refresh')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Language')).toBeInTheDocument();
   });
 });

@@ -411,6 +411,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   Notification Private Destinations: ${config.notificationAllowPrivateAddresses ? 'Allowed' : 'Blocked'}
   Time Zone: ${config.timeZone || 'Browser local'}
   Time Format: ${config.timeFormat}
+  Read-only Mode: ${config.readOnly ? 'Enabled' : 'Disabled'}
 `);
 
   if (!lapiClient.hasAuthConfig()) {
@@ -435,6 +436,16 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   if (config.basePath) {
     app.get(`${config.basePath}/api/health`, healthHandler);
   }
+
+  const ensureCanManageEnforcement = (context: HonoContext) => {
+    if (!config.readOnly) return null;
+    return context.json({ error: 'Read-only mode is enabled', code: 'READ_ONLY' }, 403);
+  };
+
+  const ensureCanManageSettings = (context: HonoContext) => {
+    if (!config.readOnly) return null;
+    return context.json({ error: 'Read-only mode is enabled', code: 'READ_ONLY' }, 403);
+  };
 
   app.get(`${config.basePath}/api/alerts`, ensureAuth, async (context) => {
     try {
@@ -483,6 +494,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   });
 
   app.post(`${config.basePath}/api/alerts/bulk-delete`, ensureAuth, async (context) => {
+    const readOnlyResponse = ensureCanManageEnforcement(context);
+    if (readOnlyResponse) return readOnlyResponse;
+
     const doRequest = async () => {
       const body = await context.req.json<BulkDeleteRequest>();
       if (!Array.isArray(body.ids) || body.ids.length === 0) {
@@ -535,6 +549,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   });
 
   app.delete(`${config.basePath}/api/alerts/:id`, ensureAuth, async (context) => {
+    const readOnlyResponse = ensureCanManageEnforcement(context);
+    if (readOnlyResponse) return readOnlyResponse;
+
     const alertId = String(context.req.param('id'));
     if (!/^\d+$/.test(alertId)) {
       return context.json({ error: 'Invalid alert ID' }, 400);
@@ -632,6 +649,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       table_column_preferences: loadTableColumnPreferences(database),
       time_zone: config.timeZone,
       time_format: config.timeFormat,
+      permissions: {
+        mode: config.readOnly ? 'read-only' : 'admin',
+        can_manage_enforcement: !config.readOnly,
+        can_manage_settings: !config.readOnly,
+      },
     };
 
     return context.json(payload);
@@ -681,6 +703,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   });
 
   app.put(`${config.basePath}/api/config/refresh-interval`, ensureAuth, async (context) => {
+    const readOnlyResponse = ensureCanManageSettings(context);
+    if (readOnlyResponse) return readOnlyResponse;
+
     try {
       const body = await context.req.json<{ interval?: string }>();
       const interval = body.interval;
@@ -740,6 +765,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   });
 
   app.post(`${config.basePath}/api/cleanup/by-ip`, ensureAuth, async (context) => {
+    const readOnlyResponse = ensureCanManageEnforcement(context);
+    if (readOnlyResponse) return readOnlyResponse;
+
     const doRequest = async () => {
       const body = await context.req.json<CleanupByIpRequest>();
       const ip = String(body.ip || '').trim();
@@ -781,6 +809,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   });
 
   app.post(`${config.basePath}/api/notifications/bulk-delete`, ensureAuth, async (context) => {
+    const readOnlyResponse = ensureCanManageSettings(context);
+    if (readOnlyResponse) return readOnlyResponse;
+
     const body = await context.req.json<BulkDeleteRequest>();
     const ids = normalizeNotificationIds(body.ids);
     if (ids.length === 0) {
@@ -790,11 +821,17 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     return context.json({ deleted: notificationService.deleteNotifications(ids) });
   });
 
-  app.post(`${config.basePath}/api/notifications/delete-read`, ensureAuth, () =>
-    Response.json({ deleted: notificationService.deleteReadNotifications() }),
-  );
+  app.post(`${config.basePath}/api/notifications/delete-read`, ensureAuth, (context) => {
+    const readOnlyResponse = ensureCanManageSettings(context);
+    if (readOnlyResponse) return readOnlyResponse;
+
+    return Response.json({ deleted: notificationService.deleteReadNotifications() });
+  });
 
   app.delete(`${config.basePath}/api/notifications/:id`, ensureAuth, (context) => {
+    const readOnlyResponse = ensureCanManageSettings(context);
+    if (readOnlyResponse) return readOnlyResponse;
+
     const id = String(context.req.param('id'));
     if (!notificationService.deleteNotification(id)) {
       return context.json({ error: 'Notification not found' }, 404);
@@ -806,6 +843,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   app.get(`${config.basePath}/api/notifications/settings`, ensureAuth, () => Response.json(notificationService.listSettings()));
 
   app.post(`${config.basePath}/api/notification-channels`, ensureAuth, async (context) => {
+    const readOnlyResponse = ensureCanManageSettings(context);
+    if (readOnlyResponse) return readOnlyResponse;
+
     try {
       const body = await context.req.json<UpsertNotificationChannelRequest>();
       return context.json(notificationService.createChannel(body), 201);
@@ -815,6 +855,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   });
 
   app.put(`${config.basePath}/api/notification-channels/:id`, ensureAuth, async (context) => {
+    const readOnlyResponse = ensureCanManageSettings(context);
+    if (readOnlyResponse) return readOnlyResponse;
+
     try {
       const id = String(context.req.param('id'));
       const body = await context.req.json<UpsertNotificationChannelRequest>();
@@ -826,12 +869,18 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   });
 
   app.delete(`${config.basePath}/api/notification-channels/:id`, ensureAuth, (context) => {
+    const readOnlyResponse = ensureCanManageSettings(context);
+    if (readOnlyResponse) return readOnlyResponse;
+
     const id = String(context.req.param('id'));
     notificationService.deleteChannel(id);
     return context.json({ success: true });
   });
 
   app.post(`${config.basePath}/api/notification-channels/:id/test`, ensureAuth, async (context) => {
+    const readOnlyResponse = ensureCanManageSettings(context);
+    if (readOnlyResponse) return readOnlyResponse;
+
     try {
       const id = String(context.req.param('id'));
       await notificationService.testChannel(id);
@@ -843,6 +892,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   });
 
   app.post(`${config.basePath}/api/notification-rules`, ensureAuth, async (context) => {
+    const readOnlyResponse = ensureCanManageSettings(context);
+    if (readOnlyResponse) return readOnlyResponse;
+
     try {
       const body = await context.req.json<UpsertNotificationRuleRequest>();
       return context.json(notificationService.createRule(body), 201);
@@ -852,6 +904,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   });
 
   app.put(`${config.basePath}/api/notification-rules/:id`, ensureAuth, async (context) => {
+    const readOnlyResponse = ensureCanManageSettings(context);
+    if (readOnlyResponse) return readOnlyResponse;
+
     try {
       const id = String(context.req.param('id'));
       const body = await context.req.json<UpsertNotificationRuleRequest>();
@@ -863,12 +918,18 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   });
 
   app.delete(`${config.basePath}/api/notification-rules/:id`, ensureAuth, (context) => {
+    const readOnlyResponse = ensureCanManageSettings(context);
+    if (readOnlyResponse) return readOnlyResponse;
+
     const id = String(context.req.param('id'));
     notificationService.deleteRule(id);
     return context.json({ success: true });
   });
 
   app.post(`${config.basePath}/api/cache/clear`, ensureAuth, async (context) => {
+    const readOnlyResponse = ensureCanManageEnforcement(context);
+    if (readOnlyResponse) return readOnlyResponse;
+
     try {
       console.log('Manual cache clear requested');
       database.clearSyncData();
@@ -993,6 +1054,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   });
 
   app.post(`${config.basePath}/api/decisions`, ensureAuth, async (context) => {
+    const readOnlyResponse = ensureCanManageEnforcement(context);
+    if (readOnlyResponse) return readOnlyResponse;
+
     const doRequest = async () => {
       const body = await context.req.json<AddDecisionRequest>();
       const ip = body.ip;
@@ -1032,6 +1096,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   });
 
   app.post(`${config.basePath}/api/decisions/bulk-delete`, ensureAuth, async (context) => {
+    const readOnlyResponse = ensureCanManageEnforcement(context);
+    if (readOnlyResponse) return readOnlyResponse;
+
     const doRequest = async () => {
       const body = await context.req.json<BulkDeleteRequest>();
       if (!Array.isArray(body.ids) || body.ids.length === 0) {
@@ -1057,6 +1124,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   });
 
   app.delete(`${config.basePath}/api/decisions/:id`, ensureAuth, async (context) => {
+    const readOnlyResponse = ensureCanManageEnforcement(context);
+    if (readOnlyResponse) return readOnlyResponse;
+
     const decisionId = String(context.req.param('id'));
     if (!/^\d+$/.test(decisionId)) {
       return context.json({ error: 'Invalid decision ID' }, 400);

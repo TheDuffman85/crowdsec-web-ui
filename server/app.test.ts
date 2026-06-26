@@ -615,12 +615,18 @@ describe('createApp', () => {
       machine_features_enabled: boolean;
       origin_features_enabled: boolean;
       table_column_preferences: { alerts: { desktop: string[]; mobile: string[] }; decisions: { desktop: string[]; mobile: string[] } };
+      permissions: { mode: string; can_manage_enforcement: boolean; can_manage_settings: boolean };
     })).toEqual(
       expect.objectContaining({
         lookback_period: '1m',
         simulations_enabled: true,
         machine_features_enabled: true,
         origin_features_enabled: true,
+        permissions: {
+          mode: 'admin',
+          can_manage_enforcement: true,
+          can_manage_settings: true,
+        },
         table_column_preferences: {
           alerts: {
             desktop: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
@@ -838,6 +844,154 @@ describe('createApp', () => {
     const redirect = await controller.fetch(new Request('http://localhost/'));
     expect(redirect.status).toBe(302);
     expect(redirect.headers.get('location')).toBe('/crowdsec/');
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('read-only mode blocks enforcement and management mutations but allows preferences and notification read state', async () => {
+    const alert = sampleAlert();
+    const { controller, database, lapiClient, fetchCalls } = createController({
+      env: { PERMISSION_READ_ONLY: 'true' },
+    });
+    await lapiClient.login();
+    seedAlert(database, alert);
+    const now = new Date().toISOString();
+    database.insertNotification({
+      $id: 'notif-1',
+      $created_at: now,
+      $updated_at: now,
+      $rule_id: 'rule-1',
+      $rule_name: 'Rule 1',
+      $rule_type: 'alert-threshold',
+      $severity: 'warning',
+      $title: 'Notification 1',
+      $message: 'Notification body',
+      $read_at: null,
+      $metadata_json: '{}',
+      $deliveries_json: '[]',
+      $dedupe_key: 'notif-1',
+    });
+
+    const configResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
+    expect(configResponse.status).toBe(200);
+    expect((await configResponse.json()) as { permissions?: { mode: string; can_manage_enforcement: boolean; can_manage_settings: boolean } }).toEqual(
+      expect.objectContaining({
+        permissions: {
+          mode: 'read-only',
+          can_manage_enforcement: false,
+          can_manage_settings: false,
+        },
+      }),
+    );
+
+    const guardedRequests = [
+      new Request('http://localhost/crowdsec/api/decisions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip: '5.6.7.8', duration: '4h', type: 'ban', reason: 'manual' }),
+      }),
+      new Request('http://localhost/crowdsec/api/decisions/10', { method: 'DELETE' }),
+      new Request('http://localhost/crowdsec/api/decisions/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: ['10'] }),
+      }),
+      new Request('http://localhost/crowdsec/api/alerts/1', { method: 'DELETE' }),
+      new Request('http://localhost/crowdsec/api/alerts/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: ['1'] }),
+      }),
+      new Request('http://localhost/crowdsec/api/cleanup/by-ip', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip: '1.2.3.4' }),
+      }),
+      new Request('http://localhost/crowdsec/api/cache/clear', { method: 'POST' }),
+      new Request('http://localhost/crowdsec/api/config/refresh-interval', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ interval: '5s' }),
+      }),
+      new Request('http://localhost/crowdsec/api/notifications/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: ['notif-1'] }),
+      }),
+      new Request('http://localhost/crowdsec/api/notifications/delete-read', { method: 'POST' }),
+      new Request('http://localhost/crowdsec/api/notifications/notif-1', { method: 'DELETE' }),
+      new Request('http://localhost/crowdsec/api/notification-channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      }),
+      new Request('http://localhost/crowdsec/api/notification-channels/channel-1', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      }),
+      new Request('http://localhost/crowdsec/api/notification-channels/channel-1', { method: 'DELETE' }),
+      new Request('http://localhost/crowdsec/api/notification-channels/channel-1/test', { method: 'POST' }),
+      new Request('http://localhost/crowdsec/api/notification-rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      }),
+      new Request('http://localhost/crowdsec/api/notification-rules/rule-1', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      }),
+      new Request('http://localhost/crowdsec/api/notification-rules/rule-1', { method: 'DELETE' }),
+    ];
+
+    for (const request of guardedRequests) {
+      const response = await controller.fetch(request);
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({
+        error: 'Read-only mode is enabled',
+        code: 'READ_ONLY',
+      });
+    }
+
+    expect(database.countAlerts()).toBe(1);
+    expect(database.countDecisions()).toBe(1);
+    expect(database.getDecisionById('10')).not.toBeNull();
+    expect(fetchCalls.filter((call) =>
+      (call.url.endsWith('/v1/alerts') && call.method === 'POST') ||
+      (/\/v1\/alerts\/\d+$/.test(call.url) && call.method === 'DELETE') ||
+      (/\/v1\/decisions\/\d+$/.test(call.url) && call.method === 'DELETE')
+    )).toEqual([]);
+
+    const languageUpdate = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/config/language', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ language: 'de' }),
+      }),
+    );
+    expect(languageUpdate.status).toBe(200);
+
+    const columnUpdate = await controller.fetch(
+      new Request('http://localhost/crowdsec/api/config/table-columns', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ table: 'alerts', visible_columns: ['time', 'source'] }),
+      }),
+    );
+    expect(columnUpdate.status).toBe(200);
+
+    const markRead = await controller.fetch(new Request('http://localhost/crowdsec/api/notifications/notif-1/read', { method: 'POST' }));
+    expect(markRead.status).toBe(200);
+    const bulkRead = await controller.fetch(new Request('http://localhost/crowdsec/api/notifications/bulk-read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: ['notif-1'] }),
+    }));
+    expect(bulkRead.status).toBe(200);
+    expect(database.countNotifications()).toBe(1);
 
     controller.stopBackgroundTasks();
     database.close();
