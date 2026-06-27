@@ -223,6 +223,7 @@
   "pages.settings.refreshHelp": "Das gespeicherte Intervall wird für automatische Seitenaktualisierungen verwendet.",
   "pages.settings.refreshSaved": "Aktualisierungsintervall auf {interval} gesetzt.",
   "pages.settings.readOnlyRefresh": "Der Nur-Lese-Modus ist aktiv. Das Aktualisierungsintervall kann nur im Admin-Modus geändert werden.",
+  "pages.settings.authDisabledHint": "Die Dashboard-Authentifizierung ist deaktiviert. Setze CROWDSEC_AUTH_ENABLED=true und starte die Web-UI neu, um Anmeldung und Kontoeinstellungen zu aktivieren.",
   "pages.settings.failedToLoadSettings": "Einstellungen konnten nicht geladen werden.",
   "pages.settings.failedToSaveRefresh": "Aktualisierungsintervall konnte nicht gespeichert werden.",
   "pages.alerts.alertDetails": "Alarmdetails",

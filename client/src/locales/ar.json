@@ -223,6 +223,7 @@
   "pages.settings.refreshHelp": "يستخدم الفاصل المحفوظ لتحديث الصفحات تلقائيا.",
   "pages.settings.refreshSaved": "تم تحديث فاصل التحديث إلى {interval}.",
   "pages.settings.readOnlyRefresh": "وضع القراءة فقط مفعل. لا يمكن تغيير فاصل التحديث إلا في وضع المسؤول.",
+  "pages.settings.authDisabledHint": "مصادقة لوحة التحكم معطلة. اضبط CROWDSEC_AUTH_ENABLED=true وأعد تشغيل واجهة الويب لتفعيل تسجيل الدخول وإعدادات الحساب.",
   "pages.settings.failedToLoadSettings": "فشل تحميل الإعدادات.",
   "pages.settings.failedToSaveRefresh": "فشل حفظ فاصل التحديث.",
   "pages.alerts.alertDetails": "تفاصيل التنبيه",

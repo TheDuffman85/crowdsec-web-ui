@@ -223,6 +223,7 @@
   "pages.settings.refreshHelp": "Сохраненный интервал используется для автоматического обновления страниц.",
   "pages.settings.refreshSaved": "Интервал обновления изменен на {interval}.",
   "pages.settings.readOnlyRefresh": "Включен режим только для чтения. Интервал обновления можно изменить только в режиме администратора.",
+  "pages.settings.authDisabledHint": "Аутентификация панели отключена. Задайте CROWDSEC_AUTH_ENABLED=true и перезапустите веб-интерфейс, чтобы включить вход и настройки учетной записи.",
   "pages.settings.failedToLoadSettings": "Не удалось загрузить настройки.",
   "pages.settings.failedToSaveRefresh": "Не удалось сохранить интервал обновления.",
   "pages.alerts.alertDetails": "Сведения об оповещении",

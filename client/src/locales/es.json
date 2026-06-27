@@ -223,6 +223,7 @@
   "pages.settings.refreshHelp": "El intervalo guardado se usa para las actualizaciones automáticas de las páginas.",
   "pages.settings.refreshSaved": "Intervalo de actualización actualizado a {interval}.",
   "pages.settings.readOnlyRefresh": "El modo de solo lectura está activado. El intervalo de actualización solo se puede cambiar en modo administrador.",
+  "pages.settings.authDisabledHint": "La autenticación del panel está desactivada. Define CROWDSEC_AUTH_ENABLED=true y reinicia la interfaz web para activar el inicio de sesión y los ajustes de cuenta.",
   "pages.settings.failedToLoadSettings": "No se pudieron cargar los ajustes.",
   "pages.settings.failedToSaveRefresh": "No se pudo guardar el intervalo de actualización.",
   "pages.alerts.alertDetails": "Detalles de la alerta",

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { createRuntimeConfig, getIntervalName, parseBooleanEnv, parseCsvEnv, parseLookbackToMs, parseRefreshInterval, parseTimeFormat, parseTimeZone } from './config';
+import { createRuntimeConfig, getIntervalName, parseBooleanEnv, parseCsvEnv, parseLookbackToMs, parseOptionalBooleanEnv, parseRefreshInterval, parseTimeFormat, parseTimeZone } from './config';
 
 const tempDirs: string[] = [];
 
@@ -46,6 +46,13 @@ describe('config helpers', () => {
     expect(parseBooleanEnv('On')).toBe(true);
     expect(parseBooleanEnv('0', true)).toBe(false);
     expect(parseBooleanEnv('maybe', true)).toBe(true);
+  });
+
+  test('parseOptionalBooleanEnv only accepts explicit boolean values', () => {
+    expect(parseOptionalBooleanEnv(undefined)).toBeNull();
+    expect(parseOptionalBooleanEnv('true')).toBe(true);
+    expect(parseOptionalBooleanEnv('OFF')).toBe(false);
+    expect(parseOptionalBooleanEnv('maybe')).toBeNull();
   });
 
   test('parseCsvEnv splits, trims, and drops empty entries', () => {
@@ -192,6 +199,11 @@ describe('config helpers', () => {
   test('createRuntimeConfig enables read-only mode from environment', () => {
     const config = createRuntimeConfig({ PERMISSION_READ_ONLY: 'true' });
     expect(config.readOnly).toBe(true);
+  });
+
+  test('createRuntimeConfig falls back when positive intervals are disabled', () => {
+    const config = createRuntimeConfig({ CROWDSEC_LAPI_REQUEST_TIMEOUT: 'manual' });
+    expect(config.lapiRequestTimeoutMs).toBe(30_000);
   });
 
   test('createRuntimeConfig reads file-backed dashboard auth secrets', () => {

@@ -223,6 +223,7 @@
   "pages.settings.refreshHelp": "L’intervalle enregistré est utilisé pour les actualisations automatiques des pages.",
   "pages.settings.refreshSaved": "Intervalle d’actualisation mis à jour sur {interval}.",
   "pages.settings.readOnlyRefresh": "Le mode lecture seule est activé. L’intervalle d’actualisation ne peut être modifié qu’en mode administrateur.",
+  "pages.settings.authDisabledHint": "L’authentification du tableau de bord est désactivée. Définissez CROWDSEC_AUTH_ENABLED=true puis redémarrez l’interface web pour activer la connexion et les paramètres de compte.",
   "pages.settings.failedToLoadSettings": "Échec du chargement des paramètres.",
   "pages.settings.failedToSaveRefresh": "Échec de l’enregistrement de l’intervalle d’actualisation.",
   "pages.alerts.alertDetails": "Détails de l’alerte",

@@ -223,6 +223,7 @@
   "pages.settings.refreshHelp": "सहेजा गया अंतराल अपने आप पेज रिफ्रेश करने के लिए उपयोग होता है।",
   "pages.settings.refreshSaved": "रिफ्रेश अंतराल {interval} पर अपडेट किया गया।",
   "pages.settings.readOnlyRefresh": "रीड-ओनली मोड सक्षम है। रिफ्रेश अंतराल केवल एडमिन मोड में बदला जा सकता है।",
+  "pages.settings.authDisabledHint": "डैशबोर्ड प्रमाणीकरण अक्षम है। साइन-इन और खाता सेटिंग्स सक्षम करने के लिए CROWDSEC_AUTH_ENABLED=true सेट करें और वेब UI को रीस्टार्ट करें।",
   "pages.settings.failedToLoadSettings": "सेटिंग्स लोड करने में विफल।",
   "pages.settings.failedToSaveRefresh": "रिफ्रेश अंतराल सहेजने में विफल।",
   "pages.alerts.alertDetails": "अलर्ट विवरण",
