@@ -4,6 +4,17 @@ import { resolveSecretEnv } from './env-secrets';
 export type AlertFilterMode = 'default' | 'new' | 'legacy';
 export type TimeFormat = 'browser' | '12h' | '24h';
 
+export interface DashboardAuthConfig {
+  enabled: boolean | null;
+  sessionSecret?: string;
+  oidcIssuerUrl?: string;
+  oidcClientId?: string;
+  oidcClientSecret?: string;
+  oidcGroupsClaim: string;
+  oidcAdminGroups: string[];
+  oidcReadOnlyGroups: string[];
+}
+
 export interface RuntimeConfig {
   port: number;
   basePath: string;
@@ -46,6 +57,7 @@ export interface RuntimeConfig {
   timeZone: string | null;
   timeFormat: TimeFormat;
   readOnly: boolean;
+  dashboardAuth: DashboardAuthConfig;
 }
 
 export function parseTimeZone(value: string | undefined): string | null {
@@ -107,6 +119,15 @@ export function parseBooleanEnv(value: string | undefined, defaultValue = false)
   return defaultValue;
 }
 
+export function parseOptionalBooleanEnv(value: string | undefined): boolean | null {
+  if (value === undefined) return null;
+  const normalized = String(value).trim().toLowerCase();
+
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return null;
+}
+
 export function parseCsvEnv(value: string | undefined): string[] {
   if (!value) return [];
   const entries = value
@@ -118,6 +139,19 @@ export function parseCsvEnv(value: string | undefined): string[] {
     deduped.add(entry);
   }
   return Array.from(deduped);
+}
+
+function parseDashboardAuthConfig(env: NodeJS.ProcessEnv): DashboardAuthConfig {
+  return {
+    enabled: parseOptionalBooleanEnv(env.CROWDSEC_AUTH_ENABLED),
+    sessionSecret: resolveSecretEnv('CROWDSEC_AUTH_SECRET', env)?.trim() || undefined,
+    oidcIssuerUrl: env.CROWDSEC_AUTH_OIDC_ISSUER_URL?.trim() || undefined,
+    oidcClientId: env.CROWDSEC_AUTH_OIDC_CLIENT_ID?.trim() || undefined,
+    oidcClientSecret: resolveSecretEnv('CROWDSEC_AUTH_OIDC_CLIENT_SECRET', env)?.trim() || undefined,
+    oidcGroupsClaim: env.CROWDSEC_AUTH_OIDC_GROUPS_CLAIM?.trim() || 'groups',
+    oidcAdminGroups: parseCsvEnv(env.CROWDSEC_AUTH_OIDC_ADMIN_GROUPS),
+    oidcReadOnlyGroups: parseCsvEnv(env.CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS),
+  };
 }
 
 export function getIntervalName(intervalMs: number): string {
@@ -281,5 +315,6 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
     timeZone: parseTimeZone(env.TZ),
     timeFormat: parseTimeFormat(env.CROWDSEC_TIME_FORMAT),
     readOnly: parseBooleanEnv(env.PERMISSION_READ_ONLY, false),
+    dashboardAuth: parseDashboardAuthConfig(env),
   };
 }

@@ -44,6 +44,7 @@ import { createRuntimeConfig, getIntervalName, parseRefreshInterval, type Runtim
 import { getDateTimeKey, getTimeZoneOffsetMs, getZonedHourlyBucketKeys } from './utils/date-time';
 import { CrowdsecDatabase, type AlertInsertParams, type DecisionInsertParams } from './database';
 import { LapiClient } from './lapi';
+import { createDashboardAuth } from './app-auth';
 import { createNotificationService } from './notifications';
 import type { MqttPublishConfig } from './notifications/mqtt-client';
 import { createNotificationOutboundGuard } from './notifications/outbound-guard';
@@ -344,6 +345,12 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     timeZone: config.timeZone,
     timeFormat: config.timeFormat,
   });
+  const dashboardAuth = createDashboardAuth({
+    config: config.dashboardAuth,
+    database,
+    basePath: config.basePath,
+    instanceReadOnly: config.readOnly,
+  });
 
   const app = new Hono();
   const distRoot = options.distRoot || path.resolve(process.cwd(), 'dist/client');
@@ -411,6 +418,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   Notification Private Destinations: ${config.notificationAllowPrivateAddresses ? 'Allowed' : 'Blocked'}
   Time Zone: ${config.timeZone || 'Browser local'}
   Time Format: ${config.timeFormat}
+  Dashboard Auth: ${dashboardAuth.enabled ? 'Enabled' : 'Disabled'}
+  Dashboard OIDC: ${dashboardAuth.oidcEnabled ? 'Enabled' : 'Disabled'}
   Read-only Mode: ${config.readOnly ? 'Enabled' : 'Disabled'}
 `);
 
@@ -436,14 +445,15 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   if (config.basePath) {
     app.get(`${config.basePath}/api/health`, healthHandler);
   }
+  dashboardAuth.registerRoutes(app);
 
   const ensureCanManageEnforcement = (context: HonoContext) => {
-    if (!config.readOnly) return null;
+    if (dashboardAuth.getPermissions(context).can_manage_enforcement) return null;
     return context.json({ error: 'Read-only mode is enabled', code: 'READ_ONLY' }, 403);
   };
 
   const ensureCanManageSettings = (context: HonoContext) => {
-    if (!config.readOnly) return null;
+    if (dashboardAuth.getPermissions(context).can_manage_settings) return null;
     return context.json({ error: 'Read-only mode is enabled', code: 'READ_ONLY' }, 403);
   };
 
@@ -649,11 +659,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       table_column_preferences: loadTableColumnPreferences(database),
       time_zone: config.timeZone,
       time_format: config.timeFormat,
-      permissions: {
-        mode: config.readOnly ? 'read-only' : 'admin',
-        can_manage_enforcement: !config.readOnly,
-        can_manage_settings: !config.readOnly,
-      },
+      permissions: dashboardAuth.getPermissions(context),
     };
 
     return context.json(payload);
@@ -2347,6 +2353,13 @@ ${errorSummary}  Status: ${syncSummary.state}
   }
 
   async function ensureAuth(context: HonoContext, next: HonoNext): Promise<Response | void> {
+    let authorized = false;
+    const authResponse = await dashboardAuth.ensureAuth(context, async () => {
+      authorized = true;
+    });
+    if (authResponse) return authResponse;
+    if (!authorized) return undefined;
+
     if (!lapiClient.hasToken()) {
       const success = await lapiClient.login('request authentication');
       if (!success) {

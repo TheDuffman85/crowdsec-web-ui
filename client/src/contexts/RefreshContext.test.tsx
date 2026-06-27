@@ -43,7 +43,7 @@ function Consumer() {
       <span data-testid="interval">{intervalMs}</span>
       <span data-testid="refresh">{refreshSignal}</span>
       <span data-testid="sync">{syncStatus?.message}</span>
-      <button type="button" onClick={() => void setIntervalMs(30000)}>
+      <button type="button" onClick={() => void setIntervalMs(30000).catch(() => undefined)}>
         update
       </button>
     </div>

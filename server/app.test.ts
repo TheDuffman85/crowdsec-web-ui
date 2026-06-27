@@ -388,6 +388,7 @@ function createController(options: {
     VITE_COMMIT_HASH: 'abc123',
     DB_DIR: tempDir,
     NOTIFICATION_ALLOW_PRIVATE_ADDRESSES: 'true',
+    CROWDSEC_AUTH_ENABLED: 'false',
     ...authEnv,
     ...options.env,
   });
@@ -466,6 +467,157 @@ function createController(options: {
 
   return { controller, database, lapiClient, fetchCalls };
 }
+
+test('dashboard auth protects API routes and allows initial setup login', async () => {
+  const { controller } = createController({
+    env: {
+      CROWDSEC_AUTH_ENABLED: 'true',
+    },
+  });
+
+  const unauthenticated = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
+  expect(unauthenticated.status).toBe(401);
+
+  const statusBeforeSetup = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/status'));
+  expect(await statusBeforeSetup.json()).toMatchObject({
+    authEnabled: true,
+    setupRequired: true,
+    authenticated: false,
+  });
+
+  const setup = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/setup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'Secret123' }),
+  }));
+  expect(setup.status).toBe(200);
+  const cookie = setup.headers.get('set-cookie');
+  expect(cookie).toContain('crowdsec_web_ui_session=');
+
+  const authenticated = await controller.fetch(new Request('http://localhost/crowdsec/api/config', {
+    headers: { cookie: cookie || '' },
+  }));
+  expect(authenticated.status).toBe(200);
+  const payload = await authenticated.json() as { permissions?: { mode?: string } };
+  expect(payload.permissions?.mode).toBe('admin');
+});
+
+test('dashboard auth exposes account settings and password changes', async () => {
+  const { controller } = createController({
+    env: {
+      CROWDSEC_AUTH_ENABLED: 'true',
+    },
+  });
+
+  const setup = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/setup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'Secret123' }),
+  }));
+  const cookie = setup.headers.get('set-cookie') || '';
+
+  const settings = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/settings', {
+    headers: { cookie },
+  }));
+  expect(settings.status).toBe(200);
+  expect(await settings.json()).toMatchObject({
+    disablePasswordLogin: false,
+    oidcIssuerUrl: '',
+    oidcClientId: '',
+    hasOidcClientSecret: false,
+    oidcGroupsClaim: 'groups',
+    oidcAdminGroups: '',
+    oidcReadOnlyGroups: '',
+    hasPassword: true,
+  });
+
+  const saveGroupMapping = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', cookie },
+    body: JSON.stringify({
+      oidcGroupsClaim: 'roles',
+      oidcAdminGroups: 'admins, secops, admins',
+      oidcReadOnlyGroups: 'viewers',
+    }),
+  }));
+  expect(saveGroupMapping.status).toBe(200);
+  expect(await saveGroupMapping.json()).toMatchObject({
+    settings: {
+      oidcGroupsClaim: 'roles',
+      oidcAdminGroups: 'admins,secops',
+      oidcReadOnlyGroups: 'viewers',
+    },
+  });
+
+  const disableWithoutAlternative = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', cookie },
+    body: JSON.stringify({ disablePasswordLogin: true }),
+  }));
+  expect(disableWithoutAlternative.status).toBe(400);
+
+  const wrongCurrentPassword = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/change-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie },
+    body: JSON.stringify({ currentPassword: 'WrongSecret123', newPassword: 'NewSecret123' }),
+  }));
+  expect(wrongCurrentPassword.status).toBe(401);
+
+  const changePassword = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/change-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie },
+    body: JSON.stringify({ currentPassword: 'Secret123', newPassword: 'NewSecret123' }),
+  }));
+  expect(changePassword.status).toBe(200);
+
+  const oldLogin = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'Secret123' }),
+  }));
+  expect(oldLogin.status).toBe(401);
+
+  const newLogin = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'NewSecret123' }),
+  }));
+  expect(newLogin.status).toBe(200);
+});
+
+test('dashboard auth settings use OIDC environment values as defaults', async () => {
+  const { controller } = createController({
+    env: {
+      CROWDSEC_AUTH_ENABLED: 'true',
+      CROWDSEC_AUTH_OIDC_ISSUER_URL: 'https://idp.example.com/application/o/crowdsec/',
+      CROWDSEC_AUTH_OIDC_CLIENT_ID: 'crowdsec-client',
+      CROWDSEC_AUTH_OIDC_CLIENT_SECRET: 'oidc-secret',
+      CROWDSEC_AUTH_OIDC_GROUPS_CLAIM: 'roles',
+      CROWDSEC_AUTH_OIDC_ADMIN_GROUPS: 'admins,secops',
+      CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS: 'viewers',
+    },
+  });
+
+  const setup = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/setup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'Secret123' }),
+  }));
+  const cookie = setup.headers.get('set-cookie') || '';
+
+  const settings = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/settings', {
+    headers: { cookie },
+  }));
+  expect(settings.status).toBe(200);
+  expect(await settings.json()).toMatchObject({
+    oidcIssuerUrl: 'https://idp.example.com/application/o/crowdsec/',
+    oidcClientId: 'crowdsec-client',
+    hasOidcClientSecret: true,
+    oidcGroupsClaim: 'roles',
+    oidcAdminGroups: 'admins,secops',
+    oidcReadOnlyGroups: 'viewers',
+  });
+});
 
 function seedAlert(database: CrowdsecDatabase, alert: AlertRecord): void {
   database.insertAlert({

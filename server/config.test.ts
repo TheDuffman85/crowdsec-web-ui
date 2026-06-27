@@ -111,6 +111,14 @@ describe('config helpers', () => {
       NOTIFICATION_DEBUG_PAYLOADS: 'true',
       TZ: 'Europe/Berlin',
       CROWDSEC_TIME_FORMAT: '24h',
+      CROWDSEC_AUTH_ENABLED: 'true',
+      CROWDSEC_AUTH_SECRET: 'auth-secret',
+      CROWDSEC_AUTH_OIDC_ISSUER_URL: 'https://idp.example.com/application/o/crowdsec/',
+      CROWDSEC_AUTH_OIDC_CLIENT_ID: 'crowdsec-client',
+      CROWDSEC_AUTH_OIDC_CLIENT_SECRET: 'oidc-secret',
+      CROWDSEC_AUTH_OIDC_GROUPS_CLAIM: 'roles',
+      CROWDSEC_AUTH_OIDC_ADMIN_GROUPS: 'admins, secops',
+      CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS: 'viewers',
     });
 
     expect(config.port).toBe(4000);
@@ -142,6 +150,16 @@ describe('config helpers', () => {
     expect(config.timeZone).toBe('Europe/Berlin');
     expect(config.timeFormat).toBe('24h');
     expect(config.readOnly).toBe(false);
+    expect(config.dashboardAuth).toEqual({
+      enabled: true,
+      sessionSecret: 'auth-secret',
+      oidcIssuerUrl: 'https://idp.example.com/application/o/crowdsec/',
+      oidcClientId: 'crowdsec-client',
+      oidcClientSecret: 'oidc-secret',
+      oidcGroupsClaim: 'roles',
+      oidcAdminGroups: ['admins', 'secops'],
+      oidcReadOnlyGroups: ['viewers'],
+    });
   });
 
   test('createRuntimeConfig disables simulations by default', () => {
@@ -167,11 +185,25 @@ describe('config helpers', () => {
     expect(config.alertSyncChunkMs).toBe(21_600_000);
     expect(config.alertSyncMinChunkMs).toBe(900_000);
     expect(config.readOnly).toBe(false);
+    expect(config.dashboardAuth.enabled).toBeNull();
+    expect(config.dashboardAuth.oidcGroupsClaim).toBe('groups');
   });
 
   test('createRuntimeConfig enables read-only mode from environment', () => {
     const config = createRuntimeConfig({ PERMISSION_READ_ONLY: 'true' });
     expect(config.readOnly).toBe(true);
+  });
+
+  test('createRuntimeConfig reads file-backed dashboard auth secrets', () => {
+    const config = createRuntimeConfig({
+      CROWDSEC_AUTH_ENABLED: 'false',
+      CROWDSEC_AUTH_SECRET_FILE: createTempSecret('auth-secret-from-file\n'),
+      CROWDSEC_AUTH_OIDC_CLIENT_SECRET_FILE: createTempSecret('oidc-secret-from-file\n'),
+    });
+
+    expect(config.dashboardAuth.enabled).toBe(false);
+    expect(config.dashboardAuth.sessionSecret).toBe('auth-secret-from-file');
+    expect(config.dashboardAuth.oidcClientSecret).toBe('oidc-secret-from-file');
   });
 
   test('createRuntimeConfig supports mTLS authentication', () => {

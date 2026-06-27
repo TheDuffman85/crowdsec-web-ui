@@ -119,6 +119,37 @@ describe('CrowdsecDatabase', () => {
     db.close();
   });
 
+  test('fresh databases default dashboard auth on', () => {
+    const db = createTestDatabase();
+
+    expect(db.isAuthMigrationDefaultDisabled()).toBe(false);
+
+    db.close();
+  });
+
+  test('existing databases are migrated with dashboard auth disabled by default', () => {
+    const dbPath = createTestDatabasePath();
+    const legacy = createLegacyDatabase(dbPath);
+    legacy.exec(`
+      CREATE TABLE alerts (
+        id INTEGER PRIMARY KEY,
+        uuid TEXT UNIQUE,
+        created_at TEXT NOT NULL,
+        scenario TEXT,
+        source_ip TEXT,
+        message TEXT,
+        raw_data TEXT
+      )
+    `);
+    legacy.close();
+
+    const db = new CrowdsecDatabase({ dbPath });
+
+    expect(db.isAuthMigrationDefaultDisabled()).toBe(true);
+
+    db.close();
+  });
+
   test('deleteDecisionsByAlertIdExcept removes stale decisions while preserving kept and unrelated rows', () => {
     const db = createTestDatabase();
 

@@ -73,4 +73,30 @@ describe('App lazy routes', () => {
     render(<App />);
     await waitFor(() => expect(screen.getByText('Settings Page')).toBeInTheDocument());
   });
+
+  test('redirects authenticated users away from setup', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.includes('/api/auth/status')) {
+          return Response.json({
+            authEnabled: true,
+            setupRequired: false,
+            authenticated: true,
+            user: { userId: 1, username: 'admin', role: 'admin' },
+            oidcEnabled: false,
+            passkeysEnabled: false,
+          });
+        }
+        return Response.json({ update_available: false });
+      }),
+    );
+    window.history.pushState({}, '', '/setup');
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('Dashboard Page')).toBeInTheDocument());
+    expect(window.location.pathname).toBe('/');
+  });
 });

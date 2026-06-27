@@ -1,6 +1,7 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, ShieldAlert, Gavel, Bell, X, Sun, Moon, ArrowUpCircle, Menu, PanelLeftClose, Settings as SettingsIcon } from "lucide-react";
+import { LayoutDashboard, ShieldAlert, Gavel, Bell, X, Sun, Moon, ArrowUpCircle, Menu, PanelLeftClose, Settings as SettingsIcon, LogOut } from "lucide-react";
 import { Badge } from "./ui/Badge";
+import { useAuth } from "../contexts/AuthContext";
 import { useNotificationUnreadCount } from "../contexts/useNotificationUnreadCount";
 import { useRefresh } from "../contexts/useRefresh";
 import { useState, useEffect } from "react";
@@ -58,6 +59,7 @@ function compareReleaseVersions(left: string, right: string): number {
 }
 
 export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: SidebarProps) {
+    const { authEnabled, logout, user } = useAuth();
     const { lastUpdated, refreshSignal } = useRefresh();
     const { unreadCount } = useNotificationUnreadCount();
     const { t } = useI18n();
@@ -216,6 +218,24 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                         {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
                     </button>
                 </div>
+
+                {authEnabled && user && (
+                    <div className="flex items-center justify-between gap-3 rounded-lg bg-gray-50 p-3 dark:bg-gray-900/50">
+                        <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-gray-700 dark:text-gray-200">{user.username}</p>
+                            <p className="text-xs text-gray-500">{user.role === 'read-only' ? 'Read-only' : 'Admin'}</p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => void logout()}
+                            className="shrink-0 rounded-md p-1.5 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+                            aria-label="Sign out"
+                            title="Sign out"
+                        >
+                            <LogOut size={18} />
+                        </button>
+                    </div>
+                )}
 
                 {/* Update Notification */}
                 {updateStatus?.update_available && (

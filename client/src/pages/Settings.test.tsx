@@ -100,7 +100,7 @@ describe('Settings', () => {
 
     expect(screen.getByLabelText('Language')).toBeEnabled();
     expect(screen.getByLabelText('Refresh interval')).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
     expect(screen.getByText('Read-only mode is enabled.')).toBeInTheDocument();
   });
 

@@ -36,11 +36,13 @@
   },
   "dependencies": {
     "@hono/node-server": "2.0.4",
+    "@simplewebauthn/server": "^13.3.0",
     "@types/sortablejs": "^1.15.9",
     "better-sqlite3": "12.10.0",
     "hono": "4.12.23",
     "i18next": "^26.3.1",
     "mqtt": "^5.15.1",
+    "openid-client": "^6.8.4",
     "react-i18next": "^17.0.8",
     "sortablejs": "^1.15.7",
     "undici": "8.1.0"
