@@ -1,15 +1,25 @@
 import { rmSync } from 'node:fs';
 import path from 'node:path';
+import { hashPassword } from '../server/app-auth';
 import { CrowdsecDatabase } from '../server/database';
 
 const dbDir = process.env.DB_DIR || path.join(process.env.TMPDIR || '/tmp', 'crowdsec-web-ui-screenshots');
 const dbPath = path.join(dbDir, 'crowdsec.db');
+const demoUsername = process.env.CROWDSEC_SCREENSHOT_USERNAME || 'admin';
+const demoPassword = process.env.CROWDSEC_SCREENSHOT_PASSWORD || 'Screenshot123';
 
 rmSync(dbPath, { force: true });
 rmSync(`${dbPath}-shm`, { force: true });
 rmSync(`${dbPath}-wal`, { force: true });
 
 const database = new CrowdsecDatabase({ dbDir });
+
+database.createAuthUser({
+  username: demoUsername,
+  passwordHash: await hashPassword(demoPassword),
+  role: 'admin',
+  authProvider: 'password',
+});
 
 const now = new Date();
 const iso = (minutesAgo: number) => new Date(now.getTime() - minutesAgo * 60_000).toISOString();

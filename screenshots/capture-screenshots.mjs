@@ -12,6 +12,8 @@ const screenshotDir = process.env.CROWDSEC_SCREENSHOT_OUTPUT_DIR || scriptDir;
 const chromePath = process.env.CHROME_PATH || "/usr/bin/google-chrome";
 const userDataDir = join(tmpdir(), `crowdsec-web-ui-screenshots-chrome-${Date.now()}`);
 const remotePort = Number.parseInt(process.env.CROWDSEC_SCREENSHOT_CHROME_PORT || "9224", 10);
+const demoUsername = process.env.CROWDSEC_SCREENSHOT_USERNAME || "admin";
+const demoPassword = process.env.CROWDSEC_SCREENSHOT_PASSWORD || "Screenshot123";
 
 mkdirSync(screenshotDir, { recursive: true });
 
@@ -143,12 +145,22 @@ async function evaluate(cdp, expression, awaitPromise = true) {
     userGesture: true,
   });
   if (result.exceptionDetails) {
-    throw new Error(result.exceptionDetails.text || "Evaluation failed");
+    throw new Error(
+      result.exceptionDetails.exception?.description ||
+      result.exceptionDetails.exception?.value ||
+      result.exceptionDetails.text ||
+      "Evaluation failed",
+    );
   }
   return result.result?.value;
 }
 
 async function navigate(cdp, path) {
+  await navigateDocument(cdp, path);
+  await waitForAppSettled(cdp);
+}
+
+async function navigateDocument(cdp, path) {
   let loaded = false;
   const onLoad = () => {
     loaded = true;
@@ -157,7 +169,19 @@ async function navigate(cdp, path) {
   await cdp.send("Page.navigate", { url: `${baseUrl}${path}` });
   const deadline = Date.now() + 12_000;
   while (!loaded && Date.now() < deadline) await sleep(100);
-  await waitForAppSettled(cdp);
+  await waitForDocumentReady(cdp);
+}
+
+async function waitForDocumentReady(cdp) {
+  const deadline = Date.now() + 12_000;
+  while (Date.now() < deadline) {
+    const ready = await evaluate(
+      cdp,
+      `document.readyState === "interactive" || document.readyState === "complete"`,
+    );
+    if (ready) return;
+    await sleep(100);
+  }
 }
 
 async function waitForAppSettled(cdp) {
@@ -186,7 +210,7 @@ async function waitForAppSettled(cdp) {
 }
 
 async function prepareSession(cdp) {
-  await navigate(cdp, "/");
+  await navigateDocument(cdp, "/login");
   await evaluate(
     cdp,
     `(() => {
@@ -194,6 +218,24 @@ async function prepareSession(cdp) {
       localStorage.setItem("menuOpen", "true");
       localStorage.setItem("dashboard_granularity", "hour");
       document.documentElement.classList.remove("dark");
+      return true;
+    })()`,
+  );
+  await evaluate(
+    cdp,
+    `(async () => {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: ${JSON.stringify(demoUsername)},
+          password: ${JSON.stringify(demoPassword)}
+        })
+      });
+      if (!response.ok) {
+        throw new Error("Demo login failed: " + response.status + " " + await response.text());
+      }
       return true;
     })()`,
   );
@@ -310,6 +352,9 @@ async function main() {
 
       await clickByText(cdp, "Add Rule");
       await screenshot(cdp, "notification_rule.png");
+
+      await navigate(cdp, "/settings");
+      await screenshot(cdp, "settings.png");
     } finally {
       cdp.close();
     }

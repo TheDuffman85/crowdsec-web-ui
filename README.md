@@ -75,9 +75,6 @@ Create notification rules for alert spikes, alert thresholds, IP bans, recent CV
   <img src="screenshots/notification_rule.png" alt="Notification Rule" width="50%">
 </a>
 
-### Localization
-CrowdSec Web UI includes Arabic, English, German, French, Hindi, Japanese, Portuguese, Spanish, Russian, and Chinese translations. The language selector can follow the browser language for the UI, or it can be set explicitly. When a language is set explicitly, server-generated text such as sync status messages, notification titles, notification bodies, and notification test messages uses that saved language too. With **Browser default**, server-generated messages use English because background jobs and outbound notifications do not have access to a browser locale.
-
 ### Unified Search
 -   **Free-text first**: The Alerts and Decisions search bars still support normal free-text queries.
 -   **Advanced syntax**: Power users can refine searches with quoted phrases, `field:value`, `AND`, `OR`, `NOT`, unary `-`, and parentheses.
@@ -93,8 +90,18 @@ CrowdSec Web UI includes Arabic, English, German, French, Hindi, Japanese, Portu
 -   **Responsive**: Optimized for mobile and desktop.
 -   **Real-time**: Fast interactions using modern React technology.
 
+### Settings
+Configure language, refresh cadence, password login, passkeys, and OIDC SSO from one settings page.
+
+<a href="screenshots/settings.png">
+  <img src="screenshots/settings.png" alt="Settings" width="50%">
+</a>
+
+### Localization
+CrowdSec Web UI includes Arabic, English, German, French, Hindi, Japanese, Portuguese, Spanish, Russian, and Chinese translations. The language selector can follow the browser language for the UI, or it can be set explicitly. When a language is set explicitly, server-generated text such as sync status messages, notification titles, notification bodies, and notification test messages uses that saved language too. With **Browser default**, server-generated messages use English because background jobs and outbound notifications do not have access to a browser locale.
+
 ### Dashboard Authentication
-Password login, passkeys, and OIDC SSO protect both the browser UI and API routes when dashboard authentication is enabled. New installs start with authentication enabled and use an initial setup page to create the first administrator account. Existing installs migrated from older versions keep authentication disabled until you opt in with `CROWDSEC_AUTH_ENABLED=true`.
+Password login, passkeys, and OIDC SSO protect the browser UI and protected application API routes when dashboard authentication is enabled. New installs start with authentication enabled and use an initial setup page to create the first administrator account. Existing installs migrated from older versions keep authentication disabled until you opt in with `CROWDSEC_AUTH_ENABLED=true`.
 
 > [!CAUTION]
 > **Security Notice**: CrowdSec Web UI includes built-in dashboard authentication, but public deployments should still run behind HTTPS and a hardened reverse proxy. For centralized access control, configure OIDC SSO with an Identity Provider (IdP) such as [Authentik](https://goauthentik.io/), [Authelia](https://www.authelia.com/), or [Keycloak](https://www.keycloak.org/). Existing installs upgraded from versions without dashboard authentication remain unauthenticated until `CROWDSEC_AUTH_ENABLED=true` is set.
@@ -313,7 +320,7 @@ Choose exactly one auth mode: password auth or mTLS auth.
 
 ### Dashboard Authentication
 
-Dashboard authentication covers both the browser UI and `/api/*` routes. New installs start with authentication enabled and show an initial setup page where you create the first local administrator account. Upgraded installs with an existing SQLite database are migrated with authentication disabled by default, so existing deployments keep working until you opt in with:
+Dashboard authentication covers the browser UI and protected application API routes. The health endpoint remains public for container and reverse-proxy health checks. New installs start with authentication enabled and show an initial setup page where you create the first local administrator account. Upgraded installs with an existing SQLite database are migrated with authentication disabled by default, so existing deployments keep working until you opt in with:
 
 ```env
 CROWDSEC_AUTH_ENABLED=true
