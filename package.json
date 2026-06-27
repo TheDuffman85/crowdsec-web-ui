@@ -4,10 +4,10 @@
   "description": "A web UI for CrowdSec alerts and decisions",
   "main": "dist/server/index.js",
   "type": "module",
-  "packageManager": "pnpm@10.33.0",
+  "packageManager": "pnpm@11.9.0",
   "engines": {
-    "node": "24.15.0",
-    "pnpm": "10.33.0"
+    "node": "24.18.0",
+    "pnpm": "11.9.0"
   },
   "scripts": {
     "ensure:native-deps": "node scripts/ensure-native-deps.mjs",
