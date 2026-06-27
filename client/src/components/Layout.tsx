@@ -1,10 +1,13 @@
 import { Outlet, useLocation } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { useState, useEffect } from "react";
+import { Toast } from "./Toast";
+import { useToast } from "../contexts/useToast";
 import { useI18n } from "../lib/i18n";
 
 export function Layout() {
     const { t } = useI18n();
+    const { toasts, removeToast } = useToast();
     const [theme, setTheme] = useState<'light' | 'dark'>(() => {
         if (typeof window !== 'undefined') {
             const savedTheme = localStorage.getItem("theme");
@@ -61,6 +64,8 @@ export function Layout() {
                 return t('pages.decisions.title');
             case '/notifications':
                 return t('pages.notifications.title');
+            case '/settings':
+                return t('pages.settings.title');
             default:
                 return t('pages.dashboard.title');
         }
@@ -105,6 +110,16 @@ export function Layout() {
                     <Outlet />
                 </div>
             </main>
+            <div className="fixed bottom-4 right-4 z-50 flex w-[calc(100vw-2rem)] max-w-sm flex-col gap-2">
+                {toasts.map((toast) => (
+                    <Toast
+                        key={toast.id}
+                        message={toast.message}
+                        type={toast.type}
+                        onClose={() => removeToast(toast.id)}
+                    />
+                ))}
+            </div>
         </div>
     );
 }

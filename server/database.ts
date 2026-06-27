@@ -84,6 +84,27 @@ type JsonRow = {
   fetched_at?: string;
 };
 
+export interface AuthUserRow {
+  id: number;
+  username: string;
+  password_hash: string | null;
+  role: 'admin' | 'read-only';
+  auth_provider: 'password' | 'oidc';
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WebAuthnCredentialRow {
+  id: number;
+  user_id: number;
+  credential_id: string;
+  public_key: string;
+  sign_count: number;
+  transports: string | null;
+  name: string | null;
+  created_at: string;
+}
+
 export class CrowdsecDatabase {
   public readonly db: Database;
 
@@ -110,6 +131,19 @@ export class CrowdsecDatabase {
   private readonly deleteDecisionsByAlertIdStatement: any;
   private readonly getMetaStatement: any;
   private readonly setMetaStatement: any;
+  private readonly countAuthUsersStatement: any;
+  private readonly createAuthUserStatement: any;
+  private readonly getAuthUserByIdStatement: any;
+  private readonly getAuthUserByUsernameStatement: any;
+  private readonly updateAuthUserPasswordStatement: any;
+  private readonly upsertOidcUserStatement: any;
+  private readonly listWebAuthnCredentialsByUserStatement: any;
+  private readonly countWebAuthnCredentialsStatement: any;
+  private readonly createWebAuthnCredentialStatement: any;
+  private readonly getWebAuthnCredentialByCredentialIdStatement: any;
+  private readonly updateWebAuthnCredentialCounterStatement: any;
+  private readonly renameWebAuthnCredentialStatement: any;
+  private readonly deleteWebAuthnCredentialStatement: any;
   private readonly listNotificationChannelsStatement: any;
   private readonly getNotificationChannelByIdStatement: any;
   private readonly upsertNotificationChannelStatement: any;
@@ -137,7 +171,8 @@ export class CrowdsecDatabase {
   constructor(options: DatabaseOptions = {}) {
     const resolvedPath = resolveDatabasePath(options);
     this.db = openDatabase(resolvedPath);
-    initSchema(this.db);
+    const freshDatabase = isDatabaseFresh(this.db);
+    initSchema(this.db, freshDatabase);
 
     this.insertAlertStatement = this.db.query(`
       INSERT OR REPLACE INTO alerts (id, uuid, created_at, scenario, source_ip, message, raw_data)
@@ -215,6 +250,48 @@ export class CrowdsecDatabase {
     this.deleteDecisionsByAlertIdStatement = this.db.query('DELETE FROM decisions WHERE alert_id = $alert_id');
     this.getMetaStatement = this.db.query('SELECT value FROM meta WHERE key = ?');
     this.setMetaStatement = this.db.query('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)');
+    this.countAuthUsersStatement = this.db.query('SELECT COUNT(*) as count FROM auth_users');
+    this.createAuthUserStatement = this.db.query(`
+      INSERT INTO auth_users (username, password_hash, role, auth_provider, created_at, updated_at)
+      VALUES ($username, $password_hash, $role, $auth_provider, $created_at, $updated_at)
+    `);
+    this.getAuthUserByIdStatement = this.db.query('SELECT * FROM auth_users WHERE id = $id');
+    this.getAuthUserByUsernameStatement = this.db.query('SELECT * FROM auth_users WHERE username = $username');
+    this.updateAuthUserPasswordStatement = this.db.query(`
+      UPDATE auth_users
+      SET password_hash = $password_hash, updated_at = $updated_at
+      WHERE id = $id
+    `);
+    this.upsertOidcUserStatement = this.db.query(`
+      INSERT INTO auth_users (username, password_hash, role, auth_provider, created_at, updated_at)
+      VALUES ($username, NULL, $role, 'oidc', $created_at, $updated_at)
+      ON CONFLICT(username) DO UPDATE SET
+        role = excluded.role,
+        auth_provider = 'oidc',
+        updated_at = excluded.updated_at
+    `);
+    this.listWebAuthnCredentialsByUserStatement = this.db.query(`
+      SELECT * FROM webauthn_credentials
+      WHERE user_id = $user_id
+      ORDER BY created_at DESC
+    `);
+    this.countWebAuthnCredentialsStatement = this.db.query('SELECT COUNT(*) as count FROM webauthn_credentials');
+    this.createWebAuthnCredentialStatement = this.db.query(`
+      INSERT INTO webauthn_credentials (user_id, credential_id, public_key, sign_count, transports, name, created_at)
+      VALUES ($user_id, $credential_id, $public_key, $sign_count, $transports, $name, $created_at)
+    `);
+    this.getWebAuthnCredentialByCredentialIdStatement = this.db.query('SELECT * FROM webauthn_credentials WHERE credential_id = $credential_id');
+    this.updateWebAuthnCredentialCounterStatement = this.db.query(`
+      UPDATE webauthn_credentials
+      SET sign_count = $sign_count
+      WHERE id = $id
+    `);
+    this.renameWebAuthnCredentialStatement = this.db.query(`
+      UPDATE webauthn_credentials
+      SET name = $name
+      WHERE id = $id AND user_id = $user_id
+    `);
+    this.deleteWebAuthnCredentialStatement = this.db.query('DELETE FROM webauthn_credentials WHERE id = $id AND user_id = $user_id');
     this.listNotificationChannelsStatement = this.db.query(`
       SELECT id, created_at, updated_at, name, type, enabled, config_json
       FROM notification_channels
@@ -472,6 +549,103 @@ export class CrowdsecDatabase {
     this.setMetaStatement.run(key, value);
   }
 
+  isAuthMigrationDefaultDisabled(): boolean {
+    return this.getMeta('auth_existing_install_default_disabled')?.value === 'true';
+  }
+
+  countAuthUsers(): number {
+    return (this.countAuthUsersStatement.get() as CountRow).count;
+  }
+
+  createAuthUser(params: {
+    username: string;
+    passwordHash: string | null;
+    role: 'admin' | 'read-only';
+    authProvider: 'password' | 'oidc';
+  }): number {
+    const now = new Date().toISOString();
+    const result = this.createAuthUserStatement.run({
+      $username: params.username,
+      $password_hash: params.passwordHash,
+      $role: params.role,
+      $auth_provider: params.authProvider,
+      $created_at: now,
+      $updated_at: now,
+    }) as { lastInsertRowid?: number | bigint };
+    return Number(result.lastInsertRowid);
+  }
+
+  getAuthUserById(id: number): AuthUserRow | null {
+    return (this.getAuthUserByIdStatement.get({ $id: id }) as AuthUserRow | null) || null;
+  }
+
+  getAuthUserByUsername(username: string): AuthUserRow | null {
+    return (this.getAuthUserByUsernameStatement.get({ $username: username }) as AuthUserRow | null) || null;
+  }
+
+  updateAuthUserPassword(id: number, passwordHash: string): boolean {
+    return this.updateAuthUserPasswordStatement.run({
+      $id: id,
+      $password_hash: passwordHash,
+      $updated_at: new Date().toISOString(),
+    }).changes > 0;
+  }
+
+  upsertOidcUser(username: string, role: 'admin' | 'read-only'): AuthUserRow {
+    const now = new Date().toISOString();
+    this.upsertOidcUserStatement.run({
+      $username: username,
+      $role: role,
+      $created_at: now,
+      $updated_at: now,
+    });
+    return this.getAuthUserByUsername(username)!;
+  }
+
+  listWebAuthnCredentialsByUser(userId: number): WebAuthnCredentialRow[] {
+    return this.listWebAuthnCredentialsByUserStatement.all({ $user_id: userId }) as WebAuthnCredentialRow[];
+  }
+
+  countWebAuthnCredentials(): number {
+    return (this.countWebAuthnCredentialsStatement.get() as CountRow).count;
+  }
+
+  createWebAuthnCredential(params: {
+    userId: number;
+    credentialId: string;
+    publicKey: string;
+    signCount: number;
+    transports: string | null;
+    name: string | null;
+  }): number {
+    const result = this.createWebAuthnCredentialStatement.run({
+      $user_id: params.userId,
+      $credential_id: params.credentialId,
+      $public_key: params.publicKey,
+      $sign_count: params.signCount,
+      $transports: params.transports,
+      $name: params.name,
+      $created_at: new Date().toISOString(),
+    }) as { lastInsertRowid?: number | bigint };
+    return Number(result.lastInsertRowid);
+  }
+
+  getWebAuthnCredentialByCredentialId(credentialId: string): WebAuthnCredentialRow | null {
+    return (this.getWebAuthnCredentialByCredentialIdStatement.get({ $credential_id: credentialId }) as WebAuthnCredentialRow | null) || null;
+  }
+
+  updateWebAuthnCredentialCounter(id: number, signCount: number): void {
+    this.updateWebAuthnCredentialCounterStatement.run({ $id: id, $sign_count: signCount });
+  }
+
+  renameWebAuthnCredential(id: number, userId: number, name: string | null): boolean {
+    return this.renameWebAuthnCredentialStatement.run({ $id: id, $user_id: userId, $name: name }).changes > 0;
+  }
+
+  deleteWebAuthnCredential(id: number, userId: number): boolean {
+    return this.deleteWebAuthnCredentialStatement.run({ $id: id, $user_id: userId }).changes > 0;
+  }
+
   listNotificationChannels(): JsonRow[] {
     return this.listNotificationChannelsStatement.all() as JsonRow[];
   }
@@ -681,6 +855,7 @@ function openDatabase(dbPath: string): Database {
   try {
     const database = createDatabase(dbPath);
     database.exec('PRAGMA journal_mode = WAL');
+    database.exec('PRAGMA foreign_keys = ON');
     database.exec('PRAGMA synchronous = NORMAL');
     database.exec('PRAGMA cache_size = -32000');
     database.exec('PRAGMA temp_store = MEMORY');
@@ -693,6 +868,16 @@ function openDatabase(dbPath: string): Database {
     }
     throw error;
   }
+}
+
+function isDatabaseFresh(db: Database): boolean {
+  const row = db.query(`
+    SELECT COUNT(*) AS count
+    FROM sqlite_master
+    WHERE type = 'table'
+      AND name NOT LIKE 'sqlite_%'
+  `).get() as CountRow;
+  return row.count === 0;
 }
 
 function createDatabase(dbPath: string): Database {
@@ -720,7 +905,7 @@ function normalizeBindingValue(value: unknown): unknown {
   return normalized;
 }
 
-function initSchema(db: Database): void {
+function initSchema(db: Database, freshDatabase: boolean): void {
   const createAlertsTable = `
     CREATE TABLE IF NOT EXISTS alerts (
       id INTEGER PRIMARY KEY,
@@ -759,6 +944,33 @@ function initSchema(db: Database): void {
       key TEXT PRIMARY KEY,
       value TEXT
     );
+  `;
+
+  const createAuthUsersTable = `
+    CREATE TABLE IF NOT EXISTS auth_users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL UNIQUE,
+      password_hash TEXT,
+      role TEXT NOT NULL DEFAULT 'admin',
+      auth_provider TEXT NOT NULL DEFAULT 'password',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_auth_users_username ON auth_users(username);
+  `;
+
+  const createWebAuthnCredentialsTable = `
+    CREATE TABLE IF NOT EXISTS webauthn_credentials (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+      credential_id TEXT NOT NULL UNIQUE,
+      public_key TEXT NOT NULL,
+      sign_count INTEGER NOT NULL DEFAULT 0,
+      transports TEXT,
+      name TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_webauthn_credentials_user_id ON webauthn_credentials(user_id);
   `;
 
   const createNotificationChannelsTable = `
@@ -831,6 +1043,12 @@ function initSchema(db: Database): void {
 
   db.exec(createAlertsTable);
   db.exec(createMetaTable);
+  db.exec(`
+    INSERT OR IGNORE INTO meta (key, value)
+    VALUES ('auth_existing_install_default_disabled', '${freshDatabase ? 'false' : 'true'}')
+  `);
+  db.exec(createAuthUsersTable);
+  db.exec(createWebAuthnCredentialsTable);
   db.exec(createNotificationChannelsTable);
   db.exec(createNotificationRulesTable);
   db.exec(createNotificationsTable);

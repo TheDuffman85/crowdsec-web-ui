@@ -29,6 +29,10 @@ vi.mock('./pages/Notifications', () => ({
   Notifications: () => <div>Notifications Page</div>,
 }));
 
+vi.mock('./pages/Settings', () => ({
+  Settings: () => <div>Settings Page</div>,
+}));
+
 describe('App lazy routes', () => {
   beforeEach(() => {
     vi.stubGlobal(
@@ -62,5 +66,37 @@ describe('App lazy routes', () => {
     window.history.pushState({}, '', '/notifications');
     render(<App />);
     await waitFor(() => expect(screen.getByText('Notifications Page')).toBeInTheDocument());
+  });
+
+  test('renders the lazy settings route', async () => {
+    window.history.pushState({}, '', '/settings');
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Settings Page')).toBeInTheDocument());
+  });
+
+  test('redirects authenticated users away from setup', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.includes('/api/auth/status')) {
+          return Response.json({
+            authEnabled: true,
+            setupRequired: false,
+            authenticated: true,
+            user: { userId: 1, username: 'admin', role: 'admin' },
+            oidcEnabled: false,
+            passkeysEnabled: false,
+          });
+        }
+        return Response.json({ update_available: false });
+      }),
+    );
+    window.history.pushState({}, '', '/setup');
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('Dashboard Page')).toBeInTheDocument());
+    expect(window.location.pathname).toBe('/');
   });
 });

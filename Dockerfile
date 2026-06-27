@@ -3,14 +3,14 @@
 # ==========================================
 # Stage 0: Node + pnpm
 # ==========================================
-FROM node:24.15.0-trixie-slim AS node-pnpm
+FROM node:24.18.0-trixie-slim AS node-pnpm
 
 RUN npm config set fetch-retries 5 \
     && npm config set fetch-retry-factor 2 \
     && npm config set fetch-retry-mintimeout 20000 \
     && npm config set fetch-retry-maxtimeout 120000 \
     && npm config set registry https://registry.npmjs.org/ \
-    && npm install -g pnpm@10.33.0
+    && npm install -g pnpm@11.9.0
 
 
 # ==========================================

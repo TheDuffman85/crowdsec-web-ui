@@ -45,3 +45,19 @@ path:focus {
 .sortable-chosen {
   @apply bg-primary-50 dark:bg-primary-900/20;
 }
+
+.toast-enter {
+  animation: toast-enter 180ms ease-out;
+}
+
+@keyframes toast-enter {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

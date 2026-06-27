@@ -1,19 +1,13 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, ShieldAlert, Gavel, Bell, X, Sun, Moon, ArrowUpCircle, Menu, PanelLeftClose, Globe2 } from "lucide-react";
+import { LayoutDashboard, ShieldAlert, Gavel, Bell, X, Sun, Moon, ArrowUpCircle, Menu, PanelLeftClose, Settings as SettingsIcon, LogOut } from "lucide-react";
 import { Badge } from "./ui/Badge";
+import { useAuth } from "../contexts/AuthContext";
 import { useNotificationUnreadCount } from "../contexts/useNotificationUnreadCount";
 import { useRefresh } from "../contexts/useRefresh";
 import { useState, useEffect } from "react";
 import { apiUrl, assetUrl } from "../lib/basePath";
-import { fetchConfig } from "../lib/api";
 import type { UpdateCheckResponse } from '../types';
-import {
-    BROWSER_LANGUAGE_SETTING,
-    SUPPORTED_LANGUAGES,
-    getLanguageLabelKey,
-    useI18n,
-    type LanguagePreference,
-} from "../lib/i18n";
+import { useI18n } from "../lib/i18n";
 import { useDateTime } from "../lib/dateTime";
 
 type ThemeMode = 'light' | 'dark';
@@ -65,35 +59,23 @@ function compareReleaseVersions(left: string, right: string): number {
 }
 
 export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: SidebarProps) {
-    const { intervalMs, setIntervalMs, lastUpdated, refreshSignal } = useRefresh();
+    const { authEnabled, logout, user } = useAuth();
+    const { lastUpdated, refreshSignal } = useRefresh();
     const { unreadCount } = useNotificationUnreadCount();
-    const { browserLanguage, preference, setLanguagePreference, t } = useI18n();
+    const { t } = useI18n();
     const { formatTime } = useDateTime();
     const [updateStatus, setUpdateStatus] = useState<UpdateCheckResponse | null>(null);
-    const [canManageSettings, setCanManageSettings] = useState(false);
 
     const links = [
         { to: "/", label: "components.sidebar.nav.dashboard", icon: LayoutDashboard },
         { to: "/alerts", label: "components.sidebar.nav.alerts", icon: ShieldAlert },
         { to: "/decisions", label: "components.sidebar.nav.decisions", icon: Gavel },
         { to: "/notifications", label: "components.sidebar.nav.notifications", icon: Bell },
+        { to: "/settings", label: "components.sidebar.nav.settings", icon: SettingsIcon },
     ];
 
     useEffect(() => {
         let cancelled = false;
-
-        const loadPermissions = async () => {
-            try {
-                const config = await fetchConfig();
-                if (!cancelled) {
-                    setCanManageSettings(config.permissions?.can_manage_settings !== false);
-                }
-            } catch (error) {
-                if (!cancelled) {
-                    console.error("Failed to load permissions", error);
-                }
-            }
-        };
 
         const checkUpdates = async () => {
             try {
@@ -117,7 +99,6 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
             }
         };
 
-        void loadPermissions();
         void checkUpdates();
         // Check on mount and when refresh signal triggers
         return () => {
@@ -219,62 +200,42 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                 ))}
             </nav>
             <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex flex-col gap-4">
+                <div className="flex items-center justify-between gap-3 rounded-lg bg-gray-50 p-3 dark:bg-gray-900/50">
+                    <div className="min-w-0">
+                        <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">
+                            {t('components.sidebar.lastRefresh')}
+                        </p>
+                        <p className="mt-1 truncate font-mono text-xs text-gray-400 dark:text-gray-500">
+                            {lastUpdated ? formatLastUpdatedTime(lastUpdated) : t('components.sidebar.lastRefreshNever')}
+                        </p>
+                    </div>
+                    <button
+                        onClick={toggleTheme}
+                        className="shrink-0 rounded-md p-1.5 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+                        aria-label={theme === "light" ? t('components.sidebar.darkMode') : t('components.sidebar.lightMode')}
+                        title={theme === "light" ? t('components.sidebar.darkMode') : t('components.sidebar.lightMode')}
+                    >
+                        {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
+                    </button>
+                </div>
 
-                {canManageSettings && (
-                    <div className="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-3 space-y-2">
-                        <div className="flex items-center justify-between">
-                            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                                {t('components.sidebar.refresh')}
-                            </label>
-                            {lastUpdated && (
-                                <span className="text-[10px] items-center text-gray-400 font-mono">
-                                    {formatLastUpdatedTime(lastUpdated)}
-                                </span>
-                            )}
+                {authEnabled && user && (
+                    <div className="flex items-center justify-between gap-3 rounded-lg bg-gray-50 p-3 dark:bg-gray-900/50">
+                        <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-gray-700 dark:text-gray-200">{user.username}</p>
+                            <p className="text-xs text-gray-500">{user.role === 'read-only' ? 'Read-only' : 'Admin'}</p>
                         </div>
-                        <select
-                            value={intervalMs}
-                            onChange={(e) => setIntervalMs(Number(e.target.value))}
-                            className="w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs rounded-md px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary-500 cursor-pointer"
+                        <button
+                            type="button"
+                            onClick={() => void logout()}
+                            className="shrink-0 rounded-md p-1.5 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+                            aria-label="Sign out"
+                            title="Sign out"
                         >
-                            <option value={0}>{t('components.sidebar.refresh.off')}</option>
-                            <option value={5000}>{t('components.sidebar.refresh.every5Seconds')}</option>
-                            <option value={30000}>{t('components.sidebar.refresh.every30Seconds')}</option>
-                            <option value={60000}>{t('components.sidebar.refresh.every1Minute')}</option>
-                            <option value={300000}>{t('components.sidebar.refresh.every5Minutes')}</option>
-                        </select>
+                            <LogOut size={18} />
+                        </button>
                     </div>
                 )}
-                <div className="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-3 space-y-2">
-                    <label htmlFor="language-select" className="flex items-center gap-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                        <Globe2 size={14} />
-                        {t('components.sidebar.language')}
-                    </label>
-                    <select
-                        id="language-select"
-                        value={preference}
-                        onChange={(event) => setLanguagePreference(event.target.value as LanguagePreference)}
-                        className="w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs rounded-md px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary-500 cursor-pointer"
-                    >
-                        <option value={BROWSER_LANGUAGE_SETTING}>
-                            {t('components.sidebar.languageBrowser')} ({t(getLanguageLabelKey(browserLanguage))})
-                        </option>
-                        {SUPPORTED_LANGUAGES.map((language) => (
-                            <option key={language.code} value={language.code}>
-                                {t(language.labelKey)}
-                            </option>
-                        ))}
-                    </select>
-                </div>
-                <button
-                    onClick={toggleTheme}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-gray-100 dark:bg-gray-700/50 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-                >
-                    {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
-                    <span className="text-sm font-medium">
-                        {theme === "light" ? t('components.sidebar.darkMode') : t('components.sidebar.lightMode')}
-                    </span>
-                </button>
 
                 {/* Update Notification */}
                 {updateStatus?.update_available && (

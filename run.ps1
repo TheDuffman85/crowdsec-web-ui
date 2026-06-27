@@ -99,7 +99,7 @@ function Assert-ToolingInstalled {
     $nodeCommand = Get-Command node -ErrorAction SilentlyContinue
     if ($null -eq $nodeCommand) {
         Write-Log "Error: 'node' is not installed."
-        Write-Log 'Please install Node.js 24.15.0 to run this application locally.'
+        Write-Log 'Please install Node.js 24.18.0 to run this application locally.'
         Write-Log 'Alternatively, use Docker to run the containerized application.'
         exit 1
     }
@@ -107,7 +107,7 @@ function Assert-ToolingInstalled {
     $pnpmCommand = Get-Command pnpm -ErrorAction SilentlyContinue
     if ($null -eq $pnpmCommand) {
         Write-Log "Error: 'pnpm' is not installed."
-        Write-Log 'Please install pnpm 10.33.0 (for example via corepack).'
+        Write-Log 'Please install pnpm 11.9.0 (for example via corepack).'
         Write-Log 'Alternatively, use Docker to run the containerized application.'
         exit 1
     }

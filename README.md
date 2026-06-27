@@ -93,8 +93,11 @@ CrowdSec Web UI includes Arabic, English, German, French, Hindi, Japanese, Portu
 -   **Responsive**: Optimized for mobile and desktop.
 -   **Real-time**: Fast interactions using modern React technology.
 
+### Dashboard Authentication
+Password login, passkeys, and OIDC SSO protect both the browser UI and API routes when dashboard authentication is enabled. New installs start with authentication enabled and use an initial setup page to create the first administrator account. Existing installs migrated from older versions keep authentication disabled until you opt in with `CROWDSEC_AUTH_ENABLED=true`.
+
 > [!CAUTION]
-> **Security Notice**: This application **does not provide any built-in authentication mechanism**. It is NOT intended to be exposed publicly without protection. We strongly recommend deploying this application behind a reverse proxy with an Identity Provider (IdP) such as [Authentik](https://goauthentik.io/), [Authelia](https://www.authelia.com/), or [Keycloak](https://www.keycloak.org/) to handle authentication and authorization.
+> **Security Notice**: CrowdSec Web UI includes built-in dashboard authentication, but public deployments should still run behind HTTPS and a hardened reverse proxy. For centralized access control, configure OIDC SSO with an Identity Provider (IdP) such as [Authentik](https://goauthentik.io/), [Authelia](https://www.authelia.com/), or [Keycloak](https://www.keycloak.org/). Existing installs upgraded from versions without dashboard authentication remain unauthenticated until `CROWDSEC_AUTH_ENABLED=true` is set.
 > Set `PERMISSION_READ_ONLY=true` to run an instance that can view data but cannot perform CrowdSec write actions or management actions such as changing refresh cadence, managing notification destinations/rules, sending notification tests, or deleting notifications. Language, table column preferences, and marking notifications as read remain writable. This is an instance-wide safety mode, not user management or per-user RBAC.
 
 ## Architecture
@@ -103,12 +106,12 @@ CrowdSec Web UI includes Arabic, English, German, French, Hindi, Japanese, Portu
 -   **Server**: Node.js (Hono). Acts as an intelligent caching layer for CrowdSec Local API (LAPI) with delta updates and optimized chunked historical data sync for improved performance and larger-scale deployments.
 -   **Build Output**: The root build emits the frontend to `dist/client` and the compiled server to `dist/server`.
 -   **Database**: SQLite (`better-sqlite3`). Persists alerts and decisions locally in `/app/data/crowdsec.db` to reduce memory usage and support historical data.
--   **Security**: The application runs as a non-root user (`node`) inside the container and communicates with CrowdSec via HTTP/LAPI. It uses **Machine Authentication** to obtain a JWT for full access (read/write), either via watcher `User/Password` or agent **mTLS**.
+-   **Security**: The application runs as a non-root user (`node`) inside the container. Dashboard authentication can protect the browser UI and API with password login, passkeys, and OIDC SSO. Separately, the backend authenticates to CrowdSec LAPI as a machine, either via watcher `User/Password` or agent **mTLS**.
 
 ## Prerequisites
 
 -   **CrowdSec**: A running CrowdSec instance.
--   **Authentication**: Configure exactly one CrowdSec LAPI auth mode for this web UI:
+-   **CrowdSec LAPI Authentication**: Configure exactly one CrowdSec LAPI auth mode for this web UI:
 
     1.  **Watcher password auth**
         Generate a secure password:
@@ -180,6 +183,10 @@ services:
       - CROWDSEC_URL=http://crowdsec:8080
       - CROWDSEC_USER=crowdsec-web-ui
       - CROWDSEC_PASSWORD=<generated_password>
+      # Authentication is enabled by default for new installs.
+      # Existing data directories migrated from older versions keep auth disabled
+      # until you explicitly set CROWDSEC_AUTH_ENABLED=true.
+      # - CROWDSEC_AUTH_ENABLED=true
       # Optional deployment-wide date/time display settings
       # - TZ=Europe/Berlin
       # - CROWDSEC_TIME_FORMAT=24h
@@ -267,6 +274,16 @@ Choose exactly one auth mode: password auth or mTLS auth.
 | `TZ` | browser local | Optional deployment-wide IANA timezone, such as `Europe/Berlin` or `UTC`. When set, the UI, dashboard grouping, filters, and server-generated timestamps all use it. |
 | `CROWDSEC_TIME_FORMAT` | browser locale | Optional deployment-wide clock format. Accepts `12h` or `24h`. When omitted, each browser's locale determines whether the UI uses a 12- or 24-hour clock. |
 | `PERMISSION_READ_ONLY` | `false` | Set to `true` to hide management actions in the UI and reject API requests that add/delete decisions, delete alerts, clean up by IP, clear the cache, change refresh cadence, manage notification destinations/rules, send notification tests, or delete notifications. Language, table column preferences, and marking notifications as read remain writable. |
+| `CROWDSEC_AUTH_ENABLED` | new installs: `true`; migrated existing installs: `false` | Enables dashboard authentication for the UI and API. Set to `false` to run without dashboard login. Existing databases from older releases are marked disabled during migration so upgrades do not lock out current deployments. |
+| `CROWDSEC_AUTH_SECRET` | auto-generated and persisted | Optional fixed secret used to sign dashboard session cookies. If unset, the app generates one and stores it in app metadata. |
+| `CROWDSEC_AUTH_SECRET_FILE` | auto-generated and persisted | Optional Docker Secrets alternative: read `CROWDSEC_AUTH_SECRET` from a file. Do not set both variables. |
+| `CROWDSEC_AUTH_OIDC_ISSUER_URL` | none | Optional OIDC issuer URL. When set with `CROWDSEC_AUTH_OIDC_CLIENT_ID`, the login page shows SSO. Can also be configured from Settings. |
+| `CROWDSEC_AUTH_OIDC_CLIENT_ID` | none | Optional OIDC client ID. Can also be configured from Settings. |
+| `CROWDSEC_AUTH_OIDC_CLIENT_SECRET` | none | Optional OIDC client secret. Can also be configured from Settings. |
+| `CROWDSEC_AUTH_OIDC_CLIENT_SECRET_FILE` | none | Optional Docker Secrets alternative: read `CROWDSEC_AUTH_OIDC_CLIENT_SECRET` from a file. Do not set both variables. |
+| `CROWDSEC_AUTH_OIDC_GROUPS_CLAIM` | `groups` | Optional OIDC claim used for group mapping. The claim may be an array or a comma-separated string. Can also be configured from Settings. |
+| `CROWDSEC_AUTH_OIDC_ADMIN_GROUPS` | empty | Optional comma-separated OIDC groups that receive admin permissions. Can also be configured from Settings. |
+| `CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS` | empty | Optional comma-separated OIDC groups that receive read-only permissions. If any OIDC group mapping is configured and a user matches no group, the user is read-only. If no OIDC groups are configured, OIDC users default to admin. Can also be configured from Settings. |
 | `CROWDSEC_LOOKBACK_PERIOD` | `168h` | Alert/history retention window used for sync and cleanup. Accepts values like `12h`, `7d`, or `30m`. |
 | `CROWDSEC_REFRESH_INTERVAL` | `30s` | Normal background refresh interval. Accepts `0`, `manual`, `5s`, `30s`, `1m`, `5m`, or other `s`/`m`/`h`/`d` values. |
 | `CROWDSEC_IDLE_REFRESH_INTERVAL` | `5m` | Refresh interval used when the app considers itself idle. |
@@ -292,7 +309,33 @@ Choose exactly one auth mode: password auth or mTLS auth.
 
 ### File-Backed Secrets
 
-`CROWDSEC_PASSWORD_FILE` and `NOTIFICATION_SECRET_KEY_FILE` read their values from UTF-8 files, including Docker Secrets mounts under `/run/secrets`. For either setting, configure the direct variable or its `_FILE` alternative, not both. The app fails fast when both are set or when a configured file cannot be read. File-backed secrets are loaded during startup, so restart the app after rotating a mounted secret.
+`CROWDSEC_PASSWORD_FILE`, `NOTIFICATION_SECRET_KEY_FILE`, `CROWDSEC_AUTH_SECRET_FILE`, and `CROWDSEC_AUTH_OIDC_CLIENT_SECRET_FILE` read their values from UTF-8 files, including Docker Secrets mounts under `/run/secrets`. For each setting, configure the direct variable or its `_FILE` alternative, not both. The app fails fast when both are set or when a configured file cannot be read. File-backed secrets are loaded during startup, so restart the app after rotating a mounted secret.
+
+### Dashboard Authentication
+
+Dashboard authentication covers both the browser UI and `/api/*` routes. New installs start with authentication enabled and show an initial setup page where you create the first local administrator account. Upgraded installs with an existing SQLite database are migrated with authentication disabled by default, so existing deployments keep working until you opt in with:
+
+```env
+CROWDSEC_AUTH_ENABLED=true
+```
+
+Set `CROWDSEC_AUTH_ENABLED=false` to disable dashboard authentication. This setting is intentionally environment-controlled, not configurable from the UI.
+
+Local password login is available after onboarding. Authenticated users can change their own password and register or remove their own passkeys from Settings. Administrators can also disable password login and configure OIDC SSO from Settings. OIDC can also be preconfigured with environment variables:
+
+```env
+CROWDSEC_AUTH_ENABLED=true
+CROWDSEC_AUTH_OIDC_ISSUER_URL=https://idp.example.com/application/o/crowdsec-web-ui/
+CROWDSEC_AUTH_OIDC_CLIENT_ID=crowdsec-web-ui
+CROWDSEC_AUTH_OIDC_CLIENT_SECRET=change-me
+CROWDSEC_AUTH_OIDC_GROUPS_CLAIM=groups
+CROWDSEC_AUTH_OIDC_ADMIN_GROUPS=crowdsec-admins,secops
+CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS=crowdsec-viewers
+```
+
+OIDC Settings accepts the issuer URL, client ID, client secret, groups claim, admin groups, and read-only groups. Saved Settings values override OIDC environment defaults. Group mapping is optional: leave the group lists empty to treat every OIDC user as an admin. Configure admin/read-only groups only when your Identity Provider should decide which SSO users get write access.
+
+OIDC group mapping is lightweight RBAC. `PERMISSION_READ_ONLY=true` is still instance-wide and overrides user roles. For OIDC, admin group matches get full access, read-only group matches can view data and keep allowed preferences, and users with no matching group become read-only whenever any OIDC group mapping is configured.
 
 ### Build and Image Metadata
 
@@ -781,7 +824,7 @@ The Web UI maintains its own local history of alerts and decisions. Data fetched
 ## Local Development
 
 1.  **Install Dependencies**:
-    You need Node.js `24.15.0` and pnpm `10.33.0` installed locally.
+    You need Node.js `24.18.0` and pnpm `11.9.0` installed locally.
     ```bash
     pnpm install
     ```
