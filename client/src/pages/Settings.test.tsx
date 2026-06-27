@@ -17,6 +17,8 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
     'languages.de': 'Deutsch',
     'languages.en': 'English',
     'pages.settings.failedToLoadSettings': 'Failed to load settings.',
+    'pages.settings.settingsSaved': 'Settings saved.',
+    'pages.settings.failedToSaveSettings': 'Failed to save settings.',
     'pages.settings.general': 'General',
     'pages.settings.generalDescription': 'Manage interface preferences.',
     'pages.settings.language': 'Language',
@@ -56,8 +58,13 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
     'pages.settings.oidcGroupsClaim': 'Groups Claim',
     'pages.settings.oidcAdminGroups': 'Admin Groups',
     'pages.settings.oidcReadOnlyGroups': 'Read-only Groups',
+    'pages.settings.addGroup': 'Add',
+    'pages.settings.noGroupsConfigured': 'No groups configured.',
+    'pages.settings.removeGroup': 'Remove {group}',
     'pages.settings.oidcGroupsHelp': 'Leave group lists empty to make all OIDC users admins. If any group is configured, unmatched OIDC users are read-only.',
     'pages.settings.saveOidcSettings': 'Save OIDC Settings',
+    'pages.settings.oidcSettingsSaved': 'OIDC settings saved.',
+    'pages.settings.failedToSaveOidcSettings': 'Failed to save OIDC settings.',
   };
 
   return {
@@ -67,7 +74,11 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
       if (key === 'pages.settings.browserDefaultLanguage') {
         return `Browser default (${values?.language ?? ''})`;
       }
-      return translations[key] ?? key;
+      const translation = translations[key] ?? key;
+      return Object.entries(values ?? {}).reduce(
+        (message, [name, value]) => message.replaceAll(`{${name}}`, String(value)),
+        translation,
+      );
     },
   };
 });
@@ -91,6 +102,7 @@ vi.mock('../lib/i18n', () => ({
     { code: 'de', labelKey: 'languages.de' },
   ],
   getLanguageLabelKey: (language: string) => `languages.${language}`,
+  resolveLanguagePreference: (preference: string) => preference === 'browser' ? 'en' : preference,
   useI18n: () => ({
     browserLanguage: 'en',
     preference: 'browser',
@@ -304,5 +316,90 @@ describe('Settings', () => {
 
     expect(screen.queryByLabelText('Current password')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Change Password' })).not.toBeInTheDocument();
+  });
+
+  test('edits OIDC groups as lists and serializes them for the API', async () => {
+    const user = userEvent.setup();
+    useAuthMock.mockReturnValue({
+      authEnabled: true,
+      setupRequired: false,
+      authenticated: true,
+      user: { userId: 1, username: 'admin', role: 'admin' },
+      authMethod: 'password',
+      oidcEnabled: true,
+      passwordLoginDisabled: false,
+      passkeysEnabled: true,
+      hasPassword: true,
+      loading: false,
+      refresh: vi.fn(),
+      login: vi.fn(),
+      setup: vi.fn(),
+      logout: vi.fn(),
+    });
+    vi.mocked(fetchConfig).mockResolvedValue({
+      lookback_period: '1h',
+      lookback_hours: 1,
+      lookback_days: 1,
+      refresh_interval: 30000,
+      current_interval_name: '30s',
+      lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
+      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+      simulations_enabled: true,
+      machine_features_enabled: false,
+      origin_features_enabled: false,
+      permissions: {
+        mode: 'admin',
+        can_manage_enforcement: true,
+        can_manage_settings: true,
+      },
+    });
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method || (input instanceof Request ? input.method : 'GET');
+      if (url.includes('/api/auth/passkeys')) {
+        return Response.json({ passkeys: [] });
+      }
+      if (url.includes('/api/auth/settings') && method === 'PUT') {
+        return Response.json({ status: 'ok', settings: {} });
+      }
+      if (url.includes('/api/auth/settings')) {
+        return Response.json({
+          disablePasswordLogin: false,
+          oidcIssuerUrl: 'https://idp.example.com',
+          oidcClientId: 'crowdsec',
+          hasOidcClientSecret: false,
+          oidcGroupsClaim: 'groups',
+          oidcAdminGroups: 'Application Admin,secops',
+          oidcReadOnlyGroups: 'Application User',
+          hasPassword: true,
+          authMethod: 'password',
+        });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<Settings />);
+
+    await screen.findByText('Application Admin');
+    await user.click(screen.getByRole('button', { name: 'Remove secops' }));
+    await user.type(screen.getByLabelText('Admin Groups'), 'security-team');
+    await user.click(screen.getAllByRole('button', { name: 'Add' })[0]);
+    await user.click(screen.getByRole('button', { name: 'Save OIDC Settings' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/auth/settings'),
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({
+          oidcIssuerUrl: 'https://idp.example.com',
+          oidcClientId: 'crowdsec',
+          oidcClientSecret: '',
+          oidcGroupsClaim: 'groups',
+          oidcAdminGroups: 'Application Admin,security-team',
+          oidcReadOnlyGroups: 'Application User',
+        }),
+      }),
+    ));
   });
 });

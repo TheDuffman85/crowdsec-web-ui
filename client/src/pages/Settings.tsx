@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
-import { KeyRound, LockKeyhole, Save, ShieldCheck, Trash2 } from "lucide-react";
+import { useEffect, useState, type FormEvent } from "react";
+import i18next from "i18next";
+import { KeyRound, LockKeyhole, Plus, Save, ShieldCheck, Trash2, X } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card";
 import { useRefresh } from "../contexts/useRefresh";
+import { useOptionalToast } from "../contexts/useToast";
 import { fetchConfig } from "../lib/api";
 import { apiUrl } from "../lib/basePath";
 import { useAuth } from "../contexts/AuthContext";
@@ -13,6 +15,7 @@ import {
     BROWSER_LANGUAGE_SETTING,
     SUPPORTED_LANGUAGES,
     getLanguageLabelKey,
+    resolveLanguagePreference,
     useI18n,
     type LanguagePreference,
 } from "../lib/i18n";
@@ -44,10 +47,22 @@ interface AuthSettings {
     authMethod: 'password' | 'passkey' | 'oidc' | null;
 }
 
+function parseGroupList(value: string): string[] {
+    return value
+        .split(',')
+        .map((group) => group.trim())
+        .filter(Boolean);
+}
+
+function serializeGroupList(groups: string[]): string {
+    return groups.map((group) => group.trim()).filter(Boolean).join(',');
+}
+
 export function Settings() {
     const { intervalMs, setIntervalMs } = useRefresh();
     const { authEnabled, refresh: refreshAuth } = useAuth();
     const { browserLanguage, preference, setLanguagePreference, t } = useI18n();
+    const toast = useOptionalToast();
     const [config, setConfig] = useState<ConfigResponse | null>(null);
     const [passkeys, setPasskeys] = useState<PasskeySummary[]>([]);
     const [authSettings, setAuthSettings] = useState<AuthSettings | null>(null);
@@ -57,12 +72,17 @@ export function Settings() {
     const [isSaving, setIsSaving] = useState(false);
     const [disablePasswordLogin, setDisablePasswordLogin] = useState(false);
     const [isSavingPasswordLogin, setIsSavingPasswordLogin] = useState(false);
+    const [isSavingOidc, setIsSavingOidc] = useState(false);
     const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
     const [oidcForm, setOidcForm] = useState({
         issuerUrl: '',
         clientId: '',
         clientSecret: '',
         groupsClaim: 'groups',
+        adminGroups: [] as string[],
+        readOnlyGroups: [] as string[],
+    });
+    const [oidcGroupDrafts, setOidcGroupDrafts] = useState({
         adminGroups: '',
         readOnlyGroups: '',
     });
@@ -111,8 +131,8 @@ export function Settings() {
                             clientId: payload.oidcClientId,
                             clientSecret: '',
                             groupsClaim: payload.oidcGroupsClaim || 'groups',
-                            adminGroups: payload.oidcAdminGroups || '',
-                            readOnlyGroups: payload.oidcReadOnlyGroups || '',
+                            adminGroups: parseGroupList(payload.oidcAdminGroups || ''),
+                            readOnlyGroups: parseGroupList(payload.oidcReadOnlyGroups || ''),
                         });
                     }
                 })
@@ -134,6 +154,15 @@ export function Settings() {
 
     const inputClass = "w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:disabled:bg-gray-800 dark:disabled:text-gray-500";
     const labelClass = "block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400";
+    const showToast = (message: string, type: 'success' | 'danger' | 'info' = 'info') => {
+        toast?.addToast(message, type);
+    };
+    const getSettingsSavedMessage = () => {
+        if (!hasLanguageChange) {
+            return t("pages.settings.settingsSaved");
+        }
+        return String(i18next.getFixedT(resolveLanguagePreference(languagePreference))("pages.settings.settingsSaved"));
+    };
 
     const handleSave = async () => {
         setIsSaving(true);
@@ -144,8 +173,10 @@ export function Settings() {
             if (hasLanguageChange) {
                 setLanguagePreference(languagePreference);
             }
+            showToast(getSettingsSavedMessage(), "success");
         } catch (error) {
             console.error("Failed to save settings", error);
+            showToast(t("pages.settings.failedToSaveSettings"), "danger");
         } finally {
             setIsSaving(false);
         }
@@ -175,8 +206,10 @@ export function Settings() {
             const listResponse = await fetch(apiUrl('/api/auth/passkeys'));
             const payload = await listResponse.json() as { passkeys: PasskeySummary[] };
             setPasskeys(payload.passkeys);
+            showToast(t("pages.settings.passkeyRegistered"), "success");
         } catch (error) {
             console.error("Failed to register passkey", error);
+            showToast(t("pages.settings.failedToRegisterPasskey"), "danger");
         }
     };
 
@@ -184,9 +217,11 @@ export function Settings() {
         const response = await fetch(apiUrl(`/api/auth/passkeys/${id}`), { method: 'DELETE' });
         if (!response.ok) {
             console.error("Failed to remove passkey");
+            showToast(t("pages.settings.failedToRemovePasskey"), "danger");
             return;
         }
         setPasskeys((current) => current.filter((passkey) => passkey.id !== id));
+        showToast(t("pages.settings.passkeyRemoved"), "success");
     };
 
     const savePasswordLoginSetting = async () => {
@@ -200,14 +235,17 @@ export function Settings() {
             const payload = await response.json().catch(() => ({})) as { error?: string; settings?: Partial<AuthSettings> };
             if (!response.ok) {
                 console.error(payload.error || 'Failed to update password login setting');
+                showToast(payload.error || t("pages.settings.failedToSavePasswordLogin"), "danger");
                 return;
             }
             const savedValue = payload.settings?.disablePasswordLogin ?? disablePasswordLogin;
             setAuthSettings((current) => current ? { ...current, disablePasswordLogin: savedValue } : current);
             setDisablePasswordLogin(savedValue);
             await refreshAuth();
+            showToast(t("pages.settings.passwordLoginSaved"), "success");
         } catch (error) {
             console.error("Failed to update password login setting", error);
+            showToast(t("pages.settings.failedToSavePasswordLogin"), "danger");
         } finally {
             setIsSavingPasswordLogin(false);
         }
@@ -216,6 +254,7 @@ export function Settings() {
     const changePassword = async () => {
         if (passwordForm.newPassword !== passwordForm.confirmPassword) {
             console.error('New passwords do not match.');
+            showToast(t("pages.settings.passwordsDoNotMatch"), "danger");
             return;
         }
         const response = await fetch(apiUrl('/api/auth/change-password'), {
@@ -229,46 +268,80 @@ export function Settings() {
         const payload = await response.json().catch(() => ({})) as { error?: string };
         if (!response.ok) {
             console.error(payload.error || 'Failed to change password');
+            showToast(payload.error || t("pages.settings.failedToChangePassword"), "danger");
             return;
         }
         setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+        showToast(t("pages.settings.passwordChanged"), "success");
     };
 
     const saveOidcSettings = async () => {
-        const response = await fetch(apiUrl('/api/auth/settings'), {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                oidcIssuerUrl: oidcForm.issuerUrl,
-                oidcClientId: oidcForm.clientId,
-                oidcClientSecret: oidcForm.clientSecret,
-                oidcGroupsClaim: oidcForm.groupsClaim,
-                oidcAdminGroups: oidcForm.adminGroups,
-                oidcReadOnlyGroups: oidcForm.readOnlyGroups,
-            }),
+        setIsSavingOidc(true);
+        const adminGroups = serializeGroupList(oidcForm.adminGroups);
+        const readOnlyGroups = serializeGroupList(oidcForm.readOnlyGroups);
+        try {
+            const response = await fetch(apiUrl('/api/auth/settings'), {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    oidcIssuerUrl: oidcForm.issuerUrl,
+                    oidcClientId: oidcForm.clientId,
+                    oidcClientSecret: oidcForm.clientSecret,
+                    oidcGroupsClaim: oidcForm.groupsClaim,
+                    oidcAdminGroups: adminGroups,
+                    oidcReadOnlyGroups: readOnlyGroups,
+                }),
+            });
+            const payload = await response.json().catch(() => ({})) as {
+                error?: string;
+                oidcError?: string;
+                settings?: Partial<AuthSettings>;
+            };
+            if (!response.ok) {
+                console.error(payload.error || 'Failed to save OIDC settings');
+                showToast(payload.error || t("pages.settings.failedToSaveOidcSettings"), "danger");
+                return;
+            }
+            setAuthSettings((current) => current ? {
+                ...current,
+                oidcIssuerUrl: oidcForm.issuerUrl.trim(),
+                oidcClientId: oidcForm.clientId.trim(),
+                hasOidcClientSecret: Boolean(oidcForm.clientSecret.trim()) || current.hasOidcClientSecret,
+                oidcGroupsClaim: oidcForm.groupsClaim.trim() || 'groups',
+                oidcAdminGroups: adminGroups,
+                oidcReadOnlyGroups: readOnlyGroups,
+            } : current);
+            setOidcForm((current) => ({ ...current, clientSecret: '' }));
+            if (payload.oidcError) {
+                console.error(`OIDC settings saved, but discovery failed: ${payload.oidcError}`);
+                showToast(t("pages.settings.oidcSettingsSavedButDiscoveryFailed", { error: payload.oidcError }), "danger");
+            } else {
+                showToast(t("pages.settings.oidcSettingsSaved"), "success");
+            }
+        } catch (error) {
+            console.error("Failed to save OIDC settings", error);
+            showToast(t("pages.settings.failedToSaveOidcSettings"), "danger");
+        } finally {
+            setIsSavingOidc(false);
+        }
+    };
+
+    const addOidcGroup = (field: 'adminGroups' | 'readOnlyGroups') => {
+        const group = oidcGroupDrafts[field].trim();
+        if (!group) return;
+
+        setOidcForm((current) => {
+            if (current[field].includes(group)) return current;
+            return { ...current, [field]: [...current[field], group] };
         });
-        const payload = await response.json().catch(() => ({})) as {
-            error?: string;
-            oidcError?: string;
-            settings?: Partial<AuthSettings>;
-        };
-        if (!response.ok) {
-            console.error(payload.error || 'Failed to save OIDC settings');
-            return;
-        }
-        setAuthSettings((current) => current ? {
+        setOidcGroupDrafts((current) => ({ ...current, [field]: '' }));
+    };
+
+    const removeOidcGroup = (field: 'adminGroups' | 'readOnlyGroups', group: string) => {
+        setOidcForm((current) => ({
             ...current,
-            oidcIssuerUrl: oidcForm.issuerUrl.trim(),
-            oidcClientId: oidcForm.clientId.trim(),
-            hasOidcClientSecret: Boolean(oidcForm.clientSecret.trim()) || current.hasOidcClientSecret,
-            oidcGroupsClaim: oidcForm.groupsClaim.trim() || 'groups',
-            oidcAdminGroups: oidcForm.adminGroups.trim(),
-            oidcReadOnlyGroups: oidcForm.readOnlyGroups.trim(),
-        } : current);
-        setOidcForm((current) => ({ ...current, clientSecret: '' }));
-        if (payload.oidcError) {
-            console.error(`OIDC settings saved, but discovery failed: ${payload.oidcError}`);
-        }
+            [field]: current[field].filter((candidate) => candidate !== group),
+        }));
     };
 
     if (isLoading) {
@@ -534,26 +607,36 @@ export function Settings() {
                                         className={inputClass}
                                     />
                                 </div>
-                                <div className="space-y-2">
-                                    <label htmlFor="oidc-admin-groups" className={labelClass}>{t("pages.settings.oidcAdminGroups")}</label>
-                                    <input
-                                        id="oidc-admin-groups"
-                                        value={oidcForm.adminGroups}
-                                        onChange={(event) => setOidcForm((current) => ({ ...current, adminGroups: event.target.value }))}
-                                        placeholder="crowdsec-admins,secops"
-                                        disabled={!canManageAuthSettings}
-                                        className={inputClass}
-                                    />
-                                </div>
+                                <GroupListEditor
+                                    id="oidc-admin-groups"
+                                    label={t("pages.settings.oidcAdminGroups")}
+                                    groups={oidcForm.adminGroups}
+                                    draft={oidcGroupDrafts.adminGroups}
+                                    onDraftChange={(value) => setOidcGroupDrafts((current) => ({ ...current, adminGroups: value }))}
+                                    onAdd={() => addOidcGroup('adminGroups')}
+                                    onRemove={(group) => removeOidcGroup('adminGroups', group)}
+                                    disabled={!canManageAuthSettings}
+                                    placeholder="crowdsec-admins"
+                                    addLabel={t("pages.settings.addGroup")}
+                                    emptyLabel={t("pages.settings.noGroupsConfigured")}
+                                    removeLabel={(group) => t("pages.settings.removeGroup", { group })}
+                                    labelClass={labelClass}
+                                />
                                 <div className="space-y-2 lg:col-span-2">
-                                    <label htmlFor="oidc-read-only-groups" className={labelClass}>{t("pages.settings.oidcReadOnlyGroups")}</label>
-                                    <input
+                                    <GroupListEditor
                                         id="oidc-read-only-groups"
-                                        value={oidcForm.readOnlyGroups}
-                                        onChange={(event) => setOidcForm((current) => ({ ...current, readOnlyGroups: event.target.value }))}
-                                        placeholder="crowdsec-viewers"
+                                        label={t("pages.settings.oidcReadOnlyGroups")}
+                                        groups={oidcForm.readOnlyGroups}
+                                        draft={oidcGroupDrafts.readOnlyGroups}
+                                        onDraftChange={(value) => setOidcGroupDrafts((current) => ({ ...current, readOnlyGroups: value }))}
+                                        onAdd={() => addOidcGroup('readOnlyGroups')}
+                                        onRemove={(group) => removeOidcGroup('readOnlyGroups', group)}
                                         disabled={!canManageAuthSettings}
-                                        className={inputClass}
+                                        placeholder="crowdsec-viewers"
+                                        addLabel={t("pages.settings.addGroup")}
+                                        emptyLabel={t("pages.settings.noGroupsConfigured")}
+                                        removeLabel={(group) => t("pages.settings.removeGroup", { group })}
+                                        labelClass={labelClass}
                                     />
                                     <p className="text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.oidcGroupsHelp")}</p>
                                 </div>
@@ -561,16 +644,101 @@ export function Settings() {
                             <button
                                 type="button"
                                 onClick={() => void saveOidcSettings()}
-                                disabled={!canManageAuthSettings}
+                                disabled={!canManageAuthSettings || isSavingOidc}
                                 className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700"
                             >
                                 <ShieldCheck className="h-4 w-4" />
-                                {t("pages.settings.saveOidcSettings")}
+                                {isSavingOidc ? t("common.saving") : t("pages.settings.saveOidcSettings")}
                             </button>
                         </div>
                     </CardContent>
                 </Card>
             )}
+        </div>
+    );
+}
+
+function GroupListEditor({
+    id,
+    label,
+    groups,
+    draft,
+    onDraftChange,
+    onAdd,
+    onRemove,
+    disabled,
+    placeholder,
+    addLabel,
+    emptyLabel,
+    removeLabel,
+    labelClass,
+}: {
+    id: string;
+    label: string;
+    groups: string[];
+    draft: string;
+    onDraftChange: (value: string) => void;
+    onAdd: () => void;
+    onRemove: (group: string) => void;
+    disabled: boolean;
+    placeholder: string;
+    addLabel: string;
+    emptyLabel: string;
+    removeLabel: (group: string) => string;
+    labelClass: string;
+}) {
+    const handleSubmit = (event: FormEvent) => {
+        event.preventDefault();
+        onAdd();
+    };
+
+    return (
+        <div className="space-y-2">
+            <label htmlFor={id} className={labelClass}>{label}</label>
+            <form
+                className="flex min-h-11 overflow-hidden rounded-lg border border-gray-300 bg-white focus-within:ring-2 focus-within:ring-primary-500 dark:border-gray-700 dark:bg-gray-900"
+                onSubmit={handleSubmit}
+            >
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 px-2 py-1.5">
+                    {groups.map((group) => (
+                        <span
+                            key={group}
+                            className="inline-flex max-w-full items-center gap-1 rounded-md bg-primary-50 px-2 py-1 text-sm font-medium text-primary-800 dark:bg-primary-900/40 dark:text-primary-100"
+                        >
+                            <span className="truncate">{group}</span>
+                            <button
+                                type="button"
+                                onClick={() => onRemove(group)}
+                                disabled={disabled}
+                                className="rounded p-0.5 text-primary-700 hover:bg-primary-100 disabled:cursor-not-allowed disabled:opacity-50 dark:text-primary-200 dark:hover:bg-primary-800"
+                                aria-label={removeLabel(group)}
+                                title={removeLabel(group)}
+                            >
+                                <X className="h-3.5 w-3.5" />
+                            </button>
+                        </span>
+                    ))}
+                    {groups.length === 0 && !draft.trim() && (
+                        <span className="px-1 py-1 text-sm text-gray-500 dark:text-gray-400">{emptyLabel}</span>
+                    )}
+                    <input
+                        id={id}
+                        value={draft}
+                        onChange={(event) => onDraftChange(event.target.value)}
+                        placeholder={groups.length === 0 ? placeholder : ''}
+                        disabled={disabled}
+                        className="min-w-48 flex-1 border-0 bg-transparent px-1 py-1 text-sm text-gray-900 outline-none placeholder:text-gray-400 disabled:cursor-not-allowed disabled:text-gray-500 dark:text-gray-100 dark:placeholder:text-gray-500 dark:disabled:text-gray-500"
+                    />
+                </div>
+                <button
+                    type="submit"
+                    disabled={disabled || !draft.trim()}
+                    className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 border-l border-gray-300 bg-gray-100 px-3 text-sm font-medium text-gray-700 hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                >
+                    <Plus className="h-4 w-4" />
+                    <span>{addLabel}</span>
+                </button>
+            </form>
         </div>
     );
 }

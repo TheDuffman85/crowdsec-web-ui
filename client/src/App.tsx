@@ -4,6 +4,7 @@ import { Layout } from "./components/Layout";
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { NotificationUnreadProvider } from "./contexts/NotificationUnreadContext";
 import { RefreshProvider } from "./contexts/RefreshContext";
+import { ToastProvider } from "./contexts/ToastContext";
 import { useRefresh } from "./contexts/useRefresh";
 import { SyncOverlay } from "./components/SyncOverlay";
 import { getBasePath } from "./lib/basePath";
@@ -25,11 +26,13 @@ function RouteFallback() {
 
 function ProtectedProviders({ children }: { children: ReactNode }) {
   return (
-    <RefreshProvider>
-      <NotificationUnreadProvider>
-        {children}
-      </NotificationUnreadProvider>
-    </RefreshProvider>
+    <ToastProvider>
+      <RefreshProvider>
+        <NotificationUnreadProvider>
+          {children}
+        </NotificationUnreadProvider>
+      </RefreshProvider>
+    </ToastProvider>
   );
 }
 
