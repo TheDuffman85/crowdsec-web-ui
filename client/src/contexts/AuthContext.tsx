@@ -14,6 +14,7 @@ export interface AuthStatus {
   setupRequired: boolean;
   authenticated: boolean;
   user: AuthUser | null;
+  authMethod: 'password' | 'passkey' | 'oidc' | null;
   oidcEnabled: boolean;
   passwordLoginDisabled: boolean;
   passkeysEnabled: boolean;
@@ -33,6 +34,7 @@ const DEFAULT_STATUS: AuthStatus = {
   setupRequired: false,
   authenticated: false,
   user: null,
+  authMethod: null,
   oidcEnabled: false,
   passwordLoginDisabled: false,
   passkeysEnabled: false,

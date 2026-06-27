@@ -41,11 +41,12 @@ interface AuthSettings {
     oidcAdminGroups: string;
     oidcReadOnlyGroups: string;
     hasPassword: boolean;
+    authMethod: 'password' | 'passkey' | 'oidc' | null;
 }
 
 export function Settings() {
     const { intervalMs, setIntervalMs } = useRefresh();
-    const { authEnabled } = useAuth();
+    const { authEnabled, refresh: refreshAuth } = useAuth();
     const { browserLanguage, preference, setLanguagePreference, t } = useI18n();
     const [config, setConfig] = useState<ConfigResponse | null>(null);
     const [passkeys, setPasskeys] = useState<PasskeySummary[]>([]);
@@ -54,6 +55,8 @@ export function Settings() {
     const [languagePreference, setLanguagePreferenceValue] = useState<LanguagePreference>(preference);
     const [refreshInterval, setRefreshInterval] = useState(intervalMs);
     const [isSaving, setIsSaving] = useState(false);
+    const [disablePasswordLogin, setDisablePasswordLogin] = useState(false);
+    const [isSavingPasswordLogin, setIsSavingPasswordLogin] = useState(false);
     const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
     const [oidcForm, setOidcForm] = useState({
         issuerUrl: '',
@@ -102,6 +105,7 @@ export function Settings() {
                 .then((payload) => {
                     if (!cancelled) {
                         setAuthSettings(payload);
+                        setDisablePasswordLogin(payload.disablePasswordLogin);
                         setOidcForm({
                             issuerUrl: payload.oidcIssuerUrl,
                             clientId: payload.oidcClientId,
@@ -126,6 +130,7 @@ export function Settings() {
     const hasLanguageChange = languagePreference !== preference;
     const hasRefreshChange = refreshInterval !== intervalMs;
     const canManageAuthSettings = canManageSettings;
+    const canChangePassword = authSettings?.hasPassword === true && authSettings.authMethod === 'password';
 
     const inputClass = "w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:disabled:bg-gray-800 dark:disabled:text-gray-500";
     const labelClass = "block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400";
@@ -184,18 +189,28 @@ export function Settings() {
         setPasskeys((current) => current.filter((passkey) => passkey.id !== id));
     };
 
-    const savePasswordLoginSetting = async (disablePasswordLogin: boolean) => {
-        const response = await fetch(apiUrl('/api/auth/settings'), {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ disablePasswordLogin }),
-        });
-        const payload = await response.json().catch(() => ({})) as { error?: string; settings?: Partial<AuthSettings> };
-        if (!response.ok) {
-            console.error(payload.error || 'Failed to update password login setting');
-            return;
+    const savePasswordLoginSetting = async () => {
+        setIsSavingPasswordLogin(true);
+        try {
+            const response = await fetch(apiUrl('/api/auth/settings'), {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ disablePasswordLogin }),
+            });
+            const payload = await response.json().catch(() => ({})) as { error?: string; settings?: Partial<AuthSettings> };
+            if (!response.ok) {
+                console.error(payload.error || 'Failed to update password login setting');
+                return;
+            }
+            const savedValue = payload.settings?.disablePasswordLogin ?? disablePasswordLogin;
+            setAuthSettings((current) => current ? { ...current, disablePasswordLogin: savedValue } : current);
+            setDisablePasswordLogin(savedValue);
+            await refreshAuth();
+        } catch (error) {
+            console.error("Failed to update password login setting", error);
+        } finally {
+            setIsSavingPasswordLogin(false);
         }
-        setAuthSettings((current) => current ? { ...current, disablePasswordLogin } : current);
     };
 
     const changePassword = async () => {
@@ -359,9 +374,9 @@ export function Settings() {
                             <label className="flex items-start gap-3 text-sm text-gray-700 dark:text-gray-200">
                                 <input
                                     type="checkbox"
-                                    checked={authSettings?.disablePasswordLogin === true}
-                                    onChange={(event) => void savePasswordLoginSetting(event.target.checked)}
-                                    disabled={!canManageAuthSettings}
+                                    checked={disablePasswordLogin}
+                                    onChange={(event) => setDisablePasswordLogin(event.target.checked)}
+                                    disabled={!canManageAuthSettings || isSavingPasswordLogin}
                                     className="mt-1 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                                 />
                                 <span>
@@ -369,8 +384,17 @@ export function Settings() {
                                     <span className="block text-xs text-gray-500 dark:text-gray-400">When enabled, only passkeys and SSO can be used to sign in.</span>
                                 </span>
                             </label>
+                            <button
+                                type="button"
+                                onClick={() => void savePasswordLoginSetting()}
+                                disabled={!canManageAuthSettings || isSavingPasswordLogin}
+                                className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                <Save className="h-4 w-4" />
+                                {isSavingPasswordLogin ? t("common.saving") : t("common.save")}
+                            </button>
 
-                            {authSettings?.hasPassword && (
+                            {canChangePassword && (
                                 <div className="grid gap-4 lg:grid-cols-3">
                                     <div className="space-y-2">
                                         <label htmlFor="current-password" className={labelClass}>Current password</label>

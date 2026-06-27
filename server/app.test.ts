@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
+import crypto from 'node:crypto';
 import type { AlertRecord } from '../shared/contracts';
 import { resolveMachineName } from '../shared/machine';
 import { createRuntimeConfig } from './config';
@@ -106,6 +107,22 @@ function sampleImplicitSimulatedAlert(): AlertRecord {
       },
     ],
   };
+}
+
+function createAuthSessionCookie(
+  database: CrowdsecDatabase,
+  payload: { userId: number; username: string; role: 'admin' | 'read-only'; authMethod: 'password' | 'passkey' | 'oidc' },
+): string {
+  const secret = database.getMeta('auth_session_secret')?.value;
+  if (!secret) throw new Error('Auth session secret was not initialized');
+  const now = Math.floor(Date.now() / 1000);
+  const encodedPayload = Buffer.from(JSON.stringify({
+    ...payload,
+    iat: now,
+    exp: now + 60 * 60,
+  })).toString('base64url');
+  const signature = crypto.createHmac('sha256', secret).update(encodedPayload).digest('base64url');
+  return `crowdsec_web_ui_session=${encodedPayload}.${signature}`;
 }
 
 function sampleManualWebUiAlert(overrides: Partial<AlertRecord> = {}): AlertRecord {
@@ -503,7 +520,7 @@ test('dashboard auth protects API routes and allows initial setup login', async 
 });
 
 test('dashboard auth exposes account settings and password changes', async () => {
-  const { controller } = createController({
+  const { controller, database } = createController({
     env: {
       CROWDSEC_AUTH_ENABLED: 'true',
     },
@@ -529,7 +546,30 @@ test('dashboard auth exposes account settings and password changes', async () =>
     oidcAdminGroups: '',
     oidcReadOnlyGroups: '',
     hasPassword: true,
+    authMethod: 'password',
   });
+
+  const passkeyCookie = createAuthSessionCookie(database, {
+    userId: 1,
+    username: 'admin',
+    role: 'admin',
+    authMethod: 'passkey',
+  });
+  const passkeySettings = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/settings', {
+    headers: { cookie: passkeyCookie },
+  }));
+  expect(passkeySettings.status).toBe(200);
+  expect(await passkeySettings.json()).toMatchObject({
+    hasPassword: true,
+    authMethod: 'passkey',
+  });
+
+  const passkeyPasswordChange = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/change-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: passkeyCookie },
+    body: JSON.stringify({ currentPassword: 'Secret123', newPassword: 'NewSecret123' }),
+  }));
+  expect(passkeyPasswordChange.status).toBe(403);
 
   const saveGroupMapping = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/settings', {
     method: 'PUT',

@@ -17,6 +17,7 @@ import { CrowdsecDatabase, type AuthUserRow } from './database';
 type HonoContext = any;
 type HonoNext = any;
 type Role = 'admin' | 'read-only';
+type AuthMethod = 'password' | 'passkey' | 'oidc';
 type MutableAuthSettingKey =
   | 'disable_password_login'
   | 'oidc_issuer_url'
@@ -39,6 +40,7 @@ export interface SessionData {
   userId: number;
   username: string;
   role: Role;
+  authMethod?: AuthMethod;
 }
 
 export interface DashboardAuth {
@@ -241,7 +243,10 @@ function verifySessionToken(token: string, secret: string): SessionData | null {
     if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return null;
     if (typeof payload.userId !== 'number' || typeof payload.username !== 'string') return null;
     const role: Role = payload.role === 'read-only' ? 'read-only' : 'admin';
-    return { userId: payload.userId, username: payload.username, role };
+    const authMethod = payload.authMethod === 'password' || payload.authMethod === 'passkey' || payload.authMethod === 'oidc'
+      ? payload.authMethod
+      : undefined;
+    return { userId: payload.userId, username: payload.username, role, authMethod };
   } catch {
     return null;
   }
@@ -429,12 +434,13 @@ export function createDashboardAuth(options: {
 
   const oidc = new OidcRuntime(getEffectiveConfig);
 
-  function createSession(context: HonoContext, user: AuthUserRow | SessionData): void {
+  function createSession(context: HonoContext, user: AuthUserRow | SessionData, authMethod?: AuthMethod): void {
     const now = Math.floor(Date.now() / 1000);
     const token = signSession({
       userId: 'id' in user ? user.id : user.userId,
       username: user.username,
       role: user.role,
+      authMethod: authMethod || ('authMethod' in user ? user.authMethod : undefined),
       iat: now,
       exp: now + SESSION_LIFETIME_SECONDS,
     }, sessionSecret);
@@ -520,6 +526,7 @@ export function createDashboardAuth(options: {
         setupRequired: enabled && database.countAuthUsers() === 0,
         authenticated: !enabled || Boolean(session),
         user: enabled ? session : null,
+        authMethod: enabled ? session?.authMethod ?? null : null,
         oidcEnabled: enabled && oidc.enabled,
         passwordLoginDisabled: enabled && isPasswordLoginDisabled(),
         passkeysEnabled: enabled && database.countWebAuthnCredentials() > 0,
@@ -544,7 +551,7 @@ export function createDashboardAuth(options: {
         authProvider: 'password',
       });
       const user = database.getAuthUserById(userId)!;
-      createSession(context, user);
+      createSession(context, user, 'password');
       return context.json({ status: 'ok', user: { userId: user.id, username: user.username, role: user.role } });
     });
 
@@ -563,7 +570,7 @@ export function createDashboardAuth(options: {
         return context.json({ error: 'Invalid credentials' }, 401);
       }
 
-      createSession(context, user);
+      createSession(context, user, 'password');
       return context.json({ status: 'ok', user: { userId: user.id, username: user.username, role: user.role } });
     });
 
@@ -592,6 +599,7 @@ export function createDashboardAuth(options: {
         oidcAdminGroups: effectiveConfig.oidcAdminGroups.join(','),
         oidcReadOnlyGroups: effectiveConfig.oidcReadOnlyGroups.join(','),
         hasPassword: Boolean(user?.password_hash),
+        authMethod: session.authMethod ?? null,
       });
     });
 
@@ -678,6 +686,9 @@ export function createDashboardAuth(options: {
       const currentPassword = typeof body?.currentPassword === 'string' ? body.currentPassword : '';
       const newPassword = typeof body?.newPassword === 'string' ? body.newPassword : '';
       if (!currentPassword || !newPassword) return context.json({ error: 'Current and new password required' }, 400);
+      if (session.authMethod !== 'password') {
+        return context.json({ error: 'Log in with your password before changing it' }, 403);
+      }
 
       const user = database.getAuthUserById(session.userId);
       if (!user?.password_hash) return context.json({ error: 'No password set for this account' }, 400);
@@ -795,7 +806,7 @@ export function createDashboardAuth(options: {
         });
         if (!verification.verified) return context.json({ error: 'Verification failed' }, 400);
         database.updateWebAuthnCredentialCounter(credential.id, verification.authenticationInfo.newCounter);
-        createSession(context, user);
+        createSession(context, user, 'passkey');
         deleteCookie(context, CHALLENGE_COOKIE, { path: cookiePath });
         return context.json({ status: 'ok', user: { userId: user.id, username: user.username, role: user.role } });
       } catch (error) {
@@ -829,7 +840,7 @@ export function createDashboardAuth(options: {
         const result = await oidc.handleCallback(callbackUrl, nonce, state);
         if (!result) return context.json({ error: 'OIDC authentication failed' }, 400);
         const user = database.upsertOidcUser(result.username, result.role);
-        createSession(context, user);
+        createSession(context, user, 'oidc');
         deleteCookie(context, OIDC_STATE_COOKIE, { path: cookiePath });
         deleteCookie(context, OIDC_NONCE_COOKIE, { path: cookiePath });
         deleteCookie(context, OIDC_REDIRECT_COOKIE, { path: cookiePath });
