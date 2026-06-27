@@ -7,6 +7,7 @@ import { useRefresh } from '../contexts/useRefresh';
 
 const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
   const translations: Record<string, string> = {
+    'common.cancel': 'Cancel',
     'common.save': 'Save',
     'common.saving': 'Saving...',
     'components.sidebar.refresh.every30Seconds': 'Every 30s',
@@ -49,6 +50,9 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
     'pages.settings.registerNewPasskey': 'Register New Passkey',
     'pages.settings.passkeyNamePrompt': 'Passkey name',
     'pages.settings.passkeyNameDefault': 'Security key',
+    'pages.settings.registerPasskeyTitle': 'Register New Passkey',
+    'pages.settings.registerPasskeyDescription': 'Give this passkey a recognizable name, then follow your browser or device prompt to finish registration.',
+    'pages.settings.registerPasskeySubmit': 'Register Passkey',
     'pages.settings.oidcSso': 'OIDC (SSO)',
     'pages.settings.oidcDescription': 'Configure the provider connection and optional group mapping for admin and read-only access.',
     'pages.settings.oidcIssuerUrl': 'Issuer URL',
@@ -316,6 +320,118 @@ describe('Settings', () => {
 
     expect(screen.queryByLabelText('Current password')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Change Password' })).not.toBeInTheDocument();
+  });
+
+  test('registers a passkey from the modal with the configured name', async () => {
+    const user = userEvent.setup();
+    useAuthMock.mockReturnValue({
+      authEnabled: true,
+      setupRequired: false,
+      authenticated: true,
+      user: { userId: 1, username: 'admin', role: 'admin' },
+      authMethod: 'password',
+      oidcEnabled: false,
+      passwordLoginDisabled: false,
+      passkeysEnabled: true,
+      hasPassword: true,
+      loading: false,
+      refresh: vi.fn(),
+      login: vi.fn(),
+      setup: vi.fn(),
+      logout: vi.fn(),
+    });
+    vi.mocked(fetchConfig).mockResolvedValue({
+      lookback_period: '1h',
+      lookback_hours: 1,
+      lookback_days: 1,
+      refresh_interval: 30000,
+      current_interval_name: '30s',
+      lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
+      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+      simulations_enabled: true,
+      machine_features_enabled: false,
+      origin_features_enabled: false,
+      permissions: {
+        mode: 'admin',
+        can_manage_enforcement: true,
+        can_manage_settings: true,
+      },
+    });
+
+    Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
+    Object.defineProperty(navigator, 'credentials', {
+      configurable: true,
+      value: {
+        create: vi.fn().mockResolvedValue({
+          id: 'credential-id',
+          rawId: new Uint8Array([1, 2, 3]).buffer,
+          type: 'public-key',
+          response: {
+            attestationObject: new Uint8Array([4, 5, 6]).buffer,
+            clientDataJSON: new Uint8Array([7, 8, 9]).buffer,
+            getTransports: () => ['internal'],
+          },
+        }),
+      },
+    });
+
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method || (input instanceof Request ? input.method : 'GET');
+      if (url.includes('/api/auth/webauthn/register/options')) {
+        return Response.json({
+          challenge: 'AQID',
+          rp: { name: 'CrowdSec Web UI', id: 'localhost' },
+          user: { id: 'BAUG', name: 'admin', displayName: 'admin' },
+          pubKeyCredParams: [{ alg: -7, type: 'public-key' }],
+        });
+      }
+      if (url.includes('/api/auth/webauthn/register/verify')) {
+        return Response.json({ status: 'ok' });
+      }
+      if (url.includes('/api/auth/passkeys')) {
+        return Response.json({
+          passkeys: method === 'GET' && fetchMock.mock.calls.some(([calledInput]) => String(calledInput).includes('/api/auth/webauthn/register/verify'))
+            ? [{ id: 1, name: 'Laptop Touch ID', createdAt: '2026-01-01T00:00:00.000Z' }]
+            : [],
+        });
+      }
+      if (url.includes('/api/auth/settings')) {
+        return Response.json({
+          disablePasswordLogin: false,
+          oidcIssuerUrl: '',
+          oidcClientId: '',
+          hasOidcClientSecret: false,
+          oidcGroupsClaim: 'groups',
+          oidcAdminGroups: '',
+          oidcReadOnlyGroups: '',
+          hasPassword: true,
+          authMethod: 'password',
+        });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<Settings />);
+
+    await screen.findByText('Authentication');
+    await user.click(screen.getByRole('button', { name: 'Register New Passkey' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Register New Passkey' });
+    await user.clear(screen.getByLabelText('Passkey name'));
+    await user.type(screen.getByLabelText('Passkey name'), 'Laptop Touch ID');
+    await user.click(screen.getByRole('button', { name: 'Register Passkey' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/auth/webauthn/register/verify'),
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('"name":"Laptop Touch ID"'),
+      }),
+    ));
+    expect(dialog).not.toBeInTheDocument();
+    expect(screen.getByText('Laptop Touch ID')).toBeInTheDocument();
   });
 
   test('edits OIDC groups as lists and serializes them for the API', async () => {

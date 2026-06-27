@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import i18next from "i18next";
 import { KeyRound, LockKeyhole, Plus, Save, ShieldCheck, Trash2, X } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card";
+import { Modal } from "../components/ui/Modal";
 import { useRefresh } from "../contexts/useRefresh";
 import { useOptionalToast } from "../contexts/useToast";
 import { fetchConfig } from "../lib/api";
@@ -72,6 +73,9 @@ export function Settings() {
     const [isSaving, setIsSaving] = useState(false);
     const [disablePasswordLogin, setDisablePasswordLogin] = useState(false);
     const [isSavingPasswordLogin, setIsSavingPasswordLogin] = useState(false);
+    const [passkeyModalOpen, setPasskeyModalOpen] = useState(false);
+    const [passkeyName, setPasskeyName] = useState('');
+    const [isRegisteringPasskey, setIsRegisteringPasskey] = useState(false);
     const [isSavingOidc, setIsSavingOidc] = useState(false);
     const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
     const [oidcForm, setOidcForm] = useState({
@@ -182,12 +186,23 @@ export function Settings() {
         }
     };
 
+    const openPasskeyModal = () => {
+        setPasskeyName(t('pages.settings.passkeyNameDefault'));
+        setPasskeyModalOpen(true);
+    };
+
+    const closePasskeyModal = () => {
+        if (isRegisteringPasskey) return;
+        setPasskeyModalOpen(false);
+    };
+
     const registerPasskey = async () => {
+        setIsRegisteringPasskey(true);
         try {
             if (!window.isSecureContext || !navigator.credentials) {
                 throw new Error('Passkeys require HTTPS or localhost');
             }
-            const name = window.prompt(t('pages.settings.passkeyNamePrompt'), t('pages.settings.passkeyNameDefault'))?.trim() || null;
+            const name = passkeyName.trim() || null;
             const optionsResponse = await fetch(apiUrl('/api/auth/webauthn/register/options'), { method: 'POST' });
             if (!optionsResponse.ok) throw new Error('Failed to start passkey registration');
             const options = toPublicKeyCredentialCreationOptions(await optionsResponse.json() as Record<string, unknown>);
@@ -206,10 +221,13 @@ export function Settings() {
             const listResponse = await fetch(apiUrl('/api/auth/passkeys'));
             const payload = await listResponse.json() as { passkeys: PasskeySummary[] };
             setPasskeys(payload.passkeys);
+            setPasskeyModalOpen(false);
             showToast(t("pages.settings.passkeyRegistered"), "success");
         } catch (error) {
             console.error("Failed to register passkey", error);
             showToast(t("pages.settings.failedToRegisterPasskey"), "danger");
+        } finally {
+            setIsRegisteringPasskey(false);
         }
     };
 
@@ -550,7 +568,7 @@ export function Settings() {
                             </div>
                             <button
                                 type="button"
-                                onClick={() => void registerPasskey()}
+                                onClick={openPasskeyModal}
                                 className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700"
                             >
                                 <KeyRound className="h-4 w-4" />
@@ -654,6 +672,53 @@ export function Settings() {
                     </CardContent>
                 </Card>
             )}
+
+            <Modal
+                isOpen={passkeyModalOpen}
+                onClose={closePasskeyModal}
+                title={t("pages.settings.registerPasskeyTitle")}
+            >
+                <form
+                    className="space-y-5"
+                    onSubmit={(event) => {
+                        event.preventDefault();
+                        void registerPasskey();
+                    }}
+                >
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                        {t("pages.settings.registerPasskeyDescription")}
+                    </p>
+                    <div className="space-y-2">
+                        <label htmlFor="passkey-name" className={labelClass}>{t("pages.settings.passkeyNamePrompt")}</label>
+                        <input
+                            id="passkey-name"
+                            value={passkeyName}
+                            onChange={(event) => setPasskeyName(event.target.value)}
+                            disabled={isRegisteringPasskey}
+                            className={inputClass}
+                            autoFocus
+                        />
+                    </div>
+                    <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                        <button
+                            type="button"
+                            onClick={closePasskeyModal}
+                            disabled={isRegisteringPasskey}
+                            className="inline-flex h-10 items-center justify-center rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800"
+                        >
+                            {t("common.cancel")}
+                        </button>
+                        <button
+                            type="submit"
+                            disabled={isRegisteringPasskey}
+                            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                            <KeyRound className="h-4 w-4" />
+                            {isRegisteringPasskey ? t("common.saving") : t("pages.settings.registerPasskeySubmit")}
+                        </button>
+                    </div>
+                </form>
+            </Modal>
         </div>
     );
 }
