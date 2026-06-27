@@ -156,7 +156,7 @@ export function Settings() {
             if (!window.isSecureContext || !navigator.credentials) {
                 throw new Error('Passkeys require HTTPS or localhost');
             }
-            const name = window.prompt('Passkey name', 'Security key')?.trim() || null;
+            const name = window.prompt(t('pages.settings.passkeyNamePrompt'), t('pages.settings.passkeyNameDefault'))?.trim() || null;
             const optionsResponse = await fetch(apiUrl('/api/auth/webauthn/register/options'), { method: 'POST' });
             if (!optionsResponse.ok) throw new Error('Failed to start passkey registration');
             const options = toPublicKeyCredentialCreationOptions(await optionsResponse.json() as Record<string, unknown>);
@@ -362,14 +362,14 @@ export function Settings() {
             {authEnabled && (
                 <Card>
                     <CardHeader>
-                        <CardTitle>Authentication</CardTitle>
-                        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Manage account sign-in methods.</p>
+                        <CardTitle>{t("pages.settings.authentication")}</CardTitle>
+                        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.authenticationDescription")}</p>
                     </CardHeader>
                     <CardContent className="space-y-8">
                         <div className="space-y-4">
                             <div>
-                                <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Password</h4>
-                                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Change your local password or disable password login after another sign-in method is configured.</p>
+                                <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{t("pages.settings.password")}</h4>
+                                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.passwordDescription")}</p>
                             </div>
                             <label className="flex items-start gap-3 text-sm text-gray-700 dark:text-gray-200">
                                 <input
@@ -380,8 +380,8 @@ export function Settings() {
                                     className="mt-1 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                                 />
                                 <span>
-                                    <span className="block font-medium">Disable password login</span>
-                                    <span className="block text-xs text-gray-500 dark:text-gray-400">When enabled, only passkeys and SSO can be used to sign in.</span>
+                                    <span className="block font-medium">{t("pages.settings.disablePasswordLogin")}</span>
+                                    <span className="block text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.disablePasswordLoginDescription")}</span>
                                 </span>
                             </label>
                             <button
@@ -397,7 +397,7 @@ export function Settings() {
                             {canChangePassword && (
                                 <div className="grid gap-4 lg:grid-cols-3">
                                     <div className="space-y-2">
-                                        <label htmlFor="current-password" className={labelClass}>Current password</label>
+                                        <label htmlFor="current-password" className={labelClass}>{t("pages.settings.currentPassword")}</label>
                                         <input
                                             id="current-password"
                                             type="password"
@@ -407,7 +407,7 @@ export function Settings() {
                                         />
                                     </div>
                                     <div className="space-y-2">
-                                        <label htmlFor="new-password" className={labelClass}>New password</label>
+                                        <label htmlFor="new-password" className={labelClass}>{t("pages.settings.newPassword")}</label>
                                         <input
                                             id="new-password"
                                             type="password"
@@ -417,7 +417,7 @@ export function Settings() {
                                         />
                                     </div>
                                     <div className="space-y-2">
-                                        <label htmlFor="confirm-password" className={labelClass}>Confirm password</label>
+                                        <label htmlFor="confirm-password" className={labelClass}>{t("pages.settings.confirmPassword")}</label>
                                         <input
                                             id="confirm-password"
                                             type="password"
@@ -433,7 +433,7 @@ export function Settings() {
                                             className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700"
                                         >
                                             <Save className="h-4 w-4" />
-                                            Change Password
+                                            {t("pages.settings.changePassword")}
                                         </button>
                                     </div>
                                 </div>
@@ -442,12 +442,12 @@ export function Settings() {
 
                         <div className="space-y-4 border-t border-gray-200 pt-6 dark:border-gray-700">
                             <div>
-                                <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Passkeys</h4>
-                                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Register hardware keys, platform authenticators, or synced passkeys for passwordless sign-in.</p>
+                                <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{t("pages.settings.passkeys")}</h4>
+                                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.passkeysDescription")}</p>
                             </div>
                             <div className="space-y-3">
                                 {passkeys.length === 0 ? (
-                                    <p className="text-sm text-gray-500 dark:text-gray-400">No passkeys registered.</p>
+                                    <p className="text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.noPasskeys")}</p>
                                 ) : (
                                     passkeys.map((passkey) => (
                                         <div
@@ -456,18 +456,18 @@ export function Settings() {
                                         >
                                             <div className="min-w-0">
                                                 <p className="truncate text-sm font-medium text-gray-900 dark:text-gray-100">
-                                                    {passkey.name || 'Passkey'}
+                                                    {passkey.name || t("pages.settings.passkey")}
                                                 </p>
                                                 <p className="text-xs text-gray-500">
-                                                    Added {new Date(passkey.createdAt).toLocaleDateString()}
+                                                    {t("pages.settings.passkeyAdded", { date: new Date(passkey.createdAt).toLocaleDateString() })}
                                                 </p>
                                             </div>
                                             <button
                                                 type="button"
                                                 onClick={() => void removePasskey(passkey.id)}
                                                 className="rounded-md p-2 text-red-600 transition-colors hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/40"
-                                                aria-label="Remove passkey"
-                                                title="Remove passkey"
+                                                aria-label={t("pages.settings.removePasskey")}
+                                                title={t("pages.settings.removePasskey")}
                                             >
                                                 <Trash2 className="h-4 w-4" />
                                             </button>
@@ -481,18 +481,18 @@ export function Settings() {
                                 className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700"
                             >
                                 <KeyRound className="h-4 w-4" />
-                                Register New Passkey
+                                {t("pages.settings.registerNewPasskey")}
                             </button>
                         </div>
 
                         <div className="space-y-4 border-t border-gray-200 pt-6 dark:border-gray-700">
                             <div>
-                                <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">OIDC (SSO)</h4>
-                                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Configure the provider connection and optional group mapping for admin and read-only access.</p>
+                                <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{t("pages.settings.oidcSso")}</h4>
+                                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.oidcDescription")}</p>
                             </div>
                             <div className="grid gap-4 lg:grid-cols-2">
                                 <div className="space-y-2 lg:col-span-2">
-                                    <label htmlFor="oidc-issuer" className={labelClass}>Issuer URL</label>
+                                    <label htmlFor="oidc-issuer" className={labelClass}>{t("pages.settings.oidcIssuerUrl")}</label>
                                     <input
                                         id="oidc-issuer"
                                         value={oidcForm.issuerUrl}
@@ -502,7 +502,7 @@ export function Settings() {
                                     />
                                 </div>
                                 <div className="space-y-2">
-                                    <label htmlFor="oidc-client-id" className={labelClass}>Client ID</label>
+                                    <label htmlFor="oidc-client-id" className={labelClass}>{t("pages.settings.oidcClientId")}</label>
                                     <input
                                         id="oidc-client-id"
                                         value={oidcForm.clientId}
@@ -512,19 +512,19 @@ export function Settings() {
                                     />
                                 </div>
                                 <div className="space-y-2">
-                                    <label htmlFor="oidc-client-secret" className={labelClass}>Client Secret</label>
+                                    <label htmlFor="oidc-client-secret" className={labelClass}>{t("pages.settings.oidcClientSecret")}</label>
                                     <input
                                         id="oidc-client-secret"
                                         type="password"
                                         value={oidcForm.clientSecret}
                                         onChange={(event) => setOidcForm((current) => ({ ...current, clientSecret: event.target.value }))}
-                                        placeholder={authSettings?.hasOidcClientSecret ? '(unchanged)' : ''}
+                                        placeholder={authSettings?.hasOidcClientSecret ? t("pages.settings.unchanged") : ''}
                                         disabled={!canManageAuthSettings}
                                         className={inputClass}
                                     />
                                 </div>
                                 <div className="space-y-2">
-                                    <label htmlFor="oidc-groups-claim" className={labelClass}>Groups Claim</label>
+                                    <label htmlFor="oidc-groups-claim" className={labelClass}>{t("pages.settings.oidcGroupsClaim")}</label>
                                     <input
                                         id="oidc-groups-claim"
                                         value={oidcForm.groupsClaim}
@@ -535,7 +535,7 @@ export function Settings() {
                                     />
                                 </div>
                                 <div className="space-y-2">
-                                    <label htmlFor="oidc-admin-groups" className={labelClass}>Admin Groups</label>
+                                    <label htmlFor="oidc-admin-groups" className={labelClass}>{t("pages.settings.oidcAdminGroups")}</label>
                                     <input
                                         id="oidc-admin-groups"
                                         value={oidcForm.adminGroups}
@@ -546,7 +546,7 @@ export function Settings() {
                                     />
                                 </div>
                                 <div className="space-y-2 lg:col-span-2">
-                                    <label htmlFor="oidc-read-only-groups" className={labelClass}>Read-only Groups</label>
+                                    <label htmlFor="oidc-read-only-groups" className={labelClass}>{t("pages.settings.oidcReadOnlyGroups")}</label>
                                     <input
                                         id="oidc-read-only-groups"
                                         value={oidcForm.readOnlyGroups}
@@ -555,7 +555,7 @@ export function Settings() {
                                         disabled={!canManageAuthSettings}
                                         className={inputClass}
                                     />
-                                    <p className="text-xs text-gray-500 dark:text-gray-400">Leave group lists empty to make all OIDC users admins. If any group is configured, unmatched OIDC users are read-only.</p>
+                                    <p className="text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.oidcGroupsHelp")}</p>
                                 </div>
                             </div>
                             <button
@@ -565,7 +565,7 @@ export function Settings() {
                                 className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700"
                             >
                                 <ShieldCheck className="h-4 w-4" />
-                                Save OIDC Settings
+                                {t("pages.settings.saveOidcSettings")}
                             </button>
                         </div>
                     </CardContent>
