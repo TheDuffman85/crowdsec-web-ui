@@ -224,7 +224,7 @@
   "pages.settings.refreshHelp": "The saved interval is used for automatic page refreshes.",
   "pages.settings.refreshSaved": "Refresh interval updated to {interval}.",
   "pages.settings.readOnlyRefresh": "Read-only mode is enabled. The refresh interval can only be changed in admin mode.",
-  "pages.settings.authDisabledHint": "Dashboard authentication is disabled. Set CROWDSEC_AUTH_ENABLED=true and restart the web UI to enable sign-in and account settings.",
+  "pages.settings.authDisabledHint": "Dashboard authentication is disabled. Set AUTH_ENABLED=true and restart the web UI to enable sign-in and account settings.",
   "pages.settings.failedToLoadSettings": "Failed to load settings.",
   "pages.settings.failedToSaveRefresh": "Failed to save refresh interval.",
   "pages.settings.settingsSaved": "Settings saved.",

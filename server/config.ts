@@ -141,9 +141,16 @@ export function parseCsvEnv(value: string | undefined): string[] {
   return Array.from(deduped);
 }
 
+function resolveDashboardAuthEnabled(env: NodeJS.ProcessEnv): boolean | null {
+  if (env.AUTH_ENABLED !== undefined) {
+    return parseOptionalBooleanEnv(env.AUTH_ENABLED);
+  }
+  return parseOptionalBooleanEnv(env.CROWDSEC_AUTH_ENABLED);
+}
+
 function parseDashboardAuthConfig(env: NodeJS.ProcessEnv): DashboardAuthConfig {
   return {
-    enabled: parseOptionalBooleanEnv(env.CROWDSEC_AUTH_ENABLED),
+    enabled: resolveDashboardAuthEnabled(env),
     sessionSecret: resolveSecretEnv('CROWDSEC_AUTH_SECRET', env)?.trim() || undefined,
     oidcIssuerUrl: env.CROWDSEC_AUTH_OIDC_ISSUER_URL?.trim() || undefined,
     oidcClientId: env.CROWDSEC_AUTH_OIDC_CLIENT_ID?.trim() || undefined,

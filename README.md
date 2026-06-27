@@ -101,10 +101,10 @@ Configure language, refresh cadence, password login, passkeys, and OIDC SSO from
 CrowdSec Web UI includes Arabic, English, German, French, Hindi, Japanese, Portuguese, Spanish, Russian, and Chinese translations. The language selector can follow the browser language for the UI, or it can be set explicitly. When a language is set explicitly, server-generated text such as sync status messages, notification titles, notification bodies, and notification test messages uses that saved language too. With **Browser default**, server-generated messages use English because background jobs and outbound notifications do not have access to a browser locale.
 
 ### Dashboard Authentication
-Password login, passkeys, and OIDC SSO protect the browser UI and protected application API routes when dashboard authentication is enabled. New installs start with authentication enabled and use an initial setup page to create the first administrator account. Existing installs migrated from older versions keep authentication disabled until you opt in with `CROWDSEC_AUTH_ENABLED=true`.
+Password login, passkeys, and OIDC SSO protect the browser UI and protected application API routes when dashboard authentication is enabled. New installs start with authentication enabled and use an initial setup page to create the first administrator account. Existing installs migrated from older versions keep authentication disabled until you opt in with `AUTH_ENABLED=true`.
 
 > [!CAUTION]
-> **Security Notice**: CrowdSec Web UI includes built-in dashboard authentication, but public deployments should still run behind HTTPS and a hardened reverse proxy. For centralized access control, configure OIDC SSO with an Identity Provider (IdP) such as [Authentik](https://goauthentik.io/), [Authelia](https://www.authelia.com/), or [Keycloak](https://www.keycloak.org/). Existing installs upgraded from versions without dashboard authentication remain unauthenticated until `CROWDSEC_AUTH_ENABLED=true` is set.
+> **Security Notice**: CrowdSec Web UI includes built-in dashboard authentication, but public deployments should still run behind HTTPS and a hardened reverse proxy. For centralized access control, configure OIDC SSO with an Identity Provider (IdP) such as [Authentik](https://goauthentik.io/), [Authelia](https://www.authelia.com/), or [Keycloak](https://www.keycloak.org/). Existing installs upgraded from versions without dashboard authentication remain unauthenticated until `AUTH_ENABLED=true` is set.
 > Set `PERMISSION_READ_ONLY=true` to run an instance that can view data but cannot perform CrowdSec write actions or management actions such as changing refresh cadence, managing notification destinations/rules, sending notification tests, or deleting notifications. Language, table column preferences, and marking notifications as read remain writable. This is an instance-wide safety mode, not user management or per-user RBAC.
 
 ## Architecture
@@ -192,8 +192,8 @@ services:
       - CROWDSEC_PASSWORD=<generated_password>
       # Authentication is enabled by default for new installs.
       # Existing data directories migrated from older versions keep auth disabled
-      # until you explicitly set CROWDSEC_AUTH_ENABLED=true.
-      # - CROWDSEC_AUTH_ENABLED=true
+      # until you explicitly set AUTH_ENABLED=true.
+      # - AUTH_ENABLED=true
       # Optional deployment-wide date/time display settings
       # - TZ=Europe/Berlin
       # - CROWDSEC_TIME_FORMAT=24h
@@ -281,7 +281,7 @@ Choose exactly one auth mode: password auth or mTLS auth.
 | `TZ` | browser local | Optional deployment-wide IANA timezone, such as `Europe/Berlin` or `UTC`. When set, the UI, dashboard grouping, filters, and server-generated timestamps all use it. |
 | `CROWDSEC_TIME_FORMAT` | browser locale | Optional deployment-wide clock format. Accepts `12h` or `24h`. When omitted, each browser's locale determines whether the UI uses a 12- or 24-hour clock. |
 | `PERMISSION_READ_ONLY` | `false` | Set to `true` to hide management actions in the UI and reject API requests that add/delete decisions, delete alerts, clean up by IP, clear the cache, change refresh cadence, manage notification destinations/rules, send notification tests, or delete notifications. Language, table column preferences, and marking notifications as read remain writable. |
-| `CROWDSEC_AUTH_ENABLED` | new installs: `true`; migrated existing installs: `false` | Enables dashboard authentication for the UI and API. Set to `false` to run without dashboard login. Existing databases from older releases are marked disabled during migration so upgrades do not lock out current deployments. |
+| `AUTH_ENABLED` | new installs: `true`; migrated existing installs: `false` | Enables dashboard authentication for the UI and API. Set to `false` to run without dashboard login. Existing databases from older releases are marked disabled during migration so upgrades do not lock out current deployments. |
 | `CROWDSEC_AUTH_SECRET` | auto-generated and persisted | Optional fixed secret used to sign dashboard session cookies. If unset, the app generates one and stores it in app metadata. |
 | `CROWDSEC_AUTH_SECRET_FILE` | auto-generated and persisted | Optional Docker Secrets alternative: read `CROWDSEC_AUTH_SECRET` from a file. Do not set both variables. |
 | `CROWDSEC_AUTH_OIDC_ISSUER_URL` | none | Optional OIDC issuer URL. When set with `CROWDSEC_AUTH_OIDC_CLIENT_ID`, the login page shows SSO. Can also be configured from Settings. |
@@ -323,15 +323,15 @@ Choose exactly one auth mode: password auth or mTLS auth.
 Dashboard authentication covers the browser UI and protected application API routes. The health endpoint remains public for container and reverse-proxy health checks. New installs start with authentication enabled and show an initial setup page where you create the first local administrator account. Upgraded installs with an existing SQLite database are migrated with authentication disabled by default, so existing deployments keep working until you opt in with:
 
 ```env
-CROWDSEC_AUTH_ENABLED=true
+AUTH_ENABLED=true
 ```
 
-Set `CROWDSEC_AUTH_ENABLED=false` to disable dashboard authentication. This setting is intentionally environment-controlled, not configurable from the UI.
+Set `AUTH_ENABLED=false` to disable dashboard authentication. This setting is intentionally environment-controlled, not configurable from the UI.
 
 Local password login is available after onboarding. Authenticated users can change their own password and register or remove their own passkeys from Settings. Administrators can also disable password login and configure OIDC SSO from Settings. OIDC can also be preconfigured with environment variables:
 
 ```env
-CROWDSEC_AUTH_ENABLED=true
+AUTH_ENABLED=true
 CROWDSEC_AUTH_OIDC_ISSUER_URL=https://idp.example.com/application/o/crowdsec-web-ui/
 CROWDSEC_AUTH_OIDC_CLIENT_ID=crowdsec-web-ui
 CROWDSEC_AUTH_OIDC_CLIENT_SECRET=change-me

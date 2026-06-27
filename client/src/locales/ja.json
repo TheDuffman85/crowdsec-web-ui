@@ -224,7 +224,7 @@
   "pages.settings.refreshHelp": "保存された間隔はページの自動更新に使用されます。",
   "pages.settings.refreshSaved": "更新間隔を {interval} に変更しました。",
   "pages.settings.readOnlyRefresh": "読み取り専用モードが有効です。更新間隔は管理者モードでのみ変更できます。",
-  "pages.settings.authDisabledHint": "ダッシュボード認証は無効です。サインインとアカウント設定を有効にするには、CROWDSEC_AUTH_ENABLED=true を設定して Web UI を再起動してください。",
+  "pages.settings.authDisabledHint": "ダッシュボード認証は無効です。サインインとアカウント設定を有効にするには、AUTH_ENABLED=true を設定して Web UI を再起動してください。",
   "pages.settings.failedToLoadSettings": "設定の読み込みに失敗しました。",
   "pages.settings.failedToSaveRefresh": "更新間隔の保存に失敗しました。",
   "pages.settings.settingsSaved": "設定を保存しました。",

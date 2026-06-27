@@ -118,7 +118,7 @@ describe('config helpers', () => {
       NOTIFICATION_DEBUG_PAYLOADS: 'true',
       TZ: 'Europe/Berlin',
       CROWDSEC_TIME_FORMAT: '24h',
-      CROWDSEC_AUTH_ENABLED: 'true',
+      AUTH_ENABLED: 'true',
       CROWDSEC_AUTH_SECRET: 'auth-secret',
       CROWDSEC_AUTH_OIDC_ISSUER_URL: 'https://idp.example.com/application/o/crowdsec/',
       CROWDSEC_AUTH_OIDC_CLIENT_ID: 'crowdsec-client',
@@ -208,7 +208,7 @@ describe('config helpers', () => {
 
   test('createRuntimeConfig reads file-backed dashboard auth secrets', () => {
     const config = createRuntimeConfig({
-      CROWDSEC_AUTH_ENABLED: 'false',
+      AUTH_ENABLED: 'false',
       CROWDSEC_AUTH_SECRET_FILE: createTempSecret('auth-secret-from-file\n'),
       CROWDSEC_AUTH_OIDC_CLIENT_SECRET_FILE: createTempSecret('oidc-secret-from-file\n'),
     });
@@ -216,6 +216,19 @@ describe('config helpers', () => {
     expect(config.dashboardAuth.enabled).toBe(false);
     expect(config.dashboardAuth.sessionSecret).toBe('auth-secret-from-file');
     expect(config.dashboardAuth.oidcClientSecret).toBe('oidc-secret-from-file');
+  });
+
+  test('createRuntimeConfig keeps the legacy dashboard auth flag working', () => {
+    const config = createRuntimeConfig({ CROWDSEC_AUTH_ENABLED: 'true' });
+    expect(config.dashboardAuth.enabled).toBe(true);
+  });
+
+  test('createRuntimeConfig prefers AUTH_ENABLED over the legacy dashboard auth flag', () => {
+    const config = createRuntimeConfig({
+      AUTH_ENABLED: 'false',
+      CROWDSEC_AUTH_ENABLED: 'true',
+    });
+    expect(config.dashboardAuth.enabled).toBe(false);
   });
 
   test('createRuntimeConfig supports mTLS authentication', () => {

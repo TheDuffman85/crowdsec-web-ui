@@ -30,7 +30,7 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
     'pages.settings.refreshDescription': 'Control automatic refreshes.',
     'pages.settings.refreshHelp': 'Refresh help.',
     'pages.settings.refreshInterval': 'Refresh interval',
-    'pages.settings.authDisabledHint': 'Dashboard authentication is disabled. Set CROWDSEC_AUTH_ENABLED=true and restart the web UI to enable sign-in and account settings.',
+    'pages.settings.authDisabledHint': 'Dashboard authentication is disabled. Set AUTH_ENABLED=true and restart the web UI to enable sign-in and account settings.',
     'pages.settings.authentication': 'Authentication',
     'pages.settings.authenticationDescription': 'Manage account sign-in methods.',
     'pages.settings.password': 'Password',
@@ -175,7 +175,7 @@ describe('Settings', () => {
     expect(screen.getByLabelText('Refresh interval')).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
     expect(screen.getByText('Read-only mode is enabled.')).toBeInTheDocument();
-    expect(screen.getByText('Dashboard authentication is disabled. Set CROWDSEC_AUTH_ENABLED=true and restart the web UI to enable sign-in and account settings.')).toBeInTheDocument();
+    expect(screen.getByText('Dashboard authentication is disabled. Set AUTH_ENABLED=true and restart the web UI to enable sign-in and account settings.')).toBeInTheDocument();
   });
 
   test('only applies language changes when saved', async () => {

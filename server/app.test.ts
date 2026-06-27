@@ -405,7 +405,7 @@ function createController(options: {
     VITE_COMMIT_HASH: 'abc123',
     DB_DIR: tempDir,
     NOTIFICATION_ALLOW_PRIVATE_ADDRESSES: 'true',
-    CROWDSEC_AUTH_ENABLED: 'false',
+    AUTH_ENABLED: 'false',
     ...authEnv,
     ...options.env,
   });
@@ -488,7 +488,7 @@ function createController(options: {
 test('dashboard auth protects API routes and allows initial setup login', async () => {
   const { controller } = createController({
     env: {
-      CROWDSEC_AUTH_ENABLED: 'true',
+      AUTH_ENABLED: 'true',
     },
   });
 
@@ -522,7 +522,7 @@ test('dashboard auth protects API routes and allows initial setup login', async 
 test('dashboard auth exposes account settings and password changes', async () => {
   const { controller, database } = createController({
     env: {
-      CROWDSEC_AUTH_ENABLED: 'true',
+      AUTH_ENABLED: 'true',
     },
   });
 
@@ -628,7 +628,7 @@ test('dashboard auth exposes account settings and password changes', async () =>
 test('dashboard auth settings use OIDC environment values as defaults', async () => {
   const { controller } = createController({
     env: {
-      CROWDSEC_AUTH_ENABLED: 'true',
+      AUTH_ENABLED: 'true',
       CROWDSEC_AUTH_OIDC_ISSUER_URL: 'https://idp.example.com/application/o/crowdsec/',
       CROWDSEC_AUTH_OIDC_CLIENT_ID: 'crowdsec-client',
       CROWDSEC_AUTH_OIDC_CLIENT_SECRET: 'oidc-secret',
