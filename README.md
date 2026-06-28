@@ -297,6 +297,8 @@ Choose exactly one auth mode: password auth or mTLS auth.
 | `CROWDSEC_IDLE_THRESHOLD` | `2m` | Inactivity period before the app switches to idle refresh behavior. |
 | `CROWDSEC_FULL_REFRESH_INTERVAL` | `5m` | Interval for full cache refreshes while active. |
 | `CROWDSEC_LAPI_REQUEST_TIMEOUT` | `30s` | Timeout for individual CrowdSec LAPI requests. Increase this for high-latency or very large CrowdSec datasets. |
+| `CROWDSEC_PROMETHEUS_URL` | none | Optional CrowdSec Prometheus metrics endpoint. When unset, the Metrics page shows setup instructions; when set, it reads bouncer, machine, AppSec, parser, and whitelist runtime metrics from this URL. |
+| `CROWDSEC_PROMETHEUS_REQUEST_TIMEOUT` | `5s` | Timeout for individual Prometheus metrics requests. Accepts the same interval syntax as refresh settings. |
 | `CROWDSEC_HEARTBEAT_INTERVAL` | `30s` | Interval for updating the Web UI machine heartbeat in CrowdSec. Use `0` or `manual` to disable heartbeat updates. |
 | `CROWDSEC_ALERT_SYNC_CHUNK` | `6h` | Window size used when syncing historical alerts from LAPI. Smaller chunks reduce per-request payload size. |
 | `CROWDSEC_ALERT_SYNC_MIN_CHUNK` | `15m` | Smallest window size used when retrying timed-out alert sync windows. |
@@ -499,6 +501,47 @@ docker inspect --format='{{.State.Health.Status}}' crowdsec_web_ui
 If you use `BASE_PATH`, the health check still targets `localhost:3000/api/health` directly inside the container, so no additional configuration is needed. If you change `PORT`, update the health check command in your deployment to match.
 
 ## Runtime Behavior
+
+### Prometheus Metrics Page
+
+The Metrics page is optional and shows a setup hint until `CROWDSEC_PROMETHEUS_URL` is set. Once configured, it reads CrowdSec's Prometheus exposition endpoint and shows runtime signals that are not already covered by the app's alert and decision history views:
+
+- bouncer LAPI request activity from `cs_lapi_bouncer_requests_total`, plus `/decisions` empty/non-empty response counters when available
+- machine LAPI request activity from `cs_lapi_machine_requests_total`
+- AppSec request and blocked activity from `cs_appsec_reqs_total` and `cs_appsec_block_total`
+- parser source, parser node, bucket-pour, acquisition, and parser timing activity from `cs_parser_*`, `cs_node_*`, `cs_bucket_poured_total`, datasource hit counters, and `cs_parsing_time_seconds`
+- whitelist hit and whitelisted activity from `cs_node_wl_hits_total` and `cs_node_wl_hits_ok_total`
+
+CrowdSec documents the endpoint at `http://127.0.0.1:6060/metrics` by default. To expose the bouncer, machine, AppSec, whitelist, and per-node parser details used by this page, enable Prometheus metrics in CrowdSec with `level: full` in `/etc/crowdsec/config.yaml`:
+
+```yaml
+prometheus:
+  enabled: true
+  level: full
+  listen_addr: 127.0.0.1
+  listen_port: 6060
+```
+
+If CrowdSec and the Web UI run in different containers, bind the CrowdSec metrics listener to an address reachable from the Web UI container and keep it on a trusted network. For example, in a Compose network you might use:
+
+```yaml
+prometheus:
+  enabled: true
+  level: full
+  listen_addr: 0.0.0.0
+  listen_port: 6060
+```
+
+Then point the Web UI at that endpoint:
+
+```yaml
+environment:
+  - CROWDSEC_PROMETHEUS_URL=http://crowdsec:6060/metrics
+```
+
+CrowdSec also supports `level: aggregated`, but that omits the per-machine/per-bouncer LAPI metrics and per-node parser metrics, so the page will have less detail. `level: none` disables metrics registration entirely.
+
+Reference: [CrowdSec Prometheus documentation](https://docs.crowdsec.net/docs/next/observability/prometheus/).
 
 ### Simulation Mode Visibility
 

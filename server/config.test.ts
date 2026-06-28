@@ -103,6 +103,8 @@ describe('config helpers', () => {
       CROWDSEC_IDLE_THRESHOLD: '30s',
       CROWDSEC_FULL_REFRESH_INTERVAL: '5m',
       CROWDSEC_LAPI_REQUEST_TIMEOUT: '2m',
+      CROWDSEC_PROMETHEUS_URL: 'http://crowdsec:6060/metrics',
+      CROWDSEC_PROMETHEUS_REQUEST_TIMEOUT: '10s',
       CROWDSEC_HEARTBEAT_INTERVAL: '1m',
       CROWDSEC_ALERT_SYNC_CHUNK: '3h',
       CROWDSEC_ALERT_SYNC_MIN_CHUNK: '30m',
@@ -144,6 +146,8 @@ describe('config helpers', () => {
     expect(config.lookbackMs).toBe(172_800_000);
     expect(config.refreshIntervalMs).toBe(5_000);
     expect(config.lapiRequestTimeoutMs).toBe(120_000);
+    expect(config.prometheusUrl).toBe('http://crowdsec:6060/metrics');
+    expect(config.prometheusRequestTimeoutMs).toBe(10_000);
     expect(config.heartbeatIntervalMs).toBe(60_000);
     expect(config.alertSyncChunkMs).toBe(10_800_000);
     expect(config.alertSyncMinChunkMs).toBe(1_800_000);
@@ -188,6 +192,8 @@ describe('config helpers', () => {
     expect(config.timeZone).toBeNull();
     expect(config.timeFormat).toBe('browser');
     expect(config.lapiRequestTimeoutMs).toBe(30_000);
+    expect(config.prometheusUrl).toBeUndefined();
+    expect(config.prometheusRequestTimeoutMs).toBe(5_000);
     expect(config.heartbeatIntervalMs).toBe(30_000);
     expect(config.alertSyncChunkMs).toBe(21_600_000);
     expect(config.alertSyncMinChunkMs).toBe(900_000);

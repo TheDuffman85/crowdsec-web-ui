@@ -454,11 +454,88 @@ export interface ConfigResponse {
   table_column_preferences?: TableColumnPreferences;
   time_zone?: string | null;
   time_format?: 'browser' | '12h' | '24h';
+  metrics_enabled?: boolean;
+  metrics_sidebar_visible?: boolean;
   permissions?: {
     mode: 'admin' | 'read-only';
     can_manage_enforcement: boolean;
     can_manage_settings?: boolean;
   };
+}
+
+export interface UpdateMetricsSidebarPreferenceRequest {
+  visible: boolean;
+}
+
+export interface CrowdsecMetricsApiEntity {
+  name: string;
+  requests: number;
+  topRoute: string | null;
+  topMethod: string | null;
+  decisionsOk?: number;
+  decisionsKo?: number;
+}
+
+export interface CrowdsecMetricsParserSource {
+  source: string;
+  type: string;
+  acquisTypes: string[];
+  linesRead: number | null;
+  processed: number;
+  parsedOk: number;
+  parsedKo: number;
+  pouredToBucket: number;
+  whitelisted: number;
+  successRate: number | null;
+}
+
+export interface CrowdsecMetricsParserNode {
+  name: string;
+  stage: string;
+  source: string;
+  type: string;
+  acquisType: string | null;
+  processed: number;
+  parsedOk: number;
+  parsedKo: number;
+  successRate: number | null;
+}
+
+export interface CrowdsecMetricsTiming {
+  source: string;
+  type: string;
+  count: number;
+  averageSeconds: number | null;
+}
+
+export interface CrowdsecMetricsWhitelist {
+  name: string;
+  reason: string;
+  hits: number;
+  whitelisted: number;
+}
+
+export interface CrowdsecMetricsResponse {
+  fetched_at: string;
+  totals: {
+    bouncerRequests: number;
+    machineRequests: number;
+    appsecRequests: number;
+    appsecBlocked: number;
+    parserProcessed: number;
+    parserOk: number;
+    parserKo: number;
+    parserSuccessRate: number | null;
+    parserAverageSeconds: number | null;
+    whitelistHits: number;
+    whitelisted: number;
+  };
+  bouncers: CrowdsecMetricsApiEntity[];
+  machines: CrowdsecMetricsApiEntity[];
+  parserSources: CrowdsecMetricsParserSource[];
+  parserNodes: CrowdsecMetricsParserNode[];
+  whitelists: CrowdsecMetricsWhitelist[];
+  parserTimings: CrowdsecMetricsTiming[];
 }
 
 export interface UpdateTableColumnsRequest {

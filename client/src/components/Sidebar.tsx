@@ -1,16 +1,18 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, ShieldAlert, Gavel, Bell, X, Sun, Moon, ArrowUpCircle, Menu, PanelLeftClose, Settings as SettingsIcon, LogOut } from "lucide-react";
+import { LayoutDashboard, ShieldAlert, Gavel, Bell, X, Sun, Moon, ArrowUpCircle, BarChart3, Menu, PanelLeftClose, Settings as SettingsIcon, LogOut } from "lucide-react";
 import { Badge } from "./ui/Badge";
 import { useAuth } from "../contexts/AuthContext";
 import { useNotificationUnreadCount } from "../contexts/useNotificationUnreadCount";
 import { useRefresh } from "../contexts/useRefresh";
 import { useState, useEffect } from "react";
 import { apiUrl, assetUrl } from "../lib/basePath";
+import { fetchConfig } from "../lib/api";
 import type { UpdateCheckResponse } from '../types';
 import { useI18n } from "../lib/i18n";
 import { useDateTime } from "../lib/dateTime";
 
 type ThemeMode = 'light' | 'dark';
+const METRICS_SIDEBAR_PREFERENCE_EVENT = 'metrics-sidebar-preference-changed';
 
 interface SidebarProps {
     isOpen: boolean;
@@ -65,12 +67,14 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
     const { t } = useI18n();
     const { formatTime } = useDateTime();
     const [updateStatus, setUpdateStatus] = useState<UpdateCheckResponse | null>(null);
+    const [showMetricsNav, setShowMetricsNav] = useState(false);
 
     const links = [
         { to: "/", label: "components.sidebar.nav.dashboard", icon: LayoutDashboard },
         { to: "/alerts", label: "components.sidebar.nav.alerts", icon: ShieldAlert },
         { to: "/decisions", label: "components.sidebar.nav.decisions", icon: Gavel },
         { to: "/notifications", label: "components.sidebar.nav.notifications", icon: Bell },
+        ...(showMetricsNav ? [{ to: "/metrics", label: "components.sidebar.nav.metrics", icon: BarChart3 }] : []),
         { to: "/settings", label: "components.sidebar.nav.settings", icon: SettingsIcon },
     ];
 
@@ -105,6 +109,31 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
             cancelled = true;
         };
     }, [refreshSignal]);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const loadMetricsAvailability = async () => {
+            try {
+                const config = await fetchConfig();
+                if (!cancelled) {
+                    setShowMetricsNav(config.metrics_sidebar_visible !== false);
+                }
+            } catch (error) {
+                if (!cancelled) {
+                    console.error("Failed to check metrics availability", error);
+                }
+            }
+        };
+
+        void loadMetricsAvailability();
+        window.addEventListener(METRICS_SIDEBAR_PREFERENCE_EVENT, loadMetricsAvailability);
+
+        return () => {
+            cancelled = true;
+            window.removeEventListener(METRICS_SIDEBAR_PREFERENCE_EVENT, loadMetricsAvailability);
+        };
+    }, []);
 
     const formatLastUpdatedTime = (date: Date | null) => {
         if (!date) return "";

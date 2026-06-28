@@ -21,6 +21,7 @@ import type {
   DashboardStatsResponse,
   DashboardStatsTotals,
   DashboardWorldMapDatum,
+  CrowdsecMetricsResponse,
   DecisionListItem,
   LapiStatus,
   PaginatedResponse,
@@ -32,6 +33,7 @@ import type {
   TableColumnPreferences,
   TableColumnPreferenceTable,
   TableColumnPreferenceViewport,
+  UpdateMetricsSidebarPreferenceRequest,
   UpdateTableColumnsRequest,
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
@@ -53,6 +55,7 @@ import { createUpdateChecker, type UpdateCheckOverrides, type UpdateChecker } fr
 import { getServerTranslator, normalizeLanguagePreference, saveLanguagePreference } from './i18n';
 import { getAlertSourceValue, getAlertTarget, resolveAlertReason, resolveAlertScenario, toSlimAlert } from './utils/alerts';
 import { parseGoDuration, toDuration } from './utils/duration';
+import { fetchCrowdsecMetrics } from './metrics';
 
 type HonoContext = any;
 type HonoNext = any;
@@ -73,6 +76,7 @@ export interface CreateAppOptions {
   startBackgroundTasks?: boolean;
   updateChecker?: UpdateChecker;
   notificationFetchImpl?: FetchLike;
+  metricsFetchImpl?: FetchLike;
   mqttPublishImpl?: (config: MqttPublishConfig, payload: string) => Promise<void>;
 }
 
@@ -93,6 +97,7 @@ interface PersistedConfig {
 }
 
 const TABLE_COLUMN_PREFERENCES_META_KEY = 'table_column_preferences';
+const METRICS_SIDEBAR_VISIBLE_META_KEY = 'metrics_sidebar_visible';
 
 interface CacheState {
   isInitialized: boolean;
@@ -405,6 +410,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   Alert Sync Chunk: ${getIntervalName(config.alertSyncChunkMs)}
   Alert Sync Min Chunk: ${getIntervalName(config.alertSyncMinChunkMs)}
   Machine Heartbeat: ${config.heartbeatIntervalMs > 0 ? getIntervalName(config.heartbeatIntervalMs) : 'Disabled'}
+  Prometheus Metrics: ${config.prometheusUrl ? `Enabled (${config.prometheusUrl})` : 'Disabled'}
   Auth Mode: ${config.crowdsecAuthMode}
   Simulations: ${config.simulationsEnabled ? 'Enabled' : 'Disabled'}
   Alert Filter Mode: ${config.alertFilterMode}
@@ -659,10 +665,51 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       table_column_preferences: loadTableColumnPreferences(database),
       time_zone: config.timeZone,
       time_format: config.timeFormat,
+      metrics_enabled: Boolean(config.prometheusUrl),
+      metrics_sidebar_visible: loadMetricsSidebarVisible(database),
       permissions: dashboardAuth.getPermissions(context),
     };
 
     return context.json(payload);
+  });
+
+  app.get(`${config.basePath}/api/metrics/crowdsec`, ensureAuth, async (context) => {
+    if (!config.prometheusUrl) {
+      return context.json({ error: 'CrowdSec Prometheus metrics are not enabled' }, 404);
+    }
+
+    try {
+      const payload: CrowdsecMetricsResponse = await fetchCrowdsecMetrics({
+        url: config.prometheusUrl,
+        timeoutMs: config.prometheusRequestTimeoutMs,
+        fetchImpl: options.metricsFetchImpl,
+      });
+
+      return context.json(payload);
+    } catch (error: any) {
+      const message = error?.message || 'Failed to read CrowdSec Prometheus metrics';
+      console.error('Error fetching CrowdSec Prometheus metrics:', message);
+      return context.json({ error: message }, 502);
+    }
+  });
+
+  app.put(`${config.basePath}/api/config/metrics-sidebar`, ensureAuth, async (context) => {
+    try {
+      const body = await context.req.json<UpdateMetricsSidebarPreferenceRequest>();
+      if (typeof body.visible !== 'boolean') {
+        return context.json({ error: 'visible must be a boolean' }, 400);
+      }
+
+      saveMetricsSidebarVisible(database, body.visible);
+
+      return context.json({
+        success: true,
+        metrics_sidebar_visible: body.visible,
+      });
+    } catch (error: any) {
+      console.error('Error updating metrics sidebar preference:', error.message);
+      return context.json({ error: 'Failed to update metrics sidebar preference' }, 500);
+    }
   });
 
   app.put(`${config.basePath}/api/config/table-columns`, ensureAuth, async (context) => {
@@ -3087,6 +3134,20 @@ function loadTableColumnPreferences(database: CrowdsecDatabase): TableColumnPref
 
 function saveTableColumnPreferences(database: CrowdsecDatabase, preferences: TableColumnPreferences): void {
   database.setMeta(TABLE_COLUMN_PREFERENCES_META_KEY, JSON.stringify(normalizeTableColumnPreferences(preferences)));
+}
+
+function loadMetricsSidebarVisible(database: CrowdsecDatabase): boolean {
+  try {
+    const value = database.getMeta(METRICS_SIDEBAR_VISIBLE_META_KEY)?.value;
+    return value !== 'false';
+  } catch (error) {
+    console.error('Error loading metrics sidebar preference from database:', error);
+    return true;
+  }
+}
+
+function saveMetricsSidebarVisible(database: CrowdsecDatabase, visible: boolean): void {
+  database.setMeta(METRICS_SIDEBAR_VISIBLE_META_KEY, visible ? 'true' : 'false');
 }
 
 function loadPersistedConfig(database: CrowdsecDatabase): PersistedConfig {

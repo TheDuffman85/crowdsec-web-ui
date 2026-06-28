@@ -368,6 +368,7 @@ function createController(options: {
   env?: Record<string, string>;
   fetchResolver?: (url: string, init?: LapiRequestInit) => Response | Promise<Response> | undefined;
   notificationFetchResolver?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
+  metricsFetchResolver?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
   mqttPublishResolver?: (config: MqttPublishConfig, payload: string) => void | Promise<void>;
 } = {}) {
   const authMode = options.authMode || 'password';
@@ -477,6 +478,14 @@ function createController(options: {
       }
       return Response.json({});
     },
+    metricsFetchImpl: async (input, init) => {
+      const url = String(input);
+      const resolved = await options.metricsFetchResolver?.(url, init);
+      if (resolved) {
+        return resolved;
+      }
+      return new Response('', { status: 404 });
+    },
     mqttPublishImpl: async (config, payload) => {
       await options.mqttPublishResolver?.(config, payload);
     },
@@ -517,6 +526,79 @@ test('dashboard auth protects API routes and allows initial setup login', async 
   expect(authenticated.status).toBe(200);
   const payload = await authenticated.json() as { permissions?: { mode?: string } };
   expect(payload.permissions?.mode).toBe('admin');
+});
+
+test('CrowdSec metrics endpoint is disabled until Prometheus URL is configured', async () => {
+  const { controller } = createController();
+
+  const configResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
+  expect(await configResponse.json()).toEqual(expect.objectContaining({
+    metrics_enabled: false,
+    metrics_sidebar_visible: true,
+  }));
+
+  const response = await controller.fetch(new Request('http://localhost/crowdsec/api/metrics/crowdsec'));
+  expect(response.status).toBe(404);
+  expect(await response.json()).toEqual({ error: 'CrowdSec Prometheus metrics are not enabled' });
+});
+
+test('CrowdSec metrics endpoint proxies and summarizes Prometheus metrics', async () => {
+  const { controller } = createController({
+    env: {
+      CROWDSEC_PROMETHEUS_URL: 'http://crowdsec:6060/metrics',
+    },
+    metricsFetchResolver: async (url) => {
+      expect(url).toBe('http://crowdsec:6060/metrics');
+      return new Response(`
+cs_lapi_bouncer_requests_total{bouncer="firewall",route="/v1/decisions",method="GET"} 7
+cs_lapi_machine_requests_total{machine="edge-1",route="/v1/alerts",method="GET"} 3
+cs_appsec_reqs_total{source="0.0.0.0:7422",appsec_engine="appsec"} 11
+cs_appsec_block_total{source="0.0.0.0:7422",appsec_engine="appsec"} 2
+cs_parser_hits_total{source="/var/log/auth.log",type="syslog"} 20
+cs_parser_hits_ok_total{source="/var/log/auth.log",type="syslog",acquis_type="file"} 19
+cs_parser_hits_ko_total{source="/var/log/auth.log",type="syslog",acquis_type="file"} 1
+cs_node_wl_hits_total{name="crowdsecurity/whitelists",source="/var/log/auth.log",type="syslog",reason="private",stage="s02-enrich",acquis_type="file"} 5
+cs_node_wl_hits_ok_total{name="crowdsecurity/whitelists",source="/var/log/auth.log",type="syslog",reason="private",stage="s02-enrich",acquis_type="file"} 3
+`, { status: 200 });
+    },
+  });
+
+  const configResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
+  expect(await configResponse.json()).toEqual(expect.objectContaining({
+    metrics_enabled: true,
+    metrics_sidebar_visible: true,
+  }));
+
+  const response = await controller.fetch(new Request('http://localhost/crowdsec/api/metrics/crowdsec'));
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual(expect.objectContaining({
+    totals: expect.objectContaining({
+      bouncerRequests: 7,
+      machineRequests: 3,
+      appsecRequests: 11,
+      appsecBlocked: 2,
+      parserProcessed: 20,
+      parserOk: 19,
+      parserKo: 1,
+      whitelistHits: 5,
+      whitelisted: 3,
+    }),
+    bouncers: [expect.objectContaining({ name: 'firewall', requests: 7 })],
+    machines: [expect.objectContaining({ name: 'edge-1', requests: 3 })],
+    parserSources: [expect.objectContaining({ source: '/var/log/auth.log', successRate: 0.95 })],
+    whitelists: [expect.objectContaining({ name: 'crowdsecurity/whitelists', reason: 'private', hits: 5, whitelisted: 3 })],
+  }));
+
+  const preferenceResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/config/metrics-sidebar', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ visible: false }),
+  }));
+  expect(preferenceResponse.status).toBe(200);
+  expect(await preferenceResponse.json()).toEqual({ success: true, metrics_sidebar_visible: false });
+
+  const updatedConfigResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
+  expect(await updatedConfigResponse.json()).toEqual(expect.objectContaining({ metrics_sidebar_visible: false }));
 });
 
 test('dashboard auth exposes account settings and password changes', async () => {
@@ -806,6 +888,8 @@ describe('createApp', () => {
       simulations_enabled: boolean;
       machine_features_enabled: boolean;
       origin_features_enabled: boolean;
+      metrics_enabled: boolean;
+      metrics_sidebar_visible: boolean;
       table_column_preferences: { alerts: { desktop: string[]; mobile: string[] }; decisions: { desktop: string[]; mobile: string[] } };
       permissions: { mode: string; can_manage_enforcement: boolean; can_manage_settings: boolean };
     })).toEqual(
@@ -814,6 +898,8 @@ describe('createApp', () => {
         simulations_enabled: true,
         machine_features_enabled: true,
         origin_features_enabled: true,
+        metrics_enabled: false,
+        metrics_sidebar_visible: true,
         permissions: {
           mode: 'admin',
           can_manage_enforcement: true,

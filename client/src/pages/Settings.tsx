@@ -3,9 +3,10 @@ import i18next from "i18next";
 import { KeyRound, LockKeyhole, Plus, Save, ShieldCheck, Trash2, X } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card";
 import { Modal } from "../components/ui/Modal";
+import { Switch } from "../components/ui/Switch";
 import { useRefresh } from "../contexts/useRefresh";
 import { useOptionalToast } from "../contexts/useToast";
-import { fetchConfig } from "../lib/api";
+import { fetchConfig, updateMetricsSidebarPreference } from "../lib/api";
 import { apiUrl } from "../lib/basePath";
 import { useAuth } from "../contexts/AuthContext";
 import {
@@ -29,6 +30,8 @@ const REFRESH_OPTIONS = [
     { value: 60000, labelKey: "components.sidebar.refresh.every1Minute" },
     { value: 300000, labelKey: "components.sidebar.refresh.every5Minutes" },
 ] as const;
+
+const METRICS_SIDEBAR_PREFERENCE_EVENT = 'metrics-sidebar-preference-changed';
 
 interface PasskeySummary {
     id: number;
@@ -70,6 +73,7 @@ export function Settings() {
     const [isLoading, setIsLoading] = useState(true);
     const [languagePreference, setLanguagePreferenceValue] = useState<LanguagePreference>(preference);
     const [refreshInterval, setRefreshInterval] = useState(intervalMs);
+    const [metricsSidebarVisible, setMetricsSidebarVisible] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
     const [disablePasswordLogin, setDisablePasswordLogin] = useState(false);
     const [isSavingPasswordLogin, setIsSavingPasswordLogin] = useState(false);
@@ -98,6 +102,7 @@ export function Settings() {
                 if (!cancelled) {
                     setConfig(nextConfig);
                     setRefreshInterval(nextConfig.refresh_interval);
+                    setMetricsSidebarVisible(nextConfig.metrics_sidebar_visible !== false);
                 }
             })
             .catch((error) => {
@@ -153,6 +158,8 @@ export function Settings() {
     const canManageSettings = config ? config.permissions?.can_manage_settings !== false : false;
     const hasLanguageChange = languagePreference !== preference;
     const hasRefreshChange = refreshInterval !== intervalMs;
+    const savedMetricsSidebarVisible = config?.metrics_sidebar_visible !== false;
+    const hasMetricsSidebarChange = metricsSidebarVisible !== savedMetricsSidebarVisible;
     const canManageAuthSettings = canManageSettings;
     const canChangePassword = authSettings?.hasPassword === true && authSettings.authMethod === 'password';
 
@@ -176,6 +183,14 @@ export function Settings() {
             }
             if (hasLanguageChange) {
                 setLanguagePreference(languagePreference);
+            }
+            if (hasMetricsSidebarChange) {
+                const payload = await updateMetricsSidebarPreference({ visible: metricsSidebarVisible });
+                setConfig((current) => current ? {
+                    ...current,
+                    metrics_sidebar_visible: payload.metrics_sidebar_visible,
+                } : current);
+                window.dispatchEvent(new Event(METRICS_SIDEBAR_PREFERENCE_EVENT));
             }
             showToast(getSettingsSavedMessage(), "success");
         } catch (error) {
@@ -419,6 +434,24 @@ export function Settings() {
                                 ))}
                             </select>
                             <p className="text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.refreshHelp")}</p>
+                        </div>
+
+                        <div className="space-y-2 xl:col-span-2">
+                            <div className="flex items-start justify-between gap-4 rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-900/40">
+                                <div className="min-w-0">
+                                    <label htmlFor="settings-metrics-sidebar" className={labelClass}>
+                                        {t("pages.settings.showMetricsInSidebar")}
+                                    </label>
+                                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                        {t("pages.settings.showMetricsInSidebarHelp")}
+                                    </p>
+                                </div>
+                                <Switch
+                                    id="settings-metrics-sidebar"
+                                    checked={metricsSidebarVisible}
+                                    onCheckedChange={setMetricsSidebarVisible}
+                                />
+                            </div>
                         </div>
                     </div>
 

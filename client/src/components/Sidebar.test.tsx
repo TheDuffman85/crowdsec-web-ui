@@ -39,7 +39,13 @@ describe('Sidebar', () => {
     vi.stubEnv('VITE_VERSION', '2026.5.2');
     vi.stubEnv('VITE_BRANCH', 'main');
     vi.stubEnv('VITE_COMMIT_HASH', 'abc123');
-    fetchMock = vi.fn(async () => Response.json({ update_available: false }));
+    fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        return Response.json({ metrics_enabled: false, metrics_sidebar_visible: true });
+      }
+      return Response.json({ update_available: false });
+    });
     vi.stubGlobal('fetch', fetchMock);
   });
 
@@ -67,7 +73,7 @@ describe('Sidebar', () => {
     });
 
     renderSidebar();
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/config'), undefined));
 
     expect(screen.queryByLabelText('0 unread notifications')).not.toBeInTheDocument();
   });
@@ -78,19 +84,68 @@ describe('Sidebar', () => {
       setUnreadCount: vi.fn(),
       refreshUnreadCount: vi.fn(),
     });
-    fetchMock.mockResolvedValueOnce(Response.json({
-      update_available: true,
-      local_version: '2026.5.1',
-      remote_version: '2026.5.2',
-      release_url: 'https://example.com/release',
-      tag: 'latest',
-    }));
+    fetchMock.mockImplementation(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        return Response.json({ metrics_enabled: false, metrics_sidebar_visible: true });
+      }
+      return Response.json({
+        update_available: true,
+        local_version: '2026.5.1',
+        remote_version: '2026.5.2',
+        release_url: 'https://example.com/release',
+        tag: 'latest',
+      });
+    });
 
     renderSidebar();
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/api/update-check?version=2026.5.2&branch=main&commit_hash=abc123');
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/update-check?version=2026.5.2&branch=main&commit_hash=abc123'), expect.anything()));
     expect(screen.queryByText('Update Available')).not.toBeInTheDocument();
+  });
+
+  test('shows metrics below notifications when sidebar preference is visible', async () => {
+    vi.mocked(useNotificationUnreadCount).mockReturnValue({
+      unreadCount: 0,
+      setUnreadCount: vi.fn(),
+      refreshUnreadCount: vi.fn(),
+    });
+    fetchMock.mockImplementation(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        return Response.json({ metrics_enabled: false, metrics_sidebar_visible: true });
+      }
+      return Response.json({ update_available: false });
+    });
+
+    renderSidebar();
+
+    const metricsLink = (await screen.findAllByRole('link', { name: 'Metrics' }))[0];
+    const notificationsLink = screen.getAllByRole('link', { name: 'Notifications' })[0];
+    const settingsLink = screen.getAllByRole('link', { name: 'Settings' })[0];
+
+    expect(metricsLink.compareDocumentPosition(notificationsLink) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+    expect(metricsLink.compareDocumentPosition(settingsLink) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  test('hides metrics when sidebar preference is disabled', async () => {
+    vi.mocked(useNotificationUnreadCount).mockReturnValue({
+      unreadCount: 0,
+      setUnreadCount: vi.fn(),
+      refreshUnreadCount: vi.fn(),
+    });
+    fetchMock.mockImplementation(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        return Response.json({ metrics_enabled: true, metrics_sidebar_visible: false });
+      }
+      return Response.json({ update_available: false });
+    });
+
+    renderSidebar();
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/config'), undefined));
+    expect(screen.queryByRole('link', { name: 'Metrics' })).not.toBeInTheDocument();
   });
 
   test('links to settings and keeps controls out of the sidebar', async () => {

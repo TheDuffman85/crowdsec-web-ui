@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { Settings } from './Settings';
-import { fetchConfig } from '../lib/api';
+import { fetchConfig, updateMetricsSidebarPreference } from '../lib/api';
 import { useRefresh } from '../contexts/useRefresh';
 
 const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
@@ -30,6 +30,8 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
     'pages.settings.refreshDescription': 'Control automatic refreshes.',
     'pages.settings.refreshHelp': 'Refresh help.',
     'pages.settings.refreshInterval': 'Refresh interval',
+    'pages.settings.showMetricsInSidebar': 'Show Metrics in sidebar',
+    'pages.settings.showMetricsInSidebarHelp': 'Metrics sidebar help.',
     'pages.settings.authDisabledHint': 'Dashboard authentication is disabled. Set AUTH_ENABLED=true and restart the web UI to enable sign-in and account settings.',
     'pages.settings.authentication': 'Authentication',
     'pages.settings.authenticationDescription': 'Manage account sign-in methods.',
@@ -89,6 +91,7 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
 
 vi.mock('../lib/api', () => ({
   fetchConfig: vi.fn(),
+  updateMetricsSidebarPreference: vi.fn(),
 }));
 
 vi.mock('../contexts/useRefresh', () => ({
@@ -118,6 +121,7 @@ vi.mock('../lib/i18n', () => ({
 describe('Settings', () => {
   beforeEach(() => {
     setLanguagePreferenceMock.mockReset();
+    vi.mocked(updateMetricsSidebarPreference).mockReset();
     useAuthMock.mockReset();
     useAuthMock.mockReturnValue({
       authEnabled: false,
@@ -154,6 +158,8 @@ describe('Settings', () => {
       simulations_enabled: true,
       machine_features_enabled: false,
       origin_features_enabled: false,
+      metrics_enabled: false,
+      metrics_sidebar_visible: true,
       permissions: {
         mode: 'read-only',
         can_manage_enforcement: false,
@@ -189,6 +195,42 @@ describe('Settings', () => {
 
     await user.click(screen.getByRole('button', { name: 'Save' }));
     expect(setLanguagePreferenceMock).toHaveBeenCalledWith('de');
+  });
+
+  test('saves metrics sidebar visibility from the general settings form', async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchConfig).mockResolvedValue({
+      lookback_period: '1h',
+      lookback_hours: 1,
+      lookback_days: 1,
+      refresh_interval: 30000,
+      current_interval_name: '30s',
+      lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
+      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+      simulations_enabled: true,
+      machine_features_enabled: false,
+      origin_features_enabled: false,
+      metrics_enabled: true,
+      metrics_sidebar_visible: true,
+      permissions: {
+        mode: 'read-only',
+        can_manage_enforcement: false,
+        can_manage_settings: false,
+      },
+    });
+    vi.mocked(updateMetricsSidebarPreference).mockResolvedValue({
+      success: true,
+      metrics_sidebar_visible: false,
+    });
+
+    render(<Settings />);
+
+    await waitFor(() => expect(fetchConfig).toHaveBeenCalled());
+
+    await user.click(screen.getByRole('switch', { name: 'Show Metrics in sidebar' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(updateMetricsSidebarPreference).toHaveBeenCalledWith({ visible: false });
   });
 
   test('saves password login setting only from its own save button', async () => {

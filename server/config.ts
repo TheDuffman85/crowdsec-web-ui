@@ -40,6 +40,8 @@ export interface RuntimeConfig {
   idleThresholdMs: number;
   fullRefreshIntervalMs: number;
   lapiRequestTimeoutMs: number;
+  prometheusUrl?: string;
+  prometheusRequestTimeoutMs: number;
   heartbeatIntervalMs: number;
   alertSyncChunkMs: number;
   alertSyncMinChunkMs: number;
@@ -305,6 +307,8 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
     idleThresholdMs: parseRefreshInterval(env.CROWDSEC_IDLE_THRESHOLD || '2m'),
     fullRefreshIntervalMs: parseRefreshInterval(env.CROWDSEC_FULL_REFRESH_INTERVAL || '5m'),
     lapiRequestTimeoutMs: parsePositiveIntervalEnv(env.CROWDSEC_LAPI_REQUEST_TIMEOUT, '30s'),
+    prometheusUrl: env.CROWDSEC_PROMETHEUS_URL?.trim() || undefined,
+    prometheusRequestTimeoutMs: parsePositiveIntervalEnv(env.CROWDSEC_PROMETHEUS_REQUEST_TIMEOUT, '5s'),
     heartbeatIntervalMs: parseRefreshInterval(env.CROWDSEC_HEARTBEAT_INTERVAL || '30s'),
     alertSyncChunkMs: parsePositiveIntervalEnv(env.CROWDSEC_ALERT_SYNC_CHUNK, '6h'),
     alertSyncMinChunkMs: parsePositiveIntervalEnv(env.CROWDSEC_ALERT_SYNC_MIN_CHUNK, '15m'),

@@ -13,6 +13,7 @@ import { useI18n } from "./lib/i18n";
 const Dashboard = lazy(async () => ({ default: (await import('./pages/Dashboard')).Dashboard }));
 const Alerts = lazy(async () => ({ default: (await import('./pages/Alerts')).Alerts }));
 const Decisions = lazy(async () => ({ default: (await import('./pages/Decisions')).Decisions }));
+const Metrics = lazy(async () => ({ default: (await import('./pages/Metrics')).Metrics }));
 const Notifications = lazy(async () => ({ default: (await import('./pages/Notifications')).Notifications }));
 const Settings = lazy(async () => ({ default: (await import('./pages/Settings')).Settings }));
 const Login = lazy(async () => ({ default: (await import('./pages/Login')).Login }));
@@ -65,6 +66,14 @@ function ProtectedAppShell() {
             element={(
               <Suspense fallback={<RouteFallback />}>
                 <Decisions />
+              </Suspense>
+            )}
+          />
+          <Route
+            path="metrics"
+            element={(
+              <Suspense fallback={<RouteFallback />}>
+                <Metrics />
               </Suspense>
             )}
           />

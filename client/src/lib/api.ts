@@ -6,6 +6,7 @@ import type {
   BulkDeleteResult,
   CleanupByIpRequest,
   ConfigResponse,
+  CrowdsecMetricsResponse,
   DashboardStatsResponse,
   DecisionListItem,
   NotificationChannel,
@@ -17,6 +18,7 @@ import type {
   StatsAlert,
   StatsDecision,
   TableColumnPreferences,
+  UpdateMetricsSidebarPreferenceRequest,
   UpdateTableColumnsRequest,
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
@@ -208,6 +210,21 @@ export async function addDecision(data: AddDecisionRequest): Promise<unknown> {
 
 export async function fetchConfig(): Promise<ConfigResponse> {
     return fetchJson<ConfigResponse>('/api/config', undefined, 'Failed to fetch config');
+}
+
+export async function fetchCrowdsecMetrics(): Promise<CrowdsecMetricsResponse> {
+    return fetchJson<CrowdsecMetricsResponse>('/api/metrics/crowdsec', undefined, 'Failed to fetch CrowdSec metrics');
+}
+
+export async function updateMetricsSidebarPreference(data: UpdateMetricsSidebarPreferenceRequest): Promise<{
+    success: boolean;
+    metrics_sidebar_visible: boolean;
+}> {
+    return sendJson('/api/config/metrics-sidebar', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    }, 'Failed to update metrics sidebar preference');
 }
 
 export async function updateTableColumns(data: UpdateTableColumnsRequest): Promise<{

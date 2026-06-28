@@ -18,6 +18,12 @@ export type {
   DashboardStatsSeries,
   DashboardStatsTotals,
   DashboardWorldMapDatum,
+  CrowdsecMetricsApiEntity,
+  CrowdsecMetricsParserNode,
+  CrowdsecMetricsParserSource,
+  CrowdsecMetricsResponse,
+  CrowdsecMetricsTiming,
+  CrowdsecMetricsWhitelist,
   BulkDeleteRequest,
   BulkDeleteResult,
   CleanupByIpRequest,
@@ -50,6 +56,7 @@ export type {
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
   UpdateTableColumnsRequest,
+  UpdateMetricsSidebarPreferenceRequest,
   UpdateCheckResponse,
 } from '../../../shared/contracts';
 
