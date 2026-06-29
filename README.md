@@ -64,6 +64,13 @@ Ban IPs directly from the UI with custom duration and reason.
   <img src="screenshots/add_decision.png" alt="Add Decision" width="50%">
 </a>
 
+### Runtime Metrics
+Inspect CrowdSec Prometheus metrics for bouncer activity, machine API traffic, AppSec requests, parser throughput, parsing timing, and whitelist hits.
+
+<a href="screenshots/metrics.png">
+  <img src="screenshots/metrics.png" alt="Runtime Metrics" width="50%">
+</a>
+
 ### Notification Center
 Create notification rules for alert spikes, alert thresholds, IP bans, recent CVE activity, LAPI availability, and application updates, then deliver them to one or more outbound destinations such as Email, Gotify, MQTT, ntfy, or Webhooks.
 

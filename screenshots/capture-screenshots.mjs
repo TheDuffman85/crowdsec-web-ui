@@ -347,6 +347,9 @@ async function main() {
       await clickByText(cdp, "Add Decision");
       await screenshot(cdp, "add_decision.png");
 
+      await navigate(cdp, "/metrics");
+      await screenshot(cdp, "metrics.png");
+
       await navigate(cdp, "/notifications");
       await screenshot(cdp, "notifications.png");
 
