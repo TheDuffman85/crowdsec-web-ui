@@ -16,9 +16,6 @@
 
 A modern, responsive web interface for managing [CrowdSec](https://crowdsec.net/) alerts and decisions. Built with **React**, **Vite**, **Node.js**, and **Tailwind CSS**.
 
-> [!IMPORTANT]
-> **Improved Performance & Better Scale**: Recent backend and caching improvements significantly reduce resource pressure and improve responsiveness across the application. CrowdSec Web UI now also supports larger-scale deployments more reliably, including environments with multiple machines and high alert or decision volumes.
-
 <div align="center">
   <a href="https://react.dev/"><img src="https://img.shields.io/badge/react-%2320232a.svg?style=for-the-badge&logo=react&logoColor=%2361DAFB" alt="React" /></a>
   <a href="https://vite.dev/"><img src="https://img.shields.io/badge/vite-%23646CFF.svg?style=for-the-badge&logo=vite&logoColor=white" alt="Vite" /></a>
@@ -29,116 +26,67 @@ A modern, responsive web interface for managing [CrowdSec](https://crowdsec.net/
 
 ## Features
 
-### Dashboard
-High-level overview of total alerts and live active decisions. Statistics and top lists with dynamic filtering, including simulation-mode visibility when enabled.
+- **Dashboard**: total alerts, live active decisions, drilldowns, top lists, dynamic filtering, and simulation-mode counts when enabled.
+- **Alerts and details**: searchable security-event history with simulation labels, attacker IP, AS, location map, and triggered-event breakdowns.
+- **Decisions**: active/expired ban management, duplicate hiding, simulation filters, and the same unified search used on Alerts.
+- **Manual actions**: add bans directly from the UI with custom duration and reason.
+- **Runtime metrics**: optional Prometheus-backed views for bouncer, machine API, AppSec, parser, parsing-time, and whitelist activity.
+- **Performance and scale**: backend caching and optimized sync reduce resource pressure and support larger deployments with multiple machines or high alert/decision volumes.
+- **Notifications**: rules for alert spikes, thresholds, new alerts/decisions, IP bans, recent CVEs, LAPI availability, and application updates; delivery to Email, Gotify, MQTT, ntfy, and Webhooks.
+- **Unified search**: free text plus quoted phrases, `field:value`, `AND`, `OR`, `NOT`, unary `-`, parentheses, and page-specific help from the `Info` button.
+- **Modern UI**: dark/light themes, responsive layouts, and fast React interactions.
+- **Settings**: language, refresh cadence, password login, passkeys, and OIDC SSO in one page.
+- **Localization**: Arabic, English, German, French, Hindi, Japanese, Portuguese, Spanish, Russian, and Chinese. Browser-default language affects the UI; an explicitly saved language also localizes server-generated sync and notification text. Browser-default server messages stay English because background jobs do not have browser locale context.
+- **Authentication**: password login, passkeys, and OIDC SSO can protect the browser UI and protected API routes. New installs start with authentication enabled and initial admin setup; older migrated installs stay disabled until `AUTH_ENABLED=true`.
 
-<a href="screenshots/dashboard.png">
-  <img src="screenshots/dashboard.png" alt="Dashboard" width="50%">
-</a>
+### Screenshots
 
-### Alerts Management
-View detailed logs of security events, including clear simulation-mode labeling, broad free-text filtering, and optional advanced search syntax.
-
-<a href="screenshots/alerts.png">
-  <img src="screenshots/alerts.png" alt="Alerts" width="50%">
-</a>
-
-### Alert Details
-Detailed modal view showing attacker IP, AS information, location with map, and triggered events breakdown.
-
-<a href="screenshots/alert_details.png">
-  <img src="screenshots/alert_details.png" alt="Alert Details" width="50%">
-</a>
-
-### Decisions Management
-View and manage active bans/decisions. Supports filtering by status (active/expired), simulation mode, hiding duplicate decisions, and the same unified search syntax used on Alerts.
-
-<a href="screenshots/decisions.png">
-  <img src="screenshots/decisions.png" alt="Decisions" width="50%">
-</a>
-
-### Manual Actions
-Ban IPs directly from the UI with custom duration and reason.
-
-<a href="screenshots/add_decision.png">
-  <img src="screenshots/add_decision.png" alt="Add Decision" width="50%">
-</a>
-
-### Runtime Metrics
-Inspect CrowdSec Prometheus metrics for bouncer activity, machine API traffic, AppSec requests, parser throughput, parsing timing, and whitelist hits.
-
-<a href="screenshots/metrics.png">
-  <img src="screenshots/metrics.png" alt="Runtime Metrics" width="50%">
-</a>
-
-### Notification Center
-Create notification rules for alert spikes, alert thresholds, IP bans, recent CVE activity, LAPI availability, and application updates, then deliver them to one or more outbound destinations such as Email, Gotify, MQTT, ntfy, or Webhooks.
-
-<a href="screenshots/notifications.png">
-  <img src="screenshots/notifications.png" alt="Notification Center" width="50%">
-</a>
-
-<a href="screenshots/notification_rule.png">
-  <img src="screenshots/notification_rule.png" alt="Notification Rule" width="50%">
-</a>
-
-### Unified Search
--   **Free-text first**: The Alerts and Decisions search bars still support normal free-text queries.
--   **Advanced syntax**: Power users can refine searches with quoted phrases, `field:value`, `AND`, `OR`, `NOT`, unary `-`, and parentheses.
--   **Inline field search**: Mix free text and fielded terms in the same query, for example `country:germany ssh`.
--   **Built-in help**: Use the `Info` button next to each search bar to open the page-specific syntax reference and examples.
-
-<a href="screenshots/search_syntax.png">
-  <img src="screenshots/search_syntax.png" alt="Search Syntax" width="50%">
-</a>
-
-### Modern UI
--   **Dark/Light Mode**: Full support for both themes.
--   **Responsive**: Optimized for mobile and desktop.
--   **Real-time**: Fast interactions using modern React technology.
-
-### Settings
-Configure language, refresh cadence, password login, passkeys, and OIDC SSO from one settings page.
-
-<a href="screenshots/settings.png">
-  <img src="screenshots/settings.png" alt="Settings" width="50%">
-</a>
-
-### Localization
-CrowdSec Web UI includes Arabic, English, German, French, Hindi, Japanese, Portuguese, Spanish, Russian, and Chinese translations. The language selector can follow the browser language for the UI, or it can be set explicitly. When a language is set explicitly, server-generated text such as sync status messages, notification titles, notification bodies, and notification test messages uses that saved language too. With **Browser default**, server-generated messages use English because background jobs and outbound notifications do not have access to a browser locale.
-
-### Dashboard Authentication
-Password login, passkeys, and OIDC SSO protect the browser UI and protected application API routes when dashboard authentication is enabled. New installs start with authentication enabled and use an initial setup page to create the first administrator account. Existing installs migrated from older versions keep authentication disabled until you opt in with `AUTH_ENABLED=true`.
+<p>
+  <a href="screenshots/dashboard.png"><img src="screenshots/dashboard.png" alt="Dashboard" width="48%"></a>
+  <a href="screenshots/alerts.png"><img src="screenshots/alerts.png" alt="Alerts" width="48%"></a>
+</p>
+<p>
+  <a href="screenshots/alert_details.png"><img src="screenshots/alert_details.png" alt="Alert Details" width="48%"></a>
+  <a href="screenshots/search_syntax.png"><img src="screenshots/search_syntax.png" alt="Search Syntax" width="48%"></a>
+</p>
+<p>
+  <a href="screenshots/decisions.png"><img src="screenshots/decisions.png" alt="Decisions" width="48%"></a>
+  <a href="screenshots/add_decision.png"><img src="screenshots/add_decision.png" alt="Add Decision" width="48%"></a>
+</p>
+<p>
+  <a href="screenshots/notifications.png"><img src="screenshots/notifications.png" alt="Notification Center" width="48%"></a>
+  <a href="screenshots/notification_rule.png"><img src="screenshots/notification_rule.png" alt="Notification Rule" width="48%"></a>
+</p>
+<p>
+  <a href="screenshots/metrics.png"><img src="screenshots/metrics.png" alt="Runtime Metrics" width="48%"></a>
+  <a href="screenshots/settings.png"><img src="screenshots/settings.png" alt="Settings" width="48%"></a>
+</p>
 
 > [!CAUTION]
-> **Security Notice**: CrowdSec Web UI includes built-in dashboard authentication, but public deployments should still run behind HTTPS and a hardened reverse proxy. For centralized access control, configure OIDC SSO with an Identity Provider (IdP) such as [Authentik](https://goauthentik.io/), [Authelia](https://www.authelia.com/), or [Keycloak](https://www.keycloak.org/). Existing installs upgraded from versions without dashboard authentication remain unauthenticated until `AUTH_ENABLED=true` is set.
+> **Security Notice**: CrowdSec Web UI includes built-in authentication, but public deployments should still run behind HTTPS and a hardened reverse proxy. For centralized access control, configure OIDC SSO with an Identity Provider (IdP) such as [Authentik](https://goauthentik.io/), [Authelia](https://www.authelia.com/), or [Keycloak](https://www.keycloak.org/). Existing installs upgraded from versions without authentication remain unauthenticated until `AUTH_ENABLED=true` is set.
 > Set `PERMISSION_READ_ONLY=true` to run an instance that can view data but cannot perform CrowdSec write actions or management actions such as changing refresh cadence, managing notification destinations/rules, sending notification tests, or deleting notifications. Language, table column preferences, and marking notifications as read remain writable. This is an instance-wide safety mode, not user management or per-user RBAC.
 
 ## Architecture
 
--   **Client**: React (Vite) + Tailwind CSS. Located in `client/`.
--   **Server**: Node.js (Hono). Acts as an intelligent caching layer for CrowdSec Local API (LAPI) with delta updates and optimized chunked historical data sync for improved performance and larger-scale deployments.
--   **Build Output**: The root build emits the frontend to `dist/client` and the compiled server to `dist/server`.
--   **Database**: SQLite (`better-sqlite3`). Persists alerts and decisions locally in `/app/data/crowdsec.db` to reduce memory usage and support historical data.
--   **Security**: The application runs as a non-root user (`node`) inside the container. Dashboard authentication can protect the browser UI and API with password login, passkeys, and OIDC SSO. Separately, the backend authenticates to CrowdSec LAPI as a machine, either via watcher `User/Password` or agent **mTLS**.
+- **Client**: React (Vite) + Tailwind CSS in `client/`; the build emits static assets to `dist/client`.
+- **Server**: Node.js (Hono) in `server/`; the build emits compiled output to `dist/server`.
+- **Cache/database**: SQLite (`better-sqlite3`) stores alerts, decisions, preferences, auth metadata, and notification state under `/app/data`.
+- **CrowdSec integration**: the server authenticates to LAPI as a machine with watcher password auth or agent mTLS, then keeps a local cache updated with delta refreshes and chunked historical sync.
+- **Container security**: the image runs as the non-root `node` user. Authentication can separately protect the browser UI and protected application API routes with password login, passkeys, and OIDC SSO.
 
 ## Prerequisites
 
--   **CrowdSec**: A running CrowdSec instance.
--   **CrowdSec LAPI Authentication**: Configure exactly one CrowdSec LAPI auth mode for this web UI:
+You need a running CrowdSec instance and exactly one CrowdSec LAPI authentication mode:
 
-    1.  **Watcher password auth**
-        Generate a secure password:
-        ```bash
-        openssl rand -hex 32
-        ```
-        Create the machine:
-        ```bash
-        docker exec crowdsec cscli machines add crowdsec-web-ui --password <generated_password> -f /dev/null
-        ```
+1. **Watcher password auth**
+   Generate a password and register the Web UI machine:
+   ```bash
+   openssl rand -hex 32
+   docker exec crowdsec cscli machines add crowdsec-web-ui --password <generated_password> -f /dev/null
+   ```
 
-    2.  **Agent mTLS auth**
-        Configure CrowdSec LAPI TLS auth and generate an agent client certificate/key pair for this Web UI as described in the [CrowdSec TLS authentication docs](https://docs.crowdsec.net/docs/local_api/tls_auth/).
+2. **Agent mTLS auth**
+   Configure CrowdSec LAPI TLS auth and generate an agent client certificate/key pair for this Web UI as described in the [CrowdSec TLS authentication docs](https://docs.crowdsec.net/docs/local_api/tls_auth/).
 
 > [!NOTE]
 > The `-f /dev/null` flag is crucial. It tells `cscli` **not** to overwrite the existing credentials file of the CrowdSec container. We only want to register the machine in the database, not change the container's local config.
@@ -152,37 +100,37 @@ Password login, passkeys, and OIDC SSO protect the browser UI and protected appl
 
 ## Run with Docker (Recommended)
 
-The examples below intentionally use only the required environment variables. Optional knobs are documented in [Environment Variables](#environment-variables).
+The examples below use only the required variables. Optional knobs are listed in [Environment Variables](#environment-variables).
 
-1.  **Build the image**:
-    ```bash
-    docker build -t crowdsec-web-ui .
-    ```
+1. **Build the image**:
 
-    You can optionally specify `DOCKER_IMAGE_REF` to override the default image reference used for checking updates (useful for forks or private registries):
-    ```bash
-    docker build --build-arg DOCKER_IMAGE_REF=my-registry/my-image -t crowdsec-web-ui .
-    ```
+   ```bash
+   docker build -t crowdsec-web-ui .
+   ```
+
+   For forks or private registries, set the image reference used by update checks:
+   ```bash
+   docker build --build-arg DOCKER_IMAGE_REF=my-registry/my-image -t crowdsec-web-ui .
+   ```
 
 > [!NOTE]
 > Current Docker images are based on Node.js rather than Bun, so the previous Bun/AVX-specific x64 runtime limitation no longer applies.
 
-2.  **Run the container**:
-    Provide the CrowdSec LAPI URL and one supported auth mode.
+2. **Run the container** with the CrowdSec LAPI URL and one supported auth mode:
 
-    ```bash
-    docker run -d \
-      --name crowdsec_web_ui \
-      -p 3000:3000 \
-      -e CROWDSEC_URL=http://<crowdsec-host>:8080 \
-      -e CROWDSEC_USER=crowdsec-web-ui \
-      -e CROWDSEC_PASSWORD=<your-secure-password> \
-      -v $(pwd)/data:/app/data \
-      --network your_crowdsec_network \
-      crowdsec-web-ui
-    ```
-> [!NOTE]
-> Ensure the container is on the same Docker network as CrowdSec so it can reach the URL.
+   ```bash
+   docker run -d \
+     --name crowdsec_web_ui \
+     -p 3000:3000 \
+     -e CROWDSEC_URL=http://<crowdsec-host>:8080 \
+     -e CROWDSEC_USER=crowdsec-web-ui \
+     -e CROWDSEC_PASSWORD=<your-secure-password> \
+     -v $(pwd)/data:/app/data \
+     --network your_crowdsec_network \
+     crowdsec-web-ui
+   ```
+
+Ensure the container is on a Docker network that can reach `CROWDSEC_URL`.
 
 ### Docker Compose Example
 
@@ -197,6 +145,8 @@ services:
       - CROWDSEC_URL=http://crowdsec:8080
       - CROWDSEC_USER=crowdsec-web-ui
       - CROWDSEC_PASSWORD=<generated_password>
+      # Optional CrowdSec Prometheus metrics endpoint
+      # - CROWDSEC_PROMETHEUS_URL=http://crowdsec:6060/metrics
       # Authentication is enabled by default for new installs.
       # Existing data directories migrated from older versions keep auth disabled
       # until you explicitly set AUTH_ENABLED=true.
@@ -226,6 +176,7 @@ services:
       - CROWDSEC_URL=http://crowdsec:8080
       - CROWDSEC_USER=crowdsec-web-ui
       - CROWDSEC_PASSWORD_FILE=/run/secrets/crowdsec_password
+      # - CROWDSEC_PROMETHEUS_URL=http://crowdsec:6060/metrics
     secrets:
       - crowdsec_password
     volumes:
@@ -252,6 +203,7 @@ services:
       - CROWDSEC_URL=https://crowdsec:8080
       - CROWDSEC_TLS_CERT_PATH=/certs/agent.pem
       - CROWDSEC_TLS_KEY_PATH=/certs/agent-key.pem
+      # - CROWDSEC_PROMETHEUS_URL=http://crowdsec:6060/metrics
       # Optional when CrowdSec LAPI uses a private or self-signed CA
       # - CROWDSEC_TLS_CA_CERT_PATH=/certs/ca.pem
     volumes:
@@ -288,8 +240,8 @@ Choose exactly one auth mode: password auth or mTLS auth.
 | `TZ` | browser local | Optional deployment-wide IANA timezone, such as `Europe/Berlin` or `UTC`. When set, the UI, dashboard grouping, filters, and server-generated timestamps all use it. |
 | `CROWDSEC_TIME_FORMAT` | browser locale | Optional deployment-wide clock format. Accepts `12h` or `24h`. When omitted, each browser's locale determines whether the UI uses a 12- or 24-hour clock. |
 | `PERMISSION_READ_ONLY` | `false` | Set to `true` to hide management actions in the UI and reject API requests that add/delete decisions, delete alerts, clean up by IP, clear the cache, change refresh cadence, manage notification destinations/rules, send notification tests, or delete notifications. Language, table column preferences, and marking notifications as read remain writable. |
-| `AUTH_ENABLED` | new installs: `true`; migrated existing installs: `false` | Enables dashboard authentication for the UI and API. Set to `false` to run without dashboard login. Existing databases from older releases are marked disabled during migration so upgrades do not lock out current deployments. |
-| `CROWDSEC_AUTH_SECRET` | auto-generated and persisted | Optional fixed secret used to sign dashboard session cookies. If unset, the app generates one and stores it in app metadata. |
+| `AUTH_ENABLED` | new installs: `true`; migrated existing installs: `false` | Enables authentication for the UI and API. Set to `false` to run without login. Existing databases from older releases are marked disabled during migration so upgrades do not lock out current deployments. |
+| `CROWDSEC_AUTH_SECRET` | auto-generated and persisted | Optional fixed secret used to sign session cookies. If unset, the app generates one and stores it in app metadata. |
 | `CROWDSEC_AUTH_SECRET_FILE` | auto-generated and persisted | Optional Docker Secrets alternative: read `CROWDSEC_AUTH_SECRET` from a file. Do not set both variables. |
 | `CROWDSEC_AUTH_OIDC_ISSUER_URL` | none | Optional OIDC issuer URL. When set with `CROWDSEC_AUTH_OIDC_CLIENT_ID`, the login page shows SSO. Can also be configured from Settings. |
 | `CROWDSEC_AUTH_OIDC_CLIENT_ID` | none | Optional OIDC client ID. Can also be configured from Settings. |
@@ -327,15 +279,15 @@ Choose exactly one auth mode: password auth or mTLS auth.
 
 `CROWDSEC_PASSWORD_FILE`, `NOTIFICATION_SECRET_KEY_FILE`, `CROWDSEC_AUTH_SECRET_FILE`, and `CROWDSEC_AUTH_OIDC_CLIENT_SECRET_FILE` read their values from UTF-8 files, including Docker Secrets mounts under `/run/secrets`. For each setting, configure the direct variable or its `_FILE` alternative, not both. The app fails fast when both are set or when a configured file cannot be read. File-backed secrets are loaded during startup, so restart the app after rotating a mounted secret.
 
-### Dashboard Authentication
+### Authentication
 
-Dashboard authentication covers the browser UI and protected application API routes. The health endpoint remains public for container and reverse-proxy health checks. New installs start with authentication enabled and show an initial setup page where you create the first local administrator account. Upgraded installs with an existing SQLite database are migrated with authentication disabled by default, so existing deployments keep working until you opt in with:
+Authentication covers the browser UI and protected application API routes. The health endpoint remains public for container and reverse-proxy health checks. New installs start with authentication enabled and show an initial setup page where you create the first local administrator account. Upgraded installs with an existing SQLite database are migrated with authentication disabled by default, so existing deployments keep working until you opt in with:
 
 ```env
 AUTH_ENABLED=true
 ```
 
-Set `AUTH_ENABLED=false` to disable dashboard authentication. This setting is intentionally environment-controlled, not configurable from the UI.
+Set `AUTH_ENABLED=false` to disable authentication. This setting is intentionally environment-controlled, not configurable from the UI.
 
 Local password login is available after onboarding. Authenticated users can change their own password and register or remove their own passkeys from Settings. Administrators can also disable password login and configure OIDC SSO from Settings. OIDC can also be preconfigured with environment variables:
 
@@ -405,17 +357,13 @@ See the [CrowdSec documentation](https://docs.crowdsec.net/docs/local_api/intro/
 
 ### Using CrowdSec Web UI with a Local or Custom Certificate
 
-If your CrowdSec Local API (LAPI) uses HTTPS with a self-signed certificate or an internal Certificate Authority (CA), the Web UI container may not trust it by default. This can result in errors like:
+If CrowdSec LAPI uses HTTPS with a self-signed certificate or internal CA, the Web UI may fail with:
 
 ```
 Login failed: unable to get local issuer certificate
 ```
 
-#### Solution: Mount the CA Certificate and Use NODE_EXTRA_CA_CERTS
-
-You can mount your CA certificate into the container and instruct Node.js to trust it using the `NODE_EXTRA_CA_CERTS` environment variable.
-
-#### Example Docker Compose
+Mount the CA certificate and point Node.js at it with `NODE_EXTRA_CA_CERTS`:
 
 ```yaml
 services:
@@ -435,19 +383,11 @@ services:
     restart: unless-stopped
 ```
 
-#### Notes
-
-- Replace `/path/on/host/root_ca.crt` with the path to your local CA certificate.
-- The `:ro` ensures the certificate is mounted read-only.
-- This method avoids rebuilding the container image.
-- Works for self-signed certificates as well as private CA certificates.
-- `NODE_EXTRA_CA_CERTS` is a general runtime trust mechanism. When using the new mTLS auth mode, prefer `CROWDSEC_TLS_CA_CERT_PATH` as the explicit CrowdSec LAPI trust input for the Web UI client connection.
+Replace `/path/on/host/root_ca.crt` with your CA file path and keep the mount read-only. This avoids rebuilding the image. For mTLS auth, prefer `CROWDSEC_TLS_CA_CERT_PATH` as the explicit CrowdSec LAPI trust input.
 
 ### Reverse Proxy with Base Path
 
-If you need to serve the Web UI at a non-root URL path (e.g., `https://example.com/crowdsec/` instead of `https://example.com/`), use the `BASE_PATH` environment variable.
-
-#### Docker Compose Example
+Use `BASE_PATH` to serve the Web UI under a non-root path such as `https://example.com/crowdsec/`:
 
 ```yaml
 services:
@@ -466,7 +406,7 @@ services:
     restart: unless-stopped
 ```
 
-#### Nginx Reverse Proxy Example
+Nginx example:
 
 ```nginx
 location /crowdsec/ {
@@ -479,18 +419,11 @@ location /crowdsec/ {
 }
 ```
 
-#### Notes
-
-- The `BASE_PATH` must start with a `/` (e.g., `/crowdsec`, not `crowdsec`)
-- Do not include a trailing slash (use `/crowdsec`, not `/crowdsec/`)
-- When `BASE_PATH` is set, accessing the root URL (`/`) will redirect to the base path
-- All API calls, assets, and navigation will automatically use the configured base path
+`BASE_PATH` must start with `/` and must not include a trailing slash. When set, `/` redirects to the base path and all API calls, assets, and navigation use it automatically.
 
 ### Health Check
 
-The Docker image includes a built-in `HEALTHCHECK` that verifies the web server is responding. Docker will automatically mark the container as `healthy` or `unhealthy`.
-
-Startup is non-blocking: if CrowdSec LAPI is temporarily unavailable, the Web UI stays up and continues retrying cache/bootstrap initialization in the background. This means the container can become `healthy` before the initial CrowdSec sync has completed.
+The image includes a `HEALTHCHECK` for `GET /api/health`, which does not require authentication. Startup is non-blocking: if CrowdSec LAPI is temporarily unavailable, the Web UI stays up and retries bootstrap in the background, so the container can become healthy before the first sync completes.
 
 **Endpoint:** `GET /api/health` (no authentication required)
 
@@ -499,7 +432,7 @@ curl http://localhost:3000/api/health
 # {"status":"ok"}
 ```
 
-The health check runs every 30 seconds with a 10-second start period to allow for initialization. You can check the container's health status with:
+The built-in check runs every 30 seconds with a 10-second start period. Check Docker health with:
 
 ```bash
 docker inspect --format='{{.State.Health.Status}}' crowdsec_web_ui
@@ -511,13 +444,7 @@ If you use `BASE_PATH`, the health check still targets `localhost:3000/api/healt
 
 ### Prometheus Metrics Page
 
-The Metrics page is optional and shows a setup hint until `CROWDSEC_PROMETHEUS_URL` is set. Once configured, it reads CrowdSec's Prometheus exposition endpoint and shows runtime signals that are not already covered by the app's alert and decision history views:
-
-- bouncer LAPI request activity from `cs_lapi_bouncer_requests_total`, plus `/decisions` empty/non-empty response counters when available
-- machine LAPI request activity from `cs_lapi_machine_requests_total`
-- AppSec request and blocked activity from `cs_appsec_reqs_total` and `cs_appsec_block_total`
-- parser source, parser node, bucket-pour, acquisition, and parser timing activity from `cs_parser_*`, `cs_node_*`, `cs_bucket_poured_total`, datasource hit counters, and `cs_parsing_time_seconds`
-- whitelist hit and whitelisted activity from `cs_node_wl_hits_total` and `cs_node_wl_hits_ok_total`
+The Metrics page shows setup guidance until `CROWDSEC_PROMETHEUS_URL` is set. Once configured, it reads CrowdSec's Prometheus endpoint for bouncer and machine LAPI activity, AppSec requests/blocks, parser and datasource activity, parsing timing, and whitelist hits.
 
 CrowdSec documents the endpoint at `http://127.0.0.1:6060/metrics` by default. To expose the bouncer, machine, AppSec, whitelist, and per-node parser details used by this page, enable Prometheus metrics in CrowdSec with `level: full` in `/etc/crowdsec/config.yaml`:
 
@@ -546,40 +473,28 @@ environment:
   - CROWDSEC_PROMETHEUS_URL=http://crowdsec:6060/metrics
 ```
 
-CrowdSec also supports `level: aggregated`, but that omits the per-machine/per-bouncer LAPI metrics and per-node parser metrics, so the page will have less detail. `level: none` disables metrics registration entirely.
+`level: aggregated` works with less detail because it omits per-machine/per-bouncer LAPI metrics and per-node parser metrics. `level: none` disables metrics registration.
 
 Reference: [CrowdSec Prometheus documentation](https://docs.crowdsec.net/docs/next/observability/prometheus/).
 
 ### Simulation Mode Visibility
 
-CrowdSec can run scenarios in **simulation mode**, where alerts and decisions are generated but no live remediation is applied. The Web UI can display those entries separately from real remediations.
-
-- `CROWDSEC_SIMULATIONS_ENABLED=false` by default.
-- When enabled, the UI shows simulation badges, simulation filters, and separate simulation counts on the dashboard.
-- When left unset or set to `false`, the UI hides simulated alerts/decisions and the backend stops requesting simulated data from the CrowdSec LAPI.
+CrowdSec simulation mode generates alerts and decisions without live remediation. `CROWDSEC_SIMULATIONS_ENABLED=false` by default. Set it to `true` to fetch simulated data and show simulation badges, filters, and dashboard counts; leave it unset or `false` to hide simulated alerts/decisions and avoid requesting them from LAPI.
 
 ### Table Column Visibility
 
-The Alerts and Decisions tables include a Columns button that lets you choose which data columns are visible. Desktop and mobile layouts are saved separately in the application database and apply globally to the Web UI.
-
-- `ID`, `Machine`, and `Origin` are hidden by default.
-- The app automatically uses the saved desktop or mobile column layout for the current screen size.
-- Machine values prefer `machine_alias` and fall back to `machine_id`.
-- Alerts with decisions from more than one origin display `Mixed` when the Origin column is visible.
-- Hidden columns remain searchable with the advanced search syntax, including `id:`, `machine:`, and `origin:`.
+The Alerts and Decisions tables include a Columns button. Desktop and mobile layouts are saved separately in the application database and apply globally. `ID`, `Machine`, and `Origin` are hidden by default; `Machine` prefers `machine_alias` and falls back to `machine_id`; alerts with multiple decision origins show `Mixed`. Hidden columns remain searchable with advanced fields such as `id:`, `machine:`, and `origin:`.
 
 ### Search Syntax
 
 The Alerts and Decisions pages use a single search box that supports both normal free-text search and optional advanced syntax.
 
-- Plain words keep working as free-text search, for example `ssh hetzner`
-- Quoted phrases match exact text, for example `"nginx bf"`
-- Fielded search uses `field:value`, for example `country:germany` or `status:active`
-- Date filtering uses the `date` field with ISO dates or timestamps, for example `date>=2026-03-24` or `date<2026-03-25T12:00:00Z`
-- Exact field checks use `=` and `<>`, for example `country=DE` or `sim<>simulated`
-- Boolean operators `AND`, `OR`, and `NOT` are supported
-- Unary `-` can be used as shorthand for negation, for example `-sim:simulated`
-- Parentheses can group expressions, for example `country:(germany OR france)`
+- Plain words: `ssh hetzner`
+- Quoted phrases: `"nginx bf"`
+- Fielded search: `country:germany`, `status:active`
+- Date comparisons: `date>=2026-03-24`, `date<2026-03-25T12:00:00Z`
+- Exact/negative checks: `country=DE`, `sim<>simulated`, `-sim:simulated`
+- Boolean logic and grouping: `AND`, `OR`, `NOT`, `country:(germany OR france)`
 
 Examples:
 
@@ -590,18 +505,13 @@ Examples:
 - Decisions: `date>=2026-03-24 AND action:ban`
 - Decisions: `alert:123 OR ip:"192.168.5.0/24"`
 
-Notes:
-
-- A field name by itself, such as `country`, is treated as normal free text unless it is followed by `:`
-- Ordered comparisons such as `<`, `>`, `<=`, `>=`, and `=>` are supported for the `date` field
-- If you want to search for literal operator words like `AND`, `OR`, or `NOT`, wrap them in double quotes
-- Use the `Info` button beside the search field to see the supported fields and examples for the current page
+A field name by itself, such as `country`, is free text unless followed by `:`. Ordered comparisons (`<`, `>`, `<=`, `>=`, `=>`) are supported for `date`. To search literal operator words like `AND`, `OR`, or `NOT`, wrap them in double quotes. Use the `Info` button beside the search field for page-specific fields and examples.
 
 ### Alert Source Filtering
 
-Some CrowdSec setups ingest very large volumes of alerts and decisions from external automation, imported blocklists, or community feeds. In those cases, you may want the Web UI to focus on specific synced alerts instead of caching everything exposed by the LAPI.
+Use alert source filters when CrowdSec ingests large volumes from automation, imported blocklists, or community feeds and you want the Web UI cache to focus on specific origins.
 
-The recommended configuration is:
+Configuration:
 
 - `CROWDSEC_ALERT_INCLUDE_ORIGINS`: comma-separated list of exact origins to include when syncing alerts
 - `CROWDSEC_ALERT_EXCLUDE_ORIGINS`: comma-separated list of exact origins that cause a synced alert to be dropped
@@ -618,17 +528,9 @@ environment:
   - CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY=false
 ```
 
-Behavior:
+Behavior: without source vars, the Web UI fetches the normal non-CAPI/non-lists alert feed. Include origins are pushed upstream where possible. `CROWDSEC_ALERT_INCLUDE_CAPI=true` adds the dedicated CAPI/community-blocklist query unless explicit include filters are also set. Empty-origin include/exclude handling and generic excludes are local because CrowdSec LAPI does not expose those filters. If an alert contains any excluded origin, the whole alert is dropped. Origin checks prefer associated decision origins and fall back to CrowdSec blocklist/list source scopes for alerts without decisions.
 
-- if no alert source vars are set, the Web UI keeps the current default and fetches the normal non-CAPI/non-lists alert feed
-- `CROWDSEC_ALERT_INCLUDE_ORIGINS` limits upstream queries to alerts matching the origins you list
-- `CROWDSEC_ALERT_INCLUDE_CAPI=true` adds the dedicated CAPI/community-blocklist query on top of the normal non-CAPI/non-lists feed, unless you also enable explicit include filtering with `CROWDSEC_ALERT_INCLUDE_ORIGINS` and/or `CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY`
-- `CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY=true` adds an extra unfiltered non-CAPI query lane so explicit include filters can also keep alerts whose effective origin stays empty after local evaluation
-- `CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY=true` drops alerts whose effective origin stays empty after local evaluation
-- `CROWDSEC_ALERT_EXCLUDE_ORIGINS` removes matching alerts after the result sets are merged; if an alert contains any excluded origin, the whole alert is dropped
-- these origin checks are based on the alert's associated decision origins when present, with CrowdSec blocklist/list source scopes used as a fallback for alerts without decisions
-
-Common origins in CrowdSec include:
+Common origins:
 
 - `crowdsec` for alerts carrying decisions created by the security engine
 - `cscli` for alerts created by manual `cscli decisions add`
@@ -640,213 +542,60 @@ Examples:
 
 - `CROWDSEC_ALERT_INCLUDE_ORIGINS=crowdsec` keeps only security-engine alerts
 - `CROWDSEC_ALERT_INCLUDE_ORIGINS=lists` fetches only list-based alerts
-- `CROWDSEC_ALERT_INCLUDE_CAPI=true` keeps the default non-CAPI feed and adds CAPI/community-blocklist alerts
-- `CROWDSEC_ALERT_INCLUDE_ORIGINS=CAPI` fetches only CAPI/community-blocklist alerts
-- `CROWDSEC_ALERT_INCLUDE_ORIGINS=crowdsec` with `CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY=true` keeps both `crowdsec` alerts and alerts without an origin
-- `CROWDSEC_ALERT_INCLUDE_ORIGINS=cscli` with `CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY=true` keeps both `cscli` alerts and alerts without an origin
+- `CROWDSEC_ALERT_INCLUDE_CAPI=true` keeps the default non-CAPI feed and adds CAPI/community-blocklist alerts; `CROWDSEC_ALERT_INCLUDE_ORIGINS=CAPI` fetches only CAPI/community-blocklist alerts
+- `CROWDSEC_ALERT_INCLUDE_ORIGINS=crowdsec` with `CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY=true` keeps `crowdsec` alerts and alerts without an origin
+- `CROWDSEC_ALERT_INCLUDE_ORIGINS=cscli` with `CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY=true` keeps `cscli` alerts and alerts without an origin
 - `CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY=true` removes alerts without an effective origin from the synced cache
 - `CROWDSEC_ALERT_EXCLUDE_ORIGINS=cscli,lists` removes manual `cscli` alerts and imported list alerts from the local synced cache view
 
-Notes:
-
-- include filters are applied upstream where possible, which is usually the biggest performance win
-- `CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY` is local-only because CrowdSec LAPI does not expose an upstream "missing origin" filter
-- `CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY` is mainly intended as an additive option alongside `CROWDSEC_ALERT_INCLUDE_ORIGINS` and/or `CROWDSEC_ALERT_INCLUDE_CAPI`
-- `CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY` is also local-only because CrowdSec LAPI does not expose an upstream "missing origin" filter
-- generic excludes are applied locally after fetch because CrowdSec LAPI does not expose a general alert-origin exclude filter
-- because the local decisions view is built from synced alerts, these settings also affect which imported decisions appear in the UI
+Because the local decisions view is built from synced alerts, these settings also affect which imported decisions appear in the UI.
 
 ## Notifications
 
-The **Notifications** page lets you define rules that watch the locally cached CrowdSec data and create notification events when a condition matches. Every notification is also stored in-app, where you can review delivery status and mark items as read.
+The **Notifications** page defines rules over locally cached CrowdSec data. Matching rules create in-app notifications, record delivery status, and can send outbound messages to one or more destinations.
 
 ### Rules
 
-Each rule has:
+Every rule has a name, severity (`info`, `warning`, `critical`), incident-based deduplication, and one or more destination channels. Alert-based rules can filter scenario text, target text, and simulated alerts. `IP Ban` and `New Alert/Decision` rules also support exact IP and CIDR filters.
 
--   a name
--   a severity: `info`, `warning`, or `critical`
--   incident-based deduplication so the same condition only fires once until it clears and reappears
--   one or more destination channels
-
-Alert-based rules can also use optional filters for scenario text, target text, and whether simulated alerts should be included. `IP Ban` and `New Alert/Decision` rules can additionally filter exact IPs and CIDR ranges.
-
-Available rule types:
-
--   `Alert Spike`: compares the current window with the previous window and triggers when the percentage increase and minimum alert count are exceeded
--   `Alert Threshold`: triggers when the number of matching alerts in the configured time window reaches the threshold
--   `New Alert/Decision`: creates one notification for every matching alert, decision, or both within the configured lookback window. Each notification includes the record ID, timestamps, scenario, target, source/value, and other relevant alert or decision details. Stable per-record deduplication prevents repeat notifications on later evaluations. Filters support scenario and target text, simulated records, exact IPs, and CIDR ranges.
--   `IP Ban`: triggers once for each active ban decision that appears in the configured time window. It supports exact IP and CIDR range filters, and deduplicates duplicate active decision rows for the same ban.
--   `Recent CVE`: extracts CVE IDs from matching alerts and checks publication age before notifying
--   `LAPI Availability`: triggers when CrowdSec LAPI stays unavailable longer than the configured outage threshold, with optional recovery notifications
--   `Application Update`: uses the built-in update check and triggers when a newer CrowdSec Web UI version is available
+| Rule type | Behavior |
+| --- | --- |
+| `Alert Spike` | Compares the current window with the previous window and triggers when percentage increase and minimum alert count are exceeded. |
+| `Alert Threshold` | Triggers when matching alerts in the configured time window reach the threshold. |
+| `New Alert/Decision` | Creates one notification for every matching alert, decision, or both within the lookback window. Includes record ID, timestamps, scenario, target, source/value, and related alert/decision details. Stable per-record deduplication prevents repeats. |
+| `IP Ban` | Triggers once for each active ban decision in the configured window, supports exact IP/CIDR filters, and deduplicates duplicate active decision rows for the same ban. |
+| `Recent CVE` | Extracts CVE IDs from matching alerts and checks publication age before notifying. |
+| `LAPI Availability` | Triggers when CrowdSec LAPI stays unavailable past the outage threshold, with optional recovery notifications. |
+| `Application Update` | Uses the built-in update check and triggers when a newer CrowdSec Web UI version is available. |
 
 > [!NOTE]
 > The `Recent CVE` rule queries the NVD API to determine when a CVE was published. If outbound access to `services.nvd.nist.gov` is blocked, recent-CVE notifications may be skipped.
 
 ### Destinations
 
-You can create multiple destinations and attach the same rule to several of them.
+You can enable/disable destinations independently and attach the same rule to several destinations. Saved secrets are masked in the UI and encrypted at rest with `NOTIFICATION_SECRET_KEY`, or with an auto-generated key persisted in app metadata. **Send Test** validates a saved destination immediately. Delivery results are stored as `delivered` or `failed`. Private, loopback, and link-local destinations are allowed by default and can be blocked with `NOTIFICATION_ALLOW_PRIVATE_ADDRESSES=false`.
 
-Shared behavior:
+| Destination | Settings |
+| --- | --- |
+| Email | SMTP host/port/security (`Plain SMTP`, `STARTTLS`, `SMTPS / Implicit TLS`), optional user/password, from address, comma-separated recipients, importance (`auto`, `normal`, `important`), and optional insecure TLS for trusted self-signed SMTP endpoints. Auto importance maps `info` to `normal` and `warning`/`critical` to `important`. |
+| Gotify | Gotify URL, app token, and priority (`auto` or explicit integer). Auto priority maps `info` to `5`, `warning` to `7`, and `critical` to `10`. |
+| ntfy | Server URL, topic, optional access token, and priority (`auto`, `min`, `low`, `default`, `high`, `urgent`). Auto priority maps `info` to `default`, `warning` to `high`, and `critical` to `urgent`. |
+| MQTT | Generic publish-only output with broker URL, optional username/password/client ID, QoS `0` or `1`, keepalive, connect timeout, topic, and retain flag. It does not include Home Assistant discovery, entity sync, or command handling. |
+| Webhook | Custom HTTP delivery with method (`POST`, `PUT`, `PATCH`), URL, optional query parameters/headers, auth (none, bearer token, or basic auth), body mode (`JSON`, `Text`, `Form`), timeout, retries, retry delay, and optional insecure TLS for trusted self-signed HTTPS endpoints. |
 
--   destinations can be enabled or disabled independently
--   secrets are masked when you reopen a saved destination
--   destinations with saved secrets are encrypted at rest using `NOTIFICATION_SECRET_KEY`, or an auto-generated key persisted in app metadata when the env var is unset
--   **Send Test** validates a saved destination without waiting for a real rule to fire
--   delivery results are stored with each notification as `delivered` or `failed`
--   private, loopback, and link-local outbound destinations are allowed by default and can be blocked explicitly
+MQTT publishes JSON with `title`, `message`, `severity`, `metadata`, `sent_at`, `channel_id`, `channel_name`, `channel_type`, `rule_id`, `rule_name`, and `rule_type`. Test sends use `rule_id=test`, `rule_name=Test notification`, and `rule_type=test`.
 
-Supported destination types:
+Webhook templates support dotted `event.*` variables in bodies and templated fields. Available fields include `title`, `message`, `severity`, `metadata`, `sent_at`, `channel_name`, `rule_id`, `rule_name`, and `rule_type`, each with a `*Json` variant for unquoted JSON insertion. Nullable rule fields also provide `OrUnknown` and `OrUnknownJson` aliases. Failed webhook deliveries record the HTTP status and a truncated response body; `NOTIFICATION_DEBUG_PAYLOADS=true` also logs a truncated rendered request body, with sensitive form fields redacted.
 
-#### Email
-
-SMTP delivery with:
-
--   `SMTP Host`
--   `SMTP Port`
--   `SMTP Security`: `Plain SMTP`, `STARTTLS`, or `SMTPS / Implicit TLS`
--   optional `SMTP User` and `SMTP Password`
--   `From Address`
--   one or more comma-separated `To Address(es)`
--   `Importance`: `auto`, `normal`, or `important`
--   optional `Allow insecure TLS` for trusted self-signed SMTP endpoints
-
-When email importance is set to `auto`, it follows the rule severity:
-
--   `info` -> `normal`
--   `warning` -> `important`
--   `critical` -> `important`
-
-#### Gotify
-
-Gotify delivery with:
-
--   `Gotify URL`
--   `App Token`
--   `Priority`: `auto` or an explicit integer
-
-When Gotify priority is set to `auto`, it follows the rule severity:
-
--   `info` -> `5`
--   `warning` -> `7`
--   `critical` -> `10`
-
-#### ntfy
-
-ntfy delivery with:
-
--   `Server URL`
--   `Topic`
--   optional `Access Token`
--   `Priority`: `auto`, `min`, `low`, `default`, `high`, or `urgent`
-
-When ntfy priority is set to `auto`, it follows the rule severity:
-
--   `info` -> `default`
--   `warning` -> `high`
--   `critical` -> `urgent`
-
-#### MQTT
-
-MQTT delivery is generic publish-only notification output. It does **not** include Home Assistant discovery, entity sync, or command handling.
-
-MQTT settings:
-
--   `Broker URL`
--   optional `Username` and `Password`
--   optional `Client ID`
--   `QoS`: `0` or `1`
--   `Keepalive`
--   `Connect Timeout`
--   `Topic`
--   `Retain MQTT payloads`
-
-Each notification publishes a JSON payload to the configured topic containing:
-
--   `title`
--   `message`
--   `severity`
--   `metadata`
--   `sent_at`
--   `channel_id`
--   `channel_name`
--   `channel_type`
--   `rule_id`
--   `rule_name`
--   `rule_type`
-
-For test sends, rule fields use a synthetic context: `rule_id` is `test`, `rule_name` is `Test notification`, and `rule_type` is `test`.
-
-Notification titles and bodies are localized when the global language selector is set to a specific language. If the selector is set to **Browser default**, outbound notification content is generated in English because notification jobs run on the server without access to the browser's locale.
-
-#### Webhook
-
-Webhook delivery supports custom integrations such as automation tools, internal APIs, chat bridges, and other HTTP endpoints.
-
-Webhook settings:
-
--   HTTP method: `POST`, `PUT`, or `PATCH`
--   target `URL`
--   optional query parameters
--   optional custom headers
--   authentication: none, bearer token, or basic auth
--   body mode: `JSON`, `Text`, or `Form`
--   request timeout
--   retry attempts and retry delay
--   optional `Allow insecure TLS` for trusted self-signed HTTPS endpoints
-
-Webhook templates support simple dotted variables rooted at `event.*`. The body and templated fields can reference values such as:
-
--   `{{event.title}}`
--   `{{event.titleJson}}`
--   `{{event.message}}`
--   `{{event.messageJson}}`
--   `{{event.severity}}`
--   `{{event.severityJson}}`
--   `{{event.metadata}}`
--   `{{event.metadataJson}}`
--   `{{event.sent_at}}`
--   `{{event.sent_atJson}}`
--   `{{event.channel_name}}`
--   `{{event.channel_nameJson}}`
--   `{{event.rule_id}}`
--   `{{event.rule_idJson}}`
--   `{{event.rule_idOrUnknown}}`
--   `{{event.rule_idOrUnknownJson}}`
--   `{{event.rule_name}}`
--   `{{event.rule_nameJson}}`
--   `{{event.rule_nameOrUnknown}}`
--   `{{event.rule_nameOrUnknownJson}}`
--   `{{event.rule_type}}`
--   `{{event.rule_typeJson}}`
--   `{{event.rule_typeOrUnknown}}`
--   `{{event.rule_typeOrUnknownJson}}`
-
-Use the `*Json` variables when placing values inside JSON templates without surrounding quotes. Nullable rule fields also provide `OrUnknown` aliases for destinations that reject JSON `null` values.
-
-Failed webhook deliveries include the HTTP status and a truncated response body in the delivery error and server warning logs. Set `NOTIFICATION_DEBUG_PAYLOADS=true` to also include a truncated rendered request body in warning logs; sensitive form fields are redacted, but JSON/text bodies may still contain secrets.
+Notification titles and bodies are localized when the global language selector is set to a specific language. With **Browser default**, outbound notification content is generated in English because server jobs do not have access to the browser locale.
 
 ### Notification Security Controls
 
--   `NOTIFICATION_SECRET_KEY`: optional override for the notification encryption key. If unset, the backend auto-generates one on first start and persists it in application metadata so encrypted destinations continue working across restarts.
--   `NOTIFICATION_SECRET_KEY_FILE`: optional Docker Secrets alternative for loading `NOTIFICATION_SECRET_KEY` from a mounted file.
--   `NOTIFICATION_ALLOW_PRIVATE_ADDRESSES=true` by default. Set it to `false` if you want to block private, loopback, and link-local destinations.
--   `NOTIFICATION_DEBUG_PAYLOADS=false` by default. Set it to `true` only while troubleshooting failed deliveries, then turn it back off.
+`NOTIFICATION_SECRET_KEY` can override the destination-secret encryption key; otherwise the backend generates one on first start and persists it in app metadata. `NOTIFICATION_SECRET_KEY_FILE` reads that key from a mounted file. `NOTIFICATION_ALLOW_PRIVATE_ADDRESSES=true` allows private, loopback, and link-local destinations; set it to `false` to block them. `NOTIFICATION_DEBUG_PAYLOADS=false` should only be set to `true` temporarily while troubleshooting failed deliveries.
 
 ### Current Scope
 
-The notification system currently supports:
-
--   in-app notification history
--   rule-based outbound delivery
--   Email, Gotify, MQTT, ntfy, and Webhook destinations
-
-It currently does **not** include:
-
--   Telegram destinations
--   Home Assistant MQTT discovery
--   MQTT entity state publishing or inbound commands
+The notification system supports in-app notification history, rule-based outbound delivery, and Email, Gotify, MQTT, ntfy, and Webhook destinations. It does **not** currently include Telegram, Home Assistant MQTT discovery, MQTT entity state publishing, or inbound commands.
 
 ### Run with Helm
 
@@ -855,13 +604,10 @@ A Helm chart for deploying `crowdsec-web-ui` on Kubernetes is available (maintai
 
 ## Persistence & Alert History
 
-All data is stored in SQLite under `/app/data`. To persist data across container restarts, mount the `/app/data` directory rather than only the `crowdsec.db` file, because SQLite also uses `crowdsec.db-wal` and `crowdsec.db-shm` sidecar files.
+All data is stored in SQLite under `/app/data`. Mount the directory, not only `crowdsec.db`, because SQLite also uses `crowdsec.db-wal` and `crowdsec.db-shm` sidecar files.
 
-**Docker Run:**
-Add `-v $(pwd)/data:/app/data` to your command.
+For Docker run, add `-v $(pwd)/data:/app/data`. For Compose:
 
-**Docker Compose:**
-Add the volume mapping:
 ```yaml
 volumes:
   - ./data:/app/data
@@ -869,96 +615,79 @@ volumes:
 
 ### How It Works
 
-The Web UI maintains its own local history of alerts and decisions. Data fetched from the CrowdSec LAPI is stored in the local database and preserved across restarts, while successful full refreshes reconcile the local cache with LAPI so alerts deleted outside the UI are removed locally too.
+The Web UI maintains local alert and decision history. Data from CrowdSec LAPI is preserved across restarts, merged with new data on boot, and reconciled during successful full refreshes so alerts deleted outside the UI are removed locally too. Alerts are kept for `CROWDSEC_LOOKBACK_PERIOD` (default: 7 days), then cleaned up automatically.
 
-- Alerts are kept for the duration of `CROWDSEC_LOOKBACK_PERIOD` (default: 7 days), then automatically cleaned up.
-- On restart, existing data is reused and new data from LAPI is merged in, then successful full sync windows prune alerts no longer returned by LAPI.
-- Active-decision refreshes first use one lookback-wide request to avoid excessive LAPI polling. If that request times out, it is retried in smaller windows down to `CROWDSEC_ALERT_SYNC_MIN_CHUNK`.
-- If LAPI is unavailable during startup, the Web UI keeps retrying bootstrap in the background using `CROWDSEC_BOOTSTRAP_RETRY_DELAY` until it can initialize automatically.
-- If some sync windows fail but others succeed, the UI serves the imported cache and marks sync as partial while background retries continue.
-- To force a full cache reset, use the `POST /api/cache/clear` endpoint.
+Active-decision refreshes first use one lookback-wide request to avoid excessive LAPI polling. If that times out, the request is retried in smaller windows down to `CROWDSEC_ALERT_SYNC_MIN_CHUNK`. If LAPI is unavailable during startup, bootstrap retries continue in the background using `CROWDSEC_BOOTSTRAP_RETRY_DELAY`; if only some sync windows fail, the UI serves the imported cache and marks sync partial while retries continue. To force a full cache reset, use `POST /api/cache/clear`.
 
 ## Local Development
 
-1.  **Install Dependencies**:
-    You need Node.js `24.18.0` and pnpm `11.9.0` installed locally.
-    ```bash
-    pnpm install
-    ```
+1. **Install dependencies**
 
-2.  **Configuration**:
-    Create a `.env` file in the root directory with your CrowdSec credentials:
-    ```bash
-    CROWDSEC_URL=http://localhost:8080
-    CROWDSEC_USER=crowdsec-web-ui
-    CROWDSEC_PASSWORD=<your-secure-password>
-    CROWDSEC_SIMULATIONS_ENABLED=true
-    CROWDSEC_REFRESH_INTERVAL=30s
-    CROWDSEC_LAPI_REQUEST_TIMEOUT=30s
-    CROWDSEC_ALERT_SYNC_CHUNK=6h
-    CROWDSEC_ALERT_SYNC_MIN_CHUNK=15m
-    CROWDSEC_BOOTSTRAP_RETRY_DELAY=30s
-    CROWDSEC_BOOTSTRAP_RETRY_ENABLED=true
-    # Optional: Base path for reverse proxy deployments
-    # BASE_PATH=/crowdsec
-    ```
+   You need Node.js `24.18.0` and pnpm `11.9.0`.
+   ```bash
+   pnpm install
+   ```
 
-    Or use mTLS instead of `CROWDSEC_USER`/`CROWDSEC_PASSWORD`:
-    ```bash
-    CROWDSEC_URL=https://localhost:8080
-    CROWDSEC_TLS_CERT_PATH=/path/to/agent.pem
-    CROWDSEC_TLS_KEY_PATH=/path/to/agent-key.pem
-    # Optional when using a private CA or self-signed CrowdSec LAPI certificate
-    CROWDSEC_TLS_CA_CERT_PATH=/path/to/ca.pem
-    CROWDSEC_SIMULATIONS_ENABLED=true
-    CROWDSEC_REFRESH_INTERVAL=30s
-    ```
+2. **Configure `.env`**
 
-3.  **Start the Application**:
-    You can either use the root pnpm scripts directly or the helper script `run.sh`.
+   Create a `.env` file in the root directory with your CrowdSec credentials:
+   ```bash
+   CROWDSEC_URL=http://localhost:8080
+   CROWDSEC_USER=crowdsec-web-ui
+   CROWDSEC_PASSWORD=<your-secure-password>
+   CROWDSEC_PROMETHEUS_URL=http://localhost:6060/metrics
+   CROWDSEC_SIMULATIONS_ENABLED=true
+   CROWDSEC_REFRESH_INTERVAL=30s
+   CROWDSEC_LAPI_REQUEST_TIMEOUT=30s
+   CROWDSEC_ALERT_SYNC_CHUNK=6h
+   CROWDSEC_ALERT_SYNC_MIN_CHUNK=15m
+   CROWDSEC_BOOTSTRAP_RETRY_DELAY=30s
+   CROWDSEC_BOOTSTRAP_RETRY_ENABLED=true
+   # BASE_PATH=/crowdsec
+   ```
 
-    **Development Mode with pnpm**:
-    Starts both server (port 3000) and client (port 5173).
-    ```bash
-    pnpm run dev
-    ```
+   Or use mTLS instead of `CROWDSEC_USER`/`CROWDSEC_PASSWORD`:
+   ```bash
+   CROWDSEC_URL=https://localhost:8080
+   CROWDSEC_TLS_CERT_PATH=/path/to/agent.pem
+   CROWDSEC_TLS_KEY_PATH=/path/to/agent-key.pem
+   CROWDSEC_PROMETHEUS_URL=http://localhost:6060/metrics
+   # Optional when using a private CA or self-signed CrowdSec LAPI certificate
+   CROWDSEC_TLS_CA_CERT_PATH=/path/to/ca.pem
+   CROWDSEC_SIMULATIONS_ENABLED=true
+   CROWDSEC_REFRESH_INTERVAL=30s
+   ```
 
-    **Production Build with pnpm**:
-    Builds the client and compiled server output.
-    ```bash
-    pnpm run build
-    ```
+3. **Start or build**
 
-    **Production Start with pnpm**:
-    Starts the compiled server from `dist/server`. This is the same startup contract used by the Docker image via `pnpm start`.
-    ```bash
-    pnpm start
-    ```
+   Development mode starts the server on port 3000 and Vite on port 5173:
+   ```bash
+   pnpm run dev
+   # or
+   ./run.sh dev
+   ```
 
-    **Development Mode with helper script**:
-    Starts both server (port 3000) and client (port 5173).
-    ```bash
-    ./run.sh dev
-    ```
+   Production build/start:
+   ```bash
+   pnpm run build
+   pnpm start
+   # or build and start with the helper
+   ./run.sh
+   ```
 
-    **Production Mode with helper script**:
-    Builds the application and starts the server (port 3000).
-    ```bash
-    ./run.sh
-    ```
+4. **CrowdSec mTLS smoke test**
 
-4.  **CrowdSec mTLS smoke test**:
-    Starts a disposable CrowdSec LAPI container, generates temporary server/client certificates, enables LAPI client certificate verification, logs in through the Web UI LAPI client, and confirms CrowdSec registered the TLS machine.
-    ```bash
-    pnpm run test:mtls:crowdsec
-    ```
+   Starts a disposable CrowdSec LAPI container, generates temporary server/client certificates, enables LAPI client certificate verification, logs in through the Web UI LAPI client, and confirms CrowdSec registered the TLS machine.
+   ```bash
+   pnpm run test:mtls:crowdsec
+   ```
 
-    Optional overrides:
-    ```bash
-    CROWDSEC_MTLS_IMAGE=crowdsecurity/crowdsec:latest pnpm run test:mtls:crowdsec
-    CROWDSEC_MTLS_KEEP=1 pnpm run test:mtls:crowdsec
-    CROWDSEC_MTLS_CONTAINER=my-crowdsec-test pnpm run test:mtls:crowdsec
-    ```
+   Optional overrides:
+   ```bash
+   CROWDSEC_MTLS_IMAGE=crowdsecurity/crowdsec:latest pnpm run test:mtls:crowdsec
+   CROWDSEC_MTLS_KEEP=1 pnpm run test:mtls:crowdsec
+   CROWDSEC_MTLS_CONTAINER=my-crowdsec-test pnpm run test:mtls:crowdsec
+   ```
 
 ## Translations
 
