@@ -161,7 +161,9 @@ Supported dashboard filters: `country`, `scenario`, `as`, `ip`, `target`, `dateS
 | --- | --- | --- |
 | GET | `/api/metrics/crowdsec` | Fetch and normalize CrowdSec Prometheus metrics. Returns `404` when `CROWDSEC_PROMETHEUS_URL` is not configured and `502` when the metrics fetch fails. |
 
-The response includes `fetched_at`, `totals`, `bouncers`, `machines`, `parserSources`, `parserNodes`, `whitelists`, and `parserTimings`.
+The response includes `fetched_at`, `totals`, `bouncers`, `machines`, `parserSources`, `parserNodes`, `whitelists`, and `parserTimings`. It can also include runtime-only observability sections: `lapiRoutes` and `appsecEngines`.
+
+Parser, LAPI latency, AppSec, bouncer, and machine values are derived from the current CrowdSec Prometheus scrape. The endpoint does not query Prometheus history or calculate Grafana-style `rate()`/`increase()` windows, so metrics that require time-window tracking are intentionally omitted.
 
 ## Notifications
 

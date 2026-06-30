@@ -13,6 +13,8 @@ cs_lapi_decisions_ok_total{bouncer="firewall"} 10
 cs_lapi_decisions_ko_total{bouncer="firewall"} 2
 cs_lapi_machine_requests_total{machine="edge-1",route="/v1/alerts",method="GET"} 5
 cs_lapi_machine_requests_total{machine="edge-1",route="/v1/watchers/login",method="POST"} 1
+cs_lapi_request_duration_seconds_count{endpoint="/v1/alerts",method="GET"} 4
+cs_lapi_request_duration_seconds_sum{endpoint="/v1/alerts",method="GET"} 0.8
 cs_appsec_reqs_total{source="0.0.0.0:7422",appsec_engine="appsec"} 100
 cs_appsec_block_total{source="0.0.0.0:7422",appsec_engine="appsec"} 7
 cs_filesource_hits_total{source="/var/log/auth.log"} 110
@@ -90,5 +92,19 @@ cs_parsing_time_seconds_sum{source="/var/log/auth.log",type="syslog"} 0.25
       count: 100,
       averageSeconds: 0.0025,
     });
+    expect(summary.lapiRoutes?.[0]).toMatchObject({
+      method: 'GET',
+      route: '/v1/alerts',
+      requests: 4,
+      averageSeconds: 0.2,
+    });
+    expect(summary.appsecEngines?.[0]).toMatchObject({
+      engine: 'appsec',
+      source: '0.0.0.0:7422',
+      requests: 100,
+      blocked: 7,
+      blockRate: 0.07,
+    });
   });
+
 });

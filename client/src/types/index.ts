@@ -19,6 +19,8 @@ export type {
   DashboardStatsTotals,
   DashboardWorldMapDatum,
   CrowdsecMetricsApiEntity,
+  CrowdsecMetricsAppsecEngine,
+  CrowdsecMetricsLapiRoute,
   CrowdsecMetricsParserNode,
   CrowdsecMetricsParserSource,
   CrowdsecMetricsResponse,

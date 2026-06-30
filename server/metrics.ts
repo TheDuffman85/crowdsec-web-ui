@@ -1,5 +1,7 @@
 import type {
+  CrowdsecMetricsAppsecEngine,
   CrowdsecMetricsApiEntity,
+  CrowdsecMetricsLapiRoute,
   CrowdsecMetricsParserNode,
   CrowdsecMetricsParserSource,
   CrowdsecMetricsResponse,
@@ -64,6 +66,13 @@ interface AppsecEngineAccumulator {
   source: string;
   requests: number;
   blocked: number;
+}
+
+interface LapiRouteAccumulator {
+  method: string;
+  route: string;
+  requests: number;
+  sum: number;
 }
 
 interface WhitelistAccumulator {
@@ -407,6 +416,45 @@ function aggregateAppsecEngines(samples: PrometheusSample[]): AppsecEngineAccumu
   return sortedTop(Array.from(engines.values()), (engine) => engine.requests || engine.blocked);
 }
 
+function aggregateLapiRoutes(samples: PrometheusSample[]): CrowdsecMetricsLapiRoute[] {
+  const routes = new Map<string, LapiRouteAccumulator>();
+
+  const getRoute = (sample: PrometheusSample): LapiRouteAccumulator => {
+    const method = sample.labels.method || 'GET';
+    const route = sample.labels.route || sample.labels.endpoint || 'unknown';
+    const key = `${method}\u0000${route}`;
+    let accumulator = routes.get(key);
+    if (!accumulator) {
+      accumulator = { method, route, requests: 0, sum: 0 };
+      routes.set(key, accumulator);
+    }
+    return accumulator;
+  };
+
+  for (const sample of metric(samples, 'cs_lapi_request_duration_seconds_count')) {
+    getRoute(sample).requests += sample.value;
+  }
+
+  for (const sample of metric(samples, 'cs_lapi_request_duration_seconds_sum')) {
+    getRoute(sample).sum += sample.value;
+  }
+
+  return sortedTop(Array.from(routes.values()), (route) => route.requests)
+    .map((route) => ({
+      method: route.method,
+      route: route.route,
+      requests: route.requests,
+      averageSeconds: route.requests > 0 ? route.sum / route.requests : null,
+    }));
+}
+
+function mapAppsecEngines(engines: AppsecEngineAccumulator[]): CrowdsecMetricsAppsecEngine[] {
+  return engines.map((engine) => ({
+    ...engine,
+    blockRate: ratio(engine.blocked, engine.requests),
+  }));
+}
+
 function aggregateWhitelists(samples: PrometheusSample[]): CrowdsecMetricsWhitelist[] {
   const whitelists = new Map<string, WhitelistAccumulator>();
 
@@ -471,6 +519,8 @@ export function summarizeCrowdsecMetrics(samples: PrometheusSample[]): CrowdsecM
     parserNodes: aggregateParserNodes(samples),
     whitelists,
     parserTimings: aggregateParserTimings(samples),
+    lapiRoutes: aggregateLapiRoutes(samples),
+    appsecEngines: mapAppsecEngines(appsecEngines),
   };
 }
 

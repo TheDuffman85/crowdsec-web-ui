@@ -515,6 +515,21 @@ export interface CrowdsecMetricsWhitelist {
   whitelisted: number;
 }
 
+export interface CrowdsecMetricsLapiRoute {
+  method: string;
+  route: string;
+  requests: number;
+  averageSeconds: number | null;
+}
+
+export interface CrowdsecMetricsAppsecEngine {
+  engine: string;
+  source: string;
+  requests: number;
+  blocked: number;
+  blockRate: number | null;
+}
+
 export interface CrowdsecMetricsResponse {
   fetched_at: string;
   totals: {
@@ -536,6 +551,8 @@ export interface CrowdsecMetricsResponse {
   parserNodes: CrowdsecMetricsParserNode[];
   whitelists: CrowdsecMetricsWhitelist[];
   parserTimings: CrowdsecMetricsTiming[];
+  lapiRoutes?: CrowdsecMetricsLapiRoute[];
+  appsecEngines?: CrowdsecMetricsAppsecEngine[];
 }
 
 export interface UpdateTableColumnsRequest {

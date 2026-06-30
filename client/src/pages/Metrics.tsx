@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import {
   Activity,
   AlertCircle,
@@ -8,6 +9,7 @@ import {
   DatabaseZap,
   FileSearch,
   ListChecks,
+  Network,
   RefreshCw,
   Server,
   ShieldCheck,
@@ -21,6 +23,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import { useI18n } from '../lib/i18n';
 import type {
   CrowdsecMetricsApiEntity,
+  CrowdsecMetricsAppsecEngine,
+  CrowdsecMetricsLapiRoute,
   CrowdsecMetricsParserNode,
   CrowdsecMetricsParserSource,
   CrowdsecMetricsResponse,
@@ -58,13 +62,63 @@ function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
-function ProgressBar({ value }: { value: number | null }) {
+type MetricTone = 'neutral' | 'success' | 'warning' | 'danger';
+
+const toneClasses: Record<MetricTone, {
+  text: string;
+  bg: string;
+  bar: string;
+}> = {
+  neutral: {
+    text: 'text-primary-600 dark:text-primary-400',
+    bg: 'bg-primary-50 dark:bg-primary-900/30',
+    bar: 'bg-primary-500',
+  },
+  success: {
+    text: 'text-emerald-700 dark:text-emerald-300',
+    bg: 'bg-emerald-50 dark:bg-emerald-950/40',
+    bar: 'bg-emerald-500',
+  },
+  warning: {
+    text: 'text-amber-700 dark:text-amber-300',
+    bg: 'bg-amber-50 dark:bg-amber-950/40',
+    bar: 'bg-amber-500',
+  },
+  danger: {
+    text: 'text-amber-800 dark:text-amber-300',
+    bg: 'bg-amber-50 dark:bg-amber-950/40',
+    bar: 'bg-amber-500',
+  },
+};
+
+function successTone(value: number | null): MetricTone {
+  if (value === null) return 'neutral';
+  if (value >= 0.8) return 'success';
+  if (value >= 0.5) return 'warning';
+  return 'danger';
+}
+
+function latencyTone(value: number | null): MetricTone {
+  if (value === null) return 'neutral';
+  if (value > 1) return 'danger';
+  if (value > 0.25) return 'warning';
+  return 'success';
+}
+
+function parserTimingTone(value: number | null): MetricTone {
+  if (value === null) return 'neutral';
+  if (value > 0.01) return 'danger';
+  if (value >= 0.001) return 'warning';
+  return 'success';
+}
+
+function ProgressBar({ value, tone = 'neutral' }: { value: number | null; tone?: MetricTone }) {
   const percent = value === null ? 0 : Math.max(0, Math.min(100, value * 100));
 
   return (
     <div className="h-2 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
       <div
-        className="h-full rounded-full bg-primary-500 transition-[width]"
+        className={`h-full rounded-full transition-[width] ${toneClasses[tone].bar}`}
         style={{ width: `${percent}%` }}
       />
     </div>
@@ -76,9 +130,9 @@ function DecisionResponseBar({ empty, nonEmpty }: { empty: number; nonEmpty: num
   const emptyPercent = total > 0 ? Math.max(0, Math.min(100, (empty / total) * 100)) : 0;
 
   return (
-    <div className="h-2 w-full overflow-hidden rounded-full bg-[#e8b15f] dark:bg-[#e8b15f]">
+    <div className="h-2 w-full overflow-hidden rounded-full bg-amber-500">
       <div
-        className="h-full rounded-full bg-primary-500 transition-[width]"
+        className="h-full rounded-full bg-emerald-500 transition-[width]"
         style={{ width: `${emptyPercent}%` }}
       />
     </div>
@@ -90,9 +144,9 @@ function ParserResultBar({ parsed, unparsed }: { parsed: number; unparsed: numbe
   const parsedPercent = total > 0 ? Math.max(0, Math.min(100, (parsed / total) * 100)) : 0;
 
   return (
-    <div className="h-2 w-full overflow-hidden rounded-full bg-[#e8b15f] dark:bg-[#e8b15f]">
+    <div className="h-2 w-full overflow-hidden rounded-full bg-amber-500">
       <div
-        className="h-full rounded-full bg-primary-500 transition-[width]"
+        className="h-full rounded-full bg-emerald-500 transition-[width]"
         style={{ width: `${parsedPercent}%` }}
       />
     </div>
@@ -104,16 +158,20 @@ function MetricTile({
   value,
   detail,
   icon: Icon,
+  tone = 'neutral',
 }: {
   title: string;
   value: string;
   detail: string;
   icon: LucideIcon;
+  tone?: MetricTone;
 }) {
+  const toneClass = toneClasses[tone];
+
   return (
     <Card>
       <CardContent className="flex min-h-32 items-center gap-4 p-4 sm:p-5">
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-primary-50 text-primary-600 dark:bg-primary-900/30 dark:text-primary-300">
+        <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-lg ${toneClass.bg} ${toneClass.text}`}>
           <Icon className="h-5 w-5" />
         </div>
         <div className="min-w-0">
@@ -151,6 +209,42 @@ function EmptyState({ message }: { message: string }) {
     <div className="rounded-lg border border-dashed border-gray-200 p-6 text-center text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
       {message}
     </div>
+  );
+}
+
+function TooltipValue({ children, tone, tooltip, className = '' }: { children: ReactNode; tone: MetricTone; tooltip: string; className?: string }) {
+  return (
+    <span className="group relative inline-flex shrink-0">
+      <span
+        tabIndex={0}
+        aria-label={tooltip}
+        className={`rounded-md px-2 py-1 outline-none ring-offset-2 ring-offset-white focus:ring-2 focus:ring-primary-500 dark:ring-offset-gray-800 ${toneClasses[tone].bg} ${toneClasses[tone].text} ${className}`}
+      >
+        {children}
+      </span>
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute right-0 top-full z-20 mt-2 hidden w-72 rounded-lg bg-gray-900 px-3 py-2 text-left text-xs font-normal leading-5 text-white shadow-lg group-hover:block group-focus-within:block dark:bg-gray-700"
+      >
+        {tooltip}
+      </span>
+    </span>
+  );
+}
+
+function ParserSuccessBadge({ value, tooltip }: { value: number | null; tooltip: string }) {
+  return (
+    <TooltipValue tone={successTone(value)} tooltip={tooltip} className="text-xs font-semibold">
+      {formatPercent(value)}
+    </TooltipValue>
+  );
+}
+
+function TimingValue({ value, tooltip, fallback }: { value: number | null; tooltip: string; fallback: string }) {
+  return (
+    <TooltipValue tone={parserTimingTone(value)} tooltip={tooltip} className="font-mono text-lg font-bold">
+      {formatDuration(value, fallback)}
+    </TooltipValue>
   );
 }
 
@@ -201,7 +295,7 @@ function EntityList({
                       <DecisionResponseBar empty={emptyDecisions} nonEmpty={nonEmptyDecisions} />
                       <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs">
                         <div>
-                          <p className="font-mono text-sm font-semibold text-primary-600 dark:text-primary-400">
+                          <p className="font-mono text-sm font-semibold text-emerald-700 dark:text-emerald-300">
                             {formatNumber(emptyDecisions)}
                           </p>
                           <p className="text-gray-500 dark:text-gray-400">
@@ -209,7 +303,7 @@ function EntityList({
                           </p>
                         </div>
                         <div>
-                          <p className="font-mono text-sm font-semibold text-[#e8b15f]">
+                          <p className="font-mono text-sm font-semibold text-amber-700 dark:text-amber-300">
                             {formatNumber(nonEmptyDecisions)}
                           </p>
                           <p className="text-gray-500 dark:text-gray-400">
@@ -231,10 +325,9 @@ function EntityList({
 
 function ParserSourceList({ items }: { items: CrowdsecMetricsParserSource[] }) {
   const { t } = useI18n();
-  const notAvailable = t('pages.metrics.notAvailable');
 
   return (
-    <Card>
+    <Card className="overflow-visible">
       <SectionHeader
         icon={FileSearch}
         title={t('pages.metrics.parserSources')}
@@ -254,9 +347,10 @@ function ParserSourceList({ items }: { items: CrowdsecMetricsParserSource[] }) {
                       {item.type}{item.acquisTypes.length > 0 ? ` / ${item.acquisTypes.join(', ')}` : ''}
                     </p>
                   </div>
-                  <span className="shrink-0 rounded-md bg-primary-50 px-2 py-1 text-xs font-semibold text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">
-                    {formatPercent(item.successRate, notAvailable)}
-                  </span>
+                  <ParserSuccessBadge
+                    value={item.successRate}
+                    tooltip={t('pages.metrics.parserSuccessTooltip')}
+                  />
                 </div>
                 <div className="mt-4">
                   <ParserResultBar parsed={item.parsedOk} unparsed={item.parsedKo} />
@@ -267,11 +361,11 @@ function ParserSourceList({ items }: { items: CrowdsecMetricsParserSource[] }) {
                     <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.read')}</p>
                   </div>
                   <div>
-                    <p className="font-mono text-sm font-semibold text-primary-600 dark:text-primary-400">{formatNumber(item.parsedOk)}</p>
+                    <p className="font-mono text-sm font-semibold text-emerald-700 dark:text-emerald-300">{formatNumber(item.parsedOk)}</p>
                     <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.parsed')}</p>
                   </div>
                   <div>
-                    <p className="font-mono text-sm font-semibold text-[#e8b15f]">{formatNumber(item.parsedKo)}</p>
+                    <p className="font-mono text-sm font-semibold text-amber-800 dark:text-amber-300">{formatNumber(item.parsedKo)}</p>
                     <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.unparsed')}</p>
                   </div>
                   <div>
@@ -327,7 +421,7 @@ function ParserNodeList({ items }: { items: CrowdsecMetricsParserNode[] }) {
                   <div className="font-mono text-sm font-semibold text-gray-900 dark:text-white lg:text-right">{formatNumber(item.processed)}</div>
                   <div className="space-y-1 lg:text-right">
                     <span className="text-sm font-semibold text-gray-900 dark:text-white">{formatPercent(item.successRate, notAvailable)}</span>
-                    <ProgressBar value={item.successRate} />
+                    <ProgressBar value={item.successRate} tone={successTone(item.successRate)} />
                   </div>
                 </div>
               ))}
@@ -382,9 +476,10 @@ function WhitelistList({ items }: { items: CrowdsecMetricsWhitelist[] }) {
 function TimingList({ items }: { items: CrowdsecMetricsTiming[] }) {
   const { t } = useI18n();
   const notAvailable = t('pages.metrics.notAvailable');
+  const timingTooltip = t('pages.metrics.parserTimingTooltip');
 
   return (
-    <Card>
+    <Card className="overflow-visible">
       <SectionHeader
         icon={Clock3}
         title={t('pages.metrics.parserTiming')}
@@ -402,11 +497,110 @@ function TimingList({ items }: { items: CrowdsecMetricsTiming[] }) {
                     <p className="truncate font-semibold text-gray-900 dark:text-white" title={item.source}>{item.source}</p>
                     <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{item.type}</p>
                   </div>
-                  <p className="font-mono text-lg font-bold text-gray-900 dark:text-white">{formatDuration(item.averageSeconds, notAvailable)}</p>
+                  <TimingValue value={item.averageSeconds} tooltip={timingTooltip} fallback={notAvailable} />
                 </div>
                 <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">{t('pages.metrics.parsedLinesTimed', { count: formatNumber(item.count) })}</p>
               </div>
             ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function LapiLatencyList({ items }: { items?: CrowdsecMetricsLapiRoute[] }) {
+  const { t } = useI18n();
+  const notAvailable = t('pages.metrics.notAvailable');
+  const routes = items || [];
+
+  return (
+    <Card>
+      <SectionHeader
+        icon={Network}
+        title={t('pages.metrics.lapiLatency')}
+        description={t('pages.metrics.lapiLatencyDescription')}
+      />
+      <CardContent>
+        {routes.length === 0 ? (
+          <EmptyState message={t('pages.metrics.emptyLapiLatency')} />
+        ) : (
+          <div className="overflow-hidden rounded-lg border border-gray-100 dark:border-gray-700/70">
+            <div className="hidden grid-cols-[90px_minmax(0,2fr)_110px_130px] gap-3 border-b border-gray-100 bg-gray-50 px-4 py-2 text-xs font-semibold uppercase text-gray-500 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-400 lg:grid">
+              <span>{t('pages.metrics.columns.method')}</span>
+              <span>{t('pages.metrics.columns.route')}</span>
+              <span className="text-right">{t('pages.metrics.columns.requests')}</span>
+              <span className="text-right">{t('pages.metrics.columns.average')}</span>
+            </div>
+            <div className="divide-y divide-gray-100 dark:divide-gray-700/70">
+              {routes.map((item) => {
+                const tone = latencyTone(item.averageSeconds);
+
+                return (
+                  <div key={`${item.method}-${item.route}`} className="grid gap-2 px-4 py-3 lg:grid-cols-[90px_minmax(0,2fr)_110px_130px] lg:items-center lg:gap-3">
+                    <div className="font-mono text-xs font-semibold text-gray-600 dark:text-gray-300">{item.method}</div>
+                    <div className="truncate text-sm font-medium text-gray-900 dark:text-white" title={item.route}>{item.route}</div>
+                    <div className="font-mono text-sm font-semibold text-gray-900 dark:text-white lg:text-right">{formatNumber(item.requests)}</div>
+                    <div className={`font-mono text-sm font-semibold lg:text-right ${toneClasses[tone].text}`}>{formatDuration(item.averageSeconds, notAvailable)}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function AppsecEngineList({ items }: { items?: CrowdsecMetricsAppsecEngine[] }) {
+  const { t } = useI18n();
+  const notAvailable = t('pages.metrics.notAvailable');
+  const engines = items || [];
+  const blockRateTooltip = t('pages.metrics.appsecBlockRateTooltip');
+
+  return (
+    <Card className="overflow-visible">
+      <SectionHeader
+        icon={ShieldOff}
+        title={t('pages.metrics.appsecEngines')}
+        description={t('pages.metrics.appsecEnginesDescription')}
+      />
+      <CardContent>
+        {engines.length === 0 ? (
+          <EmptyState message={t('pages.metrics.emptyAppsecEngines')} />
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {engines.map((item) => {
+              const blockTone: MetricTone = item.blocked > 0 ? 'warning' : 'neutral';
+
+              return (
+                <div key={`${item.engine}-${item.source}`} className="rounded-lg border border-gray-100 p-4 dark:border-gray-700/70">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate font-semibold text-gray-900 dark:text-white" title={item.engine}>{item.engine}</p>
+                      <p className="mt-1 truncate text-xs text-gray-500 dark:text-gray-400" title={item.source}>{item.source}</p>
+                    </div>
+                    <TooltipValue tone={blockTone} tooltip={blockRateTooltip} className="text-xs font-semibold">
+                      {formatPercent(item.blockRate, notAvailable)}
+                    </TooltipValue>
+                  </div>
+                  <div className="mt-4">
+                    <ProgressBar value={item.blockRate} tone={blockTone} />
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs">
+                    <div>
+                      <p className="font-mono text-sm font-semibold text-gray-900 dark:text-white">{formatNumber(item.requests)}</p>
+                      <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.requests')}</p>
+                    </div>
+                    <div>
+                      <p className="font-mono text-sm font-semibold text-amber-700 dark:text-amber-300">{formatNumber(item.blocked)}</p>
+                      <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.blocked')}</p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </CardContent>
@@ -487,7 +681,7 @@ export function Metrics() {
         <Card>
           <CardContent className="flex flex-col gap-4 p-6">
             <div className="flex items-start gap-3">
-              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-600 dark:text-red-400" />
+              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700 dark:text-amber-300" />
               <div className="min-w-0">
                 <h2 className="text-lg font-semibold text-gray-900 dark:text-white">{t('pages.metrics.unavailableTitle')}</h2>
                 <p className="mt-2 break-words text-sm leading-6 text-gray-600 dark:text-gray-300">{state.message}</p>
@@ -524,8 +718,10 @@ export function Metrics() {
           <EntityList title={t('pages.metrics.machines')} icon={Bot} items={data.machines} emptyMessage={t('pages.metrics.emptyMachines')} description={t('pages.metrics.machinesDescription')} />
         </div>
 
+        <AppsecEngineList items={data.appsecEngines} />
         <ParserSourceList items={data.parserSources} />
         <TimingList items={data.parserTimings} />
+        <LapiLatencyList items={data.lapiRoutes} />
         <ParserNodeList items={data.parserNodes} />
         <WhitelistList items={data.whitelists} />
       </div>
