@@ -71,6 +71,34 @@ function ProgressBar({ value }: { value: number | null }) {
   );
 }
 
+function DecisionResponseBar({ empty, nonEmpty }: { empty: number; nonEmpty: number }) {
+  const total = empty + nonEmpty;
+  const emptyPercent = total > 0 ? Math.max(0, Math.min(100, (empty / total) * 100)) : 0;
+
+  return (
+    <div className="h-2 w-full overflow-hidden rounded-full bg-[#e8b15f] dark:bg-[#e8b15f]">
+      <div
+        className="h-full rounded-full bg-primary-500 transition-[width]"
+        style={{ width: `${emptyPercent}%` }}
+      />
+    </div>
+  );
+}
+
+function ParserResultBar({ parsed, unparsed }: { parsed: number; unparsed: number }) {
+  const total = parsed + unparsed;
+  const parsedPercent = total > 0 ? Math.max(0, Math.min(100, (parsed / total) * 100)) : 0;
+
+  return (
+    <div className="h-2 w-full overflow-hidden rounded-full bg-[#e8b15f] dark:bg-[#e8b15f]">
+      <div
+        className="h-full rounded-full bg-primary-500 transition-[width]"
+        style={{ width: `${parsedPercent}%` }}
+      />
+    </div>
+  );
+}
+
 function MetricTile({
   title,
   value,
@@ -150,8 +178,9 @@ function EntityList({
         ) : (
           <div className="space-y-3">
             {items.map((item) => {
-              const decisionTotal = (item.decisionsOk || 0) + (item.decisionsKo || 0);
-              const decisionHitRate = decisionTotal > 0 ? (item.decisionsOk || 0) / decisionTotal : null;
+              const nonEmptyDecisions = item.decisionsOk || 0;
+              const emptyDecisions = item.decisionsKo || 0;
+              const decisionTotal = nonEmptyDecisions + emptyDecisions;
 
               return (
                 <div key={item.name} className="rounded-lg border border-gray-100 p-3 dark:border-gray-700/70">
@@ -168,15 +197,25 @@ function EntityList({
                     </div>
                   </div>
                   {decisionTotal > 0 && (
-                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                      <div className="rounded-md bg-green-50 px-2 py-1 text-green-700 dark:bg-green-900/20 dark:text-green-300">
-                        {t('pages.metrics.labels.nonEmpty', { count: formatNumber(item.decisionsOk || 0) })}
-                      </div>
-                      <div className="rounded-md bg-gray-50 px-2 py-1 text-gray-600 dark:bg-gray-700/50 dark:text-gray-300">
-                        {t('pages.metrics.labels.empty', { count: formatNumber(item.decisionsKo || 0) })}
-                      </div>
-                      <div className="col-span-2">
-                        <ProgressBar value={decisionHitRate} />
+                    <div className="mt-3">
+                      <DecisionResponseBar empty={emptyDecisions} nonEmpty={nonEmptyDecisions} />
+                      <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs">
+                        <div>
+                          <p className="font-mono text-sm font-semibold text-primary-600 dark:text-primary-400">
+                            {formatNumber(emptyDecisions)}
+                          </p>
+                          <p className="text-gray-500 dark:text-gray-400">
+                            {t('pages.metrics.labels.empty', { count: '' }).trim()}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="font-mono text-sm font-semibold text-[#e8b15f]">
+                            {formatNumber(nonEmptyDecisions)}
+                          </p>
+                          <p className="text-gray-500 dark:text-gray-400">
+                            {t('pages.metrics.labels.nonEmpty', { count: '' }).trim()}
+                          </p>
+                        </div>
                       </div>
                     </div>
                   )}
@@ -220,7 +259,7 @@ function ParserSourceList({ items }: { items: CrowdsecMetricsParserSource[] }) {
                   </span>
                 </div>
                 <div className="mt-4">
-                  <ProgressBar value={item.successRate} />
+                  <ParserResultBar parsed={item.parsedOk} unparsed={item.parsedKo} />
                 </div>
                 <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs sm:grid-cols-5">
                   <div>
@@ -228,11 +267,11 @@ function ParserSourceList({ items }: { items: CrowdsecMetricsParserSource[] }) {
                     <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.read')}</p>
                   </div>
                   <div>
-                    <p className="font-mono text-sm font-semibold text-green-700 dark:text-green-300">{formatNumber(item.parsedOk)}</p>
+                    <p className="font-mono text-sm font-semibold text-primary-600 dark:text-primary-400">{formatNumber(item.parsedOk)}</p>
                     <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.parsed')}</p>
                   </div>
                   <div>
-                    <p className="font-mono text-sm font-semibold text-gray-700 dark:text-gray-200">{formatNumber(item.parsedKo)}</p>
+                    <p className="font-mono text-sm font-semibold text-[#e8b15f]">{formatNumber(item.parsedKo)}</p>
                     <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.unparsed')}</p>
                   </div>
                   <div>
