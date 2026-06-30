@@ -74,6 +74,8 @@ A modern, responsive web interface for managing [CrowdSec](https://crowdsec.net/
 - **CrowdSec integration**: the server authenticates to LAPI as a machine with watcher password auth or agent mTLS, then keeps a local cache updated with delta refreshes and chunked historical sync.
 - **Container security**: the image runs as the non-root `node` user. Authentication can separately protect the browser UI and protected application API routes with password login, passkeys, and OIDC SSO.
 
+See [API.md](API.md) for the application API reference, including auth behavior, route lists, query parameters, and request/response shapes.
+
 ## Prerequisites
 
 You need a running CrowdSec instance and exactly one CrowdSec LAPI authentication mode:
