@@ -47,9 +47,12 @@ interface AuthSettings {
     oidcGroupsClaim: string;
     oidcAdminGroups: string;
     oidcReadOnlyGroups: string;
+    oidcUnmatchedRole: OidcUnmatchedRole;
     hasPassword: boolean;
     authMethod: 'password' | 'passkey' | 'oidc' | null;
 }
+
+type OidcUnmatchedRole = 'deny' | 'admin' | 'read-only';
 
 function parseGroupList(value: string): string[] {
     return value
@@ -89,6 +92,7 @@ export function Settings() {
         groupsClaim: 'groups',
         adminGroups: [] as string[],
         readOnlyGroups: [] as string[],
+        unmatchedRole: 'deny' as OidcUnmatchedRole,
     });
     const [oidcGroupDrafts, setOidcGroupDrafts] = useState({
         adminGroups: '',
@@ -142,6 +146,7 @@ export function Settings() {
                             groupsClaim: payload.oidcGroupsClaim || 'groups',
                             adminGroups: parseGroupList(payload.oidcAdminGroups || ''),
                             readOnlyGroups: parseGroupList(payload.oidcReadOnlyGroups || ''),
+                            unmatchedRole: payload.oidcUnmatchedRole || 'deny',
                         });
                     }
                 })
@@ -323,6 +328,7 @@ export function Settings() {
                     oidcGroupsClaim: oidcForm.groupsClaim,
                     oidcAdminGroups: adminGroups,
                     oidcReadOnlyGroups: readOnlyGroups,
+                    oidcUnmatchedRole: oidcForm.unmatchedRole,
                 }),
             });
             const payload = await response.json().catch(() => ({})) as {
@@ -343,6 +349,7 @@ export function Settings() {
                 oidcGroupsClaim: oidcForm.groupsClaim.trim() || 'groups',
                 oidcAdminGroups: adminGroups,
                 oidcReadOnlyGroups: readOnlyGroups,
+                oidcUnmatchedRole: oidcForm.unmatchedRole,
             } : current);
             setOidcForm((current) => ({ ...current, clientSecret: '' }));
             if (payload.oidcError) {
@@ -658,6 +665,22 @@ export function Settings() {
                                         className={inputClass}
                                     />
                                 </div>
+                                <div className="space-y-2">
+                                    <label htmlFor="oidc-unmatched-role" className={labelClass}>{t("pages.settings.oidcUnmatchedRole")}</label>
+                                    <select
+                                        id="oidc-unmatched-role"
+                                        aria-describedby="oidc-unmatched-role-help"
+                                        value={oidcForm.unmatchedRole}
+                                        onChange={(event) => setOidcForm((current) => ({ ...current, unmatchedRole: event.target.value as OidcUnmatchedRole }))}
+                                        disabled={!canManageAuthSettings}
+                                        className={inputClass}
+                                    >
+                                        <option value="deny">{t("pages.settings.oidcUnmatchedRoleDeny")}</option>
+                                        <option value="admin">{t("pages.settings.oidcUnmatchedRoleAdmin")}</option>
+                                        <option value="read-only">{t("pages.settings.oidcUnmatchedRoleReadOnly")}</option>
+                                    </select>
+                                    <p id="oidc-unmatched-role-help" className="text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.oidcGroupsHelp")}</p>
+                                </div>
                                 <GroupListEditor
                                     id="oidc-admin-groups"
                                     label={t("pages.settings.oidcAdminGroups")}
@@ -673,24 +696,21 @@ export function Settings() {
                                     removeLabel={(group) => t("pages.settings.removeGroup", { group })}
                                     labelClass={labelClass}
                                 />
-                                <div className="space-y-2 lg:col-span-2">
-                                    <GroupListEditor
-                                        id="oidc-read-only-groups"
-                                        label={t("pages.settings.oidcReadOnlyGroups")}
-                                        groups={oidcForm.readOnlyGroups}
-                                        draft={oidcGroupDrafts.readOnlyGroups}
-                                        onDraftChange={(value) => setOidcGroupDrafts((current) => ({ ...current, readOnlyGroups: value }))}
-                                        onAdd={() => addOidcGroup('readOnlyGroups')}
-                                        onRemove={(group) => removeOidcGroup('readOnlyGroups', group)}
-                                        disabled={!canManageAuthSettings}
-                                        placeholder="crowdsec-viewers"
-                                        addLabel={t("pages.settings.addGroup")}
-                                        emptyLabel={t("pages.settings.noGroupsConfigured")}
-                                        removeLabel={(group) => t("pages.settings.removeGroup", { group })}
-                                        labelClass={labelClass}
-                                    />
-                                    <p className="text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.oidcGroupsHelp")}</p>
-                                </div>
+                                <GroupListEditor
+                                    id="oidc-read-only-groups"
+                                    label={t("pages.settings.oidcReadOnlyGroups")}
+                                    groups={oidcForm.readOnlyGroups}
+                                    draft={oidcGroupDrafts.readOnlyGroups}
+                                    onDraftChange={(value) => setOidcGroupDrafts((current) => ({ ...current, readOnlyGroups: value }))}
+                                    onAdd={() => addOidcGroup('readOnlyGroups')}
+                                    onRemove={(group) => removeOidcGroup('readOnlyGroups', group)}
+                                    disabled={!canManageAuthSettings}
+                                    placeholder="crowdsec-viewers"
+                                    addLabel={t("pages.settings.addGroup")}
+                                    emptyLabel={t("pages.settings.noGroupsConfigured")}
+                                    removeLabel={(group) => t("pages.settings.removeGroup", { group })}
+                                    labelClass={labelClass}
+                                />
                             </div>
                             <button
                                 type="button"

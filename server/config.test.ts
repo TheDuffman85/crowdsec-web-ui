@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { createRuntimeConfig, getIntervalName, parseBooleanEnv, parseCsvEnv, parseLookbackToMs, parseOptionalBooleanEnv, parseRefreshInterval, parseTimeFormat, parseTimeZone } from './config';
+import { createRuntimeConfig, getIntervalName, parseBooleanEnv, parseCsvEnv, parseLookbackToMs, parseOidcUnmatchedRole, parseOptionalBooleanEnv, parseRefreshInterval, parseTimeFormat, parseTimeZone } from './config';
 
 const tempDirs: string[] = [];
 
@@ -53,6 +53,14 @@ describe('config helpers', () => {
     expect(parseOptionalBooleanEnv('true')).toBe(true);
     expect(parseOptionalBooleanEnv('OFF')).toBe(false);
     expect(parseOptionalBooleanEnv('maybe')).toBeNull();
+  });
+
+  test('parseOidcUnmatchedRole defaults to deny and validates supported values', () => {
+    expect(parseOidcUnmatchedRole(undefined)).toBe('deny');
+    expect(parseOidcUnmatchedRole(' DENY ')).toBe('deny');
+    expect(parseOidcUnmatchedRole('admin')).toBe('admin');
+    expect(parseOidcUnmatchedRole('read-only')).toBe('read-only');
+    expect(() => parseOidcUnmatchedRole('viewer')).toThrow(/CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE/);
   });
 
   test('parseCsvEnv splits, trims, and drops empty entries', () => {
@@ -128,6 +136,7 @@ describe('config helpers', () => {
       CROWDSEC_AUTH_OIDC_GROUPS_CLAIM: 'roles',
       CROWDSEC_AUTH_OIDC_ADMIN_GROUPS: 'admins, secops',
       CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS: 'viewers',
+      CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE: 'read-only',
     });
 
     expect(config.port).toBe(4000);
@@ -170,6 +179,7 @@ describe('config helpers', () => {
       oidcGroupsClaim: 'roles',
       oidcAdminGroups: ['admins', 'secops'],
       oidcReadOnlyGroups: ['viewers'],
+      oidcUnmatchedRole: 'read-only',
     });
   });
 
@@ -200,6 +210,7 @@ describe('config helpers', () => {
     expect(config.readOnly).toBe(false);
     expect(config.dashboardAuth.enabled).toBeNull();
     expect(config.dashboardAuth.oidcGroupsClaim).toBe('groups');
+    expect(config.dashboardAuth.oidcUnmatchedRole).toBe('deny');
   });
 
   test('createRuntimeConfig enables read-only mode from environment', () => {

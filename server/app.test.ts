@@ -9,6 +9,7 @@ import { createRuntimeConfig } from './config';
 import { CrowdsecDatabase } from './database';
 import { LapiClient, type LapiRequestInit } from './lapi';
 import { createApp } from './app';
+import { resolveOidcRole } from './app-auth';
 import type { MqttPublishConfig } from './notifications/mqtt-client';
 
 let tempDir: string;
@@ -627,6 +628,7 @@ test('dashboard auth exposes account settings and password changes', async () =>
     oidcGroupsClaim: 'groups',
     oidcAdminGroups: '',
     oidcReadOnlyGroups: '',
+    oidcUnmatchedRole: 'deny',
     hasPassword: true,
     authMethod: 'password',
   });
@@ -660,6 +662,7 @@ test('dashboard auth exposes account settings and password changes', async () =>
       oidcGroupsClaim: 'roles',
       oidcAdminGroups: 'admins, secops, admins',
       oidcReadOnlyGroups: 'viewers',
+      oidcUnmatchedRole: 'admin',
     }),
   }));
   expect(saveGroupMapping.status).toBe(200);
@@ -668,6 +671,7 @@ test('dashboard auth exposes account settings and password changes', async () =>
       oidcGroupsClaim: 'roles',
       oidcAdminGroups: 'admins,secops',
       oidcReadOnlyGroups: 'viewers',
+      oidcUnmatchedRole: 'admin',
     },
   });
 
@@ -717,6 +721,7 @@ test('dashboard auth settings use OIDC environment values as defaults', async ()
       CROWDSEC_AUTH_OIDC_GROUPS_CLAIM: 'roles',
       CROWDSEC_AUTH_OIDC_ADMIN_GROUPS: 'admins,secops',
       CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS: 'viewers',
+      CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE: 'read-only',
     },
   });
 
@@ -738,6 +743,7 @@ test('dashboard auth settings use OIDC environment values as defaults', async ()
     oidcGroupsClaim: 'roles',
     oidcAdminGroups: 'admins,secops',
     oidcReadOnlyGroups: 'viewers',
+    oidcUnmatchedRole: 'read-only',
   });
 });
 
@@ -795,6 +801,33 @@ function dashboardDateKey(isoString: string, timezoneOffsetMinutes: number, incl
   }
   return `${year}-${month}-${day}`;
 }
+
+describe('OIDC role mapping', () => {
+  const baseConfig = {
+    oidcAdminGroups: ['admins'],
+    oidcReadOnlyGroups: ['viewers'],
+    oidcUnmatchedRole: 'deny' as const,
+  };
+
+  test('uses matching groups before the unmatched-user policy', () => {
+    expect(resolveOidcRole(baseConfig, ['admins'])).toBe('admin');
+    expect(resolveOidcRole(baseConfig, ['viewers'])).toBe('read-only');
+    expect(resolveOidcRole(baseConfig, ['admins', 'viewers'])).toBe('admin');
+  });
+
+  test('applies the configured unmatched-user policy when no group matches', () => {
+    expect(resolveOidcRole({ ...baseConfig, oidcUnmatchedRole: 'deny' }, ['auditors'])).toBeNull();
+    expect(resolveOidcRole({ ...baseConfig, oidcUnmatchedRole: 'admin' }, ['auditors'])).toBe('admin');
+    expect(resolveOidcRole({ ...baseConfig, oidcUnmatchedRole: 'read-only' }, ['auditors'])).toBe('read-only');
+  });
+
+  test('also applies the unmatched-user policy when group lists are empty', () => {
+    const emptyGroups = { oidcAdminGroups: [], oidcReadOnlyGroups: [], oidcUnmatchedRole: 'deny' as const };
+    expect(resolveOidcRole(emptyGroups, ['admins'])).toBeNull();
+    expect(resolveOidcRole({ ...emptyGroups, oidcUnmatchedRole: 'admin' }, [])).toBe('admin');
+    expect(resolveOidcRole({ ...emptyGroups, oidcUnmatchedRole: 'read-only' }, [])).toBe('read-only');
+  });
+});
 
 describe('createApp', () => {
   test('serves health, config, alerts, decisions, stats, update-check, and mutations', async () => {

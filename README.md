@@ -251,7 +251,8 @@ Choose exactly one auth mode: password auth or mTLS auth.
 | `CROWDSEC_AUTH_OIDC_CLIENT_SECRET_FILE` | none | Optional Docker Secrets alternative: read `CROWDSEC_AUTH_OIDC_CLIENT_SECRET` from a file. Do not set both variables. |
 | `CROWDSEC_AUTH_OIDC_GROUPS_CLAIM` | `groups` | Optional OIDC claim used for group mapping. The claim may be an array or a comma-separated string. Can also be configured from Settings. |
 | `CROWDSEC_AUTH_OIDC_ADMIN_GROUPS` | empty | Optional comma-separated OIDC groups that receive admin permissions. Can also be configured from Settings. |
-| `CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS` | empty | Optional comma-separated OIDC groups that receive read-only permissions. If any OIDC group mapping is configured and a user matches no group, the user is read-only. If no OIDC groups are configured, OIDC users default to admin. Can also be configured from Settings. |
+| `CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS` | empty | Optional comma-separated OIDC groups that receive read-only permissions. Can also be configured from Settings. |
+| `CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE` | `deny` | Controls OIDC users who match no configured admin or read-only group. Accepts `deny`, `admin`, or `read-only`. Can also be configured from Settings. |
 | `CROWDSEC_LOOKBACK_PERIOD` | `168h` | Alert/history retention window used for sync and cleanup. Accepts values like `12h`, `7d`, or `30m`. |
 | `CROWDSEC_REFRESH_INTERVAL` | `30s` | Normal background refresh interval. Accepts `0`, `manual`, `5s`, `30s`, `1m`, `5m`, or other `s`/`m`/`h`/`d` values. |
 | `CROWDSEC_IDLE_REFRESH_INTERVAL` | `5m` | Refresh interval used when the app considers itself idle. |
@@ -301,11 +302,12 @@ CROWDSEC_AUTH_OIDC_CLIENT_SECRET=change-me
 CROWDSEC_AUTH_OIDC_GROUPS_CLAIM=groups
 CROWDSEC_AUTH_OIDC_ADMIN_GROUPS=crowdsec-admins,secops
 CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS=crowdsec-viewers
+CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE=deny
 ```
 
-OIDC Settings accepts the issuer URL, client ID, client secret, groups claim, admin groups, and read-only groups. Saved Settings values override OIDC environment defaults. Group mapping is optional: leave the group lists empty to treat every OIDC user as an admin. Configure admin/read-only groups only when your Identity Provider should decide which SSO users get write access.
+OIDC Settings accepts the issuer URL, client ID, client secret, groups claim, admin groups, read-only groups, and the unmatched-user policy. Saved Settings values override OIDC environment defaults. By default, OIDC users who match no configured group are denied. Set the unmatched-user policy to `admin` or `read-only` only when every user who can complete OIDC sign-in should receive that fallback role.
 
-OIDC group mapping is lightweight RBAC. `PERMISSION_READ_ONLY=true` is still instance-wide and overrides user roles. For OIDC, admin group matches get full access, read-only group matches can view data and keep allowed preferences, and users with no matching group become read-only whenever any OIDC group mapping is configured.
+OIDC group mapping is lightweight RBAC. `PERMISSION_READ_ONLY=true` is still instance-wide and overrides user roles. For OIDC, admin group matches get full access, read-only group matches can view data and keep allowed preferences, and users with no matching group follow `CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE`.
 
 ### Build and Image Metadata
 

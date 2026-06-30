@@ -64,10 +64,14 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
     'pages.settings.oidcGroupsClaim': 'Groups Claim',
     'pages.settings.oidcAdminGroups': 'Admin Groups',
     'pages.settings.oidcReadOnlyGroups': 'Read-only Groups',
+    'pages.settings.oidcUnmatchedRole': 'Unmatched OIDC users',
+    'pages.settings.oidcUnmatchedRoleDeny': 'Deny sign-in',
+    'pages.settings.oidcUnmatchedRoleAdmin': 'Admin access',
+    'pages.settings.oidcUnmatchedRoleReadOnly': 'Read-only access',
     'pages.settings.addGroup': 'Add',
     'pages.settings.noGroupsConfigured': 'No groups configured.',
     'pages.settings.removeGroup': 'Remove {group}',
-    'pages.settings.oidcGroupsHelp': 'Leave group lists empty to make all OIDC users admins. If any group is configured, unmatched OIDC users are read-only.',
+    'pages.settings.oidcGroupsHelp': 'Choose what happens when an OIDC user matches no configured group. The default is deny sign-in.',
     'pages.settings.saveOidcSettings': 'Save OIDC Settings',
     'pages.settings.oidcSettingsSaved': 'OIDC settings saved.',
     'pages.settings.failedToSaveOidcSettings': 'Failed to save OIDC settings.',
@@ -287,6 +291,7 @@ describe('Settings', () => {
           oidcGroupsClaim: 'groups',
           oidcAdminGroups: '',
           oidcReadOnlyGroups: '',
+          oidcUnmatchedRole: 'deny',
           hasPassword: true,
           authMethod: 'password',
         });
@@ -349,6 +354,7 @@ describe('Settings', () => {
           oidcGroupsClaim: 'groups',
           oidcAdminGroups: '',
           oidcReadOnlyGroups: '',
+          oidcUnmatchedRole: 'deny',
           hasPassword: true,
           authMethod: 'passkey',
         });
@@ -447,6 +453,7 @@ describe('Settings', () => {
           oidcGroupsClaim: 'groups',
           oidcAdminGroups: '',
           oidcReadOnlyGroups: '',
+          oidcUnmatchedRole: 'deny',
           hasPassword: true,
           authMethod: 'password',
         });
@@ -529,6 +536,7 @@ describe('Settings', () => {
           oidcGroupsClaim: 'groups',
           oidcAdminGroups: 'Application Admin,secops',
           oidcReadOnlyGroups: 'Application User',
+          oidcUnmatchedRole: 'deny',
           hasPassword: true,
           authMethod: 'password',
         });
@@ -540,9 +548,12 @@ describe('Settings', () => {
     render(<Settings />);
 
     await screen.findByText('Application Admin');
+    expect(screen.getByLabelText('Unmatched OIDC users')).toHaveValue('deny');
+    expect(screen.getByLabelText('Unmatched OIDC users')).toHaveAccessibleDescription('Choose what happens when an OIDC user matches no configured group. The default is deny sign-in.');
     await user.click(screen.getByRole('button', { name: 'Remove secops' }));
     await user.type(screen.getByLabelText('Admin Groups'), 'security-team');
     await user.click(screen.getAllByRole('button', { name: 'Add' })[0]);
+    await user.selectOptions(screen.getByLabelText('Unmatched OIDC users'), 'admin');
     await user.click(screen.getByRole('button', { name: 'Save OIDC Settings' }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
@@ -556,6 +567,7 @@ describe('Settings', () => {
           oidcGroupsClaim: 'groups',
           oidcAdminGroups: 'Application Admin,security-team',
           oidcReadOnlyGroups: 'Application User',
+          oidcUnmatchedRole: 'admin',
         }),
       }),
     ));

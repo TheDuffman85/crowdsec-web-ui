@@ -11,7 +11,7 @@ import {
   type VerifiedRegistrationResponse,
 } from '@simplewebauthn/server';
 import * as oidcClient from 'openid-client';
-import type { DashboardAuthConfig } from './config';
+import { parseOidcUnmatchedRole, type DashboardAuthConfig, type OidcUnmatchedRole } from './config';
 import { CrowdsecDatabase, type AuthUserRow } from './database';
 
 type HonoContext = any;
@@ -25,7 +25,8 @@ type MutableAuthSettingKey =
   | 'oidc_client_secret'
   | 'oidc_groups_claim'
   | 'oidc_admin_groups'
-  | 'oidc_read_only_groups';
+  | 'oidc_read_only_groups'
+  | 'oidc_unmatched_role';
 
 interface EffectiveAuthConfig {
   oidcIssuerUrl?: string;
@@ -34,6 +35,13 @@ interface EffectiveAuthConfig {
   oidcGroupsClaim: string;
   oidcAdminGroups: string[];
   oidcReadOnlyGroups: string[];
+  oidcUnmatchedRole: OidcUnmatchedRole;
+}
+
+export interface OidcRoleConfig {
+  oidcAdminGroups: string[];
+  oidcReadOnlyGroups: string[];
+  oidcUnmatchedRole: OidcUnmatchedRole;
 }
 
 export interface SessionData {
@@ -145,12 +153,12 @@ function formatCsvList(value: string | undefined): string {
   return parseCsvList(value).join(',');
 }
 
-function resolveOidcRole(config: EffectiveAuthConfig, groups: string[]): Role {
+export function resolveOidcRole(config: OidcRoleConfig, groups: string[]): Role | null {
   const groupSet = new Set(groups);
   if (config.oidcAdminGroups.some((group) => groupSet.has(group))) return 'admin';
   if (config.oidcReadOnlyGroups.some((group) => groupSet.has(group))) return 'read-only';
-  if (config.oidcAdminGroups.length > 0 || config.oidcReadOnlyGroups.length > 0) return 'read-only';
-  return 'admin';
+  if (config.oidcUnmatchedRole === 'deny') return null;
+  return config.oidcUnmatchedRole;
 }
 
 function encryptSecret(value: string, secret: string): string {
@@ -375,7 +383,7 @@ class OidcRuntime {
     return `${authorizationEndpoint}?${params.toString()}`;
   }
 
-  async handleCallback(currentUrl: URL, expectedNonce?: string, expectedState?: string): Promise<{ username: string; role: Role } | null> {
+  async handleCallback(currentUrl: URL, expectedNonce?: string, expectedState?: string): Promise<{ username: string; role: Role | null } | null> {
     const configuration = await this.getConfiguration();
     const config = this.getConfig();
     const tokens = await oidcClient.authorizationCodeGrant(configuration, currentUrl, {
@@ -425,6 +433,7 @@ export function createDashboardAuth(options: {
       oidcGroupsClaim: readAuthSetting(database, 'oidc_groups_claim') || config.oidcGroupsClaim || 'groups',
       oidcAdminGroups: parseCsvList(readAuthSetting(database, 'oidc_admin_groups') ?? config.oidcAdminGroups.join(',')),
       oidcReadOnlyGroups: parseCsvList(readAuthSetting(database, 'oidc_read_only_groups') ?? config.oidcReadOnlyGroups.join(',')),
+      oidcUnmatchedRole: parseOidcUnmatchedRole(readAuthSetting(database, 'oidc_unmatched_role') ?? config.oidcUnmatchedRole),
     };
   }
 
@@ -598,6 +607,7 @@ export function createDashboardAuth(options: {
         oidcGroupsClaim: effectiveConfig.oidcGroupsClaim,
         oidcAdminGroups: effectiveConfig.oidcAdminGroups.join(','),
         oidcReadOnlyGroups: effectiveConfig.oidcReadOnlyGroups.join(','),
+        oidcUnmatchedRole: effectiveConfig.oidcUnmatchedRole,
         hasPassword: Boolean(user?.password_hash),
         authMethod: session.authMethod ?? null,
       });
@@ -640,6 +650,17 @@ export function createDashboardAuth(options: {
         writeAuthSetting(database, 'oidc_read_only_groups', readOnlyGroups);
       }
 
+      if ('oidcUnmatchedRole' in body) {
+        if (typeof body.oidcUnmatchedRole !== 'string') {
+          return context.json({ error: 'Invalid OIDC unmatched role' }, 400);
+        }
+        try {
+          writeAuthSetting(database, 'oidc_unmatched_role', parseOidcUnmatchedRole(body.oidcUnmatchedRole));
+        } catch {
+          return context.json({ error: 'Invalid OIDC unmatched role' }, 400);
+        }
+      }
+
       if ('oidcIssuerUrl' in body || 'oidcClientId' in body || 'oidcClientSecret' in body) {
         const currentConfig = getEffectiveConfig();
         const issuer = typeof body.oidcIssuerUrl === 'string' ? body.oidcIssuerUrl.trim() : (currentConfig.oidcIssuerUrl || '');
@@ -675,6 +696,7 @@ export function createDashboardAuth(options: {
           oidcGroupsClaim: effectiveConfig.oidcGroupsClaim,
           oidcAdminGroups: effectiveConfig.oidcAdminGroups.join(','),
           oidcReadOnlyGroups: effectiveConfig.oidcReadOnlyGroups.join(','),
+          oidcUnmatchedRole: effectiveConfig.oidcUnmatchedRole,
         },
       });
     });
@@ -839,6 +861,7 @@ export function createDashboardAuth(options: {
         callbackUrl.search = internalUrl.search;
         const result = await oidc.handleCallback(callbackUrl, nonce, state);
         if (!result) return context.json({ error: 'OIDC authentication failed' }, 400);
+        if (!result.role) return context.json({ error: 'OIDC user is not authorized' }, 403);
         const user = database.upsertOidcUser(result.username, result.role);
         createSession(context, user, 'oidc');
         deleteCookie(context, OIDC_STATE_COOKIE, { path: cookiePath });

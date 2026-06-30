@@ -3,6 +3,7 @@ import { resolveSecretEnv } from './env-secrets';
 
 export type AlertFilterMode = 'default' | 'new' | 'legacy';
 export type TimeFormat = 'browser' | '12h' | '24h';
+export type OidcUnmatchedRole = 'deny' | 'admin' | 'read-only';
 
 export interface DashboardAuthConfig {
   enabled: boolean | null;
@@ -13,6 +14,7 @@ export interface DashboardAuthConfig {
   oidcGroupsClaim: string;
   oidcAdminGroups: string[];
   oidcReadOnlyGroups: string[];
+  oidcUnmatchedRole: OidcUnmatchedRole;
 }
 
 export interface RuntimeConfig {
@@ -130,6 +132,13 @@ export function parseOptionalBooleanEnv(value: string | undefined): boolean | nu
   return null;
 }
 
+export function parseOidcUnmatchedRole(value: string | undefined): OidcUnmatchedRole {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return 'deny';
+  if (normalized === 'deny' || normalized === 'admin' || normalized === 'read-only') return normalized;
+  throw new Error('Invalid CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE value. Must be one of: deny, admin, read-only.');
+}
+
 export function parseCsvEnv(value: string | undefined): string[] {
   if (!value) return [];
   const entries = value
@@ -160,6 +169,7 @@ function parseDashboardAuthConfig(env: NodeJS.ProcessEnv): DashboardAuthConfig {
     oidcGroupsClaim: env.CROWDSEC_AUTH_OIDC_GROUPS_CLAIM?.trim() || 'groups',
     oidcAdminGroups: parseCsvEnv(env.CROWDSEC_AUTH_OIDC_ADMIN_GROUPS),
     oidcReadOnlyGroups: parseCsvEnv(env.CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS),
+    oidcUnmatchedRole: parseOidcUnmatchedRole(env.CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE),
   };
 }
 
