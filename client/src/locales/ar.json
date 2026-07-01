@@ -370,7 +370,7 @@
   "pages.metrics.lapiLatency": "زمن استجابة LAPI",
   "pages.metrics.lapiLatencyDescription": "متوسط مدة طلبات واجهة API المحلية حسب نقطة النهاية والطريقة، مشتق من مخططات المدة في CrowdSec.",
   "pages.metrics.appsecEngines": "محركات AppSec",
-  "pages.metrics.appsecEnginesDescription": "طلبات AppSec ونشاط الحظر مجمعة حسب المحرك والمصدر.",
+  "pages.metrics.appsecEnginesDescription": "نشاط AppSec مجمع حسب المحرك والمصدر. الأخضر يعرض الطلبات، والكهرماني يبرز الطلبات المحظورة.",
   "pages.metrics.emptyBouncers": "لم يعرّض CrowdSec أي مقاييس LAPI لكل مكون معالجة.",
   "pages.metrics.emptyMachines": "لم يعرّض CrowdSec أي مقاييس LAPI لكل جهاز.",
   "pages.metrics.emptyLapiLatency": "لم يعرض CrowdSec بيانات مخطط مدة LAPI.",
@@ -596,6 +596,6 @@
   "tableColumns.value": "القيمة",
   "tableColumns.view": "عرض",
   "pages.metrics.parserSuccessTooltip": "لون نجاح المحلل: الأخضر يعني 80% أو أكثر، والكهرماني من 50% إلى 80%، والذهبي أقل من 50%. قد تكون الأسطر غير المحللة طبيعية حسب إعدادات الجمع والمحلل.",
-  "pages.metrics.appsecBlockRateTooltip": "لون معدل حظر AppSec: الرمادي يعني عدم وجود طلبات محظورة لهذا المحرك/المصدر، والكهرماني يعني أن CrowdSec حظر طلبا واحدا أو أكثر. النسبة هي طلبات AppSec المحظورة مقسومة على إجمالي طلبات AppSec في عدادات المقاييس الحالية.",
+  "pages.metrics.appsecBlockRateTooltip": "شريط نشاط AppSec: الأخضر يعرض إجمالي الطلبات لهذا المحرك/المصدر، والجزء الكهرماني يعرض الطلبات المحظورة. النسبة هي طلبات AppSec المحظورة مقسومة على إجمالي طلبات AppSec في عدادات المقاييس الحالية.",
   "pages.metrics.parserTimingTooltip": "لون وقت المحلل: الأخضر أقل من 1 ms، والكهرماني من 1 ms إلى 10 ms، والذهبي أكثر من 10 ms. الوقت الأعلى يعني غالبا عملا أكبر للمحلل وليس بالضرورة خطأ."
 }

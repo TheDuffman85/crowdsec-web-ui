@@ -370,7 +370,7 @@
   "pages.metrics.lapiLatency": "Latence LAPI",
   "pages.metrics.lapiLatencyDescription": "Durée moyenne des requêtes à l API locale par point de terminaison et méthode, dérivée des histogrammes de durée CrowdSec.",
   "pages.metrics.appsecEngines": "Moteurs AppSec",
-  "pages.metrics.appsecEnginesDescription": "Requêtes et blocages AppSec regroupés par moteur et source.",
+  "pages.metrics.appsecEnginesDescription": "Activité AppSec regroupée par moteur et source. Le vert indique les requêtes ; l'ambre met en évidence les requêtes bloquées.",
   "pages.metrics.emptyBouncers": "Aucune metrique LAPI par agent de remediation n a ete exposee par CrowdSec.",
   "pages.metrics.emptyMachines": "Aucune métrique LAPI par machine n a été exposée par CrowdSec.",
   "pages.metrics.emptyLapiLatency": "CrowdSec n a exposé aucune donnée d histogramme de durée LAPI.",
@@ -596,6 +596,6 @@
   "tableColumns.value": "Valeur",
   "tableColumns.view": "Voir",
   "pages.metrics.parserSuccessTooltip": "Couleur du succès d analyse : vert signifie 80 % ou plus, ambre 50 % à 80 %, et doré moins de 50 %. Les lignes non analysées peuvent être normales selon la configuration d acquisition et d analyse.",
-  "pages.metrics.appsecBlockRateTooltip": "Couleur du taux de blocage AppSec : gris signifie aucune requête bloquée pour ce moteur/source, et ambre signifie que CrowdSec a bloqué une ou plusieurs requêtes. Le pourcentage correspond aux requêtes AppSec bloquées divisées par toutes les requêtes AppSec dans les compteurs actuels.",
+  "pages.metrics.appsecBlockRateTooltip": "Barre d'activité AppSec : le vert indique toutes les requêtes pour ce moteur/source, et le segment ambre indique les requêtes bloquées. Le pourcentage correspond aux requêtes AppSec bloquées divisées par toutes les requêtes AppSec dans les compteurs actuels.",
   "pages.metrics.parserTimingTooltip": "Couleur du temps d analyse : vert est inférieur à 1 ms, ambre va de 1 ms à 10 ms, et doré est supérieur à 10 ms. Un temps plus élevé indique généralement plus de travail d analyse, pas forcément une erreur."
 }

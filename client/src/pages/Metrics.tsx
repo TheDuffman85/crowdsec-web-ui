@@ -422,6 +422,20 @@ function ParserSourceList({ items }: { items: CrowdsecMetricsParserSource[] }) {
   );
 }
 
+function AppsecActivityBar({ requests, blocked }: { requests: number; blocked: number }) {
+  const total = Math.max(requests, blocked);
+  const blockedPercent = total > 0 ? Math.max(0, Math.min(100, (blocked / total) * 100)) : 0;
+
+  return (
+    <div className={`h-2 w-full overflow-hidden rounded-full ${total > 0 ? 'bg-emerald-500' : 'bg-gray-100 dark:bg-gray-700'}`}>
+      <div
+        className="ml-auto h-full rounded-full bg-amber-500 transition-[width]"
+        style={{ width: `${blockedPercent}%` }}
+      />
+    </div>
+  );
+}
+
 function ParserNodeList({ items, showChildNodes, onShowChildNodesChange }: { items: CrowdsecMetricsParserNode[]; showChildNodes: boolean; onShowChildNodesChange: (next: boolean) => void }) {
   const { t } = useI18n();
   const notAvailable = t('pages.metrics.notAvailable');
@@ -635,14 +649,14 @@ function AppsecEngineList({ items }: { items?: CrowdsecMetricsAppsecEngine[] }) 
                     </TooltipValue>
                   </div>
                   <div className="mt-4">
-                    <ProgressBar value={item.blockRate} tone={blockTone} />
+                    <AppsecActivityBar requests={item.requests} blocked={item.blocked} />
                   </div>
-                  <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs">
-                    <div>
-                      <p className="font-mono text-sm font-semibold text-gray-900 dark:text-white">{formatNumber(item.requests)}</p>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                    <div className="text-left">
+                      <p className="font-mono text-sm font-semibold text-emerald-700 dark:text-emerald-300">{formatNumber(item.requests)}</p>
                       <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.requests')}</p>
                     </div>
-                    <div>
+                    <div className="text-right">
                       <p className="font-mono text-sm font-semibold text-amber-700 dark:text-amber-300">{formatNumber(item.blocked)}</p>
                       <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.blocked')}</p>
                     </div>
