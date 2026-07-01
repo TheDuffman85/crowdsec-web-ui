@@ -495,6 +495,7 @@ export interface CrowdsecMetricsParserNode {
   source: string;
   type: string;
   acquisType: string | null;
+  isChild: boolean;
   processed: number;
   parsedOk: number;
   parsedKo: number;
