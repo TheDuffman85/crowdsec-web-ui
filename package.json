@@ -45,7 +45,7 @@
     "openid-client": "^6.8.4",
     "react-i18next": "^17.0.8",
     "sortablejs": "^1.15.7",
-    "undici": "8.1.0"
+    "undici": "8.5.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
