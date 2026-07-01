@@ -423,13 +423,19 @@ function ParserSourceList({ items }: { items: CrowdsecMetricsParserSource[] }) {
 }
 
 function AppsecActivityBar({ requests, blocked }: { requests: number; blocked: number }) {
-  const total = Math.max(requests, blocked);
+  const allowed = Math.max(requests - blocked, 0);
+  const total = requests > 0 ? requests : blocked;
+  const allowedPercent = total > 0 ? Math.max(0, Math.min(100, (allowed / total) * 100)) : 0;
   const blockedPercent = total > 0 ? Math.max(0, Math.min(100, (blocked / total) * 100)) : 0;
 
   return (
-    <div className={`h-2 w-full overflow-hidden rounded-full ${total > 0 ? 'bg-emerald-500' : 'bg-gray-100 dark:bg-gray-700'}`}>
+    <div className="flex h-2 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
       <div
-        className="ml-auto h-full rounded-full bg-amber-500 transition-[width]"
+        className="h-full bg-emerald-500 transition-[width]"
+        style={{ width: `${allowedPercent}%` }}
+      />
+      <div
+        className="h-full bg-amber-500 transition-[width]"
         style={{ width: `${blockedPercent}%` }}
       />
     </div>
@@ -636,6 +642,7 @@ function AppsecEngineList({ items }: { items?: CrowdsecMetricsAppsecEngine[] }) 
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {engines.map((item) => {
               const blockTone: MetricTone = item.blocked > 0 ? 'warning' : 'neutral';
+              const allowed = Math.max(item.requests - item.blocked, 0);
 
               return (
                 <div key={`${item.engine}-${item.source}`} className="rounded-lg border border-gray-100 p-4 dark:border-gray-700/70">
@@ -651,10 +658,14 @@ function AppsecEngineList({ items }: { items?: CrowdsecMetricsAppsecEngine[] }) 
                   <div className="mt-4">
                     <AppsecActivityBar requests={item.requests} blocked={item.blocked} />
                   </div>
-                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                  <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
                     <div className="text-left">
-                      <p className="font-mono text-sm font-semibold text-emerald-700 dark:text-emerald-300">{formatNumber(item.requests)}</p>
+                      <p className="font-mono text-sm font-semibold text-gray-900 dark:text-white">{formatNumber(item.requests)}</p>
                       <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.requests')}</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="font-mono text-sm font-semibold text-emerald-700 dark:text-emerald-300">{formatNumber(allowed)}</p>
+                      <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.allowed')}</p>
                     </div>
                     <div className="text-right">
                       <p className="font-mono text-sm font-semibold text-amber-700 dark:text-amber-300">{formatNumber(item.blocked)}</p>

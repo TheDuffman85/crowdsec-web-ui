@@ -370,7 +370,7 @@
   "pages.metrics.lapiLatency": "Latencia de LAPI",
   "pages.metrics.lapiLatencyDescription": "Duración media de las solicitudes a la API local por punto de conexión y método, derivada de los histogramas de duración de CrowdSec.",
   "pages.metrics.appsecEngines": "Motores AppSec",
-  "pages.metrics.appsecEnginesDescription": "Actividad de AppSec agrupada por motor y origen. El verde muestra solicitudes; el ámbar resalta solicitudes bloqueadas.",
+  "pages.metrics.appsecEnginesDescription": "Actividad de AppSec agrupada por motor y origen. El verde muestra solicitudes permitidas; el ámbar muestra solicitudes bloqueadas.",
   "pages.metrics.emptyBouncers": "CrowdSec no expuso métricas LAPI por bouncer.",
   "pages.metrics.emptyMachines": "CrowdSec no expuso métricas LAPI por máquina.",
   "pages.metrics.emptyLapiLatency": "CrowdSec no expuso datos de histogramas de duración de LAPI.",
@@ -397,6 +397,7 @@
   "pages.metrics.labels.unparsed": "sin analizar",
   "pages.metrics.labels.poured": "en bucket",
   "pages.metrics.labels.whitelisted": "permitidas",
+  "pages.metrics.labels.allowed": "permitidas",
   "pages.metrics.labels.blocked": "bloqueadas",
   "pages.metrics.columns.node": "Nodo",
   "pages.metrics.columns.stage": "Etapa",
@@ -596,6 +597,6 @@
   "tableColumns.value": "Valor",
   "tableColumns.view": "Ver",
   "pages.metrics.parserSuccessTooltip": "Color de éxito del analizador: verde es 80 % o más, ámbar es de 50 % a 80 % y dorado es menos de 50 %. Las líneas sin analizar pueden ser normales según la configuración de adquisición y análisis.",
-  "pages.metrics.appsecBlockRateTooltip": "Barra de actividad de AppSec: el verde muestra todas las solicitudes de este motor/origen, y el segmento ámbar muestra las solicitudes bloqueadas. El porcentaje es solicitudes AppSec bloqueadas dividido por el total de solicitudes AppSec en los contadores de métricas actuales.",
+  "pages.metrics.appsecBlockRateTooltip": "Barra de actividad de AppSec: el verde muestra las solicitudes permitidas de este motor/origen, y el ámbar muestra las solicitudes bloqueadas. El porcentaje es solicitudes AppSec bloqueadas dividido por el total de solicitudes AppSec en los contadores de métricas actuales.",
   "pages.metrics.parserTimingTooltip": "Color del tiempo del analizador: verde es menos de 1 ms, ámbar es de 1 ms a 10 ms y dorado es más de 10 ms. Un tiempo mayor suele indicar más trabajo del analizador, no necesariamente un error."
 }

@@ -371,7 +371,7 @@
   "pages.metrics.lapiLatency": "LAPI latency",
   "pages.metrics.lapiLatencyDescription": "Average Local API request duration by endpoint and method, derived from CrowdSec duration histograms.",
   "pages.metrics.appsecEngines": "AppSec engines",
-  "pages.metrics.appsecEnginesDescription": "AppSec activity grouped by engine and source. Green shows requests; amber highlights blocked requests.",
+  "pages.metrics.appsecEnginesDescription": "AppSec activity grouped by engine and source. Green shows allowed requests; amber shows blocked requests.",
   "pages.metrics.emptyBouncers": "No per-bouncer LAPI metrics were exposed by CrowdSec.",
   "pages.metrics.emptyMachines": "No per-machine LAPI metrics were exposed by CrowdSec.",
   "pages.metrics.emptyLapiLatency": "No LAPI duration histogram data was exposed by CrowdSec.",
@@ -398,6 +398,7 @@
   "pages.metrics.labels.unparsed": "unparsed",
   "pages.metrics.labels.poured": "poured",
   "pages.metrics.labels.whitelisted": "whitelisted",
+  "pages.metrics.labels.allowed": "allowed",
   "pages.metrics.labels.blocked": "blocked",
   "pages.metrics.columns.node": "Node",
   "pages.metrics.columns.stage": "Stage",
@@ -596,6 +597,6 @@
   "tableColumns.type": "Type",
   "tableColumns.value": "Value",
   "tableColumns.view": "View",
-  "pages.metrics.appsecBlockRateTooltip": "AppSec activity bar: green shows total requests for this engine/source, and the amber segment shows blocked requests. The percentage is blocked requests divided by total AppSec requests in the current metrics counters.",
+  "pages.metrics.appsecBlockRateTooltip": "AppSec activity bar: green shows allowed requests for this engine/source, and amber shows blocked requests. The percentage is blocked requests divided by total AppSec requests in the current metrics counters.",
   "pages.metrics.parserTimingTooltip": "Parser timing color: green is under 1 ms, amber is 1 ms to 10 ms, and gold is above 10 ms. Higher timing usually means heavier parser work, not necessarily an error."
 }

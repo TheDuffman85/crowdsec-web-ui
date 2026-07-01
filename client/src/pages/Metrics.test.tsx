@@ -94,9 +94,15 @@ describe('Metrics page', () => {
     expect(screen.getByText('/v1/alerts')).toBeInTheDocument();
     expect(screen.getByText('AppSec engines')).toBeInTheDocument();
     expect(screen.getByText('appsec')).toBeInTheDocument();
+    expect(screen.getAllByText('100').length).toBeGreaterThan(0);
+    expect(screen.getByText('requests')).toBeInTheDocument();
+    expect(screen.getByText('93')).toBeInTheDocument();
+    expect(screen.getByText('allowed')).toBeInTheDocument();
+    expect(screen.getByText('7')).toBeInTheDocument();
+    expect(screen.getByText('blocked')).toBeInTheDocument();
     expect(screen.getByText('10 parser events timed')).toBeInTheDocument();
     expect(screen.getByLabelText(/Parser timing color:/)).toBeInTheDocument();
-    expect(screen.getByLabelText(/AppSec activity bar:/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/AppSec activity bar: green shows allowed requests/)).toBeInTheDocument();
   });
 
   test('handles missing optional runtime sections', async () => {
