@@ -27,6 +27,9 @@ cs_node_wl_hits_total{name="crowdsecurity/whitelists",source="/var/log/auth.log"
 cs_node_hits_total{name="crowdsecurity/sshd-logs",source="/var/log/auth.log",type="syslog",stage="s01-parse",acquis_type="file"} 80
 cs_node_hits_ok_total{name="crowdsecurity/sshd-logs",source="/var/log/auth.log",type="syslog",stage="s01-parse",acquis_type="file"} 78
 cs_node_hits_ko_total{name="crowdsecurity/sshd-logs",source="/var/log/auth.log",type="syslog",stage="s01-parse",acquis_type="file"} 2
+cs_node_hits_total{name="child-crowdsecurity/sshd-logs",source="/var/log/auth.log",type="syslog",stage="s01-parse",acquis_type="file"} 30
+cs_node_hits_ok_total{name="child-crowdsecurity/sshd-logs",source="/var/log/auth.log",type="syslog",stage="s01-parse",acquis_type="file"} 10
+cs_node_hits_ko_total{name="child-crowdsecurity/sshd-logs",source="/var/log/auth.log",type="syslog",stage="s01-parse",acquis_type="file"} 20
 cs_parsing_time_seconds_count{source="/var/log/auth.log",type="syslog"} 100
 cs_parsing_time_seconds_sum{source="/var/log/auth.log",type="syslog"} 0.25
 `);
@@ -84,7 +87,15 @@ cs_parsing_time_seconds_sum{source="/var/log/auth.log",type="syslog"} 0.25
       processed: 80,
       parsedOk: 78,
       parsedKo: 2,
+      isChild: false,
       successRate: 0.975,
+    });
+    expect(summary.parserNodes.find((node) => node.name === 'child-crowdsecurity/sshd-logs')).toMatchObject({
+      isChild: true,
+      processed: 30,
+      parsedOk: 10,
+      parsedKo: 20,
+      successRate: 10 / 30,
     });
     expect(summary.parserTimings[0]).toMatchObject({
       source: '/var/log/auth.log',

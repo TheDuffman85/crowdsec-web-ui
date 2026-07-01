@@ -163,6 +163,8 @@ Supported dashboard filters: `country`, `scenario`, `as`, `ip`, `target`, `dateS
 
 The response includes `fetched_at`, `totals`, `bouncers`, `machines`, `parserSources`, `parserNodes`, `whitelists`, and `parserTimings`. It can also include runtime-only observability sections: `lapiRoutes` and `appsecEngines`.
 
+Parser node entries include `isChild`, which is `true` for CrowdSec child parser nodes emitted with the `child-` prefix.
+
 Parser, LAPI latency, AppSec, bouncer, and machine values are derived from the current CrowdSec Prometheus scrape. The endpoint does not query Prometheus history or calculate Grafana-style `rate()`/`increase()` windows, so metrics that require time-window tracking are intentionally omitted.
 
 ## Notifications

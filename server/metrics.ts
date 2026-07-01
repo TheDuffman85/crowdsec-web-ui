@@ -354,8 +354,13 @@ function aggregateParserNodes(samples: PrometheusSample[]): CrowdsecMetricsParse
   return sortedTop(Array.from(nodes.values()), (node) => node.processed || node.parsedOk + node.parsedKo)
     .map((node) => ({
       ...node,
+      isChild: isChildParserNodeName(node.name),
       successRate: successRate(node.parsedOk, node.parsedKo, node.processed),
     }));
+}
+
+function isChildParserNodeName(name: string): boolean {
+  return name.startsWith('child-');
 }
 
 function aggregateParserTimings(samples: PrometheusSample[]): CrowdsecMetricsTiming[] {
