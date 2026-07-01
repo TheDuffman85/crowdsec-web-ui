@@ -73,7 +73,7 @@
     "react-router-dom": "^7.14.2",
     "react-window": "^2.2.7",
     "react-zoom-pan-pinch": "4.0.3",
-    "recharts": "3.8.1",
+    "recharts": "3.9.1",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.3.0",
     "tsup": "8.5.1",
