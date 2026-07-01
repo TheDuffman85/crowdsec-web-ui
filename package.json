@@ -39,7 +39,7 @@
     "@simplewebauthn/server": "^13.3.0",
     "@types/sortablejs": "^1.15.9",
     "better-sqlite3": "12.10.0",
-    "hono": "4.12.23",
+    "hono": "4.12.27",
     "i18next": "^26.3.4",
     "mqtt": "^5.15.1",
     "openid-client": "^6.8.4",
