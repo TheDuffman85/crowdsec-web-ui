@@ -40,7 +40,7 @@
     "@types/sortablejs": "^1.15.9",
     "better-sqlite3": "12.10.0",
     "hono": "4.12.23",
-    "i18next": "^26.3.1",
+    "i18next": "^26.3.4",
     "mqtt": "^5.15.1",
     "openid-client": "^6.8.4",
     "react-i18next": "^17.0.8",
