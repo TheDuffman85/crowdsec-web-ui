@@ -387,7 +387,7 @@
   "pages.metrics.unavailableTitle": "指标不可用",
   "pages.metrics.retry": "重试",
   "pages.metrics.noRouteActivity": "无路由活动",
-  "pages.metrics.parsedLinesTimed": "已计时 {count} 行解析记录",
+  "pages.metrics.parsedLinesTimed": "已计时 {count} 个解析器事件",
   "pages.metrics.notAvailable": "不可用",
   "pages.metrics.labels.requests": "请求",
   "pages.metrics.labels.nonEmpty": "{count} 非空",

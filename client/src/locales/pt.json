@@ -387,7 +387,7 @@
   "pages.metrics.unavailableTitle": "Métricas indisponíveis",
   "pages.metrics.retry": "Tentar novamente",
   "pages.metrics.noRouteActivity": "Sem atividade de rota",
-  "pages.metrics.parsedLinesTimed": "{count} linhas analisadas cronometradas",
+  "pages.metrics.parsedLinesTimed": "{count} eventos do analisador cronometrados",
   "pages.metrics.notAvailable": "n/d",
   "pages.metrics.labels.requests": "requisições",
   "pages.metrics.labels.nonEmpty": "{count} não vazias",

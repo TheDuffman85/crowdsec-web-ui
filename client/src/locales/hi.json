@@ -387,7 +387,7 @@
   "pages.metrics.unavailableTitle": "मेट्रिक्स उपलब्ध नहीं",
   "pages.metrics.retry": "फिर प्रयास करें",
   "pages.metrics.noRouteActivity": "कोई रूट गतिविधि नहीं",
-  "pages.metrics.parsedLinesTimed": "{count} विश्लेषित लाइनों का समय मापा गया",
+  "pages.metrics.parsedLinesTimed": "{count} पार्सर इवेंट का समय मापा गया",
   "pages.metrics.notAvailable": "लागू नहीं",
   "pages.metrics.labels.requests": "अनुरोध",
   "pages.metrics.labels.nonEmpty": "{count} खाली नहीं",

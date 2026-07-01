@@ -388,7 +388,7 @@
   "pages.metrics.unavailableTitle": "Metrics unavailable",
   "pages.metrics.retry": "Retry",
   "pages.metrics.noRouteActivity": "No route activity",
-  "pages.metrics.parsedLinesTimed": "{count} parsed lines timed",
+  "pages.metrics.parsedLinesTimed": "{count} parser events timed",
   "pages.metrics.notAvailable": "n/a",
   "pages.metrics.labels.requests": "requests",
   "pages.metrics.labels.nonEmpty": "{count} non-empty",
