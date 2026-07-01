@@ -370,7 +370,7 @@
   "pages.metrics.lapiLatency": "LAPI-Latenz",
   "pages.metrics.lapiLatencyDescription": "Durchschnittliche Dauer von Anfragen an die lokale API nach Endpunkt und Methode, abgeleitet aus CrowdSec-Dauerhistogrammen.",
   "pages.metrics.appsecEngines": "AppSec-Engines",
-  "pages.metrics.appsecEnginesDescription": "AppSec-Aktivität, gruppiert nach Engine und Quelle. Grün zeigt Anfragen, Amber markiert blockierte Anfragen.",
+  "pages.metrics.appsecEnginesDescription": "AppSec-Aktivität, gruppiert nach Engine und Quelle. Grün zeigt zugelassene Anfragen, Amber zeigt blockierte Anfragen.",
   "pages.metrics.emptyBouncers": "CrowdSec hat keine LAPI-Metriken pro Bouncer bereitgestellt.",
   "pages.metrics.emptyMachines": "CrowdSec hat keine LAPI-Metriken pro Machine bereitgestellt.",
   "pages.metrics.emptyLapiLatency": "CrowdSec hat keine LAPI-Dauerhistogrammdaten bereitgestellt.",
@@ -397,6 +397,7 @@
   "pages.metrics.labels.unparsed": "ungeparst",
   "pages.metrics.labels.poured": "in Bucket übergeben",
   "pages.metrics.labels.whitelisted": "zugelassen",
+  "pages.metrics.labels.allowed": "zugelassen",
   "pages.metrics.labels.blocked": "blockiert",
   "pages.metrics.columns.node": "Knoten",
   "pages.metrics.columns.stage": "Stufe",
@@ -596,6 +597,6 @@
   "tableColumns.value": "Wert",
   "tableColumns.view": "Ansehen",
   "pages.metrics.parserSuccessTooltip": "Farbe der Analyse-Erfolgsrate: Grün bedeutet 80 % oder mehr, Amber 50 % bis 80 % und Gold unter 50 %. Ungeparste Zeilen können je nach Erfassungs- und Analysekonfiguration normal sein.",
-  "pages.metrics.appsecBlockRateTooltip": "AppSec-Aktivitätsbalken: Grün zeigt alle Anfragen für diese Engine/Quelle, der Amber-Abschnitt zeigt blockierte Anfragen. Der Prozentsatz ist blockierte AppSec-Anfragen geteilt durch alle AppSec-Anfragen in den aktuellen Metrikzählern.",
+  "pages.metrics.appsecBlockRateTooltip": "AppSec-Aktivitätsbalken: Grün zeigt zugelassene Anfragen für diese Engine/Quelle, Amber zeigt blockierte Anfragen. Der Prozentsatz ist blockierte AppSec-Anfragen geteilt durch alle AppSec-Anfragen in den aktuellen Metrikzählern.",
   "pages.metrics.parserTimingTooltip": "Farbe der Analysezeit: Grün liegt unter 1 ms, Amber bei 1 ms bis 10 ms und Gold über 10 ms. Höhere Zeiten bedeuten meist mehr Analysearbeit, nicht unbedingt einen Fehler."
 }

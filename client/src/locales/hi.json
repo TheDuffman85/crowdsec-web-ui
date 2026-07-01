@@ -370,7 +370,7 @@
   "pages.metrics.lapiLatency": "LAPI विलंबता",
   "pages.metrics.lapiLatencyDescription": "एंडपॉइंट और मेथड के अनुसार स्थानीय API अनुरोधों की औसत अवधि, CrowdSec के अवधि हिस्टोग्राम से निकाली गई।",
   "pages.metrics.appsecEngines": "AppSec इंजन",
-  "pages.metrics.appsecEnginesDescription": "इंजन और स्रोत के अनुसार समूहित AppSec गतिविधि। हरा अनुरोध दिखाता है; एम्बर ब्लॉक किए गए अनुरोधों को दिखाता है।",
+  "pages.metrics.appsecEnginesDescription": "इंजन और स्रोत के अनुसार समूहित AppSec गतिविधि। हरा अनुमति प्राप्त अनुरोध दिखाता है; एम्बर ब्लॉक किए गए अनुरोध दिखाता है।",
   "pages.metrics.emptyBouncers": "CrowdSec ने प्रति-उपचारक LAPI मेट्रिक्स उपलब्ध नहीं कराए।",
   "pages.metrics.emptyMachines": "CrowdSec ने प्रति-मशीन LAPI मेट्रिक्स उपलब्ध नहीं कराए।",
   "pages.metrics.emptyLapiLatency": "CrowdSec ने LAPI अवधि हिस्टोग्राम डेटा उपलब्ध नहीं कराया।",
@@ -397,6 +397,7 @@
   "pages.metrics.labels.unparsed": "अपार्स",
   "pages.metrics.labels.poured": "बकेट में",
   "pages.metrics.labels.whitelisted": "अनुमति-सूची में",
+  "pages.metrics.labels.allowed": "अनुमत",
   "pages.metrics.labels.blocked": "ब्लॉक किए गए",
   "pages.metrics.columns.node": "नोड",
   "pages.metrics.columns.stage": "चरण",
@@ -596,6 +597,6 @@
   "tableColumns.value": "मान",
   "tableColumns.view": "देखें",
   "pages.metrics.parserSuccessTooltip": "विश्लेषक सफलता का रंग: हरा 80% या अधिक, एम्बर 50% से 80%, और सुनहरा 50% से कम है। अपार्स लाइनें आपके संग्रह और विश्लेषक सेटअप के अनुसार सामान्य हो सकती हैं।",
-  "pages.metrics.appsecBlockRateTooltip": "AppSec गतिविधि बार: हरा इस इंजन/स्रोत के कुल अनुरोध दिखाता है, और एम्बर भाग ब्लॉक किए गए अनुरोध दिखाता है। प्रतिशत मौजूदा मेट्रिक्स काउंटर में ब्लॉक किए गए AppSec अनुरोधों को कुल AppSec अनुरोधों से भाग देकर निकाला जाता है।",
+  "pages.metrics.appsecBlockRateTooltip": "AppSec गतिविधि बार: हरा इस इंजन/स्रोत के अनुमति प्राप्त अनुरोध दिखाता है, और एम्बर ब्लॉक किए गए अनुरोध दिखाता है। प्रतिशत मौजूदा मेट्रिक्स काउंटर में ब्लॉक किए गए AppSec अनुरोधों को कुल AppSec अनुरोधों से भाग देकर निकाला जाता है।",
   "pages.metrics.parserTimingTooltip": "विश्लेषक समय का रंग: हरा 1 ms से कम, एम्बर 1 ms से 10 ms, और सुनहरा 10 ms से अधिक है। अधिक समय आम तौर पर ज्यादा विश्लेषक कार्य दिखाता है, जरूरी नहीं कि यह त्रुटि हो।"
 }
