@@ -94,6 +94,7 @@ describe('Metrics page', () => {
     expect(screen.getByText('/v1/alerts')).toBeInTheDocument();
     expect(screen.getByText('AppSec engines')).toBeInTheDocument();
     expect(screen.getByText('appsec')).toBeInTheDocument();
+    expect(screen.getByText('10 parser events timed')).toBeInTheDocument();
     expect(screen.getByLabelText(/Parser timing color:/)).toBeInTheDocument();
     expect(screen.getByLabelText(/AppSec activity bar:/)).toBeInTheDocument();
   });

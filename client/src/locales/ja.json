@@ -387,7 +387,7 @@
   "pages.metrics.unavailableTitle": "メトリクスを利用できません",
   "pages.metrics.retry": "再試行",
   "pages.metrics.noRouteActivity": "ルートアクティビティなし",
-  "pages.metrics.parsedLinesTimed": "解析済み {count} 行の時間を計測",
+  "pages.metrics.parsedLinesTimed": "{count} 件のパーサーイベントを計測",
   "pages.metrics.notAvailable": "該当なし",
   "pages.metrics.labels.requests": "リクエスト",
   "pages.metrics.labels.nonEmpty": "{count} 非空",

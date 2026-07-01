@@ -387,7 +387,7 @@
   "pages.metrics.unavailableTitle": "Метрики недоступны",
   "pages.metrics.retry": "Повторить",
   "pages.metrics.noRouteActivity": "Нет активности маршрута",
-  "pages.metrics.parsedLinesTimed": "{count} разобранных строк с измеренным временем",
+  "pages.metrics.parsedLinesTimed": "{count} событий парсера с измеренным временем",
   "pages.metrics.notAvailable": "н/д",
   "pages.metrics.labels.requests": "запросы",
   "pages.metrics.labels.nonEmpty": "{count} не пусто",

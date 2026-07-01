@@ -387,7 +387,7 @@
   "pages.metrics.unavailableTitle": "المقاييس غير متاحة",
   "pages.metrics.retry": "إعادة المحاولة",
   "pages.metrics.noRouteActivity": "لا يوجد نشاط مسار",
-  "pages.metrics.parsedLinesTimed": "تم قياس وقت {count} أسطر محللة",
+  "pages.metrics.parsedLinesTimed": "تم قياس وقت {count} أحداث محلل",
   "pages.metrics.notAvailable": "غير متاح",
   "pages.metrics.labels.requests": "طلبات",
   "pages.metrics.labels.nonEmpty": "{count} غير فارغة",
