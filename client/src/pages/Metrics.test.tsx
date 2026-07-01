@@ -95,7 +95,7 @@ describe('Metrics page', () => {
     expect(screen.getByText('AppSec engines')).toBeInTheDocument();
     expect(screen.getByText('appsec')).toBeInTheDocument();
     expect(screen.getByLabelText(/Parser timing color:/)).toBeInTheDocument();
-    expect(screen.getByLabelText(/AppSec block rate color:/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/AppSec activity bar:/)).toBeInTheDocument();
   });
 
   test('handles missing optional runtime sections', async () => {

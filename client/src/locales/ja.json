@@ -370,7 +370,7 @@
   "pages.metrics.lapiLatency": "LAPI レイテンシ",
   "pages.metrics.lapiLatencyDescription": "CrowdSec の所要時間ヒストグラムから算出した、エンドポイントとメソッド別のローカル API リクエスト平均時間です。",
   "pages.metrics.appsecEngines": "AppSec エンジン",
-  "pages.metrics.appsecEnginesDescription": "AppSec のリクエストとブロック状況をエンジンとソース別に表示します。",
+  "pages.metrics.appsecEnginesDescription": "AppSec のアクティビティをエンジンとソース別に表示します。緑はリクエスト、アンバーはブロックされたリクエストを示します。",
   "pages.metrics.emptyBouncers": "CrowdSec からバウンサーごとの LAPI メトリクスは公開されていません。",
   "pages.metrics.emptyMachines": "CrowdSec からマシンごとの LAPI メトリクスは公開されていません。",
   "pages.metrics.emptyLapiLatency": "CrowdSec から LAPI 所要時間ヒストグラムデータが公開されていません。",
@@ -596,6 +596,6 @@
   "tableColumns.value": "値",
   "tableColumns.view": "表示",
   "pages.metrics.parserSuccessTooltip": "パーサー成功率の色: 緑は 80% 以上、アンバーは 50% から 80%、ゴールドは 50% 未満です。未解析行は、取得設定やパーサー設定によっては正常な場合があります。",
-  "pages.metrics.appsecBlockRateTooltip": "AppSec ブロック率の色: グレーはこのエンジン/ソースでブロックされたリクエストがないことを示し、アンバーは CrowdSec が 1 件以上のリクエストをブロックしたことを示します。割合は現在のメトリクスカウンターで、ブロック済み AppSec リクエスト数を AppSec リクエスト総数で割った値です。",
+  "pages.metrics.appsecBlockRateTooltip": "AppSec アクティビティバー: 緑はこのエンジン/ソースの総リクエスト数、アンバーの部分はブロックされたリクエストを示します。割合は現在のメトリクスカウンターで、ブロック済み AppSec リクエスト数を AppSec リクエスト総数で割った値です。",
   "pages.metrics.parserTimingTooltip": "パーサー時間の色: 緑は 1 ms 未満、アンバーは 1 ms から 10 ms、ゴールドは 10 ms 超です。時間が長い場合は通常、パーサー処理が重いことを示し、必ずしもエラーではありません。"
 }

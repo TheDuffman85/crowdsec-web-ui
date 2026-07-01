@@ -370,7 +370,7 @@
   "pages.metrics.lapiLatency": "LAPI 延迟",
   "pages.metrics.lapiLatencyDescription": "按端点和方法统计的本地 API 请求平均耗时，来自 CrowdSec 耗时直方图。",
   "pages.metrics.appsecEngines": "AppSec 引擎",
-  "pages.metrics.appsecEnginesDescription": "按引擎和来源分组的 AppSec 请求与拦截活动。",
+  "pages.metrics.appsecEnginesDescription": "按引擎和来源分组的 AppSec 活动。绿色表示请求，琥珀色突出显示被拦截的请求。",
   "pages.metrics.emptyBouncers": "CrowdSec 未暴露按防护组件统计的 LAPI 指标。",
   "pages.metrics.emptyMachines": "CrowdSec 未暴露按节点统计的 LAPI 指标。",
   "pages.metrics.emptyLapiLatency": "CrowdSec 未暴露 LAPI 耗时直方图数据。",
@@ -596,6 +596,6 @@
   "tableColumns.value": "值",
   "tableColumns.view": "查看",
   "pages.metrics.parserSuccessTooltip": "解析器成功率颜色：绿色表示 80% 或更高，琥珀色表示 50% 到 80%，金色表示低于 50%。未解析行可能是正常现象，取决于你的采集和解析器配置。",
-  "pages.metrics.appsecBlockRateTooltip": "AppSec 拦截率颜色：灰色表示此引擎/来源没有被拦截的请求，琥珀色表示 CrowdSec 拦截了一个或多个请求。该百分比等于当前指标计数器中已拦截的 AppSec 请求数除以 AppSec 请求总数。",
+  "pages.metrics.appsecBlockRateTooltip": "AppSec 活动条：绿色表示此引擎/来源的请求总量，琥珀色段表示被拦截的请求。该百分比等于当前指标计数器中已拦截的 AppSec 请求数除以 AppSec 请求总数。",
   "pages.metrics.parserTimingTooltip": "解析器耗时颜色：绿色表示低于 1 ms，琥珀色表示 1 ms 到 10 ms，金色表示高于 10 ms。耗时更高通常表示解析器工作更重，不一定是错误。"
 }
