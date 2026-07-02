@@ -41,7 +41,7 @@ import type {
 } from '../shared/contracts';
 import { resolveMachineName } from '../shared/machine';
 import { collectDistinctOrigins, normalizeOrigin } from '../shared/origin';
-import { compileAlertSearch, compileDecisionSearch, type SearchParseError } from '../shared/search';
+import { compileAlertSearch, compileDecisionSearch, matchesIpSearchValue, type SearchParseError } from '../shared/search';
 import { createRuntimeConfig, getIntervalName, parseRefreshInterval, type RuntimeConfig } from './config';
 import { getDateTimeKey, getTimeZoneOffsetMs, getZonedHourlyBucketKeys } from './utils/date-time';
 import { CrowdsecDatabase, type AlertInsertParams, type DecisionInsertParams } from './database';
@@ -3492,7 +3492,7 @@ function matchesDashboardAlertFilters(
   if (filters.country && alert.country !== filters.country) return false;
   if (filters.scenario && alert.scenario !== filters.scenario) return false;
   if (filters.as && alert.asName !== filters.as) return false;
-  if (filters.ip && alert.ip !== filters.ip) return false;
+  if (filters.ip && !matchesIpSearchValue(alert.ip, filters.ip)) return false;
   if (filters.target && alert.target !== filters.target) return false;
 
   if (includeDateRange && !matchesDashboardDateRange(alert.createdAt, filters)) {
@@ -3508,7 +3508,7 @@ function matchesDashboardDecisionFilters(
   alertIps: Set<string>,
   includeDateRange: boolean,
 ): boolean {
-  if (filters.ip && decision.value !== filters.ip) return false;
+  if (filters.ip && !matchesIpSearchValue(decision.value, filters.ip)) return false;
 
   if (requiresDashboardAlertIpJoin(filters) && (!decision.value || !alertIps.has(decision.value))) {
     return false;
@@ -3813,12 +3813,11 @@ function matchesAlertListFilters(alert: SlimAlert, filters: AlertListFilters): b
   if (!matchesSimulationFilter(alert.simulated === true, filters.simulation)) return false;
 
   const scenario = (alert.scenario || '').toLowerCase();
-  const sourceValue = (getAlertSourceValue(alert.source) || '').toLowerCase();
   const cn = (alert.source?.cn || '').toLowerCase();
   const asName = (alert.source?.as_name || '').toLowerCase();
   const target = (alert.target || '').toLowerCase();
 
-  if (filters.ip && !sourceValue.includes(filters.ip)) return false;
+  if (filters.ip && !getSlimAlertSourceValues(alert).some((value) => matchesIpSearchValue(value, filters.ip))) return false;
   if (filters.country && !cn.includes(filters.country)) return false;
   if (filters.scenario && !scenario.includes(filters.scenario)) return false;
   if (filters.as && !asName.includes(filters.as)) return false;
@@ -3846,7 +3845,7 @@ function matchesDecisionListFilters(decision: DecisionListItem, filters: Decisio
   if (filters.country && decision.detail.country !== filters.country) return false;
   if (filters.scenario && decision.detail.reason !== filters.scenario) return false;
   if (filters.as && decision.detail.as !== filters.as) return false;
-  if (filters.ip && decision.value !== filters.ip) return false;
+  if (filters.ip && !matchesIpSearchValue(decision.value, filters.ip)) return false;
 
   if (filters.target) {
     const value = (decision.value || '').toLowerCase();
@@ -3873,6 +3872,11 @@ function matchesSimulationFilter(isSimulated: boolean, filter: string): boolean 
   if (filter === 'simulated') return isSimulated;
   if (filter === 'live') return !isSimulated;
   return true;
+}
+
+function getSlimAlertSourceValues(alert: SlimAlert): string[] {
+  return [alert.source?.ip, alert.source?.value, alert.source?.range]
+    .filter((value): value is string => Boolean(value));
 }
 
 function isDecisionListItemExpired(decision: DecisionListItem): boolean {

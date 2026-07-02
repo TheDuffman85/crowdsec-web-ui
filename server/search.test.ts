@@ -164,6 +164,51 @@ describe('shared search compiler', () => {
     expect(nameSearch.predicate(swedenAlert)).toBe(false);
   });
 
+  test('matches alert source IPs and ranges contained in an IPv4 CIDR search', () => {
+    const compiled = compileAlertSearch('ip:10.0.0.0/24');
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) {
+      return;
+    }
+
+    expect(compiled.predicate({
+      ...baseAlert,
+      source: { value: '10.0.0.42' },
+    })).toBe(true);
+    expect(compiled.predicate({
+      ...baseAlert,
+      source: { range: '10.0.0.0/24' },
+    })).toBe(true);
+    expect(compiled.predicate({
+      ...baseAlert,
+      source: { range: '10.0.0.128/25' },
+    })).toBe(true);
+    expect(compiled.predicate({
+      ...baseAlert,
+      source: { value: '10.0.1.42' },
+    })).toBe(false);
+  });
+
+  test('matches bare CIDR terms against alert and decision IP fields', () => {
+    const alertSearch = compileAlertSearch('10.0.0.0/24');
+    expect(alertSearch.ok).toBe(true);
+    if (!alertSearch.ok) {
+      return;
+    }
+
+    expect(alertSearch.predicate({ ...baseAlert, source: { ip: '10.0.0.42' } })).toBe(true);
+    expect(alertSearch.predicate({ ...baseAlert, source: { ip: '10.0.1.42' } })).toBe(false);
+
+    const decisionSearch = compileDecisionSearch('2001:db8::/32');
+    expect(decisionSearch.ok).toBe(true);
+    if (!decisionSearch.ok) {
+      return;
+    }
+
+    expect(decisionSearch.predicate({ ...baseDecision, value: '2001:db8::42' })).toBe(true);
+    expect(decisionSearch.predicate({ ...baseDecision, value: '2001:db9::42' })).toBe(false);
+  });
+
   test('supports semantic decision fields', () => {
     const compiled = compileDecisionSearch('status:active AND action:ban AND alert:123 AND duplicate:false');
     expect(compiled.ok).toBe(true);
@@ -194,6 +239,29 @@ describe('shared search compiler', () => {
 
     expect(nameSearch.predicate(baseDecision)).toBe(true);
     expect(nameSearch.predicate(swedenDecision)).toBe(false);
+  });
+
+  test('matches decision IPs and ranges contained in IPv4 and IPv6 CIDR searches', () => {
+    const ipv4Search = compileDecisionSearch('ip:10.0.0.0/24');
+    expect(ipv4Search.ok).toBe(true);
+    if (!ipv4Search.ok) {
+      return;
+    }
+
+    expect(ipv4Search.predicate({ ...baseDecision, value: '10.0.0.42' })).toBe(true);
+    expect(ipv4Search.predicate({ ...baseDecision, value: '10.0.0.0/24' })).toBe(true);
+    expect(ipv4Search.predicate({ ...baseDecision, value: '10.0.0.128/25' })).toBe(true);
+    expect(ipv4Search.predicate({ ...baseDecision, value: '10.0.1.42' })).toBe(false);
+
+    const ipv6Search = compileDecisionSearch('ip:"2001:db8::/32"');
+    expect(ipv6Search.ok).toBe(true);
+    if (!ipv6Search.ok) {
+      return;
+    }
+
+    expect(ipv6Search.predicate({ ...baseDecision, value: '2001:db8::42' })).toBe(true);
+    expect(ipv6Search.predicate({ ...baseDecision, value: '2001:db8:1::/48' })).toBe(true);
+    expect(ipv6Search.predicate({ ...baseDecision, value: '2001:db9::42' })).toBe(false);
   });
 
   test('supports date equality and the => alias for decisions', () => {

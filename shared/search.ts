@@ -506,7 +506,7 @@ const alertFieldMatchers: AlertFieldMatcherMap = {
   id: (alert, value) => normalizeValue(alert.id) === normalizeValue(value),
   scenario: (alert, value) => includesNormalized(alert.scenario, value),
   message: (alert, value) => includesNormalized(alert.message, value),
-  ip: (alert, value) => getAlertSourceValues(alert).some((candidate) => includesNormalized(candidate, value)),
+  ip: (alert, value) => getAlertSourceValues(alert).some((candidate) => matchesIpSearchValue(candidate, value)),
   country: (alert, value) => matchesCountryField(alert.source?.cn || '', value),
   as: (alert, value) => includesNormalized(alert.source?.as_name, value),
   target: (alert, value) => includesNormalized(alert.target, value),
@@ -520,7 +520,7 @@ const decisionFieldMatchers: DecisionFieldMatcherMap = {
   id: (decision, value) => normalizeValue(decision.id) === normalizeValue(value),
   alert: (decision, value) => normalizeValue(decision.detail.alert_id) === normalizeValue(value),
   scenario: (decision, value) => includesNormalized(decision.detail.reason || decision.scenario, value),
-  ip: (decision, value) => includesNormalized(decision.value, value),
+  ip: (decision, value) => matchesIpSearchValue(decision.value, value),
   country: (decision, value) => matchesCountryField(decision.detail.country || '', value),
   as: (decision, value) => includesNormalized(decision.detail.as, value),
   target: (decision, value) => includesNormalized(decision.detail.target, value),
@@ -1230,8 +1230,9 @@ function matchAlertFreeText(alert: SlimAlert, value: string): boolean {
   const machine = resolveMachineName(alert) || '';
   const origins = collectDistinctOrigins(alert.decisions);
   const simulationSearch = alert.simulated === true ? 'simulation simulated' : 'live';
+  const sourceValues = getAlertSourceValues(alert);
 
-  return [
+  return sourceValues.some((candidate) => matchesIpSearchValue(candidate, value)) || [
     scenario,
     message,
     asName,
@@ -1241,7 +1242,6 @@ function matchAlertFreeText(alert: SlimAlert, value: string): boolean {
     machine,
     alert.meta_search || '',
     simulationSearch,
-    ...getAlertSourceValues(alert),
     ...origins,
   ].some((candidate) => includesNormalized(candidate, value));
 }
@@ -1252,8 +1252,7 @@ function matchDecisionFreeText(decision: DecisionListItem, value: string): boole
   const machine = decision.machine || '';
   const simulationSearch = decision.simulated === true ? 'simulation simulated' : 'live';
 
-  return [
-    decision.value || '',
+  return matchesIpSearchValue(decision.value, value) || [
     decision.detail.reason || decision.scenario || '',
     countryCode,
     countryName,
@@ -1306,6 +1305,33 @@ function compareFieldValue<T>(
 
 function getAlertSourceValues(alert: SlimAlert): string[] {
   return [alert.source?.ip, alert.source?.value, alert.source?.range].filter((value): value is string => Boolean(value));
+}
+
+export function matchesIpSearchValue(candidate: string | number | null | undefined, value: string): boolean {
+  const normalizedCandidate = normalizeValue(candidate);
+  const normalizedValue = normalizeValue(value);
+  if (!normalizedCandidate || !normalizedValue) {
+    return false;
+  }
+
+  if (normalizedCandidate === normalizedValue) {
+    return true;
+  }
+
+  const filterCidr = parseCidrRange(normalizedValue);
+  if (filterCidr) {
+    const candidateIp = parseIpAddress(normalizedCandidate);
+    if (candidateIp && candidateIp.version === filterCidr.version) {
+      return cidrContainsIp(filterCidr, candidateIp);
+    }
+
+    const candidateCidr = parseCidrRange(normalizedCandidate);
+    if (candidateCidr && candidateCidr.version === filterCidr.version) {
+      return cidrContainsCidr(filterCidr, candidateCidr);
+    }
+  }
+
+  return includesNormalized(normalizedCandidate, normalizedValue);
 }
 
 function includesNormalized(candidate: string | number | null | undefined, value: string): boolean {
@@ -1384,6 +1410,125 @@ function matchesBoolean(candidate: boolean, value: string): boolean {
     return !candidate;
   }
   return false;
+}
+
+type ParsedIpAddress = { version: 4 | 6; bits: 32 | 128; value: bigint };
+type ParsedCidrRange = ParsedIpAddress & { prefix: number };
+
+function parseCidrRange(value: string): ParsedCidrRange | null {
+  const [addressText, prefixText, extraText] = value.split('/');
+  if (extraText !== undefined || prefixText === undefined || !/^\d+$/.test(prefixText)) {
+    return null;
+  }
+
+  const address = parseIpAddress(addressText);
+  if (!address) {
+    return null;
+  }
+
+  const prefix = Number(prefixText);
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > address.bits) {
+    return null;
+  }
+
+  return { ...address, prefix };
+}
+
+function cidrContainsIp(cidr: ParsedCidrRange, address: ParsedIpAddress): boolean {
+  if (cidr.version !== address.version) {
+    return false;
+  }
+
+  const mask = getCidrMask(cidr.bits, cidr.prefix);
+  return (cidr.value & mask) === (address.value & mask);
+}
+
+function cidrContainsCidr(filter: ParsedCidrRange, candidate: ParsedCidrRange): boolean {
+  return filter.version === candidate.version &&
+    candidate.prefix >= filter.prefix &&
+    cidrContainsIp(filter, candidate);
+}
+
+function getCidrMask(bits: 32 | 128, prefix: number): bigint {
+  if (prefix === 0) {
+    return 0n;
+  }
+
+  return ((1n << BigInt(bits)) - 1n) ^ ((1n << BigInt(bits - prefix)) - 1n);
+}
+
+function parseIpAddress(value: string): ParsedIpAddress | null {
+  if (value.includes(':')) {
+    const parsed = parseIpv6Address(value);
+    return parsed === null ? null : { version: 6, bits: 128, value: parsed };
+  }
+
+  const parsed = parseIpv4Address(value);
+  return parsed === null ? null : { version: 4, bits: 32, value: parsed };
+}
+
+function parseIpv4Address(value: string): bigint | null {
+  const parts = value.split('.');
+  if (parts.length !== 4) {
+    return null;
+  }
+
+  let result = 0n;
+  for (const part of parts) {
+    if (!/^\d+$/.test(part)) {
+      return null;
+    }
+
+    const octet = Number(part);
+    if (!Number.isInteger(octet) || octet < 0 || octet > 255) {
+      return null;
+    }
+
+    result = (result << 8n) + BigInt(octet);
+  }
+  return result;
+}
+
+function parseIpv6Address(value: string): bigint | null {
+  const normalized = value.toLowerCase();
+  const [leftText, rightText, extraText] = normalized.split('::');
+  if (extraText !== undefined) {
+    return null;
+  }
+
+  const leftParts = splitIpv6Parts(leftText || '');
+  const rightParts = rightText === undefined ? [] : splitIpv6Parts(rightText || '');
+  if (!leftParts || !rightParts) {
+    return null;
+  }
+
+  const missingParts = 8 - leftParts.length - rightParts.length;
+  if (rightText === undefined ? missingParts !== 0 : missingParts < 1) {
+    return null;
+  }
+
+  const parts = [...leftParts, ...Array.from({ length: missingParts }, () => 0), ...rightParts];
+  if (parts.length !== 8) {
+    return null;
+  }
+
+  return parts.reduce((result, part) => (result << 16n) + BigInt(part), 0n);
+}
+
+function splitIpv6Parts(value: string): number[] | null {
+  if (!value) {
+    return [];
+  }
+
+  const parts = value.split(':');
+  const parsed: number[] = [];
+  for (const part of parts) {
+    if (!/^[0-9a-f]{1,4}$/.test(part)) {
+      return null;
+    }
+    parsed.push(Number.parseInt(part, 16));
+  }
+  return parsed;
 }
 
 function compareDateValue(candidate: string | undefined, operator: SearchComparisonOperator, rawValue: string): boolean {
