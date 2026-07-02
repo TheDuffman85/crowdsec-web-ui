@@ -76,6 +76,22 @@ A self-hosted web dashboard for [CrowdSec](https://crowdsec.net/) to review aler
 
 See [API.md](API.md) for the application API reference, including auth behavior, route lists, query parameters, and request/response shapes.
 
+## Related Projects
+
+<table>
+  <tr>
+    <td width="80" align="center" valign="middle">
+      <a href="https://github.com/TheDuffman85/linux-update-dashboard">
+        <img src="https://raw.githubusercontent.com/TheDuffman85/linux-update-dashboard/main/assets/logo.svg" alt="Linux Update Dashboard Logo" width="56" />
+      </a>
+    </td>
+    <td valign="middle">
+      <a href="https://github.com/TheDuffman85/linux-update-dashboard"><strong>Linux Update Dashboard</strong></a><br />
+      A self-hosted web app for checking and applying Linux package updates across multiple servers from one browser dashboard.
+    </td>
+  </tr>
+</table>
+
 ## Prerequisites
 
 You need a running CrowdSec instance and exactly one CrowdSec LAPI authentication mode:
