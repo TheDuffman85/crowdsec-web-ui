@@ -278,6 +278,8 @@
   "pages.settings.oidcUnmatchedRoleAdmin": "管理员访问",
   "pages.settings.oidcUnmatchedRoleReadOnly": "只读访问",
   "pages.settings.addGroup": "添加",
+  "pages.settings.noScopesConfigured": "未配置作用域。",
+  "pages.settings.removeScope": "移除 {scope}",
   "pages.settings.noGroupsConfigured": "未配置组。",
   "pages.settings.removeGroup": "移除 {group}",
   "pages.settings.oidcGroupsHelp": "选择 OIDC 用户未匹配任何已配置组时的处理方式。默认拒绝登录。",

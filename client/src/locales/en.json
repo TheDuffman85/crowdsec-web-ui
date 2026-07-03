@@ -278,6 +278,8 @@
   "pages.settings.oidcUnmatchedRoleAdmin": "Admin access",
   "pages.settings.oidcUnmatchedRoleReadOnly": "Read-only access",
   "pages.settings.addGroup": "Add",
+  "pages.settings.noScopesConfigured": "No scopes configured.",
+  "pages.settings.removeScope": "Remove {scope}",
   "pages.settings.noGroupsConfigured": "No groups configured.",
   "pages.settings.removeGroup": "Remove {group}",
   "pages.settings.oidcGroupsHelp": "Choose what happens when an OIDC user matches no configured group. The default is deny sign-in.",

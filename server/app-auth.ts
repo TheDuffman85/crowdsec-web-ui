@@ -11,7 +11,7 @@ import {
   type VerifiedRegistrationResponse,
 } from '@simplewebauthn/server';
 import * as oidcClient from 'openid-client';
-import { parseOidcUnmatchedRole, type DashboardAuthConfig, type OidcUnmatchedRole } from './config';
+import { parseOidcScope, parseOidcUnmatchedRole, type DashboardAuthConfig, type OidcUnmatchedRole } from './config';
 import { CrowdsecDatabase, type AuthUserRow } from './database';
 
 type HonoContext = any;
@@ -645,9 +645,15 @@ export function createDashboardAuth(options: {
       }
 
       if ('oidcScope' in body) {
-        const scope = typeof body.oidcScope === 'string' && body.oidcScope.trim()
-          ? body.oidcScope.trim()
-          : config.oidcScope;
+        let scope: string;
+        try {
+          const scopeInput = typeof body.oidcScope === 'string' && body.oidcScope.trim()
+            ? body.oidcScope
+            : config.oidcScope;
+          scope = parseOidcScope(scopeInput);
+        } catch {
+          return context.json({ error: 'OIDC scopes must include openid' }, 400);
+        }
         writeAuthSetting(database, 'oidc_scope', scope);
       }
 

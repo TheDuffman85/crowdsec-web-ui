@@ -278,6 +278,8 @@
   "pages.settings.oidcUnmatchedRoleAdmin": "Acesso de administrador",
   "pages.settings.oidcUnmatchedRoleReadOnly": "Acesso somente leitura",
   "pages.settings.addGroup": "Adicionar",
+  "pages.settings.noScopesConfigured": "Nenhum scope configurado.",
+  "pages.settings.removeScope": "Remover {scope}",
   "pages.settings.noGroupsConfigured": "Nenhum grupo configurado.",
   "pages.settings.removeGroup": "Remover {group}",
   "pages.settings.oidcGroupsHelp": "Escolha o que acontece quando um usuário OIDC não corresponde a nenhum grupo configurado. O padrão é negar o login.",

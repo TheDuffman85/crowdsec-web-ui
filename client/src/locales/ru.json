@@ -278,6 +278,8 @@
   "pages.settings.oidcUnmatchedRoleAdmin": "Доступ администратора",
   "pages.settings.oidcUnmatchedRoleReadOnly": "Доступ только для чтения",
   "pages.settings.addGroup": "Добавить",
+  "pages.settings.noScopesConfigured": "Scopes не настроены.",
+  "pages.settings.removeScope": "Удалить {scope}",
   "pages.settings.noGroupsConfigured": "Группы не настроены.",
   "pages.settings.removeGroup": "Удалить {group}",
   "pages.settings.oidcGroupsHelp": "Выберите, что происходит, если пользователь OIDC не соответствует ни одной настроенной группе. По умолчанию вход запрещен.",

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { createRuntimeConfig, getIntervalName, parseBooleanEnv, parseCsvEnv, parseLookbackToMs, parseOidcUnmatchedRole, parseOptionalBooleanEnv, parseRefreshInterval, parseTimeFormat, parseTimeZone } from './config';
+import { createRuntimeConfig, getIntervalName, parseBooleanEnv, parseCsvEnv, parseLookbackToMs, parseOidcScope, parseOidcUnmatchedRole, parseOptionalBooleanEnv, parseRefreshInterval, parseTimeFormat, parseTimeZone } from './config';
 
 const tempDirs: string[] = [];
 
@@ -61,6 +61,12 @@ describe('config helpers', () => {
     expect(parseOidcUnmatchedRole('admin')).toBe('admin');
     expect(parseOidcUnmatchedRole('read-only')).toBe('read-only');
     expect(() => parseOidcUnmatchedRole('viewer')).toThrow(/CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE/);
+  });
+
+  test('parseOidcScope defaults, normalizes, and requires openid', () => {
+    expect(parseOidcScope(undefined)).toBe('openid profile email');
+    expect(parseOidcScope(' openid   profile email roles ')).toBe('openid profile email roles');
+    expect(() => parseOidcScope('profile email groups')).toThrow(/CROWDSEC_AUTH_OIDC_SCOPE/);
   });
 
   test('parseCsvEnv splits, trims, and drops empty entries', () => {
@@ -211,9 +217,15 @@ describe('config helpers', () => {
     expect(config.alertSyncMinChunkMs).toBe(900_000);
     expect(config.readOnly).toBe(false);
     expect(config.dashboardAuth.enabled).toBeNull();
-    expect(config.dashboardAuth.oidcScope).toBe('openid profile email groups');
+    expect(config.dashboardAuth.oidcScope).toBe('openid profile email');
     expect(config.dashboardAuth.oidcGroupsClaim).toBe('groups');
     expect(config.dashboardAuth.oidcUnmatchedRole).toBe('deny');
+  });
+
+  test('createRuntimeConfig rejects OIDC scopes without openid', () => {
+    expect(() => createRuntimeConfig({
+      CROWDSEC_AUTH_OIDC_SCOPE: 'profile email groups',
+    })).toThrow(/CROWDSEC_AUTH_OIDC_SCOPE/);
   });
 
   test('createRuntimeConfig enables read-only mode from environment', () => {

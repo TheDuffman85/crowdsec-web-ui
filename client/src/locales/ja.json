@@ -278,6 +278,8 @@
   "pages.settings.oidcUnmatchedRoleAdmin": "管理者アクセス",
   "pages.settings.oidcUnmatchedRoleReadOnly": "読み取り専用アクセス",
   "pages.settings.addGroup": "追加",
+  "pages.settings.noScopesConfigured": "スコープは設定されていません。",
+  "pages.settings.removeScope": "{scope} を削除",
   "pages.settings.noGroupsConfigured": "グループは設定されていません。",
   "pages.settings.removeGroup": "{group} を削除",
   "pages.settings.oidcGroupsHelp": "OIDC ユーザーが設定済みグループに一致しない場合の動作を選択します。デフォルトではサインインを拒否します。",

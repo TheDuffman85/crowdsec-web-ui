@@ -4,6 +4,7 @@ import { resolveSecretEnv } from './env-secrets';
 export type AlertFilterMode = 'default' | 'new' | 'legacy';
 export type TimeFormat = 'browser' | '12h' | '24h';
 export type OidcUnmatchedRole = 'deny' | 'admin' | 'read-only';
+export const DEFAULT_OIDC_SCOPE = 'openid profile email';
 
 export interface DashboardAuthConfig {
   enabled: boolean | null;
@@ -140,6 +141,16 @@ export function parseOidcUnmatchedRole(value: string | undefined): OidcUnmatched
   throw new Error('Invalid CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE value. Must be one of: deny, admin, read-only.');
 }
 
+export function parseOidcScope(value: string | undefined): string {
+  const scope = value?.trim();
+  if (!scope) return DEFAULT_OIDC_SCOPE;
+  const scopes = scope.split(/\s+/);
+  if (!scopes.includes('openid')) {
+    throw new Error('Invalid CROWDSEC_AUTH_OIDC_SCOPE value. Must include openid.');
+  }
+  return scopes.join(' ');
+}
+
 export function parseCsvEnv(value: string | undefined): string[] {
   if (!value) return [];
   const entries = value
@@ -167,7 +178,7 @@ function parseDashboardAuthConfig(env: NodeJS.ProcessEnv): DashboardAuthConfig {
     oidcIssuerUrl: env.CROWDSEC_AUTH_OIDC_ISSUER_URL?.trim() || undefined,
     oidcClientId: env.CROWDSEC_AUTH_OIDC_CLIENT_ID?.trim() || undefined,
     oidcClientSecret: resolveSecretEnv('CROWDSEC_AUTH_OIDC_CLIENT_SECRET', env)?.trim() || undefined,
-    oidcScope: env.CROWDSEC_AUTH_OIDC_SCOPE?.trim() || 'openid profile email groups',
+    oidcScope: parseOidcScope(env.CROWDSEC_AUTH_OIDC_SCOPE),
     oidcGroupsClaim: env.CROWDSEC_AUTH_OIDC_GROUPS_CLAIM?.trim() || 'groups',
     oidcAdminGroups: parseCsvEnv(env.CROWDSEC_AUTH_OIDC_ADMIN_GROUPS),
     oidcReadOnlyGroups: parseCsvEnv(env.CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS),

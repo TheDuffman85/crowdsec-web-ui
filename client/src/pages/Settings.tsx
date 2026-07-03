@@ -54,16 +54,25 @@ interface AuthSettings {
 }
 
 type OidcUnmatchedRole = 'deny' | 'admin' | 'read-only';
+const DEFAULT_OIDC_SCOPE = 'openid profile email';
 
-function parseGroupList(value: string): string[] {
+function parseCsvList(value: string): string[] {
     return value
         .split(',')
-        .map((group) => group.trim())
+        .map((item) => item.trim())
         .filter(Boolean);
 }
 
-function serializeGroupList(groups: string[]): string {
-    return groups.map((group) => group.trim()).filter(Boolean).join(',');
+function parseSpaceSeparatedList(value: string): string[] {
+    return value.trim().split(/\s+/).filter(Boolean);
+}
+
+function serializeCsvList(items: string[]): string {
+    return items.map((item) => item.trim()).filter(Boolean).join(',');
+}
+
+function serializeSpaceSeparatedList(items: string[]): string {
+    return items.map((item) => item.trim()).filter(Boolean).join(' ');
 }
 
 export function Settings() {
@@ -90,13 +99,14 @@ export function Settings() {
         issuerUrl: '',
         clientId: '',
         clientSecret: '',
-        scope: 'openid profile email groups',
+        scopes: parseSpaceSeparatedList(DEFAULT_OIDC_SCOPE),
         groupsClaim: 'groups',
         adminGroups: [] as string[],
         readOnlyGroups: [] as string[],
         unmatchedRole: 'deny' as OidcUnmatchedRole,
     });
-    const [oidcGroupDrafts, setOidcGroupDrafts] = useState({
+    const [oidcListDrafts, setOidcListDrafts] = useState({
+        scopes: '',
         adminGroups: '',
         readOnlyGroups: '',
     });
@@ -145,10 +155,10 @@ export function Settings() {
                             issuerUrl: payload.oidcIssuerUrl,
                             clientId: payload.oidcClientId,
                             clientSecret: '',
-                            scope: payload.oidcScope || 'openid profile email groups',
+                            scopes: parseSpaceSeparatedList(payload.oidcScope || DEFAULT_OIDC_SCOPE),
                             groupsClaim: payload.oidcGroupsClaim || 'groups',
-                            adminGroups: parseGroupList(payload.oidcAdminGroups || ''),
-                            readOnlyGroups: parseGroupList(payload.oidcReadOnlyGroups || ''),
+                            adminGroups: parseCsvList(payload.oidcAdminGroups || ''),
+                            readOnlyGroups: parseCsvList(payload.oidcReadOnlyGroups || ''),
                             unmatchedRole: payload.oidcUnmatchedRole || 'deny',
                         });
                     }
@@ -318,8 +328,9 @@ export function Settings() {
 
     const saveOidcSettings = async () => {
         setIsSavingOidc(true);
-        const adminGroups = serializeGroupList(oidcForm.adminGroups);
-        const readOnlyGroups = serializeGroupList(oidcForm.readOnlyGroups);
+        const scopes = serializeSpaceSeparatedList(oidcForm.scopes);
+        const adminGroups = serializeCsvList(oidcForm.adminGroups);
+        const readOnlyGroups = serializeCsvList(oidcForm.readOnlyGroups);
         try {
             const response = await fetch(apiUrl('/api/auth/settings'), {
                 method: 'PUT',
@@ -328,7 +339,7 @@ export function Settings() {
                     oidcIssuerUrl: oidcForm.issuerUrl,
                     oidcClientId: oidcForm.clientId,
                     oidcClientSecret: oidcForm.clientSecret,
-                    oidcScope: oidcForm.scope,
+                    oidcScope: scopes,
                     oidcGroupsClaim: oidcForm.groupsClaim,
                     oidcAdminGroups: adminGroups,
                     oidcReadOnlyGroups: readOnlyGroups,
@@ -350,7 +361,7 @@ export function Settings() {
                 oidcIssuerUrl: oidcForm.issuerUrl.trim(),
                 oidcClientId: oidcForm.clientId.trim(),
                 hasOidcClientSecret: Boolean(oidcForm.clientSecret.trim()) || current.hasOidcClientSecret,
-                oidcScope: oidcForm.scope.trim() || 'openid profile email groups',
+                oidcScope: payload.settings?.oidcScope ?? (scopes || DEFAULT_OIDC_SCOPE),
                 oidcGroupsClaim: oidcForm.groupsClaim.trim() || 'groups',
                 oidcAdminGroups: adminGroups,
                 oidcReadOnlyGroups: readOnlyGroups,
@@ -371,21 +382,23 @@ export function Settings() {
         }
     };
 
-    const addOidcGroup = (field: 'adminGroups' | 'readOnlyGroups') => {
-        const group = oidcGroupDrafts[field].trim();
-        if (!group) return;
+    const addOidcListItem = (field: 'scopes' | 'adminGroups' | 'readOnlyGroups') => {
+        const draft = oidcListDrafts[field].trim();
+        if (!draft) return;
+        const items = field === 'scopes' ? parseSpaceSeparatedList(draft) : [draft];
 
         setOidcForm((current) => {
-            if (current[field].includes(group)) return current;
-            return { ...current, [field]: [...current[field], group] };
+            const nextItems = items.filter((item) => !current[field].includes(item));
+            if (nextItems.length === 0) return current;
+            return { ...current, [field]: [...current[field], ...nextItems] };
         });
-        setOidcGroupDrafts((current) => ({ ...current, [field]: '' }));
+        setOidcListDrafts((current) => ({ ...current, [field]: '' }));
     };
 
-    const removeOidcGroup = (field: 'adminGroups' | 'readOnlyGroups', group: string) => {
+    const removeOidcListItem = (field: 'scopes' | 'adminGroups' | 'readOnlyGroups', item: string) => {
         setOidcForm((current) => ({
             ...current,
-            [field]: current[field].filter((candidate) => candidate !== group),
+            [field]: current[field].filter((candidate) => candidate !== item),
         }));
     };
 
@@ -659,15 +672,22 @@ export function Settings() {
                                         className={inputClass}
                                     />
                                 </div>
-                                <div className="space-y-2 lg:col-span-2">
-                                    <label htmlFor="oidc-scope" className={labelClass}>{t("pages.settings.oidcScope")}</label>
-                                    <input
-                                        id="oidc-scope"
-                                        value={oidcForm.scope}
-                                        onChange={(event) => setOidcForm((current) => ({ ...current, scope: event.target.value }))}
-                                        placeholder="openid profile email groups"
+                                <div className="lg:col-span-2">
+                                    <GroupListEditor
+                                        id="oidc-scopes"
+                                        label={t("pages.settings.oidcScope")}
+                                        groups={oidcForm.scopes}
+                                        draft={oidcListDrafts.scopes}
+                                        onDraftChange={(value) => setOidcListDrafts((current) => ({ ...current, scopes: value }))}
+                                        onAdd={() => addOidcListItem('scopes')}
+                                        onRemove={(scope) => removeOidcListItem('scopes', scope)}
                                         disabled={!canManageAuthSettings}
-                                        className={inputClass}
+                                        placeholder={DEFAULT_OIDC_SCOPE}
+                                        addLabel={t("pages.settings.addGroup")}
+                                        emptyLabel={t("pages.settings.noScopesConfigured")}
+                                        removeLabel={(scope) => t("pages.settings.removeScope", { scope })}
+                                        canRemove={(scope) => scope !== 'openid'}
+                                        labelClass={labelClass}
                                     />
                                 </div>
                                 <div className="space-y-2">
@@ -701,10 +721,10 @@ export function Settings() {
                                     id="oidc-admin-groups"
                                     label={t("pages.settings.oidcAdminGroups")}
                                     groups={oidcForm.adminGroups}
-                                    draft={oidcGroupDrafts.adminGroups}
-                                    onDraftChange={(value) => setOidcGroupDrafts((current) => ({ ...current, adminGroups: value }))}
-                                    onAdd={() => addOidcGroup('adminGroups')}
-                                    onRemove={(group) => removeOidcGroup('adminGroups', group)}
+                                    draft={oidcListDrafts.adminGroups}
+                                    onDraftChange={(value) => setOidcListDrafts((current) => ({ ...current, adminGroups: value }))}
+                                    onAdd={() => addOidcListItem('adminGroups')}
+                                    onRemove={(group) => removeOidcListItem('adminGroups', group)}
                                     disabled={!canManageAuthSettings}
                                     placeholder="crowdsec-admins"
                                     addLabel={t("pages.settings.addGroup")}
@@ -716,10 +736,10 @@ export function Settings() {
                                     id="oidc-read-only-groups"
                                     label={t("pages.settings.oidcReadOnlyGroups")}
                                     groups={oidcForm.readOnlyGroups}
-                                    draft={oidcGroupDrafts.readOnlyGroups}
-                                    onDraftChange={(value) => setOidcGroupDrafts((current) => ({ ...current, readOnlyGroups: value }))}
-                                    onAdd={() => addOidcGroup('readOnlyGroups')}
-                                    onRemove={(group) => removeOidcGroup('readOnlyGroups', group)}
+                                    draft={oidcListDrafts.readOnlyGroups}
+                                    onDraftChange={(value) => setOidcListDrafts((current) => ({ ...current, readOnlyGroups: value }))}
+                                    onAdd={() => addOidcListItem('readOnlyGroups')}
+                                    onRemove={(group) => removeOidcListItem('readOnlyGroups', group)}
                                     disabled={!canManageAuthSettings}
                                     placeholder="crowdsec-viewers"
                                     addLabel={t("pages.settings.addGroup")}
@@ -805,6 +825,7 @@ function GroupListEditor({
     addLabel,
     emptyLabel,
     removeLabel,
+    canRemove = () => true,
     labelClass,
 }: {
     id: string;
@@ -819,6 +840,7 @@ function GroupListEditor({
     addLabel: string;
     emptyLabel: string;
     removeLabel: (group: string) => string;
+    canRemove?: (group: string) => boolean;
     labelClass: string;
 }) {
     const handleSubmit = (event: FormEvent) => {
@@ -832,6 +854,11 @@ function GroupListEditor({
             <form
                 className="flex min-h-11 overflow-hidden rounded-lg border border-gray-300 bg-white focus-within:ring-2 focus-within:ring-primary-500 dark:border-gray-700 dark:bg-gray-900"
                 onSubmit={handleSubmit}
+                autoComplete="off"
+                data-1p-ignore="true"
+                data-bwignore="true"
+                data-form-type="other"
+                data-lpignore="true"
             >
                 <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 px-2 py-1.5">
                     {groups.map((group) => (
@@ -840,16 +867,18 @@ function GroupListEditor({
                             className="inline-flex max-w-full items-center gap-1 rounded-md bg-primary-50 px-2 py-1 text-sm font-medium text-primary-800 dark:bg-primary-900/40 dark:text-primary-100"
                         >
                             <span className="truncate">{group}</span>
-                            <button
-                                type="button"
-                                onClick={() => onRemove(group)}
-                                disabled={disabled}
-                                className="rounded p-0.5 text-primary-700 hover:bg-primary-100 disabled:cursor-not-allowed disabled:opacity-50 dark:text-primary-200 dark:hover:bg-primary-800"
-                                aria-label={removeLabel(group)}
-                                title={removeLabel(group)}
-                            >
-                                <X className="h-3.5 w-3.5" />
-                            </button>
+                            {canRemove(group) && (
+                                <button
+                                    type="button"
+                                    onClick={() => onRemove(group)}
+                                    disabled={disabled}
+                                    className="rounded p-0.5 text-primary-700 hover:bg-primary-100 disabled:cursor-not-allowed disabled:opacity-50 dark:text-primary-200 dark:hover:bg-primary-800"
+                                    aria-label={removeLabel(group)}
+                                    title={removeLabel(group)}
+                                >
+                                    <X className="h-3.5 w-3.5" />
+                                </button>
+                            )}
                         </span>
                     ))}
                     {groups.length === 0 && !draft.trim() && (
@@ -857,10 +886,19 @@ function GroupListEditor({
                     )}
                     <input
                         id={id}
+                        name="list-token"
+                        type="text"
                         value={draft}
                         onChange={(event) => onDraftChange(event.target.value)}
                         placeholder={groups.length === 0 ? placeholder : ''}
                         disabled={disabled}
+                        autoComplete="off"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        data-1p-ignore="true"
+                        data-bwignore="true"
+                        data-form-type="other"
+                        data-lpignore="true"
                         className="min-w-48 flex-1 border-0 bg-transparent px-1 py-1 text-sm text-gray-900 outline-none placeholder:text-gray-400 disabled:cursor-not-allowed disabled:text-gray-500 dark:text-gray-100 dark:placeholder:text-gray-500 dark:disabled:text-gray-500"
                     />
                 </div>

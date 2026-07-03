@@ -625,7 +625,7 @@ test('dashboard auth exposes account settings and password changes', async () =>
     oidcIssuerUrl: '',
     oidcClientId: '',
     hasOidcClientSecret: false,
-    oidcScope: 'openid profile email groups',
+    oidcScope: 'openid profile email',
     oidcGroupsClaim: 'groups',
     oidcAdminGroups: '',
     oidcReadOnlyGroups: '',
@@ -676,6 +676,16 @@ test('dashboard auth exposes account settings and password changes', async () =>
       oidcReadOnlyGroups: 'viewers',
       oidcUnmatchedRole: 'admin',
     },
+  });
+
+  const invalidScope = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', cookie },
+    body: JSON.stringify({ oidcScope: 'profile email groups' }),
+  }));
+  expect(invalidScope.status).toBe(400);
+  expect(await invalidScope.json()).toMatchObject({
+    error: 'OIDC scopes must include openid',
   });
 
   const disableWithoutAlternative = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/settings', {

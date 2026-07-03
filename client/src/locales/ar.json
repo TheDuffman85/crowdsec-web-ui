@@ -278,6 +278,8 @@
   "pages.settings.oidcUnmatchedRoleAdmin": "وصول مسؤول",
   "pages.settings.oidcUnmatchedRoleReadOnly": "وصول للقراءة فقط",
   "pages.settings.addGroup": "إضافة",
+  "pages.settings.noScopesConfigured": "لم يتم تكوين أي نطاقات.",
+  "pages.settings.removeScope": "إزالة {scope}",
   "pages.settings.noGroupsConfigured": "لم يتم تكوين أي مجموعات.",
   "pages.settings.removeGroup": "إزالة {group}",
   "pages.settings.oidcGroupsHelp": "اختر ما يحدث عندما لا يطابق مستخدم OIDC أي مجموعة مضبوطة. الافتراضي هو رفض تسجيل الدخول.",

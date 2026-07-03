@@ -278,6 +278,8 @@
   "pages.settings.oidcUnmatchedRoleAdmin": "एडमिन एक्सेस",
   "pages.settings.oidcUnmatchedRoleReadOnly": "रीड-ओनली एक्सेस",
   "pages.settings.addGroup": "जोड़ें",
+  "pages.settings.noScopesConfigured": "कोई स्कोप कॉन्फ़िगर नहीं है।",
+  "pages.settings.removeScope": "{scope} हटाएं",
   "pages.settings.noGroupsConfigured": "कोई समूह कॉन्फ़िगर नहीं है।",
   "pages.settings.removeGroup": "{group} हटाएं",
   "pages.settings.oidcGroupsHelp": "चुनें कि OIDC उपयोगकर्ता किसी कॉन्फ़िगर किए गए समूह से मेल न खाए तो क्या होगा। डिफ़ॉल्ट रूप से साइन-इन अस्वीकार किया जाता है।",
