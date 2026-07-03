@@ -17,9 +17,7 @@ import type {
   SlimAlert,
   StatsAlert,
   StatsDecision,
-  TableColumnPreferences,
   UpdateMetricsSidebarPreferenceRequest,
-  UpdateTableColumnsRequest,
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
 } from '../types';
@@ -225,17 +223,6 @@ export async function updateMetricsSidebarPreference(data: UpdateMetricsSidebarP
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
     }, 'Failed to update metrics sidebar preference');
-}
-
-export async function updateTableColumns(data: UpdateTableColumnsRequest): Promise<{
-    success: boolean;
-    table_column_preferences: TableColumnPreferences;
-}> {
-    return sendJson('/api/config/table-columns', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-    }, 'Failed to update table columns');
 }
 
 export async function updateLanguagePreference(language: string): Promise<{

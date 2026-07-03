@@ -53,11 +53,8 @@ export type {
   TableColumnId,
   TableColumnPreferences,
   TableColumnPreferenceTable,
-  TableColumnPreferenceViewport,
-  TableColumnViewportPreferences,
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
-  UpdateTableColumnsRequest,
   UpdateMetricsSidebarPreferenceRequest,
   UpdateCheckResponse,
 } from '../../../shared/contracts';

@@ -29,16 +29,6 @@ function createDefaultConfigResponse(): ConfigResponse {
       can_manage_enforcement: true,
       can_manage_settings: true,
     },
-    table_column_preferences: {
-      alerts: {
-        desktop: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-        mobile: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-      },
-      decisions: {
-        desktop: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-        mobile: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-      },
-    },
   };
 }
 
@@ -173,24 +163,6 @@ vi.mock('../lib/api', () => {
       deleted_decisions: 0,
       failed: [],
     })),
-    updateTableColumns: vi.fn(async (data: { table: 'alerts' | 'decisions'; viewport?: 'desktop' | 'mobile'; visible_columns: string[] }) => {
-      const viewport = data.viewport || 'desktop';
-      const preferences = {
-        alerts: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-        },
-        decisions: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-        },
-      };
-      preferences[data.table][viewport] = data.visible_columns;
-      return {
-      success: true,
-      table_column_preferences: preferences,
-      };
-    }),
     fetchConfig: vi.fn(async () => createDefaultConfigResponse()),
   };
 });
@@ -267,16 +239,6 @@ describe('Decisions page', () => {
       permissions: {
         mode: 'read-only',
         can_manage_enforcement: false,
-      },
-      table_column_preferences: {
-        alerts: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-        },
-        decisions: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-        },
       },
     });
 
@@ -361,47 +323,10 @@ describe('Decisions page', () => {
     expect(screen.getByRole('columnheader', { name: 'Origin' })).toBeInTheDocument();
   });
 
-  test('syncs decision modal columns from desktop to mobile', async () => {
-    render(
-      <MemoryRouter initialEntries={['/decisions']}>
-        <Decisions />
-      </MemoryRouter>,
-    );
-
-    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
-
-    await userEvent.click(screen.getByRole('button', { name: 'Choose decision table columns' }));
-    await userEvent.click(screen.getByLabelText('ID'));
-    await userEvent.click(screen.getByRole('button', { name: 'Sync to mobile' }));
-    await userEvent.click(screen.getByRole('button', { name: 'mobile' }));
-
-    expect(screen.getByLabelText('ID')).toBeChecked();
-    expect(screen.getByRole('button', { name: 'Sync to desktop' })).toBeInTheDocument();
-  });
-
   test('uses saved decision column order', async () => {
-    vi.mocked(api.fetchConfig).mockResolvedValue({
-      lookback_period: '1h',
-      lookback_hours: 1,
-      lookback_days: 1,
-      refresh_interval: 30000,
-      current_interval_name: '30s',
-      lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
-      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
-      simulations_enabled: true,
-      machine_features_enabled: true,
-      origin_features_enabled: true,
-      table_column_preferences: {
-        alerts: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-        },
-        decisions: {
-          desktop: ['source', 'action', 'time', 'alert'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-        },
-      },
-    });
+    window.localStorage.setItem('crowdsec-web-ui:table-column-preferences', JSON.stringify({
+      decisions: ['source', 'action', 'time', 'alert'],
+    }));
 
     render(
       <MemoryRouter initialEntries={['/decisions']}>
@@ -414,6 +339,9 @@ describe('Decisions page', () => {
   });
 
   test('shows machine column and allows filtering by machine when enabled', async () => {
+    window.localStorage.setItem('crowdsec-web-ui:table-column-preferences', JSON.stringify({
+      decisions: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'machine', 'origin', 'alert'],
+    }));
     vi.mocked(api.fetchConfig).mockResolvedValue({
       lookback_period: '1h',
       lookback_hours: 1,
@@ -425,16 +353,6 @@ describe('Decisions page', () => {
       simulations_enabled: true,
       machine_features_enabled: true,
       origin_features_enabled: true,
-      table_column_preferences: {
-        alerts: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-        },
-        decisions: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'machine', 'origin', 'alert'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'machine', 'origin', 'alert'],
-        },
-      },
     });
 
     render(
@@ -453,6 +371,9 @@ describe('Decisions page', () => {
   });
 
   test('shows origin column and allows filtering by origin when enabled', async () => {
+    window.localStorage.setItem('crowdsec-web-ui:table-column-preferences', JSON.stringify({
+      decisions: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'origin', 'alert'],
+    }));
     vi.mocked(api.fetchConfig).mockResolvedValue({
       lookback_period: '1h',
       lookback_hours: 1,
@@ -464,16 +385,6 @@ describe('Decisions page', () => {
       simulations_enabled: true,
       machine_features_enabled: false,
       origin_features_enabled: true,
-      table_column_preferences: {
-        alerts: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-        },
-        decisions: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'origin', 'alert'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'origin', 'alert'],
-        },
-      },
     });
 
     render(
@@ -483,7 +394,7 @@ describe('Decisions page', () => {
     );
 
     await waitFor(() => expect(screen.getByRole('columnheader', { name: 'Origin' })).toBeInTheDocument());
-    expect(screen.getByText('manual')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('manual')).toBeInTheDocument());
     expect(screen.getByText('CAPI')).toBeInTheDocument();
 
     fireEvent.change(screen.getByPlaceholderText('Filter decisions...'), { target: { value: 'manual' } });

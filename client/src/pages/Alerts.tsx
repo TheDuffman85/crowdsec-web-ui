@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, type MouseEvent as ReactMouseEvent } from "react";
 import { useSearchParams, Link } from "react-router-dom";
-import { fetchAlertsPaginated, fetchAlert, deleteAlert, bulkDeleteAlerts, cleanupByIp, fetchConfig, fetchDecisionsPaginated, updateTableColumns } from "../lib/api";
+import { fetchAlertsPaginated, fetchAlert, deleteAlert, bulkDeleteAlerts, cleanupByIp, fetchConfig, fetchDecisionsPaginated } from "../lib/api";
 import { isSimulatedAlert, isSimulatedDecision, matchesSimulationFilter, parseSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
 import { Badge } from "../components/ui/Badge";
@@ -12,13 +12,13 @@ import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { EventCard } from "../components/EventCard";
 import { getCountryName } from "../lib/utils";
-import { useTableColumnViewport } from "../lib/useTableColumnViewport";
-import { DEFAULT_TABLE_COLUMN_PREFERENCES, TABLE_COLUMN_DEFINITIONS } from "../../../shared/contracts";
+import { loadStoredTableColumnPreferences, saveStoredTableColumnPreferences } from "../lib/tableColumns";
+import { TABLE_COLUMN_DEFINITIONS } from "../../../shared/contracts";
 import { resolveMachineName } from "../../../shared/machine";
 import { collectDistinctOrigins, getOriginDisplayValue, getOriginTitle } from "../../../shared/origin";
 import { compileAlertSearch, getSearchHelpDefinition, type SearchParseError } from "../../../shared/search";
 import { Info, ExternalLink, Shield, ShieldBan, Trash2, X, AlertCircle, Columns3 } from "lucide-react";
-import type { AlertRecord, AlertSource, ApiPermissionError, BulkDeleteResult, DecisionListItem, SimulationFilter, SlimAlert, TableColumnId, TableColumnPreferences, TableColumnViewportPreferences } from '../types';
+import type { AlertRecord, AlertSource, ApiPermissionError, BulkDeleteResult, DecisionListItem, SimulationFilter, SlimAlert, TableColumnId, TableColumnPreferences } from '../types';
 import { useI18n, type I18nContextValue } from "../lib/i18n";
 import { useDateTime } from "../lib/dateTime";
 
@@ -134,9 +134,8 @@ export function Alerts() {
     const [alerts, setAlerts] = useState<AlertListItem[]>([]);
     const [simulationsEnabled, setSimulationsEnabled] = useState(false);
     const [canManageEnforcement, setCanManageEnforcement] = useState(false);
-    const [tableColumnPreferences, setTableColumnPreferences] = useState<TableColumnPreferences>(DEFAULT_TABLE_COLUMN_PREFERENCES);
+    const [tableColumnPreferences, setTableColumnPreferences] = useState<TableColumnPreferences>(() => loadStoredTableColumnPreferences());
     const [showColumnsModal, setShowColumnsModal] = useState(false);
-    const [columnsSaving, setColumnsSaving] = useState(false);
     const [searchDraft, setSearchDraft] = useState(initialQueryParam);
     const [debouncedSearchDraft, setDebouncedSearchDraft] = useState(initialQueryParam);
     const [showSearchSyntaxModal, setShowSearchSyntaxModal] = useState(false);
@@ -163,7 +162,6 @@ export function Alerts() {
     const [errorInfo, setErrorInfo] = useState<ErrorInfo | null>(null);
     const [pendingDeleteErrorInfo, setPendingDeleteErrorInfo] = useState<ErrorInfo | null>(null);
     const [showAllEvents, setShowAllEvents] = useState(false);
-    const tableColumnViewport = useTableColumnViewport();
     const currentSimulationFilter = simulationsEnabled ? parseSimulationFilter(searchParams.get("simulation")) : 'all';
     const alertIdParam = searchParams.get("id");
     const queryParam = searchParams.get("q");
@@ -197,7 +195,6 @@ export function Alerts() {
     const configRef = useRef<{
         simulationsEnabled: boolean;
         canManageEnforcement: boolean;
-        tableColumnPreferences: TableColumnPreferences;
     } | null>(null);
     const hasLoadedAlertsRef = useRef(false);
     const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -216,7 +213,7 @@ export function Alerts() {
         () => getSearchHelpDefinition('alerts', searchValidationFeatures, { alerts }),
         [alerts, searchValidationFeatures],
     );
-    const visibleAlertColumns = tableColumnPreferences.alerts[tableColumnViewport];
+    const visibleAlertColumns = tableColumnPreferences.alerts;
     const alertColumnDefinitionById = useMemo(
         () => new Map<TableColumnId, (typeof TABLE_COLUMN_DEFINITIONS.alerts)[number]>(
             TABLE_COLUMN_DEFINITIONS.alerts.map((column) => [column.id, column]),
@@ -257,44 +254,25 @@ export function Alerts() {
         const nextConfig = {
             simulationsEnabled: configData.simulations_enabled === true,
             canManageEnforcement: configData.permissions?.can_manage_enforcement !== false,
-            tableColumnPreferences: configData.table_column_preferences || DEFAULT_TABLE_COLUMN_PREFERENCES,
         };
 
         configRef.current = nextConfig;
         setSimulationsEnabled(nextConfig.simulationsEnabled);
         setCanManageEnforcement(nextConfig.canManageEnforcement);
-        setTableColumnPreferences(nextConfig.tableColumnPreferences);
 
         return nextConfig;
     }, []);
 
-    const saveAlertColumns = useCallback(async (visiblePreferences: TableColumnViewportPreferences) => {
-        setColumnsSaving(true);
-        try {
-            const [, mobileResult] = await Promise.all([
-                updateTableColumns({ table: 'alerts', viewport: 'desktop', visible_columns: visiblePreferences.desktop }),
-                updateTableColumns({ table: 'alerts', viewport: 'mobile', visible_columns: visiblePreferences.mobile }),
-            ]);
+    const saveAlertColumns = useCallback((visiblePreferences: TableColumnId[]) => {
+        setTableColumnPreferences((currentPreferences) => {
             const nextPreferences = {
-                ...mobileResult.table_column_preferences,
-                alerts: {
-                    ...mobileResult.table_column_preferences.alerts,
-                    ...visiblePreferences,
-                },
+                ...currentPreferences,
+                alerts: visiblePreferences,
             };
-            setTableColumnPreferences(nextPreferences);
-            if (configRef.current) {
-                configRef.current = {
-                    ...configRef.current,
-                    tableColumnPreferences: nextPreferences,
-                };
-            }
-            setShowColumnsModal(false);
-        } catch (error) {
-            console.error(error);
-        } finally {
-            setColumnsSaving(false);
-        }
+            saveStoredTableColumnPreferences(nextPreferences);
+            return nextPreferences;
+        });
+        setShowColumnsModal(false);
     }, []);
 
     const loadAlerts = useCallback(async ({
@@ -1515,9 +1493,7 @@ export function Alerts() {
             <TableColumnsModal
                 isOpen={showColumnsModal}
                 table="alerts"
-                activeViewport={tableColumnViewport}
                 columnPreferences={tableColumnPreferences.alerts}
-                saving={columnsSaving}
                 onClose={() => setShowColumnsModal(false)}
                 onSave={saveAlertColumns}
             />

@@ -4,7 +4,6 @@ import crypto from 'node:crypto';
 import { Hono } from 'hono';
 import { compress } from 'hono/compress';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { DEFAULT_TABLE_COLUMN_PREFERENCES, TABLE_COLUMN_DEFINITIONS } from '../shared/contracts';
 import type {
   AddDecisionRequest,
   AlertDecision,
@@ -29,12 +28,7 @@ import type {
   StatsAlert,
   StatsDecision,
   SyncStatus,
-  TableColumnId,
-  TableColumnPreferences,
-  TableColumnPreferenceTable,
-  TableColumnPreferenceViewport,
   UpdateMetricsSidebarPreferenceRequest,
-  UpdateTableColumnsRequest,
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
   UpdateCheckResponse,
@@ -96,7 +90,6 @@ interface PersistedConfig {
   refresh_interval_ms?: number;
 }
 
-const TABLE_COLUMN_PREFERENCES_META_KEY = 'table_column_preferences';
 const METRICS_SIDEBAR_VISIBLE_META_KEY = 'metrics_sidebar_visible';
 
 interface CacheState {
@@ -662,7 +655,6 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       simulations_enabled: config.simulationsEnabled,
       machine_features_enabled: true,
       origin_features_enabled: true,
-      table_column_preferences: loadTableColumnPreferences(database),
       time_zone: config.timeZone,
       time_format: config.timeFormat,
       metrics_enabled: Boolean(config.prometheusUrl),
@@ -709,49 +701,6 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     } catch (error: any) {
       console.error('Error updating metrics sidebar preference:', error.message);
       return context.json({ error: 'Failed to update metrics sidebar preference' }, 500);
-    }
-  });
-
-  app.put(`${config.basePath}/api/config/table-columns`, ensureAuth, async (context) => {
-    try {
-      const body = await context.req.json<UpdateTableColumnsRequest>();
-      const table = body.table;
-      if (!isTableColumnPreferenceTable(table)) {
-        return context.json({ error: 'Invalid table. Must be one of: alerts, decisions' }, 400);
-      }
-      const viewport = body.viewport || 'desktop';
-      if (!isTableColumnPreferenceViewport(viewport)) {
-        return context.json({ error: 'Invalid viewport. Must be one of: desktop, mobile' }, 400);
-      }
-
-      if (!Array.isArray(body.visible_columns)) {
-        return context.json({ error: 'visible_columns must be an array' }, 400);
-      }
-
-      const validColumnIds = getTableColumnIdSet(table);
-      const visibleColumns: TableColumnId[] = [];
-      const seenColumnIds = new Set<string>();
-      for (const columnId of body.visible_columns) {
-        if (typeof columnId !== 'string' || !validColumnIds.has(columnId as TableColumnId)) {
-          return context.json({ error: `Invalid column for ${table}: ${String(columnId)}` }, 400);
-        }
-        if (!seenColumnIds.has(columnId)) {
-          seenColumnIds.add(columnId);
-          visibleColumns.push(columnId as TableColumnId);
-        }
-      }
-
-      const nextPreferences = loadTableColumnPreferences(database);
-      nextPreferences[table][viewport] = visibleColumns;
-      saveTableColumnPreferences(database, nextPreferences);
-
-      return context.json({
-        success: true,
-        table_column_preferences: nextPreferences,
-      });
-    } catch (error: any) {
-      console.error('Error updating table columns:', error.message);
-      return context.json({ error: 'Failed to update table columns' }, 500);
     }
   });
 
@@ -3038,102 +2987,6 @@ ${errorSummary}  Status: ${syncSummary.state}
     void ensureBootstrapReady('startup');
   }
 
-}
-
-function cloneDefaultTableColumnPreferences(): TableColumnPreferences {
-  return {
-    alerts: {
-      desktop: [...DEFAULT_TABLE_COLUMN_PREFERENCES.alerts.desktop],
-      mobile: [...DEFAULT_TABLE_COLUMN_PREFERENCES.alerts.mobile],
-    },
-    decisions: {
-      desktop: [...DEFAULT_TABLE_COLUMN_PREFERENCES.decisions.desktop],
-      mobile: [...DEFAULT_TABLE_COLUMN_PREFERENCES.decisions.mobile],
-    },
-  };
-}
-
-function getTableColumnIdSet(table: TableColumnPreferenceTable): Set<TableColumnId> {
-  return new Set(TABLE_COLUMN_DEFINITIONS[table].map((column) => column.id));
-}
-
-function isTableColumnPreferenceTable(value: unknown): value is TableColumnPreferenceTable {
-  return value === 'alerts' || value === 'decisions';
-}
-
-function isTableColumnPreferenceViewport(value: unknown): value is TableColumnPreferenceViewport {
-  return value === 'desktop' || value === 'mobile';
-}
-
-function normalizeTableColumnIds(table: TableColumnPreferenceTable, value: unknown): TableColumnId[] | null {
-  if (!Array.isArray(value)) {
-    return null;
-  }
-
-  const validColumnIds = getTableColumnIdSet(table);
-  const seenColumnIds = new Set<string>();
-  const nextColumns: TableColumnId[] = [];
-  for (const columnId of value) {
-    if (typeof columnId !== 'string' || !validColumnIds.has(columnId as TableColumnId) || seenColumnIds.has(columnId)) {
-      continue;
-    }
-    seenColumnIds.add(columnId);
-    nextColumns.push(columnId as TableColumnId);
-  }
-  return nextColumns;
-}
-
-function normalizeTableColumnPreferences(value: unknown): TableColumnPreferences {
-  const preferences = cloneDefaultTableColumnPreferences();
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return preferences;
-  }
-
-  const input = value as Partial<Record<TableColumnPreferenceTable, unknown>>;
-  for (const table of ['alerts', 'decisions'] as const) {
-    const rawPreference = input[table];
-    if (Array.isArray(rawPreference)) {
-      const legacyColumns = normalizeTableColumnIds(table, rawPreference);
-      if (legacyColumns) {
-        preferences[table] = {
-          desktop: [...legacyColumns],
-          mobile: [...legacyColumns],
-        };
-      }
-      continue;
-    }
-
-    if (!rawPreference || typeof rawPreference !== 'object') {
-      continue;
-    }
-
-    const viewportInput = rawPreference as Partial<Record<TableColumnPreferenceViewport, unknown>>;
-    for (const viewport of ['desktop', 'mobile'] as const) {
-      const columns = normalizeTableColumnIds(table, viewportInput[viewport]);
-      if (columns) {
-        preferences[table][viewport] = columns;
-      }
-    }
-  }
-
-  return preferences;
-}
-
-function loadTableColumnPreferences(database: CrowdsecDatabase): TableColumnPreferences {
-  try {
-    const row = database.getMeta(TABLE_COLUMN_PREFERENCES_META_KEY);
-    if (!row?.value) {
-      return cloneDefaultTableColumnPreferences();
-    }
-    return normalizeTableColumnPreferences(JSON.parse(row.value));
-  } catch (error) {
-    console.error('Error loading table column preferences from database:', error);
-    return cloneDefaultTableColumnPreferences();
-  }
-}
-
-function saveTableColumnPreferences(database: CrowdsecDatabase, preferences: TableColumnPreferences): void {
-  database.setMeta(TABLE_COLUMN_PREFERENCES_META_KEY, JSON.stringify(normalizeTableColumnPreferences(preferences)));
 }
 
 function loadMetricsSidebarVisible(database: CrowdsecDatabase): boolean {

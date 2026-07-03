@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, type FormEvent } from "react";
 import { useSearchParams, Link } from "react-router-dom";
-import { deleteDecision, bulkDeleteDecisions, cleanupByIp, addDecision, fetchConfig, fetchDecisionsPaginated, updateTableColumns } from "../lib/api";
+import { deleteDecision, bulkDeleteDecisions, cleanupByIp, addDecision, fetchConfig, fetchDecisionsPaginated } from "../lib/api";
 import { isSimulatedDecision, parseSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
 import { Badge } from "../components/ui/Badge";
@@ -11,11 +11,11 @@ import { TableColumnsModal } from "../components/TableColumnsModal";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { getCountryName } from "../lib/utils";
-import { useTableColumnViewport } from "../lib/useTableColumnViewport";
-import { DEFAULT_TABLE_COLUMN_PREFERENCES, TABLE_COLUMN_DEFINITIONS } from "../../../shared/contracts";
+import { TABLE_COLUMN_DEFINITIONS } from "../../../shared/contracts";
+import { loadStoredTableColumnPreferences, saveStoredTableColumnPreferences } from "../lib/tableColumns";
 import { compileDecisionSearch, getSearchHelpDefinition, type SearchParseError } from "../../../shared/search";
 import { Trash2, Gavel, X, ExternalLink, Shield, ShieldBan, AlertCircle, Info, Columns3 } from "lucide-react";
-import type { AddDecisionRequest, ApiPermissionError, BulkDeleteResult, DecisionListItem, TableColumnId, TableColumnPreferences, TableColumnViewportPreferences } from '../types';
+import type { AddDecisionRequest, ApiPermissionError, BulkDeleteResult, DecisionListItem, TableColumnId, TableColumnPreferences } from '../types';
 import { useI18n, type I18nContextValue } from "../lib/i18n";
 
 type DecisionDeleteAction =
@@ -105,9 +105,8 @@ export function Decisions() {
     const [decisions, setDecisions] = useState<DecisionListItem[]>([]);
     const [simulationsEnabled, setSimulationsEnabled] = useState(false);
     const [canManageEnforcement, setCanManageEnforcement] = useState(false);
-    const [tableColumnPreferences, setTableColumnPreferences] = useState<TableColumnPreferences>(DEFAULT_TABLE_COLUMN_PREFERENCES);
+    const [tableColumnPreferences, setTableColumnPreferences] = useState<TableColumnPreferences>(() => loadStoredTableColumnPreferences());
     const [showColumnsModal, setShowColumnsModal] = useState(false);
-    const [columnsSaving, setColumnsSaving] = useState(false);
     const [searchDraft, setSearchDraft] = useState(initialQueryParam);
     const [debouncedSearchDraft, setDebouncedSearchDraft] = useState(initialQueryParam);
     const [showSearchSyntaxModal, setShowSearchSyntaxModal] = useState(false);
@@ -129,7 +128,6 @@ export function Decisions() {
     const [pendingDeleteErrorInfo, setPendingDeleteErrorInfo] = useState<ErrorInfo | null>(null);
     const [addDecisionErrorInfo, setAddDecisionErrorInfo] = useState<ErrorInfo | null>(null);
     const [addDecisionInProgress, setAddDecisionInProgress] = useState(false);
-    const tableColumnViewport = useTableColumnViewport();
     const alertIdFilter = searchParams.get("alert_id");
     const queryParam = searchParams.get("q");
     const appliedQuery = queryParam?.trim() ?? "";
@@ -159,7 +157,6 @@ export function Decisions() {
     const configRef = useRef<{
         simulationsEnabled: boolean;
         canManageEnforcement: boolean;
-        tableColumnPreferences: TableColumnPreferences;
     } | null>(null);
     const hasLoadedDecisionsRef = useRef(false);
     const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -178,7 +175,7 @@ export function Decisions() {
         () => getSearchHelpDefinition('decisions', searchValidationFeatures, { decisions }),
         [decisions, searchValidationFeatures],
     );
-    const visibleDecisionColumns = tableColumnPreferences.decisions[tableColumnViewport];
+    const visibleDecisionColumns = tableColumnPreferences.decisions;
     const decisionColumnDefinitionById = useMemo(
         () => new Map<TableColumnId, (typeof TABLE_COLUMN_DEFINITIONS.decisions)[number]>(
             TABLE_COLUMN_DEFINITIONS.decisions.map((column) => [column.id, column]),
@@ -217,44 +214,25 @@ export function Decisions() {
         const nextConfig = {
             simulationsEnabled: configData.simulations_enabled === true,
             canManageEnforcement: configData.permissions?.can_manage_enforcement !== false,
-            tableColumnPreferences: configData.table_column_preferences || DEFAULT_TABLE_COLUMN_PREFERENCES,
         };
 
         configRef.current = nextConfig;
         setSimulationsEnabled(nextConfig.simulationsEnabled);
         setCanManageEnforcement(nextConfig.canManageEnforcement);
-        setTableColumnPreferences(nextConfig.tableColumnPreferences);
 
         return nextConfig;
     }, []);
 
-    const saveDecisionColumns = useCallback(async (visiblePreferences: TableColumnViewportPreferences) => {
-        setColumnsSaving(true);
-        try {
-            const [, mobileResult] = await Promise.all([
-                updateTableColumns({ table: 'decisions', viewport: 'desktop', visible_columns: visiblePreferences.desktop }),
-                updateTableColumns({ table: 'decisions', viewport: 'mobile', visible_columns: visiblePreferences.mobile }),
-            ]);
+    const saveDecisionColumns = useCallback((visiblePreferences: TableColumnId[]) => {
+        setTableColumnPreferences((currentPreferences) => {
             const nextPreferences = {
-                ...mobileResult.table_column_preferences,
-                decisions: {
-                    ...mobileResult.table_column_preferences.decisions,
-                    ...visiblePreferences,
-                },
+                ...currentPreferences,
+                decisions: visiblePreferences,
             };
-            setTableColumnPreferences(nextPreferences);
-            if (configRef.current) {
-                configRef.current = {
-                    ...configRef.current,
-                    tableColumnPreferences: nextPreferences,
-                };
-            }
-            setShowColumnsModal(false);
-        } catch (error) {
-            console.error(error);
-        } finally {
-            setColumnsSaving(false);
-        }
+            saveStoredTableColumnPreferences(nextPreferences);
+            return nextPreferences;
+        });
+        setShowColumnsModal(false);
     }, []);
 
     const loadDecisions = useCallback(async ({
@@ -1186,9 +1164,7 @@ export function Decisions() {
             <TableColumnsModal
                 isOpen={showColumnsModal}
                 table="decisions"
-                activeViewport={tableColumnViewport}
                 columnPreferences={tableColumnPreferences.decisions}
-                saving={columnsSaving}
                 onClose={() => setShowColumnsModal(false)}
                 onSave={saveDecisionColumns}
             />

@@ -17,7 +17,6 @@ export interface PaginatedResponse<T> {
 }
 
 export type TableColumnPreferenceTable = 'alerts' | 'decisions';
-export type TableColumnPreferenceViewport = 'desktop' | 'mobile';
 export type AlertTableColumnId = 'id' | 'time' | 'scenario' | 'country' | 'as' | 'source' | 'machine' | 'origin' | 'decisions';
 export type DecisionTableColumnId = 'id' | 'time' | 'scenario' | 'country' | 'as' | 'source' | 'action' | 'expiration' | 'machine' | 'origin' | 'alert';
 export type TableColumnId = AlertTableColumnId | DecisionTableColumnId;
@@ -28,8 +27,7 @@ export interface TableColumnDefinition {
   defaultVisible: boolean;
 }
 
-export type TableColumnViewportPreferences = Record<TableColumnPreferenceViewport, TableColumnId[]>;
-export type TableColumnPreferences = Record<TableColumnPreferenceTable, TableColumnViewportPreferences>;
+export type TableColumnPreferences = Record<TableColumnPreferenceTable, TableColumnId[]>;
 
 export const TABLE_COLUMN_DEFINITIONS: Record<TableColumnPreferenceTable, TableColumnDefinition[]> = {
   alerts: [
@@ -66,23 +64,8 @@ const DEFAULT_DECISION_TABLE_COLUMNS = TABLE_COLUMN_DEFINITIONS.decisions
   .map((column) => column.id);
 
 export const DEFAULT_TABLE_COLUMN_PREFERENCES: TableColumnPreferences = {
-  alerts: {
-    desktop: [...DEFAULT_ALERT_TABLE_COLUMNS],
-    mobile: [...DEFAULT_ALERT_TABLE_COLUMNS],
-  },
-  decisions: {
-    desktop: [...DEFAULT_DECISION_TABLE_COLUMNS],
-    mobile: [...DEFAULT_DECISION_TABLE_COLUMNS],
-  },
-};
-
-export const LEGACY_DEFAULT_TABLE_COLUMN_PREFERENCES: Record<TableColumnPreferenceTable, TableColumnId[]> = {
-  alerts: TABLE_COLUMN_DEFINITIONS.alerts
-    .filter((column) => column.defaultVisible)
-    .map((column) => column.id),
-  decisions: TABLE_COLUMN_DEFINITIONS.decisions
-    .filter((column) => column.defaultVisible)
-    .map((column) => column.id),
+  alerts: [...DEFAULT_ALERT_TABLE_COLUMNS],
+  decisions: [...DEFAULT_DECISION_TABLE_COLUMNS],
 };
 
 export type AlertMetaValue =
@@ -451,7 +434,6 @@ export interface ConfigResponse {
   simulations_enabled: boolean;
   machine_features_enabled: boolean;
   origin_features_enabled: boolean;
-  table_column_preferences?: TableColumnPreferences;
   time_zone?: string | null;
   time_format?: 'browser' | '12h' | '24h';
   metrics_enabled?: boolean;
@@ -554,12 +536,6 @@ export interface CrowdsecMetricsResponse {
   parserTimings: CrowdsecMetricsTiming[];
   lapiRoutes?: CrowdsecMetricsLapiRoute[];
   appsecEngines?: CrowdsecMetricsAppsecEngine[];
-}
-
-export interface UpdateTableColumnsRequest {
-  table: TableColumnPreferenceTable;
-  viewport?: TableColumnPreferenceViewport;
-  visible_columns: TableColumnId[];
 }
 
 export interface AddDecisionRequest {

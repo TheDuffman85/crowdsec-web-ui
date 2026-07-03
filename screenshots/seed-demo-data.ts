@@ -366,17 +366,6 @@ database.insertNotification({
   $dedupe_key: 'app-update:2026.06.06',
 });
 
-database.setMeta('table_column_preferences', JSON.stringify({
-  alerts: {
-    desktop: ['time', 'scenario', 'country', 'as', 'source', 'machine', 'origin', 'decisions'],
-    mobile: ['time', 'scenario', 'country', 'source', 'decisions'],
-  },
-  decisions: {
-    desktop: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'machine', 'origin', 'alert'],
-    mobile: ['time', 'scenario', 'country', 'source', 'action', 'expiration', 'alert'],
-  },
-}));
-
 database.setMeta('refresh_interval_ms', '300000');
 database.close();
 

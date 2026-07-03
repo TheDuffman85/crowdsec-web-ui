@@ -40,16 +40,6 @@ function createDefaultConfigResponse(): ConfigResponse {
       can_manage_enforcement: true,
       can_manage_settings: true,
     },
-    table_column_preferences: {
-      alerts: {
-        desktop: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-        mobile: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-      },
-      decisions: {
-        desktop: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-        mobile: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-      },
-    },
   };
 }
 
@@ -237,24 +227,6 @@ vi.mock('../lib/api', () => {
       deleted_decisions: 0,
       failed: [],
     })),
-    updateTableColumns: vi.fn(async (data: { table: 'alerts' | 'decisions'; viewport?: 'desktop' | 'mobile'; visible_columns: string[] }) => {
-      const viewport = data.viewport || 'desktop';
-      const preferences = {
-        alerts: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-        },
-        decisions: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-        },
-      };
-      preferences[data.table][viewport] = data.visible_columns;
-      return {
-      success: true,
-      table_column_preferences: preferences,
-      };
-    }),
     fetchConfig: vi.fn(async () => createDefaultConfigResponse()),
   };
 });
@@ -303,19 +275,6 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
-function setMobileViewport(isMobile: boolean): void {
-  vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
-    matches: isMobile,
-    media: query,
-    onchange: null,
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-    addListener: vi.fn(),
-    removeListener: vi.fn(),
-    dispatchEvent: vi.fn(),
-  })));
-}
-
 async function flushAlertSearchDebounce(): Promise<void> {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 350));
@@ -344,16 +303,6 @@ describe('Alerts page', () => {
       permissions: {
         mode: 'read-only',
         can_manage_enforcement: false,
-      },
-      table_column_preferences: {
-        alerts: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-        },
-        decisions: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-        },
       },
     });
 
@@ -438,28 +387,9 @@ describe('Alerts page', () => {
   });
 
   test('uses saved alert column order', async () => {
-    vi.mocked(api.fetchConfig).mockResolvedValue({
-      lookback_period: '1h',
-      lookback_hours: 1,
-      lookback_days: 1,
-      refresh_interval: 30000,
-      current_interval_name: '30s',
-      lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
-      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
-      simulations_enabled: true,
-      machine_features_enabled: true,
-      origin_features_enabled: true,
-      table_column_preferences: {
-        alerts: {
-          desktop: ['source', 'time', 'decisions', 'scenario'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-        },
-        decisions: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-        },
-      },
-    });
+    window.localStorage.setItem('crowdsec-web-ui:table-column-preferences', JSON.stringify({
+      alerts: ['source', 'time', 'decisions', 'scenario'],
+    }));
 
     render(
       <MemoryRouter initialEntries={['/alerts']}>
@@ -471,7 +401,7 @@ describe('Alerts page', () => {
     expect(getVisibleColumnHeaderNames()).toEqual(['IP / Range', 'Time', 'Decisions', 'Scenario', 'Actions']);
   });
 
-  test('keeps unsaved column edits while switching modal layouts', async () => {
+  test('keeps unsaved column edits local to the modal until save', async () => {
     render(
       <MemoryRouter initialEntries={['/alerts']}>
         <Alerts />
@@ -484,36 +414,18 @@ describe('Alerts page', () => {
     await userEvent.click(screen.getByLabelText('ID'));
     expect(screen.getByLabelText('ID')).toBeChecked();
 
-    await userEvent.click(screen.getByRole('button', { name: 'mobile' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('columnheader', { name: 'ID' })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Choose alert table columns' }));
     expect(screen.getByLabelText('ID')).not.toBeChecked();
-
-    await userEvent.click(screen.getByRole('button', { name: 'desktop' }));
-    expect(screen.getByLabelText('ID')).toBeChecked();
-  });
-
-  test('syncs alert modal columns from desktop to mobile', async () => {
-    render(
-      <MemoryRouter initialEntries={['/alerts']}>
-        <Alerts />
-      </MemoryRouter>,
-    );
-
-    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
-
-    await userEvent.click(screen.getByRole('button', { name: 'Choose alert table columns' }));
-    await userEvent.click(screen.getByLabelText('ID'));
-    await userEvent.click(screen.getByRole('button', { name: 'Sync to mobile' }));
-    await userEvent.click(screen.getByRole('button', { name: 'mobile' }));
-
-    expect(screen.getByLabelText('ID')).toBeChecked();
-    expect(screen.getByRole('button', { name: 'Sync to desktop' })).toBeInTheDocument();
   });
 
   test('resets alert column visibility and order to defaults', async () => {
-    window.localStorage.setItem('crowdsec-web-ui:alerts:table-column-order', JSON.stringify({
-      desktop: ['source', 'id', 'machine', 'origin', 'time', 'scenario', 'country', 'as', 'decisions'],
-      mobile: ['source', 'id', 'machine', 'origin', 'time', 'scenario', 'country', 'as', 'decisions'],
-    }));
+    window.localStorage.setItem(
+      'crowdsec-web-ui:alerts:table-column-order',
+      JSON.stringify(['source', 'id', 'machine', 'origin', 'time', 'scenario', 'country', 'as', 'decisions']),
+    );
 
     render(
       <MemoryRouter initialEntries={['/alerts']}>
@@ -540,15 +452,15 @@ describe('Alerts page', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(getVisibleColumnHeaderNames()).toEqual(['Time', 'Scenario', 'Country', 'AS', 'IP / Range', 'Decisions', 'Actions']));
-    expect(JSON.parse(window.localStorage.getItem('crowdsec-web-ui:alerts:table-column-order') || '{}').desktop)
+    expect(JSON.parse(window.localStorage.getItem('crowdsec-web-ui:alerts:table-column-order') || '[]'))
       .toEqual(['id', 'time', 'scenario', 'country', 'as', 'source', 'machine', 'origin', 'decisions']);
   });
 
   test('keeps saved order for hidden alert columns when they are enabled later', async () => {
-    window.localStorage.setItem('crowdsec-web-ui:alerts:table-column-order', JSON.stringify({
-      desktop: ['time', 'scenario', 'country', 'as', 'source', 'id', 'decisions', 'machine', 'origin'],
-      mobile: ['time', 'scenario', 'country', 'as', 'source', 'decisions', 'id', 'machine', 'origin'],
-    }));
+    window.localStorage.setItem(
+      'crowdsec-web-ui:alerts:table-column-order',
+      JSON.stringify(['time', 'scenario', 'country', 'as', 'source', 'id', 'decisions', 'machine', 'origin']),
+    );
 
     render(
       <MemoryRouter initialEntries={['/alerts']}>
@@ -568,30 +480,16 @@ describe('Alerts page', () => {
     expect(headers.indexOf('ID')).toBeLessThan(headers.indexOf('Decisions'));
   });
 
-  test('uses separate alert column preferences for mobile and desktop', async () => {
-    setMobileViewport(true);
-    vi.mocked(api.fetchConfig).mockResolvedValue({
-      lookback_period: '1h',
-      lookback_hours: 1,
-      lookback_days: 1,
-      refresh_interval: 30000,
-      current_interval_name: '30s',
-      lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
-      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
-      simulations_enabled: true,
-      machine_features_enabled: true,
-      origin_features_enabled: true,
-      table_column_preferences: {
-        alerts: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-          mobile: ['id', 'source'],
-        },
-        decisions: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-          mobile: ['source', 'alert'],
-        },
+  test('migrates legacy split alert column preferences to one layout', async () => {
+    window.localStorage.setItem('crowdsec-web-ui:table-column-preferences', JSON.stringify({
+      alerts: {
+        desktop: ['id', 'source'],
+        mobile: ['id', 'source'],
       },
-    });
+      decisions: {
+        mobile: ['source', 'alert'],
+      },
+    }));
 
     render(
       <MemoryRouter initialEntries={['/alerts']}>
@@ -605,11 +503,15 @@ describe('Alerts page', () => {
     expect(screen.queryByRole('columnheader', { name: 'Scenario' })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Choose alert table columns' }));
-    expect(screen.getByText('Column choices are saved separately for desktop and mobile; the app automatically uses the matching layout for your screen.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'mobile' })).toHaveClass('bg-white');
+    expect(screen.getByText('Column choices are saved in this browser.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'mobile' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'desktop' })).not.toBeInTheDocument();
   });
 
   test('shows machine column and detail card when the column is enabled', async () => {
+    window.localStorage.setItem('crowdsec-web-ui:table-column-preferences', JSON.stringify({
+      alerts: ['time', 'scenario', 'country', 'as', 'source', 'machine', 'decisions'],
+    }));
     vi.mocked(api.fetchConfig).mockResolvedValue({
       lookback_period: '1h',
       lookback_hours: 1,
@@ -621,16 +523,6 @@ describe('Alerts page', () => {
       simulations_enabled: true,
       machine_features_enabled: true,
       origin_features_enabled: false,
-      table_column_preferences: {
-        alerts: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'machine', 'decisions'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'machine', 'decisions'],
-        },
-        decisions: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-        },
-      },
     });
     vi.mocked(api.fetchAlert).mockResolvedValueOnce({
       id: 1,
@@ -659,6 +551,9 @@ describe('Alerts page', () => {
   });
 
   test('shows origin column, renders mixed origins, and filters alerts by origin when enabled', async () => {
+    window.localStorage.setItem('crowdsec-web-ui:table-column-preferences', JSON.stringify({
+      alerts: ['time', 'scenario', 'country', 'as', 'source', 'origin', 'decisions'],
+    }));
     const originAlerts: SlimAlert[] = [
       {
         id: 1,
@@ -696,16 +591,6 @@ describe('Alerts page', () => {
       simulations_enabled: true,
       machine_features_enabled: false,
       origin_features_enabled: true,
-      table_column_preferences: {
-        alerts: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'origin', 'decisions'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'origin', 'decisions'],
-        },
-        decisions: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-        },
-      },
     });
     vi.mocked(api.fetchAlertsPaginated).mockImplementation(async (page, pageSize, filters) => {
       const query = (filters?.q || '').toLowerCase();
@@ -958,16 +843,6 @@ describe('Alerts page', () => {
       simulations_enabled: true,
       machine_features_enabled: false,
       origin_features_enabled: false,
-      table_column_preferences: {
-        alerts: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-        },
-        decisions: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-        },
-      },
     });
     vi.mocked(api.fetchAlertsPaginated).mockImplementation(async (page, pageSize, filters) => {
       const rangeAlerts: SlimAlert[] = [
@@ -1131,16 +1006,6 @@ describe('Alerts page', () => {
       simulations_enabled: true,
       machine_features_enabled: false,
       origin_features_enabled: false,
-      table_column_preferences: {
-        alerts: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'decisions'],
-        },
-        decisions: {
-          desktop: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-          mobile: ['time', 'scenario', 'country', 'as', 'source', 'action', 'expiration', 'alert'],
-        },
-      },
     });
     vi.mocked(api.fetchAlertsPaginated).mockImplementation(async (page, pageSize) =>
       toPaginatedAlerts([
