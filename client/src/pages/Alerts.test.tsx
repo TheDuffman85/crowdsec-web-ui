@@ -607,7 +607,7 @@ describe('Alerts page', () => {
     );
 
     await waitFor(() => expect(screen.getByRole('columnheader', { name: 'Origin' })).toBeInTheDocument());
-    expect(screen.getByText('Mixed')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Mixed')).toBeInTheDocument());
     expect(screen.getByText('crowdsec')).toBeInTheDocument();
 
     await userEvent.type(screen.getByPlaceholderText('Filter alerts...'), 'capi');
