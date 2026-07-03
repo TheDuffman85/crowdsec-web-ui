@@ -44,6 +44,7 @@ interface AuthSettings {
     oidcIssuerUrl: string;
     oidcClientId: string;
     hasOidcClientSecret: boolean;
+    oidcScope: string;
     oidcGroupsClaim: string;
     oidcAdminGroups: string;
     oidcReadOnlyGroups: string;
@@ -89,6 +90,7 @@ export function Settings() {
         issuerUrl: '',
         clientId: '',
         clientSecret: '',
+        scope: 'openid profile email groups',
         groupsClaim: 'groups',
         adminGroups: [] as string[],
         readOnlyGroups: [] as string[],
@@ -143,6 +145,7 @@ export function Settings() {
                             issuerUrl: payload.oidcIssuerUrl,
                             clientId: payload.oidcClientId,
                             clientSecret: '',
+                            scope: payload.oidcScope || 'openid profile email groups',
                             groupsClaim: payload.oidcGroupsClaim || 'groups',
                             adminGroups: parseGroupList(payload.oidcAdminGroups || ''),
                             readOnlyGroups: parseGroupList(payload.oidcReadOnlyGroups || ''),
@@ -325,6 +328,7 @@ export function Settings() {
                     oidcIssuerUrl: oidcForm.issuerUrl,
                     oidcClientId: oidcForm.clientId,
                     oidcClientSecret: oidcForm.clientSecret,
+                    oidcScope: oidcForm.scope,
                     oidcGroupsClaim: oidcForm.groupsClaim,
                     oidcAdminGroups: adminGroups,
                     oidcReadOnlyGroups: readOnlyGroups,
@@ -346,6 +350,7 @@ export function Settings() {
                 oidcIssuerUrl: oidcForm.issuerUrl.trim(),
                 oidcClientId: oidcForm.clientId.trim(),
                 hasOidcClientSecret: Boolean(oidcForm.clientSecret.trim()) || current.hasOidcClientSecret,
+                oidcScope: oidcForm.scope.trim() || 'openid profile email groups',
                 oidcGroupsClaim: oidcForm.groupsClaim.trim() || 'groups',
                 oidcAdminGroups: adminGroups,
                 oidcReadOnlyGroups: readOnlyGroups,
@@ -650,6 +655,17 @@ export function Settings() {
                                         value={oidcForm.clientSecret}
                                         onChange={(event) => setOidcForm((current) => ({ ...current, clientSecret: event.target.value }))}
                                         placeholder={authSettings?.hasOidcClientSecret ? t("pages.settings.unchanged") : ''}
+                                        disabled={!canManageAuthSettings}
+                                        className={inputClass}
+                                    />
+                                </div>
+                                <div className="space-y-2 lg:col-span-2">
+                                    <label htmlFor="oidc-scope" className={labelClass}>{t("pages.settings.oidcScope")}</label>
+                                    <input
+                                        id="oidc-scope"
+                                        value={oidcForm.scope}
+                                        onChange={(event) => setOidcForm((current) => ({ ...current, scope: event.target.value }))}
+                                        placeholder="openid profile email groups"
                                         disabled={!canManageAuthSettings}
                                         className={inputClass}
                                     />

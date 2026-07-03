@@ -269,6 +269,7 @@
   "pages.settings.oidcClientId": "クライアント ID",
   "pages.settings.oidcClientSecret": "クライアントシークレット",
   "pages.settings.unchanged": "(変更なし)",
+  "pages.settings.oidcScope": "OIDC スコープ",
   "pages.settings.oidcGroupsClaim": "グループクレーム",
   "pages.settings.oidcAdminGroups": "管理者グループ",
   "pages.settings.oidcReadOnlyGroups": "読み取り専用グループ",

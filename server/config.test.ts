@@ -133,6 +133,7 @@ describe('config helpers', () => {
       CROWDSEC_AUTH_OIDC_ISSUER_URL: 'https://idp.example.com/application/o/crowdsec/',
       CROWDSEC_AUTH_OIDC_CLIENT_ID: 'crowdsec-client',
       CROWDSEC_AUTH_OIDC_CLIENT_SECRET: 'oidc-secret',
+      CROWDSEC_AUTH_OIDC_SCOPE: 'openid profile email roles',
       CROWDSEC_AUTH_OIDC_GROUPS_CLAIM: 'roles',
       CROWDSEC_AUTH_OIDC_ADMIN_GROUPS: 'admins, secops',
       CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS: 'viewers',
@@ -176,6 +177,7 @@ describe('config helpers', () => {
       oidcIssuerUrl: 'https://idp.example.com/application/o/crowdsec/',
       oidcClientId: 'crowdsec-client',
       oidcClientSecret: 'oidc-secret',
+      oidcScope: 'openid profile email roles',
       oidcGroupsClaim: 'roles',
       oidcAdminGroups: ['admins', 'secops'],
       oidcReadOnlyGroups: ['viewers'],
@@ -209,6 +211,7 @@ describe('config helpers', () => {
     expect(config.alertSyncMinChunkMs).toBe(900_000);
     expect(config.readOnly).toBe(false);
     expect(config.dashboardAuth.enabled).toBeNull();
+    expect(config.dashboardAuth.oidcScope).toBe('openid profile email groups');
     expect(config.dashboardAuth.oidcGroupsClaim).toBe('groups');
     expect(config.dashboardAuth.oidcUnmatchedRole).toBe('deny');
   });

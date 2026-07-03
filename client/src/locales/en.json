@@ -269,6 +269,7 @@
   "pages.settings.oidcClientId": "Client ID",
   "pages.settings.oidcClientSecret": "Client Secret",
   "pages.settings.unchanged": "(unchanged)",
+  "pages.settings.oidcScope": "Scopes",
   "pages.settings.oidcGroupsClaim": "Groups Claim",
   "pages.settings.oidcAdminGroups": "Admin Groups",
   "pages.settings.oidcReadOnlyGroups": "Read-only Groups",

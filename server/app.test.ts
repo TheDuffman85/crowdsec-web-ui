@@ -625,6 +625,7 @@ test('dashboard auth exposes account settings and password changes', async () =>
     oidcIssuerUrl: '',
     oidcClientId: '',
     hasOidcClientSecret: false,
+    oidcScope: 'openid profile email groups',
     oidcGroupsClaim: 'groups',
     oidcAdminGroups: '',
     oidcReadOnlyGroups: '',
@@ -660,6 +661,7 @@ test('dashboard auth exposes account settings and password changes', async () =>
     headers: { 'Content-Type': 'application/json', cookie },
     body: JSON.stringify({
       oidcGroupsClaim: 'roles',
+      oidcScope: 'openid profile email groups offline_access',
       oidcAdminGroups: 'admins, secops, admins',
       oidcReadOnlyGroups: 'viewers',
       oidcUnmatchedRole: 'admin',
@@ -669,6 +671,7 @@ test('dashboard auth exposes account settings and password changes', async () =>
   expect(await saveGroupMapping.json()).toMatchObject({
     settings: {
       oidcGroupsClaim: 'roles',
+      oidcScope: 'openid profile email groups offline_access',
       oidcAdminGroups: 'admins,secops',
       oidcReadOnlyGroups: 'viewers',
       oidcUnmatchedRole: 'admin',
@@ -718,6 +721,7 @@ test('dashboard auth settings use OIDC environment values as defaults', async ()
       CROWDSEC_AUTH_OIDC_ISSUER_URL: 'https://idp.example.com/application/o/crowdsec/',
       CROWDSEC_AUTH_OIDC_CLIENT_ID: 'crowdsec-client',
       CROWDSEC_AUTH_OIDC_CLIENT_SECRET: 'oidc-secret',
+      CROWDSEC_AUTH_OIDC_SCOPE: 'openid profile email roles',
       CROWDSEC_AUTH_OIDC_GROUPS_CLAIM: 'roles',
       CROWDSEC_AUTH_OIDC_ADMIN_GROUPS: 'admins,secops',
       CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS: 'viewers',
@@ -740,6 +744,7 @@ test('dashboard auth settings use OIDC environment values as defaults', async ()
     oidcIssuerUrl: 'https://idp.example.com/application/o/crowdsec/',
     oidcClientId: 'crowdsec-client',
     hasOidcClientSecret: true,
+    oidcScope: 'openid profile email roles',
     oidcGroupsClaim: 'roles',
     oidcAdminGroups: 'admins,secops',
     oidcReadOnlyGroups: 'viewers',

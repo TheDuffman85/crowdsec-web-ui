@@ -269,6 +269,7 @@
   "pages.settings.oidcClientId": "客户端 ID",
   "pages.settings.oidcClientSecret": "客户端密钥",
   "pages.settings.unchanged": "（未更改）",
+  "pages.settings.oidcScope": "OIDC 作用域",
   "pages.settings.oidcGroupsClaim": "组声明",
   "pages.settings.oidcAdminGroups": "管理员组",
   "pages.settings.oidcReadOnlyGroups": "只读组",

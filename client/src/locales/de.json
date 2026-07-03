@@ -269,6 +269,7 @@
   "pages.settings.oidcClientId": "Client-Kennung",
   "pages.settings.oidcClientSecret": "Client-Geheimnis",
   "pages.settings.unchanged": "(unverändert)",
+  "pages.settings.oidcScope": "OIDC-Scopes",
   "pages.settings.oidcGroupsClaim": "Gruppenattribut",
   "pages.settings.oidcAdminGroups": "Admin-Gruppen",
   "pages.settings.oidcReadOnlyGroups": "Nur-Lese-Gruppen",

@@ -11,6 +11,7 @@ export interface DashboardAuthConfig {
   oidcIssuerUrl?: string;
   oidcClientId?: string;
   oidcClientSecret?: string;
+  oidcScope: string;
   oidcGroupsClaim: string;
   oidcAdminGroups: string[];
   oidcReadOnlyGroups: string[];
@@ -166,6 +167,7 @@ function parseDashboardAuthConfig(env: NodeJS.ProcessEnv): DashboardAuthConfig {
     oidcIssuerUrl: env.CROWDSEC_AUTH_OIDC_ISSUER_URL?.trim() || undefined,
     oidcClientId: env.CROWDSEC_AUTH_OIDC_CLIENT_ID?.trim() || undefined,
     oidcClientSecret: resolveSecretEnv('CROWDSEC_AUTH_OIDC_CLIENT_SECRET', env)?.trim() || undefined,
+    oidcScope: env.CROWDSEC_AUTH_OIDC_SCOPE?.trim() || 'openid profile email groups',
     oidcGroupsClaim: env.CROWDSEC_AUTH_OIDC_GROUPS_CLAIM?.trim() || 'groups',
     oidcAdminGroups: parseCsvEnv(env.CROWDSEC_AUTH_OIDC_ADMIN_GROUPS),
     oidcReadOnlyGroups: parseCsvEnv(env.CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS),

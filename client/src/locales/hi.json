@@ -269,6 +269,7 @@
   "pages.settings.oidcClientId": "क्लाइंट ID",
   "pages.settings.oidcClientSecret": "क्लाइंट सीक्रेट",
   "pages.settings.unchanged": "(बदला नहीं गया)",
+  "pages.settings.oidcScope": "OIDC स्कोप",
   "pages.settings.oidcGroupsClaim": "समूह दावा",
   "pages.settings.oidcAdminGroups": "एडमिन समूह",
   "pages.settings.oidcReadOnlyGroups": "रीड-ओनली समूह",

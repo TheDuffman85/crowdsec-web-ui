@@ -66,7 +66,7 @@ These routes are mounted below `/api/auth`. Auth setup/login routes are availabl
 | POST | `/api/auth/logout` | Clear the session cookie. |
 | GET | `/api/auth/me` | Current authenticated session user. |
 | GET | `/api/auth/settings` | Auth settings visible to the current user, including OIDC settings metadata and password/passkey state. |
-| PUT | `/api/auth/settings` | Admin-only auth settings update. Can disable password login and configure OIDC issuer, client ID, client secret, groups claim, admin groups, read-only groups, and unmatched-user policy. |
+| PUT | `/api/auth/settings` | Admin-only auth settings update. Can disable password login and configure OIDC issuer, client ID, client secret, scopes, groups claim, admin groups, read-only groups, and unmatched-user policy. |
 | POST | `/api/auth/change-password` | Change the current user's password. The user must be logged in with password auth. |
 | GET | `/api/auth/passkeys` | List passkeys for the current user. |
 | PATCH | `/api/auth/passkeys/:id` | Rename a passkey with `{ "name": "..." }`. |

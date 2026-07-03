@@ -269,6 +269,7 @@
   "pages.settings.oidcClientId": "معرّف العميل",
   "pages.settings.oidcClientSecret": "سر العميل",
   "pages.settings.unchanged": "(بدون تغيير)",
+  "pages.settings.oidcScope": "نطاقات OIDC",
   "pages.settings.oidcGroupsClaim": "مطالبة المجموعات",
   "pages.settings.oidcAdminGroups": "مجموعات المسؤولين",
   "pages.settings.oidcReadOnlyGroups": "مجموعات القراءة فقط",

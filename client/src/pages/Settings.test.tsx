@@ -61,6 +61,7 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
     'pages.settings.oidcClientId': 'Client ID',
     'pages.settings.oidcClientSecret': 'Client Secret',
     'pages.settings.unchanged': '(unchanged)',
+    'pages.settings.oidcScope': 'Scopes',
     'pages.settings.oidcGroupsClaim': 'Groups Claim',
     'pages.settings.oidcAdminGroups': 'Admin Groups',
     'pages.settings.oidcReadOnlyGroups': 'Read-only Groups',
@@ -288,6 +289,7 @@ describe('Settings', () => {
           oidcIssuerUrl: '',
           oidcClientId: '',
           hasOidcClientSecret: false,
+          oidcScope: 'openid profile email groups',
           oidcGroupsClaim: 'groups',
           oidcAdminGroups: '',
           oidcReadOnlyGroups: '',
@@ -351,6 +353,7 @@ describe('Settings', () => {
           oidcIssuerUrl: '',
           oidcClientId: '',
           hasOidcClientSecret: false,
+          oidcScope: 'openid profile email groups',
           oidcGroupsClaim: 'groups',
           oidcAdminGroups: '',
           oidcReadOnlyGroups: '',
@@ -450,6 +453,7 @@ describe('Settings', () => {
           oidcIssuerUrl: '',
           oidcClientId: '',
           hasOidcClientSecret: false,
+          oidcScope: 'openid profile email groups',
           oidcGroupsClaim: 'groups',
           oidcAdminGroups: '',
           oidcReadOnlyGroups: '',
@@ -533,6 +537,7 @@ describe('Settings', () => {
           oidcIssuerUrl: 'https://idp.example.com',
           oidcClientId: 'crowdsec',
           hasOidcClientSecret: false,
+          oidcScope: 'openid profile email groups',
           oidcGroupsClaim: 'groups',
           oidcAdminGroups: 'Application Admin,secops',
           oidcReadOnlyGroups: 'Application User',
@@ -551,6 +556,8 @@ describe('Settings', () => {
     expect(screen.getByLabelText('Unmatched OIDC users')).toHaveValue('deny');
     expect(screen.getByLabelText('Unmatched OIDC users')).toHaveAccessibleDescription('Choose what happens when an OIDC user matches no configured group. The default is deny sign-in.');
     await user.click(screen.getByRole('button', { name: 'Remove secops' }));
+    await user.clear(screen.getByLabelText('Scopes'));
+    await user.type(screen.getByLabelText('Scopes'), 'openid profile email groups offline_access');
     await user.type(screen.getByLabelText('Admin Groups'), 'security-team');
     await user.click(screen.getAllByRole('button', { name: 'Add' })[0]);
     await user.selectOptions(screen.getByLabelText('Unmatched OIDC users'), 'admin');
@@ -564,6 +571,7 @@ describe('Settings', () => {
           oidcIssuerUrl: 'https://idp.example.com',
           oidcClientId: 'crowdsec',
           oidcClientSecret: '',
+          oidcScope: 'openid profile email groups offline_access',
           oidcGroupsClaim: 'groups',
           oidcAdminGroups: 'Application Admin,security-team',
           oidcReadOnlyGroups: 'Application User',
