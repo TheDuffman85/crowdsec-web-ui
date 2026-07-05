@@ -12,6 +12,7 @@ import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { EventCard } from "../components/EventCard";
 import { getCountryName } from "../lib/utils";
+import { getDecisionExpirationState } from "../lib/decisionExpiration";
 import { loadStoredTableColumnPreferences, saveStoredTableColumnPreferences } from "../lib/tableColumns";
 import { TABLE_COLUMN_DEFINITIONS } from "../../../shared/contracts";
 import { resolveMachineName } from "../../../shared/machine";
@@ -138,6 +139,7 @@ export function Alerts() {
     const [showColumnsModal, setShowColumnsModal] = useState(false);
     const [searchDraft, setSearchDraft] = useState(initialQueryParam);
     const [debouncedSearchDraft, setDebouncedSearchDraft] = useState(initialQueryParam);
+    const [nowMs, setNowMs] = useState(() => Date.now());
     const [showSearchSyntaxModal, setShowSearchSyntaxModal] = useState(false);
     const [initialLoading, setInitialLoading] = useState(true);
     const [hasLoadedAlerts, setHasLoadedAlerts] = useState(false);
@@ -404,6 +406,11 @@ export function Alerts() {
     useEffect(() => {
         loadAlertsRef.current = loadAlerts;
     }, [loadAlerts]);
+
+    useEffect(() => {
+        const intervalId = window.setInterval(() => setNowMs(Date.now()), 1_000);
+        return () => window.clearInterval(intervalId);
+    }, []);
 
     const lastAlertElementRef = useCallback((node: HTMLTableRowElement | null) => {
         if (initialLoading || backgroundLoading || loadingMore || !hasMoreAlerts) return;
@@ -1333,17 +1340,8 @@ export function Alerts() {
                                                     </td>
                                                 </tr>
                                             ) : modalDecisions.map((decision, idx) => {
-                                                // Check if this specific decision is active or expired
-                                                const isActive = (() => {
-                                                    if (decision.expired !== undefined) {
-                                                        return !decision.expired;
-                                                    }
-
-                                                    if (decision.detail.expiration) {
-                                                        return new Date(decision.detail.expiration) > new Date();
-                                                    }
-                                                    return true; // Assume active if no stop_at and not definitely expired
-                                                })();
+                                                const expirationState = getDecisionExpirationState(decision, nowMs);
+                                                const isActive = !expirationState.isExpired;
                                                 return (
                                                     <tr
                                                         key={`${decision.id}-${decision.detail.duration ?? idx}`}
@@ -1353,7 +1351,7 @@ export function Alerts() {
                                                         <td className="px-4 py-2 text-sm"><Badge variant="danger">{decision.detail.type || decision.detail.action || "ban"}</Badge></td>
                                                         <td className="px-4 py-2 text-sm font-mono">{decision.value}</td>
                                                         <td className="px-4 py-2 text-sm">
-                                                            {isActive ? decision.detail.duration : "0s"}
+                                                            {expirationState.label}
                                                             {!isActive && <span className="ml-2 text-xs text-red-500 dark:text-red-400">{t('pages.decisions.expired')}</span>}
                                                         </td>
                                                         <td className="px-4 py-2 text-sm">{decision.detail.origin || "-"}</td>

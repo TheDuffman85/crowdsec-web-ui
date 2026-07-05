@@ -169,10 +169,69 @@ vi.mock('../lib/api', () => {
 
 beforeEach(() => {
   vi.mocked(api.fetchConfig).mockResolvedValue(createDefaultConfigResponse());
+  vi.mocked(api.fetchDecisionsPaginated).mockImplementation(async (page: number, pageSize = 50, filters?: Record<string, string>) => {
+    let decisions: DecisionListItem[] = [
+      {
+        id: 10,
+        created_at: '2026-03-23T10:00:00.000Z',
+        machine: 'host-a',
+        value: '1.2.3.4',
+        expired: false,
+        is_duplicate: false,
+        simulated: false,
+        detail: {
+          origin: 'manual',
+          reason: 'crowdsecurity/ssh-bf',
+          country: 'DE',
+          as: 'Hetzner',
+          action: 'ban',
+          duration: '4h',
+          alert_id: 1,
+          target: 'ssh',
+        },
+      },
+      {
+        id: 20,
+        created_at: '2026-03-24T11:00:00.000Z',
+        machine: 'machine-2',
+        value: '5.6.7.8',
+        expired: false,
+        is_duplicate: false,
+        simulated: true,
+        detail: {
+          origin: 'CAPI',
+          reason: 'crowdsecurity/nginx-bf',
+          country: 'US',
+          as: 'AWS',
+          action: 'ban',
+          duration: '4h',
+          alert_id: 2,
+          target: 'nginx',
+        },
+      },
+    ];
+
+    if (filters?.simulation === 'simulated') {
+      decisions = decisions.filter((decision) => decision.simulated === true);
+    }
+    if (filters?.q) {
+      const compiledSearch = compileDecisionSearch(filters.q, {
+        machineEnabled: true,
+        originEnabled: true,
+      });
+      if (!compiledSearch.ok) {
+        throw new Error(compiledSearch.error.message);
+      }
+      decisions = decisions.filter(compiledSearch.predicate);
+    }
+
+    return toPaginatedDecisions(decisions, page, pageSize, 2);
+  });
 });
 
 afterEach(() => {
   refreshSignalMock = 0;
+  vi.useRealTimers();
   window.localStorage.clear();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -302,6 +361,48 @@ describe('Decisions page', () => {
     expect(screen.queryByRole('columnheader', { name: 'Origin' })).not.toBeInTheDocument();
   });
 
+  test('counts decision expiration down live from the absolute stop time', async () => {
+    const expiresAt = new Date(Date.now() + 2_500).toISOString();
+    vi.mocked(api.fetchDecisionsPaginated).mockImplementationOnce(async (page, pageSize) =>
+      toPaginatedDecisions([
+        {
+          id: 10,
+          created_at: new Date(Date.now() - 60_000).toISOString(),
+          value: '1.2.3.4',
+          expired: false,
+          is_duplicate: false,
+          simulated: false,
+          detail: {
+            origin: 'manual',
+            reason: 'crowdsecurity/ssh-bf',
+            country: 'DE',
+            as: 'Hetzner',
+            action: 'ban',
+            duration: '4m10s',
+            expiration: expiresAt,
+            alert_id: 1,
+          },
+        },
+      ], page, pageSize),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText(/^[123]s$/)).toBeInTheDocument());
+    expect(screen.queryByText('4m10s')).not.toBeInTheDocument();
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2_600));
+    });
+    await waitFor(() => expect(screen.getByText('0s')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Expired/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Select decision 10' })).toBeDisabled());
+  });
+
   test('saves decision table columns from the modal', async () => {
     render(
       <MemoryRouter initialEntries={['/decisions']}>
@@ -362,7 +463,7 @@ describe('Decisions page', () => {
     );
 
     await waitFor(() => expect(screen.getByRole('columnheader', { name: 'Machine' })).toBeInTheDocument());
-    expect(screen.getByText('host-a')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('host-a')).toBeInTheDocument());
 
     fireEvent.change(screen.getByPlaceholderText('Filter decisions...'), { target: { value: 'host-a' } });
     await flushDecisionSearchDebounce();
@@ -395,7 +496,7 @@ describe('Decisions page', () => {
 
     await waitFor(() => expect(screen.getByRole('columnheader', { name: 'Origin' })).toBeInTheDocument());
     await waitFor(() => expect(screen.getByText('manual')).toBeInTheDocument());
-    expect(screen.getByText('CAPI')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('CAPI')).toBeInTheDocument());
 
     fireEvent.change(screen.getByPlaceholderText('Filter decisions...'), { target: { value: 'manual' } });
     await flushDecisionSearchDebounce();

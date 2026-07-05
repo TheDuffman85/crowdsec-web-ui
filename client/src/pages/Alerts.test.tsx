@@ -544,9 +544,8 @@ describe('Alerts page', () => {
       </MemoryRouter>,
     );
 
-    await waitFor(() => expect(screen.getByRole('columnheader', { name: 'Machine' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Alert Details #1')).toBeInTheDocument());
     expect(screen.getAllByText('host-a').length).toBeGreaterThan(1);
-    expect(screen.getByText('Alert Details #1')).toBeInTheDocument();
     expect(screen.getAllByText('Machine').length).toBeGreaterThan(1);
   });
 

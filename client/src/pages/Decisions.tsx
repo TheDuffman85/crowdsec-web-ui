@@ -11,6 +11,7 @@ import { TableColumnsModal } from "../components/TableColumnsModal";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { getCountryName } from "../lib/utils";
+import { getDecisionExpirationState } from "../lib/decisionExpiration";
 import { TABLE_COLUMN_DEFINITIONS } from "../../../shared/contracts";
 import { loadStoredTableColumnPreferences, saveStoredTableColumnPreferences } from "../lib/tableColumns";
 import { compileDecisionSearch, getSearchHelpDefinition, type SearchParseError } from "../../../shared/search";
@@ -76,8 +77,8 @@ function toErrorInfo(error: unknown, fallbackMessage: string): ErrorInfo {
     };
 }
 
-function isDecisionExpired(decision: DecisionListItem): boolean {
-    return decision.expired === true;
+function isDecisionExpired(decision: DecisionListItem, nowMs: number): boolean {
+    return getDecisionExpirationState(decision, nowMs).isExpired;
 }
 
 function summarizeDeleteResult(result: BulkDeleteResult, t: I18nContextValue['t']): string | null {
@@ -109,6 +110,7 @@ export function Decisions() {
     const [showColumnsModal, setShowColumnsModal] = useState(false);
     const [searchDraft, setSearchDraft] = useState(initialQueryParam);
     const [debouncedSearchDraft, setDebouncedSearchDraft] = useState(initialQueryParam);
+    const [nowMs, setNowMs] = useState(() => Date.now());
     const [showSearchSyntaxModal, setShowSearchSyntaxModal] = useState(false);
     const [initialLoading, setInitialLoading] = useState(true);
     const [hasLoadedDecisions, setHasLoadedDecisions] = useState(false);
@@ -332,6 +334,11 @@ export function Decisions() {
     useEffect(() => {
         loadDecisionsRef.current = loadDecisions;
     }, [loadDecisions]);
+
+    useEffect(() => {
+        const intervalId = window.setInterval(() => setNowMs(Date.now()), 1_000);
+        return () => window.clearInterval(intervalId);
+    }, []);
 
     const lastDecisionElementRef = useCallback((node: HTMLTableRowElement | null) => {
         if (initialLoading || backgroundLoading || loadingMore || !hasMoreDecisions) return;
@@ -619,8 +626,14 @@ export function Decisions() {
     };
 
     const filteredDecisions = decisions;
-    const selectedFilteredDecisionIds = selectableDecisionIds.filter((id) => selectedDecisionIds.includes(id));
-    const allFilteredDecisionsSelected = selectableDecisionIds.length > 0 && selectedFilteredDecisionIds.length === selectableDecisionIds.length;
+    const visibleExpiredDecisionIds = new Set(
+        filteredDecisions
+            .filter((decision) => isDecisionExpired(decision, nowMs))
+            .map((decision) => String(decision.id)),
+    );
+    const activeSelectableDecisionIds = selectableDecisionIds.filter((id) => !visibleExpiredDecisionIds.has(id));
+    const selectedFilteredDecisionIds = activeSelectableDecisionIds.filter((id) => selectedDecisionIds.includes(id));
+    const allFilteredDecisionsSelected = activeSelectableDecisionIds.length > 0 && selectedFilteredDecisionIds.length === activeSelectableDecisionIds.length;
     const someFilteredDecisionsSelected = selectedFilteredDecisionIds.length > 0 && !allFilteredDecisionsSelected;
 
     useEffect(() => {
@@ -632,10 +645,10 @@ export function Decisions() {
     const toggleAllFilteredDecisions = () => {
         setSelectedDecisionIds((prev) => {
             if (allFilteredDecisionsSelected) {
-                return prev.filter((id) => !selectableDecisionIds.includes(id));
+                return prev.filter((id) => !activeSelectableDecisionIds.includes(id));
             }
 
-            return Array.from(new Set([...prev, ...selectableDecisionIds]));
+            return Array.from(new Set([...prev, ...activeSelectableDecisionIds]));
         });
     };
 
@@ -847,7 +860,7 @@ export function Decisions() {
                                             type="checkbox"
                                             aria-label={t('pages.decisions.selectAllFiltered')}
                                             checked={allFilteredDecisionsSelected}
-                                            disabled={selectableDecisionIds.length === 0}
+                                            disabled={activeSelectableDecisionIds.length === 0}
                                             onChange={toggleAllFilteredDecisions}
                                             className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                                         />
@@ -877,8 +890,9 @@ export function Decisions() {
                                 <tr><td colSpan={decisionTableColSpan} className="px-6 py-4 text-center text-sm text-gray-500">{alertIdFilter ? t('pages.decisions.noDecisionsForAlert') : t('pages.decisions.noDecisions')}</td></tr>
                             ) : (
                                 visibleDecisions.map((decision, index) => {
-                                    const decisionDuration = decision.detail.duration ?? '';
-                                    const isExpired = isDecisionExpired(decision);
+                                    const expirationState = getDecisionExpirationState(decision, nowMs);
+                                    const decisionDuration = expirationState.label;
+                                    const isExpired = expirationState.isExpired;
                                     const rowClasses = isExpired
                                         ? "hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors opacity-60 bg-gray-50 dark:bg-gray-900/20"
                                         : "hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors";
