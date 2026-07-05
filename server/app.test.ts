@@ -1627,6 +1627,77 @@ describe('createApp', () => {
     destroyTempDir();
   });
 
+  test('keeps the longest active decision visible when duplicate values are hidden', async () => {
+    const createdAt = new Date().toISOString();
+    const shortStopAt = new Date(Date.now() + 14 * 60 * 60 * 1_000).toISOString();
+    const longStopAt = new Date(Date.now() + 62 * 60 * 60 * 1_000).toISOString();
+    const duplicateAlert = sampleAlert({
+      id: 110,
+      uuid: 'alert-110',
+      created_at: createdAt,
+      source: { ip: '85.121.208.95', value: '85.121.208.95', cn: 'RO', as_name: 'Stylish By A&I Srl' },
+      decisions: [
+        {
+          id: 10,
+          type: 'ban',
+          value: '85.121.208.95',
+          duration: '14h',
+          stop_at: shortStopAt,
+          origin: 'crowdsec',
+          scenario: 'crowdsecurity/appsec-native',
+          simulated: false,
+        },
+        {
+          id: 49,
+          type: 'ban',
+          value: '85.121.208.95',
+          duration: '62h',
+          stop_at: longStopAt,
+          origin: 'crowdsec',
+          scenario: 'crowdsecurity/http-probing',
+          simulated: false,
+        },
+      ],
+    });
+    const { controller, database } = createController({
+      fetchResolver: (url) => {
+        if (url.includes('/v1/alerts?')) {
+          return Response.json([duplicateAlert]);
+        }
+        return undefined;
+      },
+    });
+    seedAlert(database, duplicateAlert);
+
+    const defaultResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions?page=1&page_size=10'));
+    expect(defaultResponse.status).toBe(200);
+    expect((await defaultResponse.json()) as { data: Array<{ id: number; detail: { reason: string } }> }).toEqual(
+      expect.objectContaining({
+        data: [
+          expect.objectContaining({
+            id: 49,
+            detail: expect.objectContaining({ reason: 'crowdsecurity/http-probing' }),
+          }),
+        ],
+      }),
+    );
+
+    const duplicatesResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions?page=1&page_size=10&hide_duplicates=false'));
+    expect(duplicatesResponse.status).toBe(200);
+    expect((await duplicatesResponse.json()) as { data: Array<{ id: number; is_duplicate: boolean }> }).toEqual(
+      expect.objectContaining({
+        data: expect.arrayContaining([
+          expect.objectContaining({ id: 10, is_duplicate: true }),
+          expect.objectContaining({ id: 49, is_duplicate: false }),
+        ]),
+      }),
+    );
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
   test('supports advanced boolean search for alerts and decisions', async () => {
     const searchAlerts = [
       sampleAlert({

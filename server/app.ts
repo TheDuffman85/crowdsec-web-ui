@@ -3183,15 +3183,20 @@ function toDecisionListItem(
 }
 
 function markDuplicateDecisions(decisions: DecisionListItem[]): DecisionListItem[] {
-  const primaryMap = new Map<string | undefined, number>();
+  const primaryMap = new Map<string, { id: string | number; expirationMs: number; numericId: number }>();
 
   for (const decision of decisions) {
     if (decision.expired) continue;
     const key = `${decision.value ?? ''}|${decision.simulated === true ? 'simulated' : 'live'}`;
+    const expirationMs = getDecisionExpirationMs(decision);
     const numericId = getNumericDecisionId(decision.id);
     const current = primaryMap.get(key);
-    if (current === undefined || numericId < current) {
-      primaryMap.set(key, numericId);
+    if (
+      current === undefined ||
+      expirationMs > current.expirationMs ||
+      (expirationMs === current.expirationMs && numericId < current.numericId)
+    ) {
+      primaryMap.set(key, { id: decision.id, expirationMs, numericId });
     }
   }
 
@@ -3203,9 +3208,14 @@ function markDuplicateDecisions(decisions: DecisionListItem[]): DecisionListItem
     const primaryId = primaryMap.get(`${decision.value ?? ''}|${decision.simulated === true ? 'simulated' : 'live'}`);
     return {
       ...decision,
-      is_duplicate: getNumericDecisionId(decision.id) !== primaryId,
+      is_duplicate: String(decision.id) !== String(primaryId?.id),
     };
   });
+}
+
+function getDecisionExpirationMs(decision: DecisionListItem): number {
+  const expiration = decision.detail.expiration ? Date.parse(decision.detail.expiration) : Number.NaN;
+  return Number.isFinite(expiration) ? expiration : Number.NEGATIVE_INFINITY;
 }
 
 function getNumericDecisionId(id: string | number): number {
