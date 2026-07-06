@@ -47,6 +47,22 @@ describe('HighlightedSearchInput', () => {
     expect(highlightLayer.style.transform).toBe('translateX(-42px)');
   });
 
+  test('uses translucent selection colors so mirrored text stays readable', () => {
+    render(
+      <HighlightedSearchInput
+        searchPage="alerts"
+        placeholder="Filter alerts..."
+        value="date<=2026-07-05"
+        onChange={() => {}}
+      />,
+    );
+
+    expect(screen.getByPlaceholderText('Filter alerts...')).toHaveClass(
+      'selection:bg-primary-500/20',
+      'dark:selection:bg-primary-900/60',
+    );
+  });
+
   test('marks syntax error ranges inside the mirrored highlight layer', () => {
     render(
       <HighlightedSearchInput

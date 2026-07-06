@@ -146,7 +146,7 @@ jobs:
               : [];
 
             const prNumbers = [];
-            const pullRequests = new Map();
+            const seenPullRequests = new Set();
             const directCommits = [];
 
             for (const commit of commits) {
@@ -163,9 +163,9 @@ jobs:
                 continue;
               }
 
-              if (!pullRequests.has(pullRequest.number)) {
+              if (!seenPullRequests.has(pullRequest.number)) {
                 prNumbers.push(pullRequest.number);
-                pullRequests.set(pullRequest.number, pullRequest);
+                seenPullRequests.add(pullRequest.number);
                 addContributor(pullRequest.user);
               }
             }
@@ -177,7 +177,6 @@ jobs:
             }
 
             for (const number of prNumbers) {
-              const pullRequest = pullRequests.get(number);
               const prCommits = await github.paginate(github.rest.pulls.listCommits, {
                 owner,
                 repo,
@@ -185,19 +184,10 @@ jobs:
                 per_page: 100,
               });
 
-              lines.push(
-                `- ${pullRequest.title} ([#${number}](${prUrl(number)}))`
-              );
-
               for (const commit of prCommits) {
                 addContributor(commit.author);
-              }
-
-              if (prCommits.length > 1) {
-                for (const commit of prCommits) {
-                  const subject = commit.commit.message.split("\n")[0];
-                  lines.push(`  - ${subject}`);
-                }
+                const subject = commit.commit.message.split("\n")[0];
+                lines.push(`- ${subject} ([#${number}](${prUrl(number)}))`);
               }
             }
 

@@ -12,6 +12,11 @@ export interface SearchFeatureFlags {
   originEnabled?: boolean;
 }
 
+export interface SearchDateOptions {
+  timezoneOffsetMinutes?: number;
+  timeZone?: string | null;
+}
+
 export interface SearchFieldDefinition {
   name: string;
   aliases: string[];
@@ -569,10 +574,14 @@ export function getSearchHelpDefinition(
   };
 }
 
-export function compileAlertSearch(query: string, features: SearchFeatureFlags = {}): AlertSearchCompileResult {
+export function compileAlertSearch(
+  query: string,
+  features: SearchFeatureFlags = {},
+  dateOptions: SearchDateOptions = {},
+): AlertSearchCompileResult {
   const help = getSearchHelpDefinition('alerts', features);
   const fieldMap = getFieldMap('alerts', features);
-  const parsed = parseQuery(query, fieldMap);
+  const parsed = parseQuery(query, fieldMap, dateOptions);
   if (!parsed.ok) {
     return { ok: false, error: parsed.error, help };
   }
@@ -581,14 +590,18 @@ export function compileAlertSearch(query: string, features: SearchFeatureFlags =
     ok: true,
     ast: parsed.ast,
     help,
-    predicate: (alert) => parsed.ast === null || evaluateNode(parsed.ast, alert, alertFieldMatchers, matchAlertFreeText),
+    predicate: (alert) => parsed.ast === null || evaluateNode(parsed.ast, alert, alertFieldMatchers, matchAlertFreeText, undefined, dateOptions),
   };
 }
 
-export function compileDecisionSearch(query: string, features: SearchFeatureFlags = {}): DecisionSearchCompileResult {
+export function compileDecisionSearch(
+  query: string,
+  features: SearchFeatureFlags = {},
+  dateOptions: SearchDateOptions = {},
+): DecisionSearchCompileResult {
   const help = getSearchHelpDefinition('decisions', features);
   const fieldMap = getFieldMap('decisions', features);
-  const parsed = parseQuery(query, fieldMap);
+  const parsed = parseQuery(query, fieldMap, dateOptions);
   if (!parsed.ok) {
     return { ok: false, error: parsed.error, help };
   }
@@ -597,7 +610,7 @@ export function compileDecisionSearch(query: string, features: SearchFeatureFlag
     ok: true,
     ast: parsed.ast,
     help,
-    predicate: (decision) => parsed.ast === null || evaluateNode(parsed.ast, decision, decisionFieldMatchers, matchDecisionFreeText),
+    predicate: (decision) => parsed.ast === null || evaluateNode(parsed.ast, decision, decisionFieldMatchers, matchDecisionFreeText, undefined, dateOptions),
   };
 }
 
@@ -626,7 +639,7 @@ export function analyzeSearchQuery(
     start: token.start + trimOffset,
     end: token.end + trimOffset,
   }));
-  const parser = new SearchParser(trimmedQuery, tokenResult.tokens, fieldMap);
+  const parser = new SearchParser(trimmedQuery, tokenResult.tokens, fieldMap, {});
   const parsed = parser.parse();
 
   return {
@@ -657,7 +670,11 @@ function isFieldAvailable(definition: SearchFieldDefinition, features: SearchFea
   return true;
 }
 
-function parseQuery(query: string, fieldMap: FieldMap): { ok: true; ast: SearchNode | null } | { ok: false; error: SearchParseError } {
+function parseQuery(
+  query: string,
+  fieldMap: FieldMap,
+  dateOptions: SearchDateOptions,
+): { ok: true; ast: SearchNode | null } | { ok: false; error: SearchParseError } {
   const { trimmedQuery, trimOffset } = normalizeSearchQuery(query);
   if (!trimmedQuery) {
     return { ok: true, ast: null };
@@ -671,7 +688,7 @@ function parseQuery(query: string, fieldMap: FieldMap): { ok: true; ast: SearchN
     };
   }
 
-  const parser = new SearchParser(trimmedQuery, tokenResult.tokens, fieldMap);
+  const parser = new SearchParser(trimmedQuery, tokenResult.tokens, fieldMap, dateOptions);
   const parsed = parser.parse();
   if (!parsed.ok) {
     return {
@@ -964,6 +981,7 @@ class SearchParser {
     private readonly query: string,
     private readonly tokens: SearchToken[],
     private readonly fieldMap: FieldMap,
+    private readonly dateOptions: SearchDateOptions,
   ) {}
 
   parse(): { ok: true; ast: SearchNode | null } | { ok: false; error: SearchParseError } {
@@ -1074,7 +1092,7 @@ class SearchParser {
         );
       }
 
-      if (definition.valueType === 'date' && parseSearchDateValue(valueToken.value) === null) {
+      if (definition.valueType === 'date' && parseSearchDateValue(valueToken.value, this.dateOptions) === null) {
         throw this.error(
           'Invalid date value. Use `YYYY-MM-DD` or an ISO timestamp',
           valueToken.start,
@@ -1195,6 +1213,7 @@ function evaluateNode<T>(
   fieldMatchers: Record<string, (item: T, value: string) => boolean>,
   freeTextMatcher: (item: T, value: string) => boolean,
   scopedField?: string,
+  dateOptions: SearchDateOptions = {},
 ): boolean {
   switch (node.kind) {
     case 'term':
@@ -1203,18 +1222,18 @@ function evaluateNode<T>(
       }
       return freeTextMatcher(item, node.value);
     case 'comparison':
-      return compareFieldValue(item, node.field, node.operator, node.value, fieldMatchers);
+      return compareFieldValue(item, node.field, node.operator, node.value, fieldMatchers, dateOptions);
     case 'field':
-      return evaluateNode(node.expression, item, fieldMatchers, freeTextMatcher, node.field);
+      return evaluateNode(node.expression, item, fieldMatchers, freeTextMatcher, node.field, dateOptions);
     case 'not':
-      return !evaluateNode(node.expression, item, fieldMatchers, freeTextMatcher, scopedField);
+      return !evaluateNode(node.expression, item, fieldMatchers, freeTextMatcher, scopedField, dateOptions);
     case 'binary':
       if (node.operator === 'AND') {
-        return evaluateNode(node.left, item, fieldMatchers, freeTextMatcher, scopedField) &&
-          evaluateNode(node.right, item, fieldMatchers, freeTextMatcher, scopedField);
+        return evaluateNode(node.left, item, fieldMatchers, freeTextMatcher, scopedField, dateOptions) &&
+          evaluateNode(node.right, item, fieldMatchers, freeTextMatcher, scopedField, dateOptions);
       }
-      return evaluateNode(node.left, item, fieldMatchers, freeTextMatcher, scopedField) ||
-        evaluateNode(node.right, item, fieldMatchers, freeTextMatcher, scopedField);
+      return evaluateNode(node.left, item, fieldMatchers, freeTextMatcher, scopedField, dateOptions) ||
+        evaluateNode(node.right, item, fieldMatchers, freeTextMatcher, scopedField, dateOptions);
     default:
       return false;
   }
@@ -1282,9 +1301,10 @@ function compareFieldValue<T>(
   operator: SearchComparisonOperator,
   value: string,
   fieldMatchers: Record<string, (item: T, value: string) => boolean>,
+  dateOptions: SearchDateOptions,
 ): boolean {
   if (field === 'date') {
-    return compareDateValue((item as { created_at?: string }).created_at, operator, value);
+    return compareDateValue((item as { created_at?: string }).created_at, operator, value, dateOptions);
   }
 
   const matcher = fieldMatchers[field];
@@ -1531,14 +1551,19 @@ function splitIpv6Parts(value: string): number[] | null {
   return parsed;
 }
 
-function compareDateValue(candidate: string | undefined, operator: SearchComparisonOperator, rawValue: string): boolean {
+function compareDateValue(
+  candidate: string | undefined,
+  operator: SearchComparisonOperator,
+  rawValue: string,
+  dateOptions: SearchDateOptions,
+): boolean {
   const candidateTimestamp = parseIsoTimestamp(candidate);
-  const filterRange = parseSearchDateValue(rawValue);
+  const filterRange = parseSearchDateValue(rawValue, dateOptions);
   if (candidateTimestamp === null || filterRange === null) {
     return false;
   }
 
-  if (filterRange.precision === 'day') {
+  if (filterRange.precision === 'day' || filterRange.precision === 'hour') {
     switch (operator) {
       case '=':
         return candidateTimestamp >= filterRange.start && candidateTimestamp < filterRange.end;
@@ -1575,22 +1600,40 @@ function compareDateValue(candidate: string | undefined, operator: SearchCompari
   }
 }
 
-function parseSearchDateValue(value: string): { start: number; end: number; precision: 'day' | 'instant' } | null {
+function parseSearchDateValue(
+  value: string,
+  dateOptions: SearchDateOptions = {},
+): { start: number; end: number; precision: 'day' | 'hour' | 'instant' } | null {
   const trimmedValue = value.trim();
   if (!trimmedValue) {
     return null;
   }
 
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmedValue)) {
-    const start = Date.parse(`${trimmedValue}T00:00:00.000Z`);
-    if (Number.isNaN(start)) {
+    const parts = parseDateOnlyParts(trimmedValue);
+    if (!parts) {
       return null;
     }
+    const nextParts = addDaysToDateOnlyParts(parts, 1);
 
     return {
-      start,
-      end: start + 24 * 60 * 60 * 1000,
+      start: getDateOnlyBoundaryTimestamp(parts, dateOptions),
+      end: getDateOnlyBoundaryTimestamp(nextParts, dateOptions),
       precision: 'day',
+    };
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}$/.test(trimmedValue)) {
+    const parts = parseDateHourParts(trimmedValue);
+    if (!parts) {
+      return null;
+    }
+    const nextParts = addHoursToDateHourParts(parts, 1);
+
+    return {
+      start: getDateHourBoundaryTimestamp(parts, dateOptions),
+      end: getDateHourBoundaryTimestamp(nextParts, dateOptions),
+      precision: 'hour',
     };
   }
 
@@ -1604,6 +1647,133 @@ function parseSearchDateValue(value: string): { start: number; end: number; prec
     end: timestamp,
     precision: 'instant',
   };
+}
+
+function parseDateOnlyParts(value: string): { year: number; month: number; day: number } | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const timestamp = Date.UTC(year, month - 1, day);
+  const normalized = new Date(timestamp);
+  if (
+    normalized.getUTCFullYear() !== year ||
+    normalized.getUTCMonth() !== month - 1 ||
+    normalized.getUTCDate() !== day
+  ) {
+    return null;
+  }
+
+  return { year, month, day };
+}
+
+function parseDateHourParts(value: string): { year: number; month: number; day: number; hour: number } | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2})$/.exec(value);
+  if (!match) {
+    return null;
+  }
+
+  const dateParts = parseDateOnlyParts(`${match[1]}-${match[2]}-${match[3]}`);
+  const hour = Number(match[4]);
+  if (!dateParts || !Number.isInteger(hour) || hour < 0 || hour > 23) {
+    return null;
+  }
+
+  return { ...dateParts, hour };
+}
+
+function addDaysToDateOnlyParts(
+  parts: { year: number; month: number; day: number },
+  days: number,
+): { year: number; month: number; day: number } {
+  const date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days));
+  return {
+    year: date.getUTCFullYear(),
+    month: date.getUTCMonth() + 1,
+    day: date.getUTCDate(),
+  };
+}
+
+function addHoursToDateHourParts(
+  parts: { year: number; month: number; day: number; hour: number },
+  hours: number,
+): { year: number; month: number; day: number; hour: number } {
+  const date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour + hours));
+  return {
+    year: date.getUTCFullYear(),
+    month: date.getUTCMonth() + 1,
+    day: date.getUTCDate(),
+    hour: date.getUTCHours(),
+  };
+}
+
+function getDateOnlyBoundaryTimestamp(
+  parts: { year: number; month: number; day: number },
+  dateOptions: SearchDateOptions,
+): number {
+  const wallTime = Date.UTC(parts.year, parts.month - 1, parts.day, 0, 0, 0, 0);
+  if (dateOptions.timeZone && isUsableTimeZone(dateOptions.timeZone)) {
+    return zonedWallTimeToTimestamp(wallTime, dateOptions.timeZone);
+  }
+
+  if (Number.isFinite(dateOptions.timezoneOffsetMinutes)) {
+    return wallTime + Number(dateOptions.timezoneOffsetMinutes) * 60_000;
+  }
+
+  return wallTime;
+}
+
+function getDateHourBoundaryTimestamp(
+  parts: { year: number; month: number; day: number; hour: number },
+  dateOptions: SearchDateOptions,
+): number {
+  const wallTime = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, 0, 0, 0);
+  if (dateOptions.timeZone && isUsableTimeZone(dateOptions.timeZone)) {
+    return zonedWallTimeToTimestamp(wallTime, dateOptions.timeZone);
+  }
+
+  if (Number.isFinite(dateOptions.timezoneOffsetMinutes)) {
+    return wallTime + Number(dateOptions.timezoneOffsetMinutes) * 60_000;
+  }
+
+  return wallTime;
+}
+
+function zonedWallTimeToTimestamp(wallTime: number, timeZone: string): number {
+  let instant = new Date(wallTime);
+  for (let iteration = 0; iteration < 3; iteration += 1) {
+    instant = new Date(wallTime - getTimeZoneOffsetMs(instant, timeZone));
+  }
+  return instant.getTime();
+}
+
+function getTimeZoneOffsetMs(date: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat('en', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((entry) => entry.type === type)?.value || 0);
+  const representedAsUtc = Date.UTC(part('year'), part('month') - 1, part('day'), part('hour'), part('minute'), part('second'));
+  return representedAsUtc - Math.floor(date.getTime() / 1_000) * 1_000;
+}
+
+function isUsableTimeZone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en', { timeZone }).format(new Date(0));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function parseIsoTimestamp(value: string | undefined): number | null {
