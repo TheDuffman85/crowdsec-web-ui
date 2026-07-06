@@ -47,7 +47,7 @@ import { createNotificationOutboundGuard } from './notifications/outbound-guard'
 import { createNotificationSecretStore } from './notifications/secret-store';
 import { createUpdateChecker, type UpdateCheckOverrides, type UpdateChecker } from './update-check';
 import { getServerTranslator, normalizeLanguagePreference, saveLanguagePreference } from './i18n';
-import { getAlertSourceValue, getAlertTarget, resolveAlertReason, resolveAlertScenario, toSlimAlert } from './utils/alerts';
+import { getAlertSourceValue, getAlertTarget, resolveAlertHistoryAt, resolveAlertReason, resolveAlertScenario, toSlimAlert } from './utils/alerts';
 import { parseGoDuration, toDuration } from './utils/duration';
 import { fetchCrowdsecMetrics } from './metrics';
 
@@ -973,7 +973,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
             return null;
           }
           const payload: StatsAlert = {
-            created_at: alert.created_at,
+            created_at: resolveAlertHistoryAt(alert),
             kind: typeof alert.kind === 'string' ? alert.kind : undefined,
             scenario: resolveAlertScenario(alert),
             source: alert.source
@@ -1568,10 +1568,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       }),
     };
 
+    const alertHistoryAt = resolveAlertHistoryAt(alert);
     const alertData: AlertInsertParams = {
       $id: alert.id,
       $uuid: alert.uuid || String(alert.id),
-      $created_at: alert.created_at,
+      $created_at: alertHistoryAt,
       $scenario: alert.scenario,
       $source_ip: sourceValue,
       $message: alert.message || '',
@@ -1590,7 +1591,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     const observedAt = new Date().toISOString();
     for (const decision of normalizedDecisions) {
       currentDecisionIds.push(String(decision.id));
-      const createdAt = decision.created_at || alert.created_at;
+      const createdAt = decision.created_at || alertHistoryAt;
       const stopAt = resolveDecisionStopAt(decision, createdAt, observedAt);
 
       const enrichedDecision = {
@@ -2794,13 +2795,14 @@ ${errorSummary}  Status: ${syncSummary.state}
       .map((hydratedAlert) => applySimulationModeToAlert(hydratedAlert, config.simulationsEnabled))
       .filter((alert): alert is AlertRecord => alert !== null)
       .flatMap((alert): DashboardAlertStatsRecord[] => {
-        const timestamp = Date.parse(alert.created_at);
+        const createdAt = resolveAlertHistoryAt(alert);
+        const timestamp = Date.parse(createdAt);
         if (!Number.isFinite(timestamp)) {
           return [];
         }
 
         return [{
-          createdAt: alert.created_at,
+          createdAt,
           timestamp,
           country: alert.source?.cn,
           scenario: resolveAlertScenario(alert),

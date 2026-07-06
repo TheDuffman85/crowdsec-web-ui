@@ -87,10 +87,18 @@ export function resolveAlertReason(alert: AlertRecord): string | undefined {
   return typeof alert.reason === 'string' ? alert.reason : undefined;
 }
 
+export function resolveAlertHistoryAt(alert: Pick<AlertRecord, 'created_at' | 'start_at'>): string {
+  if (typeof alert.start_at === 'string' && Number.isFinite(Date.parse(alert.start_at))) {
+    return alert.start_at;
+  }
+
+  return alert.created_at;
+}
+
 export function toSlimAlert(alert: AlertRecord): SlimAlert {
   return {
     id: alert.id,
-    created_at: alert.created_at,
+    created_at: resolveAlertHistoryAt(alert),
     scenario: resolveAlertScenario(alert),
     reason: resolveAlertReason(alert),
     message: typeof alert.message === 'string' ? alert.message : undefined,

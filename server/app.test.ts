@@ -10,6 +10,8 @@ import { CrowdsecDatabase } from './database';
 import { LapiClient, type LapiRequestInit } from './lapi';
 import { createApp } from './app';
 import { resolveOidcRole } from './app-auth';
+import { resolveAlertHistoryAt } from './utils/alerts';
+import { parseGoDuration } from './utils/duration';
 import type { MqttPublishConfig } from './notifications/mqtt-client';
 
 let tempDir: string;
@@ -763,10 +765,11 @@ test('dashboard auth settings use OIDC environment values as defaults', async ()
 });
 
 function seedAlert(database: CrowdsecDatabase, alert: AlertRecord): void {
+  const alertHistoryAt = resolveAlertHistoryAt(alert);
   database.insertAlert({
     $id: alert.id,
     $uuid: alert.uuid || String(alert.id),
-    $created_at: alert.created_at,
+    $created_at: alertHistoryAt,
     $scenario: alert.scenario,
     $source_ip: alert.source?.ip || alert.source?.value || alert.source?.range || '',
     $message: alert.message || '',
@@ -774,7 +777,7 @@ function seedAlert(database: CrowdsecDatabase, alert: AlertRecord): void {
   });
 
   for (const decision of alert.decisions || []) {
-    const createdAt = decision.created_at || alert.created_at;
+    const createdAt = decision.created_at || alertHistoryAt;
     const stopAt = decision.stop_at || new Date(Date.now() + 30 * 60 * 1_000).toISOString();
     database.insertDecision({
       $id: String(decision.id),
@@ -2831,6 +2834,84 @@ describe('createApp', () => {
     expect(alertsJson.pagination.total).toBe(2);
     expect(alertsJson.data.map((alert) => alert.id).sort()).toEqual([240, 241]);
     expect(database.getDecisionById('2411')).not.toBeNull();
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('uses replay alert start time for cache history, visibility, and dashboard buckets', async () => {
+    const replayStartMs = Date.now() - 2 * 24 * 60 * 60 * 1_000;
+    const replayStartAt = new Date(replayStartMs).toISOString();
+    const replayCreatedAt = new Date().toISOString();
+    const replayStopAt = new Date(replayStartMs + 30 * 60 * 1_000).toISOString();
+    const replayAlert = sampleAlert({
+      id: 242,
+      uuid: 'alert-242',
+      created_at: replayCreatedAt,
+      start_at: replayStartAt,
+      stop_at: replayStopAt,
+      decisions: [
+        {
+          id: 2421,
+          type: 'ban',
+          value: '10.10.10.10',
+          duration: '30m',
+          stop_at: replayStopAt,
+          origin: 'crowdsec',
+          scenario: 'crowdsecurity/ssh-bf',
+          simulated: false,
+        },
+      ],
+    });
+
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_LOOKBACK_PERIOD: '72h',
+        CROWDSEC_ALERT_SYNC_CHUNK: '24h',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (url.includes('/v1/alerts?') && url.includes('has_active_decision=true')) {
+          return Response.json([]);
+        }
+        if (url.includes('/v1/alerts?')) {
+          const params = new URL(url).searchParams;
+          const sinceMs = parseGoDuration(params.get('since'));
+          const untilMs = parseGoDuration(params.get('until') || '0s');
+          const requestNow = Date.now();
+          const windowStart = requestNow - sinceMs;
+          const windowEnd = requestNow - untilMs;
+          return Response.json(replayStartMs >= windowStart && replayStartMs < windowEnd ? [replayAlert] : []);
+        }
+        return undefined;
+      },
+    });
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50'));
+    expect(alertsResponse.status).toBe(200);
+    const alertsJson = await alertsResponse.json() as {
+      data: Array<{ id: number; created_at: string }>;
+      pagination: { total: number };
+    };
+    expect(alertsJson.pagination.total).toBe(1);
+    expect(alertsJson.data).toEqual([
+      expect.objectContaining({ id: 242, created_at: replayStartAt }),
+    ]);
+
+    const storedAlerts = database.db.query('SELECT id, created_at FROM alerts ORDER BY id').all() as Array<{ id: number; created_at: string }>;
+    expect(storedAlerts).toEqual([{ id: 242, created_at: replayStartAt }]);
+
+    const dashboardResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats?granularity=day'));
+    expect(dashboardResponse.status).toBe(200);
+    const dashboardJson = await dashboardResponse.json() as {
+      series: { alertsHistory: Array<{ date: string; count: number }> };
+    };
+    expect(dashboardJson.series.alertsHistory).toEqual(
+      expect.arrayContaining([expect.objectContaining({ date: replayStartAt.slice(0, 10), count: 1 })]),
+    );
 
     controller.stopBackgroundTasks();
     database.close();
@@ -4944,6 +5025,60 @@ describe('createApp', () => {
 
     const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
     expect(alertRequests.some((call) => call.url.includes('origin=CAPI'))).toBe(false);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('alert source filters intentionally prune replayed crowdsec alerts when excluded', async () => {
+    const replayStartAt = new Date(Date.now() - 30_000).toISOString();
+    const replayStopAt = new Date(Date.now() - 5_000).toISOString();
+    const replayAlert = sampleAlert({
+      id: 71,
+      uuid: 'alert-71',
+      created_at: new Date().toISOString(),
+      start_at: replayStartAt,
+      stop_at: replayStopAt,
+      decisions: [
+        {
+          id: 710,
+          type: 'ban',
+          value: '71.71.71.71',
+          duration: '30m',
+          stop_at: replayStopAt,
+          origin: 'crowdsec',
+          scenario: 'crowdsecurity/ssh-bf',
+          simulated: false,
+        },
+      ],
+    });
+
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_ALERT_EXCLUDE_ORIGINS: 'crowdsec',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (url.includes('/v1/alerts?') && !url.includes('has_active_decision=true')) {
+          return Response.json([replayAlert]);
+        }
+        if (url.includes('/v1/alerts?')) {
+          return Response.json([]);
+        }
+        return undefined;
+      },
+    });
+
+    seedAlert(database, replayAlert);
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alertsResponse.status).toBe(200);
+    expect(await alertsResponse.json()).toEqual([]);
+    expect(database.countAlerts()).toBe(0);
+    expect(database.getDecisionById('710')).toBeNull();
 
     controller.stopBackgroundTasks();
     database.close();

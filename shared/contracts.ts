@@ -135,6 +135,8 @@ export interface AlertRecord {
   id: string | number;
   uuid?: string;
   created_at: string;
+  start_at?: string;
+  stop_at?: string;
   scenario?: string;
   reason?: string;
   source?: AlertSource | null;

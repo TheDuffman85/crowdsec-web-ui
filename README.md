@@ -639,7 +639,7 @@ volumes:
 
 ### How It Works
 
-The Web UI maintains local alert and decision history. Data from CrowdSec LAPI is preserved across restarts, merged with new data on boot, and reconciled during successful full refreshes so alerts deleted outside the UI are removed locally too. Alerts are kept for `CROWDSEC_LOOKBACK_PERIOD` (default: 7 days), then cleaned up automatically.
+The Web UI maintains local alert and decision history. Data from CrowdSec LAPI is preserved across restarts, merged with new data on boot, and reconciled during successful full refreshes so alerts deleted outside the UI are removed locally too. Alerts are indexed by CrowdSec `start_at` when present, falling back to `created_at`, so replayed alerts are shown at the original alert/event time rather than the replay import time. Alerts are kept for `CROWDSEC_LOOKBACK_PERIOD` (default: 7 days), then cleaned up automatically.
 
 Active-decision refreshes first use one lookback-wide request to avoid excessive LAPI polling. If that times out, the request is retried in smaller windows down to `CROWDSEC_ALERT_SYNC_MIN_CHUNK`. If LAPI is unavailable during startup, bootstrap retries continue in the background using `CROWDSEC_BOOTSTRAP_RETRY_DELAY`; if only some sync windows fail, the UI serves the imported cache and marks sync partial while retries continue. To force a full cache reset, use `POST /api/cache/clear`.
 
