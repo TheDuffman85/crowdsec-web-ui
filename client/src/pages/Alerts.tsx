@@ -21,7 +21,7 @@ import { compileAlertSearch, getSearchHelpDefinition, type SearchParseError } fr
 import { Info, ExternalLink, Shield, ShieldBan, Trash2, X, AlertCircle, Columns3 } from "lucide-react";
 import type { AlertRecord, AlertSource, ApiPermissionError, BulkDeleteResult, DecisionListItem, SimulationFilter, SlimAlert, TableColumnId, TableColumnPreferences } from '../types';
 import { useI18n, type I18nContextValue } from "../lib/i18n";
-import { useDateTime } from "../lib/dateTime";
+import { getBrowserTimeZone, useDateTime } from "../lib/dateTime";
 
 type AlertListItem = SlimAlert;
 type AlertSelection = AlertListItem | AlertRecord;
@@ -128,7 +128,7 @@ function summarizeDeleteResult(result: BulkDeleteResult, t: I18nContextValue['t'
 
 export function Alerts() {
     const { language, t } = useI18n();
-    const { formatDateTime } = useDateTime();
+    const { formatDateTime, timeZone } = useDateTime();
     const { refreshSignal, setLastUpdated } = useRefresh();
     const [searchParams, setSearchParams] = useSearchParams();
     const initialQueryParam = searchParams.get("q") ?? "";
@@ -206,9 +206,13 @@ export function Alerts() {
     const skipSearchParamSyncRef = useRef<string | null>(null);
     const searchDebounceTimeoutRef = useRef<number | null>(null);
     const searchValidationFeatures = useMemo(() => ({ machineEnabled: true, originEnabled: true }), []);
+    const searchDateOptions = useMemo(() => ({
+        timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+        timeZone: timeZone || getBrowserTimeZone(),
+    }), [timeZone]);
     const compiledSearch = useMemo(
-        () => compileAlertSearch(debouncedSearchDraft, searchValidationFeatures),
-        [debouncedSearchDraft, searchValidationFeatures],
+        () => compileAlertSearch(debouncedSearchDraft, searchValidationFeatures, searchDateOptions),
+        [debouncedSearchDraft, searchDateOptions, searchValidationFeatures],
     );
     const queryError: SearchParseError | null = compiledSearch.ok ? null : compiledSearch.error;
     const searchHelp = useMemo(
@@ -238,6 +242,8 @@ export function Alerts() {
         const filters: Record<string, string> = {
             tz_offset: String(new Date().getTimezoneOffset()),
         };
+        const browserTimeZone = getBrowserTimeZone();
+        if (browserTimeZone) filters.browser_tz = browserTimeZone;
         if (appliedQuery) filters.q = appliedQuery;
         if (dateStartParam) filters.dateStart = dateStartParam;
         if (dateEndParam) filters.dateEnd = dateEndParam;

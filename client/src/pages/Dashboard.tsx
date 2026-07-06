@@ -150,6 +150,8 @@ function buildDashboardDrilldownQuery(filters: DashboardFilters, simulationsEnab
     if (filters.as) clauses.push(`as:${quoteSearchValue(filters.as)}`);
     if (filters.ip) clauses.push(`ip:${quoteSearchValue(filters.ip)}`);
     if (filters.target) clauses.push(`target:${quoteSearchValue(filters.target)}`);
+    if (filters.dateRange?.start) clauses.push(`date>=${quoteSearchValue(filters.dateRange.start)}`);
+    if (filters.dateRange?.end) clauses.push(`date<=${quoteSearchValue(filters.dateRange.end)}`);
     if (simulationsEnabled && filters.simulation !== 'all') {
         clauses.push(`sim:${filters.simulation}`);
     }
@@ -157,17 +159,13 @@ function buildDashboardDrilldownQuery(filters: DashboardFilters, simulationsEnab
     return clauses.join(' AND ');
 }
 
-function buildDashboardDrilldownHref(pathname: '/alerts' | '/decisions', query: string, dateRange: DashboardFilters['dateRange']): string {
-    if (!query && !dateRange) {
+function buildDashboardDrilldownHref(pathname: '/alerts' | '/decisions', query: string): string {
+    if (!query) {
         return pathname;
     }
 
     const params = new URLSearchParams();
-    if (query) params.set('q', query);
-    if (dateRange) {
-        params.set('dateStart', dateRange.start);
-        params.set('dateEnd', dateRange.end);
-    }
+    params.set('q', query);
     return `${pathname}?${params.toString()}`;
 }
 
@@ -450,8 +448,8 @@ export function Dashboard() {
 
     const simulationsEnabled = config?.simulations_enabled === true;
     const drilldownQuery = buildDashboardDrilldownQuery(filters, simulationsEnabled);
-    const alertsLink = buildDashboardDrilldownHref('/alerts', drilldownQuery, filters.dateRange);
-    const decisionsLink = buildDashboardDrilldownHref('/decisions', drilldownQuery, filters.dateRange);
+    const alertsLink = buildDashboardDrilldownHref('/alerts', drilldownQuery);
+    const decisionsLink = buildDashboardDrilldownHref('/decisions', drilldownQuery);
     const filteredTotals = dashboardData.filteredTotals;
     const filteredSimulationAlertsCount = filteredTotals.simulatedAlerts;
     const filteredSimulationDecisionsCount = filteredTotals.simulatedDecisions;

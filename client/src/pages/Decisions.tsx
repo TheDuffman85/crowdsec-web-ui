@@ -18,6 +18,7 @@ import { compileDecisionSearch, getSearchHelpDefinition, type SearchParseError }
 import { Trash2, Gavel, X, ExternalLink, Shield, ShieldBan, AlertCircle, Info, Columns3 } from "lucide-react";
 import type { AddDecisionRequest, ApiPermissionError, BulkDeleteResult, DecisionListItem, TableColumnId, TableColumnPreferences } from '../types';
 import { useI18n, type I18nContextValue } from "../lib/i18n";
+import { getBrowserTimeZone, useDateTime } from "../lib/dateTime";
 
 type DecisionDeleteAction =
     | { kind: "single"; decisionId: string | number }
@@ -100,6 +101,7 @@ function summarizeDeleteResult(result: BulkDeleteResult, t: I18nContextValue['t'
 
 export function Decisions() {
     const { language, t } = useI18n();
+    const { timeZone } = useDateTime();
     const { refreshSignal, setLastUpdated } = useRefresh();
     const [searchParams, setSearchParams] = useSearchParams();
     const initialQueryParam = searchParams.get("q") ?? "";
@@ -168,9 +170,13 @@ export function Decisions() {
     const skipSearchParamSyncRef = useRef<string | null>(null);
     const searchDebounceTimeoutRef = useRef<number | null>(null);
     const searchValidationFeatures = useMemo(() => ({ machineEnabled: true, originEnabled: true }), []);
+    const searchDateOptions = useMemo(() => ({
+        timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+        timeZone: timeZone || getBrowserTimeZone(),
+    }), [timeZone]);
     const compiledSearch = useMemo(
-        () => compileDecisionSearch(debouncedSearchDraft, searchValidationFeatures),
-        [debouncedSearchDraft, searchValidationFeatures],
+        () => compileDecisionSearch(debouncedSearchDraft, searchValidationFeatures, searchDateOptions),
+        [debouncedSearchDraft, searchDateOptions, searchValidationFeatures],
     );
     const queryError: SearchParseError | null = compiledSearch.ok ? null : compiledSearch.error;
     const searchHelp = useMemo(
@@ -197,6 +203,8 @@ export function Decisions() {
         const filters: Record<string, string> = {
             tz_offset: String(new Date().getTimezoneOffset()),
         };
+        const browserTimeZone = getBrowserTimeZone();
+        if (browserTimeZone) filters.browser_tz = browserTimeZone;
         if (appliedQuery) filters.q = appliedQuery;
         if (dateStartParam) filters.dateStart = dateStartParam;
         if (dateEndParam) filters.dateEnd = dateEndParam;

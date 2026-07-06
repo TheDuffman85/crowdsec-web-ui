@@ -131,6 +131,44 @@ describe('shared search compiler', () => {
     expect(compiled.predicate({ ...baseAlert, created_at: '2026-03-25T00:00:00.000Z' })).toBe(false);
   });
 
+  test('evaluates date-only comparisons in the supplied timezone for alerts', () => {
+    const compiled = compileAlertSearch('date<=2026-07-05', {}, { timeZone: 'Europe/Berlin' });
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) {
+      return;
+    }
+
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-07-05T21:59:59.999Z' })).toBe(true);
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-07-05T22:00:00.000Z' })).toBe(false);
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-07-05T23:26:28.000Z' })).toBe(false);
+  });
+
+  test('uses timezone-specific day lengths across DST boundaries', () => {
+    const compiled = compileAlertSearch('date=2026-03-29', {}, { timeZone: 'Europe/Berlin' });
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) {
+      return;
+    }
+
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-03-28T22:59:59.999Z' })).toBe(false);
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-03-28T23:00:00.000Z' })).toBe(true);
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-03-29T21:59:59.999Z' })).toBe(true);
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-03-29T22:00:00.000Z' })).toBe(false);
+  });
+
+  test('supports dashboard hour date comparisons in the supplied timezone', () => {
+    const compiled = compileAlertSearch('date>=2026-07-05T01 AND date<=2026-07-05T03', {}, { timeZone: 'Europe/Berlin' });
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) {
+      return;
+    }
+
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-07-04T22:59:59.999Z' })).toBe(false);
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-07-04T23:00:00.000Z' })).toBe(true);
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-07-05T01:59:59.999Z' })).toBe(true);
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-07-05T02:00:00.000Z' })).toBe(false);
+  });
+
   test('treats lowercase boolean keywords as operators when the query is clearly advanced', () => {
     const compiled = compileAlertSearch('origin:manual or country:us', {
       originEnabled: true,

@@ -43,6 +43,14 @@ export function formatDateTimeValue(value: Date | string | number, settings: Dat
   return date ? date.toLocaleString(undefined, withSettings(settings, options)) : String(value);
 }
 
+export function getBrowserTimeZone(): string | null {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+  } catch {
+    return null;
+  }
+}
+
 export function createDateTimeContextValue(settings: DateTimeSettings): DateTimeContextValue {
   return {
     ...settings,

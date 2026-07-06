@@ -249,11 +249,11 @@ describe('Dashboard page', () => {
     expect((decisionsCard as HTMLElement).getAttribute('href')).not.toContain('scenario=');
   });
 
-  test('keeps dashboard date ranges as timezone-aware drilldown parameters', async () => {
+  test('adds dashboard date ranges to drilldown search syntax', async () => {
     localStorage.setItem('dashboard_filters', JSON.stringify({
       dateRange: { start: '2026-03-29T01', end: '2026-03-29T03' },
       dateRangeSticky: true,
-      country: null,
+      country: 'DE',
       scenario: null,
       as: null,
       ip: null,
@@ -269,11 +269,15 @@ describe('Dashboard page', () => {
 
     await waitFor(() => expect(screen.getByText('Top Countries')).toBeInTheDocument());
     const alertsCard = screen.getByText('Total Alerts').closest('a');
+    const decisionsCard = screen.getByText('Active Decisions').closest('a');
     const params = new URLSearchParams((alertsCard as HTMLElement).getAttribute('href')?.split('?')[1] ?? '');
+    const decisionsParams = new URLSearchParams((decisionsCard as HTMLElement).getAttribute('href')?.split('?')[1] ?? '');
+    const expectedQuery = 'country:DE AND date>=2026-03-29T01 AND date<=2026-03-29T03';
 
-    expect(params.get('dateStart')).toBe('2026-03-29T01');
-    expect(params.get('dateEnd')).toBe('2026-03-29T03');
-    expect(params.get('q')).toBeNull();
+    expect(params.get('q')).toBe(expectedQuery);
+    expect(decisionsParams.get('q')).toBe(expectedQuery);
+    expect(params.get('dateStart')).toBeNull();
+    expect(params.get('dateEnd')).toBeNull();
   });
 
   test('shows restored stale scenario filter as a selected zero-count row', async () => {
