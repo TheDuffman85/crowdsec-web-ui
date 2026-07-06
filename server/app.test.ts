@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
 import crypto from 'node:crypto';
+import { generate } from 'otplib';
 import type { AlertRecord } from '../shared/contracts';
 import { resolveMachineName } from '../shared/machine';
 import { createRuntimeConfig } from './config';
@@ -633,6 +634,7 @@ test('dashboard auth exposes account settings and password changes', async () =>
     oidcReadOnlyGroups: '',
     oidcUnmatchedRole: 'deny',
     hasPassword: true,
+    totpEnabled: false,
     authMethod: 'password',
   });
 
@@ -648,6 +650,7 @@ test('dashboard auth exposes account settings and password changes', async () =>
   expect(passkeySettings.status).toBe(200);
   expect(await passkeySettings.json()).toMatchObject({
     hasPassword: true,
+    totpEnabled: false,
     authMethod: 'passkey',
   });
 
@@ -724,6 +727,88 @@ test('dashboard auth exposes account settings and password changes', async () =>
     body: JSON.stringify({ username: 'admin', password: 'NewSecret123' }),
   }));
   expect(newLogin.status).toBe(200);
+});
+
+test('dashboard auth supports optional TOTP for password login', async () => {
+  const { controller, database } = createController({
+    env: {
+      AUTH_ENABLED: 'true',
+    },
+  });
+
+  const setup = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/setup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'Secret123' }),
+  }));
+  const sessionCookie = setup.headers.get('set-cookie') || '';
+
+  const totpSetup = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/totp/setup', {
+    method: 'POST',
+    headers: { cookie: sessionCookie },
+  }));
+  expect(totpSetup.status).toBe(200);
+  const totpSetupPayload = await totpSetup.json() as { secret: string; otpauthUrl: string };
+  expect(totpSetupPayload.secret).toMatch(/^[A-Z2-7]+$/);
+  expect(totpSetupPayload.otpauthUrl).toContain('otpauth://totp/');
+  expect(totpSetupPayload.otpauthUrl).toContain('issuer=CrowdSec%20Web%20UI');
+
+  const setupCookie = totpSetup.headers.get('set-cookie') || '';
+  const enableTotp = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/totp/enable', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      cookie: `${sessionCookie}; ${setupCookie.split(';')[0]}`,
+    },
+    body: JSON.stringify({ code: await generate({ secret: totpSetupPayload.secret }) }),
+  }));
+  expect(enableTotp.status).toBe(200);
+  expect(await enableTotp.json()).toMatchObject({ totpEnabled: true });
+  const user = database.getAuthUserByUsername('admin');
+  expect(user?.totp_enabled).toBe(1);
+  expect(user?.totp_secret).toMatch(/^enc:v1:/);
+
+  const disableWithoutPassword = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/totp', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+    body: JSON.stringify({}),
+  }));
+  expect(disableWithoutPassword.status).toBe(400);
+  expect(await disableWithoutPassword.json()).toMatchObject({
+    error: 'Current password required',
+  });
+
+  const passwordOnlyLogin = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'Secret123' }),
+  }));
+  expect(passwordOnlyLogin.status).toBe(401);
+  expect(await passwordOnlyLogin.json()).toMatchObject({ requiresTotp: true });
+
+  const invalidTotpLogin = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'Secret123', totpCode: '000000' }),
+  }));
+  expect(invalidTotpLogin.status).toBe(401);
+  expect(await invalidTotpLogin.json()).toMatchObject({ requiresTotp: true });
+
+  const validTotpLogin = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'Secret123', totpCode: await generate({ secret: totpSetupPayload.secret }) }),
+  }));
+  expect(validTotpLogin.status).toBe(200);
+
+  const disableTotp = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/totp', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+    body: JSON.stringify({ currentPassword: 'Secret123' }),
+  }));
+  expect(disableTotp.status).toBe(200);
+  expect(await disableTotp.json()).toMatchObject({ totpEnabled: false });
+  expect(database.getAuthUserByUsername('admin')?.totp_enabled).toBe(0);
 });
 
 test('dashboard auth settings use OIDC environment values as defaults', async () => {

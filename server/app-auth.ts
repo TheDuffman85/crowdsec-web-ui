@@ -10,6 +10,7 @@ import {
   type VerifiedAuthenticationResponse,
   type VerifiedRegistrationResponse,
 } from '@simplewebauthn/server';
+import { generateSecret, generateURI, verify } from 'otplib';
 import * as oidcClient from 'openid-client';
 import { parseOidcScope, parseOidcUnmatchedRole, type DashboardAuthConfig, type OidcUnmatchedRole } from './config';
 import { CrowdsecDatabase, type AuthUserRow } from './database';
@@ -70,11 +71,13 @@ const SESSION_COOKIE = 'crowdsec_web_ui_session';
 const SESSION_LIFETIME_SECONDS = 60 * 60 * 24 * 30;
 const SESSION_REFRESH_AFTER_SECONDS = 60 * 60 * 24;
 const CHALLENGE_COOKIE = 'crowdsec_web_ui_webauthn_challenge';
+const TOTP_SETUP_COOKIE = 'crowdsec_web_ui_totp_setup';
 const OIDC_STATE_COOKIE = 'crowdsec_web_ui_oidc_state';
 const OIDC_NONCE_COOKIE = 'crowdsec_web_ui_oidc_nonce';
 const OIDC_REDIRECT_COOKIE = 'crowdsec_web_ui_oidc_redirect_uri';
 const DUMMY_PASSWORD_HASH_PROMISE = hashPassword('timing-safe-dummy-password-pad');
 const ENCRYPTED_SECRET_PREFIX = 'enc:v1:';
+const TOTP_EPOCH_TOLERANCE_SECONDS = 30;
 
 function base64url(input: Buffer | string): string {
   return Buffer.from(input).toString('base64url');
@@ -221,6 +224,30 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
   }) as Buffer;
   const expectedKey = fromBase64url(expected);
   return key.length === expectedKey.length && crypto.timingSafeEqual(key, expectedKey);
+}
+
+function normalizeTotpCode(value: string): string {
+  return value.replace(/\s+/g, '');
+}
+
+function signShortValue(value: string, secret: string): string {
+  const signature = crypto.createHmac('sha256', secret).update(value).digest('base64url');
+  return `${value}.${signature}`;
+}
+
+function verifyShortValue(token: string | undefined, secret: string): string | null {
+  if (!token) return null;
+  const separatorIndex = token.lastIndexOf('.');
+  if (separatorIndex <= 0) return null;
+  const value = token.slice(0, separatorIndex);
+  const signature = token.slice(separatorIndex + 1);
+  const expectedSignature = crypto.createHmac('sha256', secret).update(value).digest('base64url');
+  const signatureBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expectedSignature);
+  if (signatureBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)) {
+    return null;
+  }
+  return value;
 }
 
 function resolveSessionSecret(database: CrowdsecDatabase, configuredSecret?: string): string {
@@ -543,6 +570,7 @@ export function createDashboardAuth(options: {
         passwordLoginDisabled: enabled && isPasswordLoginDisabled(),
         passkeysEnabled: enabled && database.countWebAuthnCredentials() > 0,
         hasPassword: Boolean(user?.password_hash),
+        totpEnabled: Boolean(user?.totp_enabled),
       });
     });
 
@@ -573,6 +601,7 @@ export function createDashboardAuth(options: {
       const body = asObject(await context.req.json().catch(() => null));
       const username = typeof body?.username === 'string' ? body.username.trim() : '';
       const password = typeof body?.password === 'string' ? body.password : '';
+      const totpCode = typeof body?.totpCode === 'string' ? normalizeTotpCode(body.totpCode) : '';
       if (!username || !password) return context.json({ error: 'Username and password required' }, 400);
 
       const user = database.getAuthUserByUsername(username);
@@ -580,6 +609,16 @@ export function createDashboardAuth(options: {
       const valid = await verifyPassword(password, hashToVerify);
       if (!user || !user.password_hash || !valid) {
         return context.json({ error: 'Invalid credentials' }, 401);
+      }
+      if (user.totp_enabled && user.totp_secret) {
+        if (!totpCode) {
+          return context.json({ error: 'Authenticator code required', requiresTotp: true }, 401);
+        }
+        const secret = decryptSecret(user.totp_secret, sessionSecret);
+        const verification = await verify({ token: totpCode, secret, epochTolerance: TOTP_EPOCH_TOLERANCE_SECONDS });
+        if (!verification.valid) {
+          return context.json({ error: 'Invalid authenticator code', requiresTotp: true }, 401);
+        }
       }
 
       createSession(context, user, 'password');
@@ -613,6 +652,7 @@ export function createDashboardAuth(options: {
         oidcReadOnlyGroups: effectiveConfig.oidcReadOnlyGroups.join(','),
         oidcUnmatchedRole: effectiveConfig.oidcUnmatchedRole,
         hasPassword: Boolean(user?.password_hash),
+        totpEnabled: Boolean(user?.totp_enabled),
         authMethod: session.authMethod ?? null,
       });
     });
@@ -740,6 +780,69 @@ export function createDashboardAuth(options: {
 
       database.updateAuthUserPassword(user.id, await hashPassword(newPassword));
       return context.json({ status: 'ok' });
+    });
+
+    auth.post('/totp/setup', (context) => {
+      const session = getSession(context);
+      if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
+      if (session.authMethod !== 'password') {
+        return context.json({ error: 'Log in with your password before setting up TOTP' }, 403);
+      }
+
+      const user = database.getAuthUserById(session.userId);
+      if (!user?.password_hash) return context.json({ error: 'No password set for this account' }, 400);
+      const secret = generateSecret();
+      const otpauthUrl = generateURI({
+        issuer: 'CrowdSec Web UI',
+        label: user.username,
+        secret,
+      });
+      setShortCookie(context, TOTP_SETUP_COOKIE, signShortValue(secret, sessionSecret));
+      return context.json({ secret, otpauthUrl });
+    });
+
+    auth.post('/totp/enable', async (context) => {
+      const session = getSession(context);
+      if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
+      if (session.authMethod !== 'password') {
+        return context.json({ error: 'Log in with your password before setting up TOTP' }, 403);
+      }
+
+      const body = asObject(await context.req.json().catch(() => null));
+      const code = typeof body?.code === 'string' ? normalizeTotpCode(body.code) : '';
+      if (!code) return context.json({ error: 'Authenticator code required' }, 400);
+      const secret = verifyShortValue(getCookie(context, TOTP_SETUP_COOKIE), sessionSecret);
+      if (!secret) return context.json({ error: 'TOTP setup expired. Start setup again.' }, 400);
+      const verification = await verify({ token: code, secret, epochTolerance: TOTP_EPOCH_TOLERANCE_SECONDS });
+      if (!verification.valid) {
+        return context.json({ error: 'Invalid authenticator code' }, 400);
+      }
+
+      const user = database.getAuthUserById(session.userId);
+      if (!user?.password_hash) return context.json({ error: 'No password set for this account' }, 400);
+      database.updateAuthUserTotp(user.id, encryptSecret(secret, sessionSecret), true);
+      deleteCookie(context, TOTP_SETUP_COOKIE, { path: cookiePath });
+      return context.json({ status: 'ok', totpEnabled: true });
+    });
+
+    auth.delete('/totp', async (context) => {
+      const session = getSession(context);
+      if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
+      if (session.authMethod !== 'password') {
+        return context.json({ error: 'Log in with your password before disabling TOTP' }, 403);
+      }
+
+      const body = asObject(await context.req.json().catch(() => null));
+      const currentPassword = typeof body?.currentPassword === 'string' ? body.currentPassword : '';
+      if (!currentPassword) return context.json({ error: 'Current password required' }, 400);
+      const user = database.getAuthUserById(session.userId);
+      if (!user?.password_hash) return context.json({ error: 'No password set for this account' }, 400);
+      if (!user.totp_enabled || !user.totp_secret) return context.json({ error: 'TOTP is not enabled for this account' }, 400);
+      if (!await verifyPassword(currentPassword, user.password_hash)) {
+        return context.json({ error: 'Current password is incorrect' }, 401);
+      }
+      database.updateAuthUserTotp(user.id, null, false);
+      return context.json({ status: 'ok', totpEnabled: false });
     });
 
     auth.get('/passkeys', (context) => {

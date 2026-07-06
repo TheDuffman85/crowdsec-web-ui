@@ -62,12 +62,15 @@ These routes are mounted below `/api/auth`. Auth setup/login routes are availabl
 | --- | --- | --- |
 | GET | `/api/auth/status` | Auth state, setup status, current user/session state, OIDC availability, passkey availability, and password-login state. |
 | POST | `/api/auth/setup` | Create the first admin user and start a session. Requires `username` and `password`; only works before any auth user exists. |
-| POST | `/api/auth/login` | Password login with `username` and `password`. |
+| POST | `/api/auth/login` | Password login with `username` and `password`. Accounts with TOTP enabled also require `totpCode`; missing or invalid codes return `requiresTotp: true`. |
 | POST | `/api/auth/logout` | Clear the session cookie. |
 | GET | `/api/auth/me` | Current authenticated session user. |
 | GET | `/api/auth/settings` | Auth settings visible to the current user, including OIDC settings metadata and password/passkey state. |
 | PUT | `/api/auth/settings` | Admin-only auth settings update. Can disable password login and configure OIDC issuer, client ID, client secret, scopes, groups claim, admin groups, read-only groups, and unmatched-user policy. |
 | POST | `/api/auth/change-password` | Change the current user's password. The user must be logged in with password auth. |
+| POST | `/api/auth/totp/setup` | Start TOTP enrollment for the current password-authenticated user. Returns a base32 secret and `otpauth://` URI for QR setup. |
+| POST | `/api/auth/totp/enable` | Complete TOTP enrollment with `{ "code": "123456" }`. |
+| DELETE | `/api/auth/totp` | Disable TOTP for the current password-authenticated user with `{ "currentPassword": "..." }`. |
 | GET | `/api/auth/passkeys` | List passkeys for the current user. |
 | PATCH | `/api/auth/passkeys/:id` | Rename a passkey with `{ "name": "..." }`. |
 | DELETE | `/api/auth/passkeys/:id` | Delete one of the current user's passkeys. |

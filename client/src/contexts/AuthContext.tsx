@@ -19,12 +19,13 @@ export interface AuthStatus {
   passwordLoginDisabled: boolean;
   passkeysEnabled: boolean;
   hasPassword: boolean;
+  totpEnabled: boolean;
 }
 
 interface AuthContextValue extends AuthStatus {
   loading: boolean;
   refresh: () => Promise<void>;
-  login: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string, totpCode?: string) => Promise<void>;
   setup: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
 }
@@ -39,6 +40,7 @@ const DEFAULT_STATUS: AuthStatus = {
   passwordLoginDisabled: false,
   passkeysEnabled: false,
   hasPassword: false,
+  totpEnabled: false,
 };
 
 const fallbackAuthContext: AuthContextValue = {
@@ -100,12 +102,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const login = useCallback(async (username: string, password: string) => {
-    await readJson('/api/auth/login', {
+  const login = useCallback(async (username: string, password: string, totpCode?: string) => {
+    const response = await fetch(apiUrl('/api/auth/login'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, totpCode }),
     });
+    if (!response.ok) {
+      let message = 'Login failed';
+      let requiresTotp = false;
+      try {
+        const payload = await response.json() as { error?: string; requiresTotp?: boolean };
+        message = payload.error || message;
+        requiresTotp = payload.requiresTotp === true;
+      } catch {
+        // Use the default message.
+      }
+      throw Object.assign(new Error(message), { requiresTotp });
+    }
     await refresh();
   }, [refresh]);
 

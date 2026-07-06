@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { Settings } from './Settings';
@@ -43,6 +43,29 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
     'pages.settings.newPassword': 'New password',
     'pages.settings.confirmPassword': 'Confirm password',
     'pages.settings.changePassword': 'Change Password',
+    'pages.settings.totpTitle': 'Authenticator app (TOTP)',
+    'pages.settings.totpDescription': 'Require a time-based code after password sign-in.',
+    'pages.settings.totpEnabledDescription': 'Authenticator codes are required after password sign-in.',
+    'pages.settings.setupTotp': 'Set Up TOTP',
+    'pages.settings.manageTotp': 'Manage TOTP',
+    'pages.settings.setupTotpTitle': 'Set Up TOTP',
+    'pages.settings.manageTotpTitle': 'Manage TOTP',
+    'pages.settings.setupTotpDescription': 'Scan the QR code with an authenticator app, or open the setup link on this device. Enter the generated code to finish setup.',
+    'pages.settings.disableTotpDescription': 'Disabling TOTP removes the extra code requirement from password sign-in. Confirm with your current password.',
+    'pages.settings.manualTotpSecret': 'Manual setup key',
+    'pages.settings.copyTotpSecret': 'Copy setup key',
+    'pages.settings.openAuthenticatorApp': 'Open in authenticator app',
+    'pages.settings.authenticatorCode': 'Authenticator code',
+    'pages.settings.verifyAndEnableTotp': 'Verify and Enable',
+    'pages.settings.disableTotp': 'Disable TOTP',
+    'pages.settings.totpQrAlt': 'TOTP setup QR code',
+    'pages.settings.generatingQrCode': 'Generating QR code...',
+    'pages.settings.failedToStartTotpSetup': 'Failed to start TOTP setup.',
+    'pages.settings.failedToEnableTotp': 'Failed to enable TOTP.',
+    'pages.settings.failedToDisableTotp': 'Failed to disable TOTP.',
+    'pages.settings.totpEnabled': 'TOTP enabled.',
+    'pages.settings.totpDisabled': 'TOTP disabled.',
+    'pages.settings.copied': 'Copied.',
     'pages.settings.passkeys': 'Passkeys',
     'pages.settings.passkeysDescription': 'Register hardware keys, platform authenticators, or synced passkeys for passwordless sign-in.',
     'pages.settings.noPasskeys': 'No passkeys registered.',
@@ -101,6 +124,12 @@ vi.mock('../lib/api', () => ({
   updateMetricsSidebarPreference: vi.fn(),
 }));
 
+vi.mock('qrcode', () => ({
+  default: {
+    toDataURL: vi.fn().mockResolvedValue('data:image/png;base64,qr'),
+  },
+}));
+
 vi.mock('../contexts/useRefresh', () => ({
   useRefresh: vi.fn(),
 }));
@@ -140,6 +169,7 @@ describe('Settings', () => {
       passwordLoginDisabled: false,
       passkeysEnabled: false,
       hasPassword: false,
+      totpEnabled: false,
       loading: false,
       refresh: vi.fn(),
       login: vi.fn(),
@@ -253,6 +283,7 @@ describe('Settings', () => {
       passwordLoginDisabled: false,
       passkeysEnabled: true,
       hasPassword: true,
+      totpEnabled: false,
       loading: false,
       refresh: refreshAuth,
       login: vi.fn(),
@@ -297,6 +328,7 @@ describe('Settings', () => {
           oidcReadOnlyGroups: '',
           oidcUnmatchedRole: 'deny',
           hasPassword: true,
+          totpEnabled: false,
           authMethod: 'password',
         });
       }
@@ -338,6 +370,7 @@ describe('Settings', () => {
       passwordLoginDisabled: false,
       passkeysEnabled: true,
       hasPassword: true,
+      totpEnabled: false,
       loading: false,
       refresh: vi.fn(),
       login: vi.fn(),
@@ -361,6 +394,7 @@ describe('Settings', () => {
           oidcReadOnlyGroups: '',
           oidcUnmatchedRole: 'deny',
           hasPassword: true,
+          totpEnabled: false,
           authMethod: 'passkey',
         });
       }
@@ -375,6 +409,185 @@ describe('Settings', () => {
     expect(screen.queryByRole('button', { name: 'Change Password' })).not.toBeInTheDocument();
   });
 
+  test('sets up TOTP from the password authentication modal', async () => {
+    const user = userEvent.setup();
+    useAuthMock.mockReturnValue({
+      authEnabled: true,
+      setupRequired: false,
+      authenticated: true,
+      user: { userId: 1, username: 'admin', role: 'admin' },
+      authMethod: 'password',
+      oidcEnabled: false,
+      passwordLoginDisabled: false,
+      passkeysEnabled: true,
+      hasPassword: true,
+      totpEnabled: false,
+      loading: false,
+      refresh: vi.fn(),
+      login: vi.fn(),
+      setup: vi.fn(),
+      logout: vi.fn(),
+    });
+    vi.mocked(fetchConfig).mockResolvedValue({
+      lookback_period: '1h',
+      lookback_hours: 1,
+      lookback_days: 1,
+      refresh_interval: 30000,
+      current_interval_name: '30s',
+      lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
+      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+      simulations_enabled: true,
+      machine_features_enabled: false,
+      origin_features_enabled: false,
+      permissions: {
+        mode: 'admin',
+        can_manage_enforcement: true,
+        can_manage_settings: true,
+      },
+    });
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method || (input instanceof Request ? input.method : 'GET');
+      if (url.includes('/api/auth/totp/setup')) {
+        return Response.json({
+          secret: 'JBSWY3DPEHPK3PXP',
+          otpauthUrl: 'otpauth://totp/CrowdSec%20Web%20UI:admin?secret=JBSWY3DPEHPK3PXP&issuer=CrowdSec%20Web%20UI',
+        });
+      }
+      if (url.includes('/api/auth/totp') && method === 'POST') {
+        return Response.json({ status: 'ok', totpEnabled: true });
+      }
+      if (url.includes('/api/auth/passkeys')) {
+        return Response.json({ passkeys: [] });
+      }
+      if (url.includes('/api/auth/settings')) {
+        return Response.json({
+          disablePasswordLogin: false,
+          oidcIssuerUrl: '',
+          oidcClientId: '',
+          hasOidcClientSecret: false,
+          oidcScope: 'openid profile email',
+          oidcGroupsClaim: 'groups',
+          oidcAdminGroups: '',
+          oidcReadOnlyGroups: '',
+          oidcUnmatchedRole: 'deny',
+          hasPassword: true,
+          totpEnabled: false,
+          authMethod: 'password',
+        });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<Settings />);
+
+    await screen.findByText('Authentication');
+    await user.click(screen.getByRole('button', { name: 'Set Up TOTP' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Set Up TOTP' });
+    expect(await screen.findByAltText('TOTP setup QR code')).toHaveAttribute('src', 'data:image/png;base64,qr');
+    expect(screen.getByLabelText('Manual setup key')).toHaveValue('JBSWY3DPEHPK3PXP');
+    expect(screen.getByRole('link', { name: 'Open in authenticator app' })).toHaveAttribute('href', expect.stringContaining('otpauth://totp/'));
+
+    await user.type(screen.getByLabelText('Authenticator code'), '123456');
+    await user.click(screen.getByRole('button', { name: 'Verify and Enable' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/auth/totp/enable'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ code: '123456' }),
+      }),
+    ));
+    expect(dialog).not.toBeInTheDocument();
+  });
+
+  test('requires only the current password when disabling TOTP', async () => {
+    const user = userEvent.setup();
+    useAuthMock.mockReturnValue({
+      authEnabled: true,
+      setupRequired: false,
+      authenticated: true,
+      user: { userId: 1, username: 'admin', role: 'admin' },
+      authMethod: 'password',
+      oidcEnabled: false,
+      passwordLoginDisabled: false,
+      passkeysEnabled: true,
+      hasPassword: true,
+      totpEnabled: true,
+      loading: false,
+      refresh: vi.fn(),
+      login: vi.fn(),
+      setup: vi.fn(),
+      logout: vi.fn(),
+    });
+    vi.mocked(fetchConfig).mockResolvedValue({
+      lookback_period: '1h',
+      lookback_hours: 1,
+      lookback_days: 1,
+      refresh_interval: 30000,
+      current_interval_name: '30s',
+      lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
+      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+      simulations_enabled: true,
+      machine_features_enabled: false,
+      origin_features_enabled: false,
+      permissions: {
+        mode: 'admin',
+        can_manage_enforcement: true,
+        can_manage_settings: true,
+      },
+    });
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method || (input instanceof Request ? input.method : 'GET');
+      if (url.includes('/api/auth/totp') && method === 'DELETE') {
+        return Response.json({ status: 'ok', totpEnabled: false });
+      }
+      if (url.includes('/api/auth/passkeys')) {
+        return Response.json({ passkeys: [] });
+      }
+      if (url.includes('/api/auth/settings')) {
+        return Response.json({
+          disablePasswordLogin: false,
+          oidcIssuerUrl: '',
+          oidcClientId: '',
+          hasOidcClientSecret: false,
+          oidcScope: 'openid profile email',
+          oidcGroupsClaim: 'groups',
+          oidcAdminGroups: '',
+          oidcReadOnlyGroups: '',
+          oidcUnmatchedRole: 'deny',
+          hasPassword: true,
+          totpEnabled: true,
+          authMethod: 'password',
+        });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<Settings />);
+
+    await screen.findByText('Authentication');
+    await user.click(screen.getByRole('button', { name: 'Manage TOTP' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Manage TOTP' });
+    expect(within(dialog).getByRole('button', { name: 'Disable TOTP' })).toBeDisabled();
+    await user.type(within(dialog).getByLabelText('Current password'), 'Secret123');
+    expect(within(dialog).queryByLabelText('Authenticator code')).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Disable TOTP' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/auth/totp'),
+      expect.objectContaining({
+        method: 'DELETE',
+        body: JSON.stringify({ currentPassword: 'Secret123' }),
+      }),
+    ));
+  });
+
   test('registers a passkey from the modal with the configured name', async () => {
     const user = userEvent.setup();
     useAuthMock.mockReturnValue({
@@ -387,6 +600,7 @@ describe('Settings', () => {
       passwordLoginDisabled: false,
       passkeysEnabled: true,
       hasPassword: true,
+      totpEnabled: false,
       loading: false,
       refresh: vi.fn(),
       login: vi.fn(),
@@ -461,6 +675,7 @@ describe('Settings', () => {
           oidcReadOnlyGroups: '',
           oidcUnmatchedRole: 'deny',
           hasPassword: true,
+          totpEnabled: false,
           authMethod: 'password',
         });
       }
@@ -501,6 +716,7 @@ describe('Settings', () => {
       passwordLoginDisabled: false,
       passkeysEnabled: true,
       hasPassword: true,
+      totpEnabled: false,
       loading: false,
       refresh: vi.fn(),
       login: vi.fn(),
@@ -545,6 +761,7 @@ describe('Settings', () => {
           oidcReadOnlyGroups: 'Application User',
           oidcUnmatchedRole: 'deny',
           hasPassword: true,
+          totpEnabled: false,
           authMethod: 'password',
         });
       }

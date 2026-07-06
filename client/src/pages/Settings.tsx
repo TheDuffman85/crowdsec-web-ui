@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import i18next from "i18next";
-import { KeyRound, LockKeyhole, Plus, Save, ShieldCheck, Trash2, X } from "lucide-react";
+import QRCode from "qrcode";
+import { Copy, KeyRound, LockKeyhole, Plus, QrCode, Save, ShieldCheck, Trash2, X } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card";
 import { Modal } from "../components/ui/Modal";
 import { Switch } from "../components/ui/Switch";
@@ -50,6 +51,7 @@ interface AuthSettings {
     oidcReadOnlyGroups: string;
     oidcUnmatchedRole: OidcUnmatchedRole;
     hasPassword: boolean;
+    totpEnabled: boolean;
     authMethod: 'password' | 'passkey' | 'oidc' | null;
 }
 
@@ -93,6 +95,14 @@ export function Settings() {
     const [passkeyModalOpen, setPasskeyModalOpen] = useState(false);
     const [passkeyName, setPasskeyName] = useState('');
     const [isRegisteringPasskey, setIsRegisteringPasskey] = useState(false);
+    const [totpModalOpen, setTotpModalOpen] = useState(false);
+    const [isLoadingTotpSetup, setIsLoadingTotpSetup] = useState(false);
+    const [isSavingTotp, setIsSavingTotp] = useState(false);
+    const [totpSecret, setTotpSecret] = useState('');
+    const [totpOtpAuthUrl, setTotpOtpAuthUrl] = useState('');
+    const [totpQrDataUrl, setTotpQrDataUrl] = useState('');
+    const [totpCode, setTotpCode] = useState('');
+    const [totpDisablePassword, setTotpDisablePassword] = useState('');
     const [isSavingOidc, setIsSavingOidc] = useState(false);
     const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
     const [oidcForm, setOidcForm] = useState({
@@ -172,6 +182,33 @@ export function Settings() {
             cancelled = true;
         };
     }, [authEnabled, t]);
+
+    useEffect(() => {
+        let cancelled = false;
+        if (!totpOtpAuthUrl) {
+            return () => {
+                cancelled = true;
+            };
+        }
+
+        void QRCode.toDataURL(totpOtpAuthUrl, {
+            width: 256,
+            margin: 1,
+            color: {
+                dark: '#111827',
+                light: '#ffffff',
+            },
+        }).then((dataUrl) => {
+            if (!cancelled) setTotpQrDataUrl(dataUrl);
+        }).catch((error) => {
+            console.error("Failed to generate TOTP QR code", error);
+            if (!cancelled) setTotpQrDataUrl('');
+        });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [totpOtpAuthUrl]);
 
     const canManageSettings = config ? config.permissions?.can_manage_settings !== false : false;
     const hasLanguageChange = languagePreference !== preference;
@@ -273,6 +310,89 @@ export function Settings() {
         }
         setPasskeys((current) => current.filter((passkey) => passkey.id !== id));
         showToast(t("pages.settings.passkeyRemoved"), "success");
+    };
+
+    const openTotpModal = async () => {
+        setTotpModalOpen(true);
+        setTotpCode('');
+        setTotpSecret('');
+        setTotpOtpAuthUrl('');
+        setTotpDisablePassword('');
+        if (authSettings?.totpEnabled) return;
+
+        setIsLoadingTotpSetup(true);
+        try {
+            const response = await fetch(apiUrl('/api/auth/totp/setup'), { method: 'POST' });
+            const payload = await response.json().catch(() => ({})) as { error?: string; secret?: string; otpauthUrl?: string };
+            if (!response.ok || !payload.secret || !payload.otpauthUrl) {
+                throw new Error(payload.error || t("pages.settings.failedToStartTotpSetup"));
+            }
+            setTotpSecret(payload.secret);
+            setTotpOtpAuthUrl(payload.otpauthUrl);
+        } catch (error) {
+            console.error("Failed to start TOTP setup", error);
+            setTotpModalOpen(false);
+            showToast(error instanceof Error ? error.message : t("pages.settings.failedToStartTotpSetup"), "danger");
+        } finally {
+            setIsLoadingTotpSetup(false);
+        }
+    };
+
+    const closeTotpModal = () => {
+        if (isSavingTotp) return;
+        setTotpModalOpen(false);
+    };
+
+    const enableTotp = async () => {
+        setIsSavingTotp(true);
+        try {
+            const response = await fetch(apiUrl('/api/auth/totp/enable'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ code: totpCode }),
+            });
+            const payload = await response.json().catch(() => ({})) as { error?: string; totpEnabled?: boolean };
+            if (!response.ok) {
+                throw new Error(payload.error || t("pages.settings.failedToEnableTotp"));
+            }
+            setAuthSettings((current) => current ? { ...current, totpEnabled: payload.totpEnabled ?? true } : current);
+            setTotpModalOpen(false);
+            showToast(t("pages.settings.totpEnabled"), "success");
+        } catch (error) {
+            console.error("Failed to enable TOTP", error);
+            showToast(error instanceof Error ? error.message : t("pages.settings.failedToEnableTotp"), "danger");
+        } finally {
+            setIsSavingTotp(false);
+        }
+    };
+
+    const disableTotp = async () => {
+        setIsSavingTotp(true);
+        try {
+            const response = await fetch(apiUrl('/api/auth/totp'), {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ currentPassword: totpDisablePassword }),
+            });
+            const payload = await response.json().catch(() => ({})) as { error?: string; totpEnabled?: boolean };
+            if (!response.ok) {
+                throw new Error(payload.error || t("pages.settings.failedToDisableTotp"));
+            }
+            setAuthSettings((current) => current ? { ...current, totpEnabled: payload.totpEnabled ?? false } : current);
+            setTotpModalOpen(false);
+            showToast(t("pages.settings.totpDisabled"), "success");
+        } catch (error) {
+            console.error("Failed to disable TOTP", error);
+            showToast(error instanceof Error ? error.message : t("pages.settings.failedToDisableTotp"), "danger");
+        } finally {
+            setIsSavingTotp(false);
+        }
+    };
+
+    const copyTotpValue = async (value: string) => {
+        if (!navigator.clipboard || !value) return;
+        await navigator.clipboard.writeText(value);
+        showToast(t("pages.settings.copied"), "success");
     };
 
     const savePasswordLoginSetting = async () => {
@@ -520,28 +640,30 @@ export function Settings() {
                                 <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{t("pages.settings.password")}</h4>
                                 <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.passwordDescription")}</p>
                             </div>
-                            <label className="flex items-start gap-3 text-sm text-gray-700 dark:text-gray-200">
-                                <input
-                                    type="checkbox"
-                                    checked={disablePasswordLogin}
-                                    onChange={(event) => setDisablePasswordLogin(event.target.checked)}
+                            <div className="space-y-4">
+                                <label className="flex items-start gap-3 text-sm text-gray-700 dark:text-gray-200">
+                                    <input
+                                        type="checkbox"
+                                        checked={disablePasswordLogin}
+                                        onChange={(event) => setDisablePasswordLogin(event.target.checked)}
+                                        disabled={!canManageAuthSettings || isSavingPasswordLogin}
+                                        className="mt-1 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                                    />
+                                    <span>
+                                        <span className="block font-medium">{t("pages.settings.disablePasswordLogin")}</span>
+                                        <span className="block text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.disablePasswordLoginDescription")}</span>
+                                    </span>
+                                </label>
+                                <button
+                                    type="button"
+                                    onClick={() => void savePasswordLoginSetting()}
                                     disabled={!canManageAuthSettings || isSavingPasswordLogin}
-                                    className="mt-1 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                                />
-                                <span>
-                                    <span className="block font-medium">{t("pages.settings.disablePasswordLogin")}</span>
-                                    <span className="block text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.disablePasswordLoginDescription")}</span>
-                                </span>
-                            </label>
-                            <button
-                                type="button"
-                                onClick={() => void savePasswordLoginSetting()}
-                                disabled={!canManageAuthSettings || isSavingPasswordLogin}
-                                className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                                <Save className="h-4 w-4" />
-                                {isSavingPasswordLogin ? t("common.saving") : t("common.save")}
-                            </button>
+                                    className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    <Save className="h-4 w-4" />
+                                    {isSavingPasswordLogin ? t("common.saving") : t("common.save")}
+                                </button>
+                            </div>
 
                             {canChangePassword && (
                                 <div className="grid gap-4 lg:grid-cols-3">
@@ -587,6 +709,25 @@ export function Settings() {
                                     </div>
                                 </div>
                             )}
+
+                            <button
+                                type="button"
+                                onClick={() => void openTotpModal()}
+                                disabled={!canChangePassword || isLoadingTotpSetup}
+                                aria-label={authSettings?.totpEnabled ? t("pages.settings.manageTotp") : t("pages.settings.setupTotp")}
+                                className="flex min-h-20 w-full flex-col items-stretch justify-between gap-4 rounded-lg border border-gray-200 bg-gray-50 p-4 text-left hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:bg-gray-900/40 dark:hover:bg-gray-900/70 sm:flex-row sm:items-center"
+                            >
+                                <span className="min-w-0">
+                                    <span className="block text-sm font-medium text-gray-900 dark:text-gray-100">{t("pages.settings.totpTitle")}</span>
+                                    <span className="mt-1 block text-xs text-gray-500 dark:text-gray-400">
+                                        {authSettings?.totpEnabled ? t("pages.settings.totpEnabledDescription") : t("pages.settings.totpDescription")}
+                                    </span>
+                                </span>
+                                <span className="inline-flex h-10 w-full shrink-0 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 sm:w-auto">
+                                    <QrCode className="h-4 w-4" />
+                                    {authSettings?.totpEnabled ? t("pages.settings.manageTotp") : t("pages.settings.setupTotp")}
+                                </span>
+                            </button>
                         </div>
 
                         <div className="space-y-4 border-t border-gray-200 pt-6 dark:border-gray-700">
@@ -761,6 +902,154 @@ export function Settings() {
                     </CardContent>
                 </Card>
             )}
+
+            <Modal
+                isOpen={totpModalOpen}
+                onClose={closeTotpModal}
+                title={authSettings?.totpEnabled ? t("pages.settings.manageTotpTitle") : t("pages.settings.setupTotpTitle")}
+                maxWidth="max-w-lg"
+            >
+                {authSettings?.totpEnabled ? (
+                    <form
+                        className="space-y-5"
+                        onSubmit={(event) => {
+                            event.preventDefault();
+                            void disableTotp();
+                        }}
+                    >
+                        <p className="text-sm text-gray-500 dark:text-gray-400">
+                            {t("pages.settings.disableTotpDescription")}
+                        </p>
+                        <div className="space-y-2">
+                            <label htmlFor="totp-disable-password" className={labelClass}>{t("pages.settings.currentPassword")}</label>
+                            <input
+                                id="totp-disable-password"
+                                type="password"
+                                value={totpDisablePassword}
+                                onChange={(event) => setTotpDisablePassword(event.target.value)}
+                                disabled={isSavingTotp}
+                                autoComplete="current-password"
+                                className={inputClass}
+                                autoFocus
+                            />
+                        </div>
+                        <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                            <button
+                                type="button"
+                                onClick={closeTotpModal}
+                                disabled={isSavingTotp}
+                                className="inline-flex h-10 items-center justify-center rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800"
+                            >
+                                {t("common.cancel")}
+                            </button>
+                            <button
+                                type="submit"
+                                disabled={isSavingTotp || !totpDisablePassword}
+                                className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-red-600 px-4 text-sm font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                <Trash2 className="h-4 w-4" />
+                                {isSavingTotp ? t("common.saving") : t("pages.settings.disableTotp")}
+                            </button>
+                        </div>
+                    </form>
+                ) : (
+                    <form
+                        className="space-y-5"
+                        onSubmit={(event) => {
+                            event.preventDefault();
+                            void enableTotp();
+                        }}
+                    >
+                        <p className="text-sm text-gray-500 dark:text-gray-400">
+                            {t("pages.settings.setupTotpDescription")}
+                        </p>
+                        {isLoadingTotpSetup ? (
+                            <div className="flex justify-center py-8">
+                                <span className="h-6 w-6 animate-spin rounded-full border-2 border-primary-500 border-t-transparent" />
+                            </div>
+                        ) : (
+                            <>
+                                <div className="flex flex-col items-center gap-3">
+                                    {totpQrDataUrl ? (
+                                        <img
+                                            src={totpQrDataUrl}
+                                            alt={t("pages.settings.totpQrAlt")}
+                                            className="w-full max-w-64 rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700"
+                                        />
+                                    ) : (
+                                        <div className="flex h-64 w-full max-w-64 items-center justify-center rounded-lg border border-gray-200 bg-gray-50 text-sm text-gray-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400">
+                                            {t("pages.settings.generatingQrCode")}
+                                        </div>
+                                    )}
+                                    {totpOtpAuthUrl && (
+                                        <a
+                                            href={totpOtpAuthUrl}
+                                            className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-center text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800 sm:w-auto"
+                                        >
+                                            <QrCode className="h-4 w-4" />
+                                            {t("pages.settings.openAuthenticatorApp")}
+                                        </a>
+                                    )}
+                                </div>
+
+                                <div className="space-y-2">
+                                    <label htmlFor="totp-secret" className={labelClass}>{t("pages.settings.manualTotpSecret")}</label>
+                                    <div className="flex gap-2">
+                                        <input
+                                            id="totp-secret"
+                                            value={totpSecret}
+                                            readOnly
+                                            className={`${inputClass} font-mono`}
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => void copyTotpValue(totpSecret)}
+                                            disabled={!totpSecret}
+                                            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800"
+                                            aria-label={t("pages.settings.copyTotpSecret")}
+                                            title={t("pages.settings.copyTotpSecret")}
+                                        >
+                                            <Copy className="h-4 w-4" />
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <label htmlFor="totp-code" className={labelClass}>{t("pages.settings.authenticatorCode")}</label>
+                                    <input
+                                        id="totp-code"
+                                        value={totpCode}
+                                        onChange={(event) => setTotpCode(event.target.value)}
+                                        disabled={isSavingTotp}
+                                        inputMode="numeric"
+                                        autoComplete="one-time-code"
+                                        pattern="[0-9 ]*"
+                                        className={inputClass}
+                                    />
+                                </div>
+                            </>
+                        )}
+                        <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                            <button
+                                type="button"
+                                onClick={closeTotpModal}
+                                disabled={isSavingTotp}
+                                className="inline-flex h-10 items-center justify-center rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800"
+                            >
+                                {t("common.cancel")}
+                            </button>
+                            <button
+                                type="submit"
+                                disabled={isSavingTotp || isLoadingTotpSetup || !totpCode.trim()}
+                                className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                <ShieldCheck className="h-4 w-4" />
+                                {isSavingTotp ? t("common.saving") : t("pages.settings.verifyAndEnableTotp")}
+                            </button>
+                        </div>
+                    </form>
+                )}
+            </Modal>
 
             <Modal
                 isOpen={passkeyModalOpen}

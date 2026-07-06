@@ -12,7 +12,10 @@ export function Login() {
   const { authEnabled, authenticated, login, oidcEnabled, passwordLoginDisabled, passkeysEnabled, refresh } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [totpCode, setTotpCode] = useState('');
+  const [requiresTotp, setRequiresTotp] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
   if (!authEnabled || authenticated) {
@@ -22,18 +25,35 @@ export function Login() {
   const handlePasswordLogin = async (event: FormEvent) => {
     event.preventDefault();
     setError('');
+    setNotice('');
     setIsLoading(true);
     try {
-      await login(username, password);
+      await login(username, password, requiresTotp ? totpCode : undefined);
     } catch (loginError) {
+      if (loginError instanceof Error && 'requiresTotp' in loginError && loginError.requiresTotp === true) {
+        setRequiresTotp(true);
+        if (!requiresTotp) {
+          setNotice(loginError.message || 'Authenticator code required');
+          return;
+        }
+      }
       setError(loginError instanceof Error ? loginError.message : 'Login failed');
     } finally {
       setIsLoading(false);
     }
   };
 
+  const resetTotpPrompt = () => {
+    setRequiresTotp(false);
+    setPassword('');
+    setTotpCode('');
+    setError('');
+    setNotice('');
+  };
+
   const handlePasskeyLogin = async () => {
     setError('');
+    setNotice('');
     setIsLoading(true);
     try {
       if (!window.isSecureContext || !navigator.credentials) {
@@ -82,36 +102,77 @@ export function Login() {
           </div>
         )}
 
+        {notice && !error && (
+          <div className="mb-4 rounded-lg border border-amber-500/50 bg-amber-950/30 px-3 py-2 text-sm text-amber-100">
+            {notice}
+          </div>
+        )}
+
         {!passwordLoginDisabled && (
           <form onSubmit={(event) => void handlePasswordLogin(event)} className="space-y-4">
-            <div className="space-y-1.5">
-              <label htmlFor="login-username" className="block text-xs font-semibold uppercase tracking-wide text-gray-400">
-                Username
-              </label>
-              <input
-                id="login-username"
-                value={username}
-                onChange={(event) => setUsername(event.target.value)}
-                required
-                autoComplete="username"
-                className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/40"
-              />
-            </div>
+            {!requiresTotp ? (
+              <>
+                <div className="space-y-1.5">
+                  <label htmlFor="login-username" className="block text-xs font-semibold uppercase tracking-wide text-gray-400">
+                    Username
+                  </label>
+                  <input
+                    id="login-username"
+                    value={username}
+                    onChange={(event) => setUsername(event.target.value)}
+                    required
+                    autoComplete="username"
+                    className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/40"
+                  />
+                </div>
 
-            <div className="space-y-1.5">
-              <label htmlFor="login-password" className="block text-xs font-semibold uppercase tracking-wide text-gray-400">
-                Password
-              </label>
-              <input
-                id="login-password"
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                required
-                autoComplete="current-password"
-                className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/40"
-              />
-            </div>
+                <div className="space-y-1.5">
+                  <label htmlFor="login-password" className="block text-xs font-semibold uppercase tracking-wide text-gray-400">
+                    Password
+                  </label>
+                  <input
+                    id="login-password"
+                    type="password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    required
+                    autoComplete="current-password"
+                    className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/40"
+                  />
+                </div>
+              </>
+            ) : (
+              <div className="space-y-1.5">
+                <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-gray-800 bg-gray-950 px-3 py-2">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Signing in as</p>
+                    <p className="truncate text-sm font-medium text-gray-100">{username}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={resetTotpPrompt}
+                    disabled={isLoading}
+                    className="shrink-0 rounded-md px-2 py-1 text-xs font-semibold text-primary-300 hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Change
+                  </button>
+                </div>
+                <label htmlFor="login-totp" className="block text-xs font-semibold uppercase tracking-wide text-gray-400">
+                  Authenticator code
+                </label>
+                <input
+                  id="login-totp"
+                  value={totpCode}
+                  onChange={(event) => setTotpCode(event.target.value)}
+                  required
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  pattern="[0-9 ]*"
+                  autoFocus
+                  className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/40"
+                />
+              </div>
+            )}
 
             <button
               type="submit"
