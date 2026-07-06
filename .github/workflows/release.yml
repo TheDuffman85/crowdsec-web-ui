@@ -135,6 +135,29 @@ jobs:
                 user.html_url || `https://github.com/${user.login}`
               );
             };
+            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+            const withRetries = async (label, fn, retries = 3) => {
+              for (let attempt = 1; attempt <= retries; attempt += 1) {
+                try {
+                  return await fn();
+                } catch (error) {
+                  const message = error?.message || String(error);
+
+                  if (attempt === retries) {
+                    core.warning(
+                      `${label} failed after ${attempt} attempts: ${message}`
+                    );
+                    throw error;
+                  }
+
+                  const delay = attempt * 1000;
+                  core.warning(
+                    `${label} failed on attempt ${attempt}/${retries}: ${message}. Retrying in ${delay}ms.`
+                  );
+                  await sleep(delay);
+                }
+              }
+            };
 
             const range = previousTag ? `${previousTag}..HEAD` : "HEAD";
             const log = git(["log", "--reverse", "--format=%H%x1f%s", range]);
@@ -147,21 +170,41 @@ jobs:
 
             const prNumbers = [];
             const seenPullRequests = new Set();
+            const fallbackCommitsByPullRequest = new Map();
             const directCommits = [];
 
             for (const commit of commits) {
-              const { data: pulls } =
-                await github.rest.repos.listPullRequestsAssociatedWithCommit({
-                  owner,
-                  repo,
-                  commit_sha: commit.sha,
-                });
+              let pulls = [];
+
+              try {
+                const response = await withRetries(
+                  `Fetching pull requests for ${commit.sha}`,
+                  () => github.rest.repos.listPullRequestsAssociatedWithCommit({
+                    owner,
+                    repo,
+                    commit_sha: commit.sha,
+                  })
+                );
+                pulls = response.data;
+              } catch {
+                directCommits.push(commit);
+                continue;
+              }
+
               const pullRequest = pulls.find((pull) => pull.merged_at) || pulls[0];
 
               if (!pullRequest) {
                 directCommits.push(commit);
                 continue;
               }
+
+              const fallbackCommits =
+                fallbackCommitsByPullRequest.get(pullRequest.number) || [];
+              fallbackCommits.push(commit);
+              fallbackCommitsByPullRequest.set(
+                pullRequest.number,
+                fallbackCommits
+              );
 
               if (!seenPullRequests.has(pullRequest.number)) {
                 prNumbers.push(pullRequest.number);
@@ -177,12 +220,24 @@ jobs:
             }
 
             for (const number of prNumbers) {
-              const prCommits = await github.paginate(github.rest.pulls.listCommits, {
-                owner,
-                repo,
-                pull_number: number,
-                per_page: 100,
-              });
+              let prCommits = [];
+
+              try {
+                prCommits = await withRetries(
+                  `Fetching commits for pull request #${number}`,
+                  () => github.paginate(github.rest.pulls.listCommits, {
+                    owner,
+                    repo,
+                    pull_number: number,
+                    per_page: 100,
+                  })
+                );
+              } catch {
+                for (const commit of fallbackCommitsByPullRequest.get(number) || []) {
+                  lines.push(`- ${commit.subject} ([#${number}](${prUrl(number)}))`);
+                }
+                continue;
+              }
 
               for (const commit of prCommits) {
                 addContributor(commit.author);
@@ -196,12 +251,19 @@ jobs:
                 lines.push(
                   `- ${commit.subject} ([${commit.sha.slice(0, 7)}](${commitUrl(commit.sha)}))`
                 );
-                const { data: directCommit } = await github.rest.repos.getCommit({
-                  owner,
-                  repo,
-                  ref: commit.sha,
-                });
-                addContributor(directCommit.author);
+                try {
+                  const { data: directCommit } = await withRetries(
+                    `Fetching commit ${commit.sha}`,
+                    () => github.rest.repos.getCommit({
+                      owner,
+                      repo,
+                      ref: commit.sha,
+                    })
+                  );
+                  addContributor(directCommit.author);
+                } catch {
+                  core.warning(`Skipping contributor lookup for ${commit.sha}.`);
+                }
               }
             }
 
