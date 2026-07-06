@@ -719,4 +719,4 @@ CrowdSec Web UI translations live in `client/src/locales/`. Keep the same keys a
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=TheDuffman85/crowdsec-web-ui&type=Date)](https://star-history.com/#TheDuffman85/crowdsec-web-ui&Date)
+[![Star History Chart](https://api.star-history.com/chart?repos=TheDuffman85/crowdsec-web-ui&type=date&legend=top-left&sealed_token=sIZgMEsvAELrAcobilkaKTbofrchv0xMb7iRiIfxjDZWY44Qt7QkWhQje7Y8KV0jT1Bta4U_DQIN9H000PGFXvPmmEPblq9_j3GwwGq4dzsvRyJfa-MHZEbBO0BIqwzEZn46x-LjQUdE6FCjgGqUJAkAPX4pfK0rsV0aysAc9-GAKcAdKSHCG_sGXD0s)](https://www.star-history.com/?type=date&repos=TheDuffman85%2Fcrowdsec-web-ui)
