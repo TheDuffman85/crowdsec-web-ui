@@ -65,6 +65,46 @@ describe('Login', () => {
     await waitFor(() => expect(loginMock).toHaveBeenLastCalledWith('admin', 'Secret123', '123456'));
   });
 
+  test('uses app validation instead of native browser validation for empty credentials', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter>
+        <Login />
+      </MemoryRouter>,
+    );
+
+    const submitButton = screen.getByRole('button', { name: 'Sign In' });
+    expect(submitButton.closest('form')).toHaveAttribute('novalidate');
+
+    await user.click(submitButton);
+
+    expect(await screen.findByText('Enter your username and password.')).toHaveClass('text-red-200');
+    expect(loginMock).not.toHaveBeenCalled();
+  });
+
+  test('shows app validation for non-numeric TOTP codes', async () => {
+    const user = userEvent.setup();
+    loginMock.mockRejectedValueOnce(Object.assign(new Error('Authenticator code required'), { requiresTotp: true }));
+
+    render(
+      <MemoryRouter>
+        <Login />
+      </MemoryRouter>,
+    );
+
+    await user.type(screen.getByLabelText('Username'), 'admin');
+    await user.type(screen.getByLabelText('Password'), 'Secret123');
+    await user.click(screen.getByRole('button', { name: 'Sign In' }));
+    await screen.findByLabelText('Authenticator code');
+
+    await user.type(screen.getByLabelText('Authenticator code'), 'sf');
+    await user.click(screen.getByRole('button', { name: 'Sign In' }));
+
+    expect(await screen.findByText('Authenticator code can only contain digits and spaces.')).toHaveClass('text-red-200');
+    expect(loginMock).toHaveBeenCalledTimes(1);
+  });
+
   test('shows invalid TOTP attempts as errors', async () => {
     const user = userEvent.setup();
     loginMock

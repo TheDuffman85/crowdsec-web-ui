@@ -22,10 +22,26 @@ export function Login() {
     return <Navigate to="/" replace />;
   }
 
+  const validatePasswordLogin = () => {
+    if (!requiresTotp) {
+      if (!username.trim() || !password) return 'Enter your username and password.';
+      return '';
+    }
+
+    if (!totpCode.trim()) return 'Enter your authenticator code.';
+    if (!/^[0-9 ]+$/.test(totpCode)) return 'Authenticator code can only contain digits and spaces.';
+    return '';
+  };
+
   const handlePasswordLogin = async (event: FormEvent) => {
     event.preventDefault();
     setError('');
     setNotice('');
+    const validationError = validatePasswordLogin();
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
     setIsLoading(true);
     try {
       await login(username, password, requiresTotp ? totpCode : undefined);
@@ -109,7 +125,7 @@ export function Login() {
         )}
 
         {!passwordLoginDisabled && (
-          <form onSubmit={(event) => void handlePasswordLogin(event)} className="space-y-4">
+          <form onSubmit={(event) => void handlePasswordLogin(event)} className="space-y-4" noValidate>
             {!requiresTotp ? (
               <>
                 <div className="space-y-1.5">
@@ -120,7 +136,6 @@ export function Login() {
                     id="login-username"
                     value={username}
                     onChange={(event) => setUsername(event.target.value)}
-                    required
                     autoComplete="username"
                     className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/40"
                   />
@@ -135,7 +150,6 @@ export function Login() {
                     type="password"
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
-                    required
                     autoComplete="current-password"
                     className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/40"
                   />
@@ -164,10 +178,8 @@ export function Login() {
                   id="login-totp"
                   value={totpCode}
                   onChange={(event) => setTotpCode(event.target.value)}
-                  required
                   inputMode="numeric"
                   autoComplete="one-time-code"
-                  pattern="[0-9 ]*"
                   autoFocus
                   className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-white outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/40"
                 />
