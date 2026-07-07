@@ -5,6 +5,7 @@ import { Copy, KeyRound, LockKeyhole, Plus, QrCode, Save, ShieldCheck, Trash2, X
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card";
 import { Modal } from "../components/ui/Modal";
 import { Switch } from "../components/ui/Switch";
+import { Badge } from "../components/ui/Badge";
 import { useRefresh } from "../contexts/useRefresh";
 import { useOptionalToast } from "../contexts/useToast";
 import { fetchConfig, updateMetricsSidebarPreference } from "../lib/api";
@@ -582,7 +583,12 @@ export function Settings() {
                         </div>
 
                         <div className="space-y-2 xl:col-span-2">
-                            <div className="flex items-start justify-between gap-4 rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-900/40">
+                            <div className="flex items-start gap-4 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+                                <Switch
+                                    id="settings-metrics-sidebar"
+                                    checked={metricsSidebarVisible}
+                                    onCheckedChange={setMetricsSidebarVisible}
+                                />
                                 <div className="min-w-0">
                                     <label htmlFor="settings-metrics-sidebar" className={labelClass}>
                                         {t("pages.settings.showMetricsInSidebar")}
@@ -591,11 +597,6 @@ export function Settings() {
                                         {t("pages.settings.showMetricsInSidebarHelp")}
                                     </p>
                                 </div>
-                                <Switch
-                                    id="settings-metrics-sidebar"
-                                    checked={metricsSidebarVisible}
-                                    onCheckedChange={setMetricsSidebarVisible}
-                                />
                             </div>
                         </div>
                     </div>
@@ -710,24 +711,30 @@ export function Settings() {
                                 </div>
                             )}
 
-                            <button
-                                type="button"
-                                onClick={() => void openTotpModal()}
-                                disabled={!canChangePassword || isLoadingTotpSetup}
-                                aria-label={authSettings?.totpEnabled ? t("pages.settings.manageTotp") : t("pages.settings.setupTotp")}
-                                className="flex min-h-20 w-full flex-col items-stretch justify-between gap-4 rounded-lg border border-gray-200 bg-gray-50 p-4 text-left hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:bg-gray-900/40 dark:hover:bg-gray-900/70 sm:flex-row sm:items-center"
-                            >
-                                <span className="min-w-0">
-                                    <span className="block text-sm font-medium text-gray-900 dark:text-gray-100">{t("pages.settings.totpTitle")}</span>
-                                    <span className="mt-1 block text-xs text-gray-500 dark:text-gray-400">
-                                        {authSettings?.totpEnabled ? t("pages.settings.totpEnabledDescription") : t("pages.settings.totpDescription")}
-                                    </span>
-                                </span>
-                                <span className="inline-flex h-10 w-full shrink-0 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 sm:w-auto">
-                                    <QrCode className="h-4 w-4" />
-                                    {authSettings?.totpEnabled ? t("pages.settings.manageTotp") : t("pages.settings.setupTotp")}
-                                </span>
-                            </button>
+                            {canChangePassword && (
+                                <div className="space-y-3">
+                                    <div>
+                                        <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-gray-900 dark:text-gray-100">
+                                            <span>{t("pages.settings.totpTitle")}</span>
+                                            <Badge variant={authSettings?.totpEnabled ? "success" : "secondary"}>
+                                                {authSettings?.totpEnabled ? t("common.enabled") : t("common.disabled")}
+                                            </Badge>
+                                        </div>
+                                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                            {authSettings?.totpEnabled ? t("pages.settings.totpEnabledDescription") : t("pages.settings.totpDescription")}
+                                        </p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => void openTotpModal()}
+                                        disabled={isLoadingTotpSetup}
+                                        className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        <QrCode className="h-4 w-4" />
+                                        {authSettings?.totpEnabled ? t("pages.settings.manageTotp") : t("pages.settings.setupTotp")}
+                                    </button>
+                                </div>
+                            )}
                         </div>
 
                         <div className="space-y-4 border-t border-gray-200 pt-6 dark:border-gray-700">

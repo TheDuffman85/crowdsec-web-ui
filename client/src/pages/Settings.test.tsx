@@ -359,7 +359,7 @@ describe('Settings', () => {
     expect(screen.getByRole('button', { name: 'Change Password' })).toBeInTheDocument();
   });
 
-  test('hides password change when the session was not password-authenticated', async () => {
+  test('hides password-backed settings when the session was not password-authenticated', async () => {
     useAuthMock.mockReturnValue({
       authEnabled: true,
       setupRequired: false,
@@ -407,6 +407,7 @@ describe('Settings', () => {
 
     expect(screen.queryByLabelText('Current password')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Change Password' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Set Up TOTP' })).not.toBeInTheDocument();
   });
 
   test('sets up TOTP from the password authentication modal', async () => {
