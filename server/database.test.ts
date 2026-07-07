@@ -150,6 +150,49 @@ describe('CrowdsecDatabase', () => {
     db.close();
   });
 
+  test('migrates existing auth users with TOTP replay tracking', () => {
+    const dbPath = createTestDatabasePath();
+    const legacy = createLegacyDatabase(dbPath);
+    legacy.exec(`
+      CREATE TABLE auth_users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL UNIQUE,
+        password_hash TEXT,
+        totp_secret TEXT,
+        totp_enabled INTEGER NOT NULL DEFAULT 0,
+        role TEXT NOT NULL DEFAULT 'admin',
+        auth_provider TEXT NOT NULL DEFAULT 'password',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `);
+    legacy.query(`
+      INSERT INTO auth_users (username, password_hash, totp_secret, totp_enabled, role, auth_provider, created_at, updated_at)
+      VALUES ($username, $password_hash, $totp_secret, $totp_enabled, $role, $auth_provider, $created_at, $updated_at)
+    `).run({
+      $username: 'admin',
+      $password_hash: 'hash',
+      $totp_secret: 'secret',
+      $totp_enabled: 1,
+      $role: 'admin',
+      $auth_provider: 'password',
+      $created_at: '2026-01-01T00:00:00.000Z',
+      $updated_at: '2026-01-01T00:00:00.000Z',
+    });
+    legacy.close();
+
+    const db = new CrowdsecDatabase({ dbPath });
+
+    expect(db.getAuthUserByUsername('admin')?.totp_last_step).toBeNull();
+    expect(db.updateAuthUserTotpLastStep(1, 12345)).toBe(true);
+    expect(db.getAuthUserByUsername('admin')?.totp_last_step).toBe(12345);
+    expect(db.updateAuthUserTotpLastStep(1, 12345)).toBe(false);
+    expect(db.updateAuthUserTotpLastStep(1, 12344)).toBe(false);
+    expect(db.getAuthUserByUsername('admin')?.totp_last_step).toBe(12345);
+
+    db.close();
+  });
+
   test('deleteDecisionsByAlertIdExcept removes stale decisions while preserving kept and unrelated rows', () => {
     const db = createTestDatabase();
 

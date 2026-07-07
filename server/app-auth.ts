@@ -78,6 +78,17 @@ const OIDC_REDIRECT_COOKIE = 'crowdsec_web_ui_oidc_redirect_uri';
 const DUMMY_PASSWORD_HASH_PROMISE = hashPassword('timing-safe-dummy-password-pad');
 const ENCRYPTED_SECRET_PREFIX = 'enc:v1:';
 const TOTP_EPOCH_TOLERANCE_SECONDS = 30;
+const TOTP_CODE_PATTERN = /^\d{6}$/;
+const AUTH_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+const AUTH_RATE_LIMIT_BLOCK_MS = 15 * 60 * 1000;
+const PASSWORD_MAX_FAILURES = 10;
+const TOTP_MAX_FAILURES = 5;
+
+interface AuthFailureBucket {
+  failures: number;
+  firstFailureAt: number;
+  blockedUntil: number;
+}
 
 function base64url(input: Buffer | string): string {
   return Buffer.from(input).toString('base64url');
@@ -230,6 +241,24 @@ function normalizeTotpCode(value: string): string {
   return value.replace(/\s+/g, '');
 }
 
+function isTotpCodeFormatValid(value: string): boolean {
+  return TOTP_CODE_PATTERN.test(value);
+}
+
+async function verifyTotpCode(token: string, secret: string): Promise<{ valid: boolean; timeStep: number | null }> {
+  if (!isTotpCodeFormatValid(token)) return { valid: false, timeStep: null };
+  try {
+    const verification = await verify({ token, secret, epochTolerance: TOTP_EPOCH_TOLERANCE_SECONDS });
+    const timeStep = verification.valid ? (verification as { timeStep?: unknown }).timeStep : null;
+    return {
+      valid: verification.valid,
+      timeStep: typeof timeStep === 'number' ? timeStep : null,
+    };
+  } catch {
+    return { valid: false, timeStep: null };
+  }
+}
+
 function signShortValue(value: string, secret: string): string {
   const signature = crypto.createHmac('sha256', secret).update(value).digest('base64url');
   return `${value}.${signature}`;
@@ -257,6 +286,51 @@ function resolveSessionSecret(database: CrowdsecDatabase, configuredSecret?: str
   const generated = crypto.randomBytes(32).toString('base64url');
   database.setMeta('auth_session_secret', generated);
   return generated;
+}
+
+function getClientAddress(context: Context): string {
+  return context.req.header('x-forwarded-for')?.split(',')[0]?.trim()
+    || context.req.header('x-real-ip')?.trim()
+    || 'unknown';
+}
+
+function getAuthAttemptKey(context: Context, username: string): string {
+  return `${getClientAddress(context)}\n${username.trim().toLowerCase()}`;
+}
+
+function getAuthThrottleRetryAfter(buckets: Map<string, AuthFailureBucket>, key: string, now = Date.now()): number | null {
+  const bucket = buckets.get(key);
+  if (!bucket) return null;
+  if (bucket.blockedUntil > now) return Math.ceil((bucket.blockedUntil - now) / 1000);
+  if (now - bucket.firstFailureAt > AUTH_RATE_LIMIT_WINDOW_MS) {
+    buckets.delete(key);
+  }
+  return null;
+}
+
+function recordAuthFailure(
+  buckets: Map<string, AuthFailureBucket>,
+  key: string,
+  maxFailures: number,
+  now = Date.now(),
+): number | null {
+  const current = buckets.get(key);
+  const bucket = current && now - current.firstFailureAt <= AUTH_RATE_LIMIT_WINDOW_MS
+    ? current
+    : { failures: 0, firstFailureAt: now, blockedUntil: 0 };
+
+  bucket.failures += 1;
+  if (bucket.failures >= maxFailures) {
+    bucket.failures = 0;
+    bucket.firstFailureAt = now;
+    bucket.blockedUntil = now + AUTH_RATE_LIMIT_BLOCK_MS;
+  }
+  buckets.set(key, bucket);
+  return getAuthThrottleRetryAfter(buckets, key, now);
+}
+
+function clearAuthFailures(buckets: Map<string, AuthFailureBucket>, key: string): void {
+  buckets.delete(key);
 }
 
 function signSession(payload: Record<string, unknown>, secret: string): string {
@@ -446,6 +520,10 @@ export function createDashboardAuth(options: {
   const enabled = config.enabled ?? !database.isAuthMigrationDefaultDisabled();
   const cookiePath = getCookiePath(basePath);
   const sessionSecret = resolveSessionSecret(database, config.sessionSecret);
+  const persistedSessionSecret = database.getMeta('auth_session_secret')?.value;
+  const totpSecretEncryptionSecret = config.sessionSecret || sessionSecret;
+  const passwordFailureBuckets = new Map<string, AuthFailureBucket>();
+  const totpFailureBuckets = new Map<string, AuthFailureBucket>();
 
   function getEffectiveConfig(): EffectiveAuthConfig {
     const encryptedClientSecret = readAuthSetting(database, 'oidc_client_secret');
@@ -472,6 +550,29 @@ export function createDashboardAuth(options: {
   }
 
   const oidc = new OidcRuntime(getEffectiveConfig);
+
+  function decryptTotpSecret(value: string): string {
+    const candidateSecrets = Array.from(new Set([
+      totpSecretEncryptionSecret,
+      persistedSessionSecret,
+    ].filter((secret): secret is string => Boolean(secret))));
+
+    let lastError: unknown;
+    for (const secret of candidateSecrets) {
+      try {
+        return decryptSecret(value, secret);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (lastError) throw lastError;
+    return decryptSecret(value, sessionSecret);
+  }
+
+  function authThrottleResponse(context: HonoContext, retryAfterSeconds: number): Response {
+    context.header('Retry-After', String(retryAfterSeconds));
+    return context.json({ error: 'Too many authentication attempts. Try again later.' }, 429);
+  }
 
   function createSession(context: HonoContext, user: AuthUserRow | SessionData, authMethod?: AuthMethod): void {
     const now = Math.floor(Date.now() / 1000);
@@ -603,22 +704,35 @@ export function createDashboardAuth(options: {
       const password = typeof body?.password === 'string' ? body.password : '';
       const totpCode = typeof body?.totpCode === 'string' ? normalizeTotpCode(body.totpCode) : '';
       if (!username || !password) return context.json({ error: 'Username and password required' }, 400);
+      const authAttemptKey = getAuthAttemptKey(context, username);
+      const passwordRetryAfter = getAuthThrottleRetryAfter(passwordFailureBuckets, authAttemptKey);
+      if (passwordRetryAfter !== null) return authThrottleResponse(context, passwordRetryAfter);
 
       const user = database.getAuthUserByUsername(username);
       const hashToVerify = user?.password_hash || await DUMMY_PASSWORD_HASH_PROMISE;
       const valid = await verifyPassword(password, hashToVerify);
       if (!user || !user.password_hash || !valid) {
+        recordAuthFailure(passwordFailureBuckets, authAttemptKey, PASSWORD_MAX_FAILURES);
         return context.json({ error: 'Invalid credentials' }, 401);
       }
+      clearAuthFailures(passwordFailureBuckets, authAttemptKey);
       if (user.totp_enabled && user.totp_secret) {
         if (!totpCode) {
           return context.json({ error: 'Authenticator code required', requiresTotp: true }, 401);
         }
-        const secret = decryptSecret(user.totp_secret, sessionSecret);
-        const verification = await verify({ token: totpCode, secret, epochTolerance: TOTP_EPOCH_TOLERANCE_SECONDS });
-        if (!verification.valid) {
+        const totpRetryAfter = getAuthThrottleRetryAfter(totpFailureBuckets, authAttemptKey);
+        if (totpRetryAfter !== null) return authThrottleResponse(context, totpRetryAfter);
+        const secret = decryptTotpSecret(user.totp_secret);
+        const verification = await verifyTotpCode(totpCode, secret);
+        if (!verification.valid || verification.timeStep === null) {
+          recordAuthFailure(totpFailureBuckets, authAttemptKey, TOTP_MAX_FAILURES);
           return context.json({ error: 'Invalid authenticator code', requiresTotp: true }, 401);
         }
+        if (!database.updateAuthUserTotpLastStep(user.id, verification.timeStep)) {
+          recordAuthFailure(totpFailureBuckets, authAttemptKey, TOTP_MAX_FAILURES);
+          return context.json({ error: 'Invalid authenticator code', requiresTotp: true }, 401);
+        }
+        clearAuthFailures(totpFailureBuckets, authAttemptKey);
       }
 
       createSession(context, user, 'password');
@@ -791,6 +905,7 @@ export function createDashboardAuth(options: {
 
       const user = database.getAuthUserById(session.userId);
       if (!user?.password_hash) return context.json({ error: 'No password set for this account' }, 400);
+      if (user.totp_enabled) return context.json({ error: 'TOTP is already enabled for this account' }, 400);
       const secret = generateSecret();
       const otpauthUrl = generateURI({
         issuer: 'CrowdSec Web UI',
@@ -811,16 +926,18 @@ export function createDashboardAuth(options: {
       const body = asObject(await context.req.json().catch(() => null));
       const code = typeof body?.code === 'string' ? normalizeTotpCode(body.code) : '';
       if (!code) return context.json({ error: 'Authenticator code required' }, 400);
+      if (!isTotpCodeFormatValid(code)) return context.json({ error: 'Invalid authenticator code' }, 400);
       const secret = verifyShortValue(getCookie(context, TOTP_SETUP_COOKIE), sessionSecret);
       if (!secret) return context.json({ error: 'TOTP setup expired. Start setup again.' }, 400);
-      const verification = await verify({ token: code, secret, epochTolerance: TOTP_EPOCH_TOLERANCE_SECONDS });
+      const user = database.getAuthUserById(session.userId);
+      if (!user?.password_hash) return context.json({ error: 'No password set for this account' }, 400);
+      if (user.totp_enabled) return context.json({ error: 'TOTP is already enabled for this account' }, 400);
+      const verification = await verifyTotpCode(code, secret);
       if (!verification.valid) {
         return context.json({ error: 'Invalid authenticator code' }, 400);
       }
 
-      const user = database.getAuthUserById(session.userId);
-      if (!user?.password_hash) return context.json({ error: 'No password set for this account' }, 400);
-      database.updateAuthUserTotp(user.id, encryptSecret(secret, sessionSecret), true);
+      database.updateAuthUserTotp(user.id, encryptSecret(secret, totpSecretEncryptionSecret), true);
       deleteCookie(context, TOTP_SETUP_COOKIE, { path: cookiePath });
       return context.json({ status: 'ok', totpEnabled: true });
     });

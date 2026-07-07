@@ -90,6 +90,7 @@ export interface AuthUserRow {
   password_hash: string | null;
   totp_secret: string | null;
   totp_enabled: number;
+  totp_last_step: number | null;
   role: 'admin' | 'read-only';
   auth_provider: 'password' | 'oidc';
   created_at: string;
@@ -139,6 +140,7 @@ export class CrowdsecDatabase {
   private readonly getAuthUserByUsernameStatement: any;
   private readonly updateAuthUserPasswordStatement: any;
   private readonly updateAuthUserTotpStatement: any;
+  private readonly updateAuthUserTotpLastStepStatement: any;
   private readonly upsertOidcUserStatement: any;
   private readonly listWebAuthnCredentialsByUserStatement: any;
   private readonly countWebAuthnCredentialsStatement: any;
@@ -267,8 +269,13 @@ export class CrowdsecDatabase {
     `);
     this.updateAuthUserTotpStatement = this.db.query(`
       UPDATE auth_users
-      SET totp_secret = $totp_secret, totp_enabled = $totp_enabled, updated_at = $updated_at
+      SET totp_secret = $totp_secret, totp_enabled = $totp_enabled, totp_last_step = $totp_last_step, updated_at = $updated_at
       WHERE id = $id
+    `);
+    this.updateAuthUserTotpLastStepStatement = this.db.query(`
+      UPDATE auth_users
+      SET totp_last_step = $totp_last_step, updated_at = $updated_at
+      WHERE id = $id AND (totp_last_step IS NULL OR totp_last_step < $totp_last_step)
     `);
     this.upsertOidcUserStatement = this.db.query(`
       INSERT INTO auth_users (username, password_hash, role, auth_provider, created_at, updated_at)
@@ -604,6 +611,15 @@ export class CrowdsecDatabase {
       $id: id,
       $totp_secret: secret,
       $totp_enabled: enabled ? 1 : 0,
+      $totp_last_step: null,
+      $updated_at: new Date().toISOString(),
+    }).changes > 0;
+  }
+
+  updateAuthUserTotpLastStep(id: number, lastStep: number): boolean {
+    return this.updateAuthUserTotpLastStepStatement.run({
+      $id: id,
+      $totp_last_step: lastStep,
       $updated_at: new Date().toISOString(),
     }).changes > 0;
   }
@@ -970,6 +986,7 @@ function initSchema(db: Database, freshDatabase: boolean): void {
       password_hash TEXT,
       totp_secret TEXT,
       totp_enabled INTEGER NOT NULL DEFAULT 0,
+      totp_last_step INTEGER,
       role TEXT NOT NULL DEFAULT 'admin',
       auth_provider TEXT NOT NULL DEFAULT 'password',
       created_at TEXT NOT NULL,
@@ -1128,6 +1145,9 @@ function migrateAuthUsersTable(db: Database): void {
   }
   if (!columns.some((column) => column.name === 'totp_enabled')) {
     db.exec('ALTER TABLE auth_users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!columns.some((column) => column.name === 'totp_last_step')) {
+    db.exec('ALTER TABLE auth_users ADD COLUMN totp_last_step INTEGER');
   }
 }
 
