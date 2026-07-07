@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { I18nContext, type I18nContextValue } from '../lib/i18n';
 import { WorldMapCard } from './WorldMapCard';
@@ -258,6 +258,59 @@ describe('WorldMapCard', () => {
     );
 
     await waitFor(() => expect(screen.getByText(/Decisions: 3 \(2 active\)/)).toBeInTheDocument());
+  });
+
+  test('renders the tooltip outside the zoom transform at a fixed screen size', async () => {
+    render(
+      <WorldMapCard
+        data={[{ label: 'Germany', countryCode: 'DE', count: 2, liveCount: 2, simulatedCount: 0 }]}
+        onCountrySelect={vi.fn()}
+        selectedCountry={null}
+        simulationsEnabled={true}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('world-map-tooltip')).toBeInTheDocument());
+
+    const mapContainer = document.querySelector('.world-map-container') as HTMLElement | null;
+    expect(mapContainer).not.toBeNull();
+
+    fireEvent.pointerMove(mapContainer as HTMLElement, { clientX: 40, clientY: 50 });
+
+    const tooltip = screen.getByTestId('world-map-tooltip');
+    expect(tooltip.parentElement).toBe(document.body);
+    expect(tooltip).toHaveClass('fixed');
+    expect(tooltip).toHaveStyle({ left: '55px', top: '65px' });
+  });
+
+  test('hides counts for a country dimmed by an active country filter', async () => {
+    render(
+      <WorldMapCard
+        data={[{ label: 'United States', countryCode: 'US', count: 2, liveCount: 2, simulatedCount: 0 }]}
+        onCountrySelect={vi.fn()}
+        selectedCountry="US"
+        simulationsEnabled={true}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText('Germany')).toBeInTheDocument());
+    expect(screen.queryByText(/Alerts:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Decisions:/)).not.toBeInTheDocument();
+  });
+
+  test('hides counts for a grey country without stats', async () => {
+    render(
+      <WorldMapCard
+        data={[]}
+        onCountrySelect={vi.fn()}
+        selectedCountry={null}
+        simulationsEnabled={true}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText('Germany')).toBeInTheDocument());
+    expect(screen.queryByText(/Alerts:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Decisions:/)).not.toBeInTheDocument();
   });
 
   test('uses the geographic feature id for a country without stats', async () => {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
+import { useState, useEffect, useMemo, useRef, useLayoutEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Choropleth, type ChoroplethBoundFeature } from '@nivo/geo';
 import {
@@ -45,8 +45,6 @@ interface GeoJsonResponse {
 interface TooltipPosition {
     x: number;
     y: number;
-    clientX: number;
-    clientY: number;
 }
 
 interface WorldMapCardProps {
@@ -74,45 +72,38 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
     const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
     const [initialScale, setInitialScale] = useState(() => window.innerWidth < 800 ? 0.7 : 1.0);
     const [tooltipEnabled, setTooltipEnabled] = useState(true);
-
-
-    // Refs for tooltip positioning
+    const previousSelectedCountryRef = useRef<string | null>(selectedCountry);
+    const touchTooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const tooltipRef = useRef<HTMLDivElement | null>(null);
-    const mousePosRef = useRef<TooltipPosition>({ x: 0, y: 0, clientX: 0, clientY: 0 });
+    const tooltipPositionRef = useRef<TooltipPosition>({ x: 0, y: 0 });
 
-    // Track mouse position GLOBALLY to ensure we always have coordinates
-    useEffect(() => {
-        const handleMouseMove = (e: MouseEvent) => {
-            // Update ref for initial position of new tooltips
-            mousePosRef.current = {
-                x: e.pageX,
-                y: e.pageY,
-                clientX: e.clientX,
-                clientY: e.clientY
-            };
+    const hideTooltip = useCallback(() => {
+        setTooltipEnabled((current) => current ? false : current);
+    }, []);
 
-            // If a tooltip is currently active, move it immediately
-            if (tooltipRef.current) {
-                const x = e.pageX + 15;
-                const y = e.pageY + 15;
-                tooltipRef.current.style.left = `${x}px`;
-                tooltipRef.current.style.top = `${y}px`;
-            }
-        };
+    const showTooltipSoon = useCallback(() => {
+        if (touchTooltipTimerRef.current) {
+            clearTimeout(touchTooltipTimerRef.current);
+        }
 
-        window.addEventListener('mousemove', handleMouseMove, { capture: true });
-        return () => window.removeEventListener('mousemove', handleMouseMove, { capture: true });
+        touchTooltipTimerRef.current = setTimeout(() => {
+            setTooltipEnabled(true);
+            touchTooltipTimerRef.current = null;
+        }, 100);
+    }, []);
+
+    const updateTooltipPosition = useCallback((clientX: number, clientY: number) => {
+        const nextPosition = { x: clientX + 15, y: clientY + 15 };
+        tooltipPositionRef.current = nextPosition;
+
+        if (tooltipRef.current) {
+            tooltipRef.current.style.left = `${nextPosition.x}px`;
+            tooltipRef.current.style.top = `${nextPosition.y}px`;
+        }
     }, []);
 
     // Handle interaction events to hide tooltip - use WINDOW level to guarantee capture
     useEffect(() => {
-        const hideTooltip = () => {
-            // Instant direct DOM manipulation for zero latency
-            const tooltip = document.getElementById('world-map-tooltip');
-            if (tooltip) tooltip.style.opacity = '0';
-            setTooltipEnabled(false);
-        };
-
         // Catch ALL touchmove events at window level (captures map panning, page scrolling, everything)
         const handleTouchMove = () => {
             hideTooltip();
@@ -125,10 +116,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
 
         // Handle touchend to re-enable tooltip for NEXT tap (not auto-show)
         const handleTouchEnd = () => {
-            // Slight delay to avoid re-triggering on the same tap
-            setTimeout(() => {
-                setTooltipEnabled(true);
-            }, 100);
+            showTooltipSoon();
         };
 
         // Use capture:true AND attach to window to guarantee we see these events
@@ -140,68 +128,73 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
             window.removeEventListener('touchmove', handleTouchMove, { capture: true });
             window.removeEventListener('scroll', handleScroll, { capture: true });
             window.removeEventListener('touchend', handleTouchEnd, { capture: true });
-        };
-    }, []);
-    // Tooltip Component to be rendered by Nivo
-    const PortalTooltip = ({ feature }: { feature: ChoroplethBoundFeature }) => {
-        // useLayoutEffect ensures position is set BEFORE paint
-        useLayoutEffect(() => {
-            if (tooltipRef.current) {
-                const { x, y } = mousePosRef.current;
-                tooltipRef.current.style.left = `${x + 15}px`;
-                tooltipRef.current.style.top = `${y + 15}px`;
+            if (touchTooltipTimerRef.current) {
+                clearTimeout(touchTooltipTimerRef.current);
+                touchTooltipTimerRef.current = null;
             }
+        };
+    }, [hideTooltip, showTooltipSoon]);
+    // Tooltip Component to be rendered by Nivo
+    const MapTooltip = ({ feature }: { feature: ChoroplethBoundFeature }) => {
+        useLayoutEffect(() => {
+            if (!tooltipRef.current) {
+                return;
+            }
+
+            const { x, y } = tooltipPositionRef.current;
+            tooltipRef.current.style.left = `${x}px`;
+            tooltipRef.current.style.top = `${y}px`;
         }, []);
 
-        if (!feature) return null;
+        if (!feature || !tooltipEnabled) return null;
 
         // Find alert data locally since Nivo only passes the feature props
         const featureId = getFeatureCountryCode(feature);
+        const isDimmedByCountryFilter = selectedCountry !== null && selectedCountry !== featureId;
+        const showMetricRows = !isDimmedByCountryFilter && (feature.data !== undefined || selectedCountry === featureId);
 
         return createPortal(
             <div
-                id="world-map-tooltip"
                 ref={tooltipRef}
-                className="fixed z-[99999] pointer-events-none bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 border border-gray-200 dark:border-gray-700 shadow-xl rounded-lg p-3 text-sm max-w-[200px] transition-opacity duration-150"
-                style={{
-                    left: 0,
-                    top: 0,
-                    opacity: tooltipEnabled ? 1 : 0,
-                    // transform is handled by refs in parent via style.left/top
-                }}
+                data-testid="world-map-tooltip"
+                className="fixed z-[99999] pointer-events-none bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 border border-gray-200 dark:border-gray-700 shadow-xl rounded-lg p-3 text-sm max-w-[200px]"
             >
-                <div className="font-medium mb-2">
+                <div className={`font-medium ${showMetricRows ? 'mb-2' : ''}`}>
                     {getCountryName(featureId, language) ?? feature.label ?? featureId}
                 </div>
-                <div className="flex items-center gap-2">
-                    <ShieldAlert className="w-4 h-4" style={{ color: DASHBOARD_COLORS.liveAlerts }} />
-                    <span style={{ color: DASHBOARD_COLORS.liveAlerts }}>
-                        {t('components.worldMap.alerts')}: {Number(feature.data?.liveCount || 0).toLocaleString()}
-                    </span>
-                </div>
-                <div className="mt-1 flex items-center gap-2">
-                    <Gavel className="w-4 h-4" style={{ color: DASHBOARD_COLORS.liveDecisions }} />
-                    <span style={{ color: DASHBOARD_COLORS.liveDecisions }}>
-                        {t('components.dashboardCharts.decisions')}: {Number(feature.data?.liveDecisionCount || 0).toLocaleString()}
-                        {' '}({Number(feature.data?.activeLiveDecisionCount || 0).toLocaleString()} {t('common.active').toLocaleLowerCase(language)})
-                    </span>
-                </div>
-                {simulationsEnabled && Number(feature.data?.simulatedCount || 0) > 0 && (
-                    <div className="mt-1 flex items-center gap-2">
-                        <ShieldAlert className="w-4 h-4" style={{ color: DASHBOARD_COLORS.simulatedAlerts }} />
-                        <span style={{ color: DASHBOARD_COLORS.simulatedAlerts }}>
-                            {t('components.worldMap.simulationAlerts')}: {Number(feature.data?.simulatedCount || 0).toLocaleString()}
-                        </span>
-                    </div>
-                )}
-                {simulationsEnabled && Number(feature.data?.simulatedDecisionCount || 0) > 0 && (
-                    <div className="mt-1 flex items-center gap-2">
-                        <Gavel className="w-4 h-4" style={{ color: DASHBOARD_COLORS.simulatedDecisions }} />
-                        <span style={{ color: DASHBOARD_COLORS.simulatedDecisions }}>
-                            {t('components.dashboardCharts.simulationDecisions')}: {Number(feature.data?.simulatedDecisionCount || 0).toLocaleString()}
-                            {' '}({Number(feature.data?.activeSimulatedDecisionCount || 0).toLocaleString()} {t('common.active').toLocaleLowerCase(language)})
-                        </span>
-                    </div>
+                {showMetricRows && (
+                    <>
+                        <div className="flex items-center gap-2">
+                            <ShieldAlert className="w-4 h-4" style={{ color: DASHBOARD_COLORS.liveAlerts }} />
+                            <span style={{ color: DASHBOARD_COLORS.liveAlerts }}>
+                                {t('components.worldMap.alerts')}: {Number(feature.data?.liveCount || 0).toLocaleString()}
+                            </span>
+                        </div>
+                        <div className="mt-1 flex items-center gap-2">
+                            <Gavel className="w-4 h-4" style={{ color: DASHBOARD_COLORS.liveDecisions }} />
+                            <span style={{ color: DASHBOARD_COLORS.liveDecisions }}>
+                                {t('components.dashboardCharts.decisions')}: {Number(feature.data?.liveDecisionCount || 0).toLocaleString()}
+                                {' '}({Number(feature.data?.activeLiveDecisionCount || 0).toLocaleString()} {t('common.active').toLocaleLowerCase(language)})
+                            </span>
+                        </div>
+                        {simulationsEnabled && Number(feature.data?.simulatedCount || 0) > 0 && (
+                            <div className="mt-1 flex items-center gap-2">
+                                <ShieldAlert className="w-4 h-4" style={{ color: DASHBOARD_COLORS.simulatedAlerts }} />
+                                <span style={{ color: DASHBOARD_COLORS.simulatedAlerts }}>
+                                    {t('components.worldMap.simulationAlerts')}: {Number(feature.data?.simulatedCount || 0).toLocaleString()}
+                                </span>
+                            </div>
+                        )}
+                        {simulationsEnabled && Number(feature.data?.simulatedDecisionCount || 0) > 0 && (
+                            <div className="mt-1 flex items-center gap-2">
+                                <Gavel className="w-4 h-4" style={{ color: DASHBOARD_COLORS.simulatedDecisions }} />
+                                <span style={{ color: DASHBOARD_COLORS.simulatedDecisions }}>
+                                    {t('components.dashboardCharts.simulationDecisions')}: {Number(feature.data?.simulatedDecisionCount || 0).toLocaleString()}
+                                    {' '}({Number(feature.data?.activeSimulatedDecisionCount || 0).toLocaleString()} {t('common.active').toLocaleLowerCase(language)})
+                                </span>
+                            </div>
+                        )}
+                    </>
                 )}
             </div>,
             document.body
@@ -374,10 +367,15 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
 
     // Handle selection visual state manually with robust DOM selector
     useEffect(() => {
+        const previousSelectedCountry = previousSelectedCountryRef.current;
+        previousSelectedCountryRef.current = selectedCountry;
+
+        if (!selectedCountry && !previousSelectedCountry) {
+            return;
+        }
         if (!containerRef.current || geoFeatures.length === 0) return;
 
-        // Debounce slightly to ensure render cycle completes
-        const timer = setTimeout(() => {
+        const animationFrameId = window.requestAnimationFrame(() => {
             // Select ONLY paths that have a fill attribute and are NOT 'none' (this implies they are feature paths, not graticules)
             // Nivo graticules usually have fill="none".
             // Features have a color fill.
@@ -426,10 +424,10 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
                     path.style.filter = '';
                 }
             });
-        }, 150); // Increased delay slightly to be safe
+        });
 
-        return () => clearTimeout(timer);
-    }, [selectedCountry, geoFeatures, isLoadingStats, nivoData]); // Added nivoData dependency as re-render changes DOM
+        return () => window.cancelAnimationFrame(animationFrameId);
+    }, [selectedCountry, geoFeatures, isLoadingStats]);
 
     return (
         <Card className="h-full flex flex-col overflow-hidden">
@@ -448,6 +446,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
                     <div
                         ref={containerRef}
                         className={`w-full h-full absolute inset-0 world-map-container ${isFiltered ? 'country-filtered' : ''}`}
+                        onPointerMoveCapture={(event) => updateTooltipPosition(event.clientX, event.clientY)}
                     >
                         <style>{`
                             .world-map-container path {
@@ -486,11 +485,11 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
                             limitToBounds={false}
                             onPanning={() => {
                                 // Hide tooltip only when actual panning occurs
-                                setTooltipEnabled(false);
+                                hideTooltip();
                             }}
                             onPanningStop={(ref: ReactZoomPanPinchRef) => {
                                 // Re-enable tooltip after panning stops
-                                setTimeout(() => setTooltipEnabled(true), 100);
+                                showTooltipSoon();
                                 // Rubberband effect: check if map is panned outside visible area
                                 if (!containerRef.current) return;
 
@@ -566,7 +565,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
                                                         onCountrySelect(featureId);
                                                     }
                                                 }}
-                                                tooltip={PortalTooltip}
+                                                tooltip={MapTooltip}
                                             />
                                         </div>
                                     </TransformComponent>
