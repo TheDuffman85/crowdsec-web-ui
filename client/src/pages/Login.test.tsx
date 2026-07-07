@@ -1,7 +1,10 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import i18next from 'i18next';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { I18nProvider } from '../lib/I18nProvider';
+import { LANGUAGE_SETTING_KEY } from '../lib/i18n';
 import { Login } from './Login';
 
 const { loginMock, refreshMock, useAuthMock } = vi.hoisted(() => ({
@@ -12,6 +15,10 @@ const { loginMock, refreshMock, useAuthMock } = vi.hoisted(() => ({
 
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: useAuthMock,
+}));
+
+vi.mock('../lib/api', () => ({
+  updateLanguagePreference: vi.fn(async (language: string) => ({ success: true, language })),
 }));
 
 describe('Login', () => {
@@ -35,6 +42,33 @@ describe('Login', () => {
       setup: vi.fn(),
       logout: vi.fn(),
     });
+  });
+
+  afterEach(async () => {
+    cleanup();
+    localStorage.clear();
+    await i18next.changeLanguage('en');
+  });
+
+  test('uses the stored language preference for login copy', async () => {
+    localStorage.setItem(LANGUAGE_SETTING_KEY, 'de');
+
+    const { unmount } = render(
+      <I18nProvider>
+        <MemoryRouter>
+          <Login />
+        </MemoryRouter>
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Willkommen zurück' })).toBeInTheDocument();
+    expect(screen.getByText('Melde dich bei deinem CrowdSec-Dashboard an')).toBeInTheDocument();
+    expect(screen.getByLabelText('Benutzername')).toBeInTheDocument();
+    expect(screen.getByLabelText('Passwort')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Anmelden' })).toBeInTheDocument();
+
+    unmount();
+    await i18next.changeLanguage('en');
   });
 
   test('hides credentials while prompting for TOTP and submits the accepted credentials with the code', async () => {
