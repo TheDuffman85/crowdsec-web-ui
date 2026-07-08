@@ -279,7 +279,7 @@ Choose exactly one auth mode: password auth or mTLS auth.
 | `CROWDSEC_PROMETHEUS_URL` | none | Optional CrowdSec Prometheus metrics endpoint. When unset, the Metrics page shows setup instructions; when set, it reads bouncer, machine, AppSec, parser, LAPI latency, and whitelist runtime metrics from this URL. |
 | `CROWDSEC_PROMETHEUS_REQUEST_TIMEOUT` | `5s` | Timeout for individual Prometheus metrics requests. Accepts the same interval syntax as refresh settings. |
 | `CROWDSEC_HEARTBEAT_INTERVAL` | `30s` | Interval for updating the Web UI machine heartbeat in CrowdSec. Use `0` or `manual` to disable heartbeat updates. |
-| `CROWDSEC_ALERT_SYNC_CHUNK` | `6h` | Window size used when syncing historical alerts from LAPI. Smaller chunks reduce per-request payload size. |
+| `CROWDSEC_ALERT_SYNC_CHUNK` | `12h` | Window size used when syncing historical alerts from LAPI. Smaller chunks reduce per-request payload size. |
 | `CROWDSEC_ALERT_SYNC_MIN_CHUNK` | `15m` | Smallest window size used when retrying timed-out alert sync windows. |
 | `CROWDSEC_BOOTSTRAP_RETRY_DELAY` | `30s` | Delay between background retries when initial CrowdSec bootstrap fails. |
 | `CROWDSEC_BOOTSTRAP_RETRY_ENABLED` | `true` | Enables background bootstrap retry after startup or login failures. |
@@ -641,7 +641,7 @@ volumes:
 
 The Web UI maintains local alert and decision history. Data from CrowdSec LAPI is preserved across restarts, merged with new data on boot, and reconciled during successful full refreshes so alerts deleted outside the UI are removed locally too. Alerts are indexed by CrowdSec `start_at` when present, falling back to `created_at`, so replayed alerts are shown at the original alert/event time rather than the replay import time. Alerts are kept for `CROWDSEC_LOOKBACK_PERIOD` (default: 7 days), then cleaned up automatically.
 
-Active-decision refreshes first use one lookback-wide request to avoid excessive LAPI polling. If that times out, the request is retried in smaller windows down to `CROWDSEC_ALERT_SYNC_MIN_CHUNK`. If LAPI is unavailable during startup, bootstrap retries continue in the background using `CROWDSEC_BOOTSTRAP_RETRY_DELAY`; if only some sync windows fail, the UI serves the imported cache and marks sync partial while retries continue. To force a full cache reset, use `POST /api/cache/clear`.
+Active-decision refreshes use the same `CROWDSEC_ALERT_SYNC_CHUNK` windows as historical alert sync so large active-decision sets are processed incrementally. If a window times out, it is retried in smaller windows down to `CROWDSEC_ALERT_SYNC_MIN_CHUNK`. If LAPI is unavailable during startup, bootstrap retries continue in the background using `CROWDSEC_BOOTSTRAP_RETRY_DELAY`; if only some sync windows fail, the UI serves the imported cache and marks sync partial while retries continue. To force a full cache reset, use `POST /api/cache/clear`.
 
 ## Local Development
 
@@ -663,7 +663,7 @@ Active-decision refreshes first use one lookback-wide request to avoid excessive
    CROWDSEC_SIMULATIONS_ENABLED=true
    CROWDSEC_REFRESH_INTERVAL=30s
    CROWDSEC_LAPI_REQUEST_TIMEOUT=30s
-   CROWDSEC_ALERT_SYNC_CHUNK=6h
+   CROWDSEC_ALERT_SYNC_CHUNK=12h
    CROWDSEC_ALERT_SYNC_MIN_CHUNK=15m
    CROWDSEC_BOOTSTRAP_RETRY_DELAY=30s
    CROWDSEC_BOOTSTRAP_RETRY_ENABLED=true

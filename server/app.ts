@@ -135,7 +135,7 @@ interface WindowSyncSummary {
 }
 
 interface ActiveWindowSyncSummary {
-  alerts: AlertRecord[];
+  decisionCountsByAlertId: Map<string, number>;
   errors: string[];
   successfulWindows: number;
 }
@@ -1532,15 +1532,12 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
 
     const queries = configuredQueries.length === 0 ? [{ includeCapi: false }] : configuredQueries;
-    const resultSets = await Promise.all(queries.map((query) =>
-      lapiClient.fetchAlerts(since, until, hasActiveDecision, {
+    const merged = new Map<string, AlertRecord>();
+    for (const query of queries) {
+      const resultSet = await lapiClient.fetchAlerts(since, until, hasActiveDecision, {
         ...query,
         requireAllScopes: options.requireComplete,
-      }),
-    ));
-
-    const merged = new Map<string, AlertRecord>();
-    for (const resultSet of resultSets) {
+      });
       for (const alert of resultSet) {
         const typedAlert = alert as AlertRecord;
         if (!typedAlert?.id) continue;
@@ -1670,22 +1667,53 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     return pruned;
   }
 
-  function reconcileActiveDecisionAlerts(alerts: AlertRecord[], now: string): { alerts: number; decisions: number } {
+  function reconcileActiveDecisionIds(keepIds: Array<string | number>, now: string): { alerts: number; decisions: number } {
     let pruned = { alerts: 0, decisions: 0 };
-    const keepIds = alerts.map((alert) => alert.id);
     const since = new Date(Date.now() - config.lookbackMs).toISOString();
-    const reconcileTransaction = database.transaction<AlertRecord[]>((items) => {
-      for (const alert of items) {
-        processAlertForDatabase(alert);
-      }
-      pruned = database.deleteActiveAlertsMissing(keepIds, now, since);
+    const reconcileTransaction = database.transaction<Array<string | number>>((ids) => {
+      pruned = database.deleteActiveAlertsMissing(ids, now, since);
     });
 
-    reconcileTransaction(alerts);
+    reconcileTransaction(keepIds);
     if (pruned.alerts > 0 || pruned.decisions > 0) {
       dashboardStatsCache = null;
     }
     return pruned;
+  }
+
+  function persistAndIndexActiveDecisionAlerts(alerts: AlertRecord[]): Map<string, number> {
+    const decisionCountsByAlertId = new Map<string, number>();
+    const persistTransaction = database.transaction<AlertRecord[]>((items) => {
+      for (const alert of items) {
+        processAlertForDatabase(alert);
+        decisionCountsByAlertId.set(String(alert.id), Array.isArray(alert.decisions) ? alert.decisions.length : 0);
+      }
+    });
+
+    persistTransaction(alerts);
+    if (alerts.length > 0) {
+      dashboardStatsCache = null;
+    }
+    return decisionCountsByAlertId;
+  }
+
+  function mergeActiveDecisionCounts(
+    left: Map<string, number>,
+    right: Map<string, number>,
+  ): Map<string, number> {
+    const merged = new Map(left);
+    for (const [id, count] of right) {
+      merged.set(id, count);
+    }
+    return merged;
+  }
+
+  function countIndexedDecisions(decisionCountsByAlertId: Map<string, number>): number {
+    let total = 0;
+    for (const count of decisionCountsByAlertId.values()) {
+      total += count;
+    }
+    return total;
   }
 
   function persistSyncedAlerts(alerts: AlertRecord[]): void {
@@ -1723,7 +1751,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
   function combineActiveWindowSummaries(left: ActiveWindowSyncSummary, right: ActiveWindowSyncSummary): ActiveWindowSyncSummary {
     return {
-      alerts: mergeAlertRecords([...left.alerts, ...right.alerts]),
+      decisionCountsByAlertId: mergeActiveDecisionCounts(left.decisionCountsByAlertId, right.decisionCountsByAlertId),
       errors: [...left.errors, ...right.errors],
       successfulWindows: left.successfulWindows + right.successfulWindows,
     };
@@ -1795,8 +1823,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
     try {
       const alerts = await fetchAlertsForSync(sinceDuration, untilDuration, true, { requireComplete: true });
+      const activeAlerts = mergeAlertRecords(alerts);
+      const decisionCountsByAlertId = persistAndIndexActiveDecisionAlerts(activeAlerts);
       return {
-        alerts,
+        decisionCountsByAlertId,
         errors: [],
         successfulWindows: 1,
       };
@@ -1812,7 +1842,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       const errorMessage = `Active decisions ${windowLabel}: ${error.message}`;
       console.error('Failed to sync active decisions window:', error.message);
       return {
-        alerts: [],
+        decisionCountsByAlertId: new Map(),
         errors: [errorMessage],
         successfulWindows: 0,
       };
@@ -1820,7 +1850,19 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   }
 
   async function fetchActiveDecisionAlerts(lookbackStart: number, now: number): Promise<ActiveWindowSyncSummary> {
-    return fetchActiveDecisionWindow(lookbackStart, now, now);
+    let currentStart = lookbackStart;
+    let summary: ActiveWindowSyncSummary = {
+      decisionCountsByAlertId: new Map(),
+      errors: [],
+      successfulWindows: 0,
+    };
+    while (currentStart < now) {
+      const currentEnd = Math.min(currentStart + config.alertSyncChunkMs, now);
+      const windowSummary = await fetchActiveDecisionWindow(currentStart, currentEnd, now);
+      summary = combineActiveWindowSummaries(summary, windowSummary);
+      currentStart = currentEnd;
+    }
+    return summary;
   }
 
   async function syncHistory(): Promise<SyncHistorySummary> {
@@ -1895,22 +1937,19 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
     updateSyncStatus({ progress: 95, message: t('components.syncOverlay.statusActiveDecisions') });
     console.log('Syncing active decisions...');
-    const activeWindowSummary = await fetchActiveDecisionAlerts(lookbackStart, now);
-    const activeDecisionAlerts = mergeAlertRecords(activeWindowSummary.alerts);
-    const activeDecisionCount = countAlertDecisions(activeDecisionAlerts);
     const cachedAlertsBeforeActiveSync = database.countAlerts();
     const cachedDecisionsBeforeActiveSync = database.countDecisions();
-    activeDecisionAlertsCount = activeDecisionAlerts.length;
-    activeDecisionsCount = activeDecisionCount;
+    const activeWindowSummary = await fetchActiveDecisionAlerts(lookbackStart, now);
+    const activeDecisionCountsByAlertId = activeWindowSummary.decisionCountsByAlertId;
+    activeDecisionAlertsCount = activeDecisionCountsByAlertId.size;
+    activeDecisionsCount = countIndexedDecisions(activeDecisionCountsByAlertId);
     successfulWindows += activeWindowSummary.successfulWindows;
     activeErrors = activeWindowSummary.errors;
 
     if (activeErrors.length === 0) {
-      const pruned = reconcileActiveDecisionAlerts(activeDecisionAlerts, new Date().toISOString());
+      const pruned = reconcileActiveDecisionIds(Array.from(activeDecisionCountsByAlertId.keys()), new Date().toISOString());
       activePrunedAlerts = pruned.alerts;
       activePrunedDecisions = pruned.decisions;
-    } else if (activeDecisionAlerts.length > 0) {
-      persistSyncedAlerts(activeDecisionAlerts);
     }
     activeNetCachedAlerts = database.countAlerts() - cachedAlertsBeforeActiveSync;
     activeNetCachedDecisions = database.countDecisions() - cachedDecisionsBeforeActiveSync;
@@ -2044,13 +2083,8 @@ ${errorSummary}  Status: ${syncSummary.state}
       const deltaEnd = new Date(deltaStartedAt).toISOString();
       console.log(`Fetching delta updates (since: ${sinceDuration})...`);
       const activeLookbackStart = deltaStartedAt - config.lookbackMs;
-      const [newAlerts, activeWindowSummary] = await Promise.all([
-        fetchAlertsForSync(sinceDuration, null, false, { requireComplete: true }),
-        fetchActiveDecisionAlerts(activeLookbackStart, deltaStartedAt),
-      ]);
-      const activeDecisionAlerts = mergeAlertRecords(activeWindowSummary.alerts);
+      const newAlerts = await fetchAlertsForSync(sinceDuration, null, false, { requireComplete: true });
       const newDecisionCount = countAlertDecisions(newAlerts);
-      const activeDecisionCount = countAlertDecisions(activeDecisionAlerts);
 
       const deltaPruned = reconcileSyncedAlertWindow(newAlerts, deltaStart, deltaEnd);
       if (newAlerts.length > 0 || deltaPruned.alerts > 0 || deltaPruned.decisions > 0) {
@@ -2059,15 +2093,16 @@ ${errorSummary}  Status: ${syncSummary.state}
         );
       }
 
+      const activeWindowSummary = await fetchActiveDecisionAlerts(activeLookbackStart, deltaStartedAt);
+      const activeDecisionCountsByAlertId = activeWindowSummary.decisionCountsByAlertId;
+      const activeDecisionAlertsCount = activeDecisionCountsByAlertId.size;
+      const activeDecisionCount = countIndexedDecisions(activeDecisionCountsByAlertId);
       const activePruned = activeWindowSummary.errors.length === 0
-        ? reconcileActiveDecisionAlerts(activeDecisionAlerts, new Date().toISOString())
+        ? reconcileActiveDecisionIds(Array.from(activeDecisionCountsByAlertId.keys()), new Date().toISOString())
         : { alerts: 0, decisions: 0 };
-      if (activeWindowSummary.errors.length > 0 && activeDecisionAlerts.length > 0) {
-        persistSyncedAlerts(activeDecisionAlerts);
-      }
-      if (activeDecisionAlerts.length > 0 || activePruned.alerts > 0 || activePruned.decisions > 0) {
+      if (activeDecisionAlertsCount > 0 || activePruned.alerts > 0 || activePruned.decisions > 0) {
         console.log(
-          `Active decision refresh: ${activeDecisionAlerts.length} alerts and ${activeDecisionCount} decisions synced, ${activePruned.alerts} stale alerts and ${activePruned.decisions} stale decisions pruned`,
+          `Active decision refresh: ${activeDecisionAlertsCount} alerts and ${activeDecisionCount} decisions synced, ${activePruned.alerts} stale alerts and ${activePruned.decisions} stale decisions pruned`,
         );
       }
       if (activeWindowSummary.errors.length > 0) {
@@ -2076,7 +2111,7 @@ ${errorSummary}  Status: ${syncSummary.state}
 
       cache.lastUpdate = new Date().toISOString();
       lapiClient.updateStatus(true);
-      console.log(`Delta update complete: ${newAlerts.length} alerts and ${newDecisionCount} decisions synced, ${activeDecisionAlerts.length} active decision alerts and ${activeDecisionCount} decisions refreshed`);
+      console.log(`Delta update complete: ${newAlerts.length} alerts and ${newDecisionCount} decisions synced, ${activeDecisionAlertsCount} active decision alerts and ${activeDecisionCount} decisions refreshed`);
     } catch (error: any) {
       console.error('Failed to update cache delta:', error.message);
       lapiClient.updateStatus(false, error);
