@@ -213,7 +213,7 @@ describe('config helpers', () => {
     expect(config.prometheusUrl).toBeUndefined();
     expect(config.prometheusRequestTimeoutMs).toBe(5_000);
     expect(config.heartbeatIntervalMs).toBe(30_000);
-    expect(config.alertSyncChunkMs).toBe(21_600_000);
+    expect(config.alertSyncChunkMs).toBe(43_200_000);
     expect(config.alertSyncMinChunkMs).toBe(900_000);
     expect(config.readOnly).toBe(false);
     expect(config.dashboardAuth.enabled).toBeNull();

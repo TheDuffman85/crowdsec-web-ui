@@ -222,7 +222,7 @@ export function Login() {
           </form>
         )}
 
-        {(passkeysEnabled || oidcEnabled) && (
+        {!requiresTotp && (passkeysEnabled || oidcEnabled) && (
           <div className={`${passwordLoginDisabled ? '' : 'mt-4'} space-y-2`}>
             {passkeysEnabled && (
               <button

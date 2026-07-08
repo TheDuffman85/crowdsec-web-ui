@@ -353,20 +353,25 @@ export class LapiClient {
     const scopes: Array<'ip' | 'range' | undefined> = singleScopeOnly
       ? [undefined]
       : [undefined, 'ip', 'range'];
+    const merged = new Map<string, unknown>();
     let successfulScopes = 0;
     let lastError: Error | null = null;
-    const resultSets = await Promise.all(scopes.map(async (scope) => {
+    for (const scope of scopes) {
       const scopeLabel = scope || 'unscoped';
       try {
         const response = await this.fetchLapi<unknown[]>(`/v1/alerts?${buildParams(scope).toString()}`);
         successfulScopes += 1;
-        return Array.isArray(response.data) ? response.data : [];
+        const resultSet = Array.isArray(response.data) ? response.data : [];
+        for (const alert of resultSet) {
+          const id = typeof alert === 'object' && alert !== null && 'id' in alert ? String(alert.id) : null;
+          if (!id) continue;
+          merged.set(id, alert);
+        }
       } catch (error: any) {
         lastError = error instanceof Error ? error : new Error(String(error));
         console.error(`Failed to fetch ${scopeLabel} alerts: ${error.message}`);
-        return [];
       }
-    }));
+    }
 
     if (successfulScopes === 0) {
       throw lastError || new Error('Failed to fetch alerts');
@@ -374,15 +379,6 @@ export class LapiClient {
 
     if (filters.requireAllScopes && successfulScopes !== scopes.length) {
       throw lastError || new Error('Failed to fetch all alert scopes');
-    }
-
-    const merged = new Map<string, unknown>();
-    for (const resultSet of resultSets) {
-      for (const alert of resultSet) {
-        const id = typeof alert === 'object' && alert !== null && 'id' in alert ? String(alert.id) : null;
-        if (!id) continue;
-        merged.set(id, alert);
-      }
     }
 
     return Array.from(merged.values());

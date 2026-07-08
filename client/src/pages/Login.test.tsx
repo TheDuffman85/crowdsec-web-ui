@@ -165,6 +165,23 @@ describe('Login', () => {
   test('can reset from the TOTP prompt back to password login', async () => {
     const user = userEvent.setup();
     loginMock.mockRejectedValueOnce(Object.assign(new Error('Authenticator code required'), { requiresTotp: true }));
+    useAuthMock.mockReturnValue({
+      authEnabled: true,
+      setupRequired: false,
+      authenticated: false,
+      user: null,
+      authMethod: null,
+      oidcEnabled: true,
+      passwordLoginDisabled: false,
+      passkeysEnabled: true,
+      hasPassword: true,
+      totpEnabled: false,
+      loading: false,
+      refresh: refreshMock,
+      login: loginMock,
+      setup: vi.fn(),
+      logout: vi.fn(),
+    });
 
     render(
       <MemoryRouter>
@@ -172,15 +189,22 @@ describe('Login', () => {
       </MemoryRouter>,
     );
 
+    expect(screen.getByRole('button', { name: 'Sign In with Passkey' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Continue with SSO' })).toBeInTheDocument();
+
     await user.type(screen.getByLabelText('Username'), 'admin');
     await user.type(screen.getByLabelText('Password'), 'Secret123');
     await user.click(screen.getByRole('button', { name: 'Sign In' }));
     await screen.findByLabelText('Authenticator code');
+    expect(screen.queryByRole('button', { name: 'Sign In with Passkey' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Continue with SSO' })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Change' }));
 
     expect(screen.getByLabelText('Username')).toHaveValue('admin');
     expect(screen.getByLabelText('Password')).toHaveValue('');
     expect(screen.queryByLabelText('Authenticator code')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sign In with Passkey' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Continue with SSO' })).toBeInTheDocument();
   });
 });
