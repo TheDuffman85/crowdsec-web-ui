@@ -1,23 +1,8 @@
 import { serve } from '@hono/node-server';
 import { createApp } from './app';
+import { installTimestampedConsole } from './logging';
 
-const originalLog = console.log.bind(console);
-const originalInfo = console.info.bind(console);
-const originalWarn = console.warn.bind(console);
-const originalError = console.error.bind(console);
-const originalDebug = console.debug.bind(console);
-
-function withTimestamp(writer: (...args: unknown[]) => void) {
-  return (...args: unknown[]) => {
-    writer(`[${new Date().toISOString()}]`, ...args);
-  };
-}
-
-console.log = withTimestamp(originalLog);
-console.info = withTimestamp(originalInfo);
-console.warn = withTimestamp(originalWarn);
-console.error = withTimestamp(originalError);
-console.debug = withTimestamp(originalDebug);
+installTimestampedConsole();
 
 const controller = createApp({ startBackgroundTasks: true });
 const server = serve({

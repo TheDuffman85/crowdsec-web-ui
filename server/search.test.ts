@@ -119,6 +119,26 @@ describe('shared search compiler', () => {
     expect(compiled.predicate({ ...baseAlert, simulated: true })).toBe(false);
   });
 
+  test('supports simulation inequality without broadening invalid values', () => {
+    const liveAlerts = compileAlertSearch('sim<>simulated');
+    expect(liveAlerts.ok).toBe(true);
+    if (!liveAlerts.ok) {
+      return;
+    }
+
+    expect(liveAlerts.predicate(baseAlert)).toBe(true);
+    expect(liveAlerts.predicate({ ...baseAlert, simulated: true })).toBe(false);
+
+    const invalidSimulation = compileAlertSearch('sim<>simulatd');
+    expect(invalidSimulation.ok).toBe(true);
+    if (!invalidSimulation.ok) {
+      return;
+    }
+
+    expect(invalidSimulation.predicate(baseAlert)).toBe(false);
+    expect(invalidSimulation.predicate({ ...baseAlert, simulated: true })).toBe(false);
+  });
+
   test('supports date comparison operators for alerts', () => {
     const compiled = compileAlertSearch('date>=2026-03-24 AND date<2026-03-25');
     expect(compiled.ok).toBe(true);

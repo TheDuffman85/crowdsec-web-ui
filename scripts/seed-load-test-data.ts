@@ -2,6 +2,7 @@ import { rmSync } from 'node:fs';
 import path from 'node:path';
 import { parseLookbackToMs } from '../server/config';
 import { CrowdsecDatabase } from '../server/database';
+import { installTimestampedConsole } from '../server/logging';
 
 const DEFAULT_ALERTS = 300_000;
 const DEFAULT_DECISIONS = 300_000;
@@ -339,6 +340,7 @@ function hasActiveSourceDecision(record: ReturnType<typeof buildAlertRecord>, no
   return (record.decisions || []).some((decision) => Date.parse(decision.stop_at) > nowMs) ? 1 : 0;
 }
 
+installTimestampedConsole();
 const config = readConfig();
 const dbPath = path.join(config.dbDir, 'crowdsec.db');
 const nowMs = Date.now();

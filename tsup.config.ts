@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['server/index.ts'],
+  entry: ['server/index.ts', 'server/query-worker.ts', 'server/sync-worker.ts'],
   outDir: 'dist/server',
   format: ['esm'],
   platform: 'node',

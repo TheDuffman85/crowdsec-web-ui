@@ -121,6 +121,47 @@ describe('CrowdsecDatabase', () => {
     db.close();
   });
 
+  test('treats unchanged sync upserts as no-ops', () => {
+    const db = createTestDatabase();
+    const alert = {
+      $id: 1,
+      $uuid: 'alert-1',
+      $created_at: '2025-01-01T00:00:00.000Z',
+      $scenario: 'crowdsecurity/ssh-bf',
+      $source_ip: '1.2.3.4',
+      $message: 'alert',
+      $raw_data: JSON.stringify({ id: 1, message: 'alert' }),
+    };
+    const decision = {
+      $id: '10',
+      $uuid: '10',
+      $alert_id: 1,
+      $created_at: '2025-01-01T00:00:00.000Z',
+      $stop_at: '2030-01-01T00:00:00.000Z',
+      $value: '1.2.3.4',
+      $type: 'ban',
+      $origin: 'manual',
+      $scenario: 'crowdsecurity/ssh-bf',
+      $raw_data: JSON.stringify({ id: 10, value: '1.2.3.4', stop_at: '2030-01-01T00:00:00.000Z' }),
+    };
+
+    expect(db.insertAlert(alert)).toBe(true);
+    expect(db.insertDecision(decision)).toBe(true);
+    db.db.prepare('UPDATE decisions SET is_duplicate = 1 WHERE id = ?').run('10');
+
+    expect(db.insertAlert(alert)).toBe(false);
+    expect(db.insertDecision(decision)).toBe(false);
+    expect((db.db.prepare('SELECT is_duplicate FROM decisions WHERE id = ?').get('10') as { is_duplicate: number }).is_duplicate).toBe(1);
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts').get() as { count: number }).count).toBe(1);
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM decisions_fts').get() as { count: number }).count).toBe(1);
+
+    expect(db.insertAlert({ ...alert, $message: 'updated', $raw_data: JSON.stringify({ id: 1, message: 'updated' }) })).toBe(true);
+    expect(db.insertDecision({ ...decision, $stop_at: '2031-01-01T00:00:00.000Z' })).toBe(true);
+    expect((db.db.prepare('SELECT is_duplicate FROM decisions WHERE id = ?').get('10') as { is_duplicate: number }).is_duplicate).toBe(0);
+
+    db.close();
+  });
+
   test('fresh databases default dashboard auth on', () => {
     const db = createTestDatabase();
 

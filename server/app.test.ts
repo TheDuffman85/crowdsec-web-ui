@@ -9,7 +9,7 @@ import { resolveMachineName } from '../shared/machine';
 import { createRuntimeConfig } from './config';
 import { CrowdsecDatabase } from './database';
 import { LapiClient, type LapiRequestInit } from './lapi';
-import { createApp } from './app';
+import { createApp, type CreateAppOptions } from './app';
 import { resolveOidcRole } from './app-auth';
 import { resolveAlertHistoryAt } from './utils/alerts';
 import { parseGoDuration } from './utils/duration';
@@ -376,6 +376,7 @@ function createController(options: {
   notificationFetchResolver?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
   metricsFetchResolver?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
   mqttPublishResolver?: (config: MqttPublishConfig, payload: string) => void | Promise<void>;
+  syncWorker?: CreateAppOptions['syncWorker'];
 } = {}) {
   const authMode = options.authMode || 'password';
   const mtlsCertPath = path.join(tempDir, 'agent.pem');
@@ -495,6 +496,7 @@ function createController(options: {
     mqttPublishImpl: async (config, payload) => {
       await options.mqttPublishResolver?.(config, payload);
     },
+    syncWorker: options.syncWorker,
   });
 
   return { controller, database, lapiClient, fetchCalls };
@@ -1505,6 +1507,39 @@ describe('createApp', () => {
     destroyTempDir();
   });
 
+  test('serves finalized dashboard stats immediately after initial sync', async () => {
+    const alert = sampleAlert({
+      id: 301,
+      uuid: 'dashboard-alert-301',
+      created_at: new Date().toISOString(),
+      source: { ip: '1.2.3.4', value: '1.2.3.4', cn: 'DE', as_name: 'Hetzner' },
+      target: 'ssh',
+    });
+    const { controller, database, lapiClient } = createController({
+      fetchResolver: (url) => url.includes('/v1/alerts?') ? Response.json([alert]) : undefined,
+    });
+
+    seedAlert(database, alert);
+    await lapiClient.login();
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=10'));
+    expect(alertsResponse.status).toBe(200);
+
+    const dashboardResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats?granularity=day'));
+    expect(dashboardResponse.status).toBe(200);
+    expect((await dashboardResponse.json()) as {
+      totals: { alerts: number; decisions: number };
+      topCountries: Array<{ countryCode?: string; count: number }>;
+    }).toEqual(expect.objectContaining({
+      totals: expect.objectContaining({ alerts: 1, decisions: 1 }),
+      topCountries: [expect.objectContaining({ countryCode: 'DE', count: 1 })],
+    }));
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
   test('dashboard scenario filters only include exact scenario matches', async () => {
     const envAccessAlert = sampleAlert({
       id: 201,
@@ -1899,6 +1934,24 @@ describe('createApp', () => {
       expect.objectContaining({
         data: [expect.objectContaining({ id: 1 })],
         pagination: expect.objectContaining({ total: 1 }),
+      }),
+    );
+
+    const liveAlertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=10&q=sim<>simulated'));
+    expect(liveAlertsResponse.status).toBe(200);
+    expect((await liveAlertsResponse.json()) as { data: Array<{ id: number }>; pagination: { total: number } }).toEqual(
+      expect.objectContaining({
+        data: [expect.objectContaining({ id: 1 })],
+        pagination: expect.objectContaining({ total: 1 }),
+      }),
+    );
+
+    const typoAlertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=10&q=sim<>simulatd'));
+    expect(typoAlertsResponse.status).toBe(200);
+    expect((await typoAlertsResponse.json()) as { data: Array<{ id: number }>; pagination: { total: number } }).toEqual(
+      expect.objectContaining({
+        data: [],
+        pagination: expect.objectContaining({ total: 0 }),
       }),
     );
 
@@ -2365,6 +2418,46 @@ describe('createApp', () => {
       call.url.includes('/v1/alerts?') && call.url.includes('has_active_decision=true'),
     );
     expect(activeRequests.length).toBeGreaterThan(3);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('keeps the initial sync visible until indexes and dashboard data are finalized', async () => {
+    let releaseIndexRebuild = () => {};
+    const indexRebuild = new Promise<void>((resolve) => {
+      releaseIndexRebuild = resolve;
+    });
+    const syncWorker: NonNullable<CreateAppOptions['syncWorker']> = {
+      persistAlerts: vi.fn(async () => ({ changed: false })),
+      deleteAlertsMissingBetween: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      deleteCachedAlerts: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      deleteCachedDecisions: vi.fn(async () => 0),
+      beginDeferredSearchIndexUpdates: vi.fn(async () => {}),
+      rebuildSearchIndexes: vi.fn(() => indexRebuild),
+      refreshDecisionDuplicateFlags: vi.fn(async () => {}),
+      cleanupOldData: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      clearSyncData: vi.fn(async () => {}),
+      close: vi.fn(),
+    };
+    const { controller, database } = createController({ syncWorker });
+
+    const alertsRequest = controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    await vi.waitFor(() => expect(syncWorker.rebuildSearchIndexes).toHaveBeenCalled());
+    expect(controller.getSyncStatus()).toEqual(expect.objectContaining({
+      isSyncing: true,
+      progress: 100,
+      completedAt: null,
+    }));
+
+    releaseIndexRebuild();
+    expect((await alertsRequest).status).toBe(200);
+    expect(controller.getSyncStatus()).toEqual(expect.objectContaining({
+      isSyncing: false,
+      progress: 100,
+      completedAt: expect.any(String),
+    }));
 
     controller.stopBackgroundTasks();
     database.close();
@@ -3633,10 +3726,7 @@ describe('createApp', () => {
     expect(addDecision.status).toBe(200);
     expect(notificationFinished).toBe(false);
 
-    for (let index = 0; index < 10 && !notificationStarted; index += 1) {
-      await Promise.resolve();
-    }
-    expect(notificationStarted).toBe(true);
+    await vi.waitFor(() => expect(notificationStarted).toBe(true));
 
     releaseNotification();
     for (let index = 0; index < 10 && !notificationFinished; index += 1) {

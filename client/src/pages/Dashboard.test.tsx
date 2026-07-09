@@ -619,6 +619,42 @@ describe('Dashboard page', () => {
     await waitFor(() => expect(screen.getByText('Total Alerts')).toBeInTheDocument());
   });
 
+  test('retries pending dashboard statistics without remounting the page', async () => {
+    fetchDashboardStatsMock
+      .mockResolvedValueOnce({
+        ...buildDashboardStatsResponse(),
+        pending: true,
+        retryAfterMs: 1,
+        totals: {
+          alerts: 0,
+          decisions: 0,
+          simulatedAlerts: 0,
+          simulatedDecisions: 0,
+        },
+        filteredTotals: {
+          alerts: 0,
+          decisions: 0,
+          simulatedAlerts: 0,
+          simulatedDecisions: 0,
+        },
+        topCountries: [],
+        topScenarios: [],
+        topAS: [],
+        topTargets: [],
+      })
+      .mockResolvedValueOnce(buildDashboardStatsResponse());
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledTimes(2));
+    const alertsCard = await screen.findByText('Total Alerts');
+    expect(within(alertsCard.closest('a') as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('2');
+  });
+
   test('does not trigger a duplicate dashboard load when filters change after a refresh signal', async () => {
     refreshSignalMock = 1;
     const completedLiveLoads: Array<Record<string, string> | undefined> = [];

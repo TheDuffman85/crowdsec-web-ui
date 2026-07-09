@@ -1,15 +1,27 @@
 import { serve } from '@hono/node-server';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
 import path from 'node:path';
 import type { AlertDecision, AlertRecord } from '../shared/contracts';
 import { createApp } from '../server/app';
 import { createRuntimeConfig } from '../server/config';
 import { CrowdsecDatabase } from '../server/database';
+import { installTimestampedConsole } from '../server/logging';
 import { parseGoDuration } from '../server/utils/duration';
 
 const LOADTEST_SOURCE_TABLE = 'loadtest_alert_source';
+installTimestampedConsole();
 const dbDir = process.env.LOADTEST_DB_DIR || process.env.DB_DIR || path.join(process.env.TMPDIR || '/tmp', 'crowdsec-web-ui-load-test');
 const port = Number(process.env.LOADTEST_BACKEND_PORT || process.env.PORT || 3000);
 const database = new CrowdsecDatabase({ dbDir });
+const eventLoopDelay = monitorEventLoopDelay({ resolution: 10 });
+eventLoopDelay.enable();
+const eventLoopDelayReporter = setInterval(() => {
+  const maxDelayMs = eventLoopDelay.max / 1_000_000;
+  if (maxDelayMs >= 100) {
+    console.warn(`[loadtest event-loop] blocked for up to ${maxDelayMs.toFixed(0)}ms during the last second`);
+  }
+  eventLoopDelay.reset();
+}, 1_000);
 const initialAlertCount = parseIntegerEnv('LOADTEST_ALERTS', 300_000);
 const initialDecisionCount = parseIntegerEnv('LOADTEST_DECISIONS', 300_000);
 const refreshAlertCount = parseIntegerEnv('LOADTEST_REFRESH_ALERTS', 100);
@@ -628,6 +640,8 @@ function shutdown() {
   if (shutdownInProgress) return;
   shutdownInProgress = true;
   process.exitCode = 0;
+  clearInterval(eventLoopDelayReporter);
+  eventLoopDelay.disable();
   controller.stopBackgroundTasks();
   server.close(() => {
     database.close();

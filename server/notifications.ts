@@ -37,12 +37,14 @@ import type { UpdateChecker } from './update-check';
 import { getServerTranslator, type Translator } from './i18n';
 import type { TimeFormat } from './config';
 import { formatDateTime } from './utils/date-time';
+import type { DatabaseQueryWorker } from './query-worker-client';
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 type RuleConfigInput = NotificationRuleConfig | Record<string, AlertMetaValue>;
 
 export interface NotificationServiceOptions {
   database: CrowdsecDatabase;
+  queryWorker?: Pick<DatabaseQueryWorker, 'all' | 'get'>;
   fetchImpl?: FetchLike;
   mqttPublishImpl?: (config: MqttPublishConfig, payload: string) => Promise<void>;
   updateChecker?: UpdateChecker;
@@ -103,6 +105,10 @@ export interface NotificationService {
 
 export function createNotificationService(options: NotificationServiceOptions): NotificationService {
   const database = options.database;
+  const queryWorker = options.queryWorker || {
+    all: async <T>(sql: string, params: unknown[] = []) => database.db.prepare(sql).all(...params) as T[],
+    get: async <T>(sql: string, params: unknown[] = []) => database.db.prepare(sql).get(...params) as T,
+  };
   const fetchImpl = options.fetchImpl || fetch;
   const mqttPublishImpl = options.mqttPublishImpl;
   const updateChecker = options.updateChecker;
@@ -571,14 +577,14 @@ export function createNotificationService(options: NotificationServiceOptions): 
     const windowMs = config.window_minutes * 60_000;
     const currentStart = now.getTime() - windowMs;
     const previousStart = currentStart - windowMs;
-    const currentAlerts = getAlertsBetween(new Date(currentStart), now, config.filters);
-    const previousAlerts = getAlertsBetween(new Date(previousStart), new Date(currentStart), config.filters);
-    const baseline = Math.max(previousAlerts.length, 1);
-    const increasePercent = ((currentAlerts.length - previousAlerts.length) / baseline) * 100;
+    const currentAlertCount = await countAlertsBetween(new Date(currentStart), now, config.filters);
+    const previousAlertCount = await countAlertsBetween(new Date(previousStart), new Date(currentStart), config.filters);
+    const baseline = Math.max(previousAlertCount, 1);
+    const increasePercent = ((currentAlertCount - previousAlertCount) / baseline) * 100;
 
     if (
-      currentAlerts.length < config.minimum_current_alerts ||
-      currentAlerts.length <= previousAlerts.length ||
+      currentAlertCount < config.minimum_current_alerts ||
+      currentAlertCount <= previousAlertCount ||
       increasePercent < config.percent_increase
     ) {
       return [];
@@ -588,14 +594,14 @@ export function createNotificationService(options: NotificationServiceOptions): 
       dedupeKey: 'spike:active',
       title: t('server.notifications.alertSpike.title', { ruleName: rule.name }),
       message: t('server.notifications.alertSpike.message', {
-        count: currentAlerts.length,
+        count: currentAlertCount,
         minutes: config.window_minutes,
         percent: Math.round(increasePercent),
-        previousCount: previousAlerts.length,
+        previousCount: previousAlertCount,
       }),
       metadata: {
-        current_count: currentAlerts.length,
-        previous_count: previousAlerts.length,
+        current_count: currentAlertCount,
+        previous_count: previousAlertCount,
         increase_percent: Math.round(increasePercent),
         window_minutes: config.window_minutes,
         filters: toMetaRecord(config.filters),
@@ -606,9 +612,9 @@ export function createNotificationService(options: NotificationServiceOptions): 
   async function evaluateAlertThresholdRule(rule: NotificationRule, now: Date, t: Translator): Promise<NotificationCandidate[]> {
     const config = normalizeRuleConfig('alert-threshold', rule.config);
     const windowMs = config.window_minutes * 60_000;
-    const alerts = getAlertsBetween(new Date(now.getTime() - windowMs), now, config.filters);
+    const alertCount = await countAlertsBetween(new Date(now.getTime() - windowMs), now, config.filters);
 
-    if (alerts.length < config.alert_threshold) {
+    if (alertCount < config.alert_threshold) {
       return [];
     }
 
@@ -616,12 +622,12 @@ export function createNotificationService(options: NotificationServiceOptions): 
       dedupeKey: 'threshold:active',
       title: t('server.notifications.alertThreshold.title', { ruleName: rule.name }),
       message: t('server.notifications.alertThreshold.message', {
-        count: alerts.length,
+        count: alertCount,
         minutes: config.window_minutes,
         threshold: config.alert_threshold,
       }),
       metadata: {
-        matched_alerts: alerts.length,
+        matched_alerts: alertCount,
         threshold: config.alert_threshold,
         window_minutes: config.window_minutes,
         filters: toMetaRecord(config.filters),
@@ -635,7 +641,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
     const candidates: NotificationCandidate[] = [];
 
     if (config.event_type === 'alert' || config.event_type === 'both') {
-      for (const alert of getAlertsBetween(windowStart, now, config.filters)) {
+      for (const alert of await getAlertsBetween(windowStart, now, config.filters)) {
         const alertId = String(alert.id);
         const source = getAlertSourceValue(alert);
         const scenario = String(alert.scenario || alert.reason || '—');
@@ -674,12 +680,8 @@ export function createNotificationService(options: NotificationServiceOptions): 
     }
 
     if (config.event_type === 'decision' || config.event_type === 'both') {
-      for (const row of database.getAllDecisions()) {
-        const decision = parseDecisionRow(row.raw_data);
-        if (!decision || !matchesDecisionFilters(decision, config.filters)) continue;
+      for (const decision of await getDecisionsBetween(windowStart, now, config.filters)) {
         const createdAt = String(decision.created_at || '');
-        const createdAtMs = Date.parse(createdAt);
-        if (!Number.isFinite(createdAtMs) || createdAtMs < windowStart.getTime() || createdAtMs > now.getTime()) continue;
 
         const decisionId = String(decision.id);
         const value = String(decision.value || '—');
@@ -724,7 +726,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
 
   async function evaluateNewCveRule(rule: NotificationRule, now: Date, t: Translator): Promise<NotificationCandidate[]> {
     const config = normalizeRuleConfig('new-cve', rule.config);
-    const alerts = getAlertsBetween(new Date(now.getTime() - 7 * 86_400_000), now, config.filters);
+    const alerts = await getAlertsBetween(new Date(now.getTime() - 7 * 86_400_000), now, config.filters);
     const matches = new Map<string, AlertRecord[]>();
 
     for (const alert of alerts) {
@@ -770,17 +772,9 @@ export function createNotificationService(options: NotificationServiceOptions): 
 
   async function evaluateIpBanRule(rule: NotificationRule, now: Date, t: Translator): Promise<NotificationCandidate[]> {
     const config = normalizeRuleConfig('ip-ban', rule.config);
-    const windowStart = now.getTime() - config.window_minutes * 60_000;
-    return database
-      .getActiveDecisions(now.toISOString())
-      .map((row) => parseDecisionRow(row.raw_data))
-      .filter((decision): decision is AlertDecision & Record<string, unknown> => decision !== null)
-      .filter((decision) => {
-        const createdAt = Date.parse(String(decision.created_at || ''));
-        return Number.isFinite(createdAt) && createdAt >= windowStart && createdAt <= now.getTime();
-      })
+    const windowStart = new Date(now.getTime() - config.window_minutes * 60_000);
+    return (await getDecisionsBetween(windowStart, now, config.filters, { activeAt: now }))
       .filter((decision) => normalizeDecisionType(decision) === 'ban')
-      .filter((decision) => matchesDecisionFilters(decision, config.filters))
       .map((decision) => {
         const decisionId = String(decision.id);
         const value = String(decision.value || 'unknown');
@@ -902,11 +896,100 @@ export function createNotificationService(options: NotificationServiceOptions): 
     return candidates;
   }
 
-  function getAlertsBetween(start: Date, end: Date, filters?: NotificationFilter): AlertRecord[] {
-    return database
-      .getAlertsBetween(start.toISOString(), end.toISOString())
-      .map((row) => JSON.parse(row.raw_data) as AlertRecord)
-      .filter((alert) => matchesAlertFilters(alert, filters));
+  async function countAlertsBetween(start: Date, end: Date, filters?: NotificationFilter): Promise<number> {
+    const condition = buildNotificationDataCondition('alerts', start, end, filters);
+    const row = await queryWorker.get<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM alerts WHERE ${condition.sql}`,
+      condition.params,
+    );
+    return Number(row?.count || 0);
+  }
+
+  async function getAlertsBetween(start: Date, end: Date, filters?: NotificationFilter): Promise<AlertRecord[]> {
+    const condition = buildNotificationDataCondition('alerts', start, end, filters);
+    const alerts: AlertRecord[] = [];
+    let lastId = 0;
+    while (true) {
+      const rows = await queryWorker.all<{ id: number; raw_data: string }>(`
+        SELECT id, raw_data
+        FROM alerts
+        WHERE ${condition.sql} AND id > ?
+        ORDER BY id ASC
+        LIMIT 1000
+      `, [...condition.params, lastId]);
+      if (rows.length === 0) break;
+      for (const row of rows) {
+        try {
+          const alert = JSON.parse(row.raw_data) as AlertRecord;
+          if (matchesAlertFilters(alert, filters)) alerts.push(alert);
+        } catch {
+          // Ignore malformed cached rows; the next sync can replace them.
+        }
+      }
+      lastId = rows[rows.length - 1].id;
+    }
+    return alerts;
+  }
+
+  async function getDecisionsBetween(
+    start: Date,
+    end: Date,
+    filters?: NotificationFilter,
+    options: { activeAt?: Date } = {},
+  ): Promise<Array<AlertDecision & Record<string, unknown>>> {
+    const condition = buildNotificationDataCondition('decisions', start, end, filters, options.activeAt);
+    const decisions: Array<AlertDecision & Record<string, unknown>> = [];
+    let lastRowId = 0;
+    while (true) {
+      const rows = await queryWorker.all<{ rowid: number; raw_data: string }>(`
+        SELECT rowid, raw_data
+        FROM decisions
+        WHERE ${condition.sql} AND rowid > ?
+        ORDER BY rowid ASC
+        LIMIT 1000
+      `, [...condition.params, lastRowId]);
+      if (rows.length === 0) break;
+      for (const row of rows) {
+        const decision = parseDecisionRow(row.raw_data);
+        if (decision && matchesDecisionFilters(decision, filters)) decisions.push(decision);
+      }
+      lastRowId = rows[rows.length - 1].rowid;
+    }
+    return decisions;
+  }
+
+  function buildNotificationDataCondition(
+    table: 'alerts' | 'decisions',
+    start: Date,
+    end: Date,
+    filters?: NotificationFilter,
+    activeAt?: Date,
+  ): { sql: string; params: unknown[] } {
+    const clauses = ['created_at >= ?', 'created_at < ?'];
+    const params: unknown[] = [start.toISOString(), end.toISOString()];
+    if (filters?.include_simulated !== true) clauses.push('simulated = 0');
+    if (filters?.scenario) {
+      clauses.push("LOWER(scenario) LIKE ? ESCAPE '\\'");
+      params.push(`%${escapeSqlLike(filters.scenario.toLowerCase())}%`);
+    }
+    if (filters?.target) {
+      clauses.push("LOWER(target) LIKE ? ESCAPE '\\'");
+      params.push(`%${escapeSqlLike(filters.target.toLowerCase())}%`);
+    }
+    if (filters?.values && filters.values.length > 0) {
+      const valueColumn = table === 'alerts' ? 'source_ip' : 'value';
+      clauses.push(`(${filters.values.map(() => `matches_ip_search_value(${valueColumn}, ?) = 1`).join(' OR ')})`);
+      params.push(...filters.values);
+    }
+    if (table === 'decisions' && activeAt) {
+      clauses.push('stop_at > ?');
+      params.push(activeAt.toISOString());
+    }
+    return { sql: clauses.join(' AND '), params };
+  }
+
+  function escapeSqlLike(value: string): string {
+    return value.replace(/[\\%_]/g, (character) => `\\${character}`);
   }
 
   function parseDecisionRow(rawData: string): (AlertDecision & Record<string, unknown>) | null {

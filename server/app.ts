@@ -50,6 +50,8 @@ import { getServerTranslator, normalizeLanguagePreference, saveLanguagePreferenc
 import { getAlertSourceValue, getAlertTarget, resolveAlertHistoryAt, resolveAlertReason, resolveAlertScenario, toSlimAlert } from './utils/alerts';
 import { parseGoDuration, toDuration } from './utils/duration';
 import { fetchCrowdsecMetrics } from './metrics';
+import { DatabaseQueryWorker, QueryWorkerTimeoutError } from './query-worker-client';
+import { DatabaseSyncWorker, type SyncAlertMutation } from './sync-worker-client';
 
 type HonoContext = any;
 type HonoNext = any;
@@ -74,6 +76,20 @@ export interface CreateAppOptions {
   mqttPublishImpl?: (config: MqttPublishConfig, payload: string) => Promise<void>;
   initialCacheState?: Partial<CacheState>;
   rootRedirectPath?: string;
+  queryWorker?: DatabaseQueryWorker;
+  syncWorker?: Pick<
+    DatabaseSyncWorker,
+    | 'persistAlerts'
+    | 'deleteAlertsMissingBetween'
+    | 'deleteCachedAlerts'
+    | 'deleteCachedDecisions'
+    | 'beginDeferredSearchIndexUpdates'
+    | 'rebuildSearchIndexes'
+    | 'refreshDecisionDuplicateFlags'
+    | 'cleanupOldData'
+    | 'clearSyncData'
+    | 'close'
+  >;
 }
 
 export interface AppController {
@@ -127,6 +143,7 @@ interface SyncHistorySummary {
   state: 'complete' | 'partial' | 'failed';
   cachedAlerts: number;
   cachedDecisions: number;
+  changed: boolean;
 }
 
 interface WindowSyncSummary {
@@ -134,12 +151,14 @@ interface WindowSyncSummary {
   decisions: number;
   errors: string[];
   successfulWindows: number;
+  changed: boolean;
 }
 
 interface ActiveWindowSyncSummary {
   decisionCountsByAlertId: Map<string, number>;
   errors: string[];
   successfulWindows: number;
+  changed: boolean;
 }
 
 interface CachedDecisionRecord {
@@ -259,7 +278,13 @@ interface DashboardDecisionAccumulator {
   activeSimulatedDecisionBuckets: Map<string, number>;
 }
 const NOTIFICATION_SECRET_KEY_META_KEY = 'notification_secret_key';
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const DASHBOARD_LOOP_YIELD_INTERVAL = 5_000;
+const DASHBOARD_INDEX_BATCH_SIZE = 5_000;
+const DASHBOARD_COLD_BUILD_ROW_LIMIT = 100_000;
+// Writes run in the maintenance worker; this size balances worker-message overhead
+// against short WAL write transactions that let read workers keep snapshots moving.
+const SYNC_WRITE_BATCH_SIZE = 1_000;
 const LEGACY_UNFILTERED_ALERT_ORIGIN_TOKENS = new Set(['none']);
 const CAPI_ALERT_ORIGIN = 'CAPI';
 const LISTS_ALERT_ORIGIN = 'lists';
@@ -338,8 +363,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   const notificationOutboundGuard = createNotificationOutboundGuard({
     allowPrivateAddresses: config.notificationAllowPrivateAddresses,
   });
+  const queryWorker = options.queryWorker || new DatabaseQueryWorker({ dbPath: database.dbPath });
+  const syncWorker = options.syncWorker || new DatabaseSyncWorker({ dbPath: database.dbPath });
   const notificationService = createNotificationService({
     database,
+    queryWorker,
     fetchImpl: options.notificationFetchImpl,
     mqttPublishImpl: options.mqttPublishImpl,
     updateChecker: checkForUpdates,
@@ -389,6 +417,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   let dashboardStatsCache: DashboardStatsCache | null = null;
   let dashboardStatsCacheVersion = 0;
   const dashboardStatsResponseCache = new Map<string, DashboardStatsResponse>();
+  const staleDashboardStatsResponseCache = new Map<string, DashboardStatsResponse>();
+  const dashboardStatsIndexPromises = new Map<string, Promise<DashboardStatsCache>>();
+  const dashboardStatsResponsePromises = new Map<string, Promise<DashboardStatsResponse>>();
 
   const persistedConfig = loadPersistedConfig(database);
   let refreshIntervalMs = persistedConfig.refresh_interval_ms ?? config.refreshIntervalMs;
@@ -404,6 +435,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   let heartbeatFailureLogged = false;
   let bootstrapRetryTimeout: ReturnType<typeof setTimeout> | null = null;
   let bootstrapPromise: Promise<boolean> | null = null;
+  let bootstrapSource: string | null = null;
   let bootstrapWaitLogged = false;
 
   console.log(`Cache Configuration:
@@ -472,9 +504,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         await updateCache();
       }
 
-      if (!cache.isInitialized) {
-        await ensureBootstrapReady('alerts request');
-      }
+      await prepareReadCache('alerts request');
 
       const pageRequest = getPageRequest(context);
       if (pageRequest) {
@@ -489,7 +519,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         if (!compiledSearch.ok) {
           return context.json(toSearchErrorResponse(compiledSearch.error), 400);
         }
-        return context.json(queryPaginatedAlerts(pageRequest, filters, compiledSearch.ast));
+        return context.json(await queryPaginatedAlerts(pageRequest, filters, compiledSearch.ast));
       }
 
       const since = new Date(Date.now() - config.lookbackMs).toISOString();
@@ -501,6 +531,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
       return context.json(alerts);
     } catch (error: any) {
+      if (error instanceof QueryWorkerTimeoutError) {
+        console.warn('Timed out serving alerts from database:', error.message);
+        return context.json({ error: 'Alert query timed out' }, 504);
+      }
       console.error('Error serving alerts from database:', error.message);
       return context.json({ error: 'Failed to retrieve alerts' }, 500);
     }
@@ -591,9 +625,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         await updateCache();
       }
 
-      if (!cache.isInitialized) {
-        await ensureBootstrapReady('decisions request');
-      }
+      await prepareReadCache('decisions request');
 
       const pageRequest = getPageRequest(context);
       const includeExpired = context.req.query('include_expired') === 'true';
@@ -609,7 +641,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         if (!compiledSearch.ok) {
           return context.json(toSearchErrorResponse(compiledSearch.error), 400);
         }
-        return context.json(queryPaginatedDecisions(pageRequest, filters, compiledSearch.ast, includeExpired));
+        return context.json(await queryPaginatedDecisions(pageRequest, filters, compiledSearch.ast, includeExpired));
       }
 
       const now = new Date().toISOString();
@@ -633,6 +665,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
       return context.json(decisions);
     } catch (error: any) {
+      if (error instanceof QueryWorkerTimeoutError) {
+        console.warn('Timed out serving decisions from database:', error.message);
+        return context.json({ error: 'Decision query timed out' }, 504);
+      }
       console.error('Error serving decisions from database:', error.message);
       return context.json({ error: 'Failed to retrieve decisions' }, 500);
     }
@@ -930,9 +966,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
     try {
       console.log('Manual cache clear requested');
-      database.clearSyncData();
+      await syncWorker.clearSyncData();
       cache.isInitialized = false;
       cache.lastUpdate = null;
+      staleDashboardStatsResponseCache.clear();
       invalidateDashboardStatsCache();
       isFirstSync = true;
       await ensureBootstrapReady('manual cache clear');
@@ -954,21 +991,14 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         await updateCache();
       }
 
-      if (!cache.isInitialized) {
-        await ensureBootstrapReady('stats alerts request');
-      }
+      await prepareReadCache('stats alerts request');
 
       const where = createSqlWhere();
       where.add('created_at >= ?', new Date(Date.now() - config.lookbackMs).toISOString());
       if (!config.simulationsEnabled) {
         where.add('simulated = 0');
       }
-      const alerts = (database.db.prepare(`
-        SELECT created_at, scenario, source_ip, country, as_name, target, simulated
-        FROM alerts
-        ${where.toSql()}
-        ORDER BY created_at DESC, id DESC
-      `).all(...where.params) as Array<{
+      const alerts = (await queryWorker.all<{
         created_at: string;
         scenario?: string | null;
         source_ip?: string | null;
@@ -976,7 +1006,12 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         as_name?: string | null;
         target?: string | null;
         simulated?: number | null;
-      }>).map((row): StatsAlert => ({
+      }>(`
+        SELECT created_at, scenario, source_ip, country, as_name, target, simulated
+        FROM alerts
+        ${where.toSql()}
+        ORDER BY created_at DESC, id DESC
+      `, where.params)).map((row): StatsAlert => ({
         created_at: row.created_at,
         scenario: row.scenario || undefined,
         source: row.source_ip || row.country || row.as_name
@@ -994,6 +1029,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
       return context.json(alerts);
     } catch (error: any) {
+      if (error instanceof QueryWorkerTimeoutError) {
+        console.warn('Timed out serving stats alerts from database:', error.message);
+        return context.json({ error: 'Alert statistics query timed out' }, 504);
+      }
       console.error('Error serving stats alerts from database:', error.message);
       return context.json({ error: 'Failed to retrieve alert statistics' }, 500);
     }
@@ -1005,9 +1044,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         await updateCache();
       }
 
-      if (!cache.isInitialized) {
-        await ensureBootstrapReady('stats decisions request');
-      }
+      await prepareReadCache('stats decisions request');
 
       const now = new Date().toISOString();
       const where = createSqlWhere();
@@ -1015,12 +1052,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       if (!config.simulationsEnabled) {
         where.add('simulated = 0');
       }
-      const decisions = (database.db.prepare(`
-        SELECT id, created_at, scenario, value, stop_at, target, simulated
-        FROM decisions
-        ${where.toSql()}
-        ORDER BY created_at DESC, id DESC
-      `).all(...where.params) as Array<{
+      const decisions = (await queryWorker.all<{
         id: string | number;
         created_at: string;
         scenario?: string | null;
@@ -1028,7 +1060,12 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         stop_at?: string | null;
         target?: string | null;
         simulated?: number | null;
-      }>).map((row): StatsDecision => ({
+      }>(`
+        SELECT id, created_at, scenario, value, stop_at, target, simulated
+        FROM decisions
+        ${where.toSql()}
+        ORDER BY created_at DESC, id DESC
+      `, where.params)).map((row): StatsDecision => ({
         id: row.id,
         created_at: row.created_at,
         scenario: row.scenario || undefined,
@@ -1040,6 +1077,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
       return context.json(decisions);
     } catch (error: any) {
+      if (error instanceof QueryWorkerTimeoutError) {
+        console.warn('Timed out serving stats decisions from database:', error.message);
+        return context.json({ error: 'Decision statistics query timed out' }, 504);
+      }
       console.error('Error serving stats decisions from database:', error.message);
       return context.json({ error: 'Failed to retrieve decision statistics' }, 500);
     }
@@ -1051,12 +1092,27 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         await updateCache();
       }
 
-      if (!cache.isInitialized) {
-        await ensureBootstrapReady('dashboard stats request');
+      await prepareReadCache('dashboard stats request');
+      const filters = getDashboardStatsFilters(context, config.timeZone);
+      if (shouldServeEmptyDashboardStats()) {
+        warmDashboardStatsCache(filters);
+        const staleResponse = staleDashboardStatsResponseCache.get(getStaleDashboardStatsResponseCacheKey(filters));
+        if (staleResponse) {
+          return context.json({
+            ...staleResponse,
+            pending: true,
+            retryAfterMs: 1_500,
+          });
+        }
+        return context.json(createEmptyDashboardStatsResponse({ pending: true }));
       }
 
-      return context.json(buildDashboardStats(getDashboardStatsFilters(context, config.timeZone)));
+      return context.json(await buildDashboardStats(filters));
     } catch (error: any) {
+      if (error instanceof QueryWorkerTimeoutError) {
+        console.warn('Timed out serving dashboard statistics from database:', error.message);
+        return context.json({ error: 'Dashboard statistics query timed out' }, 504);
+      }
       console.error('Error serving dashboard statistics from database:', error.message);
       return context.json({ error: 'Failed to retrieve dashboard statistics' }, 500);
     }
@@ -1258,6 +1314,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     } catch (error: any) {
       console.error(`Notification evaluation failed during ${source}:`, error.message);
     }
+  }
+
+  async function refreshDecisionDuplicateFlags(): Promise<void> {
+    await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
   }
 
   function getLegacyAlertSyncQueries(): AlertSyncQuery[] {
@@ -1465,13 +1525,17 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     return origin !== CAPI_ALERT_ORIGIN;
   }
 
-  function pruneCachedEntriesForCurrentAlertFilters(): { alerts: number; decisions: number } {
-    const cachedAlerts = database.getAllAlerts();
+  async function pruneCachedEntriesForCurrentAlertFilters(): Promise<{ alerts: number; decisions: number }> {
+    const cachedAlerts = await queryWorker.all<{ raw_data: string }>('SELECT raw_data FROM alerts');
     const allAlertIds = new Set<string>();
     const staleAlertIds: string[] = [];
     const staleAlertIdSet = new Set<string>();
 
-    for (const row of cachedAlerts) {
+    for (let index = 0; index < cachedAlerts.length; index += 1) {
+      if (index > 0 && index % SYNC_WRITE_BATCH_SIZE === 0) {
+        await delay(0);
+      }
+      const row = cachedAlerts[index];
       try {
         const alert = JSON.parse(row.raw_data) as AlertRecord;
         if (!alert?.id) {
@@ -1490,10 +1554,18 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
 
     const remainingAlertIds = new Set([...allAlertIds].filter((id) => !staleAlertIdSet.has(id)));
-    const prunedAlerts = database.deleteCachedAlerts(staleAlertIds);
+    const prunedAlerts = await syncWorker.deleteCachedAlerts(staleAlertIds);
     const staleDecisionIds: string[] = [];
+    const cachedDecisions = await queryWorker.all<{
+      raw_data: string;
+      alert_id?: string | number | null;
+    }>('SELECT raw_data, alert_id FROM decisions');
 
-    for (const row of database.getAllDecisions()) {
+    for (let index = 0; index < cachedDecisions.length; index += 1) {
+      if (index > 0 && index % SYNC_WRITE_BATCH_SIZE === 0) {
+        await delay(0);
+      }
+      const row = cachedDecisions[index];
       try {
         const decision = JSON.parse(row.raw_data) as { id?: string | number; alert_id?: string | number; origin?: unknown };
         if (decision.id === undefined || decision.id === null) {
@@ -1514,14 +1586,13 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       }
     }
 
-    const orphanDecisions = database.deleteCachedDecisions(staleDecisionIds);
+    const orphanDecisions = await syncWorker.deleteCachedDecisions(staleDecisionIds);
     const pruned = {
       alerts: prunedAlerts.alerts,
       decisions: prunedAlerts.decisions + orphanDecisions,
     };
 
     if (pruned.alerts > 0 || pruned.decisions > 0) {
-      invalidateDashboardStatsCache();
       console.log(`Alert filter cleanup: removed ${pruned.alerts} stale cached alerts and ${pruned.decisions} stale cached decisions.`);
     }
 
@@ -1558,8 +1629,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       .filter((alert) => !shouldExcludeAlertByOrigin(alert));
   }
 
-  function processAlertForDatabase(alert: AlertRecord): void {
-    if (!alert || !alert.id) return;
+  function buildAlertMutation(alert: AlertRecord): SyncAlertMutation | null {
+    if (!alert || !alert.id) return null;
     const decisions = alert.decisions || [];
     const alertSource = alert.source || null;
     const sourceValue = getAlertSourceValue(alertSource);
@@ -1591,15 +1662,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       $record: enrichedAlert,
     };
 
-    try {
-      database.insertAlert(alertData);
-    } catch (error: any) {
-      if (!String(error.message).includes('UNIQUE constraint')) {
-        console.error(`Failed to insert alert ${alert.id}:`, error.message);
-      }
-    }
-
     const currentDecisionIds: string[] = [];
+    const decisionData: DecisionInsertParams[] = [];
     const observedAt = new Date().toISOString();
     for (const decision of normalizedDecisions) {
       currentDecisionIds.push(String(decision.id));
@@ -1623,7 +1687,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         is_duplicate: false,
       };
 
-      const decisionData: DecisionInsertParams = {
+      decisionData.push({
         $id: String(decision.id),
         $uuid: String(decision.id),
         $alert_id: alert.id,
@@ -1635,16 +1699,14 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         $scenario: enrichedDecision.scenario,
         $raw_data: JSON.stringify(enrichedDecision),
         $record: enrichedDecision,
-      };
-
-      try {
-        database.insertDecision(decisionData);
-      } catch (error: any) {
-        console.error(`Failed to insert decision ${decision.id}:`, error.message);
-      }
+      });
     }
 
-    database.deleteDecisionsByAlertIdExcept(alert.id, currentDecisionIds);
+    return {
+      alert: alertData,
+      decisions: decisionData,
+      keepDecisionIds: currentDecisionIds,
+    };
   }
 
   function resolveDecisionStopAt(decision: AlertDecision, createdAt: string, observedAt: string): string {
@@ -1660,51 +1722,80 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     return createdAt;
   }
 
-  function reconcileSyncedAlertWindow(alerts: AlertRecord[], start: string, end: string): { alerts: number; decisions: number } {
-    let pruned = { alerts: 0, decisions: 0 };
+  async function reconcileSyncedAlertWindow(
+    alerts: AlertRecord[],
+    start: string,
+    end: string,
+  ): Promise<{ alerts: number; decisions: number; changed: boolean }> {
+    let changed = false;
     const keepIds = alerts.map((alert) => alert.id);
-    const reconcileTransaction = database.transaction<AlertRecord[]>((items) => {
-      for (const alert of items) {
-        processAlertForDatabase(alert);
-      }
-      pruned = database.deleteAlertsMissingBetween(start, end, keepIds);
-    });
 
-    reconcileTransaction(alerts);
-    if (pruned.alerts > 0 || pruned.decisions > 0) {
-      invalidateDashboardStatsCache();
+    for (let offset = 0; offset < alerts.length; offset += SYNC_WRITE_BATCH_SIZE) {
+      const mutations = alerts
+        .slice(offset, offset + SYNC_WRITE_BATCH_SIZE)
+        .map(buildAlertMutation)
+        .filter((mutation): mutation is SyncAlertMutation => mutation !== null);
+      const result = await syncWorker.persistAlerts(mutations);
+      changed = result.changed || changed;
     }
-    return pruned;
+    const pruned = await syncWorker.deleteAlertsMissingBetween(start, end, keepIds);
+    return {
+      ...pruned,
+      changed: changed || pruned.alerts > 0 || pruned.decisions > 0,
+    };
   }
 
-  function reconcileActiveDecisionIds(keepIds: Array<string | number>, now: string): { alerts: number; decisions: number } {
-    let pruned = { alerts: 0, decisions: 0 };
+  async function reconcileActiveDecisionIds(
+    keepIds: Array<string | number>,
+    now: string,
+  ): Promise<{ alerts: number; decisions: number; changed: boolean }> {
     const since = new Date(Date.now() - config.lookbackMs).toISOString();
-    const reconcileTransaction = database.transaction<Array<string | number>>((ids) => {
-      pruned = database.deleteActiveAlertsMissing(ids, now, since);
-    });
-
-    reconcileTransaction(keepIds);
-    if (pruned.alerts > 0 || pruned.decisions > 0) {
-      invalidateDashboardStatsCache();
+    const keepSet = new Set(keepIds.map(String));
+    const cachedActiveIds = await queryWorker.all<{ id: string | number }>(`
+      SELECT DISTINCT active.alert_id AS id
+      FROM decisions AS active INDEXED BY idx_decisions_stop_alert_id
+      WHERE active.stop_at > ?
+        AND active.alert_id IS NOT NULL
+        AND EXISTS (
+          SELECT 1
+          FROM alerts
+          WHERE alerts.id = active.alert_id
+            AND alerts.created_at >= ?
+        )
+    `, [now, since]);
+    const staleIds = cachedActiveIds
+      .map((row) => String(row.id))
+      .filter((id) => !keepSet.has(id));
+    const pruned = { alerts: 0, decisions: 0 };
+    for (let offset = 0; offset < staleIds.length; offset += SYNC_WRITE_BATCH_SIZE) {
+      const result = await syncWorker.deleteCachedAlerts(staleIds.slice(offset, offset + SYNC_WRITE_BATCH_SIZE));
+      pruned.alerts += result.alerts;
+      pruned.decisions += result.decisions;
     }
-    return pruned;
+    return {
+      ...pruned,
+      changed: pruned.alerts > 0 || pruned.decisions > 0,
+    };
   }
 
-  function persistAndIndexActiveDecisionAlerts(alerts: AlertRecord[]): Map<string, number> {
+  async function persistAndIndexActiveDecisionAlerts(
+    alerts: AlertRecord[],
+  ): Promise<{ decisionCountsByAlertId: Map<string, number>; changed: boolean }> {
     const decisionCountsByAlertId = new Map<string, number>();
-    const persistTransaction = database.transaction<AlertRecord[]>((items) => {
-      for (const alert of items) {
-        processAlertForDatabase(alert);
-        decisionCountsByAlertId.set(String(alert.id), Array.isArray(alert.decisions) ? alert.decisions.length : 0);
-      }
-    });
-
-    persistTransaction(alerts);
-    if (alerts.length > 0) {
-      invalidateDashboardStatsCache();
+    let changed = false;
+    for (const alert of alerts) {
+      decisionCountsByAlertId.set(String(alert.id), Array.isArray(alert.decisions) ? alert.decisions.length : 0);
     }
-    return decisionCountsByAlertId;
+
+    for (let offset = 0; offset < alerts.length; offset += SYNC_WRITE_BATCH_SIZE) {
+      const mutations = alerts
+        .slice(offset, offset + SYNC_WRITE_BATCH_SIZE)
+        .map(buildAlertMutation)
+        .filter((mutation): mutation is SyncAlertMutation => mutation !== null);
+      const result = await syncWorker.persistAlerts(mutations);
+      changed = result.changed || changed;
+    }
+    return { decisionCountsByAlertId, changed };
   }
 
   function mergeActiveDecisionCounts(
@@ -1724,16 +1815,6 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       total += count;
     }
     return total;
-  }
-
-  function persistSyncedAlerts(alerts: AlertRecord[]): void {
-    const persistTransaction = database.transaction<AlertRecord[]>((items) => {
-      for (const alert of items) {
-        processAlertForDatabase(alert);
-      }
-    });
-
-    persistTransaction(alerts);
   }
 
   function mergeAlertRecords(alerts: AlertRecord[]): AlertRecord[] {
@@ -1756,6 +1837,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       decisions: left.decisions + right.decisions,
       errors: [...left.errors, ...right.errors],
       successfulWindows: left.successfulWindows + right.successfulWindows,
+      changed: left.changed || right.changed,
     };
   }
 
@@ -1764,6 +1846,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       decisionCountsByAlertId: mergeActiveDecisionCounts(left.decisionCountsByAlertId, right.decisionCountsByAlertId),
       errors: [...left.errors, ...right.errors],
       successfulWindows: left.successfulWindows + right.successfulWindows,
+      changed: left.changed || right.changed,
     };
   }
 
@@ -1788,7 +1871,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     try {
       const alerts = await fetchAlertsForSync(sinceDuration, untilDuration, false, { requireComplete: true });
       const decisionCount = countAlertDecisions(alerts);
-      const pruned = reconcileSyncedAlertWindow(
+      const pruned = await reconcileSyncedAlertWindow(
         alerts,
         new Date(startMs).toISOString(),
         new Date(endMs).toISOString(),
@@ -1805,6 +1888,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         decisions: decisionCount,
         errors: [],
         successfulWindows: 1,
+        changed: pruned.changed,
       };
     } catch (error: any) {
       if (isTimeoutError(error) && canSplitWindow(startMs, endMs)) {
@@ -1822,6 +1906,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         decisions: 0,
         errors: [errorMessage],
         successfulWindows: 0,
+        changed: false,
       };
     }
   }
@@ -1834,11 +1919,12 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     try {
       const alerts = await fetchAlertsForSync(sinceDuration, untilDuration, true, { requireComplete: true });
       const activeAlerts = mergeAlertRecords(alerts);
-      const decisionCountsByAlertId = persistAndIndexActiveDecisionAlerts(activeAlerts);
+      const persisted = await persistAndIndexActiveDecisionAlerts(activeAlerts);
       return {
-        decisionCountsByAlertId,
+        decisionCountsByAlertId: persisted.decisionCountsByAlertId,
         errors: [],
         successfulWindows: 1,
+        changed: persisted.changed,
       };
     } catch (error: any) {
       if (isTimeoutError(error) && canSplitWindow(startMs, endMs)) {
@@ -1855,6 +1941,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         decisionCountsByAlertId: new Map(),
         errors: [errorMessage],
         successfulWindows: 0,
+        changed: false,
       };
     }
   }
@@ -1865,6 +1952,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       decisionCountsByAlertId: new Map(),
       errors: [],
       successfulWindows: 0,
+      changed: false,
     };
     while (currentStart < now) {
       const currentEnd = Math.min(currentStart + config.alertSyncChunkMs, now);
@@ -1908,8 +1996,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     let activePrunedAlerts = 0;
     let activePrunedDecisions = 0;
     let activeErrors: string[] = [];
+    let changed = false;
 
-    const filterPruned = pruneCachedEntriesForCurrentAlertFilters();
+    const filterPruned = await pruneCachedEntriesForCurrentAlertFilters();
+    changed = filterPruned.alerts > 0 || filterPruned.decisions > 0;
     if (filterPruned.alerts > 0 || filterPruned.decisions > 0) {
       updateSyncStatus({
         message: t('components.syncOverlay.statusRemovedStale', {
@@ -1941,6 +2031,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       totalDecisions += result.decisions;
       successfulWindows += result.successfulWindows;
       historicalErrors.push(...result.errors);
+      changed = result.changed || changed;
 
       currentStart = currentEnd;
       await delay(100);
@@ -1951,6 +2042,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     const cachedAlertsBeforeActiveSync = database.countAlerts();
     const cachedDecisionsBeforeActiveSync = database.countDecisions();
     const activeWindowSummary = await fetchActiveDecisionAlerts(lookbackStart, now);
+    changed = activeWindowSummary.changed || changed;
     const activeDecisionCountsByAlertId = activeWindowSummary.decisionCountsByAlertId;
     activeDecisionAlertsCount = activeDecisionCountsByAlertId.size;
     activeDecisionsCount = countIndexedDecisions(activeDecisionCountsByAlertId);
@@ -1958,9 +2050,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     activeErrors = activeWindowSummary.errors;
 
     if (activeErrors.length === 0) {
-      const pruned = reconcileActiveDecisionIds(Array.from(activeDecisionCountsByAlertId.keys()), new Date().toISOString());
+      const pruned = await reconcileActiveDecisionIds(Array.from(activeDecisionCountsByAlertId.keys()), new Date().toISOString());
       activePrunedAlerts = pruned.alerts;
       activePrunedDecisions = pruned.decisions;
+      changed = pruned.changed || changed;
     }
     activeNetCachedAlerts = database.countAlerts() - cachedAlertsBeforeActiveSync;
     activeNetCachedDecisions = database.countDecisions() - cachedDecisionsBeforeActiveSync;
@@ -1986,10 +2079,12 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     console.log(logMessage);
 
     updateSyncStatus({
-      isSyncing: false,
+      // Keep the initial overlay open until initializeCache has finalized all
+      // read-visible indexes and dashboard cache state.
+      isSyncing: showOverlay,
       progress: state === 'failed' ? 0 : 100,
       message,
-      completedAt: new Date().toISOString(),
+      completedAt: showOverlay ? null : new Date().toISOString(),
       state,
       errors,
     });
@@ -2009,6 +2104,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       errors,
       cachedAlerts,
       cachedDecisions,
+      changed,
     };
   }
 
@@ -2022,23 +2118,37 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       const deferSearchIndexUpdates = !cache.isInitialized && database.searchIndexAvailable;
       let deferredSearchIndexesRebuilt = false;
       if (deferSearchIndexUpdates) {
-        database.beginDeferredSearchIndexUpdates();
+        await syncWorker.beginDeferredSearchIndexUpdates();
       }
       try {
         console.log('Initializing cache with chunked data load...');
         const syncSummary = await syncHistory();
-        database.refreshDecisionDuplicateFlags(new Date().toISOString());
+        await refreshDecisionDuplicateFlags();
         if (deferSearchIndexUpdates) {
           console.log('Rebuilding search indexes after initial cache load...');
           const searchIndexStartedAt = Date.now();
-          database.rebuildSearchIndexes();
+          await syncWorker.rebuildSearchIndexes();
           deferredSearchIndexesRebuilt = true;
           console.log(`Search indexes rebuilt in ${formatElapsedTime(Date.now() - searchIndexStartedAt)}.`);
+        }
+        if (syncSummary.changed) {
+          invalidateDashboardStatsCache();
         }
         cache.lastUpdate = new Date().toISOString();
         cache.isInitialized = syncSummary.state !== 'failed';
         cache.isComplete = syncSummary.state === 'complete';
         lapiClient.updateStatus(syncSummary.state === 'complete', syncSummary.errors[0] ? { message: syncSummary.errors[0] } : null);
+        if (syncStatus.isSyncing && cache.isInitialized) {
+          try {
+            await getDashboardStatsIndex();
+          } catch (error: any) {
+            console.error('Failed to prepare dashboard data before completing initial sync:', error.message);
+          }
+        }
+        updateSyncStatus({
+          isSyncing: false,
+          completedAt: new Date().toISOString(),
+        });
         await runNotificationEvaluation('cache initialization');
         const activeDecisionChanged =
           syncSummary.activeNetCachedAlerts !== 0 ||
@@ -2087,7 +2197,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       } finally {
         if (deferSearchIndexUpdates && !deferredSearchIndexesRebuilt) {
           try {
-            database.rebuildSearchIndexes();
+            await syncWorker.rebuildSearchIndexes();
           } catch (error: any) {
             console.error('Failed to rebuild search indexes:', error.message);
           }
@@ -2117,7 +2227,8 @@ ${errorSummary}  Status: ${syncSummary.state}
       const newAlerts = await fetchAlertsForSync(sinceDuration, null, false, { requireComplete: true });
       const newDecisionCount = countAlertDecisions(newAlerts);
 
-      const deltaPruned = reconcileSyncedAlertWindow(newAlerts, deltaStart, deltaEnd);
+      const deltaPruned = await reconcileSyncedAlertWindow(newAlerts, deltaStart, deltaEnd);
+      let changed = deltaPruned.changed;
       if (newAlerts.length > 0 || deltaPruned.alerts > 0 || deltaPruned.decisions > 0) {
         console.log(
           `Delta update: ${newAlerts.length} alerts and ${newDecisionCount} decisions synced, ${deltaPruned.alerts} stale alerts and ${deltaPruned.decisions} stale decisions pruned`,
@@ -2125,12 +2236,14 @@ ${errorSummary}  Status: ${syncSummary.state}
       }
 
       const activeWindowSummary = await fetchActiveDecisionAlerts(activeLookbackStart, deltaStartedAt);
+      changed = activeWindowSummary.changed || changed;
       const activeDecisionCountsByAlertId = activeWindowSummary.decisionCountsByAlertId;
       const activeDecisionAlertsCount = activeDecisionCountsByAlertId.size;
       const activeDecisionCount = countIndexedDecisions(activeDecisionCountsByAlertId);
       const activePruned = activeWindowSummary.errors.length === 0
-        ? reconcileActiveDecisionIds(Array.from(activeDecisionCountsByAlertId.keys()), new Date().toISOString())
-        : { alerts: 0, decisions: 0 };
+        ? await reconcileActiveDecisionIds(Array.from(activeDecisionCountsByAlertId.keys()), new Date().toISOString())
+        : { alerts: 0, decisions: 0, changed: false };
+      changed = activePruned.changed || changed;
       if (activeDecisionAlertsCount > 0 || activePruned.alerts > 0 || activePruned.decisions > 0) {
         console.log(
           `Active decision refresh: ${activeDecisionAlertsCount} alerts and ${activeDecisionCount} decisions synced, ${activePruned.alerts} stale alerts and ${activePruned.decisions} stale decisions pruned`,
@@ -2140,7 +2253,10 @@ ${errorSummary}  Status: ${syncSummary.state}
         throw new Error(`Active decision refresh incomplete: ${activeWindowSummary.errors.join('; ')}`);
       }
 
-      database.refreshDecisionDuplicateFlags(new Date().toISOString());
+      await refreshDecisionDuplicateFlags();
+      if (changed) {
+        invalidateDashboardStatsCache();
+      }
       cache.lastUpdate = new Date().toISOString();
       lapiClient.updateStatus(true);
       console.log(`Delta update complete: ${newAlerts.length} alerts and ${newDecisionCount} decisions synced, ${activeDecisionAlertsCount} active decision alerts and ${activeDecisionCount} decisions refreshed`);
@@ -2150,12 +2266,11 @@ ${errorSummary}  Status: ${syncSummary.state}
     }
   }
 
-  function cleanupOldData(): void {
+  async function cleanupOldData(): Promise<void> {
     const cutoff = new Date(Date.now() - config.lookbackMs).toISOString();
     try {
-      const removedAlerts = database.deleteOldAlerts(cutoff);
-      const removedDecisions = database.deleteOldDecisions(cutoff);
-      console.log(`Cleanup: Removed ${removedAlerts} old alerts, ${removedDecisions} old decisions`);
+      const removed = await syncWorker.cleanupOldData(cutoff);
+      console.log(`Cleanup: Removed ${removed.alerts} old alerts, ${removed.decisions} old decisions`);
     } catch (error: any) {
       console.error('Cleanup failed:', error.message);
     }
@@ -2163,7 +2278,7 @@ ${errorSummary}  Status: ${syncSummary.state}
 
   async function updateCache(): Promise<void> {
     await updateCacheDelta();
-    cleanupOldData();
+    await cleanupOldData();
     await runNotificationEvaluation('cache update');
   }
 
@@ -2200,6 +2315,22 @@ ${errorSummary}  Status: ${syncSummary.state}
     }, config.bootstrapRetryDelayMs);
   }
 
+  async function prepareReadCache(source: string): Promise<void> {
+    if (cache.isInitialized) {
+      return;
+    }
+
+    if (bootstrapPromise && isBackgroundBootstrapSource(bootstrapSource)) {
+      return;
+    }
+
+    await ensureBootstrapReady(source);
+  }
+
+  function isBackgroundBootstrapSource(source: string | null): boolean {
+    return source === 'startup' || source === 'bootstrap retry';
+  }
+
   async function ensureBootstrapReady(source = 'bootstrap'): Promise<boolean> {
     if (!lapiClient.hasAuthConfig()) {
       return false;
@@ -2219,6 +2350,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       return bootstrapPromise;
     }
 
+    bootstrapSource = source;
     bootstrapPromise = (async () => {
       console.log(`Starting bootstrap recovery (${source})...`);
       if (!lapiClient.hasToken()) {
@@ -2252,6 +2384,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       return await bootstrapPromise;
     } finally {
       bootstrapPromise = null;
+      bootstrapSource = null;
     }
   }
 
@@ -2875,11 +3008,11 @@ ${errorSummary}  Status: ${syncSummary.state}
     return parsedAlerts.map((alert) => hydrateAlertWithDecisionsBatch(alert, stopAtMap));
   }
 
-  function queryPaginatedAlerts(
+  async function queryPaginatedAlerts(
     pageRequest: PageRequest,
     filters: AlertListFilters,
     searchAst: SearchNode | null,
-  ): PaginatedResponse<SlimAlert> {
+  ): Promise<PaginatedResponse<SlimAlert>> {
     const since = new Date(Date.now() - config.lookbackMs).toISOString();
     const baseWhere = createSqlWhere();
     baseWhere.add('created_at >= ?', since);
@@ -2894,16 +3027,16 @@ ${errorSummary}  Status: ${syncSummary.state}
       filteredWhere.add(searchWhere.sql, ...searchWhere.params);
     }
 
-    const unfilteredTotal = queryCount('alerts', baseWhere);
-    const total = queryCount('alerts', filteredWhere);
+    const unfilteredTotal = await queryCount('alerts', baseWhere);
+    const total = await queryCount('alerts', filteredWhere);
     const offset = (pageRequest.page - 1) * pageRequest.pageSize;
-    const rows = database.db.prepare(`
+    const rows = await queryWorker.all<{ raw_data: string }>(`
       SELECT raw_data
       FROM alerts
       ${filteredWhere.toSql()}
       ORDER BY created_at DESC, id DESC
       LIMIT ? OFFSET ?
-    `).all(...filteredWhere.params, pageRequest.pageSize, offset) as Array<{ raw_data: string }>;
+    `, [...filteredWhere.params, pageRequest.pageSize, offset]);
 
     const data = hydrateAlertsBatch(rows)
       .map((alert) => applySimulationModeToAlert(alert, config.simulationsEnabled))
@@ -2923,15 +3056,14 @@ ${errorSummary}  Status: ${syncSummary.state}
     };
   }
 
-  function queryPaginatedDecisions(
+  async function queryPaginatedDecisions(
     pageRequest: PageRequest,
     filters: DecisionListFilters,
     searchAst: SearchNode | null,
     includeExpired: boolean,
-  ): PaginatedResponse<DecisionListItem> {
+  ): Promise<PaginatedResponse<DecisionListItem>> {
     const since = new Date(Date.now() - config.lookbackMs).toISOString();
     const now = new Date().toISOString();
-    database.refreshDecisionDuplicateFlags(now);
     const duplicateSql = getDecisionDuplicateSql(now);
     const baseWhere = createSqlWhere();
     if (includeExpired) {
@@ -2950,23 +3082,23 @@ ${errorSummary}  Status: ${syncSummary.state}
       filteredWhere.add(searchWhere.sql, ...searchWhere.params);
     }
 
-    const unfilteredTotal = queryCount('decisions', baseWhere);
-    const total = queryCount('decisions', filteredWhere);
+    const unfilteredTotal = await queryCount('decisions', baseWhere);
+    const total = await queryCount('decisions', filteredWhere);
     const offset = (pageRequest.page - 1) * pageRequest.pageSize;
     const decisionsTable = shouldUseDefaultDecisionPagingIndex(filters, searchAst, includeExpired)
       ? 'decisions INDEXED BY idx_decisions_duplicate_created_at'
       : 'decisions';
-    const rows = database.db.prepare(`
+    const rows = await queryWorker.all<{
+      raw_data: string;
+      alert_id?: string | number | null;
+      is_duplicate?: number;
+    }>(`
       SELECT raw_data, alert_id, ${duplicateSql} AS is_duplicate
       FROM ${decisionsTable}
       ${filteredWhere.toSql()}
       ORDER BY created_at DESC, id DESC
       LIMIT ? OFFSET ?
-    `).all(...filteredWhere.params, pageRequest.pageSize, offset) as Array<{
-      raw_data: string;
-      alert_id?: string | number | null;
-      is_duplicate?: number;
-    }>;
+    `, [...filteredWhere.params, pageRequest.pageSize, offset]);
 
     const data = rows.map((row) => {
       const decision = JSON.parse(row.raw_data) as AlertDecision & Record<string, unknown>;
@@ -2992,8 +3124,8 @@ ${errorSummary}  Status: ${syncSummary.state}
     };
   }
 
-  function queryCount(tableName: 'alerts' | 'decisions', where: SqlWhere): number {
-    const row = database.db.prepare(`SELECT COUNT(*) AS count FROM ${tableName} ${where.toSql()}`).get(...where.params) as { count: number };
+  async function queryCount(tableName: 'alerts' | 'decisions', where: SqlWhere): Promise<number> {
+    const row = await queryWorker.get<{ count: number }>(`SELECT COUNT(*) AS count FROM ${tableName} ${where.toSql()}`, where.params);
     return row.count;
   }
 
@@ -3100,12 +3232,25 @@ ${errorSummary}  Status: ${syncSummary.state}
     });
   }
 
-  function getDashboardStatsIndex(): DashboardStatsCache {
-    const cacheKey = `${cache.lastUpdate || 'uninitialized'}:${config.lookbackMs}:${config.simulationsEnabled ? 'sim' : 'live'}`;
+  async function getDashboardStatsIndex(): Promise<DashboardStatsCache> {
+    const cacheKey = getDashboardStatsCacheKey();
     if (dashboardStatsCache?.key === cacheKey) {
       return dashboardStatsCache;
     }
 
+    const pending = dashboardStatsIndexPromises.get(cacheKey);
+    if (pending) {
+      return pending;
+    }
+
+    const promise = buildDashboardStatsIndex(cacheKey).finally(() => {
+      dashboardStatsIndexPromises.delete(cacheKey);
+    });
+    dashboardStatsIndexPromises.set(cacheKey, promise);
+    return promise;
+  }
+
+  async function buildDashboardStatsIndex(cacheKey: string): Promise<DashboardStatsCache> {
     const since = new Date(Date.now() - config.lookbackMs).toISOString();
     const nowIso = new Date().toISOString();
     const nowTimestamp = Date.now();
@@ -3115,11 +3260,14 @@ ${errorSummary}  Status: ${syncSummary.state}
     if (!config.simulationsEnabled) {
       alertWhere.add('simulated = 0');
     }
-    const alertRows = database.db.prepare(`
-      SELECT created_at, country, scenario, as_name, source_ip, target, simulated
-      FROM alerts
-      ${alertWhere.toSql()}
-    `).all(...alertWhere.params) as Array<{
+    const alerts: DashboardAlertStatsRecord[] = [];
+    let simulatedAlerts = 0;
+    let lastAlertId = 0;
+    while (true) {
+      const batchWhere = alertWhere.clone();
+      batchWhere.add('id > ?', lastAlertId);
+      const alertRows = await queryWorker.all<{
+      id: number;
       created_at: string;
       country?: string | null;
       scenario?: string | null;
@@ -3127,31 +3275,44 @@ ${errorSummary}  Status: ${syncSummary.state}
       source_ip?: string | null;
       target?: string | null;
       simulated?: number | null;
-    }>;
-    const alerts: DashboardAlertStatsRecord[] = [];
-    let simulatedAlerts = 0;
-    for (const row of alertRows) {
-      const createdAt = row.created_at;
-      const timestamp = Date.parse(createdAt);
-      if (!Number.isFinite(timestamp)) {
-        continue;
+    }>(`
+      SELECT id, created_at, country, scenario, as_name, source_ip, target, simulated
+      FROM alerts
+      ${batchWhere.toSql()}
+      ORDER BY id ASC
+      LIMIT ?
+    `, [...batchWhere.params, DASHBOARD_INDEX_BATCH_SIZE]);
+      if (alertRows.length === 0) {
+        break;
       }
 
-      const simulated = row.simulated === 1;
-      if (simulated) {
-        simulatedAlerts += 1;
+      for (let index = 0; index < alertRows.length; index += 1) {
+        const row = alertRows[index];
+        const createdAt = row.created_at;
+        const timestamp = Date.parse(createdAt);
+        if (!Number.isFinite(timestamp)) {
+          continue;
+        }
+
+        const simulated = row.simulated === 1;
+        if (simulated) {
+          simulatedAlerts += 1;
+        }
+
+        alerts.push({
+          createdAt,
+          timestamp,
+          country: row.country || undefined,
+          scenario: row.scenario || undefined,
+          asName: row.as_name || undefined,
+          ip: row.source_ip || undefined,
+          target: row.target || undefined,
+          simulated,
+        });
       }
 
-      alerts.push({
-        createdAt,
-        timestamp,
-        country: row.country || undefined,
-        scenario: row.scenario || undefined,
-        asName: row.as_name || undefined,
-        ip: row.source_ip || undefined,
-        target: row.target || undefined,
-        simulated,
-      });
+      lastAlertId = Number(alertRows[alertRows.length - 1]?.id || lastAlertId);
+      await delay(0);
     }
 
     const decisionWhere = createSqlWhere();
@@ -3159,48 +3320,64 @@ ${errorSummary}  Status: ${syncSummary.state}
     if (!config.simulationsEnabled) {
       decisionWhere.add('simulated = 0');
     }
-    const decisionRows = database.db.prepare(`
-      SELECT created_at, stop_at, value, country, simulated
-      FROM decisions
-      ${decisionWhere.toSql()}
-    `).all(...decisionWhere.params) as Array<{
+    const decisions: DashboardDecisionStatsRecord[] = [];
+    let activeDecisions = 0;
+    let activeSimulatedDecisions = 0;
+    let lastDecisionRowId = 0;
+    while (true) {
+      const batchWhere = decisionWhere.clone();
+      batchWhere.add('rowid > ?', lastDecisionRowId);
+      const decisionRows = await queryWorker.all<{
+      rowid: number;
       created_at: string;
       stop_at?: string | null;
       value?: string | null;
       country?: string | null;
       simulated?: number | null;
-    }>;
-    const decisions: DashboardDecisionStatsRecord[] = [];
-    let activeDecisions = 0;
-    let activeSimulatedDecisions = 0;
-    for (const row of decisionRows) {
-      const createdAt = row.created_at;
-      const timestamp = Date.parse(createdAt);
-      if (!Number.isFinite(timestamp)) {
-        continue;
+    }>(`
+      SELECT rowid, created_at, stop_at, value, country, simulated
+      FROM decisions
+      ${batchWhere.toSql()}
+      ORDER BY rowid ASC
+      LIMIT ?
+    `, [...batchWhere.params, DASHBOARD_INDEX_BATCH_SIZE]);
+      if (decisionRows.length === 0) {
+        break;
       }
 
-      const stopAt = row.stop_at || undefined;
-      const stopTimestamp = stopAt ? Date.parse(stopAt) : Number.NaN;
-      const normalizedStopTimestamp = Number.isFinite(stopTimestamp) ? stopTimestamp : 0;
-      const simulated = row.simulated === 1;
-      if (normalizedStopTimestamp > nowTimestamp) {
-        if (simulated) {
-          activeSimulatedDecisions += 1;
-        } else {
-          activeDecisions += 1;
+      for (let index = 0; index < decisionRows.length; index += 1) {
+        const row = decisionRows[index];
+        const createdAt = row.created_at;
+        const timestamp = Date.parse(createdAt);
+        if (!Number.isFinite(timestamp)) {
+          continue;
         }
+
+        const stopAt = row.stop_at || undefined;
+        const stopTimestamp = stopAt ? Date.parse(stopAt) : Number.NaN;
+        const normalizedStopTimestamp = Number.isFinite(stopTimestamp) ? stopTimestamp : 0;
+        const simulated = row.simulated === 1;
+        if (normalizedStopTimestamp > nowTimestamp) {
+          if (simulated) {
+            activeSimulatedDecisions += 1;
+          } else {
+            activeDecisions += 1;
+          }
+        }
+
+        decisions.push({
+          createdAt,
+          stopAt,
+          timestamp,
+          stopTimestamp: normalizedStopTimestamp,
+          value: row.value || undefined,
+          country: row.country || undefined,
+          simulated,
+        });
       }
 
-      decisions.push({
-        createdAt,
-        stopAt,
-        timestamp,
-        stopTimestamp: normalizedStopTimestamp,
-        value: row.value || undefined,
-        country: row.country || undefined,
-        simulated,
-      });
+      lastDecisionRowId = Number(decisionRows[decisionRows.length - 1]?.rowid || lastDecisionRowId);
+      await delay(0);
     }
 
     const totals: DashboardStatsTotals = {
@@ -3210,18 +3387,94 @@ ${errorSummary}  Status: ${syncSummary.state}
       simulatedDecisions: activeSimulatedDecisions,
     };
 
-    dashboardStatsCache = { key: cacheKey, alerts, decisions, totals };
-    return dashboardStatsCache;
+    const statsCache = { key: cacheKey, alerts, decisions, totals };
+    if (cacheKey === getDashboardStatsCacheKey()) {
+      dashboardStatsCache = statsCache;
+    }
+    return statsCache;
   }
 
-  function buildDashboardStats(filters: DashboardStatsFilters): DashboardStatsResponse {
-    const statsIndex = getDashboardStatsIndex();
+  async function buildDashboardStats(filters: DashboardStatsFilters): Promise<DashboardStatsResponse> {
+    const statsIndex = await getDashboardStatsIndex();
     const responseCacheKey = getDashboardStatsResponseCacheKey(statsIndex.key, filters);
     const cachedResponse = dashboardStatsResponseCache.get(responseCacheKey);
     if (cachedResponse) {
       return cachedResponse;
     }
 
+    const pending = dashboardStatsResponsePromises.get(responseCacheKey);
+    if (pending) {
+      return pending;
+    }
+
+    const promise = buildDashboardStatsResponse(statsIndex, filters, responseCacheKey).finally(() => {
+      dashboardStatsResponsePromises.delete(responseCacheKey);
+    });
+    dashboardStatsResponsePromises.set(responseCacheKey, promise);
+    return promise;
+  }
+
+  function createEmptyDashboardStatsResponse(options: { pending?: boolean } = {}): DashboardStatsResponse {
+    const totals: DashboardStatsTotals = {
+      alerts: 0,
+      decisions: 0,
+      simulatedAlerts: 0,
+      simulatedDecisions: 0,
+    };
+
+    return {
+      pending: options.pending || undefined,
+      retryAfterMs: options.pending ? 1_500 : undefined,
+      totals,
+      filteredTotals: totals,
+      globalTotal: 0,
+      topTargets: [],
+      topCountries: [],
+      allCountries: [],
+      topScenarios: [],
+      topAS: [],
+      series: {
+        alertsHistory: [],
+        simulatedAlertsHistory: [],
+        decisionsHistory: [],
+        simulatedDecisionsHistory: [],
+        activeDecisionsHistory: [],
+        activeSimulatedDecisionsHistory: [],
+        unfilteredAlertsHistory: [],
+        unfilteredSimulatedAlertsHistory: [],
+        unfilteredDecisionsHistory: [],
+        unfilteredSimulatedDecisionsHistory: [],
+      },
+    };
+  }
+
+  function shouldServeEmptyDashboardStats(): boolean {
+    if (dashboardStatsCache?.key === getDashboardStatsCacheKey()) {
+      return false;
+    }
+
+    if (dashboardStatsIndexPromises.size > 0 || dashboardStatsResponsePromises.size > 0) {
+      return true;
+    }
+
+    try {
+      return database.countAlerts() + database.countDecisions() > DASHBOARD_COLD_BUILD_ROW_LIMIT;
+    } catch {
+      return false;
+    }
+  }
+
+  function warmDashboardStatsCache(filters: DashboardStatsFilters): void {
+    void buildDashboardStats(filters).catch((error: any) => {
+      console.error('Failed to warm dashboard statistics cache:', error.message);
+    });
+  }
+
+  async function buildDashboardStatsResponse(
+    statsIndex: DashboardStatsCache,
+    filters: DashboardStatsFilters,
+    responseCacheKey: string,
+  ): Promise<DashboardStatsResponse> {
     const nowTimestamp = Date.now();
     const lookbackDays = Math.max(1, Math.round(lookbackHours(config.lookbackPeriod) / 24));
 
@@ -3232,7 +3485,11 @@ ${errorSummary}  Status: ${syncSummary.state}
     const filteredAlertIps = new Set<string>();
     const sliderAlertIps = new Set<string>();
 
-    for (const alert of statsIndex.alerts) {
+    for (let index = 0; index < statsIndex.alerts.length; index += 1) {
+      if (index > 0 && index % DASHBOARD_LOOP_YIELD_INTERVAL === 0) {
+        await delay(0);
+      }
+      const alert = statsIndex.alerts[index];
       if (alert.ip && alert.country && alert.country !== 'Unknown') {
         alertCountryByIp.set(alert.ip, alert.country);
       }
@@ -3261,7 +3518,12 @@ ${errorSummary}  Status: ${syncSummary.state}
     const chartDecisionAccumulator = createDashboardDecisionAccumulator();
     const sliderDecisionAccumulator = createDashboardDecisionAccumulator();
 
-    for (const decision of statsIndex.decisions) {
+    let globalTotal = 0;
+    for (let index = 0; index < statsIndex.decisions.length; index += 1) {
+      if (index > 0 && index % DASHBOARD_LOOP_YIELD_INTERVAL === 0) {
+        await delay(0);
+      }
+      const decision = statsIndex.decisions[index];
       if (!matchesDashboardSimulationFilter(decision.simulated, filters.simulation)) {
         continue;
       }
@@ -3285,6 +3547,14 @@ ${errorSummary}  Status: ${syncSummary.state}
         }
       }
     }
+    for (let index = 0; index < statsIndex.alerts.length; index += 1) {
+      if (index > 0 && index % DASHBOARD_LOOP_YIELD_INTERVAL === 0) {
+        await delay(0);
+      }
+      if (matchesDashboardSimulationFilter(statsIndex.alerts[index].simulated, filters.simulation)) {
+        globalTotal += 1;
+      }
+    }
 
     const response: DashboardStatsResponse = {
       totals: statsIndex.totals,
@@ -3294,7 +3564,7 @@ ${errorSummary}  Status: ${syncSummary.state}
         simulatedAlerts: filteredAlertAccumulator.simulatedAlerts,
         simulatedDecisions: filteredDecisionAccumulator.simulatedDecisions,
       },
-      globalTotal: statsIndex.alerts.filter((alert) => matchesDashboardSimulationFilter(alert.simulated, filters.simulation)).length,
+      globalTotal,
       topTargets: topDashboardEntries(filteredAlertAccumulator.targets),
       topCountries: dashboardCountryList(filteredAlertAccumulator.countries, 10),
       allCountries: dashboardWorldMapData(filteredAlertAccumulator.countries, filteredDecisionAccumulator.countries),
@@ -3315,14 +3585,26 @@ ${errorSummary}  Status: ${syncSummary.state}
     };
 
     dashboardStatsResponseCache.set(responseCacheKey, response);
+    const staleCacheKey = getStaleDashboardStatsResponseCacheKey(filters);
+    staleDashboardStatsResponseCache.set(staleCacheKey, response);
     if (dashboardStatsResponseCache.size > 50) {
       const firstKey = dashboardStatsResponseCache.keys().next().value;
       if (firstKey) {
         dashboardStatsResponseCache.delete(firstKey);
       }
     }
+    if (staleDashboardStatsResponseCache.size > 50) {
+      const firstKey = staleDashboardStatsResponseCache.keys().next().value;
+      if (firstKey) {
+        staleDashboardStatsResponseCache.delete(firstKey);
+      }
+    }
 
     return response;
+  }
+
+  function getDashboardStatsCacheKey(): string {
+    return `${dashboardStatsCacheVersion}:${config.lookbackMs}:${config.simulationsEnabled ? 'sim' : 'live'}`;
   }
 
   function invalidateDashboardStatsCache(): void {
@@ -3334,6 +3616,11 @@ ${errorSummary}  Status: ${syncSummary.state}
   function getDashboardStatsResponseCacheKey(indexKey: string, filters: DashboardStatsFilters): string {
     return `${dashboardStatsCacheVersion}:${indexKey}:${JSON.stringify(filters)}`;
   }
+
+  function getStaleDashboardStatsResponseCacheKey(filters: DashboardStatsFilters): string {
+    return JSON.stringify(filters);
+  }
+
   function normalizeAlertDetail(input: unknown, alertId: string): AlertRecord | null {
     if (Array.isArray(input)) {
       const matchingAlert = input.find((candidate) => String((candidate as AlertRecord | undefined)?.id) === alertId);
@@ -3362,6 +3649,8 @@ ${errorSummary}  Status: ${syncSummary.state}
     stopBackgroundTasks: () => {
       stopRefreshScheduler();
       stopHeartbeatScheduler();
+      queryWorker.close();
+      syncWorker.close();
     },
     getSyncStatus: () => ({ ...syncStatus }),
     getLapiStatus: () => lapiClient.getStatus(),
@@ -3531,14 +3820,39 @@ function countryCondition(value: string): SqlCondition {
 }
 
 function simulationTermCondition(value: string): SqlCondition {
-  const normalized = value.trim().toLowerCase();
-  if (['sim', 'simulated', 'simulation', 'true', 'yes', '1'].includes(normalized)) {
+  const parsed = parseSimulationSearchValue(value);
+  if (parsed === true) {
     return { sql: 'simulated = 1', params: [] };
   }
-  if (['live', 'false', 'no', '0'].includes(normalized)) {
+  if (parsed === false) {
     return { sql: 'simulated = 0', params: [] };
   }
   return { sql: '0 = 1', params: [] };
+}
+
+function simulationComparisonCondition(operator: string, value: string): SqlCondition {
+  const parsed = parseSimulationSearchValue(value);
+  if (parsed === null) {
+    return { sql: '0 = 1', params: [] };
+  }
+  if (operator === '=') {
+    return { sql: `simulated = ${parsed ? 1 : 0}`, params: [] };
+  }
+  if (operator === '<>') {
+    return { sql: `simulated = ${parsed ? 0 : 1}`, params: [] };
+  }
+  return { sql: '0 = 1', params: [] };
+}
+
+function parseSimulationSearchValue(value: string): boolean | null {
+  const normalized = value.trim().toLowerCase();
+  if (['sim', 'simulated', 'simulation', 'true', 'yes', '1'].includes(normalized)) {
+    return true;
+  }
+  if (['live', 'false', 'no', '0'].includes(normalized)) {
+    return false;
+  }
+  return null;
 }
 
 function decisionStatusCondition(value: string, now: string): SqlCondition {
@@ -3582,6 +3896,9 @@ function compileSearchNodeSql(
   if (node.kind === 'comparison') {
     if (node.field === 'date') {
       return dateComparisonCondition('created_at', node.operator, node.value, context.dateOptions);
+    }
+    if (node.field === 'sim') {
+      return simulationComparisonCondition(node.operator, node.value);
     }
     const condition = context.fieldCondition(node.field, node.value);
     if (node.operator === '<>') {

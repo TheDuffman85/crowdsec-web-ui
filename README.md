@@ -706,7 +706,7 @@ Active-decision refreshes use the same `CROWDSEC_ALERT_SYNC_CHUNK` windows as hi
    ./run.sh loadtest
    ```
 
-   Load-test mode seeds a repeatable fake-LAPI source dataset in a separate SQLite database, builds the frontend, and starts a local backend with authentication disabled. On startup, the backend imports that source dataset through the normal bootstrap/full-sync path before serving it from the app cache. The UI opens on the default Dashboard at `http://localhost:3000/`. The default source dataset is `300000` alerts and `300000` embedded decisions under `/tmp/crowdsec-web-ui-load-test`. Load-test mode prints source seed timings, sync progress, and `/api` requests to the console while it runs.
+   Load-test mode seeds a repeatable fake-LAPI source dataset in a separate SQLite database, builds the frontend, and starts a local backend with authentication disabled. On startup, the backend imports that source dataset through the normal bootstrap/full-sync path before serving it from the app cache. The UI opens on the default Dashboard at `http://localhost:3000/`. The default source dataset is `300000` alerts and `300000` embedded decisions under `/tmp/crowdsec-web-ui-load-test`. Load-test mode prints source seed timings, sync progress, `/api` requests, and event-loop stalls of at least 100ms to the console while it runs.
 
    Override the dataset with environment variables:
    ```bash

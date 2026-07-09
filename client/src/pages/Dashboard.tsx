@@ -234,6 +234,7 @@ export function Dashboard() {
     const inFlightLoadKeysRef = useRef(new Map<string, InFlightDashboardLoad>());
     const nextLoadRequestIdRef = useRef(0);
     const lastCompletedLoadRef = useRef<{ key: string; completedAt: number } | null>(null);
+    const pendingStatsRetryTimeoutRef = useRef<number | null>(null);
 
     // Active filters
     const [filters, setFilters] = useState<DashboardFilters>(() => parseStoredFilters(localStorage.getItem('dashboard_filters')));
@@ -306,6 +307,7 @@ export function Dashboard() {
             setBackgroundRefreshing(true);
         }
 
+        let completedLoadWasPending = false;
         try {
             const [configData, dashboardStatsData] = await Promise.all([
                 fetchConfig(),
@@ -316,9 +318,23 @@ export function Dashboard() {
             }
 
             setConfig(configData);
-            dashboardStatsRef.current = dashboardStatsData;
-            setDashboardStats(dashboardStatsData);
-            setDashboardStatsLoadKey(loadKey);
+            if (pendingStatsRetryTimeoutRef.current !== null) {
+                window.clearTimeout(pendingStatsRetryTimeoutRef.current);
+                pendingStatsRetryTimeoutRef.current = null;
+            }
+            const hasCurrentStats = dashboardStatsRef.current !== null;
+            completedLoadWasPending = dashboardStatsData.pending === true;
+            if (!dashboardStatsData.pending || !hasCurrentStats) {
+                dashboardStatsRef.current = dashboardStatsData;
+                setDashboardStats(dashboardStatsData);
+                setDashboardStatsLoadKey(loadKey);
+            }
+            if (dashboardStatsData.pending) {
+                pendingStatsRetryTimeoutRef.current = window.setTimeout(() => {
+                    pendingStatsRetryTimeoutRef.current = null;
+                    void loadDataRef.current(true);
+                }, dashboardStatsData.retryAfterMs ?? 1500);
+            }
 
             // Check LAPI status from config
             if (configData.lapi_status) {
@@ -340,7 +356,7 @@ export function Dashboard() {
             if (inFlightLoadKeysRef.current.get(loadKey)?.requestId === requestId) {
                 inFlightLoadKeysRef.current.delete(loadKey);
             }
-            if (!signal?.aborted) {
+            if (!signal?.aborted && !completedLoadWasPending) {
                 lastCompletedLoadRef.current = { key: loadKey, completedAt: Date.now() };
             }
             if (!signal?.aborted) {
@@ -360,7 +376,13 @@ export function Dashboard() {
             void loadData(false, controller.signal);
         });
 
-        return () => controller.abort();
+        return () => {
+            controller.abort();
+            if (pendingStatsRetryTimeoutRef.current !== null) {
+                window.clearTimeout(pendingStatsRetryTimeoutRef.current);
+                pendingStatsRetryTimeoutRef.current = null;
+            }
+        };
     }, [loadData]);
 
     // Background Refresh

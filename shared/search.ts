@@ -1312,6 +1312,14 @@ function compareFieldValue<T>(
     return false;
   }
 
+  if (field === 'sim') {
+    const parsed = parseSimulationSearchValue(value);
+    if (parsed === null) {
+      return false;
+    }
+    return operator === '=' ? matcher(item, value) : !matcher(item, value);
+  }
+
   if (operator === '=') {
     return matcher(item, value);
   }
@@ -1395,14 +1403,25 @@ function getCountryName(code?: string | null): string {
 }
 
 function matchesSimulationTerm(isSimulated: boolean, value: string): boolean {
-  const normalized = normalizeValue(value);
-  if (['sim', 'simulated', 'simulation', 'true', 'yes', '1'].includes(normalized)) {
+  const parsed = parseSimulationSearchValue(value);
+  if (parsed === true) {
     return isSimulated;
   }
-  if (['live', 'false', 'no', '0'].includes(normalized)) {
+  if (parsed === false) {
     return !isSimulated;
   }
   return false;
+}
+
+function parseSimulationSearchValue(value: string): boolean | null {
+  const normalized = normalizeValue(value);
+  if (['sim', 'simulated', 'simulation', 'true', 'yes', '1'].includes(normalized)) {
+    return true;
+  }
+  if (['live', 'false', 'no', '0'].includes(normalized)) {
+    return false;
+  }
+  return null;
 }
 
 function isDecisionExpired(decision: DecisionListItem): boolean {

@@ -274,6 +274,8 @@ export interface DashboardStatsSeries {
 }
 
 export interface DashboardStatsResponse {
+  pending?: boolean;
+  retryAfterMs?: number;
   totals: DashboardStatsTotals;
   filteredTotals: DashboardStatsTotals;
   globalTotal: number;
