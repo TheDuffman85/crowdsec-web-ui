@@ -237,6 +237,20 @@ describe('WorldMapCard', () => {
     expect(screen.queryByText('Germany')).not.toBeInTheDocument();
   });
 
+  test('shows the country flag in the tooltip', async () => {
+    render(
+      <WorldMapCard
+        data={[{ label: 'Germany', countryCode: 'DE', count: 2, liveCount: 2, simulatedCount: 0 }]}
+        onCountrySelect={vi.fn()}
+        selectedCountry={null}
+        simulationsEnabled={true}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('world-map-tooltip')).toBeInTheDocument());
+    expect(screen.getByRole('img', { name: 'DE' })).toHaveTextContent('🇩🇪');
+  });
+
   test('shows active decisions in the tooltip', async () => {
     render(
       <WorldMapCard

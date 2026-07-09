@@ -14,6 +14,7 @@ import type { WorldMapDatum } from '../types';
 import { DASHBOARD_COLORS } from '../lib/dashboardColors';
 import { useI18n } from '../lib/i18n';
 import { getCountryName } from '../lib/utils';
+import { CountryFlag } from './CountryFlag';
 
 // Using local Natural Earth data which has proper ISO properties
 const geoUrl = assetUrl("/world-50m.json");
@@ -159,8 +160,11 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
                 data-testid="world-map-tooltip"
                 className="fixed z-[99999] pointer-events-none bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 border border-gray-200 dark:border-gray-700 shadow-xl rounded-lg p-3 text-sm max-w-[200px]"
             >
-                <div className={`font-medium ${showMetricRows ? 'mb-2' : ''}`}>
-                    {getCountryName(featureId, language) ?? feature.label ?? featureId}
+                <div className={`flex items-center gap-2 font-medium ${showMetricRows ? 'mb-2' : ''}`}>
+                    <CountryFlag code={featureId} />
+                    <span className="min-w-0">
+                        {getCountryName(featureId, language) ?? feature.label ?? featureId}
+                    </span>
                 </div>
                 {showMetricRows && (
                     <>
