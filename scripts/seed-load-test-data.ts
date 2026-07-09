@@ -10,6 +10,7 @@ const DEFAULT_DB_DIR = path.join(process.env.TMPDIR || '/tmp', 'crowdsec-web-ui-
 const DEFAULT_ACTIVE_DECISION_RATIO = 0.7;
 const DEFAULT_SIMULATION_RATIO = 0.1;
 const DEFAULT_DUPLICATE_VALUE_RATIO = 0.15;
+const LOADTEST_SOURCE_TABLE = 'loadtest_alert_source';
 
 interface LoadTestConfig {
   alerts: number;
@@ -104,7 +105,7 @@ const machines = [
   'dev-bastion',
 ] as const;
 
-const origins = ['crowdsec', 'CAPI', 'manual', 'cscli-import', 'lists'] as const;
+const origins = ['crowdsec', 'manual', 'cscli-import', 'lists'] as const;
 
 function parseIntegerEnv(name: string, defaultValue: number): number {
   const raw = process.env[name];
@@ -193,11 +194,6 @@ function buildAlertTemplate(id: number, config: LoadTestConfig, nowMs: number): 
     simulated: fraction(id, config.seed, 47) < config.simulationRatio,
     eventsCount: 1 + Math.floor(fraction(id, config.seed, 53) * 120),
   };
-}
-
-function decisionAlertId(decisionId: number, alertCount: number): number {
-  if (alertCount <= 0) return 0;
-  return ((decisionId - 1) % alertCount) + 1;
 }
 
 function buildDecisionTemplate(
@@ -296,20 +292,6 @@ function buildAlertRecord(alert: AlertTemplate, config: LoadTestConfig, nowMs: n
   };
 }
 
-function buildDecisionRecord(decision: DecisionTemplate) {
-  return {
-    ...decisionSummary(decision),
-    alert_id: decision.alertId,
-    machine_id: decision.machine,
-    machine_alias: decision.machine,
-    machine: decision.machine,
-    country: decision.country,
-    as: decision.asName,
-    target: decision.target,
-    reason: decision.scenario,
-  };
-}
-
 function removeExistingDatabase(dbDir: string): void {
   const dbPath = path.join(dbDir, 'crowdsec.db');
   rmSync(dbPath, { force: true });
@@ -328,6 +310,35 @@ function formatElapsed(ms: number): string {
   return `${(ms / 1_000).toFixed(2)}s`;
 }
 
+function ensureLoadTestSourceTable(database: CrowdsecDatabase): void {
+  database.db.exec(`
+    CREATE TABLE IF NOT EXISTS ${LOADTEST_SOURCE_TABLE} (
+      id TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL,
+      has_active_decision INTEGER NOT NULL DEFAULT 0,
+      scenario TEXT,
+      origins TEXT,
+      raw_data TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_${LOADTEST_SOURCE_TABLE}_created_at
+      ON ${LOADTEST_SOURCE_TABLE}(created_at);
+    CREATE INDEX IF NOT EXISTS idx_${LOADTEST_SOURCE_TABLE}_active_created_at
+      ON ${LOADTEST_SOURCE_TABLE}(has_active_decision, created_at);
+  `);
+}
+
+function sourceOrigins(record: ReturnType<typeof buildAlertRecord>): string {
+  const origins = new Set<string>();
+  for (const decision of record.decisions || []) {
+    if (decision.origin) origins.add(String(decision.origin));
+  }
+  return `\n${Array.from(origins).join('\n')}\n`;
+}
+
+function hasActiveSourceDecision(record: ReturnType<typeof buildAlertRecord>, nowMs: number): number {
+  return (record.decisions || []).some((decision) => Date.parse(decision.stop_at) > nowMs) ? 1 : 0;
+}
+
 const config = readConfig();
 const dbPath = path.join(config.dbDir, 'crowdsec.db');
 const nowMs = Date.now();
@@ -337,73 +348,47 @@ console.log(`Seeding load-test database at ${dbPath}`);
 console.log(`Alerts: ${config.alerts.toLocaleString('en-US')}`);
 console.log(`Decisions: ${config.decisions.toLocaleString('en-US')}`);
 console.log(`Seed: ${config.seed}`);
+if (config.alerts === 0 && config.decisions > 0) {
+  console.log('Warning: LOADTEST_DECISIONS requires alerts in CrowdSec alert payloads; no decisions will be generated when LOADTEST_ALERTS=0.');
+}
 
 removeExistingDatabase(config.dbDir);
 
 const database = new CrowdsecDatabase({ dbDir: config.dbDir });
-database.beginDeferredSearchIndexUpdates();
+ensureLoadTestSourceTable(database);
+const insertSourceAlert = database.db.prepare(`
+  INSERT INTO ${LOADTEST_SOURCE_TABLE} (id, created_at, has_active_decision, scenario, origins, raw_data)
+  VALUES (?, ?, ?, ?, ?, ?)
+`);
 
-const insertAlertsBatch = database.db.transaction((start: number, end: number) => {
+const insertSourceAlertsBatch = database.db.transaction((start: number, end: number) => {
+  let embeddedDecisions = 0;
   for (let id = start; id <= end; id += 1) {
     const alert = buildAlertTemplate(id, config, nowMs);
     const record = buildAlertRecord(alert, config, nowMs);
-    database.insertAlert({
-      $id: String(alert.id),
-      $uuid: String(record.uuid),
-      $created_at: alert.createdAt,
-      $scenario: alert.scenario,
-      $source_ip: alert.ip,
-      $message: String(record.message),
-      $raw_data: JSON.stringify(record),
-      $record: record,
-    });
+    embeddedDecisions += record.decisions.length;
+    insertSourceAlert.run(
+      String(alert.id),
+      alert.createdAt,
+      hasActiveSourceDecision(record, nowMs),
+      record.scenario || null,
+      sourceOrigins(record),
+      JSON.stringify(record),
+    );
   }
-});
-
-const insertDecisionsBatch = database.db.transaction((start: number, end: number) => {
-  for (let id = start; id <= end; id += 1) {
-    const alertId = decisionAlertId(id, config.alerts);
-    const alert = buildAlertTemplate(alertId, config, nowMs);
-    const decision = buildDecisionTemplate(id, alert, config, nowMs);
-    const record = buildDecisionRecord(decision);
-    database.insertDecision({
-      $id: String(decision.id),
-      $uuid: `loadtest-decision-${decision.id}`,
-      $alert_id: String(decision.alertId),
-      $created_at: decision.createdAt,
-      $stop_at: decision.stopAt,
-      $value: decision.value,
-      $type: decision.type,
-      $origin: decision.origin,
-      $scenario: decision.scenario,
-      $raw_data: JSON.stringify(record),
-      $record: record,
-    });
-  }
+  return embeddedDecisions;
 });
 
 const batchSize = 25_000;
 const alertSeedStartedAt = Date.now();
+let embeddedDecisionCount = 0;
 for (let start = 1; start <= config.alerts; start += batchSize) {
   const end = Math.min(config.alerts, start + batchSize - 1);
-  insertAlertsBatch(start, end);
-  logProgress('Alerts', end, config.alerts);
+  embeddedDecisionCount += insertSourceAlertsBatch(start, end) as number;
+  logProgress('Source alerts', end, config.alerts);
 }
-console.log(`Alert seeding completed in ${formatElapsed(Date.now() - alertSeedStartedAt)}.`);
-
-const decisionSeedStartedAt = Date.now();
-for (let start = 1; start <= config.decisions; start += batchSize) {
-  const end = Math.min(config.decisions, start + batchSize - 1);
-  insertDecisionsBatch(start, end);
-  logProgress('Decisions', end, config.decisions);
-}
-console.log(`Decision seeding completed in ${formatElapsed(Date.now() - decisionSeedStartedAt)}.`);
-
-console.log('Rebuilding search indexes...');
-const indexRebuildStartedAt = Date.now();
-database.rebuildSearchIndexes();
-console.log(`Search index rebuild completed in ${formatElapsed(Date.now() - indexRebuildStartedAt)}.`);
-database.setMeta('refresh_interval_ms', '300000');
+console.log(`Source alert seeding completed in ${formatElapsed(Date.now() - alertSeedStartedAt)}.`);
+console.log(`Embedded source decisions: ${embeddedDecisionCount.toLocaleString('en-US')}/${config.decisions.toLocaleString('en-US')}`);
 database.close();
 
 console.log(`Seeded load-test database at ${dbPath}`);

@@ -152,6 +152,69 @@ describe('CrowdsecDatabase', () => {
     db.close();
   });
 
+  test('migrates legacy decision tables before creating duplicate indexes', () => {
+    const dbPath = createTestDatabasePath();
+    const legacy = createLegacyDatabase(dbPath);
+    legacy.exec(`
+      CREATE TABLE alerts (
+        id INTEGER PRIMARY KEY,
+        uuid TEXT UNIQUE,
+        created_at TEXT NOT NULL,
+        scenario TEXT,
+        source_ip TEXT,
+        message TEXT,
+        raw_data TEXT
+      );
+      CREATE TABLE decisions (
+        id TEXT PRIMARY KEY,
+        uuid TEXT UNIQUE,
+        alert_id INTEGER,
+        created_at TEXT NOT NULL,
+        stop_at TEXT NOT NULL,
+        value TEXT,
+        type TEXT,
+        origin TEXT,
+        scenario TEXT,
+        raw_data TEXT
+      );
+      INSERT INTO decisions (
+        id, uuid, alert_id, created_at, stop_at, value, type, origin, scenario, raw_data
+      )
+      VALUES (
+        '10',
+        'decision-10',
+        1,
+        '2026-01-01T00:00:00.000Z',
+        '2030-01-01T00:00:00.000Z',
+        '1.2.3.4',
+        'ban',
+        'cscli',
+        'crowdsecurity/ssh-bf',
+        '{"id":10,"value":"1.2.3.4","stop_at":"2030-01-01T00:00:00.000Z"}'
+      );
+    `);
+    legacy.close();
+
+    const db = new CrowdsecDatabase({ dbPath });
+    const columns = db.db.prepare('PRAGMA table_info(decisions)').all() as Array<{ name: string }>;
+    const indexes = db.db.prepare(`
+      SELECT name
+      FROM sqlite_master
+      WHERE type = 'index' AND tbl_name = 'decisions'
+    `).all() as Array<{ name: string }>;
+    const row = db.db.prepare('SELECT is_duplicate FROM decisions WHERE id = ?').get('10') as { is_duplicate: number };
+
+    expect(columns.map((column) => column.name)).toEqual(expect.arrayContaining(['is_duplicate', 'search_text', 'simulated']));
+    expect(indexes.map((index) => index.name)).toEqual(expect.arrayContaining([
+      'idx_decisions_duplicate_active',
+      'idx_decisions_duplicate_created_at',
+    ]));
+    expect(row.is_duplicate).toBe(0);
+    expect(db.getDecisionById('10')?.stop_at).toBe('2030-01-01T00:00:00.000Z');
+
+    db.close();
+  });
+
   test('migrates existing auth users with TOTP replay tracking', () => {
     const dbPath = createTestDatabasePath();
     const legacy = createLegacyDatabase(dbPath);

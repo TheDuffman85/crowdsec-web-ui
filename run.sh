@@ -85,7 +85,15 @@ LOADTEST_ENV_NAMES=(
     LOADTEST_ACTIVE_DECISION_RATIO
     LOADTEST_SIMULATION_RATIO
     LOADTEST_DUPLICATE_VALUE_RATIO
+    LOADTEST_REFRESH_ALERTS
+    LOADTEST_REFRESH_DECISIONS
+    CROWDSEC_REFRESH_INTERVAL
+    CROWDSEC_IDLE_REFRESH_INTERVAL
+    CROWDSEC_IDLE_THRESHOLD
+    CROWDSEC_FULL_REFRESH_INTERVAL
     CROWDSEC_LOOKBACK_PERIOD
+    CROWDSEC_ALERT_SYNC_CHUNK
+    CROWDSEC_ALERT_SYNC_MIN_CHUNK
     CROWDSEC_SIMULATIONS_ENABLED
 )
 
@@ -130,7 +138,15 @@ configure_loadtest_defaults() {
     : "${LOADTEST_ACTIVE_DECISION_RATIO:=0.7}"
     : "${LOADTEST_SIMULATION_RATIO:=0.1}"
     : "${LOADTEST_DUPLICATE_VALUE_RATIO:=0.15}"
+    : "${LOADTEST_REFRESH_ALERTS:=100}"
+    : "${LOADTEST_REFRESH_DECISIONS:=100}"
+    : "${CROWDSEC_REFRESH_INTERVAL:=5m}"
+    : "${CROWDSEC_IDLE_REFRESH_INTERVAL:=5m}"
+    : "${CROWDSEC_IDLE_THRESHOLD:=2m}"
+    : "${CROWDSEC_FULL_REFRESH_INTERVAL:=5m}"
     : "${CROWDSEC_LOOKBACK_PERIOD:=30d}"
+    : "${CROWDSEC_ALERT_SYNC_CHUNK:=12h}"
+    : "${CROWDSEC_ALERT_SYNC_MIN_CHUNK:=15m}"
     : "${CROWDSEC_SIMULATIONS_ENABLED:=true}"
 
     export LOADTEST_ALERTS
@@ -141,7 +157,15 @@ configure_loadtest_defaults() {
     export LOADTEST_ACTIVE_DECISION_RATIO
     export LOADTEST_SIMULATION_RATIO
     export LOADTEST_DUPLICATE_VALUE_RATIO
+    export LOADTEST_REFRESH_ALERTS
+    export LOADTEST_REFRESH_DECISIONS
+    export CROWDSEC_REFRESH_INTERVAL
+    export CROWDSEC_IDLE_REFRESH_INTERVAL
+    export CROWDSEC_IDLE_THRESHOLD
+    export CROWDSEC_FULL_REFRESH_INTERVAL
     export CROWDSEC_LOOKBACK_PERIOD
+    export CROWDSEC_ALERT_SYNC_CHUNK
+    export CROWDSEC_ALERT_SYNC_MIN_CHUNK
     export CROWDSEC_SIMULATIONS_ENABLED
     export DB_DIR="$LOADTEST_DB_DIR"
     export PORT="$LOADTEST_BACKEND_PORT"
@@ -164,6 +188,43 @@ wait_for_url() {
 
     log "Timed out waiting for $label at $url"
     return 1
+}
+
+start_loadtest_backend() {
+    if command -v setsid >/dev/null 2>&1; then
+        setsid node --import tsx scripts/load-test-server.ts &
+    else
+        node --import tsx scripts/load-test-server.ts &
+    fi
+    BACKEND_PID=$!
+}
+
+stop_loadtest_backend() {
+    if [ -z "${BACKEND_PID:-}" ]; then
+        return
+    fi
+
+    if command -v setsid >/dev/null 2>&1; then
+        kill -TERM "-$BACKEND_PID" 2>/dev/null || kill "$BACKEND_PID" 2>/dev/null
+    else
+        kill "$BACKEND_PID" 2>/dev/null
+    fi
+
+    for _ in 1 2 3 4 5; do
+        if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+            wait "$BACKEND_PID" 2>/dev/null
+            return
+        fi
+        sleep 1
+    done
+
+    log "Load-test backend did not stop after SIGTERM; forcing shutdown..."
+    if command -v setsid >/dev/null 2>&1; then
+        kill -KILL "-$BACKEND_PID" 2>/dev/null || kill -KILL "$BACKEND_PID" 2>/dev/null
+    else
+        kill -KILL "$BACKEND_PID" 2>/dev/null
+    fi
+    wait "$BACKEND_PID" 2>/dev/null
 }
 
 # 1. Shutdown existing services
@@ -201,6 +262,9 @@ if [ "$MODE" == "loadtest" ]; then
     log "DB directory: $LOADTEST_DB_DIR"
     log "Alerts: $LOADTEST_ALERTS"
     log "Decisions: $LOADTEST_DECISIONS"
+    log "Refresh additions: $LOADTEST_REFRESH_ALERTS alerts, $LOADTEST_REFRESH_DECISIONS decisions"
+    log "Refresh interval: $CROWDSEC_REFRESH_INTERVAL"
+    log "Full refresh interval: $CROWDSEC_FULL_REFRESH_INTERVAL"
     log "Seed: $LOADTEST_SEED"
     log "Seeding load-test database..."
     log "The UI will not be available until seeding, the frontend build, and backend startup finish."
@@ -220,11 +284,9 @@ if [ "$MODE" == "loadtest" ]; then
     fi
 
     log "Starting load-test backend on port $LOADTEST_BACKEND_PORT..."
-    "${PNPM_CMD[@]}" run loadtest:server &
-    BACKEND_PID=$!
+    start_loadtest_backend
     if ! wait_for_url "http://127.0.0.1:${LOADTEST_BACKEND_PORT}/api/health" "load-test backend"; then
-        kill $BACKEND_PID 2>/dev/null
-        wait $BACKEND_PID 2>/dev/null
+        stop_loadtest_backend
         exit 1
     fi
 
@@ -234,17 +296,15 @@ if [ "$MODE" == "loadtest" ]; then
     log "Service started. Backend PID: $BACKEND_PID"
 
     cleanup() {
+        trap '' SIGINT SIGTERM
         log "Stopping load-test service..."
-        kill $BACKEND_PID 2>/dev/null
-        wait $BACKEND_PID 2>/dev/null
+        stop_loadtest_backend
         cleanup_pnpm_shim
         exit 0
     }
     trap cleanup SIGINT SIGTERM
 
-    while kill -0 $BACKEND_PID 2>/dev/null; do
-        wait
-    done
+    wait $BACKEND_PID
 elif [ "$MODE" == "dev" ]; then
     log "Starting in DEVELOPMENT mode..."
     

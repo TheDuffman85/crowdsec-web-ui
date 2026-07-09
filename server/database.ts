@@ -118,6 +118,7 @@ export class CrowdsecDatabase {
   public readonly db: Database;
   public readonly searchIndexAvailable: boolean;
   private searchIndexUpdatesDeferred = false;
+  private decisionDuplicateFlagsDirty = true;
 
   private readonly insertAlertStatement: any;
   private readonly getAllAlertsStatement: any;
@@ -225,11 +226,11 @@ export class CrowdsecDatabase {
     this.insertDecisionStatement = this.db.query(`
       INSERT OR REPLACE INTO decisions (
         id, uuid, alert_id, created_at, stop_at, value, type, origin, scenario, raw_data,
-        country, country_name, as_name, target, machine, simulated, search_text
+        country, country_name, as_name, target, machine, simulated, search_text, is_duplicate
       )
       VALUES (
         $id, $uuid, $alert_id, $created_at, $stop_at, $value, $type, $origin, $scenario, $raw_data,
-        $country, $country_name, $as_name, $target, $machine, $simulated, $search_text
+        $country, $country_name, $as_name, $target, $machine, $simulated, $search_text, 0
       )
     `);
 
@@ -257,12 +258,16 @@ export class CrowdsecDatabase {
       ORDER BY stop_at DESC
     `);
     this.getActiveAlertIdsStatement = this.db.query(`
-      SELECT DISTINCT decisions.alert_id AS id
-      FROM decisions
-      INNER JOIN alerts ON alerts.id = decisions.alert_id
-      WHERE decisions.stop_at > $now
-        AND decisions.alert_id IS NOT NULL
-        AND alerts.created_at >= $since
+      SELECT DISTINCT active.alert_id AS id
+      FROM decisions AS active INDEXED BY idx_decisions_stop_alert_id
+      WHERE active.stop_at > $now
+        AND active.alert_id IS NOT NULL
+        AND EXISTS (
+          SELECT 1
+          FROM alerts
+          WHERE alerts.id = active.alert_id
+            AND alerts.created_at >= $since
+        )
     `);
 
     this.getDecisionsSinceStatement = this.db.query(`
@@ -447,6 +452,7 @@ export class CrowdsecDatabase {
   clearSyncData(): void {
     this.db.exec('DELETE FROM alerts');
     this.db.exec('DELETE FROM decisions');
+    this.decisionDuplicateFlagsDirty = true;
     this.clearSearchIndexes();
   }
 
@@ -517,6 +523,7 @@ export class CrowdsecDatabase {
     this.deleteDecisionSearchIndexesByAlertIds(staleIds);
     const decisions = runChunkedIdMutation(this.db, 'DELETE FROM decisions WHERE alert_id IN', staleIds);
     const alerts = runChunkedIdMutation(this.db, 'DELETE FROM alerts WHERE id IN', staleIds);
+    if (decisions > 0) this.decisionDuplicateFlagsDirty = true;
     this.deleteAlertSearchIndexes(staleIds);
     return { alerts, decisions };
   }
@@ -562,6 +569,7 @@ export class CrowdsecDatabase {
       $simulated: index.simulated,
       $search_text: index.searchText,
     });
+    this.decisionDuplicateFlagsDirty = true;
     this.upsertDecisionSearchIndex(params.$id, index.searchText);
   }
 
@@ -592,6 +600,7 @@ export class CrowdsecDatabase {
       $simulated: index.simulated,
       $search_text: index.searchText,
     });
+    this.decisionDuplicateFlagsDirty = true;
     this.upsertDecisionSearchIndex(params.$id, index.searchText);
   }
 
@@ -613,6 +622,7 @@ export class CrowdsecDatabase {
     this.deleteDecisionSearchIndexesByAlertIds(staleIds);
     const decisions = runChunkedIdMutation(this.db, 'DELETE FROM decisions WHERE alert_id IN', staleIds);
     const alerts = runChunkedIdMutation(this.db, 'DELETE FROM alerts WHERE id IN', staleIds);
+    if (decisions > 0) this.decisionDuplicateFlagsDirty = true;
     this.deleteAlertSearchIndexes(staleIds);
     return { alerts, decisions };
   }
@@ -630,11 +640,13 @@ export class CrowdsecDatabase {
       changes += runChunkedIdMutation(this.db, 'DELETE FROM decisions WHERE id IN', ids);
       this.deleteDecisionSearchIndexes(ids);
     }
+    if (changes > 0) this.decisionDuplicateFlagsDirty = true;
     return changes;
   }
 
   deleteDecision(id: string | number): void {
     this.deleteDecisionStatement.run({ $id: String(id) });
+    this.decisionDuplicateFlagsDirty = true;
     this.deleteDecisionSearchIndex(id);
   }
 
@@ -643,6 +655,7 @@ export class CrowdsecDatabase {
     this.deleteDecisionSearchIndexesByAlertIds(normalizedIds);
     const decisions = runChunkedIdMutation(this.db, 'DELETE FROM decisions WHERE alert_id IN', normalizedIds);
     const alerts = runChunkedIdMutation(this.db, 'DELETE FROM alerts WHERE id IN', normalizedIds);
+    if (decisions > 0) this.decisionDuplicateFlagsDirty = true;
     this.deleteAlertSearchIndexes(normalizedIds);
     return { alerts, decisions };
   }
@@ -650,6 +663,7 @@ export class CrowdsecDatabase {
   deleteCachedDecisions(ids: Array<string | number>): number {
     const normalizedIds = ids.map(String);
     const changes = runChunkedIdMutation(this.db, 'DELETE FROM decisions WHERE id IN', normalizedIds);
+    if (changes > 0) this.decisionDuplicateFlagsDirty = true;
     this.deleteDecisionSearchIndexes(normalizedIds);
     return changes;
   }
@@ -679,6 +693,7 @@ export class CrowdsecDatabase {
       this.deleteDecisionSearchIndexes(chunk);
     }
 
+    if (changes > 0) this.decisionDuplicateFlagsDirty = true;
     return changes;
   }
 
@@ -711,7 +726,40 @@ export class CrowdsecDatabase {
 
   deleteDecisionsByAlertId(alertId: string | number): void {
     this.deleteDecisionSearchIndexesByAlertIds([String(alertId)]);
-    this.deleteDecisionsByAlertIdStatement.run({ $alert_id: alertId });
+    const result = this.deleteDecisionsByAlertIdStatement.run({ $alert_id: alertId });
+    if (result.changes > 0) this.decisionDuplicateFlagsDirty = true;
+  }
+
+  refreshDecisionDuplicateFlags(now: string, force = false): void {
+    if (!force && !this.decisionDuplicateFlagsDirty) return;
+
+    const refresh = this.db.transaction((timestamp: string) => {
+      this.db.prepare('UPDATE decisions SET is_duplicate = 0 WHERE is_duplicate <> 0').run();
+      this.db.prepare(`
+        WITH ranked AS (
+          SELECT
+            id,
+            ROW_NUMBER() OVER (
+              PARTITION BY COALESCE(value, ''), simulated
+              ORDER BY
+                stop_at DESC,
+                CASE WHEN id GLOB '[0-9]*' THEN CAST(id AS INTEGER) ELSE 9223372036854775807 END ASC
+            ) AS duplicate_rank
+          FROM decisions
+          WHERE stop_at > ?
+        )
+        UPDATE decisions
+        SET is_duplicate = 1
+        WHERE id IN (
+          SELECT id
+          FROM ranked
+          WHERE duplicate_rank > 1
+        )
+      `).run(timestamp);
+    });
+
+    refresh(now);
+    this.decisionDuplicateFlagsDirty = false;
   }
 
   getMeta(key: string): MetaRow | null {
@@ -1232,14 +1280,18 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
       target TEXT,
       machine TEXT,
       simulated INTEGER NOT NULL DEFAULT 0,
-      search_text TEXT
+      search_text TEXT,
+      is_duplicate INTEGER NOT NULL DEFAULT 0
     );
+  `;
+
+  const createDecisionIndexes = `
     CREATE INDEX IF NOT EXISTS idx_decisions_stop_at ON decisions(stop_at);
     CREATE INDEX IF NOT EXISTS idx_decisions_alert_id ON decisions(alert_id);
     CREATE INDEX IF NOT EXISTS idx_decisions_value ON decisions(value);
     CREATE INDEX IF NOT EXISTS idx_decisions_created_at ON decisions(created_at);
+    CREATE INDEX IF NOT EXISTS idx_decisions_stop_alert_id ON decisions(stop_at, alert_id);
     CREATE INDEX IF NOT EXISTS idx_decisions_value_stop_at ON decisions(value, stop_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_decisions_duplicate_primary ON decisions(value, simulated, stop_at DESC, id);
   `;
 
   const createMetaTable = `
@@ -1401,6 +1453,7 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
     db.exec(createDecisionsTable);
   }
 
+  db.exec(createDecisionIndexes);
   migrateRecordIndexColumns(db);
   migrateNotificationRulesTable(db, createNotificationRulesTable);
   migrateNotificationsTable(db, createNotificationsTable);
@@ -1434,6 +1487,7 @@ function migrateRecordIndexColumns(db: Database): void {
     ['machine', 'TEXT'],
     ['simulated', 'INTEGER NOT NULL DEFAULT 0'],
     ['search_text', 'TEXT'],
+    ['is_duplicate', 'INTEGER NOT NULL DEFAULT 0'],
   ]);
 
   db.exec(`
@@ -1451,6 +1505,9 @@ function migrateRecordIndexColumns(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_decisions_target ON decisions(target);
     CREATE INDEX IF NOT EXISTS idx_decisions_simulated ON decisions(simulated);
     CREATE INDEX IF NOT EXISTS idx_decisions_alert_created_at ON decisions(alert_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_decisions_stop_alert_id ON decisions(stop_at, alert_id);
+    CREATE INDEX IF NOT EXISTS idx_decisions_duplicate_active ON decisions(is_duplicate, stop_at, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_decisions_duplicate_created_at ON decisions(is_duplicate, created_at DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_decisions_duplicate_primary ON decisions(value, simulated, stop_at DESC, id);
   `);
 
@@ -1606,51 +1663,27 @@ function initSearchIndexes(db: Database): boolean {
 function backfillSearchIndexes(db: Database): void {
   const alertCount = (db.query('SELECT COUNT(*) AS count FROM alerts_fts').get() as CountRow | null)?.count || 0;
   if (alertCount === 0) {
-    const selectAlerts = db.query(`
-      SELECT id, search_text
+    db.exec(`
+      INSERT INTO alerts_fts(rowid, alert_id, search_text)
+      SELECT CAST(id AS INTEGER), CAST(id AS TEXT), search_text
       FROM alerts
-      WHERE search_text IS NOT NULL AND search_text <> ''
-      ORDER BY id
-      LIMIT 500
-      OFFSET ?
+      WHERE CAST(id AS TEXT) GLOB '[0-9]*'
+        AND CAST(id AS TEXT) NOT GLOB '*[^0-9]*'
+        AND CAST(id AS INTEGER) > 0
+        AND search_text IS NOT NULL
+        AND search_text <> ''
     `);
-    const insert = db.query('INSERT INTO alerts_fts(rowid, alert_id, search_text) VALUES (?, ?, ?)');
-    const restore = db.transaction((items: Array<{ id: string | number; search_text: string }>) => {
-      for (const row of items) {
-        const numericId = Number(row.id);
-        if (Number.isSafeInteger(numericId) && numericId > 0) {
-          insert.run(numericId, String(row.id), row.search_text);
-        }
-      }
-    });
-    for (let offset = 0; ; offset += 500) {
-      const rows = selectAlerts.all(offset) as Array<{ id: string | number; search_text: string }>;
-      if (rows.length === 0) break;
-      restore(rows);
-    }
   }
 
   const decisionCount = (db.query('SELECT COUNT(*) AS count FROM decisions_fts').get() as CountRow | null)?.count || 0;
   if (decisionCount === 0) {
-    const selectDecisions = db.query(`
-      SELECT id, search_text
+    db.exec(`
+      INSERT INTO decisions_fts(decision_id, search_text)
+      SELECT CAST(id AS TEXT), search_text
       FROM decisions
-      WHERE search_text IS NOT NULL AND search_text <> ''
-      ORDER BY id
-      LIMIT 500
-      OFFSET ?
+      WHERE search_text IS NOT NULL
+        AND search_text <> ''
     `);
-    const insert = db.query('INSERT INTO decisions_fts(decision_id, search_text) VALUES (?, ?)');
-    const restore = db.transaction((items: Array<{ id: string | number; search_text: string }>) => {
-      for (const row of items) {
-        insert.run(String(row.id), row.search_text);
-      }
-    });
-    for (let offset = 0; ; offset += 500) {
-      const rows = selectDecisions.all(offset) as Array<{ id: string | number; search_text: string }>;
-      if (rows.length === 0) break;
-      restore(rows);
-    }
   }
 }
 

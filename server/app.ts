@@ -295,6 +295,11 @@ function formatSignedCount(count: number): string {
   return count > 0 ? `+${count}` : String(count);
 }
 
+function formatElapsedTime(ms: number): string {
+  if (ms < 1_000) return `${ms}ms`;
+  return `${(ms / 1_000).toFixed(2)}s`;
+}
+
 function readUpdateCheckOverrides(query: Record<string, string | string[]>): UpdateCheckOverrides {
   return {
     branch: readSingleQueryValue(query.branch),
@@ -1866,6 +1871,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       const windowSummary = await fetchActiveDecisionWindow(currentStart, currentEnd, now);
       summary = combineActiveWindowSummaries(summary, windowSummary);
       currentStart = currentEnd;
+      await delay(0);
     }
     return summary;
   }
@@ -2021,10 +2027,13 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       try {
         console.log('Initializing cache with chunked data load...');
         const syncSummary = await syncHistory();
+        database.refreshDecisionDuplicateFlags(new Date().toISOString());
         if (deferSearchIndexUpdates) {
           console.log('Rebuilding search indexes after initial cache load...');
+          const searchIndexStartedAt = Date.now();
           database.rebuildSearchIndexes();
           deferredSearchIndexesRebuilt = true;
+          console.log(`Search indexes rebuilt in ${formatElapsedTime(Date.now() - searchIndexStartedAt)}.`);
         }
         cache.lastUpdate = new Date().toISOString();
         cache.isInitialized = syncSummary.state !== 'failed';
@@ -2131,6 +2140,7 @@ ${errorSummary}  Status: ${syncSummary.state}
         throw new Error(`Active decision refresh incomplete: ${activeWindowSummary.errors.join('; ')}`);
       }
 
+      database.refreshDecisionDuplicateFlags(new Date().toISOString());
       cache.lastUpdate = new Date().toISOString();
       lapiClient.updateStatus(true);
       console.log(`Delta update complete: ${newAlerts.length} alerts and ${newDecisionCount} decisions synced, ${activeDecisionAlertsCount} active decision alerts and ${activeDecisionCount} decisions refreshed`);
@@ -2921,6 +2931,7 @@ ${errorSummary}  Status: ${syncSummary.state}
   ): PaginatedResponse<DecisionListItem> {
     const since = new Date(Date.now() - config.lookbackMs).toISOString();
     const now = new Date().toISOString();
+    database.refreshDecisionDuplicateFlags(now);
     const duplicateSql = getDecisionDuplicateSql(now);
     const baseWhere = createSqlWhere();
     if (includeExpired) {
@@ -2933,22 +2944,21 @@ ${errorSummary}  Status: ${syncSummary.state}
     }
 
     const filteredWhere = baseWhere.clone();
-    addDecisionSqlFilters(filteredWhere, filters, now, duplicateSql, true);
+    addDecisionSqlFilters(filteredWhere, filters, now, duplicateSql, true, !includeExpired);
     const searchWhere = compileDecisionSearchSql(searchAst, filters, now, duplicateSql);
     if (searchWhere) {
       filteredWhere.add(searchWhere.sql, ...searchWhere.params);
     }
 
     const unfilteredTotal = queryCount('decisions', baseWhere);
-    if (!filters.showDuplicates && !searchAstUsesField(searchAst, 'duplicate')) {
-      return queryPaginatedPrimaryDecisions(pageRequest, filters, searchAst, includeExpired, baseWhere, unfilteredTotal, now, duplicateSql);
-    }
-
     const total = queryCount('decisions', filteredWhere);
     const offset = (pageRequest.page - 1) * pageRequest.pageSize;
+    const decisionsTable = shouldUseDefaultDecisionPagingIndex(filters, searchAst, includeExpired)
+      ? 'decisions INDEXED BY idx_decisions_duplicate_created_at'
+      : 'decisions';
     const rows = database.db.prepare(`
       SELECT raw_data, alert_id, ${duplicateSql} AS is_duplicate
-      FROM decisions
+      FROM ${decisionsTable}
       ${filteredWhere.toSql()}
       ORDER BY created_at DESC, id DESC
       LIMIT ? OFFSET ?
@@ -2982,98 +2992,25 @@ ${errorSummary}  Status: ${syncSummary.state}
     };
   }
 
-  function queryPaginatedPrimaryDecisions(
-    pageRequest: PageRequest,
-    filters: DecisionListFilters,
-    searchAst: SearchNode | null,
-    includeExpired: boolean,
-    baseWhere: SqlWhere,
-    unfilteredTotal: number,
-    now: string,
-    duplicateSql: string,
-  ): PaginatedResponse<DecisionListItem> {
-    const filteredWhere = createSqlWhere();
-    filteredWhere.add('duplicate_rank = 1');
-    addDecisionSqlFilters(filteredWhere, filters, now, duplicateSql, false);
-    const searchWhere = compileDecisionSearchSql(searchAst, filters, now, duplicateSql);
-    if (searchWhere) {
-      filteredWhere.add(searchWhere.sql, ...searchWhere.params);
-    }
-
-    const rankedSql = `
-      WITH ranked_decisions AS (
-        SELECT
-          id,
-          raw_data,
-          alert_id,
-          created_at,
-          stop_at,
-          value,
-          origin,
-          scenario,
-          country,
-          country_name,
-          as_name,
-          target,
-          machine,
-          simulated,
-          search_text,
-          ROW_NUMBER() OVER (
-            PARTITION BY
-              CASE WHEN stop_at > ? THEN COALESCE(value, '') ELSE CAST(id AS TEXT) END,
-              CASE WHEN stop_at > ? THEN CAST(simulated AS TEXT) ELSE CAST(id AS TEXT) END
-            ORDER BY
-              CASE WHEN stop_at > ? THEN stop_at ELSE created_at END DESC,
-              CASE WHEN id GLOB '[0-9]*' THEN CAST(id AS INTEGER) ELSE 9223372036854775807 END ASC
-          ) AS duplicate_rank
-        FROM decisions
-        ${baseWhere.toSql()}
-      )
-    `;
-    const rankedParams = [now, now, now, ...baseWhere.params];
-    const offset = (pageRequest.page - 1) * pageRequest.pageSize;
-    const rows = database.db.prepare(`
-      ${rankedSql}
-      SELECT raw_data, alert_id, 0 AS is_duplicate, COUNT(*) OVER () AS total_count
-      FROM ranked_decisions
-      ${filteredWhere.toSql()}
-      ORDER BY created_at DESC, id DESC
-      LIMIT ? OFFSET ?
-    `).all(...rankedParams, ...filteredWhere.params, pageRequest.pageSize, offset) as Array<{
-      raw_data: string;
-      alert_id?: string | number | null;
-      is_duplicate?: number;
-      total_count?: number;
-    }>;
-    const total = rows[0]?.total_count ?? 0;
-
-    const data = rows.map((row) => {
-      const decision = JSON.parse(row.raw_data) as AlertDecision & Record<string, unknown>;
-      if (decision.alert_id === undefined && row.alert_id !== undefined && row.alert_id !== null) {
-        decision.alert_id = row.alert_id;
-      }
-      decision.is_duplicate = row.is_duplicate === 1;
-      return toDecisionListItem(decision, includeExpired);
-    });
-
-    return {
-      data,
-      pagination: {
-        page: pageRequest.page,
-        page_size: pageRequest.pageSize,
-        total,
-        total_pages: Math.ceil(total / pageRequest.pageSize),
-        unfiltered_total: unfilteredTotal,
-      },
-      selectable_ids: data
-        .filter((decision) => !isDecisionListItemExpired(decision))
-        .map((decision) => decision.id),
-    };
-  }
-
   function queryCount(tableName: 'alerts' | 'decisions', where: SqlWhere): number {
     const row = database.db.prepare(`SELECT COUNT(*) AS count FROM ${tableName} ${where.toSql()}`).get(...where.params) as { count: number };
     return row.count;
+  }
+
+  function shouldUseDefaultDecisionPagingIndex(filters: DecisionListFilters, searchAst: SearchNode | null, includeExpired: boolean): boolean {
+    return !includeExpired &&
+      !searchAst &&
+      !filters.showDuplicates &&
+      !filters.q &&
+      !filters.alertId &&
+      !filters.country &&
+      !filters.scenario &&
+      !filters.as &&
+      !filters.ip &&
+      !filters.target &&
+      !filters.dateStart &&
+      !filters.dateEnd &&
+      filters.simulation === 'all';
   }
 
   function addAlertSqlFilters(where: SqlWhere, filters: AlertListFilters): void {
@@ -3095,8 +3032,15 @@ ${errorSummary}  Status: ${syncSummary.state}
     now: string,
     duplicateSql: string,
     includeDuplicateFilter: boolean,
+    activeOnly = false,
   ): void {
-    if (includeDuplicateFilter && !filters.showDuplicates) where.add(`NOT (${duplicateSql})`);
+    if (includeDuplicateFilter && !filters.showDuplicates) {
+      if (activeOnly) {
+        where.add('is_duplicate = 0');
+      } else {
+        where.add(`NOT (${duplicateSql})`);
+      }
+    }
     if (filters.alertId) where.add('CAST(alert_id AS TEXT) = ?', filters.alertId);
     addSimulationFilter(where, filters.simulation);
     if (filters.country) where.add('country = ?', filters.country);
@@ -3665,15 +3609,6 @@ function compileSearchNodeSql(
   };
 }
 
-function searchAstUsesField(node: SearchNode | null, field: string): boolean {
-  if (!node) return false;
-  if (node.kind === 'comparison') return node.field === field;
-  if (node.kind === 'field') return node.field === field || searchAstUsesField(node.expression, field);
-  if (node.kind === 'not') return searchAstUsesField(node.expression, field);
-  if (node.kind === 'binary') return searchAstUsesField(node.left, field) || searchAstUsesField(node.right, field);
-  return false;
-}
-
 type SearchPageForSql = 'alerts' | 'decisions';
 
 function dateComparisonCondition(
@@ -3745,21 +3680,9 @@ function getDateFilterBoundary(
 
 function getDecisionDuplicateSql(now: string): string {
   const nowLiteral = quoteSqlLiteral(now);
-  const numericId = "CASE WHEN decisions.id GLOB '[0-9]*' THEN CAST(decisions.id AS INTEGER) ELSE 9223372036854775807 END";
-  const otherNumericId = "CASE WHEN other.id GLOB '[0-9]*' THEN CAST(other.id AS INTEGER) ELSE 9223372036854775807 END";
   return `(
     decisions.stop_at > ${nowLiteral}
-    AND EXISTS (
-      SELECT 1
-      FROM decisions AS other
-      WHERE COALESCE(other.value, '') = COALESCE(decisions.value, '')
-        AND other.simulated = decisions.simulated
-        AND other.stop_at > ${nowLiteral}
-        AND (
-          other.stop_at > decisions.stop_at
-          OR (other.stop_at = decisions.stop_at AND ${otherNumericId} < ${numericId})
-        )
-    )
+    AND decisions.is_duplicate = 1
   )`;
 }
 
