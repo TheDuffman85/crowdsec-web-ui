@@ -306,7 +306,7 @@ function warnRemovedColumnVisibilityEnv(env: NodeJS.ProcessEnv): void {
 
 export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig {
   const lookbackPeriod = env.CROWDSEC_LOOKBACK_PERIOD || '168h';
-  const refreshIntervalMs = parseRefreshInterval(env.CROWDSEC_REFRESH_INTERVAL || '30s');
+  const refreshIntervalMs = parseRefreshInterval(env.CROWDSEC_REFRESH_INTERVAL || '1m');
   const crowdsecAuth = createCrowdsecAuthConfig(env);
   const notificationSecretKey = resolveSecretEnv('NOTIFICATION_SECRET_KEY', env)?.trim() || undefined;
   const alertFilterConfig = parseAlertFilterConfig(env);
@@ -326,9 +326,9 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
     lookbackPeriod,
     lookbackMs: parseLookbackToMs(lookbackPeriod),
     refreshIntervalMs,
-    idleRefreshIntervalMs: parseRefreshInterval(env.CROWDSEC_IDLE_REFRESH_INTERVAL || '5m'),
+    idleRefreshIntervalMs: parseRefreshInterval(env.CROWDSEC_IDLE_REFRESH_INTERVAL || '10m'),
     idleThresholdMs: parseRefreshInterval(env.CROWDSEC_IDLE_THRESHOLD || '2m'),
-    fullRefreshIntervalMs: parseRefreshInterval(env.CROWDSEC_FULL_REFRESH_INTERVAL || '5m'),
+    fullRefreshIntervalMs: parseRefreshInterval(env.CROWDSEC_FULL_REFRESH_INTERVAL || '3h'),
     lapiRequestTimeoutMs: parsePositiveIntervalEnv(env.CROWDSEC_LAPI_REQUEST_TIMEOUT, '30s'),
     prometheusUrl: env.CROWDSEC_PROMETHEUS_URL?.trim() || undefined,
     prometheusRequestTimeoutMs: parsePositiveIntervalEnv(env.CROWDSEC_PROMETHEUS_REQUEST_TIMEOUT, '5s'),

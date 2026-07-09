@@ -161,6 +161,8 @@ describe('config helpers', () => {
     expect(config.simulationsEnabled).toBe(false);
     expect(config.lookbackMs).toBe(172_800_000);
     expect(config.refreshIntervalMs).toBe(5_000);
+    expect(config.idleRefreshIntervalMs).toBe(60_000);
+    expect(config.fullRefreshIntervalMs).toBe(300_000);
     expect(config.lapiRequestTimeoutMs).toBe(120_000);
     expect(config.prometheusUrl).toBe('http://crowdsec:6060/metrics');
     expect(config.prometheusRequestTimeoutMs).toBe(10_000);
@@ -209,6 +211,9 @@ describe('config helpers', () => {
     expect(config.notificationDebugPayloads).toBe(false);
     expect(config.timeZone).toBeNull();
     expect(config.timeFormat).toBe('browser');
+    expect(config.refreshIntervalMs).toBe(60_000);
+    expect(config.idleRefreshIntervalMs).toBe(600_000);
+    expect(config.fullRefreshIntervalMs).toBe(10_800_000);
     expect(config.lapiRequestTimeoutMs).toBe(30_000);
     expect(config.prometheusUrl).toBeUndefined();
     expect(config.prometheusRequestTimeoutMs).toBe(5_000);

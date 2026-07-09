@@ -271,10 +271,10 @@ Choose exactly one auth mode: password auth or mTLS auth.
 | `CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS` | empty | Optional comma-separated OIDC groups that receive read-only permissions. Can also be configured from Settings. |
 | `CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE` | `deny` | Controls OIDC users who match no configured admin or read-only group. Accepts `deny`, `admin`, or `read-only`. Can also be configured from Settings. |
 | `CROWDSEC_LOOKBACK_PERIOD` | `168h` | Alert/history retention window used for sync and cleanup. Accepts values like `12h`, `7d`, or `30m`. |
-| `CROWDSEC_REFRESH_INTERVAL` | `5m` | Normal background refresh interval. Accepts `0`, `manual`, `5s`, `30s`, `1m`, `5m`, or other `s`/`m`/`h`/`d` values. |
-| `CROWDSEC_IDLE_REFRESH_INTERVAL` | `5m` | Refresh interval used when the app considers itself idle. |
+| `CROWDSEC_REFRESH_INTERVAL` | `1m` | Normal background refresh interval. Accepts `0`, `manual`, `5s`, `30s`, `1m`, `5m`, or other `s`/`m`/`h`/`d` values. |
+| `CROWDSEC_IDLE_REFRESH_INTERVAL` | `10m` | Refresh interval used when the app considers itself idle. |
 | `CROWDSEC_IDLE_THRESHOLD` | `2m` | Inactivity period before the app switches to idle refresh behavior. |
-| `CROWDSEC_FULL_REFRESH_INTERVAL` | `5m` | Interval for full cache refreshes while active. |
+| `CROWDSEC_FULL_REFRESH_INTERVAL` | `3h` | Interval for full cache refreshes while active. |
 | `CROWDSEC_LAPI_REQUEST_TIMEOUT` | `30s` | Timeout for individual CrowdSec LAPI requests. Increase this for high-latency or very large CrowdSec datasets. |
 | `CROWDSEC_PROMETHEUS_URL` | none | Optional CrowdSec Prometheus metrics endpoint. When unset, the Metrics page shows setup instructions; when set, it reads bouncer, machine, AppSec, parser, LAPI latency, and whitelist runtime metrics from this URL. |
 | `CROWDSEC_PROMETHEUS_REQUEST_TIMEOUT` | `5s` | Timeout for individual Prometheus metrics requests. Accepts the same interval syntax as refresh settings. |
@@ -661,7 +661,7 @@ Active-decision refreshes use the same `CROWDSEC_ALERT_SYNC_CHUNK` windows as hi
    CROWDSEC_PASSWORD=<your-secure-password>
    CROWDSEC_PROMETHEUS_URL=http://localhost:6060/metrics
    CROWDSEC_SIMULATIONS_ENABLED=true
-   CROWDSEC_REFRESH_INTERVAL=5m
+   CROWDSEC_REFRESH_INTERVAL=1m
    CROWDSEC_LAPI_REQUEST_TIMEOUT=30s
    CROWDSEC_ALERT_SYNC_CHUNK=12h
    CROWDSEC_ALERT_SYNC_MIN_CHUNK=15m
@@ -679,7 +679,7 @@ Active-decision refreshes use the same `CROWDSEC_ALERT_SYNC_CHUNK` windows as hi
    # Optional when using a private CA or self-signed CrowdSec LAPI certificate
    CROWDSEC_TLS_CA_CERT_PATH=/path/to/ca.pem
    CROWDSEC_SIMULATIONS_ENABLED=true
-   CROWDSEC_REFRESH_INTERVAL=5m
+   CROWDSEC_REFRESH_INTERVAL=1m
    ```
 
 3. **Start or build**
@@ -725,9 +725,9 @@ Active-decision refreshes use the same `CROWDSEC_ALERT_SYNC_CHUNK` windows as hi
    LOADTEST_DUPLICATE_VALUE_RATIO=0.15
    LOADTEST_REFRESH_ALERTS=100
    LOADTEST_REFRESH_DECISIONS=100
-   CROWDSEC_REFRESH_INTERVAL=5m
-   CROWDSEC_FULL_REFRESH_INTERVAL=5m
-   CROWDSEC_IDLE_REFRESH_INTERVAL=5m
+   CROWDSEC_REFRESH_INTERVAL=1m
+   CROWDSEC_FULL_REFRESH_INTERVAL=3h
+   CROWDSEC_IDLE_REFRESH_INTERVAL=10m
    CROWDSEC_IDLE_THRESHOLD=2m
    CROWDSEC_LOOKBACK_PERIOD=30d
    CROWDSEC_ALERT_SYNC_CHUNK=12h
