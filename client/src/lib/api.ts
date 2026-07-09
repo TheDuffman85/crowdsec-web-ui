@@ -24,6 +24,23 @@ import type {
 import { apiUrl } from './basePath';
 
 const inFlightGetRequests = new Map<string, Promise<unknown>>();
+const recentGetResponses = new Map<string, { expiresAt: number; value: unknown }>();
+let activeFetchImplementation: typeof fetch | null = null;
+const RECENT_GET_CACHE_MS = 500;
+
+function resetRequestCachesIfFetchChanged(): void {
+    if (activeFetchImplementation === globalThis.fetch) {
+        return;
+    }
+    activeFetchImplementation = globalThis.fetch;
+    inFlightGetRequests.clear();
+    recentGetResponses.clear();
+}
+
+function clearGetCaches(): void {
+    inFlightGetRequests.clear();
+    recentGetResponses.clear();
+}
 
 async function requestJson<T>(url: string, init: RequestInit | undefined, defaultMsg: string | undefined): Promise<T> {
     const response = await fetch(url, init);
@@ -34,14 +51,29 @@ async function requestJson<T>(url: string, init: RequestInit | undefined, defaul
 }
 
 async function fetchJson<T>(input: string, init?: RequestInit, defaultMsg?: string): Promise<T> {
+    resetRequestCachesIfFetchChanged();
     const url = apiUrl(input);
     if (init === undefined) {
+        const recentResponse = recentGetResponses.get(url);
+        if (recentResponse && recentResponse.expiresAt > Date.now()) {
+            return recentResponse.value as T;
+        }
+        if (recentResponse) {
+            recentGetResponses.delete(url);
+        }
+
         const inFlightRequest = inFlightGetRequests.get(url);
         if (inFlightRequest) {
             return inFlightRequest as Promise<T>;
         }
 
-        const request = requestJson<T>(url, init, defaultMsg).finally(() => {
+        const request = requestJson<T>(url, init, defaultMsg).then((value) => {
+            recentGetResponses.set(url, {
+                expiresAt: Date.now() + RECENT_GET_CACHE_MS,
+                value,
+            });
+            return value;
+        }).finally(() => {
             if (inFlightGetRequests.get(url) === request) {
                 inFlightGetRequests.delete(url);
             }
@@ -127,6 +159,7 @@ async function handleApiError(res: Response, defaultMsg: string, operationName =
 export async function deleteAlert(id: string | number): Promise<unknown> {
   const res = await fetch(apiUrl(`/api/alerts/${id}`), { method: 'DELETE' });
   await handleApiError(res, 'Failed to delete alert');
+  clearGetCaches();
   if (res.status === 204) return null;
   return res.json();
 }
@@ -138,7 +171,9 @@ async function postDestructiveJson<TResponse, TBody>(input: string, body: TBody,
     body: JSON.stringify(body),
   });
   await handleApiError(res, defaultMsg);
-  return res.json() as Promise<TResponse>;
+  const payload = await res.json() as TResponse;
+  clearGetCaches();
+  return payload;
 }
 
 export async function bulkDeleteAlerts(ids: BulkDeleteRequest['ids']): Promise<BulkDeleteResult> {
@@ -176,6 +211,7 @@ export async function fetchDashboardStats(
 export async function deleteDecision(id: string | number): Promise<unknown> {
   const res = await fetch(apiUrl(`/api/decisions/${id}`), { method: 'DELETE' });
   await handleApiError(res, 'Failed to delete decision');
+  clearGetCaches();
   if (res.status === 204) return null;
   return res.json();
 }
@@ -203,7 +239,9 @@ export async function addDecision(data: AddDecisionRequest): Promise<unknown> {
         body: JSON.stringify(data),
     });
     await handleApiError(res, 'Failed to add decision', 'Write Operations');
-    return res.json();
+    const payload = await res.json();
+    clearGetCaches();
+    return payload;
 }
 
 export async function fetchConfig(): Promise<ConfigResponse> {
@@ -252,10 +290,13 @@ async function sendJson<T>(input: string, init: RequestInit, defaultMsg: string)
     }
 
     if (response.status === 204) {
+        clearGetCaches();
         return null as T;
     }
 
-    return response.json() as Promise<T>;
+    const payload = await response.json() as T;
+    clearGetCaches();
+    return payload;
 }
 
 export async function fetchNotificationSettings(): Promise<NotificationSettingsResponse> {

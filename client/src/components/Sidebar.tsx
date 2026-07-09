@@ -140,6 +140,14 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
         return formatTime(date, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     };
 
+    const logo = (
+        <img
+            src={assetUrl('/logo-sidebar.png')}
+            alt={t('components.sidebar.logoAlt')}
+            className="h-10 w-10 flex-shrink-0"
+        />
+    );
+
     const renderUnreadBadge = (compact = false) => {
         if (unreadCount <= 0) {
             return null;
@@ -175,11 +183,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
             >
             <div className="p-4 lg:p-5 flex justify-between items-center gap-2">
                 <div className="flex items-center gap-2 lg:gap-3">
-                    <img
-                        src={assetUrl('/logo.svg')}
-                        alt={t('components.sidebar.logoAlt')}
-                        className="w-10 h-10 flex-shrink-0"
-                    />
+                    {isOpen ? logo : null}
                     <h1 className="text-xl lg:text-2xl font-bold bg-gradient-to-r from-primary-600 to-primary-400 bg-clip-text text-transparent leading-tight whitespace-nowrap">
                         CrowdSec Web UI
                     </h1>
@@ -348,11 +352,13 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
         >
             {/* Logo mini and expand button */}
             <div className="p-4 flex flex-col items-center gap-3">
-                <img
-                    src={assetUrl('/logo.svg')}
-                    alt={t('components.sidebar.logoAlt')}
-                    className="w-8 h-8"
-                />
+                {!isOpen ? (
+                    <img
+                        src={assetUrl('/logo-sidebar.png')}
+                        alt={t('components.sidebar.logoAlt')}
+                        className="h-8 w-8"
+                    />
+                ) : null}
                 <button
                     onClick={onToggle}
                     className="p-2 rounded-md text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700"

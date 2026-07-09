@@ -35,7 +35,7 @@ import type {
 } from '../shared/contracts';
 import { resolveMachineName } from '../shared/machine';
 import { collectDistinctOrigins, normalizeOrigin } from '../shared/origin';
-import { compileAlertSearch, compileDecisionSearch, matchesIpSearchValue, type SearchParseError } from '../shared/search';
+import { compileAlertSearch, compileDecisionSearch, matchesIpSearchValue, type SearchNode, type SearchParseError } from '../shared/search';
 import { createRuntimeConfig, getIntervalName, parseRefreshInterval, type RuntimeConfig } from './config';
 import { getDateTimeKey, getTimeZoneOffsetMs, getZonedHourlyBucketKeys } from './utils/date-time';
 import { CrowdsecDatabase, type AlertInsertParams, type DecisionInsertParams } from './database';
@@ -354,6 +354,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   const distRoot = options.distRoot || path.resolve(process.cwd(), 'dist/client');
   const staticFiles = [
     '/logo.svg',
+    '/logo-sidebar.png',
     '/favicon.ico',
     '/robots.txt',
     '/world-50m.json',
@@ -466,13 +467,6 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         await ensureBootstrapReady('alerts request');
       }
 
-      const since = new Date(Date.now() - config.lookbackMs).toISOString();
-      const alerts = hydrateAlertsBatch(database.getAlertsSince(since))
-        .map((alert) => applySimulationModeToAlert(alert, config.simulationsEnabled))
-        .filter((alert): alert is AlertRecord => alert !== null)
-        .map((alert) => toSlimAlert(alert))
-        .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
-
       const pageRequest = getPageRequest(context);
       if (pageRequest) {
         const filters = getAlertListFilters(context, config.timeZone);
@@ -486,17 +480,15 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         if (!compiledSearch.ok) {
           return context.json(toSearchErrorResponse(compiledSearch.error), 400);
         }
-        const filteredAlerts = alerts.filter((alert) =>
-          matchesAlertListFilters(alert, filters) &&
-          compiledSearch.predicate(alert),
-        );
-        return context.json(toPaginatedResponse(
-          filteredAlerts,
-          pageRequest,
-          alerts.length,
-          filteredAlerts.map((alert) => alert.id),
-        ));
+        return context.json(queryPaginatedAlerts(pageRequest, filters, compiledSearch.ast));
       }
+
+      const since = new Date(Date.now() - config.lookbackMs).toISOString();
+      const alerts = hydrateAlertsBatch(database.getAlertsSince(since))
+        .map((alert) => applySimulationModeToAlert(alert, config.simulationsEnabled))
+        .filter((alert): alert is AlertRecord => alert !== null)
+        .map((alert) => toSlimAlert(alert))
+        .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
 
       return context.json(alerts);
     } catch (error: any) {
@@ -519,7 +511,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         return context.json({ error: 'Alert IDs must be numeric' }, 400);
       }
 
-      const result = await deleteAlertsByIds(ids);
+      const result = await deleteAlertsByIdsInChunks(ids);
       if (result.deleted_decisions > 0) {
         void runNotificationEvaluation('bulk alert delete');
       }
@@ -594,7 +586,23 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         await ensureBootstrapReady('decisions request');
       }
 
+      const pageRequest = getPageRequest(context);
       const includeExpired = context.req.query('include_expired') === 'true';
+      if (pageRequest) {
+        const filters = getDecisionListFilters(context, config.timeZone);
+        const compiledSearch = compileDecisionSearch(filters.q, {
+          machineEnabled: true,
+          originEnabled: true,
+        }, {
+          timezoneOffsetMinutes: filters.timezoneOffsetMinutes,
+          timeZone: filters.timeZone,
+        });
+        if (!compiledSearch.ok) {
+          return context.json(toSearchErrorResponse(compiledSearch.error), 400);
+        }
+        return context.json(queryPaginatedDecisions(pageRequest, filters, compiledSearch.ast, includeExpired));
+      }
+
       const now = new Date().toISOString();
       const since = new Date(Date.now() - config.lookbackMs).toISOString();
       const rows = includeExpired
@@ -613,33 +621,6 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       }
       decisions = markDuplicateDecisions(decisions);
       decisions.sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
-
-      const pageRequest = getPageRequest(context);
-      if (pageRequest) {
-        const filters = getDecisionListFilters(context, config.timeZone);
-        const compiledSearch = compileDecisionSearch(filters.q, {
-          machineEnabled: true,
-          originEnabled: true,
-        }, {
-          timezoneOffsetMinutes: filters.timezoneOffsetMinutes,
-          timeZone: filters.timeZone,
-        });
-        if (!compiledSearch.ok) {
-          return context.json(toSearchErrorResponse(compiledSearch.error), 400);
-        }
-        const filteredDecisions = decisions.filter((decision) =>
-          matchesDecisionListFilters(decision, filters) &&
-          compiledSearch.predicate(decision),
-        );
-        return context.json(toPaginatedResponse(
-          filteredDecisions,
-          pageRequest,
-          decisions.length,
-          filteredDecisions
-            .filter((decision) => !isDecisionListItemExpired(decision))
-            .map((decision) => decision.id),
-        ));
-      }
 
       return context.json(decisions);
     } catch (error: any) {
@@ -968,37 +949,39 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         await ensureBootstrapReady('stats alerts request');
       }
 
-      const since = new Date(Date.now() - config.lookbackMs).toISOString();
-      const alerts = hydrateAlertsBatch(database.getAlertsSince(since))
-        .map((hydratedAlert) => {
-          const alert = applySimulationModeToAlert(
-            hydratedAlert,
-            config.simulationsEnabled,
-          );
-          if (!alert) {
-            return null;
-          }
-          const payload: StatsAlert = {
-            created_at: resolveAlertHistoryAt(alert),
-            kind: typeof alert.kind === 'string' ? alert.kind : undefined,
-            scenario: resolveAlertScenario(alert),
-            source: alert.source
-              ? {
-                  ip: alert.source.ip,
-                  value: alert.source.value,
-                  range: alert.source.range,
-                  cn: alert.source.cn,
-                  as_name: alert.source.as_name,
-                  scope: alert.source.scope,
-                }
-              : null,
-            target: alert.target,
-            simulated: isAlertSimulated(alert),
-          };
-          return payload;
-        })
-        .filter((alert): alert is StatsAlert => alert !== null)
-        .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
+      const where = createSqlWhere();
+      where.add('created_at >= ?', new Date(Date.now() - config.lookbackMs).toISOString());
+      if (!config.simulationsEnabled) {
+        where.add('simulated = 0');
+      }
+      const alerts = (database.db.prepare(`
+        SELECT created_at, scenario, source_ip, country, as_name, target, simulated
+        FROM alerts
+        ${where.toSql()}
+        ORDER BY created_at DESC, id DESC
+      `).all(...where.params) as Array<{
+        created_at: string;
+        scenario?: string | null;
+        source_ip?: string | null;
+        country?: string | null;
+        as_name?: string | null;
+        target?: string | null;
+        simulated?: number | null;
+      }>).map((row): StatsAlert => ({
+        created_at: row.created_at,
+        scenario: row.scenario || undefined,
+        source: row.source_ip || row.country || row.as_name
+          ? {
+              ip: row.source_ip && !row.source_ip.includes('/') ? row.source_ip : undefined,
+              value: row.source_ip || undefined,
+              range: row.source_ip && row.source_ip.includes('/') ? row.source_ip : undefined,
+              cn: row.country || undefined,
+              as_name: row.as_name || undefined,
+            }
+          : null,
+        target: row.target || undefined,
+        simulated: row.simulated === 1,
+      }));
 
       return context.json(alerts);
     } catch (error: any) {
@@ -1017,25 +1000,34 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         await ensureBootstrapReady('stats decisions request');
       }
 
-      const since = new Date(Date.now() - config.lookbackMs).toISOString();
       const now = new Date().toISOString();
-      const decisions = database
-        .getDecisionsSince(since, now)
-        .map((row) => {
-          const decision = JSON.parse(row.raw_data) as Record<string, unknown>;
-          const payload: StatsDecision = {
-            id: decision.id as string | number,
-            created_at: String(decision.created_at || ''),
-            scenario: typeof decision.scenario === 'string' ? decision.scenario : undefined,
-            value: typeof decision.value === 'string' ? decision.value : undefined,
-            stop_at: typeof decision.stop_at === 'string' ? decision.stop_at : undefined,
-            target: typeof decision.target === 'string' ? decision.target : undefined,
-            simulated: normalizeDecisionSimulated(decision),
-          };
-          return payload;
-        })
-        .filter((decision) => config.simulationsEnabled || !decision.simulated)
-        .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
+      const where = createSqlWhere();
+      where.add('(created_at >= ? OR stop_at > ?)', new Date(Date.now() - config.lookbackMs).toISOString(), now);
+      if (!config.simulationsEnabled) {
+        where.add('simulated = 0');
+      }
+      const decisions = (database.db.prepare(`
+        SELECT id, created_at, scenario, value, stop_at, target, simulated
+        FROM decisions
+        ${where.toSql()}
+        ORDER BY created_at DESC, id DESC
+      `).all(...where.params) as Array<{
+        id: string | number;
+        created_at: string;
+        scenario?: string | null;
+        value?: string | null;
+        stop_at?: string | null;
+        target?: string | null;
+        simulated?: number | null;
+      }>).map((row): StatsDecision => ({
+        id: row.id,
+        created_at: row.created_at,
+        scenario: row.scenario || undefined,
+        value: row.value || undefined,
+        stop_at: row.stop_at || undefined,
+        target: row.target || undefined,
+        simulated: row.simulated === 1,
+      }));
 
       return context.json(decisions);
     } catch (error: any) {
@@ -1117,7 +1109,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         return context.json({ error: 'Decision IDs must be numeric' }, 400);
       }
 
-      const result = await deleteDecisionsByIds(ids);
+      const result = await deleteDecisionsByIdsInChunks(ids);
       if (result.deleted_decisions > 0) {
         void runNotificationEvaluation('bulk decision delete');
       }
@@ -2541,27 +2533,11 @@ ${errorSummary}  Status: ${syncSummary.state}
   async function deleteAlertsByIds(ids: string[]): Promise<BulkDeleteResult> {
     const result = createDeleteResult({ requested_alerts: ids.length });
     const deletedAlertIds: string[] = [];
-    const deletedDecisionIds = new Set<string>();
-    const alertMap = new Map(getCachedAlertsForDeletion().map((alert) => [alert.id, alert]));
 
     for (const id of ids) {
       try {
         await deleteAlertFromLapi(id);
         deletedAlertIds.push(id);
-
-        const alert = alertMap.get(id);
-        if (alert) {
-          try {
-            const parsedAlert = JSON.parse(alert.raw_data) as AlertRecord;
-            for (const decision of parsedAlert.decisions || []) {
-              if (decision?.id !== undefined && decision?.id !== null) {
-                deletedDecisionIds.add(String(decision.id));
-              }
-            }
-          } catch {
-            // Ignore cache parse issues and still remove the alert row itself.
-          }
-        }
       } catch (error) {
         const typedError = error as AnyError;
         if (isPermissionError(typedError)) {
@@ -2571,6 +2547,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       }
     }
 
+    const deletedDecisionIds = new Set(getDecisionIdsForAlertIds(deletedAlertIds));
     if (deletedAlertIds.length > 0) {
       const removeAlerts = database.transaction<string[]>((alertIds) => {
         for (const id of alertIds) {
@@ -2585,6 +2562,31 @@ ${errorSummary}  Status: ${syncSummary.state}
     result.deleted_alerts = deletedAlertIds.length;
     result.deleted_decisions = deletedDecisionIds.size;
     return result;
+  }
+
+  async function deleteAlertsByIdsInChunks(ids: string[]): Promise<BulkDeleteResult> {
+    const aggregate = createDeleteResult({ requested_alerts: ids.length });
+    const chunkSize = 100;
+    for (let offset = 0; offset < ids.length; offset += chunkSize) {
+      const result = await deleteAlertsByIds(ids.slice(offset, offset + chunkSize));
+      aggregate.deleted_alerts += result.deleted_alerts;
+      aggregate.deleted_decisions += result.deleted_decisions;
+      aggregate.failed.push(...result.failed);
+    }
+    return aggregate;
+  }
+
+  function getDecisionIdsForAlertIds(alertIds: string[]): string[] {
+    const ids: string[] = [];
+    const chunkSize = 900;
+    for (let offset = 0; offset < alertIds.length; offset += chunkSize) {
+      const chunk = alertIds.slice(offset, offset + chunkSize);
+      if (chunk.length === 0) continue;
+      const placeholders = chunk.map(() => '?').join(',');
+      const rows = database.db.prepare(`SELECT id FROM decisions WHERE alert_id IN (${placeholders})`).all(...chunk) as Array<{ id: string | number }>;
+      ids.push(...rows.map((row) => String(row.id)));
+    }
+    return ids;
   }
 
   async function deleteDecisionsByIds(ids: string[]): Promise<BulkDeleteResult> {
@@ -2616,6 +2618,17 @@ ${errorSummary}  Status: ${syncSummary.state}
 
     result.deleted_decisions = deletedDecisionIds.length;
     return result;
+  }
+
+  async function deleteDecisionsByIdsInChunks(ids: string[]): Promise<BulkDeleteResult> {
+    const aggregate = createDeleteResult({ requested_decisions: ids.length });
+    const chunkSize = 100;
+    for (let offset = 0; offset < ids.length; offset += chunkSize) {
+      const result = await deleteDecisionsByIds(ids.slice(offset, offset + chunkSize));
+      aggregate.deleted_decisions += result.deleted_decisions;
+      aggregate.failed.push(...result.failed);
+    }
+    return aggregate;
   }
 
   async function deleteEntriesByIp(ip: string): Promise<BulkDeleteResult> {
@@ -2822,21 +2835,223 @@ ${errorSummary}  Status: ${syncSummary.state}
     return parsedAlerts.map((alert) => hydrateAlertWithDecisionsBatch(alert, stopAtMap));
   }
 
-  function getDashboardStatsIndex(): DashboardStatsCache {
-    const cacheKey = `${cache.lastUpdate || 'uninitialized'}:${config.lookbackMs}:${config.simulationsEnabled ? 'sim' : 'live'}`;
-    if (dashboardStatsCache?.key === cacheKey) {
-      return dashboardStatsCache;
+  function queryPaginatedAlerts(
+    pageRequest: PageRequest,
+    filters: AlertListFilters,
+    searchAst: SearchNode | null,
+  ): PaginatedResponse<SlimAlert> {
+    const since = new Date(Date.now() - config.lookbackMs).toISOString();
+    const baseWhere = createSqlWhere();
+    baseWhere.add('created_at >= ?', since);
+    if (!config.simulationsEnabled) {
+      baseWhere.add('simulated = 0');
     }
 
+    const filteredWhere = baseWhere.clone();
+    addAlertSqlFilters(filteredWhere, filters);
+    const searchWhere = compileAlertSearchSql(searchAst, filters);
+    if (searchWhere) {
+      filteredWhere.add(searchWhere.sql, ...searchWhere.params);
+    }
+
+    const unfilteredTotal = queryCount('alerts', baseWhere);
+    const total = queryCount('alerts', filteredWhere);
+    const offset = (pageRequest.page - 1) * pageRequest.pageSize;
+    const rows = database.db.prepare(`
+      SELECT raw_data
+      FROM alerts
+      ${filteredWhere.toSql()}
+      ORDER BY created_at DESC, id DESC
+      LIMIT ? OFFSET ?
+    `).all(...filteredWhere.params, pageRequest.pageSize, offset) as Array<{ raw_data: string }>;
+
+    const data = hydrateAlertsBatch(rows)
+      .map((alert) => applySimulationModeToAlert(alert, config.simulationsEnabled))
+      .filter((alert): alert is AlertRecord => alert !== null)
+      .map((alert) => toSlimAlert(alert));
+
+    return {
+      data,
+      pagination: {
+        page: pageRequest.page,
+        page_size: pageRequest.pageSize,
+        total,
+        total_pages: Math.ceil(total / pageRequest.pageSize),
+        unfiltered_total: unfilteredTotal,
+      },
+      selectable_ids: data.map((alert) => alert.id),
+    };
+  }
+
+  function queryPaginatedDecisions(
+    pageRequest: PageRequest,
+    filters: DecisionListFilters,
+    searchAst: SearchNode | null,
+    includeExpired: boolean,
+  ): PaginatedResponse<DecisionListItem> {
+    const since = new Date(Date.now() - config.lookbackMs).toISOString();
+    const now = new Date().toISOString();
+    const duplicateSql = getDecisionDuplicateSql(now);
+    const baseWhere = createSqlWhere();
+    if (includeExpired) {
+      baseWhere.add('(created_at >= ? OR stop_at > ?)', since, now);
+    } else {
+      baseWhere.add('stop_at > ?', now);
+    }
+    if (!config.simulationsEnabled) {
+      baseWhere.add('simulated = 0');
+    }
+
+    const filteredWhere = baseWhere.clone();
+    addDecisionSqlFilters(filteredWhere, filters, now, duplicateSql);
+    const searchWhere = compileDecisionSearchSql(searchAst, filters, now, duplicateSql);
+    if (searchWhere) {
+      filteredWhere.add(searchWhere.sql, ...searchWhere.params);
+    }
+
+    const unfilteredTotal = queryCount('decisions', baseWhere);
+    const total = queryCount('decisions', filteredWhere);
+    const offset = (pageRequest.page - 1) * pageRequest.pageSize;
+    const rows = database.db.prepare(`
+      SELECT raw_data, alert_id, ${duplicateSql} AS is_duplicate
+      FROM decisions
+      ${filteredWhere.toSql()}
+      ORDER BY created_at DESC, id DESC
+      LIMIT ? OFFSET ?
+    `).all(...filteredWhere.params, pageRequest.pageSize, offset) as Array<{
+      raw_data: string;
+      alert_id?: string | number | null;
+      is_duplicate?: number;
+    }>;
+
+    const data = rows.map((row) => {
+      const decision = JSON.parse(row.raw_data) as AlertDecision & Record<string, unknown>;
+      if (decision.alert_id === undefined && row.alert_id !== undefined && row.alert_id !== null) {
+        decision.alert_id = row.alert_id;
+      }
+      decision.is_duplicate = row.is_duplicate === 1;
+      return toDecisionListItem(decision, includeExpired);
+    });
+
+    return {
+      data,
+      pagination: {
+        page: pageRequest.page,
+        page_size: pageRequest.pageSize,
+        total,
+        total_pages: Math.ceil(total / pageRequest.pageSize),
+        unfiltered_total: unfilteredTotal,
+      },
+      selectable_ids: data
+        .filter((decision) => !isDecisionListItemExpired(decision))
+        .map((decision) => decision.id),
+    };
+  }
+
+  function queryCount(tableName: 'alerts' | 'decisions', where: SqlWhere): number {
+    const row = database.db.prepare(`SELECT COUNT(*) AS count FROM ${tableName} ${where.toSql()}`).get(...where.params) as { count: number };
+    return row.count;
+  }
+
+  function addAlertSqlFilters(where: SqlWhere, filters: AlertListFilters): void {
+    if (filters.ip) addIpCondition(where, 'source_ip', filters.ip);
+    if (filters.country) {
+      where.add('(LOWER(country) LIKE ? OR LOWER(country_name) LIKE ?)', likeParam(filters.country), likeParam(filters.country));
+    }
+    if (filters.scenario) addLike(where, 'LOWER(scenario)', filters.scenario);
+    if (filters.as) addLike(where, 'LOWER(as_name)', filters.as);
+    if (filters.target) addLike(where, 'LOWER(target)', filters.target);
+    if (filters.date) where.add('created_at LIKE ?', `${escapeLike(filters.date)}%`);
+    addDateRangeFilter(where, 'created_at', filters.dateStart, filters.dateEnd, filters.timezoneOffsetMinutes, filters.timeZone);
+    addSimulationFilter(where, filters.simulation);
+  }
+
+  function addDecisionSqlFilters(where: SqlWhere, filters: DecisionListFilters, now: string, duplicateSql: string): void {
+    if (!filters.showDuplicates) where.add(`NOT (${duplicateSql})`);
+    if (filters.alertId) where.add('CAST(alert_id AS TEXT) = ?', filters.alertId);
+    addSimulationFilter(where, filters.simulation);
+    if (filters.country) where.add('country = ?', filters.country);
+    if (filters.scenario) where.add('scenario = ?', filters.scenario);
+    if (filters.as) where.add('as_name = ?', filters.as);
+    if (filters.ip) addIpCondition(where, 'value', filters.ip);
+    if (filters.target) {
+      where.add('(LOWER(value) LIKE ? OR LOWER(target) LIKE ?)', likeParam(filters.target), likeParam(filters.target));
+    }
+    addDateRangeFilter(where, 'created_at', filters.dateStart, filters.dateEnd, filters.timezoneOffsetMinutes, filters.timeZone);
+    void now;
+  }
+
+  function addSimulationFilter(where: SqlWhere, filter: string): void {
+    if (filter === 'simulated') where.add('simulated = 1');
+    if (filter === 'live') where.add('simulated = 0');
+  }
+
+  function addDateRangeFilter(
+    where: SqlWhere,
+    column: string,
+    dateStart: string,
+    dateEnd: string,
+    timezoneOffsetMinutes: number,
+    timeZone: string | null,
+  ): void {
+    if (!dateStart && !dateEnd) return;
+    const includeHour = dateStart.includes('T') || dateEnd.includes('T');
+    if (dateStart) {
+      where.add(`${column} >= ?`, getDateFilterBoundary(dateStart, timezoneOffsetMinutes, timeZone, includeHour).toISOString());
+    }
+    if (dateEnd) {
+      where.add(`${column} <= ?`, getDateFilterBoundary(dateEnd, timezoneOffsetMinutes, timeZone, includeHour).toISOString());
+    }
+  }
+
+  function compileAlertSearchSql(ast: SearchNode | null, filters: AlertListFilters): SqlCondition | null {
+    return compileSearchNodeSql(ast, {
+      page: 'alerts',
+      dateOptions: filters,
+      fieldCondition: (field, value) => alertFieldCondition(field, value),
+      freeTextCondition: (value) => freeTextSearchCondition('alerts', value, database.searchIndexAvailable),
+    });
+  }
+
+  function compileDecisionSearchSql(
+    ast: SearchNode | null,
+    filters: DecisionListFilters,
+    now: string,
+    duplicateSql: string,
+  ): SqlCondition | null {
+    return compileSearchNodeSql(ast, {
+      page: 'decisions',
+      dateOptions: filters,
+      fieldCondition: (field, value) => decisionFieldCondition(field, value, now, duplicateSql),
+      freeTextCondition: (value) => freeTextSearchCondition('decisions', value, database.searchIndexAvailable),
+    });
+  }
+
+  function getDashboardStatsIndex(): DashboardStatsCache {
+    const cacheKey = `${cache.lastUpdate || 'uninitialized'}:${config.lookbackMs}:${config.simulationsEnabled ? 'sim' : 'live'}`;
     const since = new Date(Date.now() - config.lookbackMs).toISOString();
     const nowIso = new Date().toISOString();
     const nowTimestamp = Date.now();
 
-    const alerts = hydrateAlertsBatch(database.getAlertsSince(since))
-      .map((hydratedAlert) => applySimulationModeToAlert(hydratedAlert, config.simulationsEnabled))
-      .filter((alert): alert is AlertRecord => alert !== null)
-      .flatMap((alert): DashboardAlertStatsRecord[] => {
-        const createdAt = resolveAlertHistoryAt(alert);
+    const alertWhere = createSqlWhere();
+    alertWhere.add('created_at >= ?', since);
+    if (!config.simulationsEnabled) {
+      alertWhere.add('simulated = 0');
+    }
+    const alerts = (database.db.prepare(`
+      SELECT created_at, country, scenario, as_name, source_ip, target, simulated
+      FROM alerts
+      ${alertWhere.toSql()}
+    `).all(...alertWhere.params) as Array<{
+      created_at: string;
+      country?: string | null;
+      scenario?: string | null;
+      as_name?: string | null;
+      source_ip?: string | null;
+      target?: string | null;
+      simulated?: number | null;
+    }>).flatMap((row): DashboardAlertStatsRecord[] => {
+        const createdAt = row.created_at;
         const timestamp = Date.parse(createdAt);
         if (!Number.isFinite(timestamp)) {
           return [];
@@ -2845,42 +3060,49 @@ ${errorSummary}  Status: ${syncSummary.state}
         return [{
           createdAt,
           timestamp,
-          country: alert.source?.cn,
-          scenario: resolveAlertScenario(alert),
-          asName: alert.source?.as_name,
-          ip: alert.source?.ip,
-          target: alert.target,
-          simulated: isAlertSimulated(alert),
+          country: row.country || undefined,
+          scenario: row.scenario || undefined,
+          asName: row.as_name || undefined,
+          ip: row.source_ip || undefined,
+          target: row.target || undefined,
+          simulated: row.simulated === 1,
         }];
       });
 
-    const decisions = database
-      .getDecisionsSince(since, nowIso)
-      .flatMap((row): DashboardDecisionStatsRecord[] => {
-        try {
-          const decision = JSON.parse(row.raw_data) as Record<string, unknown>;
-          const createdAt = String(decision.created_at || row.created_at || '');
-          const timestamp = Date.parse(createdAt);
-          if (!Number.isFinite(timestamp)) {
-            return [];
-          }
+    const decisionWhere = createSqlWhere();
+    decisionWhere.add('(created_at >= ? OR stop_at > ?)', since, nowIso);
+    if (!config.simulationsEnabled) {
+      decisionWhere.add('simulated = 0');
+    }
+    const decisions = (database.db.prepare(`
+      SELECT created_at, stop_at, value, country, simulated
+      FROM decisions
+      ${decisionWhere.toSql()}
+    `).all(...decisionWhere.params) as Array<{
+      created_at: string;
+      stop_at?: string | null;
+      value?: string | null;
+      country?: string | null;
+      simulated?: number | null;
+    }>).flatMap((row): DashboardDecisionStatsRecord[] => {
+      const createdAt = row.created_at;
+      const timestamp = Date.parse(createdAt);
+      if (!Number.isFinite(timestamp)) {
+        return [];
+      }
 
-          const stopAt = typeof decision.stop_at === 'string' ? decision.stop_at : undefined;
-          const stopTimestamp = stopAt ? Date.parse(stopAt) : Number.NaN;
-          return [{
-            createdAt,
-            stopAt,
-            timestamp,
-            stopTimestamp: Number.isFinite(stopTimestamp) ? stopTimestamp : 0,
-            value: typeof decision.value === 'string' ? decision.value : undefined,
-            country: typeof decision.country === 'string' ? decision.country : undefined,
-            simulated: normalizeDecisionSimulated(decision as AlertDecision & Record<string, unknown>),
-          }];
-        } catch {
-          return [];
-        }
-      })
-      .filter((decision) => config.simulationsEnabled || !decision.simulated);
+      const stopAt = row.stop_at || undefined;
+      const stopTimestamp = stopAt ? Date.parse(stopAt) : Number.NaN;
+      return [{
+        createdAt,
+        stopAt,
+        timestamp,
+        stopTimestamp: Number.isFinite(stopTimestamp) ? stopTimestamp : 0,
+        value: row.value || undefined,
+        country: row.country || undefined,
+        simulated: row.simulated === 1,
+      }];
+    });
 
     const totals: DashboardStatsTotals = {
       alerts: alerts.length,
@@ -2889,8 +3111,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       simulatedDecisions: decisions.filter((decision) => decision.simulated && decision.stopTimestamp > nowTimestamp).length,
     };
 
-    dashboardStatsCache = { key: cacheKey, alerts, decisions, totals };
-    return dashboardStatsCache;
+    return { key: cacheKey, alerts, decisions, totals };
   }
 
   function buildDashboardStats(filters: DashboardStatsFilters): DashboardStatsResponse {
@@ -3030,6 +3251,349 @@ ${errorSummary}  Status: ${syncSummary.state}
     void ensureBootstrapReady('startup');
   }
 
+}
+
+interface SqlCondition {
+  sql: string;
+  params: unknown[];
+}
+
+class SqlWhere {
+  private readonly clauses: string[];
+  readonly params: unknown[];
+
+  constructor(clauses: string[] = [], params: unknown[] = []) {
+    this.clauses = clauses;
+    this.params = params;
+  }
+
+  add(sql: string, ...params: unknown[]): void {
+    this.clauses.push(sql);
+    this.params.push(...params);
+  }
+
+  clone(): SqlWhere {
+    return new SqlWhere([...this.clauses], [...this.params]);
+  }
+
+  toSql(): string {
+    return this.clauses.length > 0 ? `WHERE ${this.clauses.map((clause) => `(${clause})`).join(' AND ')}` : '';
+  }
+}
+
+function createSqlWhere(): SqlWhere {
+  return new SqlWhere();
+}
+
+function addLike(where: SqlWhere, columnSql: string, value: string): void {
+  where.add(`${columnSql} LIKE ?`, likeParam(value));
+}
+
+function addIpCondition(where: SqlWhere, column: string, value: string): void {
+  where.add(`(matches_ip_search_value(${column}, ?) = 1 OR LOWER(${column}) LIKE ?)`, value, likeParam(value));
+}
+
+function textCondition(columnSql: string, value: string): SqlCondition {
+  return { sql: `${columnSql} LIKE ?`, params: [likeParam(value)] };
+}
+
+function ipCondition(column: string, value: string): SqlCondition {
+  return {
+    sql: `(matches_ip_search_value(${column}, ?) = 1 OR LOWER(${column}) LIKE ?)`,
+    params: [value, likeParam(value)],
+  };
+}
+
+function freeTextSearchCondition(page: SearchPageForSql, value: string, searchIndexAvailable: boolean): SqlCondition {
+  const fallback = textCondition('LOWER(search_text)', value);
+  if (!searchIndexAvailable) {
+    return fallback;
+  }
+
+  const ftsQuery = toFtsQuery(value);
+  if (!ftsQuery) {
+    return fallback;
+  }
+
+  if (page === 'alerts') {
+    return {
+      sql: 'id IN (SELECT CAST(alert_id AS INTEGER) FROM alerts_fts WHERE alerts_fts MATCH ?)',
+      params: [ftsQuery],
+    };
+  }
+
+  return {
+    sql: 'id IN (SELECT decision_id FROM decisions_fts WHERE decisions_fts MATCH ?)',
+    params: [ftsQuery],
+  };
+}
+
+function alertFieldCondition(field: string, value: string): SqlCondition {
+  switch (field) {
+    case 'id':
+      return { sql: 'CAST(id AS TEXT) = ?', params: [value] };
+    case 'scenario':
+      return textCondition('LOWER(scenario)', value);
+    case 'message':
+      return textCondition('LOWER(message)', value);
+    case 'ip':
+      return ipCondition('source_ip', value);
+    case 'country':
+      return countryCondition(value);
+    case 'as':
+      return textCondition('LOWER(as_name)', value);
+    case 'target':
+      return textCondition('LOWER(target)', value);
+    case 'date':
+      return textCondition('LOWER(created_at)', value);
+    case 'sim':
+      return simulationTermCondition(value);
+    case 'machine':
+      return textCondition('LOWER(machine)', value);
+    case 'origin':
+      return textCondition('LOWER(origins)', value);
+    default:
+      return { sql: '0 = 1', params: [] };
+  }
+}
+
+function decisionFieldCondition(field: string, value: string, now: string, duplicateSql: string): SqlCondition {
+  switch (field) {
+    case 'id':
+      return { sql: 'CAST(id AS TEXT) = ?', params: [value] };
+    case 'alert':
+      return { sql: 'CAST(alert_id AS TEXT) = ?', params: [value] };
+    case 'scenario':
+      return textCondition('LOWER(scenario)', value);
+    case 'ip':
+      return ipCondition('value', value);
+    case 'country':
+      return countryCondition(value);
+    case 'as':
+      return textCondition('LOWER(as_name)', value);
+    case 'target':
+      return textCondition('LOWER(target)', value);
+    case 'date':
+      return textCondition('LOWER(created_at)', value);
+    case 'action':
+    case 'type':
+      return textCondition('LOWER(type)', value);
+    case 'status':
+      return decisionStatusCondition(value, now);
+    case 'duplicate':
+      return booleanCondition(value, duplicateSql);
+    case 'sim':
+      return simulationTermCondition(value);
+    case 'machine':
+      return textCondition('LOWER(machine)', value);
+    case 'origin':
+      return textCondition('LOWER(origin)', value);
+    default:
+      return { sql: '0 = 1', params: [] };
+  }
+}
+
+function countryCondition(value: string): SqlCondition {
+  const normalized = value.trim().toLowerCase();
+  if (/^[a-z]{2}$/.test(normalized)) {
+    return { sql: 'LOWER(country) = ?', params: [normalized] };
+  }
+  return {
+    sql: '(LOWER(country_name) LIKE ? OR LOWER(country) = ?)',
+    params: [likeParam(value), normalized],
+  };
+}
+
+function simulationTermCondition(value: string): SqlCondition {
+  const normalized = value.trim().toLowerCase();
+  if (['sim', 'simulated', 'simulation', 'true', 'yes', '1'].includes(normalized)) {
+    return { sql: 'simulated = 1', params: [] };
+  }
+  if (['live', 'false', 'no', '0'].includes(normalized)) {
+    return { sql: 'simulated = 0', params: [] };
+  }
+  return { sql: '0 = 1', params: [] };
+}
+
+function decisionStatusCondition(value: string, now: string): SqlCondition {
+  const normalized = value.trim().toLowerCase();
+  if (['expired', 'inactive'].includes(normalized)) {
+    return { sql: 'stop_at <= ?', params: [now] };
+  }
+  if (['active', 'live'].includes(normalized)) {
+    return { sql: 'stop_at > ?', params: [now] };
+  }
+  return { sql: '0 = 1', params: [] };
+}
+
+function booleanCondition(value: string, trueSql: string): SqlCondition {
+  const normalized = value.trim().toLowerCase();
+  if (['true', 'yes', '1', 'on'].includes(normalized)) {
+    return { sql: trueSql, params: [] };
+  }
+  if (['false', 'no', '0', 'off'].includes(normalized)) {
+    return { sql: `NOT (${trueSql})`, params: [] };
+  }
+  return { sql: '0 = 1', params: [] };
+}
+
+function compileSearchNodeSql(
+  node: SearchNode | null,
+  context: {
+    page: SearchPageForSql;
+    dateOptions: { timezoneOffsetMinutes: number; timeZone: string | null };
+    fieldCondition: (field: string, value: string) => SqlCondition;
+    freeTextCondition: (value: string) => SqlCondition;
+  },
+  scopedField?: string,
+): SqlCondition | null {
+  if (!node) return null;
+
+  if (node.kind === 'term') {
+    return scopedField ? context.fieldCondition(scopedField, node.value) : context.freeTextCondition(node.value);
+  }
+
+  if (node.kind === 'comparison') {
+    if (node.field === 'date') {
+      return dateComparisonCondition('created_at', node.operator, node.value, context.dateOptions);
+    }
+    const condition = context.fieldCondition(node.field, node.value);
+    if (node.operator === '<>') {
+      return { sql: `NOT (${condition.sql})`, params: condition.params };
+    }
+    return condition;
+  }
+
+  if (node.kind === 'field') {
+    return compileSearchNodeSql(node.expression, context, node.field);
+  }
+
+  if (node.kind === 'not') {
+    const condition = compileSearchNodeSql(node.expression, context, scopedField);
+    return condition ? { sql: `NOT (${condition.sql})`, params: condition.params } : null;
+  }
+
+  const left = compileSearchNodeSql(node.left, context, scopedField);
+  const right = compileSearchNodeSql(node.right, context, scopedField);
+  if (!left) return right;
+  if (!right) return left;
+  return {
+    sql: `(${left.sql}) ${node.operator} (${right.sql})`,
+    params: [...left.params, ...right.params],
+  };
+}
+
+type SearchPageForSql = 'alerts' | 'decisions';
+
+function dateComparisonCondition(
+  column: string,
+  operator: string,
+  value: string,
+  dateOptions: { timezoneOffsetMinutes: number; timeZone: string | null },
+): SqlCondition {
+  const range = parseSqlSearchDateValue(value, dateOptions);
+  if (!range) return { sql: '0 = 1', params: [] };
+  const start = new Date(range.start).toISOString();
+  const end = new Date(range.end).toISOString();
+
+  if (range.precision === 'day' || range.precision === 'hour') {
+    if (operator === '=') return { sql: `${column} >= ? AND ${column} < ?`, params: [start, end] };
+    if (operator === '<>') return { sql: `(${column} < ? OR ${column} >= ?)`, params: [start, end] };
+    if (operator === '<') return { sql: `${column} < ?`, params: [start] };
+    if (operator === '<=') return { sql: `${column} < ?`, params: [end] };
+    if (operator === '>') return { sql: `${column} >= ?`, params: [end] };
+    if (operator === '>=') return { sql: `${column} >= ?`, params: [start] };
+  }
+
+  if (operator === '=') return { sql: `${column} = ?`, params: [start] };
+  if (operator === '<>') return { sql: `${column} <> ?`, params: [start] };
+  if (operator === '<') return { sql: `${column} < ?`, params: [start] };
+  if (operator === '<=') return { sql: `${column} <= ?`, params: [start] };
+  if (operator === '>') return { sql: `${column} > ?`, params: [start] };
+  if (operator === '>=') return { sql: `${column} >= ?`, params: [start] };
+
+  return { sql: '0 = 1', params: [] };
+}
+
+function parseSqlSearchDateValue(
+  value: string,
+  dateOptions: { timezoneOffsetMinutes: number; timeZone: string | null },
+): { start: number; end: number; precision: 'day' | 'hour' | 'instant' } | null {
+  const trimmed = value.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const start = parseDashboardBucketKey(trimmed, dateOptions.timezoneOffsetMinutes, dateOptions.timeZone);
+    const endKey = formatDashboardClientBucketKey(addDashboardBucketInterval(parseDashboardWallKey(trimmed), 'day'), 'day');
+    const end = parseDashboardBucketKey(endKey, dateOptions.timezoneOffsetMinutes, dateOptions.timeZone);
+    return { start: start.getTime(), end: end.getTime(), precision: 'day' };
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}$/.test(trimmed)) {
+    const start = parseDashboardBucketKey(trimmed, dateOptions.timezoneOffsetMinutes, dateOptions.timeZone);
+    const endKey = formatDashboardClientBucketKey(addDashboardBucketInterval(parseDashboardWallKey(trimmed), 'hour'), 'hour');
+    const end = parseDashboardBucketKey(endKey, dateOptions.timezoneOffsetMinutes, dateOptions.timeZone);
+    return { start: start.getTime(), end: end.getTime(), precision: 'hour' };
+  }
+
+  const timestamp = Date.parse(trimmed);
+  if (!Number.isFinite(timestamp)) return null;
+  return { start: timestamp, end: timestamp, precision: 'instant' };
+}
+
+function getDateFilterBoundary(
+  value: string,
+  timezoneOffsetMinutes: number,
+  timeZone: string | null,
+  includeHour: boolean,
+): Date {
+  if ((includeHour && /^\d{4}-\d{2}-\d{2}T\d{2}$/.test(value)) || (!includeHour && /^\d{4}-\d{2}-\d{2}$/.test(value))) {
+    return parseDashboardBucketKey(value, timezoneOffsetMinutes, timeZone);
+  }
+  const timestamp = Date.parse(value);
+  return new Date(Number.isFinite(timestamp) ? timestamp : 0);
+}
+
+function getDecisionDuplicateSql(now: string): string {
+  const nowLiteral = quoteSqlLiteral(now);
+  const numericId = "CASE WHEN decisions.id GLOB '[0-9]*' THEN CAST(decisions.id AS INTEGER) ELSE 9223372036854775807 END";
+  const otherNumericId = "CASE WHEN other.id GLOB '[0-9]*' THEN CAST(other.id AS INTEGER) ELSE 9223372036854775807 END";
+  return `(
+    decisions.stop_at > ${nowLiteral}
+    AND EXISTS (
+      SELECT 1
+      FROM decisions AS other
+      WHERE COALESCE(other.value, '') = COALESCE(decisions.value, '')
+        AND other.simulated = decisions.simulated
+        AND other.stop_at > ${nowLiteral}
+        AND (
+          other.stop_at > decisions.stop_at
+          OR (other.stop_at = decisions.stop_at AND ${otherNumericId} < ${numericId})
+        )
+    )
+  )`;
+}
+
+function quoteSqlLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function likeParam(value: string): string {
+  return `%${escapeLike(value.trim().toLowerCase())}%`;
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (match) => `\\${match}`);
+}
+
+function toFtsQuery(value: string): string | null {
+  const terms = value
+    .trim()
+    .toLowerCase()
+    .split(/[^a-z0-9_./:-]+/i)
+    .map((term) => term.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+  if (terms.length === 0) return null;
+  return terms.map((term) => `"${term.replace(/"/g, '""')}"`).join(' AND ');
 }
 
 function loadMetricsSidebarVisible(database: CrowdsecDatabase): boolean {
@@ -3301,38 +3865,46 @@ function toPaginatedResponse<T>(
 }
 
 function getAlertListFilters(context: HonoContext, timeZone: string | null): AlertListFilters {
+  return getAlertListFiltersFromValues((key) => context.req.query(key), timeZone);
+}
+
+function getAlertListFiltersFromValues(readValue: (key: string) => string | undefined, timeZone: string | null): AlertListFilters {
   return {
-    q: context.req.query('q') || '',
-    ip: lowerQuery(context, 'ip'),
-    country: lowerQuery(context, 'country'),
-    scenario: lowerQuery(context, 'scenario'),
-    as: lowerQuery(context, 'as'),
-    date: context.req.query('date') || '',
-    dateStart: context.req.query('dateStart') || '',
-    dateEnd: context.req.query('dateEnd') || '',
-    target: lowerQuery(context, 'target'),
-    simulation: context.req.query('simulation') || 'all',
-    timezoneOffsetMinutes: parseTimezoneOffset(context),
-    timeZone: getEffectiveRequestTimeZone(context, timeZone),
+    q: readValue('q') || '',
+    ip: lowerValue(readValue('ip')),
+    country: lowerValue(readValue('country')),
+    scenario: lowerValue(readValue('scenario')),
+    as: lowerValue(readValue('as')),
+    date: readValue('date') || '',
+    dateStart: readValue('dateStart') || '',
+    dateEnd: readValue('dateEnd') || '',
+    target: lowerValue(readValue('target')),
+    simulation: readValue('simulation') || 'all',
+    timezoneOffsetMinutes: parseTimezoneOffsetValue(readValue('tz_offset')),
+    timeZone: getEffectiveRequestTimeZoneValue(readValue('browser_tz'), timeZone),
   };
 }
 
 function getDecisionListFilters(context: HonoContext, timeZone: string | null): DecisionListFilters {
-  const alertId = context.req.query('alert_id') || '';
+  return getDecisionListFiltersFromValues((key) => context.req.query(key), timeZone);
+}
+
+function getDecisionListFiltersFromValues(readValue: (key: string) => string | undefined, timeZone: string | null): DecisionListFilters {
+  const alertId = readValue('alert_id') || '';
   return {
-    q: context.req.query('q') || '',
+    q: readValue('q') || '',
     alertId,
-    country: context.req.query('country') || '',
-    scenario: context.req.query('scenario') || '',
-    as: context.req.query('as') || '',
-    ip: context.req.query('ip') || '',
-    target: lowerQuery(context, 'target'),
-    dateStart: context.req.query('dateStart') || '',
-    dateEnd: context.req.query('dateEnd') || '',
-    simulation: context.req.query('simulation') || 'all',
-    showDuplicates: context.req.query('hide_duplicates') === 'false' || Boolean(alertId),
-    timezoneOffsetMinutes: parseTimezoneOffset(context),
-    timeZone: getEffectiveRequestTimeZone(context, timeZone),
+    country: readValue('country') || '',
+    scenario: readValue('scenario') || '',
+    as: readValue('as') || '',
+    ip: readValue('ip') || '',
+    target: lowerValue(readValue('target')),
+    dateStart: readValue('dateStart') || '',
+    dateEnd: readValue('dateEnd') || '',
+    simulation: readValue('simulation') || 'all',
+    showDuplicates: readValue('hide_duplicates') === 'false' || Boolean(alertId),
+    timezoneOffsetMinutes: parseTimezoneOffsetValue(readValue('tz_offset')),
+    timeZone: getEffectiveRequestTimeZoneValue(readValue('browser_tz'), timeZone),
   };
 }
 
@@ -3700,7 +4272,11 @@ function getDashboardBucketFullDate(key: string, timezoneOffsetMinutes: number, 
   return parseDashboardBucketKey(key, timezoneOffsetMinutes, timeZone).toISOString();
 }
 function lowerQuery(context: HonoContext, key: string): string {
-  return (context.req.query(key) || '').toLowerCase();
+  return lowerValue(context.req.query(key));
+}
+
+function lowerValue(value: string | undefined): string {
+  return (value || '').toLowerCase();
 }
 
 function toSearchErrorResponse(error: SearchParseError): { error: string; details: SearchParseError } {
@@ -3711,12 +4287,20 @@ function toSearchErrorResponse(error: SearchParseError): { error: string; detail
 }
 
 function parseTimezoneOffset(context: HonoContext): number {
-  const value = Number.parseInt(context.req.query('tz_offset') || '0', 10);
+  return parseTimezoneOffsetValue(context.req.query('tz_offset'));
+}
+
+function parseTimezoneOffsetValue(rawValue: string | undefined): number {
+  const value = Number.parseInt(rawValue || '0', 10);
   return Number.isFinite(value) ? value : 0;
 }
 
 function getEffectiveRequestTimeZone(context: HonoContext, configuredTimeZone: string | null): string | null {
-  return configuredTimeZone || sanitizeRequestTimeZone(context.req.query('browser_tz'));
+  return getEffectiveRequestTimeZoneValue(context.req.query('browser_tz'), configuredTimeZone);
+}
+
+function getEffectiveRequestTimeZoneValue(browserTimeZone: string | undefined, configuredTimeZone: string | null): string | null {
+  return configuredTimeZone || sanitizeRequestTimeZone(browserTimeZone);
 }
 
 function sanitizeRequestTimeZone(value: string | undefined): string | null {

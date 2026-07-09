@@ -321,7 +321,7 @@ describe('Alerts page', () => {
     expect(screen.getByRole('button', { name: 'Choose alert table columns' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Delete all alerts and decisions for/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Actions' })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Select all filtered alerts')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Select all loaded alerts')).not.toBeInTheDocument();
   });
 
   test('localizes country names in the alert table and alert details', async () => {
@@ -1222,7 +1222,7 @@ describe('Alerts page', () => {
     expect(screen.getByText('#1074')).toBeInTheDocument();
   });
 
-  test('bulk delete selects all filtered alerts, not just the first rendered slice', async () => {
+  test('bulk delete selects loaded alerts without requiring all filtered ids', async () => {
     const bulkAlerts = Array.from({ length: 55 }, (_, index) => ({
       id: index + 1,
       created_at: `2026-03-24T${String(index % 24).padStart(2, '0')}:00:00.000Z`,
@@ -1252,12 +1252,12 @@ describe('Alerts page', () => {
     await waitFor(() => expect(screen.getByText('10.0.0.1')).toBeInTheDocument());
     expect(screen.queryByText('10.0.0.55')).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('checkbox', { name: 'Select all filtered alerts' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select all loaded alerts' }));
     await userEvent.click(screen.getByRole('button', { name: 'Delete selected' }));
     await userEvent.click(screen.getByRole('button', { name: 'Delete' }));
 
     await waitFor(() => expect(bulkDeleteAlertsMock).toHaveBeenCalledWith(
-      Array.from({ length: 55 }, (_, index) => String(index + 1)),
+      Array.from({ length: 50 }, (_, index) => String(index + 1)),
     ));
   });
 

@@ -8,6 +8,7 @@ import { Modal } from "../components/ui/Modal";
 import { HighlightedSearchInput } from "../components/HighlightedSearchInput";
 import { SearchSyntaxModal } from "../components/SearchSyntaxModal";
 import { TableColumnsModal } from "../components/TableColumnsModal";
+import { CountryFlag } from "../components/CountryFlag";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { EventCard } from "../components/EventCard";
@@ -354,9 +355,13 @@ export function Alerts() {
             setTotalPages(alertsResult.pagination.total_pages);
             setTotalAlerts(alertsResult.pagination.total);
             setTotalUnfilteredAlerts(alertsResult.pagination.unfiltered_total);
-            const nextSelectableIds = alertsResult.selectable_ids.map(String);
-            setSelectableAlertIds(nextSelectableIds);
-            setSelectedAlertIds((current) => current.filter((id) => nextSelectableIds.includes(id)));
+            const nextSelectableIds = alertsData.map((alert) => String(alert.id));
+            setSelectableAlertIds((current) => append
+                ? Array.from(new Set([...current, ...nextSelectableIds]))
+                : nextSelectableIds);
+            if (!append) {
+                setSelectedAlertIds((current) => current.filter((id) => nextSelectableIds.includes(id)));
+            }
             hasLoadedAlertsRef.current = true;
             setHasLoadedAlerts(true);
 
@@ -1073,7 +1078,7 @@ export function Alerts() {
                                                             <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 align-middle">
                                                                 {alert.source?.cn && alert.source?.cn !== "Unknown" ? (
                                                                     <div className="flex items-center gap-2" title={alert.source.cn}>
-                                                                        <span className={`fi fi-${alert.source.cn.toLowerCase()} flex-shrink-0`}></span>
+                                                                        <CountryFlag code={alert.source.cn} />
                                                                         <span className="truncate max-w-[150px]">{getCountryName(alert.source.cn, language)}</span>
                                                                     </div>
                                                                 ) : (
@@ -1238,7 +1243,7 @@ export function Alerts() {
                                 <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{t('pages.alerts.location')}</h4>
                                 <div className="text-lg text-gray-900 dark:text-gray-100 font-medium flex items-center gap-2">
                                     {selectedAlert.source?.cn && (
-                                        <span className={`fi fi-${selectedAlert.source.cn.toLowerCase()} flex-shrink-0`} title={selectedAlert.source.cn}></span>
+                                        <CountryFlag code={selectedAlert.source.cn} />
                                     )}
                                     {getCountryName(selectedAlert.source?.cn, language) || "-"}
                                 </div>

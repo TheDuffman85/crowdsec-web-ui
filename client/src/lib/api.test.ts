@@ -123,6 +123,16 @@ describe('api helpers', () => {
     await expect(Promise.all([firstRequest, secondRequest])).resolves.toEqual([{ ok: true }, { ok: true }]);
   });
 
+  test('reuses very recent GET helper responses for effect replays', async () => {
+    const fetchMock = vi.fn(async () => Response.json({ ok: true }));
+    mockFetch(fetchMock);
+
+    await expect(fetchConfig()).resolves.toEqual({ ok: true });
+    await expect(fetchConfig()).resolves.toEqual({ ok: true });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   test('fetchAlert handles direct payloads and empty array payloads', async () => {
     mockFetch(
       vi.fn(async (input) => {

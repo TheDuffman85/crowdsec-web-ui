@@ -8,6 +8,7 @@ import { Modal } from "../components/ui/Modal";
 import { HighlightedSearchInput } from "../components/HighlightedSearchInput";
 import { SearchSyntaxModal } from "../components/SearchSyntaxModal";
 import { TableColumnsModal } from "../components/TableColumnsModal";
+import { CountryFlag } from "../components/CountryFlag";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { getCountryName } from "../lib/utils";
@@ -315,9 +316,15 @@ export function Decisions() {
             setTotalPages(decisionsResult.pagination.total_pages);
             setTotalDecisions(decisionsResult.pagination.total);
             setTotalUnfilteredDecisions(decisionsResult.pagination.unfiltered_total);
-            const nextSelectableIds = decisionsResult.selectable_ids.map(String);
-            setSelectableDecisionIds(nextSelectableIds);
-            setSelectedDecisionIds((current) => current.filter((id) => nextSelectableIds.includes(id)));
+            const nextSelectableIds = decisionsData
+                .filter((decision) => !isDecisionExpired(decision, Date.now()))
+                .map((decision) => String(decision.id));
+            setSelectableDecisionIds((current) => append
+                ? Array.from(new Set([...current, ...nextSelectableIds]))
+                : nextSelectableIds);
+            if (!append) {
+                setSelectedDecisionIds((current) => current.filter((id) => nextSelectableIds.includes(id)));
+            }
             hasLoadedDecisionsRef.current = true;
             setHasLoadedDecisions(true);
 
@@ -955,7 +962,7 @@ export function Decisions() {
                                                             <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 align-middle">
                                                                 {decision.detail.country && decision.detail.country !== "Unknown" ? (
                                                                     <div className="flex items-center gap-2" title={decision.detail.country}>
-                                                                        <span className={`fi fi-${decision.detail.country.toLowerCase()} flex-shrink-0`}></span>
+                                                                        <CountryFlag code={decision.detail.country} />
                                                                         <span>{getCountryName(decision.detail.country, language)}</span>
                                                                     </div>
                                                                 ) : (

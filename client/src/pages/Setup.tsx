@@ -46,7 +46,7 @@ export function Setup() {
     <div className="flex min-h-screen items-center justify-center bg-gray-950 p-4 text-gray-100">
       <div className="w-full max-w-sm rounded-xl border border-gray-800 bg-gray-900 p-8 shadow-2xl">
         <div className="mb-6 text-center">
-          <img src={assetUrl('/logo.svg')} alt="" className="mx-auto h-14 w-14" />
+          <img src={assetUrl('/logo-sidebar.png')} alt="" className="mx-auto h-14 w-14" />
           <h1 className="mt-4 text-2xl font-bold">Initial setup</h1>
           <p className="mt-1 text-sm text-gray-400">Create your administrator account</p>
         </div>

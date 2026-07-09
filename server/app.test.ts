@@ -4,7 +4,7 @@ import path from 'path';
 import { tmpdir } from 'os';
 import crypto from 'node:crypto';
 import { generate } from 'otplib';
-import type { AlertRecord } from '../shared/contracts';
+import type { AlertRecord, PaginatedResponse, SlimAlert } from '../shared/contracts';
 import { resolveMachineName } from '../shared/machine';
 import { createRuntimeConfig } from './config';
 import { CrowdsecDatabase } from './database';
@@ -363,6 +363,7 @@ function createTestDistRoot(): string {
   writeFileSync(path.join(distRoot, 'assets', 'app.js'), 'console.log("ok");');
   writeFileSync(path.join(distRoot, 'world-50m.json'), '{"type":"Topology"}');
   writeFileSync(path.join(distRoot, 'logo.svg'), '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+  writeFileSync(path.join(distRoot, 'logo-sidebar.png'), 'png');
   return distRoot;
 }
 
@@ -1235,6 +1236,9 @@ describe('createApp', () => {
     expect(logo.status).toBe(200);
     expect((await logo.text()).includes('<svg')).toBe(true);
 
+    const sidebarLogo = await controller.fetch(new Request('http://localhost/crowdsec/logo-sidebar.png'));
+    expect(sidebarLogo.status).toBe(200);
+
     const asset = await controller.fetch(new Request('http://localhost/crowdsec/assets/app.js'));
     expect(asset.status).toBe(200);
     expect(asset.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
@@ -1906,6 +1910,72 @@ describe('createApp', () => {
         pagination: expect.objectContaining({ total: 1 }),
       }),
     );
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('serves the first paginated alert page from a 100k-row cache', async () => {
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_LOOKBACK_PERIOD: '168h',
+      },
+    });
+    const bootstrap = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(bootstrap.status).toBe(200);
+    const now = Date.now();
+    const insert = database.db.prepare(`
+      INSERT INTO alerts (
+        id, uuid, created_at, scenario, source_ip, message, raw_data,
+        country, country_name, as_name, target, machine, meta_search, origins, simulated, search_text
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const insertSearch = database.db.prepare('INSERT INTO alerts_fts(rowid, alert_id, search_text) VALUES (?, ?, ?)');
+    const insertMany = database.db.transaction((count: number) => {
+      for (let index = 1; index <= count; index += 1) {
+        const createdAt = new Date(now - index * 1_000).toISOString();
+        const ip = `10.42.${Math.floor(index / 256) % 256}.${index % 256}`;
+        const searchText = `perf scenario ${ip} germany ssh`;
+        insert.run(
+          index,
+          `perf-alert-${index}`,
+          createdAt,
+          'perf/scenario',
+          ip,
+          'perf alert',
+          JSON.stringify({
+            id: index,
+            uuid: `perf-alert-${index}`,
+            created_at: createdAt,
+            scenario: 'perf/scenario',
+            source: { ip, value: ip, cn: 'DE', as_name: 'Perf AS' },
+            target: 'ssh',
+            decisions: [],
+            simulated: false,
+          }),
+          'DE',
+          'Germany',
+          'Perf AS',
+          'ssh',
+          'perf-host',
+          'perf',
+          '',
+          0,
+          searchText,
+        );
+        insertSearch.run(index, String(index), searchText);
+      }
+    });
+    insertMany(100_000);
+
+    const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50&q=perf'));
+    expect(response.status).toBe(200);
+    const payload = await response.json() as PaginatedResponse<SlimAlert>;
+    expect(payload.data).toHaveLength(50);
+    expect(payload.pagination.total).toBe(100_000);
+    expect(payload.selectable_ids).toHaveLength(50);
 
     controller.stopBackgroundTasks();
     database.close();

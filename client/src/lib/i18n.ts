@@ -1,16 +1,7 @@
 import { createContext, useContext } from 'react';
 import i18next from 'i18next';
 import { initReactI18next } from 'react-i18next';
-import ar from '../locales/ar.json';
-import de from '../locales/de.json';
 import en from '../locales/en.json';
-import es from '../locales/es.json';
-import fr from '../locales/fr.json';
-import hi from '../locales/hi.json';
-import ja from '../locales/ja.json';
-import pt from '../locales/pt.json';
-import ru from '../locales/ru.json';
-import zh from '../locales/zh.json';
 
 export const LANGUAGE_SETTING_KEY = 'language';
 export const BROWSER_LANGUAGE_SETTING = 'browser';
@@ -32,38 +23,21 @@ export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number]['code'];
 export type LanguagePreference = SupportedLanguage | typeof BROWSER_LANGUAGE_SETTING;
 export type TranslationValues = Record<string, string | number | boolean | null | undefined>;
 
-export const i18nResources = {
-  ar: {
-    translation: ar,
-  },
-  de: {
-    translation: de,
-  },
-  en: {
-    translation: en,
-  },
-  es: {
-    translation: es,
-  },
-  fr: {
-    translation: fr,
-  },
-  hi: {
-    translation: hi,
-  },
-  ja: {
-    translation: ja,
-  },
-  pt: {
-    translation: pt,
-  },
-  ru: {
-    translation: ru,
-  },
-  zh: {
-    translation: zh,
-  },
-} as const;
+export const i18nResources = { en: { translation: en } } as const;
+
+const localeLoaders: Record<SupportedLanguage, () => Promise<{ default: Record<string, string> }>> = {
+  ar: () => import('../locales/ar.json'),
+  de: () => import('../locales/de.json'),
+  en: async () => ({ default: en as Record<string, string> }),
+  es: () => import('../locales/es.json'),
+  fr: () => import('../locales/fr.json'),
+  hi: () => import('../locales/hi.json'),
+  ja: () => import('../locales/ja.json'),
+  pt: () => import('../locales/pt.json'),
+  ru: () => import('../locales/ru.json'),
+  zh: () => import('../locales/zh.json'),
+};
+const languageResourcePromises = new Map<SupportedLanguage, Promise<void>>();
 
 const supportedLanguageCodes = new Set<string>(
   SUPPORTED_LANGUAGES.map((language) => language.code),
@@ -87,6 +61,27 @@ if (!i18next.isInitialized) {
         useSuspense: false,
       },
     });
+}
+
+export async function loadLanguageResources(language: SupportedLanguage): Promise<void> {
+  if (i18next.hasResourceBundle(language, 'translation')) {
+    return;
+  }
+
+  const existingPromise = languageResourcePromises.get(language);
+  if (existingPromise) {
+    return existingPromise;
+  }
+
+  const promise = localeLoaders[language]()
+    .then((resources) => {
+      i18next.addResourceBundle(language, 'translation', resources.default, true, true);
+    })
+    .finally(() => {
+      languageResourcePromises.delete(language);
+    });
+  languageResourcePromises.set(language, promise);
+  return promise;
 }
 
 function normalizeLanguageCode(language: string | null | undefined): SupportedLanguage | null {

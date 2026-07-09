@@ -13,6 +13,7 @@ import {
   LANGUAGE_SETTING_KEY,
   getBrowserLanguage,
   getStoredLanguagePreference,
+  loadLanguageResources,
   normalizeLanguagePreference,
   resolveLanguagePreference,
   type I18nContextValue,
@@ -28,11 +29,27 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   const language = resolveLanguagePreference(preference);
 
   useEffect(() => {
+    let cancelled = false;
+
     document.documentElement.lang = language;
     document.documentElement.dir = language === 'ar' ? 'rtl' : 'ltr';
-    if (i18n.language !== language) {
-      void i18n.changeLanguage(language);
-    }
+
+    void loadLanguageResources(language)
+      .then(() => {
+        if (!cancelled && i18n.language !== language) {
+          void i18n.changeLanguage(language);
+        }
+      })
+      .catch((error) => {
+        console.error(`Failed to load ${language} translations`, error);
+        if (!cancelled && i18n.language !== 'en') {
+          void i18n.changeLanguage('en');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [i18n, language]);
 
   useEffect(() => {

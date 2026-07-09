@@ -317,7 +317,7 @@ describe('Decisions page', () => {
     expect(screen.queryByRole('button', { name: 'Delete Decision' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Delete all alerts and decisions for/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Actions' })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Select all filtered decisions')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Select all loaded decisions')).not.toBeInTheDocument();
   });
 
   test('localizes country names in the decisions table', async () => {
@@ -902,7 +902,7 @@ describe('Decisions page', () => {
     const deleteSelectedButton = screen.getByRole('button', { name: 'Delete selected' });
     expect(deleteSelectedButton).toBeDisabled();
 
-    await userEvent.click(screen.getByRole('checkbox', { name: 'Select all filtered decisions' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select all loaded decisions' }));
     expect(deleteSelectedButton).toBeEnabled();
     await userEvent.click(deleteSelectedButton);
     await userEvent.click(screen.getByRole('button', { name: 'Delete' }));

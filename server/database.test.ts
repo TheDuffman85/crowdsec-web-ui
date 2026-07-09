@@ -81,6 +81,8 @@ describe('CrowdsecDatabase', () => {
     db.setMeta('refresh_interval_ms', '5000');
 
     expect(db.countAlerts()).toBe(1);
+    expect(db.searchIndexAvailable).toBe(true);
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts WHERE alerts_fts MATCH ?').get('alert') as { count: number }).count).toBe(1);
     expect(db.getAlertsSince('2024-12-31T00:00:00.000Z')).toHaveLength(1);
     expect(db.getActiveDecisions('2025-01-01T00:00:00.000Z')).toHaveLength(1);
     expect(db.getDecisionById('10')?.stop_at).toBe('2030-01-01T00:00:00.000Z');

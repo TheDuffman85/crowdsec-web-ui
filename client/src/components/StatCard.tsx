@@ -5,6 +5,7 @@ import type { ComponentType, ReactNode } from 'react';
 import type { LucideProps } from 'lucide-react';
 import type { StatListItem } from '../types';
 import { useI18n } from '../lib/i18n';
+import { CountryFlag } from './CountryFlag';
 
 interface StatCardProps<TItem extends StatListItem> {
     title: string;
@@ -85,7 +86,7 @@ export function StatCard<TItem extends StatListItem>({
                                             {idx + 1}
                                         </span>
                                         {item.countryCode && (
-                                            <span className={`fi fi-${item.countryCode.toLowerCase()} flex-shrink-0 rounded-sm`} />
+                                            <CountryFlag code={item.countryCode} />
                                         )}
                                         <div className="min-w-0 flex-1">
                                             {renderLabel ? (

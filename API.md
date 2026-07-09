@@ -22,6 +22,7 @@ List endpoints that support pagination use `page` and `page_size`. Pagination is
 
 - `page` defaults to `1` and is clamped to at least `1`.
 - `page_size` defaults to `50` and is clamped from `10` to `200`.
+- For high-volume alert and decision lists, `selectable_ids` contains IDs for the returned page only. Use additional pages to expand the loaded selection set.
 - Paginated responses use:
 
 ```json
