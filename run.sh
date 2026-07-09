@@ -8,6 +8,7 @@ BACKEND_PORT=3000
 FRONTEND_PORT=5173
 PNPM_SHIM_DIR=""
 PNPM_CMD=("pnpm")
+MODE="${1:-normal}"
 
 # Keep corepack-managed pnpm non-interactive on first use.
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
@@ -75,19 +76,110 @@ shutdown_service() {
     fi
 }
 
+LOADTEST_ENV_NAMES=(
+    LOADTEST_ALERTS
+    LOADTEST_DECISIONS
+    LOADTEST_SEED
+    LOADTEST_DB_DIR
+    LOADTEST_BACKEND_PORT
+    LOADTEST_ACTIVE_DECISION_RATIO
+    LOADTEST_SIMULATION_RATIO
+    LOADTEST_DUPLICATE_VALUE_RATIO
+    CROWDSEC_LOOKBACK_PERIOD
+    CROWDSEC_SIMULATIONS_ENABLED
+)
+
+capture_loadtest_overrides() {
+    LOADTEST_ENV_OVERRIDES=()
+    for name in "${LOADTEST_ENV_NAMES[@]}"; do
+        if [ "${!name+x}" ]; then
+            LOADTEST_ENV_OVERRIDES+=("$name=${!name}")
+        fi
+    done
+}
+
+restore_loadtest_overrides() {
+    for entry in "${LOADTEST_ENV_OVERRIDES[@]}"; do
+        export "$entry"
+    done
+}
+
+load_env_file() {
+    if [ -f "$ENV_FILE" ]; then
+        log "Loading environment variables from $ENV_FILE..."
+        if [ "$MODE" == "loadtest" ]; then
+            capture_loadtest_overrides
+        fi
+        set -a
+        source "$ENV_FILE"
+        set +a
+        if [ "$MODE" == "loadtest" ]; then
+            restore_loadtest_overrides
+        fi
+    else
+        log "No .env file found at $ENV_FILE. Proceeding with default environment."
+    fi
+}
+
+configure_loadtest_defaults() {
+    : "${LOADTEST_ALERTS:=300000}"
+    : "${LOADTEST_DECISIONS:=300000}"
+    : "${LOADTEST_SEED:=1337}"
+    : "${LOADTEST_DB_DIR:=${TMPDIR:-/tmp}/crowdsec-web-ui-load-test}"
+    : "${LOADTEST_BACKEND_PORT:=3000}"
+    : "${LOADTEST_ACTIVE_DECISION_RATIO:=0.7}"
+    : "${LOADTEST_SIMULATION_RATIO:=0.1}"
+    : "${LOADTEST_DUPLICATE_VALUE_RATIO:=0.15}"
+    : "${CROWDSEC_LOOKBACK_PERIOD:=30d}"
+    : "${CROWDSEC_SIMULATIONS_ENABLED:=true}"
+
+    export LOADTEST_ALERTS
+    export LOADTEST_DECISIONS
+    export LOADTEST_SEED
+    export LOADTEST_DB_DIR
+    export LOADTEST_BACKEND_PORT
+    export LOADTEST_ACTIVE_DECISION_RATIO
+    export LOADTEST_SIMULATION_RATIO
+    export LOADTEST_DUPLICATE_VALUE_RATIO
+    export CROWDSEC_LOOKBACK_PERIOD
+    export CROWDSEC_SIMULATIONS_ENABLED
+    export DB_DIR="$LOADTEST_DB_DIR"
+    export PORT="$LOADTEST_BACKEND_PORT"
+    export BACKEND_URL="http://127.0.0.1:$LOADTEST_BACKEND_PORT"
+
+    BACKEND_PORT="$LOADTEST_BACKEND_PORT"
+}
+
+wait_for_url() {
+    local url="$1"
+    local label="$2"
+    local attempts=120
+
+    for _ in $(seq 1 "$attempts"); do
+        if node -e "fetch(process.argv[1]).then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" "$url"; then
+            return 0
+        fi
+        sleep 0.25
+    done
+
+    log "Timed out waiting for $label at $url"
+    return 1
+}
+
 # 1. Shutdown existing services
-log "Checking for running services..."
-shutdown_service $BACKEND_PORT "backend"
-shutdown_service $FRONTEND_PORT "frontend"
+if [ "$MODE" != "loadtest" ]; then
+    log "Checking for running services..."
+    shutdown_service $BACKEND_PORT "backend"
+    shutdown_service $FRONTEND_PORT "frontend"
+fi
 
 # 2. Load environment variables
-if [ -f "$ENV_FILE" ]; then
-    log "Loading environment variables from $ENV_FILE..."
-    set -a
-    source "$ENV_FILE"
-    set +a
-else
-    log "No .env file found at $ENV_FILE. Proceeding with default environment."
+load_env_file
+
+if [ "$MODE" == "loadtest" ]; then
+    configure_loadtest_defaults
+    log "Checking for running load-test services..."
+    shutdown_service $BACKEND_PORT "load-test backend"
 fi
 
 trap cleanup_pnpm_shim EXIT
@@ -102,12 +194,58 @@ fi
 
 ensure_pnpm
 
-# 3. Determine mode
-MODE="${1:-normal}"
-
 cd "$PROJECT_ROOT" || exit 1
 
-if [ "$MODE" == "dev" ]; then
+if [ "$MODE" == "loadtest" ]; then
+    log "Starting in LOAD TEST mode..."
+    log "DB directory: $LOADTEST_DB_DIR"
+    log "Alerts: $LOADTEST_ALERTS"
+    log "Decisions: $LOADTEST_DECISIONS"
+    log "Seed: $LOADTEST_SEED"
+    log "Seeding load-test database..."
+    log "The UI will not be available until seeding, the frontend build, and backend startup finish."
+    "${PNPM_CMD[@]}" run loadtest:seed
+
+    if [ $? -ne 0 ]; then
+        log "Load-test database seed failed. Aborting."
+        exit 1
+    fi
+
+    log "Building load-test frontend..."
+    "${PNPM_CMD[@]}" run loadtest:build-client
+
+    if [ $? -ne 0 ]; then
+        log "Load-test frontend build failed. Aborting."
+        exit 1
+    fi
+
+    log "Starting load-test backend on port $LOADTEST_BACKEND_PORT..."
+    "${PNPM_CMD[@]}" run loadtest:server &
+    BACKEND_PID=$!
+    if ! wait_for_url "http://127.0.0.1:${LOADTEST_BACKEND_PORT}/api/health" "load-test backend"; then
+        kill $BACKEND_PID 2>/dev/null
+        wait $BACKEND_PID 2>/dev/null
+        exit 1
+    fi
+
+    log "Load-test UI is ready: http://127.0.0.1:${LOADTEST_BACKEND_PORT}/"
+    log "Load-test UI is also available at: http://localhost:${LOADTEST_BACKEND_PORT}/"
+    log "Authentication is disabled in load-test mode."
+    log "Service started. Backend PID: $BACKEND_PID"
+
+    cleanup() {
+        log "Stopping load-test service..."
+        kill $BACKEND_PID 2>/dev/null
+        wait $BACKEND_PID 2>/dev/null
+        cleanup_pnpm_shim
+        exit 0
+    }
+    trap cleanup SIGINT SIGTERM
+
+    while kill -0 $BACKEND_PID 2>/dev/null; do
+        wait
+    done
+elif [ "$MODE" == "dev" ]; then
     log "Starting in DEVELOPMENT mode..."
     
     # Start Backend in background

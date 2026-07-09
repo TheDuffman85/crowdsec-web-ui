@@ -16,7 +16,7 @@ import { getDecisionExpirationState } from "../lib/decisionExpiration";
 import { TABLE_COLUMN_DEFINITIONS } from "../../../shared/contracts";
 import { loadStoredTableColumnPreferences, saveStoredTableColumnPreferences } from "../lib/tableColumns";
 import { compileDecisionSearch, getSearchHelpDefinition, type SearchParseError } from "../../../shared/search";
-import { Trash2, Gavel, X, ExternalLink, Shield, ShieldBan, AlertCircle, Info, Columns3 } from "lucide-react";
+import { Trash2, Gavel, X, ExternalLink, Shield, ShieldBan, AlertCircle, Info, Columns3, Loader2 } from "lucide-react";
 import type { AddDecisionRequest, ApiPermissionError, BulkDeleteResult, DecisionListItem, TableColumnId, TableColumnPreferences } from '../types';
 import { useI18n, type I18nContextValue } from "../lib/i18n";
 import { getBrowserTimeZone, useDateTime } from "../lib/dateTime";
@@ -66,6 +66,19 @@ function ErrorBanner({ errorInfo, onDismiss }: { errorInfo: ErrorInfo; onDismiss
                 </button>
             )}
         </div>
+    );
+}
+
+function TableLoadingRow({ colSpan, label }: { colSpan: number; label: string }) {
+    return (
+        <tr>
+            <td colSpan={colSpan} className="bg-primary-50/60 dark:bg-primary-900/10 px-6 py-4 text-center">
+                <span className="inline-flex items-center justify-center gap-2 text-sm font-medium text-primary-700 dark:text-primary-300" aria-live="polite">
+                    <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+                    {label}
+                </span>
+            </td>
+        </tr>
     );
 }
 
@@ -1063,6 +1076,9 @@ export function Decisions() {
                                         </tr>
                                     );
                                 })
+                            )}
+                            {loadingMore && visibleDecisions.length > 0 && (
+                                <TableLoadingRow colSpan={decisionTableColSpan} label={t('pages.decisions.loadingMore')} />
                             )}
                         </tbody>
                     </table>

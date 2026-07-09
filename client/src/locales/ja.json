@@ -351,6 +351,7 @@
   "pages.alerts.filterPlaceholder": "アラートを絞り込み...",
   "pages.alerts.itemsFailedToDelete": "{count} 件の項目を削除できませんでした。",
   "pages.alerts.loading": "アラートを読み込み中...",
+  "pages.alerts.loadingMore": "さらにアラートを読み込み中...",
   "pages.alerts.location": "場所",
   "pages.alerts.noAlerts": "アラートが見つかりません",
   "pages.alerts.noAlertsOrDecisionsForIp": "{ip} のアラートまたは決定は見つかりません。",

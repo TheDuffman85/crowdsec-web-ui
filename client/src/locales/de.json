@@ -351,6 +351,7 @@
   "pages.alerts.filterPlaceholder": "Alarme filtern...",
   "pages.alerts.itemsFailedToDelete": "{count} Element(e) konnten nicht gelöscht werden.",
   "pages.alerts.loading": "Alarme werden geladen...",
+  "pages.alerts.loadingMore": "Weitere Alarme werden geladen...",
   "pages.alerts.location": "Standort",
   "pages.alerts.noAlerts": "Keine Alarme gefunden",
   "pages.alerts.noAlertsOrDecisionsForIp": "Keine Alarme oder Entscheidungen für {ip} gefunden.",

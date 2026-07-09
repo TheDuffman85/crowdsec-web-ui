@@ -351,6 +351,7 @@
   "pages.alerts.filterPlaceholder": "筛选告警...",
   "pages.alerts.itemsFailedToDelete": "{count} 个项目删除失败。",
   "pages.alerts.loading": "加载告警中...",
+  "pages.alerts.loadingMore": "正在加载更多告警...",
   "pages.alerts.location": "位置",
   "pages.alerts.noAlerts": "未找到告警",
   "pages.alerts.noAlertsOrDecisionsForIp": "未找到 {ip} 的告警或决策。",

@@ -351,6 +351,7 @@
   "pages.alerts.filterPlaceholder": "Фильтр оповещений...",
   "pages.alerts.itemsFailedToDelete": "Не удалось удалить элементов: {count}.",
   "pages.alerts.loading": "Загрузка оповещений...",
+  "pages.alerts.loadingMore": "Загрузка дополнительных оповещений...",
   "pages.alerts.location": "Местоположение",
   "pages.alerts.noAlerts": "Оповещения не найдены",
   "pages.alerts.noAlertsOrDecisionsForIp": "Для {ip} не найдены оповещения или решения.",

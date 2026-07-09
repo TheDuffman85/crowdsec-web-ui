@@ -351,6 +351,7 @@
   "pages.alerts.filterPlaceholder": "Filtrer les alertes...",
   "pages.alerts.itemsFailedToDelete": "{count} élément(s) n’ont pas pu être supprimés.",
   "pages.alerts.loading": "Chargement des alertes...",
+  "pages.alerts.loadingMore": "Chargement d'alertes supplémentaires...",
   "pages.alerts.location": "Emplacement",
   "pages.alerts.noAlerts": "Aucune alerte trouvée",
   "pages.alerts.noAlertsOrDecisionsForIp": "Aucune alerte ou décision trouvée pour {ip}.",

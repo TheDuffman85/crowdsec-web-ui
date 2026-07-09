@@ -2,8 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'node:url';
 import BetterSqlite3 from 'better-sqlite3';
+import type { AlertDecision, AlertRecord } from '../shared/contracts';
 import { matchesIpSearchValue } from '../shared/search';
-import { deriveAlertIndexValues, deriveDecisionIndexValues } from './record-index';
+import { deriveAlertIndexValues, deriveAlertIndexValuesFromRecord, deriveDecisionIndexValues, deriveDecisionIndexValuesFromRecord } from './record-index';
 
 type SqliteStatement = {
   run: (...params: any[]) => { changes: number };
@@ -30,6 +31,7 @@ export interface AlertInsertParams {
   $source_ip?: string;
   $message: string;
   $raw_data: string;
+  $record?: AlertRecord;
 }
 
 export interface DecisionInsertParams {
@@ -43,6 +45,7 @@ export interface DecisionInsertParams {
   $origin?: string;
   $scenario?: string;
   $raw_data: string;
+  $record?: AlertDecision & Record<string, unknown>;
 }
 
 export interface DecisionUpdateParams {
@@ -114,6 +117,7 @@ export interface WebAuthnCredentialRow {
 export class CrowdsecDatabase {
   public readonly db: Database;
   public readonly searchIndexAvailable: boolean;
+  private searchIndexUpdatesDeferred = false;
 
   private readonly insertAlertStatement: any;
   private readonly getAllAlertsStatement: any;
@@ -174,6 +178,10 @@ export class CrowdsecDatabase {
   private readonly countUnreadNotificationsStatement: any;
   private readonly getCveCacheEntryStatement: any;
   private readonly upsertCveCacheEntryStatement: any;
+  private readonly deleteAlertSearchIndexStatement: any | null;
+  private readonly insertAlertSearchIndexStatement: any | null;
+  private readonly deleteDecisionSearchIndexStatement: any | null;
+  private readonly insertDecisionSearchIndexStatement: any | null;
 
   constructor(options: DatabaseOptions = {}) {
     const resolvedPath = resolveDatabasePath(options);
@@ -414,6 +422,18 @@ export class CrowdsecDatabase {
       INSERT OR REPLACE INTO cve_cache (id, published_at, fetched_at)
       VALUES ($id, $published_at, $fetched_at)
     `);
+    this.deleteAlertSearchIndexStatement = this.searchIndexAvailable
+      ? this.db.prepare('DELETE FROM alerts_fts WHERE alert_id = ?')
+      : null;
+    this.insertAlertSearchIndexStatement = this.searchIndexAvailable
+      ? this.db.prepare('INSERT INTO alerts_fts(rowid, alert_id, search_text) VALUES (?, ?, ?)')
+      : null;
+    this.deleteDecisionSearchIndexStatement = this.searchIndexAvailable
+      ? this.db.prepare('DELETE FROM decisions_fts WHERE decision_id = ?')
+      : null;
+    this.insertDecisionSearchIndexStatement = this.searchIndexAvailable
+      ? this.db.prepare('INSERT INTO decisions_fts(decision_id, search_text) VALUES (?, ?)')
+      : null;
   }
 
   close(): void {
@@ -430,15 +450,35 @@ export class CrowdsecDatabase {
     this.clearSearchIndexes();
   }
 
+  beginDeferredSearchIndexUpdates(): void {
+    if (!this.searchIndexAvailable) return;
+    this.searchIndexUpdatesDeferred = true;
+    this.clearSearchIndexes();
+  }
+
+  rebuildSearchIndexes(): void {
+    if (!this.searchIndexAvailable) return;
+    try {
+      this.clearSearchIndexes();
+      backfillSearchIndexes(this.db);
+    } finally {
+      this.searchIndexUpdatesDeferred = false;
+    }
+  }
+
   insertAlert(params: AlertInsertParams): void {
-    const index = deriveAlertIndexValues(params.$raw_data, {
+    const fallback = {
       createdAt: params.$created_at,
       scenario: params.$scenario,
       sourceIp: params.$source_ip,
       message: params.$message,
-    });
+    };
+    const index = params.$record
+      ? deriveAlertIndexValuesFromRecord(params.$record, fallback)
+      : deriveAlertIndexValues(params.$raw_data, fallback);
+    const { $record, ...dbParams } = params;
     this.insertAlertStatement.run({
-      ...params,
+      ...dbParams,
       $created_at: index.historyAt,
       $scenario: index.scenario ?? params.$scenario,
       $source_ip: index.sourceIp ?? params.$source_ip,
@@ -502,14 +542,18 @@ export class CrowdsecDatabase {
   }
 
   insertDecision(params: DecisionInsertParams): void {
-    const index = deriveDecisionIndexValues(params.$raw_data, {
+    const fallback = {
       value: params.$value,
       type: params.$type,
       origin: params.$origin,
       scenario: params.$scenario,
-    });
+    };
+    const index = params.$record
+      ? deriveDecisionIndexValuesFromRecord(params.$record, fallback)
+      : deriveDecisionIndexValues(params.$raw_data, fallback);
+    const { $record, ...dbParams } = params;
     this.insertDecisionStatement.run({
-      ...params,
+      ...dbParams,
       $country: index.country,
       $country_name: index.countryName,
       $as_name: index.asName,
@@ -961,40 +1005,63 @@ export class CrowdsecDatabase {
   }
 
   private upsertAlertSearchIndex(id: string | number, searchText: string): void {
-    if (!this.searchIndexAvailable) return;
+    if (this.searchIndexUpdatesDeferred) return;
+    if (!this.searchIndexAvailable || !this.deleteAlertSearchIndexStatement || !this.insertAlertSearchIndexStatement) return;
     const numericId = Number(id);
     if (!Number.isSafeInteger(numericId) || numericId < 1) return;
-    this.runSearchIndexStatement('DELETE FROM alerts_fts WHERE alert_id = ?', String(id));
-    this.runSearchIndexStatement('INSERT INTO alerts_fts(rowid, alert_id, search_text) VALUES (?, ?, ?)', numericId, String(id), searchText);
+    try {
+      this.deleteAlertSearchIndexStatement.run(String(id));
+      this.insertAlertSearchIndexStatement.run(numericId, String(id), searchText);
+    } catch {
+      // Search indexing is an optimization; core table data remains authoritative.
+    }
   }
 
   private upsertDecisionSearchIndex(id: string | number, searchText: string): void {
-    if (!this.searchIndexAvailable) return;
-    this.runSearchIndexStatement('DELETE FROM decisions_fts WHERE decision_id = ?', String(id));
-    this.runSearchIndexStatement('INSERT INTO decisions_fts(decision_id, search_text) VALUES (?, ?)', String(id), searchText);
+    if (this.searchIndexUpdatesDeferred) return;
+    if (!this.searchIndexAvailable || !this.deleteDecisionSearchIndexStatement || !this.insertDecisionSearchIndexStatement) return;
+    try {
+      this.deleteDecisionSearchIndexStatement.run(String(id));
+      this.insertDecisionSearchIndexStatement.run(String(id), searchText);
+    } catch {
+      // Search indexing is an optimization; core table data remains authoritative.
+    }
   }
 
   private deleteAlertSearchIndex(id: string | number): void {
-    if (!this.searchIndexAvailable) return;
-    this.runSearchIndexStatement('DELETE FROM alerts_fts WHERE alert_id = ?', String(id));
+    if (this.searchIndexUpdatesDeferred) return;
+    if (!this.searchIndexAvailable || !this.deleteAlertSearchIndexStatement) return;
+    try {
+      this.deleteAlertSearchIndexStatement.run(String(id));
+    } catch {
+      // Search indexing is an optimization; core table data remains authoritative.
+    }
   }
 
   private deleteAlertSearchIndexes(ids: string[]): void {
+    if (this.searchIndexUpdatesDeferred) return;
     if (!this.searchIndexAvailable || ids.length === 0) return;
     runChunkedIdMutation(this.db, 'DELETE FROM alerts_fts WHERE alert_id IN', ids);
   }
 
   private deleteDecisionSearchIndex(id: string | number): void {
-    if (!this.searchIndexAvailable) return;
-    this.runSearchIndexStatement('DELETE FROM decisions_fts WHERE decision_id = ?', String(id));
+    if (this.searchIndexUpdatesDeferred) return;
+    if (!this.searchIndexAvailable || !this.deleteDecisionSearchIndexStatement) return;
+    try {
+      this.deleteDecisionSearchIndexStatement.run(String(id));
+    } catch {
+      // Search indexing is an optimization; core table data remains authoritative.
+    }
   }
 
   private deleteDecisionSearchIndexes(ids: string[]): void {
+    if (this.searchIndexUpdatesDeferred) return;
     if (!this.searchIndexAvailable || ids.length === 0) return;
     runChunkedIdMutation(this.db, 'DELETE FROM decisions_fts WHERE decision_id IN', ids);
   }
 
   private deleteDecisionSearchIndexesByAlertIds(alertIds: string[]): void {
+    if (this.searchIndexUpdatesDeferred) return;
     if (!this.searchIndexAvailable || alertIds.length === 0) return;
     const decisionIds: string[] = [];
     const chunkSize = 900;
@@ -1172,6 +1239,7 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
     CREATE INDEX IF NOT EXISTS idx_decisions_value ON decisions(value);
     CREATE INDEX IF NOT EXISTS idx_decisions_created_at ON decisions(created_at);
     CREATE INDEX IF NOT EXISTS idx_decisions_value_stop_at ON decisions(value, stop_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_decisions_duplicate_primary ON decisions(value, simulated, stop_at DESC, id);
   `;
 
   const createMetaTable = `
@@ -1383,6 +1451,7 @@ function migrateRecordIndexColumns(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_decisions_target ON decisions(target);
     CREATE INDEX IF NOT EXISTS idx_decisions_simulated ON decisions(simulated);
     CREATE INDEX IF NOT EXISTS idx_decisions_alert_created_at ON decisions(alert_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_decisions_duplicate_primary ON decisions(value, simulated, stop_at DESC, id);
   `);
 
   backfillRecordIndexes(db);

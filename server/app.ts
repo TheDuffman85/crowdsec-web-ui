@@ -72,6 +72,8 @@ export interface CreateAppOptions {
   notificationFetchImpl?: FetchLike;
   metricsFetchImpl?: FetchLike;
   mqttPublishImpl?: (config: MqttPublishConfig, payload: string) => Promise<void>;
+  initialCacheState?: Partial<CacheState>;
+  rootRedirectPath?: string;
 }
 
 export interface AppController {
@@ -375,11 +377,13 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   };
 
   const cache: CacheState = {
-    isInitialized: false,
-    isComplete: false,
-    lastUpdate: null,
+    isInitialized: options.initialCacheState?.isInitialized ?? false,
+    isComplete: options.initialCacheState?.isComplete ?? false,
+    lastUpdate: options.initialCacheState?.lastUpdate ?? null,
   };
   let dashboardStatsCache: DashboardStatsCache | null = null;
+  let dashboardStatsCacheVersion = 0;
+  const dashboardStatsResponseCache = new Map<string, DashboardStatsResponse>();
 
   const persistedConfig = loadPersistedConfig(database);
   let refreshIntervalMs = persistedConfig.refresh_interval_ms ?? config.refreshIntervalMs;
@@ -565,7 +569,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       const result = await deleteAlertFromLapi(alertId);
       database.deleteAlert(alertId);
       database.deleteDecisionsByAlertId(alertId);
-      dashboardStatsCache = null;
+      invalidateDashboardStatsCache();
       return context.json((result as object) || { message: 'Deleted' });
     };
 
@@ -924,7 +928,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       database.clearSyncData();
       cache.isInitialized = false;
       cache.lastUpdate = null;
-      dashboardStatsCache = null;
+      invalidateDashboardStatsCache();
       isFirstSync = true;
       await ensureBootstrapReady('manual cache clear');
 
@@ -1136,7 +1140,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       const result = await deleteDecisionFromLapi(decisionId);
       console.log(`Removing decision ${decisionId} from local cache...`);
       database.deleteDecision(decisionId);
-      dashboardStatsCache = null;
+      invalidateDashboardStatsCache();
       void runNotificationEvaluation('decision delete');
       return context.json((result as object) || { message: 'Deleted' });
     };
@@ -1208,6 +1212,13 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
   app.get(`${config.basePath}/*`, (context) => {
     try {
+      const requestPath = new URL(context.req.url).pathname;
+      const rootPath = config.basePath ? `${config.basePath}/` : '/';
+      if (options.rootRedirectPath && requestPath === rootPath) {
+        const redirectPath = `${config.basePath}${options.rootRedirectPath.startsWith('/') ? options.rootRedirectPath : `/${options.rootRedirectPath}`}`;
+        return context.redirect(redirectPath);
+      }
+
       const indexPath = path.join(distRoot, 'index.html');
       let html = fs.readFileSync(indexPath, 'utf-8');
       const safePath = config.basePath.replace(/[^a-zA-Z0-9/_-]/g, '');
@@ -1505,7 +1516,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     };
 
     if (pruned.alerts > 0 || pruned.decisions > 0) {
-      dashboardStatsCache = null;
+      invalidateDashboardStatsCache();
       console.log(`Alert filter cleanup: removed ${pruned.alerts} stale cached alerts and ${pruned.decisions} stale cached decisions.`);
     }
 
@@ -1572,6 +1583,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       $source_ip: sourceValue,
       $message: alert.message || '',
       $raw_data: JSON.stringify(enrichedAlert),
+      $record: enrichedAlert,
     };
 
     try {
@@ -1617,6 +1629,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         $origin: enrichedDecision.origin,
         $scenario: enrichedDecision.scenario,
         $raw_data: JSON.stringify(enrichedDecision),
+        $record: enrichedDecision,
       };
 
       try {
@@ -1654,7 +1667,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
     reconcileTransaction(alerts);
     if (pruned.alerts > 0 || pruned.decisions > 0) {
-      dashboardStatsCache = null;
+      invalidateDashboardStatsCache();
     }
     return pruned;
   }
@@ -1668,7 +1681,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
     reconcileTransaction(keepIds);
     if (pruned.alerts > 0 || pruned.decisions > 0) {
-      dashboardStatsCache = null;
+      invalidateDashboardStatsCache();
     }
     return pruned;
   }
@@ -1684,7 +1697,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
     persistTransaction(alerts);
     if (alerts.length > 0) {
-      dashboardStatsCache = null;
+      invalidateDashboardStatsCache();
     }
     return decisionCountsByAlertId;
   }
@@ -2000,9 +2013,19 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
 
     initializationPromise = (async () => {
+      const deferSearchIndexUpdates = !cache.isInitialized && database.searchIndexAvailable;
+      let deferredSearchIndexesRebuilt = false;
+      if (deferSearchIndexUpdates) {
+        database.beginDeferredSearchIndexUpdates();
+      }
       try {
         console.log('Initializing cache with chunked data load...');
         const syncSummary = await syncHistory();
+        if (deferSearchIndexUpdates) {
+          console.log('Rebuilding search indexes after initial cache load...');
+          database.rebuildSearchIndexes();
+          deferredSearchIndexesRebuilt = true;
+        }
         cache.lastUpdate = new Date().toISOString();
         cache.isInitialized = syncSummary.state !== 'failed';
         cache.isComplete = syncSummary.state === 'complete';
@@ -2053,6 +2076,13 @@ ${errorSummary}  Status: ${syncSummary.state}
         });
         return null;
       } finally {
+        if (deferSearchIndexUpdates && !deferredSearchIndexesRebuilt) {
+          try {
+            database.rebuildSearchIndexes();
+          } catch (error: any) {
+            console.error('Failed to rebuild search indexes:', error.message);
+          }
+        }
         initializationPromise = null;
       }
     })();
@@ -2556,7 +2586,7 @@ ${errorSummary}  Status: ${syncSummary.state}
         }
       });
       removeAlerts(deletedAlertIds);
-      dashboardStatsCache = null;
+      invalidateDashboardStatsCache();
     }
 
     result.deleted_alerts = deletedAlertIds.length;
@@ -2613,7 +2643,7 @@ ${errorSummary}  Status: ${syncSummary.state}
         }
       });
       removeDecisions(deletedDecisionIds);
-      dashboardStatsCache = null;
+      invalidateDashboardStatsCache();
     }
 
     result.deleted_decisions = deletedDecisionIds.length;
@@ -2694,7 +2724,7 @@ ${errorSummary}  Status: ${syncSummary.state}
         }
       });
       removeAlerts(deletedAlertIds);
-      dashboardStatsCache = null;
+      invalidateDashboardStatsCache();
     }
 
     const decisionIdsToDelete = Array.from(deletedDecisionIds).filter((id) => !alertDecisionIds.has(id));
@@ -2705,7 +2735,7 @@ ${errorSummary}  Status: ${syncSummary.state}
         }
       });
       removeDecisions(decisionIdsToDelete);
-      dashboardStatsCache = null;
+      invalidateDashboardStatsCache();
     }
 
     result.deleted_alerts = deletedAlertIds.length;
@@ -2903,13 +2933,17 @@ ${errorSummary}  Status: ${syncSummary.state}
     }
 
     const filteredWhere = baseWhere.clone();
-    addDecisionSqlFilters(filteredWhere, filters, now, duplicateSql);
+    addDecisionSqlFilters(filteredWhere, filters, now, duplicateSql, true);
     const searchWhere = compileDecisionSearchSql(searchAst, filters, now, duplicateSql);
     if (searchWhere) {
       filteredWhere.add(searchWhere.sql, ...searchWhere.params);
     }
 
     const unfilteredTotal = queryCount('decisions', baseWhere);
+    if (!filters.showDuplicates && !searchAstUsesField(searchAst, 'duplicate')) {
+      return queryPaginatedPrimaryDecisions(pageRequest, filters, searchAst, includeExpired, baseWhere, unfilteredTotal, now, duplicateSql);
+    }
+
     const total = queryCount('decisions', filteredWhere);
     const offset = (pageRequest.page - 1) * pageRequest.pageSize;
     const rows = database.db.prepare(`
@@ -2923,6 +2957,95 @@ ${errorSummary}  Status: ${syncSummary.state}
       alert_id?: string | number | null;
       is_duplicate?: number;
     }>;
+
+    const data = rows.map((row) => {
+      const decision = JSON.parse(row.raw_data) as AlertDecision & Record<string, unknown>;
+      if (decision.alert_id === undefined && row.alert_id !== undefined && row.alert_id !== null) {
+        decision.alert_id = row.alert_id;
+      }
+      decision.is_duplicate = row.is_duplicate === 1;
+      return toDecisionListItem(decision, includeExpired);
+    });
+
+    return {
+      data,
+      pagination: {
+        page: pageRequest.page,
+        page_size: pageRequest.pageSize,
+        total,
+        total_pages: Math.ceil(total / pageRequest.pageSize),
+        unfiltered_total: unfilteredTotal,
+      },
+      selectable_ids: data
+        .filter((decision) => !isDecisionListItemExpired(decision))
+        .map((decision) => decision.id),
+    };
+  }
+
+  function queryPaginatedPrimaryDecisions(
+    pageRequest: PageRequest,
+    filters: DecisionListFilters,
+    searchAst: SearchNode | null,
+    includeExpired: boolean,
+    baseWhere: SqlWhere,
+    unfilteredTotal: number,
+    now: string,
+    duplicateSql: string,
+  ): PaginatedResponse<DecisionListItem> {
+    const filteredWhere = createSqlWhere();
+    filteredWhere.add('duplicate_rank = 1');
+    addDecisionSqlFilters(filteredWhere, filters, now, duplicateSql, false);
+    const searchWhere = compileDecisionSearchSql(searchAst, filters, now, duplicateSql);
+    if (searchWhere) {
+      filteredWhere.add(searchWhere.sql, ...searchWhere.params);
+    }
+
+    const rankedSql = `
+      WITH ranked_decisions AS (
+        SELECT
+          id,
+          raw_data,
+          alert_id,
+          created_at,
+          stop_at,
+          value,
+          origin,
+          scenario,
+          country,
+          country_name,
+          as_name,
+          target,
+          machine,
+          simulated,
+          search_text,
+          ROW_NUMBER() OVER (
+            PARTITION BY
+              CASE WHEN stop_at > ? THEN COALESCE(value, '') ELSE CAST(id AS TEXT) END,
+              CASE WHEN stop_at > ? THEN CAST(simulated AS TEXT) ELSE CAST(id AS TEXT) END
+            ORDER BY
+              CASE WHEN stop_at > ? THEN stop_at ELSE created_at END DESC,
+              CASE WHEN id GLOB '[0-9]*' THEN CAST(id AS INTEGER) ELSE 9223372036854775807 END ASC
+          ) AS duplicate_rank
+        FROM decisions
+        ${baseWhere.toSql()}
+      )
+    `;
+    const rankedParams = [now, now, now, ...baseWhere.params];
+    const offset = (pageRequest.page - 1) * pageRequest.pageSize;
+    const rows = database.db.prepare(`
+      ${rankedSql}
+      SELECT raw_data, alert_id, 0 AS is_duplicate, COUNT(*) OVER () AS total_count
+      FROM ranked_decisions
+      ${filteredWhere.toSql()}
+      ORDER BY created_at DESC, id DESC
+      LIMIT ? OFFSET ?
+    `).all(...rankedParams, ...filteredWhere.params, pageRequest.pageSize, offset) as Array<{
+      raw_data: string;
+      alert_id?: string | number | null;
+      is_duplicate?: number;
+      total_count?: number;
+    }>;
+    const total = rows[0]?.total_count ?? 0;
 
     const data = rows.map((row) => {
       const decision = JSON.parse(row.raw_data) as AlertDecision & Record<string, unknown>;
@@ -2966,8 +3089,14 @@ ${errorSummary}  Status: ${syncSummary.state}
     addSimulationFilter(where, filters.simulation);
   }
 
-  function addDecisionSqlFilters(where: SqlWhere, filters: DecisionListFilters, now: string, duplicateSql: string): void {
-    if (!filters.showDuplicates) where.add(`NOT (${duplicateSql})`);
+  function addDecisionSqlFilters(
+    where: SqlWhere,
+    filters: DecisionListFilters,
+    now: string,
+    duplicateSql: string,
+    includeDuplicateFilter: boolean,
+  ): void {
+    if (includeDuplicateFilter && !filters.showDuplicates) where.add(`NOT (${duplicateSql})`);
     if (filters.alertId) where.add('CAST(alert_id AS TEXT) = ?', filters.alertId);
     addSimulationFilter(where, filters.simulation);
     if (filters.country) where.add('country = ?', filters.country);
@@ -3029,6 +3158,10 @@ ${errorSummary}  Status: ${syncSummary.state}
 
   function getDashboardStatsIndex(): DashboardStatsCache {
     const cacheKey = `${cache.lastUpdate || 'uninitialized'}:${config.lookbackMs}:${config.simulationsEnabled ? 'sim' : 'live'}`;
+    if (dashboardStatsCache?.key === cacheKey) {
+      return dashboardStatsCache;
+    }
+
     const since = new Date(Date.now() - config.lookbackMs).toISOString();
     const nowIso = new Date().toISOString();
     const nowTimestamp = Date.now();
@@ -3038,7 +3171,7 @@ ${errorSummary}  Status: ${syncSummary.state}
     if (!config.simulationsEnabled) {
       alertWhere.add('simulated = 0');
     }
-    const alerts = (database.db.prepare(`
+    const alertRows = database.db.prepare(`
       SELECT created_at, country, scenario, as_name, source_ip, target, simulated
       FROM alerts
       ${alertWhere.toSql()}
@@ -3050,31 +3183,39 @@ ${errorSummary}  Status: ${syncSummary.state}
       source_ip?: string | null;
       target?: string | null;
       simulated?: number | null;
-    }>).flatMap((row): DashboardAlertStatsRecord[] => {
-        const createdAt = row.created_at;
-        const timestamp = Date.parse(createdAt);
-        if (!Number.isFinite(timestamp)) {
-          return [];
-        }
+    }>;
+    const alerts: DashboardAlertStatsRecord[] = [];
+    let simulatedAlerts = 0;
+    for (const row of alertRows) {
+      const createdAt = row.created_at;
+      const timestamp = Date.parse(createdAt);
+      if (!Number.isFinite(timestamp)) {
+        continue;
+      }
 
-        return [{
-          createdAt,
-          timestamp,
-          country: row.country || undefined,
-          scenario: row.scenario || undefined,
-          asName: row.as_name || undefined,
-          ip: row.source_ip || undefined,
-          target: row.target || undefined,
-          simulated: row.simulated === 1,
-        }];
+      const simulated = row.simulated === 1;
+      if (simulated) {
+        simulatedAlerts += 1;
+      }
+
+      alerts.push({
+        createdAt,
+        timestamp,
+        country: row.country || undefined,
+        scenario: row.scenario || undefined,
+        asName: row.as_name || undefined,
+        ip: row.source_ip || undefined,
+        target: row.target || undefined,
+        simulated,
       });
+    }
 
     const decisionWhere = createSqlWhere();
     decisionWhere.add('(created_at >= ? OR stop_at > ?)', since, nowIso);
     if (!config.simulationsEnabled) {
       decisionWhere.add('simulated = 0');
     }
-    const decisions = (database.db.prepare(`
+    const decisionRows = database.db.prepare(`
       SELECT created_at, stop_at, value, country, simulated
       FROM decisions
       ${decisionWhere.toSql()}
@@ -3084,38 +3225,59 @@ ${errorSummary}  Status: ${syncSummary.state}
       value?: string | null;
       country?: string | null;
       simulated?: number | null;
-    }>).flatMap((row): DashboardDecisionStatsRecord[] => {
+    }>;
+    const decisions: DashboardDecisionStatsRecord[] = [];
+    let activeDecisions = 0;
+    let activeSimulatedDecisions = 0;
+    for (const row of decisionRows) {
       const createdAt = row.created_at;
       const timestamp = Date.parse(createdAt);
       if (!Number.isFinite(timestamp)) {
-        return [];
+        continue;
       }
 
       const stopAt = row.stop_at || undefined;
       const stopTimestamp = stopAt ? Date.parse(stopAt) : Number.NaN;
-      return [{
+      const normalizedStopTimestamp = Number.isFinite(stopTimestamp) ? stopTimestamp : 0;
+      const simulated = row.simulated === 1;
+      if (normalizedStopTimestamp > nowTimestamp) {
+        if (simulated) {
+          activeSimulatedDecisions += 1;
+        } else {
+          activeDecisions += 1;
+        }
+      }
+
+      decisions.push({
         createdAt,
         stopAt,
         timestamp,
-        stopTimestamp: Number.isFinite(stopTimestamp) ? stopTimestamp : 0,
+        stopTimestamp: normalizedStopTimestamp,
         value: row.value || undefined,
         country: row.country || undefined,
-        simulated: row.simulated === 1,
-      }];
-    });
+        simulated,
+      });
+    }
 
     const totals: DashboardStatsTotals = {
       alerts: alerts.length,
-      decisions: decisions.filter((decision) => !decision.simulated && decision.stopTimestamp > nowTimestamp).length,
-      simulatedAlerts: alerts.filter((alert) => alert.simulated).length,
-      simulatedDecisions: decisions.filter((decision) => decision.simulated && decision.stopTimestamp > nowTimestamp).length,
+      decisions: activeDecisions,
+      simulatedAlerts,
+      simulatedDecisions: activeSimulatedDecisions,
     };
 
-    return { key: cacheKey, alerts, decisions, totals };
+    dashboardStatsCache = { key: cacheKey, alerts, decisions, totals };
+    return dashboardStatsCache;
   }
 
   function buildDashboardStats(filters: DashboardStatsFilters): DashboardStatsResponse {
     const statsIndex = getDashboardStatsIndex();
+    const responseCacheKey = getDashboardStatsResponseCacheKey(statsIndex.key, filters);
+    const cachedResponse = dashboardStatsResponseCache.get(responseCacheKey);
+    if (cachedResponse) {
+      return cachedResponse;
+    }
+
     const nowTimestamp = Date.now();
     const lookbackDays = Math.max(1, Math.round(lookbackHours(config.lookbackPeriod) / 24));
 
@@ -3180,7 +3342,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       }
     }
 
-    return {
+    const response: DashboardStatsResponse = {
       totals: statsIndex.totals,
       filteredTotals: {
         alerts: filteredAlertAccumulator.alerts,
@@ -3207,6 +3369,26 @@ ${errorSummary}  Status: ${syncSummary.state}
         unfilteredSimulatedDecisionsHistory: dashboardBuckets(sliderDecisionAccumulator.simulatedDecisionBuckets, filters, lookbackDays, true),
       },
     };
+
+    dashboardStatsResponseCache.set(responseCacheKey, response);
+    if (dashboardStatsResponseCache.size > 50) {
+      const firstKey = dashboardStatsResponseCache.keys().next().value;
+      if (firstKey) {
+        dashboardStatsResponseCache.delete(firstKey);
+      }
+    }
+
+    return response;
+  }
+
+  function invalidateDashboardStatsCache(): void {
+    dashboardStatsCache = null;
+    dashboardStatsResponseCache.clear();
+    dashboardStatsCacheVersion += 1;
+  }
+
+  function getDashboardStatsResponseCacheKey(indexKey: string, filters: DashboardStatsFilters): string {
+    return `${dashboardStatsCacheVersion}:${indexKey}:${JSON.stringify(filters)}`;
   }
   function normalizeAlertDetail(input: unknown, alertId: string): AlertRecord | null {
     if (Array.isArray(input)) {
@@ -3481,6 +3663,15 @@ function compileSearchNodeSql(
     sql: `(${left.sql}) ${node.operator} (${right.sql})`,
     params: [...left.params, ...right.params],
   };
+}
+
+function searchAstUsesField(node: SearchNode | null, field: string): boolean {
+  if (!node) return false;
+  if (node.kind === 'comparison') return node.field === field;
+  if (node.kind === 'field') return node.field === field || searchAstUsesField(node.expression, field);
+  if (node.kind === 'not') return searchAstUsesField(node.expression, field);
+  if (node.kind === 'binary') return searchAstUsesField(node.left, field) || searchAstUsesField(node.right, field);
+  return false;
 }
 
 type SearchPageForSql = 'alerts' | 'decisions';

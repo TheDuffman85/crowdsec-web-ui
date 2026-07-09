@@ -351,6 +351,7 @@
   "pages.alerts.filterPlaceholder": "Filter alerts...",
   "pages.alerts.itemsFailedToDelete": "{count} item(s) failed to delete.",
   "pages.alerts.loading": "Loading alerts...",
+  "pages.alerts.loadingMore": "Loading more alerts...",
   "pages.alerts.location": "Location",
   "pages.alerts.noAlerts": "No alerts found",
   "pages.alerts.noAlertsOrDecisionsForIp": "No alerts or decisions found for {ip}.",

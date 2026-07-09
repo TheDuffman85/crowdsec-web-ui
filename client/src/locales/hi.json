@@ -351,6 +351,7 @@
   "pages.alerts.filterPlaceholder": "अलर्ट फ़िल्टर करें...",
   "pages.alerts.itemsFailedToDelete": "{count} आइटम हटाने में विफल।",
   "pages.alerts.loading": "अलर्ट लोड हो रहे हैं...",
+  "pages.alerts.loadingMore": "और अलर्ट लोड हो रहे हैं...",
   "pages.alerts.location": "स्थान",
   "pages.alerts.noAlerts": "कोई अलर्ट नहीं मिला",
   "pages.alerts.noAlertsOrDecisionsForIp": "{ip} के लिए कोई अलर्ट या निर्णय नहीं मिला।",

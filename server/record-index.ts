@@ -29,6 +29,7 @@ export interface DecisionIndexValues {
 }
 
 const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
+const countryNameCache = new Map<string, string>();
 
 export function deriveAlertIndexValues(rawData: string, fallback: {
   createdAt: string;
@@ -37,6 +38,15 @@ export function deriveAlertIndexValues(rawData: string, fallback: {
   message?: string | null;
 }): AlertIndexValues {
   const alert = parseJson<AlertRecord>(rawData);
+  return deriveAlertIndexValuesFromRecord(alert, fallback);
+}
+
+export function deriveAlertIndexValuesFromRecord(alert: AlertRecord | null | undefined, fallback: {
+  createdAt: string;
+  scenario?: string | null;
+  sourceIp?: string | null;
+  message?: string | null;
+}): AlertIndexValues {
   const resolvedHistoryAt = alert ? resolveAlertHistoryAt(alert) : null;
   const historyAt = resolvedHistoryAt && Number.isFinite(Date.parse(resolvedHistoryAt)) ? resolvedHistoryAt : fallback.createdAt;
   const scenario = alert ? resolveAlertScenario(alert) || fallback.scenario || null : fallback.scenario || null;
@@ -87,6 +97,15 @@ export function deriveDecisionIndexValues(rawData: string, fallback: {
   scenario?: string | null;
 }): DecisionIndexValues {
   const decision = parseJson<(AlertDecision & Record<string, unknown>)>(rawData);
+  return deriveDecisionIndexValuesFromRecord(decision, fallback);
+}
+
+export function deriveDecisionIndexValuesFromRecord(decision: (AlertDecision & Record<string, unknown>) | null | undefined, fallback: {
+  value?: string | null;
+  type?: string | null;
+  origin?: string | null;
+  scenario?: string | null;
+}): DecisionIndexValues {
   const country = normalizeCountryCode(readString(decision?.country));
   const asName = normalizeText(readString(decision?.as));
   const target = normalizeText(readString(decision?.target));
@@ -154,9 +173,15 @@ function normalizeSearchText(values: unknown[]): string {
 }
 
 function getCountryName(code: string): string | null {
+  const normalized = code.toUpperCase();
+  const cached = countryNameCache.get(normalized);
+  if (cached) return cached;
   try {
-    return regionNames.of(code.toUpperCase()) || code;
+    const value = regionNames.of(normalized) || code;
+    countryNameCache.set(normalized, value);
+    return value;
   } catch {
+    countryNameCache.set(normalized, code);
     return code;
   }
 }

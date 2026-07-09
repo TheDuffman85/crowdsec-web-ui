@@ -351,6 +351,7 @@
   "pages.alerts.filterPlaceholder": "تصفية التنبيهات...",
   "pages.alerts.itemsFailedToDelete": "فشل حذف {count} عنصر.",
   "pages.alerts.loading": "جارٍ تحميل التنبيهات...",
+  "pages.alerts.loadingMore": "جارٍ تحميل المزيد من التنبيهات...",
   "pages.alerts.location": "الموقع",
   "pages.alerts.noAlerts": "لم يتم العثور على تنبيهات",
   "pages.alerts.noAlertsOrDecisionsForIp": "لم يتم العثور على تنبيهات أو قرارات لـ {ip}.",

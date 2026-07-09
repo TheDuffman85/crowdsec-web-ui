@@ -699,7 +699,35 @@ Active-decision refreshes use the same `CROWDSEC_ALERT_SYNC_CHUNK` windows as hi
    ./run.sh
    ```
 
-4. **CrowdSec mTLS smoke test**
+4. **Manual large-dataset UI load test**
+
+   To test the UI against a repeatable synthetic cache without using a large production CrowdSec instance, start load-test mode:
+   ```bash
+   ./run.sh loadtest
+   ```
+
+   Load-test mode seeds a separate SQLite database through the same cache write path used by production sync, builds the frontend, and starts a fake local backend with authentication disabled. The UI opens on the default Dashboard at `http://localhost:3000/`. The default dataset is `300000` alerts and `300000` decisions under `/tmp/crowdsec-web-ui-load-test`. Load-test mode prints seed and search-index rebuild timings, then logs `/api` requests to the console while it runs.
+
+   Override the dataset with environment variables:
+   ```bash
+   LOADTEST_ALERTS=1000 LOADTEST_DECISIONS=1000 ./run.sh loadtest
+   ```
+
+   Supported load-test variables:
+   ```bash
+   LOADTEST_ALERTS=300000
+   LOADTEST_DECISIONS=300000
+   LOADTEST_SEED=1337
+   LOADTEST_DB_DIR=/tmp/crowdsec-web-ui-load-test
+   LOADTEST_BACKEND_PORT=3000
+   LOADTEST_ACTIVE_DECISION_RATIO=0.7
+   LOADTEST_SIMULATION_RATIO=0.1
+   LOADTEST_DUPLICATE_VALUE_RATIO=0.15
+   CROWDSEC_LOOKBACK_PERIOD=30d
+   CROWDSEC_SIMULATIONS_ENABLED=true
+   ```
+
+5. **CrowdSec mTLS smoke test**
 
    Starts a disposable CrowdSec LAPI container, generates temporary server/client certificates, enables LAPI client certificate verification, logs in through the Web UI LAPI client, and confirms CrowdSec registered the TLS machine.
    ```bash

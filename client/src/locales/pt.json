@@ -351,6 +351,7 @@
   "pages.alerts.filterPlaceholder": "Filtrar alertas...",
   "pages.alerts.itemsFailedToDelete": "{count} item(ns) falharam ao excluir.",
   "pages.alerts.loading": "Carregando alertas...",
+  "pages.alerts.loadingMore": "Carregando mais alertas...",
   "pages.alerts.location": "Localização",
   "pages.alerts.noAlerts": "Nenhum alerta encontrado",
   "pages.alerts.noAlertsOrDecisionsForIp": "Nenhum alerta ou decisão encontrado para {ip}.",
