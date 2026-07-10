@@ -52,6 +52,7 @@ interface AuthSettings {
     oidcReadOnlyGroups: string;
     oidcUnmatchedRole: OidcUnmatchedRole;
     hasPassword: boolean;
+    passkeysAvailable?: boolean;
     totpEnabled: boolean;
     authMethod: 'password' | 'passkey' | 'oidc' | null;
 }
@@ -142,17 +143,6 @@ export function Settings() {
             });
 
         if (authEnabled) {
-            void fetch(apiUrl('/api/auth/passkeys'))
-                .then(async (response) => {
-                    if (!response.ok) throw new Error('Failed to load passkeys');
-                    return response.json() as Promise<{ passkeys: PasskeySummary[] }>;
-                })
-                .then((payload) => {
-                    if (!cancelled) setPasskeys(payload.passkeys);
-                })
-                .catch((error) => {
-                    console.error("Failed to load passkeys", error);
-                });
             void fetch(apiUrl('/api/auth/settings'))
                 .then(async (response) => {
                     if (!response.ok) throw new Error('Failed to load authentication settings');
@@ -161,6 +151,21 @@ export function Settings() {
                 .then((payload) => {
                     if (!cancelled) {
                         setAuthSettings(payload);
+                        if (payload.passkeysAvailable !== false) {
+                            void fetch(apiUrl('/api/auth/passkeys'))
+                                .then(async (response) => {
+                                    if (!response.ok) throw new Error('Failed to load passkeys');
+                                    return response.json() as Promise<{ passkeys: PasskeySummary[] }>;
+                                })
+                                .then((passkeyPayload) => {
+                                    if (!cancelled) setPasskeys(passkeyPayload.passkeys);
+                                })
+                                .catch((error) => {
+                                    console.error("Failed to load passkeys", error);
+                                });
+                        } else {
+                            setPasskeys([]);
+                        }
                         setDisablePasswordLogin(payload.disablePasswordLogin);
                         setOidcForm({
                             issuerUrl: payload.oidcIssuerUrl,
@@ -737,6 +742,7 @@ export function Settings() {
                             )}
                         </div>
 
+                        {authSettings?.passkeysAvailable !== false && (
                         <div className="space-y-4 border-t border-gray-200 pt-6 dark:border-gray-700">
                             <div>
                                 <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{t("pages.settings.passkeys")}</h4>
@@ -772,17 +778,16 @@ export function Settings() {
                                     ))
                                 )}
                             </div>
-                            {authSettings?.hasPassword && (
-                                <button
-                                    type="button"
-                                    onClick={openPasskeyModal}
-                                    className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700"
-                                >
-                                    <KeyRound className="h-4 w-4" />
-                                    {t("pages.settings.registerNewPasskey")}
-                                </button>
-                            )}
+                            <button
+                                type="button"
+                                onClick={openPasskeyModal}
+                                className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700"
+                            >
+                                <KeyRound className="h-4 w-4" />
+                                {t("pages.settings.registerNewPasskey")}
+                            </button>
                         </div>
+                        )}
 
                         <div className="space-y-4 border-t border-gray-200 pt-6 dark:border-gray-700">
                             <div>

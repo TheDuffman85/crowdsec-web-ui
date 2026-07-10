@@ -227,6 +227,7 @@
   "pages.login.error.passkeysRequireSecureContext": "Passkey には HTTPS または localhost が必要です",
   "pages.login.error.failedToStartPasskeyLogin": "Passkey サインインを開始できませんでした",
   "pages.login.error.noPasskeyCredential": "Passkey 認証情報が返されませんでした",
+  "pages.login.error.oidcOnlyPasskey": "このパスキーは OIDC 専用アカウントに属しています。代わりに SSO でサインインしてください。",
   "pages.login.error.passkeyAuthenticationFailed": "Passkey 認証に失敗しました",
   "pages.settings.title": "設定",
   "pages.settings.general": "一般",

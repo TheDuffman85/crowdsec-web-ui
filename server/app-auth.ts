@@ -148,6 +148,10 @@ function isSecureRequest(context: Context): boolean {
   return getPublicOrigin(context).startsWith('https://');
 }
 
+function isOidcOnlyAccount(user: AuthUserRow | null): boolean {
+  return Boolean(user && user.auth_provider === 'oidc' && !user.password_hash);
+}
+
 function readClaimGroups(claims: Record<string, unknown>, claimName: string): string[] {
   const value = claims[claimName];
   if (Array.isArray(value)) {
@@ -846,6 +850,7 @@ export function createDashboardAuth(options: {
         oidcReadOnlyGroups: effectiveConfig.oidcReadOnlyGroups.join(','),
         oidcUnmatchedRole: effectiveConfig.oidcUnmatchedRole,
         hasPassword: Boolean(user?.password_hash),
+        passkeysAvailable: !isOidcOnlyAccount(user),
         totpEnabled: Boolean(user?.totp_enabled),
         authMethod: session.authMethod ?? null,
       });
@@ -1046,6 +1051,10 @@ export function createDashboardAuth(options: {
     auth.get('/passkeys', (context) => {
       const session = getSession(context);
       if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
+      const user = database.getAuthUserById(session.userId);
+      if (isOidcOnlyAccount(user)) {
+        return context.json({ error: 'Passkeys are unavailable for OIDC-only accounts' }, 403);
+      }
       return context.json({
         passkeys: database.listWebAuthnCredentialsByUser(session.userId).map((credential) => ({
           id: credential.id,
@@ -1058,6 +1067,10 @@ export function createDashboardAuth(options: {
     auth.patch('/passkeys/:id', async (context) => {
       const session = getSession(context);
       if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
+      const user = database.getAuthUserById(session.userId);
+      if (isOidcOnlyAccount(user)) {
+        return context.json({ error: 'Passkeys are unavailable for OIDC-only accounts' }, 403);
+      }
       const id = Number(context.req.param('id'));
       const body = asObject(await context.req.json().catch(() => null));
       const name = typeof body?.name === 'string' && body.name.trim() ? body.name.trim().slice(0, 80) : null;
@@ -1070,6 +1083,10 @@ export function createDashboardAuth(options: {
     auth.delete('/passkeys/:id', (context) => {
       const session = getSession(context);
       if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
+      const user = database.getAuthUserById(session.userId);
+      if (isOidcOnlyAccount(user)) {
+        return context.json({ error: 'Passkeys are unavailable for OIDC-only accounts' }, 403);
+      }
       const id = Number(context.req.param('id'));
       if (!Number.isInteger(id) || !database.deleteWebAuthnCredential(id, session.userId)) {
         return context.json({ error: 'Passkey not found' }, 404);
@@ -1081,7 +1098,7 @@ export function createDashboardAuth(options: {
       const session = getSession(context);
       if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
       const user = database.getAuthUserById(session.userId);
-      if (!user || (user.auth_provider === 'oidc' && !user.password_hash)) {
+      if (!user || isOidcOnlyAccount(user)) {
         return context.json({ error: 'Passkeys cannot be registered for OIDC-only accounts' }, 403);
       }
       const origin = getPublicOrigin(context);
@@ -1094,7 +1111,7 @@ export function createDashboardAuth(options: {
       const session = getSession(context);
       if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
       const user = database.getAuthUserById(session.userId);
-      if (!user || (user.auth_provider === 'oidc' && !user.password_hash)) {
+      if (!user || isOidcOnlyAccount(user)) {
         return context.json({ error: 'Passkeys cannot be registered for OIDC-only accounts' }, 403);
       }
       const body = asObject(await context.req.json().catch(() => null));
@@ -1145,8 +1162,8 @@ export function createDashboardAuth(options: {
       if (!body || !challenge || !credential) return context.json({ error: 'Credential not found' }, 400);
       const user = database.getAuthUserById(credential.user_id);
       if (!user) return context.json({ error: 'User not found' }, 400);
-      if (user.auth_provider === 'oidc' && !user.password_hash) {
-        return context.json({ error: 'Credential not found' }, 400);
+      if (isOidcOnlyAccount(user)) {
+        return context.json({ error: 'This passkey belongs to an OIDC-only account. Sign in with SSO instead.' }, 403);
       }
 
       try {

@@ -227,6 +227,7 @@
   "pages.login.error.passkeysRequireSecureContext": "Passkey 需要 HTTPS 或 localhost",
   "pages.login.error.failedToStartPasskeyLogin": "无法启动 passkey 登录",
   "pages.login.error.noPasskeyCredential": "未返回 passkey 凭据",
+  "pages.login.error.oidcOnlyPasskey": "此通行密钥属于仅限 OIDC 的帐户。请改用 SSO 登录。",
   "pages.login.error.passkeyAuthenticationFailed": "Passkey 身份验证失败",
   "pages.settings.title": "设置",
   "pages.settings.general": "常规",

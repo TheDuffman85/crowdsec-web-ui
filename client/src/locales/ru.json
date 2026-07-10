@@ -227,6 +227,7 @@
   "pages.login.error.passkeysRequireSecureContext": "Для passkeys требуется HTTPS или localhost",
   "pages.login.error.failedToStartPasskeyLogin": "Не удалось начать вход с passkey",
   "pages.login.error.noPasskeyCredential": "Учетные данные passkey не возвращены",
+  "pages.login.error.oidcOnlyPasskey": "Этот ключ доступа принадлежит учетной записи только OIDC. Войдите через SSO.",
   "pages.login.error.passkeyAuthenticationFailed": "Аутентификация passkey не удалась",
   "pages.settings.title": "Настройки",
   "pages.settings.general": "Общие",

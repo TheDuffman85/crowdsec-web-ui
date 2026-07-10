@@ -410,6 +410,55 @@ describe('Settings', () => {
     expect(screen.queryByRole('button', { name: 'Set Up TOTP' })).not.toBeInTheDocument();
   });
 
+  test('hides passkey settings and does not request passkeys for an OIDC-only account', async () => {
+    useAuthMock.mockReturnValue({
+      authEnabled: true,
+      setupRequired: false,
+      authenticated: true,
+      user: { userId: 1, username: 'oidc-admin', role: 'admin' },
+      authMethod: 'oidc',
+      oidcEnabled: true,
+      passwordLoginDisabled: true,
+      passkeysEnabled: false,
+      hasPassword: false,
+      totpEnabled: false,
+      loading: false,
+      refresh: vi.fn(),
+      login: vi.fn(),
+      setup: vi.fn(),
+      logout: vi.fn(),
+    });
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/auth/settings')) {
+        return Response.json({
+          disablePasswordLogin: true,
+          oidcIssuerUrl: 'https://idp.example.com',
+          oidcClientId: 'crowdsec-web-ui',
+          hasOidcClientSecret: true,
+          oidcScope: 'openid profile email',
+          oidcGroupsClaim: 'groups',
+          oidcAdminGroups: 'admins',
+          oidcReadOnlyGroups: '',
+          oidcUnmatchedRole: 'deny',
+          hasPassword: false,
+          passkeysAvailable: false,
+          totpEnabled: false,
+          authMethod: 'oidc',
+        });
+      }
+      return Response.json({ passkeys: [] });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<Settings />);
+
+    await screen.findByText('Authentication');
+
+    await waitFor(() => expect(screen.queryByText('Passkeys')).not.toBeInTheDocument());
+    expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining('/api/auth/passkeys'));
+  });
+
   test('sets up TOTP from the password authentication modal', async () => {
     const user = userEvent.setup();
     useAuthMock.mockReturnValue({

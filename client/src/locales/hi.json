@@ -227,6 +227,7 @@
   "pages.login.error.passkeysRequireSecureContext": "Passkeys के लिए HTTPS या localhost आवश्यक है",
   "pages.login.error.failedToStartPasskeyLogin": "Passkey लॉगिन शुरू करने में विफल",
   "pages.login.error.noPasskeyCredential": "कोई passkey क्रेडेंशियल वापस नहीं मिला",
+  "pages.login.error.oidcOnlyPasskey": "यह passkey केवल OIDC खाते से जुड़ी है। इसके बजाय SSO से साइन इन करें।",
   "pages.login.error.passkeyAuthenticationFailed": "Passkey प्रमाणीकरण विफल",
   "pages.settings.title": "सेटिंग्स",
   "pages.settings.general": "सामान्य",

@@ -47,6 +47,8 @@ export function Login() {
         return t('pages.login.error.failedToStartPasskeyLogin');
       case 'No passkey credential returned':
         return t('pages.login.error.noPasskeyCredential');
+      case 'This passkey belongs to an OIDC-only account. Sign in with SSO instead.':
+        return t('pages.login.error.oidcOnlyPasskey');
       case 'Passkey authentication failed':
         return t('pages.login.error.passkeyAuthenticationFailed');
       default:

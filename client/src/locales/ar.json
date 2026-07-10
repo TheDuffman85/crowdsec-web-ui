@@ -227,6 +227,7 @@
   "pages.login.error.passkeysRequireSecureContext": "تتطلب مفاتيح المرور HTTPS أو localhost",
   "pages.login.error.failedToStartPasskeyLogin": "فشل بدء تسجيل الدخول بمفتاح المرور",
   "pages.login.error.noPasskeyCredential": "لم يتم إرجاع بيانات اعتماد مفتاح المرور",
+  "pages.login.error.oidcOnlyPasskey": "مفتاح المرور هذا مرتبط بحساب OIDC فقط. سجّل الدخول عبر SSO بدلاً من ذلك.",
   "pages.login.error.passkeyAuthenticationFailed": "فشلت المصادقة بمفتاح المرور",
   "pages.settings.title": "الإعدادات",
   "pages.settings.general": "عام",

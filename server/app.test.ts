@@ -696,6 +696,7 @@ test('dashboard auth exposes account settings and password changes', async () =>
     oidcReadOnlyGroups: '',
     oidcUnmatchedRole: 'deny',
     hasPassword: true,
+    passkeysAvailable: true,
     totpEnabled: false,
     authMethod: 'password',
   });
@@ -817,6 +818,24 @@ test('OIDC-only users cannot persist SSO access by registering or using passkeys
     authMethod: 'oidc',
   });
 
+  const settings = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/settings', {
+    headers: { cookie: oidcCookie },
+  }));
+  expect(settings.status).toBe(200);
+  expect(await settings.json()).toMatchObject({
+    hasPassword: false,
+    passkeysAvailable: false,
+    authMethod: 'oidc',
+  });
+
+  const passkeys = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/passkeys', {
+    headers: { cookie: oidcCookie },
+  }));
+  expect(passkeys.status).toBe(403);
+  expect(await passkeys.json()).toMatchObject({
+    error: 'Passkeys are unavailable for OIDC-only accounts',
+  });
+
   const registration = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/webauthn/register/options', {
     method: 'POST',
     headers: { cookie: oidcCookie },
@@ -824,6 +843,32 @@ test('OIDC-only users cannot persist SSO access by registering or using passkeys
   expect(registration.status).toBe(403);
   expect(await registration.json()).toMatchObject({
     error: 'Passkeys cannot be registered for OIDC-only accounts',
+  });
+
+  database.createWebAuthnCredential({
+    userId: user.id,
+    credentialId: 'oidc-only-passkey',
+    publicKey: 'unused-for-oidc-only-account',
+    signCount: 0,
+    transports: '[]',
+    name: 'Legacy passkey',
+  });
+  const loginOptions = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/webauthn/login/options', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: user.username }),
+  }));
+  const blockedPasskeyLogin = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/webauthn/login/verify', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      cookie: loginOptions.headers.get('set-cookie') || '',
+    },
+    body: JSON.stringify({ id: 'oidc-only-passkey' }),
+  }));
+  expect(blockedPasskeyLogin.status).toBe(403);
+  expect(await blockedPasskeyLogin.json()).toMatchObject({
+    error: 'This passkey belongs to an OIDC-only account. Sign in with SSO instead.',
   });
 
   const now = Math.floor(Date.now() / 1000);

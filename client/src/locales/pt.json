@@ -227,6 +227,7 @@
   "pages.login.error.passkeysRequireSecureContext": "Passkeys exigem HTTPS ou localhost",
   "pages.login.error.failedToStartPasskeyLogin": "Falha ao iniciar login com passkey",
   "pages.login.error.noPasskeyCredential": "Nenhuma credencial de passkey retornada",
+  "pages.login.error.oidcOnlyPasskey": "Esta passkey pertence a uma conta somente OIDC. Entre com SSO.",
   "pages.login.error.passkeyAuthenticationFailed": "Falha na autenticação com passkey",
   "pages.settings.title": "Configurações",
   "pages.settings.general": "Geral",
