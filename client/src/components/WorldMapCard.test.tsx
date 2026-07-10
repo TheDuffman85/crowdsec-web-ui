@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { I18nContext, type I18nContextValue } from '../lib/i18n';
 import { WorldMapCard } from './WorldMapCard';
@@ -101,6 +102,8 @@ describe('WorldMapCard', () => {
     transformWrapperPropsSpy.mockClear();
 
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
       json: async () => ({
         features: [
           { id: 'DE', properties: { NAME: 'Germany', ISO_A2: 'DE' } },
@@ -131,6 +134,21 @@ describe('WorldMapCard', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  test('shares map loading across development StrictMode effect replays', async () => {
+    render(
+      <StrictMode>
+        <WorldMapCard
+          data={[]}
+          onCountrySelect={vi.fn()}
+          selectedCountry={null}
+        />
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('choropleth')).toBeInTheDocument());
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   test('does not remount the choropleth when selectedCountry changes', async () => {

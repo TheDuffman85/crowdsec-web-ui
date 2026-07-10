@@ -19,7 +19,6 @@ RUN npm config set fetch-retries 5 \
 FROM node-pnpm AS builder
 
 WORKDIR /app
-ENV NODE_ENV=development
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
@@ -29,6 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile --prod=false
+ENV NODE_ENV=production
 
 # Build Args need to be declared BEFORE the build step
 # Vite bakes VITE_* env vars into the static bundle at build time

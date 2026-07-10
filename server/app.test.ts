@@ -1232,6 +1232,7 @@ describe('createApp', () => {
 
     const worldMap = await controller.fetch(new Request('http://localhost/crowdsec/world-50m.json'));
     expect(worldMap.status).toBe(200);
+    expect(worldMap.headers.get('cache-control')).toBe('public, max-age=86400, stale-while-revalidate=604800');
     expect((await worldMap.text()).startsWith('{"type"')).toBe(true);
 
     const logo = await controller.fetch(new Request('http://localhost/crowdsec/logo.svg'));

@@ -25,13 +25,16 @@ vi.mock('recharts', () => {
   );
   const Bar = ({
     dataKey,
+    maxBarSize,
     minPointSize,
   }: {
     dataKey?: string;
+    maxBarSize?: number;
     minPointSize?: number | ((value: unknown, index: number) => number);
   }) => (
     <div
       data-testid={`mock-bar-${dataKey ?? 'unknown'}`}
+      data-max-bar-size={maxBarSize}
       data-min-point-size-zero={typeof minPointSize === 'function' ? minPointSize(0, 0) : minPointSize}
       data-min-point-size-positive={typeof minPointSize === 'function' ? minPointSize(3, 0) : minPointSize}
     />
@@ -198,8 +201,10 @@ describe('ActivityBarChart', () => {
     expect(screen.getByTestId('mock-y-axis')).not.toHaveAttribute('data-ticks');
     expect(screen.getByTestId('mock-bar-alerts')).toHaveAttribute('data-min-point-size-zero', '0');
     expect(screen.getByTestId('mock-bar-alerts')).toHaveAttribute('data-min-point-size-positive', '2');
+    expect(screen.getByTestId('mock-bar-alerts')).toHaveAttribute('data-max-bar-size', '40');
     expect(screen.getByTestId('mock-bar-decisions')).toHaveAttribute('data-min-point-size-zero', '0');
     expect(screen.getByTestId('mock-bar-decisions')).toHaveAttribute('data-min-point-size-positive', '2');
+    expect(screen.getByTestId('mock-bar-decisions')).toHaveAttribute('data-max-bar-size', '40');
   });
 
   test('switches the activity chart axis between symlog and linear scale', async () => {

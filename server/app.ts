@@ -1246,6 +1246,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     return context.text('Not Found', 404);
   });
 
+  app.use(`${config.basePath}/world-50m.json`, async (context, next) => {
+    context.header('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+    await next();
+  });
+
   staticFiles.forEach((file) => {
     app.use(
       `${config.basePath}${file}`,

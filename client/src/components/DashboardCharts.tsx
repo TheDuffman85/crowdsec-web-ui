@@ -600,39 +600,6 @@ export function ActivityBarChart({
     }, [sliderData, selectedDateRange, isSticky, onDateRangeSelect]);
 
 
-    // -------------------------------------------------------------------------
-    // 4. Dynamic Bar Size Calculation
-    // -------------------------------------------------------------------------
-    const containerRef = useRef<HTMLDivElement | null>(null);
-    const [containerWidth, setContainerWidth] = useState(0);
-
-    useEffect(() => {
-        if (!containerRef.current) return;
-
-        const resizeObserver = new ResizeObserver((entries) => {
-            for (const entry of entries) {
-                setContainerWidth(entry.contentRect.width);
-            }
-        });
-
-        resizeObserver.observe(containerRef.current);
-        return () => resizeObserver.disconnect();
-    }, []);
-
-    // Calculate bar size: minimum 4px, maximum 40px, based on available space
-    const dynamicBarSize = useMemo(() => {
-        if (!containerWidth || !filteredData.length) return undefined;
-
-        // Available width for bars (subtract margins: 20 left + 30 right + 40 yAxis)
-        const availableWidth = containerWidth - 90;
-        const numBarGroups = filteredData.length;
-        const barGroupWidth = availableWidth / numBarGroups;
-        const calculatedBarSize = barGroupWidth * 0.35;
-
-        // Clamp between 4 and 40
-        return Math.max(4, Math.min(40, calculatedBarSize));
-    }, [containerWidth, filteredData.length]);
-
     const yAxisMax = useMemo(() => {
         if (!filteredData.length) {
             return 0;
@@ -714,7 +681,7 @@ export function ActivityBarChart({
             </CardHeader>
             <CardContent className="flex-1 min-h-0 flex flex-col gap-0">
                 {/* Main Chart Section */}
-                <div ref={containerRef} className="flex-1 min-h-0 outline-none relative">
+                <div className="flex-1 min-h-0 outline-none relative">
                     <ResponsiveContainer width="100%" height="100%">
                         <BarChart
                             data={filteredData}
@@ -743,7 +710,7 @@ export function ActivityBarChart({
                                 fill={DASHBOARD_COLORS.liveAlerts}
                                 stroke="none"
                                 radius={[4, 4, 0, 0]}
-                                barSize={dynamicBarSize}
+                                maxBarSize={40}
                                 stackId="alerts"
                                 minPointSize={getMinBarPointSize}
                             />
@@ -755,7 +722,7 @@ export function ActivityBarChart({
                                     fill={DASHBOARD_COLORS.simulatedAlerts}
                                     stroke="none"
                                     radius={[4, 4, 0, 0]}
-                                    barSize={dynamicBarSize}
+                                    maxBarSize={40}
                                     stackId="alerts"
                                     minPointSize={getMinBarPointSize}
                                 />
@@ -767,7 +734,7 @@ export function ActivityBarChart({
                                 fill={DASHBOARD_COLORS.liveDecisions}
                                 stroke="none"
                                 radius={[4, 4, 0, 0]}
-                                barSize={dynamicBarSize}
+                                maxBarSize={40}
                                 stackId="decisions"
                                 minPointSize={getMinBarPointSize}
                             />
@@ -779,7 +746,7 @@ export function ActivityBarChart({
                                     fill={DASHBOARD_COLORS.simulatedDecisions}
                                     stroke="none"
                                     radius={[4, 4, 0, 0]}
-                                    barSize={dynamicBarSize}
+                                    maxBarSize={40}
                                     stackId="decisions"
                                     minPointSize={getMinBarPointSize}
                                 />
