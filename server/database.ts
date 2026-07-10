@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import BetterSqlite3 from 'better-sqlite3';
 import type { AlertDecision, AlertRecord } from '../shared/contracts';
@@ -99,6 +100,9 @@ export interface AuthUserRow {
   totp_last_step: number | null;
   role: 'admin' | 'read-only';
   auth_provider: 'password' | 'oidc';
+  oidc_issuer: string | null;
+  oidc_subject: string | null;
+  session_version: number;
   created_at: string;
   updated_at: string;
 }
@@ -146,10 +150,12 @@ export class CrowdsecDatabase {
   private readonly createAuthUserStatement: any;
   private readonly getAuthUserByIdStatement: any;
   private readonly getAuthUserByUsernameStatement: any;
+  private readonly getAuthUserByOidcIdentityStatement: any;
   private readonly updateAuthUserPasswordStatement: any;
   private readonly updateAuthUserTotpStatement: any;
   private readonly updateAuthUserTotpLastStepStatement: any;
-  private readonly upsertOidcUserStatement: any;
+  private readonly createOidcUserStatement: any;
+  private readonly updateOidcUserStatement: any;
   private readonly listWebAuthnCredentialsByUserStatement: any;
   private readonly countWebAuthnCredentialsStatement: any;
   private readonly createWebAuthnCredentialStatement: any;
@@ -363,9 +369,15 @@ export class CrowdsecDatabase {
     `);
     this.getAuthUserByIdStatement = this.db.query('SELECT * FROM auth_users WHERE id = $id');
     this.getAuthUserByUsernameStatement = this.db.query('SELECT * FROM auth_users WHERE username = $username');
+    this.getAuthUserByOidcIdentityStatement = this.db.query(`
+      SELECT * FROM auth_users
+      WHERE oidc_issuer = $oidc_issuer AND oidc_subject = $oidc_subject
+    `);
     this.updateAuthUserPasswordStatement = this.db.query(`
       UPDATE auth_users
-      SET password_hash = $password_hash, updated_at = $updated_at
+      SET password_hash = $password_hash,
+          session_version = session_version + 1,
+          updated_at = $updated_at
       WHERE id = $id
     `);
     this.updateAuthUserTotpStatement = this.db.query(`
@@ -378,20 +390,34 @@ export class CrowdsecDatabase {
       SET totp_last_step = $totp_last_step, updated_at = $updated_at
       WHERE id = $id AND (totp_last_step IS NULL OR totp_last_step < $totp_last_step)
     `);
-    this.upsertOidcUserStatement = this.db.query(`
-      INSERT INTO auth_users (username, password_hash, role, auth_provider, created_at, updated_at)
-      VALUES ($username, NULL, $role, 'oidc', $created_at, $updated_at)
-      ON CONFLICT(username) DO UPDATE SET
-        role = excluded.role,
-        auth_provider = 'oidc',
-        updated_at = excluded.updated_at
+    this.createOidcUserStatement = this.db.query(`
+      INSERT INTO auth_users (
+        username, password_hash, role, auth_provider, oidc_issuer, oidc_subject, created_at, updated_at
+      )
+      VALUES ($username, NULL, $role, 'oidc', $oidc_issuer, $oidc_subject, $created_at, $updated_at)
+    `);
+    this.updateOidcUserStatement = this.db.query(`
+      UPDATE auth_users
+      SET username = $username,
+          role = $role,
+          auth_provider = 'oidc',
+          oidc_issuer = $oidc_issuer,
+          oidc_subject = $oidc_subject,
+          session_version = CASE WHEN role IS NOT $role THEN session_version + 1 ELSE session_version END,
+          updated_at = $updated_at
+      WHERE id = $id
     `);
     this.listWebAuthnCredentialsByUserStatement = this.db.query(`
       SELECT * FROM webauthn_credentials
       WHERE user_id = $user_id
       ORDER BY created_at DESC
     `);
-    this.countWebAuthnCredentialsStatement = this.db.query('SELECT COUNT(*) as count FROM webauthn_credentials');
+    this.countWebAuthnCredentialsStatement = this.db.query(`
+      SELECT COUNT(*) as count
+      FROM webauthn_credentials credentials
+      JOIN auth_users users ON users.id = credentials.user_id
+      WHERE users.auth_provider <> 'oidc' OR users.password_hash IS NOT NULL
+    `);
     this.createWebAuthnCredentialStatement = this.db.query(`
       INSERT INTO webauthn_credentials (user_id, credential_id, public_key, sign_count, transports, name, created_at)
       VALUES ($user_id, $credential_id, $public_key, $sign_count, $transports, $name, $created_at)
@@ -915,15 +941,59 @@ export class CrowdsecDatabase {
     }).changes > 0;
   }
 
-  upsertOidcUser(username: string, role: 'admin' | 'read-only'): AuthUserRow {
+  upsertOidcUser(params: {
+    username: string;
+    role: 'admin' | 'read-only';
+    issuer: string;
+    subject: string;
+  }): AuthUserRow {
     const now = new Date().toISOString();
-    this.upsertOidcUserStatement.run({
-      $username: username,
-      $role: role,
-      $created_at: now,
+    let user = this.getAuthUserByOidcIdentityStatement.get({
+      $oidc_issuer: params.issuer,
+      $oidc_subject: params.subject,
+    }) as AuthUserRow | null;
+
+    // Claim a pre-migration OIDC row on its first login. Never claim a row that
+    // still has a local password, because older releases could merge an OIDC
+    // identity into a local account when their usernames matched.
+    if (!user) {
+      const legacy = this.getAuthUserByUsername(params.username);
+      if (legacy?.auth_provider === 'oidc' && !legacy.oidc_subject && !legacy.password_hash) {
+        user = legacy;
+      }
+    }
+
+    const usernameOwner = this.getAuthUserByUsername(params.username);
+    const identitySuffix = crypto
+      .createHash('sha256')
+      .update(`${params.issuer}\n${params.subject}`, 'utf8')
+      .digest('hex')
+      .slice(0, 10);
+    const storedUsername = !usernameOwner || usernameOwner.id === user?.id
+      ? params.username
+      : `${params.username}#oidc-${identitySuffix}`;
+
+    if (!user) {
+      const result = this.createOidcUserStatement.run({
+        $username: storedUsername,
+        $role: params.role,
+        $oidc_issuer: params.issuer,
+        $oidc_subject: params.subject,
+        $created_at: now,
+        $updated_at: now,
+      }) as { lastInsertRowid?: number | bigint };
+      return this.getAuthUserById(Number(result.lastInsertRowid))!;
+    }
+
+    this.updateOidcUserStatement.run({
+      $id: user.id,
+      $username: storedUsername,
+      $role: params.role,
+      $oidc_issuer: params.issuer,
+      $oidc_subject: params.subject,
       $updated_at: now,
     });
-    return this.getAuthUserByUsername(username)!;
+    return this.getAuthUserById(user.id)!;
   }
 
   listWebAuthnCredentialsByUser(userId: number): WebAuthnCredentialRow[] {
@@ -1396,6 +1466,9 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
       totp_last_step INTEGER,
       role TEXT NOT NULL DEFAULT 'admin',
       auth_provider TEXT NOT NULL DEFAULT 'password',
+      oidc_issuer TEXT,
+      oidc_subject TEXT,
+      session_version INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -1841,6 +1914,20 @@ function migrateAuthUsersTable(db: Database): void {
   if (!columns.some((column) => column.name === 'totp_last_step')) {
     db.exec('ALTER TABLE auth_users ADD COLUMN totp_last_step INTEGER');
   }
+  if (!columns.some((column) => column.name === 'oidc_issuer')) {
+    db.exec('ALTER TABLE auth_users ADD COLUMN oidc_issuer TEXT');
+  }
+  if (!columns.some((column) => column.name === 'oidc_subject')) {
+    db.exec('ALTER TABLE auth_users ADD COLUMN oidc_subject TEXT');
+  }
+  if (!columns.some((column) => column.name === 'session_version')) {
+    db.exec('ALTER TABLE auth_users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 1');
+  }
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_users_oidc_identity
+    ON auth_users(oidc_issuer, oidc_subject)
+    WHERE oidc_issuer IS NOT NULL AND oidc_subject IS NOT NULL
+  `);
 }
 
 function migrateNotificationRulesTable(db: Database, createNotificationRulesTable: string): void {

@@ -170,6 +170,69 @@ describe('CrowdsecDatabase', () => {
     db.close();
   });
 
+  test('binds OIDC users to issuer and subject without merging local usernames', () => {
+    const db = createTestDatabase();
+    const localUserId = db.createAuthUser({
+      username: 'operator',
+      passwordHash: 'local-password-hash',
+      role: 'admin',
+      authProvider: 'password',
+    });
+
+    const oidcUser = db.upsertOidcUser({
+      username: 'operator',
+      role: 'read-only',
+      issuer: 'https://idp.example.com',
+      subject: 'subject-1',
+    });
+    expect(oidcUser.id).not.toBe(localUserId);
+    expect(oidcUser.username).toMatch(/^operator#oidc-/);
+    expect(oidcUser.oidc_issuer).toBe('https://idp.example.com');
+    expect(oidcUser.oidc_subject).toBe('subject-1');
+    expect(db.getAuthUserById(localUserId)).toMatchObject({
+      username: 'operator',
+      auth_provider: 'password',
+      password_hash: 'local-password-hash',
+      role: 'admin',
+    });
+
+    const renamedOidcUser = db.upsertOidcUser({
+      username: 'renamed-operator',
+      role: 'admin',
+      issuer: 'https://idp.example.com',
+      subject: 'subject-1',
+    });
+    expect(renamedOidcUser.id).toBe(oidcUser.id);
+    expect(renamedOidcUser.username).toBe('renamed-operator');
+    expect(renamedOidcUser.session_version).toBe(oidcUser.session_version + 1);
+
+    db.close();
+  });
+
+  test('migrates legacy OIDC users in place on their next login', () => {
+    const db = createTestDatabase();
+    const legacyId = db.createAuthUser({
+      username: 'legacy-oidc',
+      passwordHash: null,
+      role: 'read-only',
+      authProvider: 'oidc',
+    });
+
+    const migrated = db.upsertOidcUser({
+      username: 'legacy-oidc',
+      role: 'read-only',
+      issuer: 'https://idp.example.com',
+      subject: 'legacy-subject',
+    });
+    expect(migrated.id).toBe(legacyId);
+    expect(migrated).toMatchObject({
+      oidc_issuer: 'https://idp.example.com',
+      oidc_subject: 'legacy-subject',
+    });
+
+    db.close();
+  });
+
   test('existing databases are migrated with dashboard auth disabled by default', () => {
     const dbPath = createTestDatabasePath();
     const legacy = createLegacyDatabase(dbPath);

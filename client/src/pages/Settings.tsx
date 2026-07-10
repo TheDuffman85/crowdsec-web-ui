@@ -772,14 +772,16 @@ export function Settings() {
                                     ))
                                 )}
                             </div>
-                            <button
-                                type="button"
-                                onClick={openPasskeyModal}
-                                className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700"
-                            >
-                                <KeyRound className="h-4 w-4" />
-                                {t("pages.settings.registerNewPasskey")}
-                            </button>
+                            {authSettings?.hasPassword && (
+                                <button
+                                    type="button"
+                                    onClick={openPasskeyModal}
+                                    className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700"
+                                >
+                                    <KeyRound className="h-4 w-4" />
+                                    {t("pages.settings.registerNewPasskey")}
+                                </button>
+                            )}
                         </div>
 
                         <div className="space-y-4 border-t border-gray-200 pt-6 dark:border-gray-700">

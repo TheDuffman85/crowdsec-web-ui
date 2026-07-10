@@ -117,14 +117,15 @@ function createAuthSessionCookie(
   database: CrowdsecDatabase,
   payload: { userId: number; username: string; role: 'admin' | 'read-only'; authMethod: 'password' | 'passkey' | 'oidc' },
   configuredSecret?: string,
+  times: { issuedAt?: number; expiresAt?: number } = {},
 ): string {
   const secret = configuredSecret || database.getMeta('auth_session_secret')?.value;
   if (!secret) throw new Error('Auth session secret was not initialized');
   const now = Math.floor(Date.now() / 1000);
   const encodedPayload = Buffer.from(JSON.stringify({
     ...payload,
-    iat: now,
-    exp: now + 60 * 60,
+    iat: times.issuedAt ?? now,
+    exp: times.expiresAt ?? now + 60 * 60,
   })).toString('base64url');
   const signature = crypto.createHmac('sha256', secret).update(encodedPayload).digest('base64url');
   return `crowdsec_web_ui_session=${encodedPayload}.${signature}`;
@@ -536,6 +537,63 @@ test('dashboard auth protects API routes and allows initial setup login', async 
   expect(payload.permissions?.mode).toBe('admin');
 });
 
+test('security middleware applies CSP, private API caching, origin checks, and body limits', async () => {
+  const { controller } = createController();
+
+  const page = await controller.fetch(new Request('http://localhost/crowdsec/'));
+  const pageHtml = await page.text();
+  const csp = page.headers.get('content-security-policy') || '';
+  const nonce = csp.match(/'nonce-([^']+)'/)?.[1];
+  expect(nonce).toBeTruthy();
+  expect(csp).toContain("default-src 'self'");
+  expect(csp).toContain("frame-ancestors 'none'");
+  expect(pageHtml).toContain(`<script nonce="${nonce}">window.__BASE_PATH__="/crowdsec";</script>`);
+  expect(page.headers.get('strict-transport-security')).toBeNull();
+
+  const apiResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
+  expect(apiResponse.headers.get('cache-control')).toBe('private, no-store');
+
+  const crossOrigin = await controller.fetch(new Request('http://localhost/crowdsec/api/config/language', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Origin: 'https://attacker.example' },
+    body: JSON.stringify({ language: 'de' }),
+  }));
+  expect(crossOrigin.status).toBe(403);
+  expect(await crossOrigin.json()).toEqual({ error: 'Cross-origin request rejected' });
+
+  const oversized = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'x'.repeat(1024 * 1024) }),
+  }));
+  expect(oversized.status).toBe(413);
+});
+
+test('password throttling cannot be bypassed with spoofed forwarded addresses', async () => {
+  const { controller } = createController({ env: { AUTH_ENABLED: 'true' } });
+  await controller.fetch(new Request('http://localhost/crowdsec/api/auth/setup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'Secret123' }),
+  }));
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const response = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': `198.51.100.${attempt + 1}` },
+      body: JSON.stringify({ username: 'admin', password: 'WrongSecret123' }),
+    }));
+    expect(response.status).toBe(401);
+  }
+
+  const throttled = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '203.0.113.250' },
+    body: JSON.stringify({ username: 'admin', password: 'WrongSecret123' }),
+  }));
+  expect(throttled.status).toBe(429);
+});
+
 test('CrowdSec metrics endpoint is disabled until Prometheus URL is configured', async () => {
   const { controller } = createController();
 
@@ -717,6 +775,17 @@ test('dashboard auth exposes account settings and password changes', async () =>
     body: JSON.stringify({ currentPassword: 'Secret123', newPassword: 'NewSecret123' }),
   }));
   expect(changePassword.status).toBe(200);
+  const refreshedCookie = changePassword.headers.get('set-cookie') || '';
+  expect(refreshedCookie).toContain('crowdsec_web_ui_session=');
+
+  const revokedOldSession = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/settings', {
+    headers: { cookie },
+  }));
+  expect(revokedOldSession.status).toBe(401);
+  const refreshedSession = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/settings', {
+    headers: { cookie: refreshedCookie },
+  }));
+  expect(refreshedSession.status).toBe(200);
 
   const oldLogin = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/login', {
     method: 'POST',
@@ -731,6 +800,46 @@ test('dashboard auth exposes account settings and password changes', async () =>
     body: JSON.stringify({ username: 'admin', password: 'NewSecret123' }),
   }));
   expect(newLogin.status).toBe(200);
+});
+
+test('OIDC-only users cannot persist SSO access by registering or using passkeys', async () => {
+  const { controller, database } = createController({ env: { AUTH_ENABLED: 'true' } });
+  const user = database.upsertOidcUser({
+    username: 'oidc-admin',
+    role: 'admin',
+    issuer: 'https://idp.example.com',
+    subject: 'oidc-subject',
+  });
+  const oidcCookie = createAuthSessionCookie(database, {
+    userId: user.id,
+    username: user.username,
+    role: user.role,
+    authMethod: 'oidc',
+  });
+
+  const registration = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/webauthn/register/options', {
+    method: 'POST',
+    headers: { cookie: oidcCookie },
+  }));
+  expect(registration.status).toBe(403);
+  expect(await registration.json()).toMatchObject({
+    error: 'Passkeys cannot be registered for OIDC-only accounts',
+  });
+
+  const now = Math.floor(Date.now() / 1000);
+  const staleOidcCookie = createAuthSessionCookie(database, {
+    userId: user.id,
+    username: user.username,
+    role: user.role,
+    authMethod: 'oidc',
+  }, undefined, {
+    issuedAt: now - 25 * 60 * 60,
+    expiresAt: now + 60 * 60,
+  });
+  const staleSession = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/settings', {
+    headers: { cookie: staleOidcCookie },
+  }));
+  expect(staleSession.status).toBe(401);
 });
 
 test('dashboard auth supports optional TOTP for password login', async () => {

@@ -2,6 +2,8 @@
 
 All API routes return JSON unless a route explicitly redirects for OIDC login/callback. Routes are served below `/api`, or below `${BASE_PATH}/api` when `BASE_PATH` is configured. `GET /api/health` is always registered at the root path; when `BASE_PATH` is set, `${BASE_PATH}/api/health` is registered too.
 
+API request bodies are limited to 1 MiB. Browser requests using state-changing methods must be same-origin; non-browser clients that do not send `Origin` or `Sec-Fetch-Site` remain supported. API responses are marked `private, no-store`.
+
 The browser UI authenticates with the HTTP-only `crowdsec_web_ui_session` cookie. There is no bearer-token API in this codebase. Authentication is enabled for new installs by default; migrated databases from older unauthenticated versions stay disabled until `AUTH_ENABLED=true` is set. When auth is enabled, protected API routes return `401` without a valid session.
 
 Protected application routes also ensure the backend can authenticate to CrowdSec LAPI. If LAPI login fails, they return `502`.
@@ -75,8 +77,8 @@ These routes are mounted below `/api/auth`. Auth setup/login routes are availabl
 | GET | `/api/auth/passkeys` | List passkeys for the current user. |
 | PATCH | `/api/auth/passkeys/:id` | Rename a passkey with `{ "name": "..." }`. |
 | DELETE | `/api/auth/passkeys/:id` | Delete one of the current user's passkeys. |
-| POST | `/api/auth/webauthn/register/options` | Start passkey registration for the current user. |
-| POST | `/api/auth/webauthn/register/verify` | Complete passkey registration. Optional `name` is stored as the passkey label. |
+| POST | `/api/auth/webauthn/register/options` | Start passkey registration for the current password-backed user. OIDC-only accounts receive `403`. |
+| POST | `/api/auth/webauthn/register/verify` | Complete passkey registration. Optional `name` is stored as the passkey label. OIDC-only accounts receive `403`. |
 | POST | `/api/auth/webauthn/login/options` | Start passkey login. Optional `username` narrows allowed credentials. |
 | POST | `/api/auth/webauthn/login/verify` | Complete passkey login and start a session. |
 | GET | `/api/auth/oidc/login` | Redirect to the configured OIDC provider. |

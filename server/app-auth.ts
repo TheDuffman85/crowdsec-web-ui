@@ -69,6 +69,7 @@ export interface DashboardAuth {
 
 const SESSION_COOKIE = 'crowdsec_web_ui_session';
 const SESSION_LIFETIME_SECONDS = 60 * 60 * 24 * 30;
+const OIDC_SESSION_LIFETIME_SECONDS = 60 * 60 * 24;
 const SESSION_REFRESH_AFTER_SECONDS = 60 * 60 * 24;
 const CHALLENGE_COOKIE = 'crowdsec_web_ui_webauthn_challenge';
 const TOTP_SETUP_COOKIE = 'crowdsec_web_ui_totp_setup';
@@ -83,6 +84,8 @@ const AUTH_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
 const AUTH_RATE_LIMIT_BLOCK_MS = 15 * 60 * 1000;
 const PASSWORD_MAX_FAILURES = 10;
 const TOTP_MAX_FAILURES = 5;
+const MAX_AUTH_FAILURE_BUCKETS = 10_000;
+const MAX_CONCURRENT_PASSWORD_VERIFICATIONS = 8;
 
 interface AuthFailureBucket {
   failures: number;
@@ -288,14 +291,21 @@ function resolveSessionSecret(database: CrowdsecDatabase, configuredSecret?: str
   return generated;
 }
 
-function getClientAddress(context: Context): string {
-  return context.req.header('x-forwarded-for')?.split(',')[0]?.trim()
-    || context.req.header('x-real-ip')?.trim()
-    || 'unknown';
+function getAccountAttemptKey(username: string): string {
+  return username.trim().toLowerCase().slice(0, 254);
 }
 
-function getAuthAttemptKey(context: Context, username: string): string {
-  return `${getClientAddress(context)}\n${username.trim().toLowerCase()}`;
+function pruneAuthFailureBuckets(buckets: Map<string, AuthFailureBucket>, now = Date.now()): void {
+  for (const [key, bucket] of buckets) {
+    if (bucket.blockedUntil <= now && now - bucket.firstFailureAt > AUTH_RATE_LIMIT_WINDOW_MS) {
+      buckets.delete(key);
+    }
+  }
+  while (buckets.size >= MAX_AUTH_FAILURE_BUCKETS) {
+    const oldestUnblocked = Array.from(buckets).find(([, bucket]) => bucket.blockedUntil <= now)?.[0];
+    if (!oldestUnblocked) break;
+    buckets.delete(oldestUnblocked);
+  }
 }
 
 function getAuthThrottleRetryAfter(buckets: Map<string, AuthFailureBucket>, key: string, now = Date.now()): number | null {
@@ -314,7 +324,11 @@ function recordAuthFailure(
   maxFailures: number,
   now = Date.now(),
 ): number | null {
+  pruneAuthFailureBuckets(buckets, now);
   const current = buckets.get(key);
+  if (!current && buckets.size >= MAX_AUTH_FAILURE_BUCKETS) {
+    return null;
+  }
   const bucket = current && now - current.firstFailureAt <= AUTH_RATE_LIMIT_WINDOW_MS
     ? current
     : { failures: 0, firstFailureAt: now, blockedUntil: 0 };
@@ -339,7 +353,7 @@ function signSession(payload: Record<string, unknown>, secret: string): string {
   return `${encodedPayload}.${signature}`;
 }
 
-function verifySessionToken(token: string, secret: string): SessionData | null {
+function verifySessionToken(token: string, secret: string): (SessionData & { sessionVersion: number; issuedAt: number }) | null {
   const [encodedPayload, signature] = token.split('.');
   if (!encodedPayload || !signature) return null;
   const expectedSignature = crypto.createHmac('sha256', secret).update(encodedPayload).digest('base64url');
@@ -350,14 +364,22 @@ function verifySessionToken(token: string, secret: string): SessionData | null {
   }
 
   try {
-    const payload = JSON.parse(fromBase64url(encodedPayload).toString('utf8')) as Partial<SessionData> & { exp?: number; iat?: number };
+    const payload = JSON.parse(fromBase64url(encodedPayload).toString('utf8')) as Partial<SessionData> & {
+      exp?: number;
+      iat?: number;
+      sessionVersion?: number;
+    };
     if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return null;
     if (typeof payload.userId !== 'number' || typeof payload.username !== 'string') return null;
     const role: Role = payload.role === 'read-only' ? 'read-only' : 'admin';
     const authMethod = payload.authMethod === 'password' || payload.authMethod === 'passkey' || payload.authMethod === 'oidc'
       ? payload.authMethod
       : undefined;
-    return { userId: payload.userId, username: payload.username, role, authMethod };
+    const sessionVersion = Number.isInteger(payload.sessionVersion) && Number(payload.sessionVersion) > 0
+      ? Number(payload.sessionVersion)
+      : 1;
+    const issuedAt = Number.isInteger(payload.iat) && Number(payload.iat) > 0 ? Number(payload.iat) : 0;
+    return { userId: payload.userId, username: payload.username, role, authMethod, sessionVersion, issuedAt };
   } catch {
     return null;
   }
@@ -486,7 +508,12 @@ class OidcRuntime {
     return `${authorizationEndpoint}?${params.toString()}`;
   }
 
-  async handleCallback(currentUrl: URL, expectedNonce?: string, expectedState?: string): Promise<{ username: string; role: Role | null } | null> {
+  async handleCallback(currentUrl: URL, expectedNonce?: string, expectedState?: string): Promise<{
+    username: string;
+    role: Role | null;
+    issuer: string;
+    subject: string;
+  } | null> {
     const configuration = await this.getConfiguration();
     const config = this.getConfig();
     const tokens = await oidcClient.authorizationCodeGrant(configuration, currentUrl, {
@@ -495,17 +522,23 @@ class OidcRuntime {
     });
     const claims = tokens.claims() as Record<string, unknown> | undefined;
     if (!claims) return null;
+    const issuer = typeof claims.iss === 'string' ? claims.iss : '';
+    const subject = typeof claims.sub === 'string' ? claims.sub : '';
+    if (!issuer || !subject) return null;
 
-    const username =
+    const username = (
       (typeof claims.preferred_username === 'string' && claims.preferred_username) ||
       (typeof claims.email === 'string' && claims.email) ||
       (typeof claims.sub === 'string' && claims.sub) ||
-      '';
+      ''
+    ).trim().slice(0, 254);
     if (!username) return null;
 
     return {
       username,
       role: resolveOidcRole(config, readClaimGroups(claims, config.oidcGroupsClaim)),
+      issuer,
+      subject,
     };
   }
 }
@@ -522,8 +555,9 @@ export function createDashboardAuth(options: {
   const sessionSecret = resolveSessionSecret(database, config.sessionSecret);
   const persistedSessionSecret = database.getMeta('auth_session_secret')?.value;
   const totpSecretEncryptionSecret = config.sessionSecret || sessionSecret;
-  const passwordFailureBuckets = new Map<string, AuthFailureBucket>();
+  const passwordAccountFailureBuckets = new Map<string, AuthFailureBucket>();
   const totpFailureBuckets = new Map<string, AuthFailureBucket>();
+  let activePasswordVerifications = 0;
 
   function getEffectiveConfig(): EffectiveAuthConfig {
     const encryptedClientSecret = readAuthSetting(database, 'oidc_client_secret');
@@ -574,15 +608,29 @@ export function createDashboardAuth(options: {
     return context.json({ error: 'Too many authentication attempts. Try again later.' }, 429);
   }
 
-  function createSession(context: HonoContext, user: AuthUserRow | SessionData, authMethod?: AuthMethod): void {
+  function createSession(
+    context: HonoContext,
+    user: AuthUserRow | SessionData,
+    authMethod?: AuthMethod,
+    authenticatedAt?: number,
+  ): void {
     const now = Math.floor(Date.now() / 1000);
+    const userId = 'id' in user ? user.id : user.userId;
+    const persistedUser = 'id' in user ? user : database.getAuthUserById(userId);
+    const effectiveAuthMethod = authMethod || ('authMethod' in user ? user.authMethod : undefined);
+    const sessionLifetime = effectiveAuthMethod === 'oidc'
+      ? OIDC_SESSION_LIFETIME_SECONDS
+      : SESSION_LIFETIME_SECONDS;
+    const absoluteStart = authenticatedAt || now;
     const token = signSession({
-      userId: 'id' in user ? user.id : user.userId,
+      userId,
       username: user.username,
       role: user.role,
-      authMethod: authMethod || ('authMethod' in user ? user.authMethod : undefined),
+      authMethod: effectiveAuthMethod,
+      sessionVersion: persistedUser?.session_version || 1,
+      authenticatedAt: absoluteStart,
       iat: now,
-      exp: now + SESSION_LIFETIME_SECONDS,
+      exp: Math.min(now + sessionLifetime, absoluteStart + sessionLifetime),
     }, sessionSecret);
     setCookie(context, SESSION_COOKIE, token, {
       httpOnly: true,
@@ -601,18 +649,38 @@ export function createDashboardAuth(options: {
     if (!enabled) return { userId: 0, username: 'disabled-auth', role: 'admin' };
     const token = getCookie(context, SESSION_COOKIE);
     if (!token) return null;
-    return verifySessionToken(token, sessionSecret);
+    const session = verifySessionToken(token, sessionSecret);
+    if (!session) return null;
+    if (
+      session.authMethod === 'oidc'
+      && (!session.issuedAt || session.issuedAt + OIDC_SESSION_LIFETIME_SECONDS < Math.floor(Date.now() / 1000))
+    ) return null;
+    const user = database.getAuthUserById(session.userId);
+    if (!user || (session.sessionVersion || 1) !== (user.session_version || 1)) return null;
+    if (session.authMethod === 'oidc' && user.auth_provider !== 'oidc') return null;
+    if (session.authMethod === 'passkey' && user.auth_provider === 'oidc' && !user.password_hash) return null;
+    return {
+      userId: user.id,
+      username: user.username,
+      role: user.role,
+      authMethod: session.authMethod,
+    };
   }
 
   function refreshSessionIfNeeded(context: HonoContext, session: SessionData): void {
     const token = getCookie(context, SESSION_COOKIE);
     if (!token) return;
     try {
-      const payload = JSON.parse(fromBase64url(token.split('.')[0] || '').toString('utf8')) as { iat?: number };
+      const payload = JSON.parse(fromBase64url(token.split('.')[0] || '').toString('utf8')) as {
+        iat?: number;
+        authenticatedAt?: number;
+        authMethod?: AuthMethod;
+      };
       if (!payload.iat) return;
+      if (payload.authMethod === 'oidc') return;
       const age = Math.floor(Date.now() / 1000) - payload.iat;
       if (age > SESSION_REFRESH_AFTER_SECONDS) {
-        createSession(context, session);
+        createSession(context, session, undefined, payload.authenticatedAt || payload.iat);
       }
     } catch {
       // Invalid tokens are handled by getSession.
@@ -682,6 +750,7 @@ export function createDashboardAuth(options: {
       const username = typeof body?.username === 'string' ? body.username.trim() : '';
       const password = typeof body?.password === 'string' ? body.password : '';
       if (!username || !password) return context.json({ error: 'Username and password required' }, 400);
+      if (username.length > 128 || password.length > 1024) return context.json({ error: 'Username or password is too long' }, 400);
       const passwordError = validatePassword(password);
       if (passwordError) return context.json({ error: passwordError }, 400);
 
@@ -704,35 +773,46 @@ export function createDashboardAuth(options: {
       const password = typeof body?.password === 'string' ? body.password : '';
       const totpCode = typeof body?.totpCode === 'string' ? normalizeTotpCode(body.totpCode) : '';
       if (!username || !password) return context.json({ error: 'Username and password required' }, 400);
-      const authAttemptKey = getAuthAttemptKey(context, username);
-      const passwordRetryAfter = getAuthThrottleRetryAfter(passwordFailureBuckets, authAttemptKey);
-      if (passwordRetryAfter !== null) return authThrottleResponse(context, passwordRetryAfter);
+      if (username.length > 254 || password.length > 1024) return context.json({ error: 'Invalid credentials' }, 401);
+      const accountAttemptKey = getAccountAttemptKey(username);
+      const accountRetryAfter = getAuthThrottleRetryAfter(passwordAccountFailureBuckets, accountAttemptKey);
+      if (accountRetryAfter !== null) return authThrottleResponse(context, accountRetryAfter);
+      if (activePasswordVerifications >= MAX_CONCURRENT_PASSWORD_VERIFICATIONS) {
+        return authThrottleResponse(context, 1);
+      }
 
       const user = database.getAuthUserByUsername(username);
       const hashToVerify = user?.password_hash || await DUMMY_PASSWORD_HASH_PROMISE;
-      const valid = await verifyPassword(password, hashToVerify);
+      activePasswordVerifications += 1;
+      let valid = false;
+      try {
+        valid = await verifyPassword(password, hashToVerify);
+      } finally {
+        activePasswordVerifications -= 1;
+      }
       if (!user || !user.password_hash || !valid) {
-        recordAuthFailure(passwordFailureBuckets, authAttemptKey, PASSWORD_MAX_FAILURES);
+        recordAuthFailure(passwordAccountFailureBuckets, accountAttemptKey, PASSWORD_MAX_FAILURES);
         return context.json({ error: 'Invalid credentials' }, 401);
       }
-      clearAuthFailures(passwordFailureBuckets, authAttemptKey);
+      clearAuthFailures(passwordAccountFailureBuckets, accountAttemptKey);
       if (user.totp_enabled && user.totp_secret) {
         if (!totpCode) {
           return context.json({ error: 'Authenticator code required', requiresTotp: true }, 401);
         }
-        const totpRetryAfter = getAuthThrottleRetryAfter(totpFailureBuckets, authAttemptKey);
+        const totpAttemptKey = String(user.id);
+        const totpRetryAfter = getAuthThrottleRetryAfter(totpFailureBuckets, totpAttemptKey);
         if (totpRetryAfter !== null) return authThrottleResponse(context, totpRetryAfter);
         const secret = decryptTotpSecret(user.totp_secret);
         const verification = await verifyTotpCode(totpCode, secret);
         if (!verification.valid || verification.timeStep === null) {
-          recordAuthFailure(totpFailureBuckets, authAttemptKey, TOTP_MAX_FAILURES);
+          recordAuthFailure(totpFailureBuckets, totpAttemptKey, TOTP_MAX_FAILURES);
           return context.json({ error: 'Invalid authenticator code', requiresTotp: true }, 401);
         }
         if (!database.updateAuthUserTotpLastStep(user.id, verification.timeStep)) {
-          recordAuthFailure(totpFailureBuckets, authAttemptKey, TOTP_MAX_FAILURES);
+          recordAuthFailure(totpFailureBuckets, totpAttemptKey, TOTP_MAX_FAILURES);
           return context.json({ error: 'Invalid authenticator code', requiresTotp: true }, 401);
         }
-        clearAuthFailures(totpFailureBuckets, authAttemptKey);
+        clearAuthFailures(totpFailureBuckets, totpAttemptKey);
       }
 
       createSession(context, user, 'password');
@@ -893,6 +973,7 @@ export function createDashboardAuth(options: {
       if (passwordError) return context.json({ error: passwordError }, 400);
 
       database.updateAuthUserPassword(user.id, await hashPassword(newPassword));
+      createSession(context, database.getAuthUserById(user.id)!, 'password');
       return context.json({ status: 'ok' });
     });
 
@@ -999,6 +1080,10 @@ export function createDashboardAuth(options: {
     auth.post('/webauthn/register/options', async (context) => {
       const session = getSession(context);
       if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
+      const user = database.getAuthUserById(session.userId);
+      if (!user || (user.auth_provider === 'oidc' && !user.password_hash)) {
+        return context.json({ error: 'Passkeys cannot be registered for OIDC-only accounts' }, 403);
+      }
       const origin = getPublicOrigin(context);
       const options = await createRegistrationOptions(session, database, new URL(origin).hostname);
       setShortCookie(context, CHALLENGE_COOKIE, options.challenge);
@@ -1008,6 +1093,10 @@ export function createDashboardAuth(options: {
     auth.post('/webauthn/register/verify', async (context) => {
       const session = getSession(context);
       if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
+      const user = database.getAuthUserById(session.userId);
+      if (!user || (user.auth_provider === 'oidc' && !user.password_hash)) {
+        return context.json({ error: 'Passkeys cannot be registered for OIDC-only accounts' }, 403);
+      }
       const body = asObject(await context.req.json().catch(() => null));
       const challenge = getCookie(context, CHALLENGE_COOKIE);
       if (!body || !challenge) return context.json({ error: 'No registration challenge found' }, 400);
@@ -1056,6 +1145,9 @@ export function createDashboardAuth(options: {
       if (!body || !challenge || !credential) return context.json({ error: 'Credential not found' }, 400);
       const user = database.getAuthUserById(credential.user_id);
       if (!user) return context.json({ error: 'User not found' }, 400);
+      if (user.auth_provider === 'oidc' && !user.password_hash) {
+        return context.json({ error: 'Credential not found' }, 400);
+      }
 
       try {
         const origin = getPublicOrigin(context);
@@ -1100,7 +1192,12 @@ export function createDashboardAuth(options: {
         const result = await oidc.handleCallback(callbackUrl, nonce, state);
         if (!result) return context.json({ error: 'OIDC authentication failed' }, 400);
         if (!result.role) return context.json({ error: 'OIDC user is not authorized' }, 403);
-        const user = database.upsertOidcUser(result.username, result.role);
+        const user = database.upsertOidcUser({
+          username: result.username,
+          role: result.role,
+          issuer: result.issuer,
+          subject: result.subject,
+        });
         createSession(context, user, 'oidc');
         deleteCookie(context, OIDC_STATE_COOKIE, { path: cookiePath });
         deleteCookie(context, OIDC_NONCE_COOKIE, { path: cookiePath });

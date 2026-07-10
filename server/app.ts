@@ -3,6 +3,7 @@ import path from 'path';
 import crypto from 'node:crypto';
 import { Hono } from 'hono';
 import { compress } from 'hono/compress';
+import { bodyLimit } from 'hono/body-limit';
 import { serveStatic } from '@hono/node-server/serve-static';
 import type {
   AddDecisionRequest,
@@ -278,6 +279,7 @@ interface DashboardDecisionAccumulator {
   activeSimulatedDecisionBuckets: Map<string, number>;
 }
 const NOTIFICATION_SECRET_KEY_META_KEY = 'notification_secret_key';
+const API_BODY_LIMIT_BYTES = 1024 * 1024;
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 const DASHBOARD_LOOP_YIELD_INTERVAL = 5_000;
 const DASHBOARD_INDEX_BATCH_SIZE = 5_000;
@@ -323,6 +325,26 @@ function formatSignedCount(count: number): string {
 function formatElapsedTime(ms: number): string {
   if (ms < 1_000) return `${ms}ms`;
   return `${(ms / 1_000).toFixed(2)}s`;
+}
+
+function getPublicRequestOrigin(context: HonoContext): string {
+  const forwardedHost = context.req.header('x-forwarded-host')?.split(',')[0]?.trim();
+  const host = forwardedHost || context.req.header('host');
+  const forwardedProto = context.req.header('x-forwarded-proto')?.split(',')[0]?.trim();
+  const url = new URL(context.req.url);
+  const protocol = forwardedProto || url.protocol.replace(/:$/, '');
+  return host ? `${protocol}://${host}` : url.origin;
+}
+
+function isRequestOriginAllowed(context: HonoContext): boolean {
+  if (context.req.header('sec-fetch-site') === 'cross-site') return false;
+  const origin = context.req.header('origin');
+  if (!origin) return true;
+  try {
+    return new URL(origin).origin === new URL(getPublicRequestOrigin(context)).origin;
+  } catch {
+    return false;
+  }
 }
 
 function readUpdateCheckOverrides(query: Record<string, string | string[]>): UpdateCheckOverrides {
@@ -472,11 +494,35 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
   app.use('*', compress());
   app.use('*', async (context, next) => {
+    const cspNonce = crypto.randomBytes(16).toString('base64');
+    (context as HonoContext).set('cspNonce', cspNonce);
     await next();
     context.header('X-Content-Type-Options', 'nosniff');
     context.header('X-Frame-Options', 'DENY');
     context.header('Referrer-Policy', 'strict-origin-when-cross-origin');
     context.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    context.header(
+      'Content-Security-Policy',
+      `default-src 'self'; base-uri 'self'; connect-src 'self'; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self' 'nonce-${cspNonce}'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:`,
+    );
+    const pathname = new URL(context.req.url).pathname;
+    const apiPrefix = `${config.basePath}/api/`;
+    if (pathname.startsWith(apiPrefix) || pathname === `${config.basePath}/api`) {
+      context.header('Cache-Control', 'private, no-store');
+      context.header('Pragma', 'no-cache');
+      context.header('Expires', '0');
+    }
+  });
+
+  app.use(`${config.basePath}/api/*`, bodyLimit({
+    maxSize: API_BODY_LIMIT_BYTES,
+    onError: (context) => context.json({ error: 'Request body is too large' }, 413),
+  }));
+  app.use(`${config.basePath}/api/*`, async (context, next) => {
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(context.req.method) && !isRequestOriginAllowed(context)) {
+      return context.json({ error: 'Cross-origin request rejected' }, 403);
+    }
+    await next();
   });
 
   app.use('*', activityTrackerMiddleware);
@@ -1288,7 +1334,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       const indexPath = path.join(distRoot, 'index.html');
       let html = fs.readFileSync(indexPath, 'utf-8');
       const safePath = config.basePath.replace(/[^a-zA-Z0-9/_-]/g, '');
-      const configScript = `<script>window.__BASE_PATH__="${safePath}";</script>`;
+      const cspNonce = String((context as HonoContext).get('cspNonce') || '');
+      const configScript = `<script nonce="${cspNonce}">window.__BASE_PATH__="${safePath}";</script>`;
       html = html.replace('</head>', `${configScript}\n</head>`);
 
       if (config.basePath) {
