@@ -107,6 +107,13 @@ export interface AuthUserRow {
   updated_at: string;
 }
 
+export interface OidcUserUpsertParams {
+  username: string;
+  role: 'admin' | 'read-only';
+  issuer: string;
+  subject: string;
+}
+
 export interface WebAuthnCredentialRow {
   id: number;
   user_id: number;
@@ -941,12 +948,7 @@ export class CrowdsecDatabase {
     }).changes > 0;
   }
 
-  upsertOidcUser(params: {
-    username: string;
-    role: 'admin' | 'read-only';
-    issuer: string;
-    subject: string;
-  }): AuthUserRow {
+  upsertOidcUser(params: OidcUserUpsertParams): AuthUserRow {
     const now = new Date().toISOString();
     let user = this.getAuthUserByOidcIdentityStatement.get({
       $oidc_issuer: params.issuer,

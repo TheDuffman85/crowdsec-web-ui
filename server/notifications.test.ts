@@ -110,7 +110,7 @@ function createService(options: {
 }
 
 describe('notification incident deduplication', () => {
-  test('lists notifications with pagination metadata and supports bulk notification mutations', () => {
+  test('lists notifications with pagination metadata and supports bulk notification mutations', async () => {
     const { database, service } = createService();
 
     database.insertNotification({
@@ -151,9 +151,9 @@ describe('notification incident deduplication', () => {
       unread_count: 1,
     }));
 
-    expect(service.markNotificationsRead(['notif-1', 'notif-2'])).toBe(1);
-    expect(service.deleteNotification('notif-2')).toBe(true);
-    expect(service.deleteReadNotifications()).toBe(1);
+    expect(await service.markNotificationsRead(['notif-1', 'notif-2'])).toBe(1);
+    expect(await service.deleteNotification('notif-2')).toBe(true);
+    expect(await service.deleteReadNotifications()).toBe(1);
     expect(service.listNotifications().data).toEqual([]);
 
     database.close();
@@ -168,7 +168,7 @@ describe('notification incident deduplication', () => {
       },
     });
 
-    const channel = service.createChannel({
+    const channel = await service.createChannel({
       name: 'Fluxer webhook',
       type: 'webhook',
       enabled: true,
@@ -202,7 +202,7 @@ describe('notification incident deduplication', () => {
     });
 
     try {
-      const channel = service.createChannel({
+      const channel = await service.createChannel({
         name: 'Fluxer webhook',
         type: 'webhook',
         enabled: true,
@@ -217,7 +217,7 @@ describe('notification incident deduplication', () => {
         },
       });
 
-      service.createRule({
+      await service.createRule({
         name: 'Threshold',
         type: 'alert-threshold',
         enabled: true,
@@ -250,7 +250,7 @@ describe('notification incident deduplication', () => {
 
   test('threshold rules fire once while active, resolve, and fire again after re-breach', async () => {
     const { database, service } = createService();
-    const rule = service.createRule({
+    const rule = await service.createRule({
       name: 'Threshold',
       type: 'alert-threshold',
       enabled: true,
@@ -299,7 +299,7 @@ describe('notification incident deduplication', () => {
   test('uses the explicit server language for notification content', async () => {
     const { database, service } = createService();
     database.setMeta('language', 'de');
-    service.createRule({
+    await service.createRule({
       name: 'Schwelle',
       type: 'alert-threshold',
       enabled: true,
@@ -325,7 +325,7 @@ describe('notification incident deduplication', () => {
 
   test('spike rules stay deduplicated while active, then fire again after clearing', async () => {
     const { database, service } = createService();
-    const rule = service.createRule({
+    const rule = await service.createRule({
       name: 'Spike',
       type: 'alert-spike',
       enabled: true,
@@ -386,7 +386,7 @@ describe('notification incident deduplication', () => {
       },
     });
 
-    const rule = service.createRule({
+    const rule = await service.createRule({
       name: 'Recent CVEs',
       type: 'new-cve',
       enabled: true,
@@ -416,7 +416,7 @@ describe('notification incident deduplication', () => {
 
   test('IP ban rules notify once per active ban decision with decision metadata', async () => {
     const { database, service } = createService();
-    const rule = service.createRule({
+    const rule = await service.createRule({
       name: 'Ban watch',
       type: 'ip-ban',
       enabled: true,
@@ -474,7 +474,7 @@ describe('notification incident deduplication', () => {
 
   test('IP ban rules do not refire when the same ban is resynced with volatile ids and timestamps', async () => {
     const { database, service } = createService();
-    service.createRule({
+    await service.createRule({
       name: 'Stable bans',
       type: 'ip-ban',
       enabled: true,
@@ -506,7 +506,7 @@ describe('notification incident deduplication', () => {
 
   test('IP ban rules collapse duplicate active decisions in the same evaluation', async () => {
     const { database, service } = createService();
-    service.createRule({
+    await service.createRule({
       name: 'Duplicate bans',
       type: 'ip-ban',
       enabled: true,
@@ -536,7 +536,7 @@ describe('notification incident deduplication', () => {
 
   test('IP ban rules resolve when an active decision is deleted from the cache', async () => {
     const { database, service } = createService();
-    const rule = service.createRule({
+    const rule = await service.createRule({
       name: 'Deleted bans',
       type: 'ip-ban',
       enabled: true,
@@ -567,7 +567,7 @@ describe('notification incident deduplication', () => {
 
   test('IP ban rules respect window, decision type, simulation, scenario, target, exact IP, and CIDR filters', async () => {
     const { database, service } = createService();
-    service.createRule({
+    await service.createRule({
       name: 'Filtered bans',
       type: 'ip-ban',
       enabled: true,
@@ -606,7 +606,7 @@ describe('notification incident deduplication', () => {
 
   test('new alert or decision rules notify once per matching record with event details', async () => {
     const { database, service } = createService();
-    service.createRule({
+    await service.createRule({
       name: 'New security activity',
       type: 'new-alert-decision',
       enabled: true,
@@ -671,7 +671,7 @@ describe('notification incident deduplication', () => {
     ]));
 
     for (const eventType of ['alert', 'decision'] as const) {
-      service.createRule({
+      await service.createRule({
         name: `${eventType}-only`,
         type: 'new-alert-decision',
         enabled: true,
@@ -696,10 +696,10 @@ describe('notification incident deduplication', () => {
     database.close();
   });
 
-  test('IP ban rules reject invalid IP and range filter values', () => {
+  test('IP ban rules reject invalid IP and range filter values', async () => {
     const { database, service } = createService();
 
-    expect(() => service.createRule({
+    await expect(service.createRule({
       name: 'Invalid bans',
       type: 'ip-ban',
       enabled: true,
@@ -711,7 +711,7 @@ describe('notification incident deduplication', () => {
           values: ['not-an-ip'],
         },
       },
-    })).toThrow('Invalid IP/range filter value: not-an-ip');
+    })).rejects.toThrow('Invalid IP/range filter value: not-an-ip');
 
     database.close();
   });
@@ -726,7 +726,7 @@ describe('notification incident deduplication', () => {
       }),
     });
 
-    const rule = service.createRule({
+    const rule = await service.createRule({
       name: 'App updates',
       type: 'application-update',
       enabled: true,
@@ -764,7 +764,7 @@ describe('notification incident deduplication', () => {
       getLapiStatus: () => lapiStatus,
     });
 
-    const rule = service.createRule({
+    const rule = await service.createRule({
       name: 'LAPI health',
       type: 'lapi-availability',
       enabled: true,
@@ -858,7 +858,7 @@ describe('notification incident deduplication', () => {
       getLapiStatus: () => lapiStatus,
     });
 
-    service.createRule({
+    await service.createRule({
       name: 'LAPI health',
       type: 'lapi-availability',
       enabled: true,

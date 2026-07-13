@@ -38,6 +38,7 @@ import { getServerTranslator, type Translator } from './i18n';
 import type { TimeFormat } from './config';
 import { formatDateTime } from './utils/date-time';
 import type { DatabaseQueryWorker } from './query-worker-client';
+import type { DatabaseWrite } from './sync-worker-client';
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 type RuleConfigInput = NotificationRuleConfig | Record<string, AlertMetaValue>;
@@ -45,6 +46,7 @@ type RuleConfigInput = NotificationRuleConfig | Record<string, AlertMetaValue>;
 export interface NotificationServiceOptions {
   database: CrowdsecDatabase;
   queryWorker?: Pick<DatabaseQueryWorker, 'all' | 'get'>;
+  writeDatabase?: DatabaseWrite;
   fetchImpl?: FetchLike;
   mqttPublishImpl?: (config: MqttPublishConfig, payload: string) => Promise<void>;
   updateChecker?: UpdateChecker;
@@ -87,24 +89,25 @@ interface NotificationDeliveryError extends Error {
 export interface NotificationService {
   listSettings: () => NotificationSettingsResponse;
   listNotifications: (page?: number, pageSize?: number) => NotificationListResponse;
-  createChannel: (input: UpsertNotificationChannelRequest) => NotificationChannel;
-  updateChannel: (id: string, input: UpsertNotificationChannelRequest) => NotificationChannel;
-  deleteChannel: (id: string) => void;
-  createRule: (input: UpsertNotificationRuleRequest) => NotificationRule;
-  updateRule: (id: string, input: UpsertNotificationRuleRequest) => NotificationRule;
-  deleteRule: (id: string) => void;
-  deleteNotification: (id: string) => boolean;
-  deleteNotifications: (ids: string[]) => number;
-  deleteReadNotifications: () => number;
-  markNotificationRead: (id: string) => boolean;
-  markNotificationsRead: (ids: string[]) => number;
-  markAllNotificationsRead: () => number;
+  createChannel: (input: UpsertNotificationChannelRequest) => Promise<NotificationChannel>;
+  updateChannel: (id: string, input: UpsertNotificationChannelRequest) => Promise<NotificationChannel>;
+  deleteChannel: (id: string) => Promise<void>;
+  createRule: (input: UpsertNotificationRuleRequest) => Promise<NotificationRule>;
+  updateRule: (id: string, input: UpsertNotificationRuleRequest) => Promise<NotificationRule>;
+  deleteRule: (id: string) => Promise<void>;
+  deleteNotification: (id: string) => Promise<boolean>;
+  deleteNotifications: (ids: string[]) => Promise<number>;
+  deleteReadNotifications: () => Promise<number>;
+  markNotificationRead: (id: string) => Promise<boolean>;
+  markNotificationsRead: (ids: string[]) => Promise<number>;
+  markAllNotificationsRead: () => Promise<number>;
   testChannel: (id: string) => Promise<void>;
   evaluateRules: (now?: Date) => Promise<void>;
 }
 
 export function createNotificationService(options: NotificationServiceOptions): NotificationService {
   const database = options.database;
+  const writeDatabase: DatabaseWrite = options.writeDatabase ?? (async (operation) => operation());
   const queryWorker = options.queryWorker || {
     all: async <T>(sql: string, params: unknown[] = []) => database.db.prepare(sql).all(...params) as T[],
     get: async <T>(sql: string, params: unknown[] = []) => database.db.prepare(sql).get(...params) as T,
@@ -172,87 +175,93 @@ export function createNotificationService(options: NotificationServiceOptions): 
     };
   }
 
-  function createChannel(input: UpsertNotificationChannelRequest): NotificationChannel {
+  async function createChannel(input: UpsertNotificationChannelRequest): Promise<NotificationChannel> {
     const now = new Date().toISOString();
     const channel = normalizeChannelInput(input, null, crypto.randomUUID(), now);
-    saveChannel(channel);
+    await writeDatabase(() => saveChannel(channel));
     return sanitizeChannel(channel);
   }
 
-  function updateChannel(id: string, input: UpsertNotificationChannelRequest): NotificationChannel {
+  async function updateChannel(id: string, input: UpsertNotificationChannelRequest): Promise<NotificationChannel> {
     const existing = getStoredChannel(id);
     if (!existing) {
       throw new Error('Notification channel not found');
     }
 
     const channel = normalizeChannelInput(input, existing, id, existing.created_at);
-    saveChannel(channel);
+    await writeDatabase(() => saveChannel(channel));
     return sanitizeChannel(channel);
   }
 
-  function deleteChannel(id: string): void {
-    database.deleteNotificationChannel(id);
+  async function deleteChannel(id: string): Promise<void> {
+    await writeDatabase(() => {
+      database.deleteNotificationChannel(id);
 
-    for (const rule of loadRules()) {
-      if (!rule.channel_ids.includes(id)) {
-        continue;
+      for (const rule of loadRules()) {
+        if (!rule.channel_ids.includes(id)) {
+          continue;
+        }
+        saveRule({
+          ...rule,
+          channel_ids: rule.channel_ids.filter((value) => value !== id),
+          updated_at: new Date().toISOString(),
+        });
       }
-      saveRule({
-        ...rule,
-        channel_ids: rule.channel_ids.filter((value) => value !== id),
-        updated_at: new Date().toISOString(),
-      });
-    }
+    });
   }
 
-  function createRule(input: UpsertNotificationRuleRequest): NotificationRule {
+  async function createRule(input: UpsertNotificationRuleRequest): Promise<NotificationRule> {
     const now = new Date().toISOString();
     const rule = normalizeRuleInput(input, null, crypto.randomUUID(), now);
-    saveRule(rule);
+    await writeDatabase(() => saveRule(rule));
     return rule;
   }
 
-  function updateRule(id: string, input: UpsertNotificationRuleRequest): NotificationRule {
+  async function updateRule(id: string, input: UpsertNotificationRuleRequest): Promise<NotificationRule> {
     const existing = getStoredRule(id);
     if (!existing) {
       throw new Error('Notification rule not found');
     }
 
     const rule = normalizeRuleInput(input, existing, id, existing.created_at);
-    saveRule(rule);
-    if (shouldResetIncidentState(existing, rule)) {
-      database.deleteNotificationIncidentsByRule(id);
-    }
+    await writeDatabase(() => {
+      saveRule(rule);
+      if (shouldResetIncidentState(existing, rule)) {
+        database.deleteNotificationIncidentsByRule(id);
+      }
+    });
     return rule;
   }
 
-  function deleteRule(id: string): void {
-    database.deleteNotificationIncidentsByRule(id);
-    database.deleteNotificationRule(id);
+  async function deleteRule(id: string): Promise<void> {
+    await writeDatabase(() => {
+      database.deleteNotificationIncidentsByRule(id);
+      database.deleteNotificationRule(id);
+    });
   }
 
-  function deleteNotification(id: string): boolean {
-    return database.deleteNotification(id);
+  function deleteNotification(id: string): Promise<boolean> {
+    return writeDatabase(() => database.deleteNotification(id));
   }
 
-  function deleteNotifications(ids: string[]): number {
-    return database.deleteNotifications(ids);
+  function deleteNotifications(ids: string[]): Promise<number> {
+    return writeDatabase(() => database.deleteNotifications(ids));
   }
 
-  function deleteReadNotifications(): number {
-    return database.deleteReadNotifications();
+  function deleteReadNotifications(): Promise<number> {
+    return writeDatabase(() => database.deleteReadNotifications());
   }
 
-  function markNotificationRead(id: string): boolean {
-    return database.markNotificationRead(id, new Date().toISOString());
+  function markNotificationRead(id: string): Promise<boolean> {
+    return writeDatabase(() => database.markNotificationRead(id, new Date().toISOString()));
   }
 
-  function markNotificationsRead(ids: string[]): number {
-    return database.markNotificationsRead(ids, new Date().toISOString());
+  function markNotificationsRead(ids: string[]): Promise<number> {
+    return writeDatabase(() => database.markNotificationsRead(ids, new Date().toISOString()));
   }
 
-  function markAllNotificationsRead(): number {
-    return database.markAllNotificationsRead(new Date().toISOString());
+  function markAllNotificationsRead(): Promise<number> {
+    return writeDatabase(() => database.markAllNotificationsRead(new Date().toISOString()));
   }
 
   async function testChannel(id: string): Promise<void> {
@@ -298,20 +307,20 @@ export function createNotificationService(options: NotificationServiceOptions): 
 
       for (const incident of activeIncidents.values()) {
         if (!candidateKeys.has(incident.incidentKey)) {
-          database.resolveNotificationIncident(rule.id, incident.incidentKey, timestamp);
+          await writeDatabase(() => database.resolveNotificationIncident(rule.id, incident.incidentKey, timestamp));
         }
       }
 
       for (const candidate of candidates) {
         const existingIncident = activeIncidents.get(candidate.dedupeKey);
         if (existingIncident) {
-          database.upsertNotificationIncident({
+          await writeDatabase(() => database.upsertNotificationIncident({
             $rule_id: rule.id,
             $incident_key: existingIncident.incidentKey,
             $first_seen_at: existingIncident.firstSeenAt,
             $last_seen_at: timestamp,
             $resolved_at: null,
-          });
+          }));
           continue;
         }
 
@@ -321,28 +330,30 @@ export function createNotificationService(options: NotificationServiceOptions): 
           deliveries.push(await sendToChannel(channel, candidate, candidateSeverity, rule));
         }
 
-        database.insertNotification({
-          $id: crypto.randomUUID(),
-          $created_at: timestamp,
-          $updated_at: timestamp,
-          $rule_id: rule.id,
-          $rule_name: rule.name,
-          $rule_type: rule.type,
-          $severity: candidateSeverity,
-          $title: candidate.title,
-          $message: candidate.message,
-          $read_at: null,
-          $metadata_json: JSON.stringify(candidate.metadata),
-          $deliveries_json: JSON.stringify(deliveries),
-          $dedupe_key: candidate.dedupeKey,
-        });
         const incidentStartedAt = candidate.incidentStartedAt || timestamp;
-        database.upsertNotificationIncident({
-          $rule_id: rule.id,
-          $incident_key: candidate.dedupeKey,
-          $first_seen_at: incidentStartedAt,
-          $last_seen_at: timestamp,
-          $resolved_at: null,
+        await writeDatabase(() => {
+          database.insertNotification({
+            $id: crypto.randomUUID(),
+            $created_at: timestamp,
+            $updated_at: timestamp,
+            $rule_id: rule.id,
+            $rule_name: rule.name,
+            $rule_type: rule.type,
+            $severity: candidateSeverity,
+            $title: candidate.title,
+            $message: candidate.message,
+            $read_at: null,
+            $metadata_json: JSON.stringify(candidate.metadata),
+            $deliveries_json: JSON.stringify(deliveries),
+            $dedupe_key: candidate.dedupeKey,
+          });
+          database.upsertNotificationIncident({
+            $rule_id: rule.id,
+            $incident_key: candidate.dedupeKey,
+            $first_seen_at: incidentStartedAt,
+            $last_seen_at: timestamp,
+            $resolved_at: null,
+          });
         });
       }
     }
@@ -1024,7 +1035,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
         return null;
       }
 
-      database.upsertCveCacheEntry(cveId, published, new Date().toISOString());
+      await writeDatabase(() => database.upsertCveCacheEntry(cveId, published, new Date().toISOString()));
       return new Date(published);
     } catch (error) {
       console.error(`Failed to resolve ${cveId} from NVD:`, error);

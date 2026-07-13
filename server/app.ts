@@ -89,6 +89,7 @@ export interface CreateAppOptions {
     | 'refreshDecisionDuplicateFlags'
     | 'cleanupOldData'
     | 'clearSyncData'
+    | 'runExclusive'
     | 'close'
   >;
 }
@@ -284,9 +285,9 @@ const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 const DASHBOARD_LOOP_YIELD_INTERVAL = 5_000;
 const DASHBOARD_INDEX_BATCH_SIZE = 5_000;
 const DASHBOARD_COLD_BUILD_ROW_LIMIT = 100_000;
-// Writes run in the maintenance worker; this size balances worker-message overhead
-// against short WAL write transactions that let read workers keep snapshots moving.
-const SYNC_WRITE_BATCH_SIZE = 1_000;
+// Keep worker-message overhead reasonable while bounding each transaction so
+// interactive writes do not sit behind a long cache batch in the shared queue.
+const SYNC_WRITE_BATCH_SIZE = 100;
 const LEGACY_UNFILTERED_ALERT_ORIGIN_TOKENS = new Set(['none']);
 const CAPI_ALERT_ORIGIN = 'CAPI';
 const LISTS_ALERT_ORIGIN = 'lists';
@@ -390,6 +391,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   const notificationService = createNotificationService({
     database,
     queryWorker,
+    writeDatabase: (operation) => syncWorker.runExclusive(operation),
     fetchImpl: options.notificationFetchImpl,
     mqttPublishImpl: options.mqttPublishImpl,
     updateChecker: checkForUpdates,
@@ -405,6 +407,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     database,
     basePath: config.basePath,
     instanceReadOnly: config.readOnly,
+    writeDatabase: (operation) => syncWorker.runExclusive(operation),
   });
 
   const app = new Hono();
@@ -652,8 +655,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
     const doRequest = async () => {
       const result = await deleteAlertFromLapi(alertId);
-      database.deleteAlert(alertId);
-      database.deleteDecisionsByAlertId(alertId);
+      await syncWorker.runExclusive(() => {
+        database.deleteAlert(alertId);
+        database.deleteDecisionsByAlertId(alertId);
+      });
       invalidateDashboardStatsCache();
       return context.json((result as object) || { message: 'Deleted' });
     };
@@ -770,7 +775,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         return context.json({ error: 'visible must be a boolean' }, 400);
       }
 
-      saveMetricsSidebarVisible(database, body.visible);
+      await syncWorker.runExclusive(() => saveMetricsSidebarVisible(database, body.visible));
 
       return context.json({
         success: true,
@@ -802,7 +807,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       const nextInterval = parseRefreshInterval(interval);
       const previous = getIntervalName(refreshIntervalMs);
       refreshIntervalMs = nextInterval;
-      savePersistedConfig(database, { refresh_interval_ms: nextInterval });
+      await syncWorker.runExclusive(() => savePersistedConfig(database, { refresh_interval_ms: nextInterval }));
       startRefreshScheduler();
       console.log(`Refresh interval changed: ${previous} -> ${interval} (${nextInterval}ms)`);
 
@@ -828,7 +833,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         return context.json({ error: 'Invalid language preference' }, 400);
       }
 
-      saveLanguagePreference(database, normalizedLanguage);
+      await syncWorker.runExclusive(() => saveLanguagePreference(database, normalizedLanguage));
       return context.json({
         success: true,
         language: normalizedLanguage,
@@ -869,9 +874,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
   });
 
-  app.post(`${config.basePath}/api/notifications/:id/read`, ensureAuth, (context) => {
+  app.post(`${config.basePath}/api/notifications/:id/read`, ensureAuth, async (context) => {
     const id = String(context.req.param('id'));
-    const updated = notificationService.markNotificationRead(id);
+    const updated = await notificationService.markNotificationRead(id);
     if (!updated) {
       return context.json({ error: 'Notification not found' }, 404);
     }
@@ -885,7 +890,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       return context.json({ error: 'At least one notification ID is required' }, 400);
     }
 
-    return context.json({ updated: notificationService.markNotificationsRead(ids) });
+    return context.json({ updated: await notificationService.markNotificationsRead(ids) });
   });
 
   app.post(`${config.basePath}/api/notifications/bulk-delete`, ensureAuth, async (context) => {
@@ -898,22 +903,22 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       return context.json({ error: 'At least one notification ID is required' }, 400);
     }
 
-    return context.json({ deleted: notificationService.deleteNotifications(ids) });
+    return context.json({ deleted: await notificationService.deleteNotifications(ids) });
   });
 
-  app.post(`${config.basePath}/api/notifications/delete-read`, ensureAuth, (context) => {
+  app.post(`${config.basePath}/api/notifications/delete-read`, ensureAuth, async (context) => {
     const readOnlyResponse = ensureCanManageSettings(context);
     if (readOnlyResponse) return readOnlyResponse;
 
-    return Response.json({ deleted: notificationService.deleteReadNotifications() });
+    return Response.json({ deleted: await notificationService.deleteReadNotifications() });
   });
 
-  app.delete(`${config.basePath}/api/notifications/:id`, ensureAuth, (context) => {
+  app.delete(`${config.basePath}/api/notifications/:id`, ensureAuth, async (context) => {
     const readOnlyResponse = ensureCanManageSettings(context);
     if (readOnlyResponse) return readOnlyResponse;
 
     const id = String(context.req.param('id'));
-    if (!notificationService.deleteNotification(id)) {
+    if (!await notificationService.deleteNotification(id)) {
       return context.json({ error: 'Notification not found' }, 404);
     }
 
@@ -928,7 +933,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
     try {
       const body = await context.req.json<UpsertNotificationChannelRequest>();
-      return context.json(notificationService.createChannel(body), 201);
+      return context.json(await notificationService.createChannel(body), 201);
     } catch (error: any) {
       return context.json({ error: error.message || 'Failed to create notification channel' }, 400);
     }
@@ -941,19 +946,19 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     try {
       const id = String(context.req.param('id'));
       const body = await context.req.json<UpsertNotificationChannelRequest>();
-      return context.json(notificationService.updateChannel(id, body));
+      return context.json(await notificationService.updateChannel(id, body));
     } catch (error: any) {
       const status = error.message === 'Notification channel not found' ? 404 : 400;
       return context.json({ error: error.message || 'Failed to update notification channel' }, status);
     }
   });
 
-  app.delete(`${config.basePath}/api/notification-channels/:id`, ensureAuth, (context) => {
+  app.delete(`${config.basePath}/api/notification-channels/:id`, ensureAuth, async (context) => {
     const readOnlyResponse = ensureCanManageSettings(context);
     if (readOnlyResponse) return readOnlyResponse;
 
     const id = String(context.req.param('id'));
-    notificationService.deleteChannel(id);
+    await notificationService.deleteChannel(id);
     return context.json({ success: true });
   });
 
@@ -977,7 +982,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
     try {
       const body = await context.req.json<UpsertNotificationRuleRequest>();
-      return context.json(notificationService.createRule(body), 201);
+      return context.json(await notificationService.createRule(body), 201);
     } catch (error: any) {
       return context.json({ error: error.message || 'Failed to create notification rule' }, 400);
     }
@@ -990,19 +995,19 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     try {
       const id = String(context.req.param('id'));
       const body = await context.req.json<UpsertNotificationRuleRequest>();
-      return context.json(notificationService.updateRule(id, body));
+      return context.json(await notificationService.updateRule(id, body));
     } catch (error: any) {
       const status = error.message === 'Notification rule not found' ? 404 : 400;
       return context.json({ error: error.message || 'Failed to update notification rule' }, status);
     }
   });
 
-  app.delete(`${config.basePath}/api/notification-rules/:id`, ensureAuth, (context) => {
+  app.delete(`${config.basePath}/api/notification-rules/:id`, ensureAuth, async (context) => {
     const readOnlyResponse = ensureCanManageSettings(context);
     if (readOnlyResponse) return readOnlyResponse;
 
     const id = String(context.req.param('id'));
-    notificationService.deleteRule(id);
+    await notificationService.deleteRule(id);
     return context.json({ success: true });
   });
 
@@ -1246,7 +1251,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     const doRequest = async () => {
       const result = await deleteDecisionFromLapi(decisionId);
       console.log(`Removing decision ${decisionId} from local cache...`);
-      database.deleteDecision(decisionId);
+      await syncWorker.runExclusive(() => database.deleteDecision(decisionId));
       invalidateDashboardStatsCache();
       void runNotificationEvaluation('decision delete');
       return context.json((result as object) || { message: 'Deleted' });
@@ -2774,13 +2779,15 @@ ${errorSummary}  Status: ${syncSummary.state}
 
     const deletedDecisionIds = new Set(getDecisionIdsForAlertIds(deletedAlertIds));
     if (deletedAlertIds.length > 0) {
-      const removeAlerts = database.transaction<string[]>((alertIds) => {
-        for (const id of alertIds) {
-          database.deleteAlert(id);
-          database.deleteDecisionsByAlertId(id);
-        }
+      await syncWorker.runExclusive(() => {
+        const removeAlerts = database.transaction<string[]>((alertIds) => {
+          for (const id of alertIds) {
+            database.deleteAlert(id);
+            database.deleteDecisionsByAlertId(id);
+          }
+        });
+        removeAlerts(deletedAlertIds);
       });
-      removeAlerts(deletedAlertIds);
       invalidateDashboardStatsCache();
     }
 
@@ -2832,12 +2839,14 @@ ${errorSummary}  Status: ${syncSummary.state}
     }
 
     if (deletedDecisionIds.length > 0) {
-      const removeDecisions = database.transaction<string[]>((decisionIds) => {
-        for (const id of decisionIds) {
-          database.deleteDecision(id);
-        }
+      await syncWorker.runExclusive(() => {
+        const removeDecisions = database.transaction<string[]>((decisionIds) => {
+          for (const id of decisionIds) {
+            database.deleteDecision(id);
+          }
+        });
+        removeDecisions(deletedDecisionIds);
       });
-      removeDecisions(deletedDecisionIds);
       invalidateDashboardStatsCache();
     }
 
@@ -2912,24 +2921,28 @@ ${errorSummary}  Status: ${syncSummary.state}
     }
 
     if (deletedAlertIds.length > 0) {
-      const removeAlerts = database.transaction<string[]>((alertIds) => {
-        for (const id of alertIds) {
-          database.deleteAlert(id);
-          database.deleteDecisionsByAlertId(id);
-        }
+      await syncWorker.runExclusive(() => {
+        const removeAlerts = database.transaction<string[]>((alertIds) => {
+          for (const id of alertIds) {
+            database.deleteAlert(id);
+            database.deleteDecisionsByAlertId(id);
+          }
+        });
+        removeAlerts(deletedAlertIds);
       });
-      removeAlerts(deletedAlertIds);
       invalidateDashboardStatsCache();
     }
 
     const decisionIdsToDelete = Array.from(deletedDecisionIds).filter((id) => !alertDecisionIds.has(id));
     if (decisionIdsToDelete.length > 0) {
-      const removeDecisions = database.transaction<string[]>((decisionIds) => {
-        for (const id of decisionIds) {
-          database.deleteDecision(id);
-        }
+      await syncWorker.runExclusive(() => {
+        const removeDecisions = database.transaction<string[]>((decisionIds) => {
+          for (const id of decisionIds) {
+            database.deleteDecision(id);
+          }
+        });
+        removeDecisions(decisionIdsToDelete);
       });
-      removeDecisions(decisionIdsToDelete);
       invalidateDashboardStatsCache();
     }
 

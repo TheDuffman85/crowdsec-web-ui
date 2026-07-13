@@ -1,6 +1,8 @@
 import { Worker } from 'node:worker_threads';
 import type { AlertInsertParams, DecisionInsertParams } from './database';
 
+export type DatabaseWrite = <T>(operation: () => T | Promise<T>) => Promise<T>;
+
 export interface SyncAlertMutation {
   alert: AlertInsertParams;
   decisions: DecisionInsertParams[];
@@ -36,6 +38,7 @@ export class DatabaseSyncWorker {
   private worker: Worker | null = null;
   private nextId = 1;
   private readonly pending = new Map<number, PendingRequest>();
+  private operationQueue: Promise<void> = Promise.resolve();
 
   constructor(options: { dbPath: string; timeoutMs?: number }) {
     this.dbPath = options.dbPath;
@@ -82,6 +85,12 @@ export class DatabaseSyncWorker {
     return this.execute({ type: 'clear-sync-data' });
   }
 
+  runExclusive<T>(operation: () => T | Promise<T>): Promise<T> {
+    const result = this.operationQueue.then(operation);
+    this.operationQueue = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
   close(): void {
     for (const [id, pending] of this.pending) {
       clearTimeout(pending.timeout);
@@ -94,6 +103,10 @@ export class DatabaseSyncWorker {
   }
 
   private execute<T>(request: SyncWorkerRequest): Promise<T> {
+    return this.runExclusive(() => this.dispatch<T>(request));
+  }
+
+  private dispatch<T>(request: SyncWorkerRequest): Promise<T> {
     const worker = this.getWorker();
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {

@@ -13,7 +13,8 @@ import {
 import { generateSecret, generateURI, verify } from 'otplib';
 import * as oidcClient from 'openid-client';
 import { parseOidcScope, parseOidcUnmatchedRole, type DashboardAuthConfig, type OidcUnmatchedRole } from './config';
-import { CrowdsecDatabase, type AuthUserRow } from './database';
+import { CrowdsecDatabase, type AuthUserRow, type OidcUserUpsertParams } from './database';
+import type { DatabaseWrite } from './sync-worker-client';
 
 type HonoContext = any;
 type HonoNext = any;
@@ -586,6 +587,7 @@ export function createDashboardAuth(options: {
   database: CrowdsecDatabase;
   basePath: string;
   instanceReadOnly: boolean;
+  writeDatabase?: DatabaseWrite;
 }): DashboardAuth {
   const { config, database, basePath, instanceReadOnly } = options;
   const enabled = config.enabled ?? !database.isAuthMigrationDefaultDisabled();
@@ -595,6 +597,8 @@ export function createDashboardAuth(options: {
   const totpSecretEncryptionSecret = config.sessionSecret || sessionSecret;
   const passwordAccountFailureBuckets = new Map<string, AuthFailureBucket>();
   const totpFailureBuckets = new Map<string, AuthFailureBucket>();
+  const writeDatabase: DatabaseWrite = options.writeDatabase
+    ?? (async (operation) => operation());
   let activePasswordVerifications = 0;
 
   function getEffectiveConfig(): EffectiveAuthConfig {
@@ -619,6 +623,10 @@ export function createDashboardAuth(options: {
 
   function isPasswordLoginDisabled(): boolean {
     return readAuthSetting(database, 'disable_password_login') === 'true';
+  }
+
+  function persistAuthSetting(key: MutableAuthSettingKey, value: string): Promise<void> {
+    return writeDatabase(() => writeAuthSetting(database, key, value));
   }
 
   const oidc = new OidcRuntime(getEffectiveConfig);
@@ -792,13 +800,18 @@ export function createDashboardAuth(options: {
       const passwordError = validatePassword(password);
       if (passwordError) return context.json({ error: passwordError }, 400);
 
-      const userId = database.createAuthUser({
-        username,
-        passwordHash: await hashPassword(password),
-        role: 'admin',
-        authProvider: 'password',
+      const passwordHash = await hashPassword(password);
+      const user = await writeDatabase(() => {
+        if (database.countAuthUsers() > 0) return null;
+        const userId = database.createAuthUser({
+          username,
+          passwordHash,
+          role: 'admin',
+          authProvider: 'password',
+        });
+        return database.getAuthUserById(userId)!;
       });
-      const user = database.getAuthUserById(userId)!;
+      if (!user) return context.json({ error: 'Setup already completed' }, 400);
       createSession(context, user, 'password');
       return context.json({ status: 'ok', user: { userId: user.id, username: user.username, role: user.role } });
     });
@@ -846,7 +859,7 @@ export function createDashboardAuth(options: {
           recordAuthFailure(totpFailureBuckets, totpAttemptKey, TOTP_MAX_FAILURES);
           return context.json({ error: 'Invalid authenticator code', requiresTotp: true }, 401);
         }
-        if (!database.updateAuthUserTotpLastStep(user.id, verification.timeStep)) {
+        if (!await writeDatabase(() => database.updateAuthUserTotpLastStep(user.id, verification.timeStep!))) {
           recordAuthFailure(totpFailureBuckets, totpAttemptKey, TOTP_MAX_FAILURES);
           return context.json({ error: 'Invalid authenticator code', requiresTotp: true }, 401);
         }
@@ -907,14 +920,14 @@ export function createDashboardAuth(options: {
             return context.json({ error: 'Register a passkey or configure OIDC before disabling password login' }, 400);
           }
         }
-        writeAuthSetting(database, 'disable_password_login', nextDisabled ? 'true' : 'false');
+        await persistAuthSetting('disable_password_login', nextDisabled ? 'true' : 'false');
       }
 
       if ('oidcGroupsClaim' in body) {
         const groupsClaim = typeof body.oidcGroupsClaim === 'string' && body.oidcGroupsClaim.trim()
           ? body.oidcGroupsClaim.trim()
           : 'groups';
-        writeAuthSetting(database, 'oidc_groups_claim', groupsClaim);
+        await persistAuthSetting('oidc_groups_claim', groupsClaim);
       }
 
       if ('oidcScope' in body) {
@@ -927,28 +940,30 @@ export function createDashboardAuth(options: {
         } catch {
           return context.json({ error: 'OIDC scopes must include openid' }, 400);
         }
-        writeAuthSetting(database, 'oidc_scope', scope);
+        await persistAuthSetting('oidc_scope', scope);
       }
 
       if ('oidcAdminGroups' in body) {
         const adminGroups = typeof body.oidcAdminGroups === 'string' ? formatCsvList(body.oidcAdminGroups) : '';
-        writeAuthSetting(database, 'oidc_admin_groups', adminGroups);
+        await persistAuthSetting('oidc_admin_groups', adminGroups);
       }
 
       if ('oidcReadOnlyGroups' in body) {
         const readOnlyGroups = typeof body.oidcReadOnlyGroups === 'string' ? formatCsvList(body.oidcReadOnlyGroups) : '';
-        writeAuthSetting(database, 'oidc_read_only_groups', readOnlyGroups);
+        await persistAuthSetting('oidc_read_only_groups', readOnlyGroups);
       }
 
       if ('oidcUnmatchedRole' in body) {
         if (typeof body.oidcUnmatchedRole !== 'string') {
           return context.json({ error: 'Invalid OIDC unmatched role' }, 400);
         }
+        let unmatchedRole: OidcUnmatchedRole;
         try {
-          writeAuthSetting(database, 'oidc_unmatched_role', parseOidcUnmatchedRole(body.oidcUnmatchedRole));
+          unmatchedRole = parseOidcUnmatchedRole(body.oidcUnmatchedRole);
         } catch {
           return context.json({ error: 'Invalid OIDC unmatched role' }, 400);
         }
+        await persistAuthSetting('oidc_unmatched_role', unmatchedRole);
       }
 
       if ('oidcIssuerUrl' in body || 'oidcClientId' in body || 'oidcClientSecret' in body) {
@@ -957,12 +972,12 @@ export function createDashboardAuth(options: {
         const clientId = typeof body.oidcClientId === 'string' ? body.oidcClientId.trim() : (currentConfig.oidcClientId || '');
         const clientSecretInput = typeof body.oidcClientSecret === 'string' ? body.oidcClientSecret.trim() : undefined;
 
-        writeAuthSetting(database, 'oidc_issuer_url', issuer);
-        writeAuthSetting(database, 'oidc_client_id', clientId);
+        await persistAuthSetting('oidc_issuer_url', issuer);
+        await persistAuthSetting('oidc_client_id', clientId);
         if (clientSecretInput !== undefined && clientSecretInput !== '') {
-          writeAuthSetting(database, 'oidc_client_secret', encryptSecret(clientSecretInput, sessionSecret));
+          await persistAuthSetting('oidc_client_secret', encryptSecret(clientSecretInput, sessionSecret));
         } else if (!issuer && !clientId) {
-          writeAuthSetting(database, 'oidc_client_secret', '');
+          await persistAuthSetting('oidc_client_secret', '');
         }
 
         if (issuer && clientId) {
@@ -1011,7 +1026,8 @@ export function createDashboardAuth(options: {
       const passwordError = validatePassword(newPassword);
       if (passwordError) return context.json({ error: passwordError }, 400);
 
-      database.updateAuthUserPassword(user.id, await hashPassword(newPassword));
+      const passwordHash = await hashPassword(newPassword);
+      await writeDatabase(() => database.updateAuthUserPassword(user.id, passwordHash));
       createSession(context, database.getAuthUserById(user.id)!, 'password');
       return context.json({ status: 'ok' });
     });
@@ -1057,7 +1073,7 @@ export function createDashboardAuth(options: {
         return context.json({ error: 'Invalid authenticator code' }, 400);
       }
 
-      database.updateAuthUserTotp(user.id, encryptSecret(secret, totpSecretEncryptionSecret), true);
+      await writeDatabase(() => database.updateAuthUserTotp(user.id, encryptSecret(secret, totpSecretEncryptionSecret), true));
       deleteCookie(context, TOTP_SETUP_COOKIE, { path: cookiePath });
       return context.json({ status: 'ok', totpEnabled: true });
     });
@@ -1078,7 +1094,7 @@ export function createDashboardAuth(options: {
       if (!await verifyPassword(currentPassword, user.password_hash)) {
         return context.json({ error: 'Current password is incorrect' }, 401);
       }
-      database.updateAuthUserTotp(user.id, null, false);
+      await writeDatabase(() => database.updateAuthUserTotp(user.id, null, false));
       return context.json({ status: 'ok', totpEnabled: false });
     });
 
@@ -1108,13 +1124,13 @@ export function createDashboardAuth(options: {
       const id = Number(context.req.param('id'));
       const body = asObject(await context.req.json().catch(() => null));
       const name = typeof body?.name === 'string' && body.name.trim() ? body.name.trim().slice(0, 80) : null;
-      if (!Number.isInteger(id) || !database.renameWebAuthnCredential(id, session.userId, name)) {
+      if (!Number.isInteger(id) || !await writeDatabase(() => database.renameWebAuthnCredential(id, session.userId, name))) {
         return context.json({ error: 'Passkey not found' }, 404);
       }
       return context.json({ status: 'ok' });
     });
 
-    auth.delete('/passkeys/:id', (context) => {
+    auth.delete('/passkeys/:id', async (context) => {
       const session = getSession(context);
       if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
       const user = database.getAuthUserById(session.userId);
@@ -1122,7 +1138,7 @@ export function createDashboardAuth(options: {
         return context.json({ error: 'Passkeys are unavailable for OIDC-only accounts' }, 403);
       }
       const id = Number(context.req.param('id'));
-      if (!Number.isInteger(id) || !database.deleteWebAuthnCredential(id, session.userId)) {
+      if (!Number.isInteger(id) || !await writeDatabase(() => database.deleteWebAuthnCredential(id, session.userId))) {
         return context.json({ error: 'Passkey not found' }, 404);
       }
       return context.json({ status: 'ok' });
@@ -1161,14 +1177,14 @@ export function createDashboardAuth(options: {
 
         const credential = verification.registrationInfo.credential;
         const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim().slice(0, 80) : null;
-        database.createWebAuthnCredential({
+        await writeDatabase(() => database.createWebAuthnCredential({
           userId: session.userId,
           credentialId: credential.id,
           publicKey: Buffer.from(credential.publicKey).toString('base64url'),
           signCount: credential.counter,
           transports: JSON.stringify((body.response as { transports?: unknown[] } | undefined)?.transports || []),
           name,
-        });
+        }));
         deleteCookie(context, CHALLENGE_COOKIE, { path: cookiePath });
         return context.json({ status: 'ok' });
       } catch (error) {
@@ -1208,7 +1224,7 @@ export function createDashboardAuth(options: {
           signCount: credential.sign_count,
         });
         if (!verification.verified) return context.json({ error: 'Verification failed' }, 400);
-        database.updateWebAuthnCredentialCounter(credential.id, verification.authenticationInfo.newCounter);
+        await writeDatabase(() => database.updateWebAuthnCredentialCounter(credential.id, verification.authenticationInfo.newCounter));
         createSession(context, user, 'passkey');
         deleteCookie(context, CHALLENGE_COOKIE, { path: cookiePath });
         return context.json({ status: 'ok', user: { userId: user.id, username: user.username, role: user.role } });
@@ -1243,12 +1259,13 @@ export function createDashboardAuth(options: {
         const result = await oidc.handleCallback(callbackUrl, nonce, state);
         if (!result) return context.json({ error: 'OIDC authentication failed' }, 400);
         if (!result.role) return context.json({ error: 'OIDC user is not authorized' }, 403);
-        const user = database.upsertOidcUser({
+        const oidcUser: OidcUserUpsertParams = {
           username: result.username,
           role: result.role,
           issuer: result.issuer,
           subject: result.subject,
-        });
+        };
+        const user = await writeDatabase(() => database.upsertOidcUser(oidcUser));
         createSession(context, user, 'oidc');
         deleteCookie(context, OIDC_STATE_COOKIE, { path: cookiePath });
         deleteCookie(context, OIDC_NONCE_COOKIE, { path: cookiePath });
