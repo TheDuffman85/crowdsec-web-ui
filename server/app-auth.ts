@@ -594,7 +594,7 @@ export function createDashboardAuth(options: {
   const cookiePath = getCookiePath(basePath);
   const sessionSecret = resolveSessionSecret(database, config.sessionSecret);
   const persistedSessionSecret = database.getMeta('auth_session_secret')?.value;
-  const totpSecretEncryptionSecret = config.sessionSecret || sessionSecret;
+  const totpSecretEncryptionSecret = config.totpSecret || config.sessionSecret || sessionSecret;
   const passwordAccountFailureBuckets = new Map<string, AuthFailureBucket>();
   const totpFailureBuckets = new Map<string, AuthFailureBucket>();
   const writeDatabase: DatabaseWrite = options.writeDatabase
@@ -634,7 +634,9 @@ export function createDashboardAuth(options: {
   function decryptTotpSecret(value: string): string {
     const candidateSecrets = Array.from(new Set([
       totpSecretEncryptionSecret,
+      config.sessionSecret,
       persistedSessionSecret,
+      sessionSecret,
     ].filter((secret): secret is string => Boolean(secret))));
 
     let lastError: unknown;
@@ -647,6 +649,17 @@ export function createDashboardAuth(options: {
     }
     if (lastError) throw lastError;
     return decryptSecret(value, sessionSecret);
+  }
+
+  function isTotpEnabled(user: AuthUserRow | null | undefined): boolean {
+    if (!user?.password_hash) return false;
+    return Boolean(config.totpSeed || (user.totp_enabled && user.totp_secret));
+  }
+
+  function getTotpSeed(user: AuthUserRow): string | undefined {
+    if (!user.password_hash) return undefined;
+    if (user.totp_enabled && user.totp_secret) return decryptTotpSecret(user.totp_secret);
+    return config.totpSeed;
   }
 
   function authThrottleResponse(context: HonoContext, retryAfterSeconds: number): Response {
@@ -785,7 +798,7 @@ export function createDashboardAuth(options: {
         passwordLoginDisabled: enabled && isPasswordLoginDisabled(),
         passkeysEnabled: enabled && database.countWebAuthnCredentials() > 0,
         hasPassword: Boolean(user?.password_hash),
-        totpEnabled: Boolean(user?.totp_enabled),
+        totpEnabled: isTotpEnabled(user),
       });
     });
 
@@ -846,15 +859,15 @@ export function createDashboardAuth(options: {
         return context.json({ error: 'Invalid credentials' }, 401);
       }
       clearAuthFailures(passwordAccountFailureBuckets, accountAttemptKey);
-      if (user.totp_enabled && user.totp_secret) {
+      const totpSeed = getTotpSeed(user);
+      if (totpSeed) {
         if (!totpCode) {
           return context.json({ error: 'Authenticator code required', requiresTotp: true }, 401);
         }
         const totpAttemptKey = String(user.id);
         const totpRetryAfter = getAuthThrottleRetryAfter(totpFailureBuckets, totpAttemptKey);
         if (totpRetryAfter !== null) return authThrottleResponse(context, totpRetryAfter);
-        const secret = decryptTotpSecret(user.totp_secret);
-        const verification = await verifyTotpCode(totpCode, secret);
+        const verification = await verifyTotpCode(totpCode, totpSeed);
         if (!verification.valid || verification.timeStep === null) {
           recordAuthFailure(totpFailureBuckets, totpAttemptKey, TOTP_MAX_FAILURES);
           return context.json({ error: 'Invalid authenticator code', requiresTotp: true }, 401);
@@ -898,7 +911,7 @@ export function createDashboardAuth(options: {
         oidcUnmatchedRole: effectiveConfig.oidcUnmatchedRole,
         hasPassword: Boolean(user?.password_hash),
         passkeysAvailable: !isOidcOnlyAccount(user),
-        totpEnabled: Boolean(user?.totp_enabled),
+        totpEnabled: isTotpEnabled(user),
         authMethod: session.authMethod ?? null,
       });
     });
@@ -1041,7 +1054,7 @@ export function createDashboardAuth(options: {
 
       const user = database.getAuthUserById(session.userId);
       if (!user?.password_hash) return context.json({ error: 'No password set for this account' }, 400);
-      if (user.totp_enabled) return context.json({ error: 'TOTP is already enabled for this account' }, 400);
+      if (isTotpEnabled(user)) return context.json({ error: 'TOTP is already enabled for this account' }, 400);
       const secret = generateSecret();
       const otpauthUrl = generateURI({
         issuer: 'CrowdSec Web UI',
@@ -1067,7 +1080,7 @@ export function createDashboardAuth(options: {
       if (!secret) return context.json({ error: 'TOTP setup expired. Start setup again.' }, 400);
       const user = database.getAuthUserById(session.userId);
       if (!user?.password_hash) return context.json({ error: 'No password set for this account' }, 400);
-      if (user.totp_enabled) return context.json({ error: 'TOTP is already enabled for this account' }, 400);
+      if (isTotpEnabled(user)) return context.json({ error: 'TOTP is already enabled for this account' }, 400);
       const verification = await verifyTotpCode(code, secret);
       if (!verification.valid) {
         return context.json({ error: 'Invalid authenticator code' }, 400);
@@ -1090,6 +1103,9 @@ export function createDashboardAuth(options: {
       if (!currentPassword) return context.json({ error: 'Current password required' }, 400);
       const user = database.getAuthUserById(session.userId);
       if (!user?.password_hash) return context.json({ error: 'No password set for this account' }, 400);
+      if (config.totpSeed) {
+        return context.json({ error: 'TOTP is configured by AUTH_TOTP_SEED and cannot be disabled from Settings' }, 400);
+      }
       if (!user.totp_enabled || !user.totp_secret) return context.json({ error: 'TOTP is not enabled for this account' }, 400);
       if (!await verifyPassword(currentPassword, user.password_hash)) {
         return context.json({ error: 'Current password is incorrect' }, 401);

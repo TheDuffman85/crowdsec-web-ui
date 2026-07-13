@@ -378,6 +378,7 @@ function createController(options: {
   metricsFetchResolver?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
   mqttPublishResolver?: (config: MqttPublishConfig, payload: string) => void | Promise<void>;
   syncWorker?: CreateAppOptions['syncWorker'];
+  database?: CrowdsecDatabase;
 } = {}) {
   const authMode = options.authMode || 'password';
   const mtlsCertPath = path.join(tempDir, 'agent.pem');
@@ -419,7 +420,7 @@ function createController(options: {
     ...options.env,
   });
 
-  const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+  const database = options.database || new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
   const fetchCalls: Array<{ url: string; method: string; body?: unknown; headers?: RequestInit['headers']; dispatcher?: unknown }> = [];
   const fetchImpl = async (input: string | URL | Request, init?: LapiRequestInit): Promise<Response> => {
     const requestInit = init;
@@ -1013,6 +1014,65 @@ test('dashboard auth supports optional TOTP for password login', async () => {
   expect(database.getAuthUserByUsername('admin')?.totp_enabled).toBe(0);
 });
 
+test('dashboard auth enforces an environment-configured TOTP seed for the password user', async () => {
+  const totpSeed = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
+  const { controller, database } = createController({
+    env: {
+      AUTH_ENABLED: 'true',
+      AUTH_TOTP_SEED: totpSeed,
+    },
+  });
+
+  const setup = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/setup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'Secret123' }),
+  }));
+  const sessionCookie = setup.headers.get('set-cookie') || '';
+  expect(database.getAuthUserByUsername('admin')).toMatchObject({ totp_enabled: 0, totp_secret: null });
+
+  const status = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/status', {
+    headers: { cookie: sessionCookie },
+  }));
+  expect(await status.json()).toMatchObject({ totpEnabled: true });
+
+  const totpSetup = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/totp/setup', {
+    method: 'POST',
+    headers: { cookie: sessionCookie },
+  }));
+  expect(totpSetup.status).toBe(400);
+  expect(await totpSetup.json()).toMatchObject({ error: 'TOTP is already enabled for this account' });
+
+  const passwordOnlyLogin = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'Secret123' }),
+  }));
+  expect(passwordOnlyLogin.status).toBe(401);
+  expect(await passwordOnlyLogin.json()).toMatchObject({ requiresTotp: true });
+
+  const validLogin = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username: 'admin',
+      password: 'Secret123',
+      totpCode: await generate({ secret: totpSeed }),
+    }),
+  }));
+  expect(validLogin.status).toBe(200);
+
+  const disableTotp = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/totp', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+    body: JSON.stringify({ currentPassword: 'Secret123' }),
+  }));
+  expect(disableTotp.status).toBe(400);
+  expect(await disableTotp.json()).toMatchObject({
+    error: 'TOTP is configured by AUTH_TOTP_SEED and cannot be disabled from Settings',
+  });
+});
+
 test('dashboard auth auto-generates an auth secret for new TOTP setup', async () => {
   const { controller, database } = createController({
     env: {
@@ -1035,18 +1095,70 @@ test('dashboard auth auto-generates an auth secret for new TOTP setup', async ()
   expect(database.getMeta('auth_session_secret')?.value).toBeTruthy();
 });
 
+test('dashboard auth uses the configured TOTP encryption secret and prefers the database seed', async () => {
+  const { controller, database } = createController({
+    env: {
+      AUTH_ENABLED: 'true',
+      AUTH_SECRET: 'first-session-secret',
+      AUTH_TOTP_SECRET: 'stable-totp-secret',
+    },
+  });
+
+  const setup = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/setup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'Secret123' }),
+  }));
+  const sessionCookie = setup.headers.get('set-cookie') || '';
+  const totpSetup = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/totp/setup', {
+    method: 'POST',
+    headers: { cookie: sessionCookie },
+  }));
+  const totpSetupPayload = await totpSetup.json() as { secret: string };
+  const setupCookie = totpSetup.headers.get('set-cookie') || '';
+  const enableTotp = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/totp/enable', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      cookie: `${sessionCookie}; ${setupCookie.split(';')[0]}`,
+    },
+    body: JSON.stringify({ code: await generate({ secret: totpSetupPayload.secret }) }),
+  }));
+  expect(enableTotp.status).toBe(200);
+
+  const { controller: restartedController } = createController({
+    database,
+    env: {
+      AUTH_ENABLED: 'true',
+      AUTH_SECRET: 'second-session-secret',
+      AUTH_TOTP_SECRET: 'stable-totp-secret',
+      AUTH_TOTP_SEED: 'NB2W45DFOIZGS3THNB2W45DFOIZGS3TH',
+    },
+  });
+  const login = await restartedController.fetch(new Request('http://localhost/crowdsec/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username: 'admin',
+      password: 'Secret123',
+      totpCode: await generate({ secret: totpSetupPayload.secret }),
+    }),
+  }));
+  expect(login.status).toBe(200);
+});
+
 test('dashboard auth settings use OIDC environment values as defaults', async () => {
   const { controller } = createController({
     env: {
       AUTH_ENABLED: 'true',
-      CROWDSEC_AUTH_OIDC_ISSUER_URL: 'https://idp.example.com/application/o/crowdsec/',
-      CROWDSEC_AUTH_OIDC_CLIENT_ID: 'crowdsec-client',
-      CROWDSEC_AUTH_OIDC_CLIENT_SECRET: 'oidc-secret',
-      CROWDSEC_AUTH_OIDC_SCOPE: 'openid profile email roles',
-      CROWDSEC_AUTH_OIDC_GROUPS_CLAIM: 'roles',
-      CROWDSEC_AUTH_OIDC_ADMIN_GROUPS: 'admins,secops',
-      CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS: 'viewers',
-      CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE: 'read-only',
+      AUTH_OIDC_ISSUER_URL: 'https://idp.example.com/application/o/crowdsec/',
+      AUTH_OIDC_CLIENT_ID: 'crowdsec-client',
+      AUTH_OIDC_CLIENT_SECRET: 'oidc-secret',
+      AUTH_OIDC_SCOPE: 'openid profile email roles',
+      AUTH_OIDC_GROUPS_CLAIM: 'roles',
+      AUTH_OIDC_ADMIN_GROUPS: 'admins,secops',
+      AUTH_OIDC_READ_ONLY_GROUPS: 'viewers',
+      AUTH_OIDC_UNMATCHED_ROLE: 'read-only',
     },
   });
 
@@ -1845,7 +1957,7 @@ describe('createApp', () => {
     const { controller, database, lapiClient } = createController({
       env: {
         TZ: 'Europe/Berlin',
-        CROWDSEC_TIME_FORMAT: '24h',
+        TIME_FORMAT: '24h',
       },
       fetchResolver: (url) => url.includes('/v1/alerts?') ? Response.json([alert]) : undefined,
     });

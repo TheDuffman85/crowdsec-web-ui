@@ -171,7 +171,7 @@ services:
       # - AUTH_ENABLED=true
       # Optional deployment-wide date/time display settings
       # - TZ=Europe/Berlin
-      # - CROWDSEC_TIME_FORMAT=24h
+      # - TIME_FORMAT=24h
     volumes:
       - ./data:/app/data
     restart: unless-stopped
@@ -256,20 +256,24 @@ Choose exactly one auth mode: password auth or mTLS auth.
 | `BASE_PATH` | empty | Serve the UI under a path prefix such as `/crowdsec`. Start with `/` and omit the trailing slash. |
 | `DB_DIR` | `/app/data` | Directory that stores the SQLite database and other persisted app data. If you change it, update your volume mounts too. |
 | `TZ` | browser local | Optional deployment-wide IANA timezone, such as `Europe/Berlin` or `UTC`. When set, the UI, dashboard grouping, filters, and server-generated timestamps all use it. |
-| `CROWDSEC_TIME_FORMAT` | browser locale | Optional deployment-wide clock format. Accepts `12h` or `24h`. When omitted, each browser's locale determines whether the UI uses a 12- or 24-hour clock. |
+| `TIME_FORMAT` | browser locale | Optional deployment-wide clock format. Accepts `12h` or `24h`. When omitted, each browser's locale determines whether the UI uses a 12- or 24-hour clock. |
 | `PERMISSION_READ_ONLY` | `false` | Set to `true` to hide management actions in the UI and reject API requests that add/delete decisions, delete alerts, clean up by IP, clear the cache, change refresh cadence, manage notification destinations/rules, send notification tests, or delete notifications. Language and marking notifications as read remain writable. |
 | `AUTH_ENABLED` | new installs: `true`; migrated existing installs: `false` | Enables authentication for the UI and API. Set to `false` to run without login. Existing databases from older releases are marked disabled during migration so upgrades do not lock out current deployments. |
-| `CROWDSEC_AUTH_SECRET` | auto-generated and persisted | Optional fixed secret used to sign session cookies and encrypt local auth secrets. If unset, the app generates one and stores it in app metadata. |
-| `CROWDSEC_AUTH_SECRET_FILE` | auto-generated and persisted | Optional Docker Secrets alternative: read `CROWDSEC_AUTH_SECRET` from a file. Do not set both variables. |
-| `CROWDSEC_AUTH_OIDC_ISSUER_URL` | none | Optional OIDC issuer URL. When set with `CROWDSEC_AUTH_OIDC_CLIENT_ID`, the login page shows SSO. Can also be configured from Settings. |
-| `CROWDSEC_AUTH_OIDC_CLIENT_ID` | none | Optional OIDC client ID. Can also be configured from Settings. |
-| `CROWDSEC_AUTH_OIDC_CLIENT_SECRET` | none | Optional OIDC client secret. Can also be configured from Settings. |
-| `CROWDSEC_AUTH_OIDC_CLIENT_SECRET_FILE` | none | Optional Docker Secrets alternative: read `CROWDSEC_AUTH_OIDC_CLIENT_SECRET` from a file. Do not set both variables. |
-| `CROWDSEC_AUTH_OIDC_SCOPE` | `openid profile email` | Optional OIDC authorization scope string. Must include `openid`. Can also be configured from Settings. |
-| `CROWDSEC_AUTH_OIDC_GROUPS_CLAIM` | `groups` | Optional OIDC claim used for group mapping. The claim may be an array or a comma-separated string. Can also be configured from Settings. |
-| `CROWDSEC_AUTH_OIDC_ADMIN_GROUPS` | empty | Optional comma-separated OIDC groups that receive admin permissions. Can also be configured from Settings. |
-| `CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS` | empty | Optional comma-separated OIDC groups that receive read-only permissions. Can also be configured from Settings. |
-| `CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE` | `deny` | Controls OIDC users who match no configured admin or read-only group. Accepts `deny`, `admin`, or `read-only`. Can also be configured from Settings. |
+| `AUTH_SECRET` | auto-generated and persisted | Optional fixed secret used to sign session cookies and encrypt saved auth settings. It is also the fallback TOTP encryption key when `AUTH_TOTP_SECRET` is unset. If unset, the app generates one and stores it in app metadata. |
+| `AUTH_SECRET_FILE` | auto-generated and persisted | Optional Docker Secrets alternative: read `AUTH_SECRET` from a file. Do not set both variables. |
+| `AUTH_TOTP_SECRET` | `AUTH_SECRET` | Optional fixed encryption key for stored per-account TOTP seeds. Keep it stable after users enable TOTP. |
+| `AUTH_TOTP_SECRET_FILE` | `AUTH_SECRET` | Optional Docker Secrets alternative: read `AUTH_TOTP_SECRET` from a file. Do not set both variables. |
+| `AUTH_TOTP_SEED` | none | Optional fallback base32 TOTP seed of at least 26 characters (128 bits) for the local password user. A seed enrolled through Settings takes precedence. When no database seed exists, the environment seed is immediately enforced and cannot be disabled from Settings. Whitespace and trailing base32 padding are normalized. |
+| `AUTH_TOTP_SEED_FILE` | none | Optional Docker Secrets alternative: read `AUTH_TOTP_SEED` from a file. Do not set both variables. |
+| `AUTH_OIDC_ISSUER_URL` | none | Optional OIDC issuer URL. When set with `AUTH_OIDC_CLIENT_ID`, the login page shows SSO. Can also be configured from Settings. |
+| `AUTH_OIDC_CLIENT_ID` | none | Optional OIDC client ID. Can also be configured from Settings. |
+| `AUTH_OIDC_CLIENT_SECRET` | none | Optional OIDC client secret. Can also be configured from Settings. |
+| `AUTH_OIDC_CLIENT_SECRET_FILE` | none | Optional Docker Secrets alternative: read `AUTH_OIDC_CLIENT_SECRET` from a file. Do not set both variables. |
+| `AUTH_OIDC_SCOPE` | `openid profile email` | Optional OIDC authorization scope string. Must include `openid`. Can also be configured from Settings. |
+| `AUTH_OIDC_GROUPS_CLAIM` | `groups` | Optional OIDC claim used for group mapping. The claim may be an array or a comma-separated string. Can also be configured from Settings. |
+| `AUTH_OIDC_ADMIN_GROUPS` | empty | Optional comma-separated OIDC groups that receive admin permissions. Can also be configured from Settings. |
+| `AUTH_OIDC_READ_ONLY_GROUPS` | empty | Optional comma-separated OIDC groups that receive read-only permissions. Can also be configured from Settings. |
+| `AUTH_OIDC_UNMATCHED_ROLE` | `deny` | Controls OIDC users who match no configured admin or read-only group. Accepts `deny`, `admin`, or `read-only`. Can also be configured from Settings. |
 | `CROWDSEC_LOOKBACK_PERIOD` | `168h` | Alert/history retention window used for sync and cleanup. Accepts values like `12h`, `7d`, or `30m`. |
 | `CROWDSEC_REFRESH_INTERVAL` | `1m` | Normal background refresh interval. Accepts `0`, `manual`, `5s`, `30s`, `1m`, `5m`, or other `s`/`m`/`h`/`d` values. |
 | `CROWDSEC_IDLE_REFRESH_INTERVAL` | `10m` | Refresh interval used when the app considers itself idle. |
@@ -297,10 +301,10 @@ Choose exactly one auth mode: password auth or mTLS auth.
 
 ### File-Backed Secrets
 
-`CROWDSEC_PASSWORD_FILE`, `NOTIFICATION_SECRET_KEY_FILE`, `CROWDSEC_AUTH_SECRET_FILE`, and `CROWDSEC_AUTH_OIDC_CLIENT_SECRET_FILE` read their values from UTF-8 files, including Docker Secrets mounts under `/run/secrets`. For each setting, configure the direct variable or its `_FILE` alternative, not both. The app fails fast when both are set or when a configured file cannot be read. File-backed secrets are loaded during startup, so restart the app after rotating a mounted secret.
+`CROWDSEC_PASSWORD_FILE`, `NOTIFICATION_SECRET_KEY_FILE`, `AUTH_SECRET_FILE`, `AUTH_TOTP_SECRET_FILE`, `AUTH_TOTP_SEED_FILE`, and `AUTH_OIDC_CLIENT_SECRET_FILE` read their values from UTF-8 files, including Docker Secrets mounts under `/run/secrets`. For each setting, configure the direct variable or its `_FILE` alternative, not both. The app fails fast when both are set or when a configured file cannot be read. File-backed secrets are loaded during startup, so restart the app after rotating a mounted secret.
 
 > [!IMPORTANT]
-> The auto-generated `CROWDSEC_AUTH_SECRET` and `NOTIFICATION_SECRET_KEY` are stored in the same SQLite database as the values they protect. This is convenient and preserves existing installations, but it does not protect secrets or session signing from someone who obtains a complete database or backup. Deployments whose threat model includes database-copy disclosure should provide both keys through their `_FILE` variables, restrict access to the mounted secret files and backups, and rotate the keys after suspected exposure.
+> The auto-generated `AUTH_SECRET` and `NOTIFICATION_SECRET_KEY` are stored in the same SQLite database as the values they protect, and TOTP encryption falls back to `AUTH_SECRET` when `AUTH_TOTP_SECRET` is unset. This is convenient and preserves existing installations, but it does not protect secrets or session signing from someone who obtains a complete database or backup. Deployments whose threat model includes database-copy disclosure should provide all three keys through their `_FILE` variables, restrict access to the mounted secret files and backups, and rotate the keys after suspected exposure.
 
 ### Authentication
 
@@ -312,23 +316,23 @@ AUTH_ENABLED=true
 
 Set `AUTH_ENABLED=false` to disable authentication. This setting is intentionally environment-controlled, not configurable from the UI.
 
-Local password login is available after onboarding. Authenticated users can change their own password, add optional TOTP verification for password sign-in, and register or remove their own passkeys from Settings. TOTP setup shows a QR code, an authenticator-app setup link for mobile devices, and the manual setup key; once enabled, password login requires the current authenticator code after the password is accepted. Administrators can also disable password login and configure OIDC SSO from Settings. OIDC can also be preconfigured with environment variables:
+Local password login is available after onboarding. Authenticated users can change their own password, add optional TOTP verification for password sign-in, and register or remove their own passkeys from Settings. TOTP setup shows a QR code, an authenticator-app setup link for mobile devices, and the manual setup key; once enabled, password login requires the current authenticator code after the password is accepted. Alternatively, `AUTH_TOTP_SEED` can provide a fallback base32 seed through deployment configuration. A seed enrolled through Settings takes precedence; the environment seed is used only when the password user has no enabled database seed. Administrators can also disable password login and configure OIDC SSO from Settings. OIDC can also be preconfigured with environment variables:
 
 ```env
 AUTH_ENABLED=true
-CROWDSEC_AUTH_OIDC_ISSUER_URL=https://idp.example.com/application/o/crowdsec-web-ui/
-CROWDSEC_AUTH_OIDC_CLIENT_ID=crowdsec-web-ui
-CROWDSEC_AUTH_OIDC_CLIENT_SECRET=change-me
-CROWDSEC_AUTH_OIDC_SCOPE="openid profile email"
-CROWDSEC_AUTH_OIDC_GROUPS_CLAIM=groups
-CROWDSEC_AUTH_OIDC_ADMIN_GROUPS=crowdsec-admins,secops
-CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS=crowdsec-viewers
-CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE=deny
+AUTH_OIDC_ISSUER_URL=https://idp.example.com/application/o/crowdsec-web-ui/
+AUTH_OIDC_CLIENT_ID=crowdsec-web-ui
+AUTH_OIDC_CLIENT_SECRET=change-me
+AUTH_OIDC_SCOPE="openid profile email"
+AUTH_OIDC_GROUPS_CLAIM=groups
+AUTH_OIDC_ADMIN_GROUPS=crowdsec-admins,secops
+AUTH_OIDC_READ_ONLY_GROUPS=crowdsec-viewers
+AUTH_OIDC_UNMATCHED_ROLE=deny
 ```
 
 OIDC Settings accepts the issuer URL, client ID, client secret, authorization scopes, groups claim, admin groups, read-only groups, and the unmatched-user policy. Saved Settings values override OIDC environment defaults. Authorization scopes must include `openid`; add provider-specific scopes such as `groups` only when your IdP requires them for the configured groups claim. By default, OIDC users who match no configured group are denied. Set the unmatched-user policy to `admin` or `read-only` only when every user who can complete OIDC sign-in should receive that fallback role.
 
-OIDC group mapping is lightweight RBAC. `PERMISSION_READ_ONLY=true` is still instance-wide and overrides user roles. For OIDC, admin group matches get full access, read-only group matches can view data and keep allowed preferences, and users with no matching group follow `CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE`.
+OIDC group mapping is lightweight RBAC. `PERMISSION_READ_ONLY=true` is still instance-wide and overrides user roles. For OIDC, admin group matches get full access, read-only group matches can view data and keep allowed preferences, and users with no matching group follow `AUTH_OIDC_UNMATCHED_ROLE`.
 
 OIDC identities are bound to the provider's stable issuer and subject claims. Existing OIDC rows are migrated in place on their next successful SSO login; if an OIDC username conflicts with a local account, the accounts remain separate. OIDC sessions have a 24-hour absolute lifetime and are not silently extended from stale role claims. OIDC-only accounts cannot register or use local passkeys, so removing access at the IdP cannot be bypassed by creating a permanent local credential. Password-backed local accounts keep their existing passkey support.
 
@@ -743,7 +747,7 @@ Active-decision refreshes use the same `CROWDSEC_ALERT_SYNC_CHUNK` windows as hi
    CROWDSEC_SIMULATIONS_ENABLED=true
    ```
 
-   The regular `CROWDSEC_AUTH_OIDC_*` environment variables are also supported in load-test mode, including issuer URL, client ID and secret, scope, group claim, role groups, and unmatched-role handling.
+   The regular `AUTH_OIDC_*` environment variables are also supported in load-test mode, including issuer URL, client ID and secret, scope, group claim, role groups, and unmatched-role handling.
 
    Both the initial source dataset and later refresh batches are exposed through the fake LAPI. On each due refresh batch it exposes `LOADTEST_REFRESH_ALERTS` new synthetic alerts and `LOADTEST_REFRESH_DECISIONS` new synthetic decisions, then the regular sync code imports them into SQLite.
 

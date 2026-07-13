@@ -29,14 +29,14 @@ function createTestDatabase(): CrowdsecDatabase {
 describe('load-test authentication', () => {
   test('defaults authentication to enabled and preserves OIDC environment settings', () => {
     const config = createRuntimeConfig(createLoadTestRuntimeEnv({
-      CROWDSEC_AUTH_OIDC_ISSUER_URL: 'https://idp.example.com/application/o/crowdsec/',
-      CROWDSEC_AUTH_OIDC_CLIENT_ID: 'load-test-client',
-      CROWDSEC_AUTH_OIDC_CLIENT_SECRET: 'load-test-secret',
-      CROWDSEC_AUTH_OIDC_SCOPE: 'openid profile email roles',
-      CROWDSEC_AUTH_OIDC_GROUPS_CLAIM: 'roles',
-      CROWDSEC_AUTH_OIDC_ADMIN_GROUPS: 'admins,secops',
-      CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS: 'viewers',
-      CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE: 'read-only',
+      AUTH_OIDC_ISSUER_URL: 'https://idp.example.com/application/o/crowdsec/',
+      AUTH_OIDC_CLIENT_ID: 'load-test-client',
+      AUTH_OIDC_CLIENT_SECRET: 'load-test-secret',
+      AUTH_OIDC_SCOPE: 'openid profile email roles',
+      AUTH_OIDC_GROUPS_CLAIM: 'roles',
+      AUTH_OIDC_ADMIN_GROUPS: 'admins,secops',
+      AUTH_OIDC_READ_ONLY_GROUPS: 'viewers',
+      AUTH_OIDC_UNMATCHED_ROLE: 'read-only',
     }));
 
     expect(config.dashboardAuth).toMatchObject({

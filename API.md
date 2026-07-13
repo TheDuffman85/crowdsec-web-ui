@@ -73,7 +73,7 @@ These routes are mounted below `/api/auth`. Auth setup/login routes are availabl
 | POST | `/api/auth/change-password` | Change the current user's password. The user must be logged in with password auth. |
 | POST | `/api/auth/totp/setup` | Start TOTP enrollment for the current password-authenticated user. Returns a base32 secret and `otpauth://` URI for QR setup. |
 | POST | `/api/auth/totp/enable` | Complete TOTP enrollment with `{ "code": "123456" }`. |
-| DELETE | `/api/auth/totp` | Disable TOTP for the current password-authenticated user with `{ "currentPassword": "..." }`. |
+| DELETE | `/api/auth/totp` | Disable Settings-enrolled TOTP for the current password-authenticated user with `{ "currentPassword": "..." }`. TOTP supplied through `AUTH_TOTP_SEED` remains environment-managed and cannot be disabled through the API. |
 | GET | `/api/auth/passkeys` | List passkeys for the current user. |
 | PATCH | `/api/auth/passkeys/:id` | Rename a passkey with `{ "name": "..." }`. |
 | DELETE | `/api/auth/passkeys/:id` | Delete one of the current user's passkeys. |

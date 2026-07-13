@@ -9,6 +9,8 @@ export const DEFAULT_OIDC_SCOPE = 'openid profile email';
 export interface DashboardAuthConfig {
   enabled: boolean | null;
   sessionSecret?: string;
+  totpSecret?: string;
+  totpSeed?: string;
   oidcIssuerUrl?: string;
   oidcClientId?: string;
   oidcClientSecret?: string;
@@ -81,7 +83,16 @@ export function parseTimeFormat(value: string | undefined): TimeFormat {
   const timeFormat = value?.trim().toLowerCase();
   if (!timeFormat) return 'browser';
   if (timeFormat === '12h' || timeFormat === '24h') return timeFormat;
-  throw new Error('Invalid CROWDSEC_TIME_FORMAT value. Must be one of: 12h, 24h.');
+  throw new Error('Invalid TIME_FORMAT value. Must be one of: 12h, 24h.');
+}
+
+export function parseTotpSeed(value: string | undefined): string | undefined {
+  const seed = value?.trim().replace(/\s+/g, '').replace(/=+$/g, '').toUpperCase();
+  if (!seed) return undefined;
+  if (seed.length < 26 || !/^[A-Z2-7]+$/.test(seed)) {
+    throw new Error('Invalid AUTH_TOTP_SEED value. Must be a base32 seed containing at least 26 characters (128 bits).');
+  }
+  return seed;
 }
 
 export function parseRefreshInterval(intervalStr: string | undefined | null): number {
@@ -138,7 +149,7 @@ export function parseOidcUnmatchedRole(value: string | undefined): OidcUnmatched
   const normalized = value?.trim().toLowerCase();
   if (!normalized) return 'deny';
   if (normalized === 'deny' || normalized === 'admin' || normalized === 'read-only') return normalized;
-  throw new Error('Invalid CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE value. Must be one of: deny, admin, read-only.');
+  throw new Error('Invalid AUTH_OIDC_UNMATCHED_ROLE value. Must be one of: deny, admin, read-only.');
 }
 
 export function parseOidcScope(value: string | undefined): string {
@@ -146,7 +157,7 @@ export function parseOidcScope(value: string | undefined): string {
   if (!scope) return DEFAULT_OIDC_SCOPE;
   const scopes = scope.split(/\s+/);
   if (!scopes.includes('openid')) {
-    throw new Error('Invalid CROWDSEC_AUTH_OIDC_SCOPE value. Must include openid.');
+    throw new Error('Invalid AUTH_OIDC_SCOPE value. Must include openid.');
   }
   return scopes.join(' ');
 }
@@ -171,18 +182,35 @@ function resolveDashboardAuthEnabled(env: NodeJS.ProcessEnv): boolean | null {
   return parseOptionalBooleanEnv(env.CROWDSEC_AUTH_ENABLED);
 }
 
+function hasEnv(env: NodeJS.ProcessEnv, name: string): boolean {
+  return Object.prototype.hasOwnProperty.call(env, name);
+}
+
+function resolveRenamedEnv(env: NodeJS.ProcessEnv, name: string, legacyName: string): string | undefined {
+  return hasEnv(env, name) ? env[name] : env[legacyName];
+}
+
+function resolveRenamedSecretEnv(env: NodeJS.ProcessEnv, name: string, legacyName: string): string | undefined {
+  if (hasEnv(env, name) || hasEnv(env, `${name}_FILE`)) {
+    return resolveSecretEnv(name, env);
+  }
+  return resolveSecretEnv(legacyName, env);
+}
+
 function parseDashboardAuthConfig(env: NodeJS.ProcessEnv): DashboardAuthConfig {
   return {
     enabled: resolveDashboardAuthEnabled(env),
-    sessionSecret: resolveSecretEnv('CROWDSEC_AUTH_SECRET', env)?.trim() || undefined,
-    oidcIssuerUrl: env.CROWDSEC_AUTH_OIDC_ISSUER_URL?.trim() || undefined,
-    oidcClientId: env.CROWDSEC_AUTH_OIDC_CLIENT_ID?.trim() || undefined,
-    oidcClientSecret: resolveSecretEnv('CROWDSEC_AUTH_OIDC_CLIENT_SECRET', env)?.trim() || undefined,
-    oidcScope: parseOidcScope(env.CROWDSEC_AUTH_OIDC_SCOPE),
-    oidcGroupsClaim: env.CROWDSEC_AUTH_OIDC_GROUPS_CLAIM?.trim() || 'groups',
-    oidcAdminGroups: parseCsvEnv(env.CROWDSEC_AUTH_OIDC_ADMIN_GROUPS),
-    oidcReadOnlyGroups: parseCsvEnv(env.CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS),
-    oidcUnmatchedRole: parseOidcUnmatchedRole(env.CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE),
+    sessionSecret: resolveRenamedSecretEnv(env, 'AUTH_SECRET', 'CROWDSEC_AUTH_SECRET')?.trim() || undefined,
+    totpSecret: resolveRenamedSecretEnv(env, 'AUTH_TOTP_SECRET', 'CROWDSEC_AUTH_TOTP_SECRET')?.trim() || undefined,
+    totpSeed: parseTotpSeed(resolveRenamedSecretEnv(env, 'AUTH_TOTP_SEED', 'CROWDSEC_AUTH_TOTP_SEED')),
+    oidcIssuerUrl: resolveRenamedEnv(env, 'AUTH_OIDC_ISSUER_URL', 'CROWDSEC_AUTH_OIDC_ISSUER_URL')?.trim() || undefined,
+    oidcClientId: resolveRenamedEnv(env, 'AUTH_OIDC_CLIENT_ID', 'CROWDSEC_AUTH_OIDC_CLIENT_ID')?.trim() || undefined,
+    oidcClientSecret: resolveRenamedSecretEnv(env, 'AUTH_OIDC_CLIENT_SECRET', 'CROWDSEC_AUTH_OIDC_CLIENT_SECRET')?.trim() || undefined,
+    oidcScope: parseOidcScope(resolveRenamedEnv(env, 'AUTH_OIDC_SCOPE', 'CROWDSEC_AUTH_OIDC_SCOPE')),
+    oidcGroupsClaim: resolveRenamedEnv(env, 'AUTH_OIDC_GROUPS_CLAIM', 'CROWDSEC_AUTH_OIDC_GROUPS_CLAIM')?.trim() || 'groups',
+    oidcAdminGroups: parseCsvEnv(resolveRenamedEnv(env, 'AUTH_OIDC_ADMIN_GROUPS', 'CROWDSEC_AUTH_OIDC_ADMIN_GROUPS')),
+    oidcReadOnlyGroups: parseCsvEnv(resolveRenamedEnv(env, 'AUTH_OIDC_READ_ONLY_GROUPS', 'CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS')),
+    oidcUnmatchedRole: parseOidcUnmatchedRole(resolveRenamedEnv(env, 'AUTH_OIDC_UNMATCHED_ROLE', 'CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE')),
   };
 }
 
@@ -347,7 +375,7 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
     notificationAllowPrivateAddresses: parseBooleanEnv(env.NOTIFICATION_ALLOW_PRIVATE_ADDRESSES, true),
     notificationDebugPayloads: parseBooleanEnv(env.NOTIFICATION_DEBUG_PAYLOADS, false),
     timeZone: parseTimeZone(env.TZ),
-    timeFormat: parseTimeFormat(env.CROWDSEC_TIME_FORMAT),
+    timeFormat: parseTimeFormat(resolveRenamedEnv(env, 'TIME_FORMAT', 'CROWDSEC_TIME_FORMAT')),
     readOnly: parseBooleanEnv(env.PERMISSION_READ_ONLY, false),
     dashboardAuth: parseDashboardAuthConfig(env),
   };

@@ -60,13 +60,13 @@ describe('config helpers', () => {
     expect(parseOidcUnmatchedRole(' DENY ')).toBe('deny');
     expect(parseOidcUnmatchedRole('admin')).toBe('admin');
     expect(parseOidcUnmatchedRole('read-only')).toBe('read-only');
-    expect(() => parseOidcUnmatchedRole('viewer')).toThrow(/CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE/);
+    expect(() => parseOidcUnmatchedRole('viewer')).toThrow(/AUTH_OIDC_UNMATCHED_ROLE/);
   });
 
   test('parseOidcScope defaults, normalizes, and requires openid', () => {
     expect(parseOidcScope(undefined)).toBe('openid profile email');
     expect(parseOidcScope(' openid   profile email roles ')).toBe('openid profile email roles');
-    expect(() => parseOidcScope('profile email groups')).toThrow(/CROWDSEC_AUTH_OIDC_SCOPE/);
+    expect(() => parseOidcScope('profile email groups')).toThrow(/AUTH_OIDC_SCOPE/);
   });
 
   test('parseCsvEnv splits, trims, and drops empty entries', () => {
@@ -89,7 +89,7 @@ describe('config helpers', () => {
     expect(() => parseTimeZone('Not/A_Timezone')).toThrow(/Invalid TZ value/);
     expect(parseTimeFormat(undefined)).toBe('browser');
     expect(parseTimeFormat('24H')).toBe('24h');
-    expect(() => parseTimeFormat('auto')).toThrow(/CROWDSEC_TIME_FORMAT/);
+    expect(() => parseTimeFormat('auto')).toThrow(/TIME_FORMAT/);
   });
 
   test('uses the browser clock format when only TZ is configured', () => {
@@ -133,17 +133,19 @@ describe('config helpers', () => {
       NOTIFICATION_ALLOW_PRIVATE_ADDRESSES: 'true',
       NOTIFICATION_DEBUG_PAYLOADS: 'true',
       TZ: 'Europe/Berlin',
-      CROWDSEC_TIME_FORMAT: '24h',
+      TIME_FORMAT: '24h',
       AUTH_ENABLED: 'true',
-      CROWDSEC_AUTH_SECRET: 'auth-secret',
-      CROWDSEC_AUTH_OIDC_ISSUER_URL: 'https://idp.example.com/application/o/crowdsec/',
-      CROWDSEC_AUTH_OIDC_CLIENT_ID: 'crowdsec-client',
-      CROWDSEC_AUTH_OIDC_CLIENT_SECRET: 'oidc-secret',
-      CROWDSEC_AUTH_OIDC_SCOPE: 'openid profile email roles',
-      CROWDSEC_AUTH_OIDC_GROUPS_CLAIM: 'roles',
-      CROWDSEC_AUTH_OIDC_ADMIN_GROUPS: 'admins, secops',
-      CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS: 'viewers',
-      CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE: 'read-only',
+      AUTH_SECRET: 'auth-secret',
+      AUTH_TOTP_SECRET: 'totp-secret',
+      AUTH_TOTP_SEED: 'jbsw y3dp ehpk 3pxp jbsw y3dp ehpk 3pxp====',
+      AUTH_OIDC_ISSUER_URL: 'https://idp.example.com/application/o/crowdsec/',
+      AUTH_OIDC_CLIENT_ID: 'crowdsec-client',
+      AUTH_OIDC_CLIENT_SECRET: 'oidc-secret',
+      AUTH_OIDC_SCOPE: 'openid profile email roles',
+      AUTH_OIDC_GROUPS_CLAIM: 'roles',
+      AUTH_OIDC_ADMIN_GROUPS: 'admins, secops',
+      AUTH_OIDC_READ_ONLY_GROUPS: 'viewers',
+      AUTH_OIDC_UNMATCHED_ROLE: 'read-only',
     });
 
     expect(config.port).toBe(4000);
@@ -182,6 +184,8 @@ describe('config helpers', () => {
     expect(config.dashboardAuth).toEqual({
       enabled: true,
       sessionSecret: 'auth-secret',
+      totpSecret: 'totp-secret',
+      totpSeed: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP',
       oidcIssuerUrl: 'https://idp.example.com/application/o/crowdsec/',
       oidcClientId: 'crowdsec-client',
       oidcClientSecret: 'oidc-secret',
@@ -229,8 +233,8 @@ describe('config helpers', () => {
 
   test('createRuntimeConfig rejects OIDC scopes without openid', () => {
     expect(() => createRuntimeConfig({
-      CROWDSEC_AUTH_OIDC_SCOPE: 'profile email groups',
-    })).toThrow(/CROWDSEC_AUTH_OIDC_SCOPE/);
+      AUTH_OIDC_SCOPE: 'profile email groups',
+    })).toThrow(/AUTH_OIDC_SCOPE/);
   });
 
   test('createRuntimeConfig enables read-only mode from environment', () => {
@@ -246,13 +250,91 @@ describe('config helpers', () => {
   test('createRuntimeConfig reads file-backed dashboard auth secrets', () => {
     const config = createRuntimeConfig({
       AUTH_ENABLED: 'false',
-      CROWDSEC_AUTH_SECRET_FILE: createTempSecret('auth-secret-from-file\n'),
-      CROWDSEC_AUTH_OIDC_CLIENT_SECRET_FILE: createTempSecret('oidc-secret-from-file\n'),
+      AUTH_SECRET_FILE: createTempSecret('auth-secret-from-file\n'),
+      AUTH_TOTP_SECRET_FILE: createTempSecret('totp-secret-from-file\n'),
+      AUTH_TOTP_SEED_FILE: createTempSecret('JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP\n'),
+      AUTH_OIDC_CLIENT_SECRET_FILE: createTempSecret('oidc-secret-from-file\n'),
     });
 
     expect(config.dashboardAuth.enabled).toBe(false);
     expect(config.dashboardAuth.sessionSecret).toBe('auth-secret-from-file');
+    expect(config.dashboardAuth.totpSecret).toBe('totp-secret-from-file');
+    expect(config.dashboardAuth.totpSeed).toBe('JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP');
     expect(config.dashboardAuth.oidcClientSecret).toBe('oidc-secret-from-file');
+  });
+
+  test('createRuntimeConfig keeps legacy file-backed auth secrets working', () => {
+    const config = createRuntimeConfig({
+      CROWDSEC_AUTH_SECRET_FILE: createTempSecret('legacy-auth-secret-from-file\n'),
+      CROWDSEC_AUTH_TOTP_SECRET_FILE: createTempSecret('legacy-totp-secret-from-file\n'),
+      CROWDSEC_AUTH_TOTP_SEED_FILE: createTempSecret('JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP\n'),
+      CROWDSEC_AUTH_OIDC_CLIENT_SECRET_FILE: createTempSecret('legacy-oidc-secret-from-file\n'),
+    });
+
+    expect(config.dashboardAuth.sessionSecret).toBe('legacy-auth-secret-from-file');
+    expect(config.dashboardAuth.totpSecret).toBe('legacy-totp-secret-from-file');
+    expect(config.dashboardAuth.totpSeed).toBe('JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP');
+    expect(config.dashboardAuth.oidcClientSecret).toBe('legacy-oidc-secret-from-file');
+  });
+
+  test('createRuntimeConfig keeps legacy non-CrowdSec variable names working', () => {
+    const config = createRuntimeConfig({
+      CROWDSEC_TIME_FORMAT: '12h',
+      CROWDSEC_AUTH_SECRET: 'legacy-auth-secret',
+      CROWDSEC_AUTH_TOTP_SECRET: 'legacy-totp-secret',
+      CROWDSEC_AUTH_TOTP_SEED: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP',
+      CROWDSEC_AUTH_OIDC_ISSUER_URL: 'https://legacy-idp.example.com/',
+      CROWDSEC_AUTH_OIDC_CLIENT_ID: 'legacy-client',
+      CROWDSEC_AUTH_OIDC_CLIENT_SECRET: 'legacy-oidc-secret',
+      CROWDSEC_AUTH_OIDC_SCOPE: 'openid profile legacy',
+      CROWDSEC_AUTH_OIDC_GROUPS_CLAIM: 'legacy-groups',
+      CROWDSEC_AUTH_OIDC_ADMIN_GROUPS: 'legacy-admins',
+      CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS: 'legacy-viewers',
+      CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE: 'admin',
+    });
+
+    expect(config.timeFormat).toBe('12h');
+    expect(config.dashboardAuth).toMatchObject({
+      sessionSecret: 'legacy-auth-secret',
+      totpSecret: 'legacy-totp-secret',
+      totpSeed: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP',
+      oidcIssuerUrl: 'https://legacy-idp.example.com/',
+      oidcClientId: 'legacy-client',
+      oidcClientSecret: 'legacy-oidc-secret',
+      oidcScope: 'openid profile legacy',
+      oidcGroupsClaim: 'legacy-groups',
+      oidcAdminGroups: ['legacy-admins'],
+      oidcReadOnlyGroups: ['legacy-viewers'],
+      oidcUnmatchedRole: 'admin',
+    });
+  });
+
+  test('createRuntimeConfig prefers canonical names over legacy names', () => {
+    const config = createRuntimeConfig({
+      TIME_FORMAT: '24h',
+      CROWDSEC_TIME_FORMAT: '12h',
+      AUTH_SECRET: 'auth-secret',
+      CROWDSEC_AUTH_SECRET: 'legacy-auth-secret',
+      AUTH_TOTP_SECRET: 'totp-secret',
+      CROWDSEC_AUTH_TOTP_SECRET: 'legacy-totp-secret',
+      AUTH_TOTP_SEED: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP',
+      CROWDSEC_AUTH_TOTP_SEED: 'NB2W45DFOIZA====',
+      AUTH_OIDC_CLIENT_ID: 'client',
+      CROWDSEC_AUTH_OIDC_CLIENT_ID: 'legacy-client',
+    });
+
+    expect(config.timeFormat).toBe('24h');
+    expect(config.dashboardAuth.sessionSecret).toBe('auth-secret');
+    expect(config.dashboardAuth.totpSecret).toBe('totp-secret');
+    expect(config.dashboardAuth.totpSeed).toBe('JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP');
+    expect(config.dashboardAuth.oidcClientId).toBe('client');
+  });
+
+  test('createRuntimeConfig rejects invalid TOTP seeds', () => {
+    expect(() => createRuntimeConfig({
+      AUTH_TOTP_SEED: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PX!',
+    })).toThrow(/AUTH_TOTP_SEED/);
+    expect(() => createRuntimeConfig({ AUTH_TOTP_SEED: 'ABC234' })).toThrow(/AUTH_TOTP_SEED/);
   });
 
   test('createRuntimeConfig keeps the legacy dashboard auth flag working', () => {
