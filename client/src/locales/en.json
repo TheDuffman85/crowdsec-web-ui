@@ -126,6 +126,7 @@
   "components.sidebar.aria.expandMenu": "Expand menu",
   "components.sidebar.darkMode": "Dark mode",
   "components.sidebar.development": "Development",
+  "components.sidebar.loadTest": "Load test",
   "components.sidebar.language": "Language",
   "components.sidebar.languageBrowser": "Browser default",
   "components.sidebar.lightMode": "Light mode",

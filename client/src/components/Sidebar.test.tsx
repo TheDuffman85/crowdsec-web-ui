@@ -148,6 +148,30 @@ describe('Sidebar', () => {
     expect(screen.queryByRole('link', { name: 'Metrics' })).not.toBeInTheDocument();
   });
 
+  test('identifies load-test mode instead of showing regular build metadata', async () => {
+    vi.mocked(useNotificationUnreadCount).mockReturnValue({
+      unreadCount: 0,
+      setUnreadCount: vi.fn(),
+      refreshUnreadCount: vi.fn(),
+    });
+    fetchMock.mockImplementation(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        return Response.json({
+          metrics_enabled: false,
+          metrics_sidebar_visible: true,
+          deployment_mode: 'load-test',
+        });
+      }
+      return Response.json({ update_available: false });
+    });
+
+    renderSidebar();
+
+    expect(await screen.findByText('Load test')).toBeInTheDocument();
+    expect(screen.queryByText('v2026.5.2')).not.toBeInTheDocument();
+  });
+
   test('links to settings and keeps controls out of the sidebar', async () => {
     vi.mocked(useNotificationUnreadCount).mockReturnValue({
       unreadCount: 0,

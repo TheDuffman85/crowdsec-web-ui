@@ -126,6 +126,7 @@
   "components.sidebar.aria.expandMenu": "Развернуть меню",
   "components.sidebar.darkMode": "Темный режим",
   "components.sidebar.development": "Разработка",
+  "components.sidebar.loadTest": "Нагрузочный тест",
   "components.sidebar.language": "Язык",
   "components.sidebar.languageBrowser": "По умолчанию браузера",
   "components.sidebar.lightMode": "Светлый режим",

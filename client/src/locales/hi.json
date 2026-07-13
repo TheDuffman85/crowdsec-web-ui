@@ -126,6 +126,7 @@
   "components.sidebar.aria.expandMenu": "मेन्यू फैलाएं",
   "components.sidebar.darkMode": "डार्क मोड",
   "components.sidebar.development": "डेवलपमेंट",
+  "components.sidebar.loadTest": "लोड परीक्षण",
   "components.sidebar.language": "भाषा",
   "components.sidebar.languageBrowser": "ब्राउज़र डिफ़ॉल्ट",
   "components.sidebar.lightMode": "लाइट मोड",

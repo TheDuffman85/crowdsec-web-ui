@@ -442,6 +442,7 @@ export interface ConfigResponse {
   time_format?: 'browser' | '12h' | '24h';
   metrics_enabled?: boolean;
   metrics_sidebar_visible?: boolean;
+  deployment_mode?: 'load-test';
   permissions?: {
     mode: 'admin' | 'read-only';
     can_manage_enforcement: boolean;

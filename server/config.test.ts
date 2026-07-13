@@ -98,6 +98,11 @@ describe('config helpers', () => {
     expect(config.timeFormat).toBe('browser');
   });
 
+  test('marks the dedicated load-test runtime mode', () => {
+    expect(createRuntimeConfig({}).deploymentMode).toBe('standard');
+    expect(createRuntimeConfig({ CROWDSEC_WEB_UI_MODE: 'load-test' }).deploymentMode).toBe('load-test');
+  });
+
   test('createRuntimeConfig reads relevant environment values', () => {
     const config = createRuntimeConfig({
       PORT: '4000',

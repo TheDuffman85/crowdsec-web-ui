@@ -126,6 +126,7 @@
   "components.sidebar.aria.expandMenu": "展开菜单",
   "components.sidebar.darkMode": "深色模式",
   "components.sidebar.development": "开发版",
+  "components.sidebar.loadTest": "负载测试",
   "components.sidebar.language": "语言",
   "components.sidebar.languageBrowser": "浏览器默认",
   "components.sidebar.lightMode": "浅色模式",

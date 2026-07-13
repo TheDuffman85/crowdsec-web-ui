@@ -126,6 +126,7 @@
   "components.sidebar.aria.expandMenu": "メニューを展開",
   "components.sidebar.darkMode": "ダークモード",
   "components.sidebar.development": "開発",
+  "components.sidebar.loadTest": "負荷テスト",
   "components.sidebar.language": "言語",
   "components.sidebar.languageBrowser": "ブラウザー既定",
   "components.sidebar.lightMode": "ライトモード",

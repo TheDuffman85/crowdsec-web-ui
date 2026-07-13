@@ -68,6 +68,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
     const { formatTime } = useDateTime();
     const [updateStatus, setUpdateStatus] = useState<UpdateCheckResponse | null>(null);
     const [showMetricsNav, setShowMetricsNav] = useState(false);
+    const [isLoadTest, setIsLoadTest] = useState(false);
 
     const links = [
         { to: "/", label: "components.sidebar.nav.dashboard", icon: LayoutDashboard },
@@ -118,6 +119,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                 const config = await fetchConfig();
                 if (!cancelled) {
                     setShowMetricsNav(config.metrics_sidebar_visible !== false);
+                    setIsLoadTest(config.deployment_mode === 'load-test');
                 }
             } catch (error) {
                 if (!cancelled) {
@@ -301,7 +303,9 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                 )}
 
                 <p className="text-xs text-center text-gray-400 dark:text-gray-500 flex flex-col items-center gap-1">
-                    {import.meta.env.VITE_VERSION ? (
+                    {isLoadTest ? (
+                        <span>{t('components.sidebar.loadTest')}</span>
+                    ) : import.meta.env.VITE_VERSION ? (
                         <>
                             <a
                                 href={

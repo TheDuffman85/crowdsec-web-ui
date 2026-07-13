@@ -609,6 +609,17 @@ test('CrowdSec metrics endpoint is disabled until Prometheus URL is configured',
   expect(await response.json()).toEqual({ error: 'CrowdSec Prometheus metrics are not enabled' });
 });
 
+test('config endpoint identifies the load-test deployment mode', async () => {
+  const { controller } = createController({
+    env: { CROWDSEC_WEB_UI_MODE: 'load-test' },
+  });
+
+  const response = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
+
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual(expect.objectContaining({ deployment_mode: 'load-test' }));
+});
+
 test('CrowdSec metrics endpoint proxies and summarizes Prometheus metrics', async () => {
   const { controller } = createController({
     env: {

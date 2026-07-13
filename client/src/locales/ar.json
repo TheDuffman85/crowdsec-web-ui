@@ -126,6 +126,7 @@
   "components.sidebar.aria.expandMenu": "توسيع القائمة",
   "components.sidebar.darkMode": "الوضع الداكن",
   "components.sidebar.development": "التطوير",
+  "components.sidebar.loadTest": "اختبار الحمل",
   "components.sidebar.language": "اللغة",
   "components.sidebar.languageBrowser": "لغة المتصفح الافتراضية",
   "components.sidebar.lightMode": "الوضع الفاتح",

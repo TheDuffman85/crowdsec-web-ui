@@ -126,6 +126,7 @@
   "components.sidebar.aria.expandMenu": "Menü ausklappen",
   "components.sidebar.darkMode": "Dunkler Modus",
   "components.sidebar.development": "Entwicklung",
+  "components.sidebar.loadTest": "Lasttest",
   "components.sidebar.language": "Sprache",
   "components.sidebar.languageBrowser": "Browserstandard",
   "components.sidebar.lightMode": "Heller Modus",

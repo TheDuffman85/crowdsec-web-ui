@@ -742,6 +742,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       time_format: config.timeFormat,
       metrics_enabled: Boolean(config.prometheusUrl),
       metrics_sidebar_visible: loadMetricsSidebarVisible(database),
+      ...(config.deploymentMode === 'load-test' ? { deployment_mode: config.deploymentMode } : {}),
       permissions: dashboardAuth.getPermissions(context),
     };
 

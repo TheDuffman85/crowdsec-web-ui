@@ -45,6 +45,7 @@ const config = createRuntimeConfig({
   CROWDSEC_HEARTBEAT_INTERVAL: '0',
   CROWDSEC_BOOTSTRAP_RETRY_ENABLED: 'false',
   CROWDSEC_SIMULATIONS_ENABLED: process.env.CROWDSEC_SIMULATIONS_ENABLED || 'true',
+  CROWDSEC_WEB_UI_MODE: 'load-test',
   VITE_VERSION: process.env.VITE_VERSION || 'loadtest',
   VITE_BRANCH: process.env.VITE_BRANCH || 'loadtest',
   VITE_COMMIT_HASH: process.env.VITE_COMMIT_HASH || 'loadtest',
