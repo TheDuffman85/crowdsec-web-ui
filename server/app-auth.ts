@@ -184,6 +184,28 @@ export function resolveOidcRole(config: OidcRoleConfig, groups: string[]): Role 
   return config.oidcUnmatchedRole;
 }
 
+export function resolveOidcClaims(
+  idClaims: Record<string, unknown>,
+  userinfo: Record<string, unknown> | undefined,
+  config: OidcRoleConfig & { oidcGroupsClaim: string },
+): { username: string; role: Role | null } | null {
+  const merged = { ...idClaims, ...(userinfo ?? {}) };
+  const username = (
+    (typeof merged.preferred_username === 'string' && merged.preferred_username) ||
+    (typeof merged.email === 'string' && merged.email) ||
+    (typeof merged.sub === 'string' && merged.sub) ||
+    ''
+  ).trim().slice(0, 254);
+  if (!username) return null;
+
+  const groups = Array.from(new Set([
+    ...readClaimGroups(idClaims, config.oidcGroupsClaim),
+    ...readClaimGroups(userinfo ?? {}, config.oidcGroupsClaim),
+  ]));
+
+  return { username, role: resolveOidcRole(config, groups) };
+}
+
 function encryptSecret(value: string, secret: string): string {
   const key = crypto.createHash('sha256').update(secret, 'utf8').digest();
   const iv = crypto.randomBytes(12);
@@ -524,26 +546,38 @@ class OidcRuntime {
       expectedNonce,
       expectedState,
     });
-    const claims = tokens.claims() as Record<string, unknown> | undefined;
-    if (!claims) return null;
-    const issuer = typeof claims.iss === 'string' ? claims.iss : '';
-    const subject = typeof claims.sub === 'string' ? claims.sub : '';
+    const idClaims = tokens.claims() as Record<string, unknown> | undefined;
+    if (!idClaims) return null;
+    const issuer = typeof idClaims.iss === 'string' ? idClaims.iss : '';
+    const subject = typeof idClaims.sub === 'string' ? idClaims.sub : '';
     if (!issuer || !subject) return null;
 
-    const username = (
-      (typeof claims.preferred_username === 'string' && claims.preferred_username) ||
-      (typeof claims.email === 'string' && claims.email) ||
-      (typeof claims.sub === 'string' && claims.sub) ||
-      ''
-    ).trim().slice(0, 254);
-    if (!username) return null;
+    const userinfo = await this.fetchUserInfoClaims(configuration, tokens.access_token, subject);
+    const resolved = resolveOidcClaims(idClaims, userinfo, config);
+    if (!resolved) return null;
 
     return {
-      username,
-      role: resolveOidcRole(config, readClaimGroups(claims, config.oidcGroupsClaim)),
+      username: resolved.username,
+      role: resolved.role,
       issuer,
       subject,
     };
+  }
+
+  private async fetchUserInfoClaims(
+    configuration: oidcClient.Configuration,
+    accessToken: string | undefined,
+    subject: string,
+  ): Promise<Record<string, unknown> | undefined> {
+    if (!configuration.serverMetadata().userinfo_endpoint) return undefined;
+    if (typeof accessToken !== 'string' || !accessToken) return undefined;
+    try {
+      const userinfo = await oidcClient.fetchUserInfo(configuration, accessToken, subject);
+      return userinfo as Record<string, unknown>;
+    } catch (error) {
+      console.warn('OIDC UserInfo fetch failed; falling back to ID token claims:', error);
+      return undefined;
+    }
   }
 }
 

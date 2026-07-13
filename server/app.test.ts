@@ -10,7 +10,7 @@ import { createRuntimeConfig } from './config';
 import { CrowdsecDatabase } from './database';
 import { LapiClient, type LapiRequestInit } from './lapi';
 import { createApp, type CreateAppOptions } from './app';
-import { resolveOidcRole } from './app-auth';
+import { resolveOidcClaims, resolveOidcRole } from './app-auth';
 import { resolveAlertHistoryAt } from './utils/alerts';
 import { parseGoDuration } from './utils/duration';
 import type { MqttPublishConfig } from './notifications/mqtt-client';
@@ -1153,6 +1153,63 @@ describe('OIDC role mapping', () => {
     expect(resolveOidcRole(emptyGroups, ['admins'])).toBeNull();
     expect(resolveOidcRole({ ...emptyGroups, oidcUnmatchedRole: 'admin' }, [])).toBe('admin');
     expect(resolveOidcRole({ ...emptyGroups, oidcUnmatchedRole: 'read-only' }, [])).toBe('read-only');
+  });
+});
+
+describe('resolveOidcClaims', () => {
+  const config = {
+    oidcGroupsClaim: 'https://sso.example.net/roles',
+    oidcAdminGroups: ['crowdsec-ui.crowdsec-admin'],
+    oidcReadOnlyGroups: ['crowdsec-ui.crowdsec-viewer'],
+    oidcUnmatchedRole: 'deny' as const,
+  };
+
+  test('resolves username and role from UserInfo when the ID token is minimal', () => {
+    const idClaims = { iss: 'https://sso.example.net', sub: '1' };
+    const userinfo = {
+      sub: '1',
+      email: 'admin@example.com',
+      name: 'Example Admin',
+      'https://sso.example.net/roles': ['crowdsec-ui.crowdsec-admin'],
+    };
+    expect(resolveOidcClaims(idClaims, userinfo, config)).toEqual({
+      username: 'admin@example.com',
+      role: 'admin',
+    });
+  });
+
+  test('falls back to ID-token claims when UserInfo is absent', () => {
+    const idClaims = {
+      sub: '1',
+      preferred_username: 'id-token-user',
+      'https://sso.example.net/roles': ['crowdsec-ui.crowdsec-viewer'],
+    };
+    expect(resolveOidcClaims(idClaims, undefined, config)).toEqual({
+      username: 'id-token-user',
+      role: 'read-only',
+    });
+  });
+
+  test('unions groups so an empty UserInfo groups value cannot erase ID-token groups', () => {
+    const idClaims = {
+      sub: '1',
+      email: 'user@example.com',
+      'https://sso.example.net/roles': ['crowdsec-ui.crowdsec-admin'],
+    };
+    const userinfo = { sub: '1', 'https://sso.example.net/roles': [] as string[] };
+    expect(resolveOidcClaims(idClaims, userinfo, config)?.role).toBe('admin');
+  });
+
+  test('unions groups drawn from both sources', () => {
+    const idClaims = { sub: '1', email: 'user@example.com', 'https://sso.example.net/roles': ['crowdsec-ui.crowdsec-viewer'] };
+    const userinfo = { sub: '1', 'https://sso.example.net/roles': ['crowdsec-ui.crowdsec-admin'] };
+    // admin wins over read-only via resolveOidcRole precedence
+    expect(resolveOidcClaims(idClaims, userinfo, config)?.role).toBe('admin');
+  });
+
+  test('returns null when no username claim can be resolved', () => {
+    const idClaims = { iss: 'https://sso.example.net' };
+    expect(resolveOidcClaims(idClaims, {}, config)).toBeNull();
   });
 });
 
