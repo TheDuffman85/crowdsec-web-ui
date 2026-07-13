@@ -87,6 +87,18 @@ LOADTEST_ENV_NAMES=(
     LOADTEST_DUPLICATE_VALUE_RATIO
     LOADTEST_REFRESH_ALERTS
     LOADTEST_REFRESH_DECISIONS
+    AUTH_ENABLED
+    CROWDSEC_AUTH_SECRET
+    CROWDSEC_AUTH_SECRET_FILE
+    CROWDSEC_AUTH_OIDC_ISSUER_URL
+    CROWDSEC_AUTH_OIDC_CLIENT_ID
+    CROWDSEC_AUTH_OIDC_CLIENT_SECRET
+    CROWDSEC_AUTH_OIDC_CLIENT_SECRET_FILE
+    CROWDSEC_AUTH_OIDC_SCOPE
+    CROWDSEC_AUTH_OIDC_GROUPS_CLAIM
+    CROWDSEC_AUTH_OIDC_ADMIN_GROUPS
+    CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS
+    CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE
     CROWDSEC_REFRESH_INTERVAL
     CROWDSEC_IDLE_REFRESH_INTERVAL
     CROWDSEC_IDLE_THRESHOLD
@@ -292,7 +304,11 @@ if [ "$MODE" == "loadtest" ]; then
 
     log "Load-test UI is ready: http://127.0.0.1:${LOADTEST_BACKEND_PORT}/"
     log "Load-test UI is also available at: http://localhost:${LOADTEST_BACKEND_PORT}/"
-    log "Authentication is disabled in load-test mode."
+    auth_enabled_value="${AUTH_ENABLED:-true}"
+    case "${auth_enabled_value,,}" in
+        0|false|no|off) log "Authentication is disabled in load-test mode." ;;
+        *) log "Authentication is enabled. Default login: load / test" ;;
+    esac
     log "Service started. Backend PID: $BACKEND_PID"
 
     cleanup() {

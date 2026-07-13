@@ -7,6 +7,12 @@ import { createRuntimeConfig } from '../server/config';
 import { CrowdsecDatabase } from '../server/database';
 import { installTimestampedConsole } from '../server/logging';
 import { parseGoDuration } from '../server/utils/duration';
+import {
+  createLoadTestRuntimeEnv,
+  ensureLoadTestUser,
+  LOAD_TEST_PASSWORD,
+  LOAD_TEST_USERNAME,
+} from './load-test-auth';
 
 const LOADTEST_SOURCE_TABLE = 'loadtest_alert_source';
 installTimestampedConsole();
@@ -31,10 +37,9 @@ const activeDecisionRatio = parseRatioEnv('LOADTEST_ACTIVE_DECISION_RATIO', 0.7)
 const simulationRatio = parseRatioEnv('LOADTEST_SIMULATION_RATIO', 0.1);
 
 const config = createRuntimeConfig({
-  ...process.env,
+  ...createLoadTestRuntimeEnv(process.env),
   PORT: String(port),
   DB_DIR: dbDir,
-  AUTH_ENABLED: 'false',
   CROWDSEC_REFRESH_INTERVAL: process.env.CROWDSEC_REFRESH_INTERVAL || '1m',
   CROWDSEC_LOOKBACK_PERIOD: process.env.CROWDSEC_LOOKBACK_PERIOD || '30d',
   CROWDSEC_HEARTBEAT_INTERVAL: '0',
@@ -44,6 +49,8 @@ const config = createRuntimeConfig({
   VITE_BRANCH: process.env.VITE_BRANCH || 'loadtest',
   VITE_COMMIT_HASH: process.env.VITE_COMMIT_HASH || 'loadtest',
 });
+const authEnabled = config.dashboardAuth.enabled ?? !database.isAuthMigrationDefaultDisabled();
+await ensureLoadTestUser(database, authEnabled);
 
 ensureLoadTestSourceTable(database);
 
@@ -632,7 +639,11 @@ const server = serve({
 });
 
 console.log(`Load-test backend running at http://127.0.0.1:${controller.config.port}/`);
-console.log(`Auth is disabled for load-test mode.`);
+if (authEnabled) {
+  console.log(`Auth is enabled for load-test mode. Default login: ${LOAD_TEST_USERNAME} / ${LOAD_TEST_PASSWORD}`);
+} else {
+  console.log(`Auth is disabled for load-test mode.`);
+}
 
 let shutdownInProgress = false;
 
