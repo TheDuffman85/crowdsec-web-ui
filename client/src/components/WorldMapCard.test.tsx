@@ -266,7 +266,7 @@ describe('WorldMapCard', () => {
     );
 
     await waitFor(() => expect(screen.getByTestId('world-map-tooltip')).toBeInTheDocument());
-    expect(screen.getByRole('img', { name: 'DE' })).toHaveTextContent('🇩🇪');
+    expect(screen.getByRole('img', { name: 'DE' })).toHaveClass('fi', 'fi-de');
   });
 
   test('shows active decisions in the tooltip', async () => {
