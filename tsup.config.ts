@@ -1,7 +1,13 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['server/index.ts', 'server/query-worker.ts', 'server/sync-worker.ts'],
+  entry: {
+    index: 'server/index.ts',
+    'query-worker': 'server/query-worker.ts',
+    'sync-worker': 'server/sync-worker.ts',
+    'load-test-server': 'scripts/load-test-server.ts',
+    'seed-load-test-data': 'scripts/seed-load-test-data.ts',
+  },
   outDir: 'dist/server',
   format: ['esm'],
   platform: 'node',

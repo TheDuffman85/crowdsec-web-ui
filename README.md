@@ -744,6 +744,23 @@ Active-decision refreshes use the same `CROWDSEC_ALERT_SYNC_CHUNK` windows as hi
 
    Both the initial source dataset and later refresh batches are exposed through the fake LAPI. On each due refresh batch it exposes `LOADTEST_REFRESH_ALERTS` new synthetic alerts and `LOADTEST_REFRESH_DECISIONS` new synthetic decisions, then the regular sync code imports them into SQLite.
 
+   The dev-build workflow publishes a containerized variant as `ghcr.io/theduffman85/crowdsec-web-ui:loadtest`. It is a drop-in replacement for the regular image: keep the same ports, environment, and `/app/data` volume, and change only the image tag. Authentication and CrowdSec connection settings are ignored by the load-test server.
+
+   ```yaml
+   services:
+     crowdsec-web-ui:
+       image: ghcr.io/theduffman85/crowdsec-web-ui:loadtest
+       ports:
+         - "3000:3000"
+       volumes:
+         - ./data:/app/data
+       environment:
+         LOADTEST_ALERTS: 300000
+         LOADTEST_DECISIONS: 300000
+   ```
+
+   The load-test image always ignores the regular `DB_DIR` setting. Its synthetic database defaults to `/tmp/crowdsec-web-ui-load-test` inside the container, so seeding cannot overwrite the database mounted at `/app/data`. The synthetic database is recreated whenever the container starts. `LOADTEST_DB_DIR` can override the container-local location when needed.
+
 5. **CrowdSec mTLS smoke test**
 
    Starts a disposable CrowdSec LAPI container, generates temporary server/client certificates, enables LAPI client certificate verification, logs in through the Web UI LAPI client, and confirms CrowdSec registered the TLS machine.

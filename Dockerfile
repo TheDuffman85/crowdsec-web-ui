@@ -61,9 +61,9 @@ RUN pnpm exec vite build \
 
 
 # ==========================================
-# Stage 2: Runner
+# Stage 2: Shared runner
 # ==========================================
-FROM node-pnpm
+FROM node-pnpm AS runner
 
 WORKDIR /app
 
@@ -118,3 +118,23 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["pnpm", "start"]
+
+
+# ==========================================
+# Stage 3: Load-test runner
+# ==========================================
+FROM runner AS loadtest
+
+# Keep synthetic data away from /app/data so this image can replace the regular
+# image in an existing deployment without touching its mounted database.
+ENV LOADTEST_DB_DIR="/tmp/crowdsec-web-ui-load-test"
+
+COPY docker-loadtest-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-loadtest-entrypoint.sh
+
+ENTRYPOINT ["docker-loadtest-entrypoint.sh"]
+CMD ["node", "dist/server/load-test-server.js"]
+
+
+# Keep the regular image as the default target for plain `docker build` calls.
+FROM runner AS production

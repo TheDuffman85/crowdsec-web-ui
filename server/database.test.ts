@@ -661,6 +661,17 @@ describe('CrowdsecDatabase', () => {
     expect(entrypoint).not.toContain('rm -f /app/data/crowdsec.db-shm');
   });
 
+  test('load-test Docker image keeps synthetic data away from the regular database', () => {
+    const dockerfile = readFileSync(path.resolve(process.cwd(), 'Dockerfile'), 'utf8');
+    const entrypoint = readFileSync(path.resolve(process.cwd(), 'docker-loadtest-entrypoint.sh'), 'utf8');
+
+    expect(dockerfile).toContain('FROM runner AS loadtest');
+    expect(dockerfile).toContain('ENV LOADTEST_DB_DIR="/tmp/crowdsec-web-ui-load-test"');
+    expect(entrypoint).toContain('export DB_DIR="$LOADTEST_DB_DIR"');
+    expect(entrypoint).not.toContain('${DB_DIR:-');
+    expect(entrypoint).not.toContain('chown -R node:node /app/data');
+  });
+
   test('migrates legacy notification rules, notifications, and seeds incidents from history', () => {
     const dbPath = createTestDatabasePath();
     const legacy = createLegacyDatabase(dbPath);

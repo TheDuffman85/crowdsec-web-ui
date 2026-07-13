@@ -76,6 +76,13 @@ jobs:
             type=raw,value=dev
             type=raw,value=dev-${{ steps.version.outputs.build_number }}
 
+      - name: Extract metadata for load-test Docker image
+        id: loadtest_meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: type=raw,value=loadtest
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
@@ -84,6 +91,23 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VITE_COMMIT_HASH=${{ steps.version.outputs.sha8 }}
+            VITE_BUILD_DATE=${{ steps.version.outputs.date }}
+            VITE_REPO_URL=${{ github.server_url }}/${{ github.repository }}
+            VITE_BRANCH=dev
+            VITE_VERSION=${{ steps.version.outputs.build_number }}
+            DOCKER_IMAGE_REF=${{ github.repository }}
+
+      - name: Build and push load-test Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: loadtest
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.loadtest_meta.outputs.tags }}
+          labels: ${{ steps.loadtest_meta.outputs.labels }}
           build-args: |
             VITE_COMMIT_HASH=${{ steps.version.outputs.sha8 }}
             VITE_BUILD_DATE=${{ steps.version.outputs.date }}
