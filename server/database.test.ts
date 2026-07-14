@@ -162,6 +162,73 @@ describe('CrowdsecDatabase', () => {
     db.close();
   });
 
+  test('updates duplicate flags differentially and skips unchanged rows', () => {
+    const db = createTestDatabase();
+    const insertDecision = (id: string, stopAt: string) => db.insertDecision({
+      $id: id,
+      $uuid: id,
+      $alert_id: 1,
+      $created_at: '2026-01-01T00:00:00.000Z',
+      $stop_at: stopAt,
+      $value: '1.2.3.4',
+      $type: 'ban',
+      $origin: 'crowdsec',
+      $scenario: 'crowdsecurity/ssh-bf',
+      $raw_data: JSON.stringify({ id, value: '1.2.3.4', stop_at: stopAt }),
+    });
+
+    insertDecision('10', '2030-01-03T00:00:00.000Z');
+    insertDecision('11', '2030-01-02T00:00:00.000Z');
+    insertDecision('12', '2030-01-01T00:00:00.000Z');
+
+    expect(db.refreshDecisionDuplicateFlags('2029-01-01T00:00:00.000Z')).toBe(2);
+    expect(db.db.prepare('SELECT id, is_duplicate FROM decisions ORDER BY id').all()).toEqual([
+      { id: '10', is_duplicate: 0 },
+      { id: '11', is_duplicate: 1 },
+      { id: '12', is_duplicate: 1 },
+    ]);
+    expect(db.refreshDecisionDuplicateFlags('2029-01-01T00:00:00.000Z', true)).toBe(0);
+
+    db.deleteDecision('10');
+    expect(db.refreshDecisionDuplicateFlags('2029-01-01T00:00:00.000Z')).toBe(1);
+    expect(db.db.prepare('SELECT id, is_duplicate FROM decisions ORDER BY id').all()).toEqual([
+      { id: '11', is_duplicate: 0 },
+      { id: '12', is_duplicate: 1 },
+    ]);
+
+    db.close();
+  });
+
+  test('defers alert and decision secondary indexes until bulk import completes', () => {
+    const db = createTestDatabase();
+
+    db.beginDeferredSearchIndexUpdates();
+    const alertIndexesDuringImport = db.db.prepare("PRAGMA index_list('alerts')").all() as Array<{ name: string }>;
+    const decisionIndexesDuringImport = db.db.prepare("PRAGMA index_list('decisions')").all() as Array<{ name: string }>;
+    expect(alertIndexesDuringImport.every((index) => index.name.startsWith('sqlite_autoindex_'))).toBe(true);
+    expect(decisionIndexesDuringImport.every((index) => index.name.startsWith('sqlite_autoindex_'))).toBe(true);
+
+    db.insertAlert({
+      $id: 1,
+      $uuid: 'deferred-alert',
+      $created_at: '2026-01-01T00:00:00.000Z',
+      $scenario: 'crowdsecurity/ssh-bf',
+      $source_ip: '1.2.3.4',
+      $message: 'deferred searchable alert',
+      $raw_data: JSON.stringify({ id: 1, message: 'deferred searchable alert' }),
+    });
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts').get() as { count: number }).count).toBe(0);
+
+    db.rebuildSearchIndexes();
+    const rebuiltAlertIndexes = db.db.prepare("PRAGMA index_list('alerts')").all() as Array<{ name: string }>;
+    const rebuiltDecisionIndexes = db.db.prepare("PRAGMA index_list('decisions')").all() as Array<{ name: string }>;
+    expect(rebuiltAlertIndexes.map((index) => index.name)).toContain('idx_alerts_created_at');
+    expect(rebuiltDecisionIndexes.map((index) => index.name)).toContain('idx_decisions_stop_alert_id');
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts WHERE alerts_fts MATCH ?').get('deferred') as { count: number }).count).toBe(1);
+
+    db.close();
+  });
+
   test('fresh databases default dashboard auth on', () => {
     const db = createTestDatabase();
 

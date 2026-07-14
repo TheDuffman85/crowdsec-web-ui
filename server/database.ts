@@ -24,6 +24,64 @@ type Database = {
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 
+const SYNC_SECONDARY_INDEX_NAMES = [
+  'idx_alerts_created_at',
+  'idx_alerts_country',
+  'idx_alerts_scenario',
+  'idx_alerts_as_name',
+  'idx_alerts_target',
+  'idx_alerts_source_ip',
+  'idx_alerts_simulated',
+  'idx_alerts_simulated_created_at',
+  'idx_alerts_country_created_at',
+  'idx_alerts_scenario_created_at',
+  'idx_decisions_stop_at',
+  'idx_decisions_alert_id',
+  'idx_decisions_value',
+  'idx_decisions_created_at',
+  'idx_decisions_stop_alert_id',
+  'idx_decisions_value_stop_at',
+  'idx_decisions_country',
+  'idx_decisions_scenario',
+  'idx_decisions_as_name',
+  'idx_decisions_target',
+  'idx_decisions_simulated',
+  'idx_decisions_simulated_created_at',
+  'idx_decisions_alert_created_at',
+  'idx_decisions_duplicate_active',
+  'idx_decisions_duplicate_created_at',
+  'idx_decisions_duplicate_primary',
+] as const;
+
+const CREATE_SYNC_SECONDARY_INDEXES_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_alerts_created_at ON alerts(created_at);
+  CREATE INDEX IF NOT EXISTS idx_alerts_country ON alerts(country);
+  CREATE INDEX IF NOT EXISTS idx_alerts_scenario ON alerts(scenario);
+  CREATE INDEX IF NOT EXISTS idx_alerts_as_name ON alerts(as_name);
+  CREATE INDEX IF NOT EXISTS idx_alerts_target ON alerts(target);
+  CREATE INDEX IF NOT EXISTS idx_alerts_source_ip ON alerts(source_ip);
+  CREATE INDEX IF NOT EXISTS idx_alerts_simulated ON alerts(simulated);
+  CREATE INDEX IF NOT EXISTS idx_alerts_simulated_created_at ON alerts(simulated, created_at DESC, id DESC);
+  CREATE INDEX IF NOT EXISTS idx_alerts_country_created_at ON alerts(country, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_alerts_scenario_created_at ON alerts(scenario, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_decisions_stop_at ON decisions(stop_at);
+  CREATE INDEX IF NOT EXISTS idx_decisions_alert_id ON decisions(alert_id);
+  CREATE INDEX IF NOT EXISTS idx_decisions_value ON decisions(value);
+  CREATE INDEX IF NOT EXISTS idx_decisions_created_at ON decisions(created_at);
+  CREATE INDEX IF NOT EXISTS idx_decisions_stop_alert_id ON decisions(stop_at, alert_id);
+  CREATE INDEX IF NOT EXISTS idx_decisions_value_stop_at ON decisions(value, stop_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_decisions_country ON decisions(country);
+  CREATE INDEX IF NOT EXISTS idx_decisions_scenario ON decisions(scenario);
+  CREATE INDEX IF NOT EXISTS idx_decisions_as_name ON decisions(as_name);
+  CREATE INDEX IF NOT EXISTS idx_decisions_target ON decisions(target);
+  CREATE INDEX IF NOT EXISTS idx_decisions_simulated ON decisions(simulated);
+  CREATE INDEX IF NOT EXISTS idx_decisions_simulated_created_at ON decisions(simulated, created_at DESC, id DESC);
+  CREATE INDEX IF NOT EXISTS idx_decisions_alert_created_at ON decisions(alert_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_decisions_duplicate_active ON decisions(is_duplicate, stop_at, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_decisions_duplicate_created_at ON decisions(is_duplicate, created_at DESC, id DESC);
+  CREATE INDEX IF NOT EXISTS idx_decisions_duplicate_primary ON decisions(value, simulated, stop_at DESC, id);
+`;
+
 export interface AlertInsertParams {
   $id: string | number;
   $uuid: string;
@@ -61,6 +119,7 @@ export interface DatabaseOptions {
 }
 
 type RowWithRawData = { raw_data: string; created_at?: string; stop_at?: string; alert_id?: string | number | null };
+export type DecisionDataRow = { raw_data: string; stop_at: string; alert_id?: string | number | null };
 type MetaRow = { value: string };
 type CountRow = { count: number };
 type IdRow = { id: string | number };
@@ -557,16 +616,20 @@ export class CrowdsecDatabase {
   }
 
   beginDeferredSearchIndexUpdates(): void {
-    if (!this.searchIndexAvailable) return;
     this.searchIndexUpdatesDeferred = true;
-    this.clearSearchIndexes();
+    if (this.searchIndexAvailable) this.clearSearchIndexes();
+    for (const indexName of SYNC_SECONDARY_INDEX_NAMES) {
+      this.db.exec(`DROP INDEX IF EXISTS ${indexName}`);
+    }
   }
 
   rebuildSearchIndexes(): void {
-    if (!this.searchIndexAvailable) return;
     try {
-      this.clearSearchIndexes();
-      backfillSearchIndexes(this.db);
+      this.db.exec(CREATE_SYNC_SECONDARY_INDEXES_SQL);
+      if (this.searchIndexAvailable) {
+        this.clearSearchIndexes();
+        backfillSearchIndexes(this.db);
+      }
     } finally {
       this.searchIndexUpdatesDeferred = false;
     }
@@ -833,6 +896,32 @@ export class CrowdsecDatabase {
     return result;
   }
 
+  getDecisionDataBatch(ids: string[]): Map<string, DecisionDataRow> {
+    const result = new Map<string, DecisionDataRow>();
+    if (ids.length === 0) return result;
+
+    const uniqueIds = Array.from(new Set(ids));
+    const chunkSize = 900;
+    for (let offset = 0; offset < uniqueIds.length; offset += chunkSize) {
+      const chunk = uniqueIds.slice(offset, offset + chunkSize);
+      const placeholders = chunk.map(() => '?').join(',');
+      const rows = this.db.prepare(`
+        SELECT id, raw_data, stop_at, alert_id
+        FROM decisions
+        WHERE id IN (${placeholders})
+      `).all(...chunk) as Array<DecisionDataRow & { id: string | number }>;
+      for (const row of rows) {
+        result.set(String(row.id), {
+          raw_data: row.raw_data,
+          stop_at: row.stop_at,
+          alert_id: row.alert_id,
+        });
+      }
+    }
+
+    return result;
+  }
+
   getActiveDecisionByValue(value: string, now: string): { raw_data: string; stop_at: string } | null {
     return (this.getActiveDecisionByValueStatement.get({ $value: value, $now: now }) as { raw_data: string; stop_at: string } | null) || null;
   }
@@ -848,36 +937,36 @@ export class CrowdsecDatabase {
     if (result.changes > 0) this.decisionDuplicateFlagsDirty = true;
   }
 
-  refreshDecisionDuplicateFlags(now: string, force = false): void {
-    if (!force && !this.decisionDuplicateFlagsDirty) return;
+  refreshDecisionDuplicateFlags(now: string, force = false): number {
+    if (!force && !this.decisionDuplicateFlagsDirty) return 0;
 
-    const refresh = this.db.transaction((timestamp: string) => {
-      this.db.prepare('UPDATE decisions SET is_duplicate = 0 WHERE is_duplicate <> 0').run();
-      this.db.prepare(`
-        WITH ranked AS (
-          SELECT
-            id,
-            ROW_NUMBER() OVER (
-              PARTITION BY COALESCE(value, ''), simulated
-              ORDER BY
-                stop_at DESC,
-                CASE WHEN id GLOB '[0-9]*' THEN CAST(id AS INTEGER) ELSE 9223372036854775807 END ASC
-            ) AS duplicate_rank
-          FROM decisions
-          WHERE stop_at > ?
-        )
-        UPDATE decisions
-        SET is_duplicate = 1
-        WHERE id IN (
-          SELECT id
-          FROM ranked
-          WHERE duplicate_rank > 1
-        )
-      `).run(timestamp);
-    });
-
-    refresh(now);
+    const result = this.db.prepare(`
+      WITH ranked AS (
+        SELECT
+          id,
+          ROW_NUMBER() OVER (
+            PARTITION BY COALESCE(value, ''), simulated
+            ORDER BY
+              stop_at DESC,
+              CASE WHEN id GLOB '[0-9]*' THEN CAST(id AS INTEGER) ELSE 9223372036854775807 END ASC
+          ) AS duplicate_rank
+        FROM decisions
+        WHERE stop_at > ?
+      ), desired AS (
+        SELECT
+          decisions.id,
+          CASE WHEN ranked.duplicate_rank > 1 THEN 1 ELSE 0 END AS is_duplicate
+        FROM decisions
+        LEFT JOIN ranked ON ranked.id = decisions.id
+      )
+      UPDATE decisions
+      SET is_duplicate = desired.is_duplicate
+      FROM desired
+      WHERE decisions.id = desired.id
+        AND decisions.is_duplicate <> desired.is_duplicate
+    `).run(now);
     this.decisionDuplicateFlagsDirty = false;
+    return result.changes;
   }
 
   getMeta(key: string): MetaRow | null {
@@ -1416,7 +1505,6 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
       simulated INTEGER NOT NULL DEFAULT 0,
       search_text TEXT
     );
-    CREATE INDEX IF NOT EXISTS idx_alerts_created_at ON alerts(created_at);
   `;
 
   const createDecisionsTable = `
@@ -1440,15 +1528,6 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
       search_text TEXT,
       is_duplicate INTEGER NOT NULL DEFAULT 0
     );
-  `;
-
-  const createDecisionIndexes = `
-    CREATE INDEX IF NOT EXISTS idx_decisions_stop_at ON decisions(stop_at);
-    CREATE INDEX IF NOT EXISTS idx_decisions_alert_id ON decisions(alert_id);
-    CREATE INDEX IF NOT EXISTS idx_decisions_value ON decisions(value);
-    CREATE INDEX IF NOT EXISTS idx_decisions_created_at ON decisions(created_at);
-    CREATE INDEX IF NOT EXISTS idx_decisions_stop_alert_id ON decisions(stop_at, alert_id);
-    CREATE INDEX IF NOT EXISTS idx_decisions_value_stop_at ON decisions(value, stop_at DESC);
   `;
 
   const createMetaTable = `
@@ -1613,7 +1692,6 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
     db.exec(createDecisionsTable);
   }
 
-  db.exec(createDecisionIndexes);
   migrateRecordIndexColumns(db);
   migrateNotificationRulesTable(db, createNotificationRulesTable);
   migrateNotificationsTable(db, createNotificationsTable);
@@ -1650,28 +1728,7 @@ function migrateRecordIndexColumns(db: Database): void {
     ['is_duplicate', 'INTEGER NOT NULL DEFAULT 0'],
   ]);
 
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_alerts_country ON alerts(country);
-    CREATE INDEX IF NOT EXISTS idx_alerts_scenario ON alerts(scenario);
-    CREATE INDEX IF NOT EXISTS idx_alerts_as_name ON alerts(as_name);
-    CREATE INDEX IF NOT EXISTS idx_alerts_target ON alerts(target);
-    CREATE INDEX IF NOT EXISTS idx_alerts_source_ip ON alerts(source_ip);
-    CREATE INDEX IF NOT EXISTS idx_alerts_simulated ON alerts(simulated);
-    CREATE INDEX IF NOT EXISTS idx_alerts_simulated_created_at ON alerts(simulated, created_at DESC, id DESC);
-    CREATE INDEX IF NOT EXISTS idx_alerts_country_created_at ON alerts(country, created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_alerts_scenario_created_at ON alerts(scenario, created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_decisions_country ON decisions(country);
-    CREATE INDEX IF NOT EXISTS idx_decisions_scenario ON decisions(scenario);
-    CREATE INDEX IF NOT EXISTS idx_decisions_as_name ON decisions(as_name);
-    CREATE INDEX IF NOT EXISTS idx_decisions_target ON decisions(target);
-    CREATE INDEX IF NOT EXISTS idx_decisions_simulated ON decisions(simulated);
-    CREATE INDEX IF NOT EXISTS idx_decisions_simulated_created_at ON decisions(simulated, created_at DESC, id DESC);
-    CREATE INDEX IF NOT EXISTS idx_decisions_alert_created_at ON decisions(alert_id, created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_decisions_stop_alert_id ON decisions(stop_at, alert_id);
-    CREATE INDEX IF NOT EXISTS idx_decisions_duplicate_active ON decisions(is_duplicate, stop_at, created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_decisions_duplicate_created_at ON decisions(is_duplicate, created_at DESC, id DESC);
-    CREATE INDEX IF NOT EXISTS idx_decisions_duplicate_primary ON decisions(value, simulated, stop_at DESC, id);
-  `);
+  db.exec(CREATE_SYNC_SECONDARY_INDEXES_SQL);
 
   backfillRecordIndexes(db);
 }

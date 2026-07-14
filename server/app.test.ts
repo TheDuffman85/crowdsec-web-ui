@@ -2777,10 +2777,9 @@ describe('createApp', () => {
       )).toBe(true);
       expect(fragments.at(-1)).toMatchObject({
         alertId: 200,
-        reconcileDecisions: true,
-        keepDecisionIds: expect.arrayContaining(['blocklist-0', 'blocklist-1200']),
+        reconcileDecisions: false,
+        keepDecisionIds: [],
       });
-      expect(fragments.at(-1)?.keepDecisionIds).toHaveLength(decisionCount);
     } finally {
       controller.stopBackgroundTasks();
       database.close();
@@ -2788,7 +2787,7 @@ describe('createApp', () => {
     }
   });
 
-  test('syncs active decisions in configured windows unless timeout splitting is needed', async () => {
+  test('does not refetch active decisions after a complete historical bootstrap', async () => {
     const { controller, database, fetchCalls } = createController({
       env: {
         CROWDSEC_LOOKBACK_PERIOD: '2h',
@@ -2808,20 +2807,14 @@ describe('createApp', () => {
     const activeRequests = fetchCalls.filter((call) =>
       call.url.includes('/v1/alerts?') && call.url.includes('has_active_decision=true'),
     );
-    expect(activeRequests).toHaveLength(6);
-    expect(activeRequests.every((call) => call.url.includes('until='))).toBe(true);
-    expect(activeRequests.some((call) => call.url.includes('since=2h') && call.url.includes('until=1h'))).toBe(true);
-    expect(activeRequests.some((call) => call.url.includes('since=1h') && call.url.includes('until=0h'))).toBe(true);
-    expect(activeRequests.some((call) => !call.url.includes('scope='))).toBe(true);
-    expect(activeRequests.some((call) => call.url.includes('scope=ip'))).toBe(true);
-    expect(activeRequests.some((call) => call.url.includes('scope=range'))).toBe(true);
+    expect(activeRequests).toHaveLength(0);
 
     controller.stopBackgroundTasks();
     database.close();
     destroyTempDir();
   });
 
-  test('splits timed-out active decision windows and imports successful smaller windows', async () => {
+  test('falls back to split active-decision windows when historical bootstrap is incomplete', async () => {
     const activeAlert = sampleAlert({
       id: 81,
       uuid: 'alert-81',
@@ -2844,6 +2837,11 @@ describe('createApp', () => {
         if (!url.includes('/v1/alerts?')) return undefined;
         const parsed = new URL(url);
         const params = parsed.searchParams;
+        if (params.get('has_active_decision') !== 'true') {
+          const error = new Error('Historical request timeout') as Error & { code?: string };
+          error.code = 'ETIMEDOUT';
+          throw error;
+        }
         if (
           params.get('has_active_decision') === 'true' &&
           params.get('since')?.startsWith('1h') &&
@@ -2863,7 +2861,7 @@ describe('createApp', () => {
     const alerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
     expect(alerts.status).toBe(200);
     expect(database.getDecisionById('810')).not.toBeNull();
-    expect(controller.getSyncStatus().state).toBe('complete');
+    expect(controller.getSyncStatus().state).toBe('partial');
 
     const activeRequests = fetchCalls.filter((call) =>
       call.url.includes('/v1/alerts?') && call.url.includes('has_active_decision=true'),
@@ -2916,7 +2914,7 @@ describe('createApp', () => {
     destroyTempDir();
   });
 
-  test('marks bootstrap partial when minimum active windows fail and skips active pruning', async () => {
+  test('does not run the active-decision failure path after complete historical bootstrap', async () => {
     const activeAlert = sampleAlert({
       id: 91,
       uuid: 'alert-91',
@@ -2931,7 +2929,7 @@ describe('createApp', () => {
     });
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const { controller, database } = createController({
+    const { controller, database, fetchCalls } = createController({
       env: {
         CROWDSEC_LOOKBACK_PERIOD: '30m',
         CROWDSEC_ALERT_SYNC_CHUNK: '30m',
@@ -2954,14 +2952,18 @@ describe('createApp', () => {
       expect(alerts.status).toBe(200);
       expect(database.getDecisionById('910')).not.toBeNull();
       expect(controller.getSyncStatus()).toEqual(expect.objectContaining({
-        state: 'partial',
-        errors: expect.arrayContaining([expect.stringContaining('Active decisions')]),
+        state: 'complete',
+        errors: [],
       }));
+      const activeRequests = fetchCalls.filter((call) =>
+        call.url.includes('/v1/alerts?') && call.url.includes('has_active_decision=true'),
+      );
+      expect(activeRequests).toHaveLength(0);
 
       const logs = logSpy.mock.calls.map((call) => String(call[0])).join('\n');
       const warnings = warnSpy.mock.calls.map((call) => String(call[0])).join('\n');
-      expect(logs).not.toContain('Cache initialized successfully');
-      expect(warnings).toContain('Cache initialized partially');
+      expect(logs).toContain('Cache initialized successfully');
+      expect(warnings).not.toContain('Cache initialized partially');
     } finally {
       logSpy.mockRestore();
       warnSpy.mockRestore();
@@ -4818,7 +4820,7 @@ describe('createApp', () => {
     expect(alerts.status).toBe(200);
 
     const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
-    expect(alertRequests).toHaveLength(6);
+    expect(alertRequests).toHaveLength(3);
     expect(alertRequests.every((call) => call.url.includes('include_capi=false'))).toBe(true);
     expect(alertRequests.some((call) => !call.url.includes('scope='))).toBe(true);
     expect(alertRequests.some((call) => call.url.includes('scope=ip'))).toBe(true);
@@ -4912,7 +4914,7 @@ describe('createApp', () => {
     );
 
     const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
-    expect(alertRequests).toHaveLength(12);
+    expect(alertRequests).toHaveLength(6);
     expect(alertRequests.some((call) => call.url.includes('origin=crowdsec'))).toBe(true);
     expect(alertRequests.some((call) => call.url.includes('scenario=manual%2Fweb-ui'))).toBe(true);
     expect(alertRequests.every((call) => call.url.includes('origin=') || call.url.includes('scenario='))).toBe(true);
@@ -5007,17 +5009,21 @@ describe('createApp', () => {
     ]));
 
     const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
-    expect(alertRequests).toHaveLength(6);
+    expect(alertRequests).toHaveLength(3);
     expect(alertRequests.every((call) => call.url.includes('include_capi=false'))).toBe(true);
     expect(alertRequests.some((call) => call.url.includes('origin=cscli-import') && !call.url.includes('scope='))).toBe(true);
     expect(alertRequests.some((call) => call.url.includes('origin=cscli-import') && call.url.includes('scope=ip'))).toBe(true);
     expect(alertRequests.some((call) => call.url.includes('origin=cscli-import') && call.url.includes('scope=range'))).toBe(true);
 
     const storedAlert = database.db.query('SELECT raw_data FROM alerts WHERE id = 17511').get() as { raw_data: string };
-    expect(JSON.parse(storedAlert.raw_data)).toEqual(expect.objectContaining({
+    const storedAlertPayload = JSON.parse(storedAlert.raw_data) as AlertRecord;
+    expect(storedAlertPayload).toEqual(expect.objectContaining({
       id: 17511,
       kind: 'cscli',
+      decisions: [{ id: 26211171 }],
     }));
+    expect(storedAlertPayload.decisions?.[0]).not.toHaveProperty('value');
+    expect(storedAlertPayload.decisions?.[0]).not.toHaveProperty('origin');
 
     controller.stopBackgroundTasks();
     database.close();
@@ -5090,7 +5096,7 @@ describe('createApp', () => {
     expect(alerts.some((alert) => alert.id === 17)).toBe(false);
 
     const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
-    expect(alertRequests).toHaveLength(6);
+    expect(alertRequests).toHaveLength(3);
     expect(alertRequests.every((call) => call.url.includes('include_capi=false'))).toBe(true);
     expect(alertRequests.some((call) => !call.url.includes('scope='))).toBe(true);
     expect(alertRequests.some((call) => call.url.includes('scope=ip'))).toBe(true);
@@ -5300,7 +5306,7 @@ describe('createApp', () => {
     ]));
 
     const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
-    expect(alertRequests).toHaveLength(2);
+    expect(alertRequests).toHaveLength(1);
     expect(alertRequests.every((call) => call.url.includes('origin=lists'))).toBe(true);
     expect(alertRequests.every((call) => !call.url.includes('scope='))).toBe(true);
 
@@ -5341,7 +5347,7 @@ describe('createApp', () => {
     );
 
     const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
-    expect(alertRequests).toHaveLength(2);
+    expect(alertRequests).toHaveLength(1);
     expect(alertRequests.every((call) => call.url.includes('origin=lists'))).toBe(true);
     expect(alertRequests.every((call) => !call.url.includes('scope='))).toBe(true);
 
@@ -5423,7 +5429,7 @@ describe('createApp', () => {
     );
 
     const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
-    expect(alertRequests).toHaveLength(6);
+    expect(alertRequests).toHaveLength(3);
     expect(alertRequests.every((call) => call.url.includes('include_capi=false'))).toBe(true);
     expect(alertRequests.every((call) => !call.url.includes('origin='))).toBe(true);
 
@@ -5487,9 +5493,9 @@ describe('createApp', () => {
     );
 
     const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
-    expect(alertRequests).toHaveLength(12);
-    expect(alertRequests.filter((call) => !call.url.includes('origin=')).length).toBe(6);
-    expect(alertRequests.filter((call) => call.url.includes('origin=crowdsec')).length).toBe(6);
+    expect(alertRequests).toHaveLength(6);
+    expect(alertRequests.filter((call) => !call.url.includes('origin=')).length).toBe(3);
+    expect(alertRequests.filter((call) => call.url.includes('origin=crowdsec')).length).toBe(3);
 
     controller.stopBackgroundTasks();
     database.close();
@@ -5549,7 +5555,7 @@ describe('createApp', () => {
     expect(alerts.some((alert) => alert.id === 58)).toBe(false);
 
     const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
-    expect(alertRequests).toHaveLength(6);
+    expect(alertRequests).toHaveLength(3);
     expect(alertRequests.every((call) => call.url.includes('include_capi=false'))).toBe(true);
 
     controller.stopBackgroundTasks();
@@ -5589,7 +5595,7 @@ describe('createApp', () => {
     expect(await alertsResponse.json()).toEqual([]);
 
     const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
-    expect(alertRequests).toHaveLength(6);
+    expect(alertRequests).toHaveLength(3);
     expect(alertRequests.every((call) => !call.url.includes('origin='))).toBe(true);
 
     controller.stopBackgroundTasks();
@@ -5666,7 +5672,7 @@ describe('createApp', () => {
     expect(alerts).toEqual([expect.objectContaining({ id: 22 })]);
 
     const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
-    expect(alertRequests).toHaveLength(6);
+    expect(alertRequests).toHaveLength(3);
     expect(alertRequests.every((call) => call.url.includes('include_capi=false'))).toBe(true);
     expect(alertRequests.every((call) => !call.url.includes('origin='))).toBe(true);
 
@@ -5706,7 +5712,7 @@ describe('createApp', () => {
     expect(await alertsResponse.json()).toEqual([]);
 
     const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
-    expect(alertRequests).toHaveLength(2);
+    expect(alertRequests).toHaveLength(1);
     expect(alertRequests.every((call) => call.url.includes('origin=lists'))).toBe(true);
     expect(alertRequests.every((call) => !call.url.includes('scope='))).toBe(true);
 

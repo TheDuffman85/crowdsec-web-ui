@@ -74,8 +74,7 @@ function execute(request: WorkerRequest['request']): unknown {
     return undefined;
   }
   if (request.type === 'refresh-duplicate-flags') {
-    database.refreshDecisionDuplicateFlags(String(request.now), true);
-    return undefined;
+    return database.refreshDecisionDuplicateFlags(String(request.now));
   }
   if (request.type === 'cleanup-old-data') {
     const cutoff = String(request.cutoff);
