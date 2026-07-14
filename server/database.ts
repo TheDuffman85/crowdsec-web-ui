@@ -47,7 +47,7 @@ const SYNC_SECONDARY_INDEX_NAMES = [
   'idx_decisions_target',
   'idx_decisions_simulated',
   'idx_decisions_simulated_created_at',
-  'idx_decisions_alert_created_at',
+  'idx_decisions_alert_created_id',
   'idx_decisions_duplicate_active',
   'idx_decisions_duplicate_created_at',
   'idx_decisions_duplicate_primary',
@@ -76,7 +76,7 @@ const CREATE_SYNC_SECONDARY_INDEXES_SQL = `
   CREATE INDEX IF NOT EXISTS idx_decisions_target ON decisions(target);
   CREATE INDEX IF NOT EXISTS idx_decisions_simulated ON decisions(simulated);
   CREATE INDEX IF NOT EXISTS idx_decisions_simulated_created_at ON decisions(simulated, created_at DESC, id DESC);
-  CREATE INDEX IF NOT EXISTS idx_decisions_alert_created_at ON decisions(alert_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_decisions_alert_created_id ON decisions(alert_id, created_at DESC, id DESC, stop_at);
   CREATE INDEX IF NOT EXISTS idx_decisions_duplicate_active ON decisions(is_duplicate, stop_at, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_decisions_duplicate_created_at ON decisions(is_duplicate, created_at DESC, id DESC);
   CREATE INDEX IF NOT EXISTS idx_decisions_duplicate_primary ON decisions(value, simulated, stop_at DESC, id);
@@ -1728,6 +1728,9 @@ function migrateRecordIndexColumns(db: Database): void {
     ['is_duplicate', 'INTEGER NOT NULL DEFAULT 0'],
   ]);
 
+  // Replaced by idx_decisions_alert_created_id, which also satisfies the
+  // deterministic decision paging order and covers the history predicate.
+  db.exec('DROP INDEX IF EXISTS idx_decisions_alert_created_at');
   db.exec(CREATE_SYNC_SECONDARY_INDEXES_SQL);
 
   backfillRecordIndexes(db);

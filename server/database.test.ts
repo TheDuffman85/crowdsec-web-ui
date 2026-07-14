@@ -224,6 +224,22 @@ describe('CrowdsecDatabase', () => {
     const rebuiltDecisionIndexes = db.db.prepare("PRAGMA index_list('decisions')").all() as Array<{ name: string }>;
     expect(rebuiltAlertIndexes.map((index) => index.name)).toContain('idx_alerts_created_at');
     expect(rebuiltDecisionIndexes.map((index) => index.name)).toContain('idx_decisions_stop_alert_id');
+    expect(rebuiltDecisionIndexes.map((index) => index.name)).toContain('idx_decisions_alert_created_id');
+    expect(
+      (db.db.prepare("PRAGMA index_info('idx_decisions_alert_created_id')").all() as Array<{ name: string }>).map((column) => column.name),
+    ).toEqual(['alert_id', 'created_at', 'id', 'stop_at']);
+    const alertDecisionPagingPlan = db.db.prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT raw_data
+      FROM decisions
+      WHERE (created_at >= ? OR stop_at > ?) AND alert_id = ?
+      ORDER BY created_at DESC, id DESC
+      LIMIT ? OFFSET ?
+    `).all('2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z', 1, 50, 0) as Array<{ detail: string }>;
+    expect(alertDecisionPagingPlan.map((step) => step.detail).join('\n')).toContain(
+      'USING INDEX idx_decisions_alert_created_id (alert_id=?)',
+    );
+    expect(alertDecisionPagingPlan.map((step) => step.detail).join('\n')).not.toContain('USE TEMP B-TREE');
     expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts WHERE alerts_fts MATCH ?').get('deferred') as { count: number }).count).toBe(1);
 
     db.close();
@@ -348,6 +364,7 @@ describe('CrowdsecDatabase', () => {
         scenario TEXT,
         raw_data TEXT
       );
+      CREATE INDEX idx_decisions_alert_created_at ON decisions(alert_id, created_at DESC);
       INSERT INTO decisions (
         id, uuid, alert_id, created_at, stop_at, value, type, origin, scenario, raw_data
       )
@@ -377,9 +394,11 @@ describe('CrowdsecDatabase', () => {
 
     expect(columns.map((column) => column.name)).toEqual(expect.arrayContaining(['is_duplicate', 'search_text', 'simulated']));
     expect(indexes.map((index) => index.name)).toEqual(expect.arrayContaining([
+      'idx_decisions_alert_created_id',
       'idx_decisions_duplicate_active',
       'idx_decisions_duplicate_created_at',
     ]));
+    expect(indexes.map((index) => index.name)).not.toContain('idx_decisions_alert_created_at');
     expect(row.is_duplicate).toBe(0);
     expect(db.getDecisionById('10')?.stop_at).toBe('2030-01-01T00:00:00.000Z');
 

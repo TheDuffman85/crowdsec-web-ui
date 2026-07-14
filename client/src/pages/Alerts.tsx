@@ -200,6 +200,7 @@ export function Alerts() {
     const inFlightLoadKeysRef = useRef(new Set<string>());
     const lastCompletedLoadRef = useRef<{ key: string; completedAt: number } | null>(null);
     const modalDecisionsLoadRef = useRef<{ alertId: string | null; page: number | null }>({ alertId: null, page: null });
+    const modalDecisionsPageRef = useRef(1);
     const loadAlertsRef = useRef<(options?: {
         isBackground?: boolean;
         page?: number;
@@ -618,7 +619,7 @@ export function Alerts() {
             let nextPage = result.pagination.page;
 
             if (!append && preserveLoadedPages) {
-                const loadedPageCount = Math.max(1, modalDecisionsPage);
+                const loadedPageCount = Math.max(1, modalDecisionsPageRef.current);
                 const maxPageToRefresh = Math.max(1, Math.min(loadedPageCount, result.pagination.total_pages || 1));
                 if (maxPageToRefresh > 1) {
                     const remainingPages = await Promise.all(
@@ -636,6 +637,7 @@ export function Alerts() {
             }
 
             setModalDecisions((current) => append ? [...current, ...result.data] : decisionsData);
+            modalDecisionsPageRef.current = nextPage;
             setModalDecisionsPage(nextPage);
             setModalDecisionsTotalPages(result.pagination.total_pages);
             setModalDecisionsTotal(result.pagination.total);
@@ -648,13 +650,14 @@ export function Alerts() {
                 setModalDecisionsLoading(false);
             }
         }
-    }, [modalDecisionsPage]);
+    }, []);
 
     useEffect(() => {
         const timeoutId = window.setTimeout(() => {
             if (!selectedAlertId) {
                 modalDecisionsLoadRef.current = { alertId: null, page: null };
                 setModalDecisions([]);
+                modalDecisionsPageRef.current = 1;
                 setModalDecisionsPage(1);
                 setModalDecisionsTotalPages(1);
                 setModalDecisionsTotal(0);
@@ -667,6 +670,7 @@ export function Alerts() {
             if (selectedAlertChanged) {
                 modalDecisionsLoadRef.current = { alertId: null, page: null };
                 setModalDecisions([]);
+                modalDecisionsPageRef.current = 1;
                 setModalDecisionsPage(1);
                 setModalDecisionsTotalPages(1);
                 setModalDecisionsTotal(0);

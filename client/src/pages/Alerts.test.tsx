@@ -1028,7 +1028,7 @@ describe('Alerts page', () => {
       decisions: [],
       events: [],
     });
-    vi.mocked(api.fetchDecisionsPaginated).mockImplementation(async (page, pageSize, filters) => {
+    const fetchDecisionsPaginatedMock = vi.mocked(api.fetchDecisionsPaginated).mockImplementation(async (page, pageSize, filters) => {
       expect(filters).toEqual(expect.objectContaining({
         alert_id: '1',
         include_expired: 'true',
@@ -1063,6 +1063,7 @@ describe('Alerts page', () => {
 
     await waitFor(() => expect(screen.getByText('Alert Details #1')).toBeInTheDocument());
     await waitFor(() => expect(screen.getByText('Showing 50 of 75')).toBeInTheDocument());
+    expect(fetchDecisionsPaginatedMock.mock.calls.map(([page]) => page)).toEqual([1]);
     expect(screen.getByText('#1000')).toBeInTheDocument();
     expect(screen.queryByText('#1074')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Load 50 more decisions/i })).not.toBeInTheDocument();
@@ -1072,6 +1073,10 @@ describe('Alerts page', () => {
     });
 
     await waitFor(() => expect(screen.getByText('#1074')).toBeInTheDocument());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(fetchDecisionsPaginatedMock.mock.calls.map(([page]) => page)).toEqual([1, 2]);
   });
 
   test('refreshes alert detail decisions for the same open alert during data refresh', async () => {

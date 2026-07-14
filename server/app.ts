@@ -3375,7 +3375,7 @@ ${errorSummary}  Status: ${syncSummary.state}
         where.add(`NOT (${duplicateSql})`);
       }
     }
-    if (filters.alertId) where.add('CAST(alert_id AS TEXT) = ?', filters.alertId);
+    if (filters.alertId) where.add('alert_id = ?', filters.alertId);
     addSimulationFilter(where, filters.simulation);
     if (filters.country) where.add('country = ?', filters.country);
     if (filters.scenario) where.add('scenario = ?', filters.scenario);
@@ -3979,7 +3979,7 @@ function decisionFieldCondition(field: string, value: string, now: string, dupli
     case 'id':
       return { sql: 'CAST(id AS TEXT) = ?', params: [value] };
     case 'alert':
-      return { sql: 'CAST(alert_id AS TEXT) = ?', params: [value] };
+      return { sql: 'alert_id = ?', params: [value] };
     case 'scenario':
       return textCondition('LOWER(scenario)', value);
     case 'ip':
