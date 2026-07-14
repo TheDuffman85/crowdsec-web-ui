@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { I18nContext, type I18nContextValue } from '../lib/i18n';
@@ -174,6 +174,10 @@ describe('WorldMapCard', () => {
     const berlinMarker = overlay.querySelector('[data-latitude="52.52"][data-longitude="13.405"]');
     expect(berlinMarker).not.toBeNull();
     expect(overlay.querySelectorAll('[data-latitude]')).toHaveLength(1);
+    expect(berlinMarker?.querySelectorAll('.world-map-attack-pulse')).toHaveLength(1);
+    expect(berlinMarker?.querySelector('.world-map-attack-pulse')).toHaveAttribute('stroke', '#ffffff');
+    expect(berlinMarker?.querySelector('.world-map-attack-dot')).toHaveAttribute('fill', '#dc2626');
+    expect(berlinMarker?.querySelector('.world-map-attack-dot')).toHaveAttribute('stroke-width', '0.75');
 
     const projectedCoordinates = berlinMarker?.getAttribute('transform')?.match(/-?\d+(?:\.\d+)?/g)?.map(Number) ?? [];
     expect(projectedCoordinates).toHaveLength(2);
@@ -212,9 +216,60 @@ describe('WorldMapCard', () => {
     transformProps.onTransform?.({}, { scale: 4, positionX: 0, positionY: 0 });
 
     expect(overlay.style.getPropertyValue('--world-map-attack-pulse-radius')).toBe('0.75px');
+    expect(overlay.style.getPropertyValue('--world-map-attack-pulse-stroke')).toBe('0.25px');
     expect(overlay.style.getPropertyValue('--world-map-attack-dot-radius')).toBe('0.625px');
+    expect(overlay.style.getPropertyValue('--world-map-attack-dot-stroke')).toBe('0.1875px');
     expect(marker?.getAttribute('transform')).toBe(markerTransform);
     expect(overlay.querySelector('.world-map-attack-marker-visual')).toBeNull();
+  });
+
+  test('adds location attack details to the country tooltip while hovering a marker', async () => {
+    render(
+      <WorldMapCard
+        data={[{ label: 'Germany', countryCode: 'DE', count: 5, liveCount: 3, simulatedCount: 2 }]}
+        attackLocations={[{ latitude: 52.52, longitude: 13.405, count: 5, liveCount: 3, simulatedCount: 2 }]}
+        onCountrySelect={vi.fn()}
+        selectedCountry={null}
+        simulationsEnabled={true}
+      />,
+    );
+
+    const overlay = await screen.findByTestId('world-map-attack-markers');
+    const marker = overlay.querySelector('[data-latitude="52.52"]');
+    const projectedCoordinates = marker?.getAttribute('transform')?.match(/-?\d+(?:\.\d+)?/g)?.map(Number) ?? [];
+    expect(projectedCoordinates).toHaveLength(2);
+
+    vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({
+      bottom: 450,
+      height: 450,
+      left: 0,
+      right: 800,
+      top: 0,
+      width: 800,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+
+    const mapContainer = document.querySelector('.world-map-container') as HTMLElement;
+    fireEvent.pointerMove(mapContainer, {
+      clientX: projectedCoordinates[0],
+      clientY: projectedCoordinates[1],
+    });
+
+    const details = await screen.findByTestId('world-map-attack-coordinates');
+    expect(details).toHaveClass('border-t');
+    expect(screen.getByText(/Alerts: 3 \(5 at this location\)/)).toBeInTheDocument();
+    expect(within(details).getByText('Approx. coordinates')).toBeInTheDocument();
+    expect(within(details).getByText('52.5200°, 13.4050°')).toBeInTheDocument();
+    expect(screen.queryByText('Attack location')).not.toBeInTheDocument();
+
+    fireEvent.pointerMove(mapContainer, {
+      clientX: projectedCoordinates[0] + 50,
+      clientY: projectedCoordinates[1] + 50,
+    });
+    await waitFor(() => expect(screen.queryByTestId('world-map-attack-coordinates')).not.toBeInTheDocument());
+    expect(screen.queryByText(/at location/)).not.toBeInTheDocument();
   });
 
   test('does not render the marker overlay when animation is disabled', async () => {

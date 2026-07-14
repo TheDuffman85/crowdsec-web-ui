@@ -10,7 +10,7 @@ import {
 } from 'react-zoom-pan-pinch';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { Switch } from './ui/Switch';
-import { Globe, ZoomIn, ZoomOut, RotateCcw, ShieldAlert, Gavel } from 'lucide-react';
+import { Globe, ZoomIn, ZoomOut, RotateCcw, ShieldAlert, Gavel, MapPin } from 'lucide-react';
 import { assetUrl } from '../lib/basePath';
 import type { DashboardAttackLocationDatum, WorldMapDatum } from '../types';
 import { DASHBOARD_COLORS } from '../lib/dashboardColors';
@@ -27,7 +27,7 @@ function setAttackMarkerVisualScale(element: SVGSVGElement | null, scale: number
 
     const inverseScale = 1 / scale;
     element.style.setProperty('--world-map-attack-pulse-radius', `${3 * inverseScale}px`);
-    element.style.setProperty('--world-map-attack-pulse-stroke', `${1.5 * inverseScale}px`);
+    element.style.setProperty('--world-map-attack-pulse-stroke', `${1 * inverseScale}px`);
     element.style.setProperty('--world-map-attack-dot-radius', `${2.5 * inverseScale}px`);
     element.style.setProperty('--world-map-attack-dot-stroke', `${0.75 * inverseScale}px`);
 }
@@ -64,6 +64,7 @@ interface TooltipPosition {
 interface AttackMarker {
     latitude: number;
     longitude: number;
+    count: number;
     x: number;
     y: number;
 }
@@ -167,6 +168,7 @@ export function WorldMapCard({
     const attackMarkerOverlayRef = useRef<SVGSVGElement | null>(null);
     const tooltipPositionRef = useRef<TooltipPosition>({ x: 0, y: 0 });
     const [documentVisible, setDocumentVisible] = useState(() => document.visibilityState !== 'hidden');
+    const [hoveredAttackMarker, setHoveredAttackMarker] = useState<AttackMarker | null>(null);
 
     useEffect(() => {
         window.localStorage.setItem(MAP_ANIMATION_STORAGE_KEY, String(animationEnabled));
@@ -185,6 +187,7 @@ export function WorldMapCard({
 
     const hideTooltip = useCallback(() => {
         setTooltipEnabled((current) => current ? false : current);
+        setHoveredAttackMarker(null);
     }, []);
 
     const showTooltipSoon = useCallback(() => {
@@ -263,9 +266,9 @@ export function WorldMapCard({
             <div
                 ref={tooltipRef}
                 data-testid="world-map-tooltip"
-                className="fixed z-[99999] pointer-events-none bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 border border-gray-200 dark:border-gray-700 shadow-xl rounded-lg p-3 text-sm max-w-[200px]"
+                className="fixed z-[99999] pointer-events-none bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 border border-gray-200 dark:border-gray-700 shadow-xl rounded-lg p-3 text-sm max-w-[260px]"
             >
-                <div className={`flex items-center gap-2 font-medium ${showMetricRows ? 'mb-2' : ''}`}>
+                <div className={`flex items-center gap-2 font-medium ${showMetricRows || hoveredAttackMarker ? 'mb-2' : ''}`}>
                     <CountryFlag code={featureId} />
                     <span className="min-w-0">
                         {getCountryName(featureId, language) ?? feature.label ?? featureId}
@@ -275,8 +278,11 @@ export function WorldMapCard({
                     <>
                         <div className="flex items-center gap-2">
                             <ShieldAlert className="w-4 h-4" style={{ color: DASHBOARD_COLORS.liveAlerts }} />
-                            <span style={{ color: DASHBOARD_COLORS.liveAlerts }}>
+                            <span className="whitespace-nowrap" style={{ color: DASHBOARD_COLORS.liveAlerts }}>
                                 {t('components.worldMap.alerts')}: {Number(feature.data?.liveCount || 0).toLocaleString()}
+                                {hoveredAttackMarker && (
+                                    <> ({t('components.worldMap.locationCount', { count: hoveredAttackMarker.count })})</>
+                                )}
                             </span>
                         </div>
                         <div className="mt-1 flex items-center gap-2">
@@ -304,6 +310,22 @@ export function WorldMapCard({
                             </div>
                         )}
                     </>
+                )}
+                {hoveredAttackMarker && (
+                    <div
+                        data-testid="world-map-attack-coordinates"
+                        className="mt-2 flex items-start gap-1.5 border-t border-gray-200 pt-2 text-gray-500 dark:border-gray-700 dark:text-gray-400"
+                    >
+                        <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                        <div className="min-w-0">
+                            <div className="text-[10px] font-medium uppercase tracking-wide">
+                                {t('components.worldMap.approximateCoordinates')}
+                            </div>
+                            <div className="mt-0.5 whitespace-nowrap font-mono text-xs tabular-nums text-gray-700 dark:text-gray-200">
+                                {hoveredAttackMarker.latitude.toFixed(4)}°, {hoveredAttackMarker.longitude.toFixed(4)}°
+                            </div>
+                        </div>
+                    </div>
                 )}
             </div>,
             document.body
@@ -462,11 +484,50 @@ export function WorldMapCard({
             const point = projection([longitude, latitude]);
             if (!point || !Number.isFinite(point[0]) || !Number.isFinite(point[1])) return;
 
-            markers.push({ latitude, longitude, x: point[0], y: point[1] });
+            markers.push({
+                latitude,
+                longitude,
+                count: location.count,
+                x: point[0],
+                y: point[1],
+            });
         });
 
         return markers;
     }, [animationEnabled, attackLocations, geoFeatures.length, mapHeight, mapWidth, projectionScale]);
+
+    const updateHoveredAttackMarker = useCallback((clientX: number, clientY: number) => {
+        const overlay = attackMarkerOverlayRef.current;
+        if (!overlay || attackMarkers.length === 0) {
+            setHoveredAttackMarker(null);
+            return;
+        }
+
+        const bounds = overlay.getBoundingClientRect();
+        if (bounds.width <= 0 || bounds.height <= 0) {
+            setHoveredAttackMarker(null);
+            return;
+        }
+
+        const hitRadius = 8;
+        let closestMarker: AttackMarker | null = null;
+        let closestDistanceSquared = hitRadius * hitRadius;
+
+        for (const marker of attackMarkers) {
+            const markerClientX = bounds.left + (marker.x / mapWidth) * bounds.width;
+            const markerClientY = bounds.top + (marker.y / mapHeight) * bounds.height;
+            const deltaX = clientX - markerClientX;
+            const deltaY = clientY - markerClientY;
+            const distanceSquared = deltaX * deltaX + deltaY * deltaY;
+
+            if (distanceSquared <= closestDistanceSquared) {
+                closestMarker = marker;
+                closestDistanceSquared = distanceSquared;
+            }
+        }
+
+        setHoveredAttackMarker((current) => current === closestMarker ? current : closestMarker);
+    }, [attackMarkers, mapHeight, mapWidth]);
 
     const isFiltered = selectedCountry !== null && selectedCountry !== undefined;
 
@@ -566,7 +627,11 @@ export function WorldMapCard({
                     <div
                         ref={containerRef}
                         className={`w-full h-full absolute inset-0 world-map-container ${isFiltered ? 'country-filtered' : ''}`}
-                        onPointerMoveCapture={(event) => updateTooltipPosition(event.clientX, event.clientY)}
+                        onPointerMoveCapture={(event) => {
+                            updateTooltipPosition(event.clientX, event.clientY);
+                            updateHoveredAttackMarker(event.clientX, event.clientY);
+                        }}
+                        onPointerLeave={() => setHoveredAttackMarker(null)}
                     >
                         <style>{`
                             .world-map-container path {
@@ -702,7 +767,7 @@ export function WorldMapCard({
                                                     viewBox={`0 0 ${mapWidth} ${mapHeight}`}
                                                     style={{
                                                         '--world-map-attack-pulse-radius': `${3 / mapTransformScaleRef.current}px`,
-                                                        '--world-map-attack-pulse-stroke': `${1.5 / mapTransformScaleRef.current}px`,
+                                                        '--world-map-attack-pulse-stroke': `${1 / mapTransformScaleRef.current}px`,
                                                         '--world-map-attack-dot-radius': `${2.5 / mapTransformScaleRef.current}px`,
                                                         '--world-map-attack-dot-stroke': `${0.75 / mapTransformScaleRef.current}px`,
                                                     } as CSSProperties}
@@ -720,8 +785,8 @@ export function WorldMapCard({
                                                                 className="world-map-attack-pulse"
                                                                 r="3"
                                                                 fill="none"
-                                                                stroke="#dc2626"
-                                                                strokeWidth="1.5"
+                                                                stroke="#ffffff"
+                                                                strokeWidth="1"
                                                                 style={{ animationDelay: `${-(index % 11) * 0.17}s` }}
                                                             />
                                                             <circle
