@@ -266,7 +266,7 @@ export function WorldMapCard({
             <div
                 ref={tooltipRef}
                 data-testid="world-map-tooltip"
-                className="fixed z-[99999] pointer-events-none bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 border border-gray-200 dark:border-gray-700 shadow-xl rounded-lg p-3 text-sm max-w-[260px]"
+                className="fixed z-[99999] pointer-events-none max-[799px]:hidden bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 border border-gray-200 dark:border-gray-700 shadow-xl rounded-lg p-3 text-sm max-w-[260px]"
             >
                 <div className={`flex items-center gap-2 font-medium ${showMetricRows || hoveredAttackMarker ? 'mb-2' : ''}`}>
                     <CountryFlag code={featureId} />

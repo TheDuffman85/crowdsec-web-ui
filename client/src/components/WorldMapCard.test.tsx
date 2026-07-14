@@ -490,6 +490,19 @@ describe('WorldMapCard', () => {
     expect(tooltip).toHaveStyle({ left: '55px', top: '65px' });
   });
 
+  test('hides the tooltip on mobile viewports', async () => {
+    render(
+      <WorldMapCard
+        data={[{ label: 'Germany', countryCode: 'DE', count: 2, liveCount: 2, simulatedCount: 0 }]}
+        onCountrySelect={vi.fn()}
+        selectedCountry={null}
+      />,
+    );
+
+    const tooltip = await screen.findByTestId('world-map-tooltip');
+    expect(tooltip).toHaveClass('max-[799px]:hidden');
+  });
+
   test('hides counts for a country dimmed by an active country filter', async () => {
     render(
       <WorldMapCard
