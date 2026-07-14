@@ -216,6 +216,8 @@ export function Dashboard() {
     const { refreshSignal, setLastUpdated } = useRefresh();
     const [initialLoading, setInitialLoading] = useState(true);
     const [backgroundRefreshing, setBackgroundRefreshing] = useState(false);
+    const [filterApplying, setFilterApplying] = useState(false);
+    const [filterApplicationVersion, setFilterApplicationVersion] = useState(0);
     const [config, setConfig] = useState<ConfigResponse | null>(null);
 
     // Initialize state from local storage or defaults
@@ -235,11 +237,12 @@ export function Dashboard() {
     const nextLoadRequestIdRef = useRef(0);
     const lastCompletedLoadRef = useRef<{ key: string; completedAt: number } | null>(null);
     const pendingStatsRetryTimeoutRef = useRef<number | null>(null);
+    const filterApplyingRef = useRef(false);
+    const latestFilterApplicationVersionRef = useRef(0);
 
     // Active filters
     const [filters, setFilters] = useState<DashboardFilters>(() => parseStoredFilters(localStorage.getItem('dashboard_filters')));
 
-    // Clear dateRange filter when granularity changes
     // Persist filters and granularity
     useEffect(() => {
         localStorage.setItem('dashboard_filters', JSON.stringify(filters));
@@ -257,10 +260,35 @@ export function Dashboard() {
         localStorage.setItem('dashboard_percentage_basis', percentageBasis);
     }, [percentageBasis]);
 
+    const finishFilterApplication = useCallback(() => {
+        filterApplyingRef.current = false;
+        setFilterApplying(false);
+    }, []);
+
+    const startFilterApplication = useCallback((applyChange: () => void) => {
+        if (filterApplyingRef.current) {
+            return false;
+        }
+
+        const nextVersion = latestFilterApplicationVersionRef.current + 1;
+        latestFilterApplicationVersionRef.current = nextVersion;
+        filterApplyingRef.current = true;
+        setFilterApplying(true);
+        setFilterApplicationVersion(nextVersion);
+        applyChange();
+        return true;
+    }, []);
+
     // Handler to change granularity and clear date range simultaneously (explicit user action)
     const handleGranularityChange = (newGranularity: Granularity) => {
-        setGranularity(newGranularity);
-        setFilters(prev => ({ ...prev, dateRange: null }));
+        if (newGranularity === granularity && filters.dateRange === null) {
+            return;
+        }
+
+        startFilterApplication(() => {
+            setGranularity(newGranularity);
+            setFilters(prev => ({ ...prev, dateRange: null }));
+        });
     };
 
     const buildDashboardStatsFilters = useCallback((): Record<string, string> => {
@@ -288,12 +316,17 @@ export function Dashboard() {
     const loadData = useCallback(async (isBackground = false, signal?: AbortSignal) => {
         const requestFilters = buildDashboardStatsFilters();
         const loadKey = JSON.stringify(requestFilters);
+        const isFilterApplication = filterApplyingRef.current &&
+            filterApplicationVersion === latestFilterApplicationVersionRef.current;
         const lastCompletedLoad = lastCompletedLoadRef.current;
         const inFlightLoad = inFlightLoadKeysRef.current.get(loadKey);
         if (
             (inFlightLoad && !inFlightLoad.signal?.aborted) ||
             (lastCompletedLoad?.key === loadKey && Date.now() - lastCompletedLoad.completedAt < 250)
         ) {
+            if (isFilterApplication) {
+                finishFilterApplication();
+            }
             return;
         }
 
@@ -363,8 +396,16 @@ export function Dashboard() {
                 setInitialLoading(false);
                 setBackgroundRefreshing(false);
             }
+            if (
+                isFilterApplication &&
+                requestId === nextLoadRequestIdRef.current &&
+                !signal?.aborted &&
+                !completedLoadWasPending
+            ) {
+                finishFilterApplication();
+            }
         }
-    }, [buildDashboardStatsFilters, setLastUpdated]);
+    }, [buildDashboardStatsFilters, filterApplicationVersion, finishFilterApplication, setLastUpdated]);
 
     useEffect(() => {
         loadDataRef.current = loadData;
@@ -446,26 +487,71 @@ export function Dashboard() {
 
     // Handle Filters
     const toggleFilter = (type: FilterKey, value: string | null | undefined) => {
-        if (!value) {
+        if (!value || filterApplyingRef.current) {
             return;
         }
 
         if (type === 'simulation') {
-            setFilters(prev => ({
-                ...prev,
-                simulation: prev.simulation === value ? 'all' : value as SimulationFilter,
-            }));
+            const nextSimulation = filters.simulation === value ? 'all' : value as SimulationFilter;
+            if (nextSimulation === filters.simulation) {
+                return;
+            }
+
+            startFilterApplication(() => {
+                setFilters(prev => ({
+                    ...prev,
+                    simulation: nextSimulation,
+                }));
+            });
             return;
         }
 
-        setFilters(prev => ({
-            ...prev,
-            [type]: prev[type] === value ? null : value
-        }));
+        startFilterApplication(() => {
+            setFilters(prev => ({
+                ...prev,
+                [type]: prev[type] === value ? null : value
+            }));
+        });
     };
 
     const clearFilters = () => {
-        setFilters(EMPTY_FILTERS);
+        if (
+            filterApplyingRef.current ||
+            (
+                filters.dateRange === null &&
+                filters.country === null &&
+                filters.scenario === null &&
+                filters.as === null &&
+                filters.ip === null &&
+                filters.target === null &&
+                filters.simulation === 'all'
+            )
+        ) {
+            return;
+        }
+
+        startFilterApplication(() => setFilters(EMPTY_FILTERS));
+    };
+
+    const handleDateRangeSelect = (dateRange: DashboardFilters['dateRange'], isAtEnd: boolean) => {
+        if (filterApplyingRef.current) {
+            return;
+        }
+
+        const nextDateRangeSticky = isAtEnd && dateRange !== null;
+        const dateRangeUnchanged = filters.dateRange?.start === dateRange?.start &&
+            filters.dateRange?.end === dateRange?.end;
+        if (dateRangeUnchanged && filters.dateRangeSticky === nextDateRangeSticky) {
+            return;
+        }
+
+        startFilterApplication(() => {
+            setFilters(prev => ({
+                ...prev,
+                dateRange,
+                dateRangeSticky: nextDateRangeSticky,
+            }));
+        });
     };
 
     const simulationsEnabled = config?.simulations_enabled === true;
@@ -507,6 +593,7 @@ export function Dashboard() {
         filters.ip !== null ||
         filters.target !== null ||
         filters.simulation !== 'all';
+    const dashboardRefreshing = backgroundRefreshing || filterApplying;
 
     if (initialLoading) {
         return <div className="text-center p-8 text-gray-500">{t('common.loadingDashboard')}</div>;
@@ -625,7 +712,7 @@ export function Dashboard() {
                         </h3>
                     </div>
                         <div className="min-h-[1.25rem] text-sm text-gray-500" aria-live="polite">
-                            <span className={`inline-flex items-center gap-2 transition-opacity ${backgroundRefreshing ? 'opacity-100' : 'opacity-0'}`}>
+                            <span className={`inline-flex items-center gap-2 transition-opacity ${dashboardRefreshing ? 'opacity-100' : 'opacity-0'}`}>
                                 <span className="h-2 w-2 rounded-full bg-primary-500 animate-pulse" aria-hidden="true" />
                                 {t('common.refreshingDashboard')}
                             </span>
@@ -653,7 +740,8 @@ export function Dashboard() {
                                 </button>
                                 <button
                                     onClick={clearFilters}
-                                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
+                                    disabled={filterApplying || !hasActiveFilters}
+                                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md transition-colors disabled:cursor-wait disabled:opacity-60"
                                 >
                                     <FilterX className="w-4 h-4" />
                                     <span className="hidden sm:inline">{t('pages.dashboard.resetFilters')}</span>
@@ -685,7 +773,8 @@ export function Dashboard() {
                                     <button
                                         key={value}
                                         onClick={() => toggleFilter('simulation', value)}
-                                        className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${filters.simulation === value
+                                        disabled={filterApplying}
+                                        className={`rounded-full px-3 py-1 text-xs font-medium transition-colors disabled:cursor-wait disabled:opacity-60 ${filters.simulation === value
                                             ? 'bg-primary-600 text-white'
                                             : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600'
                                             }`}
@@ -699,7 +788,12 @@ export function Dashboard() {
                 </div>
 
                 {/* Charts Area */}
-                <div className="grid gap-8 md:grid-cols-2" aria-busy={backgroundRefreshing}>
+                <div
+                    className={`grid gap-8 transition-opacity md:grid-cols-2 ${filterApplying ? 'opacity-70' : ''}`}
+                    aria-busy={dashboardRefreshing}
+                    aria-disabled={filterApplying}
+                    inert={filterApplying ? true : undefined}
+                >
                     {/* Activity Chart - Left */}
                     <div className="h-[450px]">
                         <Suspense fallback={<div className="text-center p-8 text-gray-500">{t('common.loadingChart')}</div>}>
@@ -715,11 +809,7 @@ export function Dashboard() {
                                 unfilteredSimulatedAlertsData={statistics.unfilteredSimulatedAlertsHistory}
                                 unfilteredSimulatedDecisionsData={statistics.unfilteredSimulatedDecisionsHistory}
                                 simulationsEnabled={simulationsEnabled}
-                                onDateRangeSelect={(dateRange, isAtEnd) => setFilters(prev => ({
-                                    ...prev,
-                                    dateRange,
-                                    dateRangeSticky: isAtEnd && dateRange !== null
-                                }))}
+                                onDateRangeSelect={handleDateRangeSelect}
                                 selectedDateRange={filters.dateRange}
                                 isSticky={filters.dateRangeSticky}
                                 granularity={granularity}
@@ -744,7 +834,12 @@ export function Dashboard() {
                 </div>
 
                 {/* Top Statistics Grid */}
-                <div className="grid gap-8 md:grid-cols-2 xl:grid-cols-4" aria-busy={backgroundRefreshing}>
+                <div
+                    className={`grid gap-8 transition-opacity md:grid-cols-2 xl:grid-cols-4 ${filterApplying ? 'opacity-70' : ''}`}
+                    aria-busy={dashboardRefreshing}
+                    aria-disabled={filterApplying}
+                    inert={filterApplying ? true : undefined}
+                >
                     <StatCard
                         title={t('pages.dashboard.topCountries')}
                         items={statistics.topCountries}
