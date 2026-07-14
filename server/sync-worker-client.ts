@@ -3,11 +3,16 @@ import type { AlertInsertParams, DecisionInsertParams } from './database';
 
 export type DatabaseWrite = <T>(operation: () => T | Promise<T>) => Promise<T>;
 
-export interface SyncAlertMutation {
-  alert: AlertInsertParams;
+interface SyncAlertMutationBase {
   decisions: DecisionInsertParams[];
   keepDecisionIds: string[];
+  reconcileDecisions?: boolean;
 }
+
+export type SyncAlertMutation = SyncAlertMutationBase & (
+  | { alert: AlertInsertParams; alertId?: never }
+  | { alert?: never; alertId: string | number }
+);
 
 type SyncWorkerRequest =
   | { type: 'persist-alerts'; mutations: SyncAlertMutation[] }

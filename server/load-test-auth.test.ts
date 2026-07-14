@@ -5,6 +5,8 @@ import { afterEach, describe, expect, test } from 'vitest';
 import {
   createLoadTestRuntimeEnv,
   ensureLoadTestUser,
+  LOAD_TEST_PASSKEY_CREDENTIAL_ID,
+  LOAD_TEST_PASSKEY_NAME,
   LOAD_TEST_PASSWORD,
   LOAD_TEST_USERNAME,
 } from '../scripts/load-test-auth';
@@ -63,7 +65,14 @@ describe('load-test authentication', () => {
     const user = enabledDatabase.getAuthUserByUsername(LOAD_TEST_USERNAME);
     expect(user).toMatchObject({ username: 'load', role: 'admin', auth_provider: 'password' });
     expect(await verifyPassword(LOAD_TEST_PASSWORD, user?.password_hash || '')).toBe(true);
+    expect(enabledDatabase.getWebAuthnCredentialByCredentialId(LOAD_TEST_PASSKEY_CREDENTIAL_ID)).toMatchObject({
+      user_id: user?.id,
+      name: LOAD_TEST_PASSKEY_NAME,
+      sign_count: 0,
+    });
+    expect(enabledDatabase.countWebAuthnCredentials()).toBe(1);
     expect(await ensureLoadTestUser(enabledDatabase, true)).toBe(false);
+    expect(enabledDatabase.countWebAuthnCredentials()).toBe(1);
     enabledDatabase.close();
 
     const disabledDatabase = createTestDatabase();

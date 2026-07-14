@@ -717,7 +717,7 @@ Active-decision refreshes use the same `CROWDSEC_ALERT_SYNC_CHUNK` windows as hi
    ./run.sh loadtest
    ```
 
-   Load-test mode seeds a repeatable fake-LAPI source dataset in a separate SQLite database, builds the frontend, and starts a local backend. Authentication is enabled by default with the administrator login `load` / `test`; set `AUTH_ENABLED=false` to disable it. On startup, the backend imports that source dataset through the normal bootstrap/full-sync path before serving it from the app cache. The UI opens on the default Dashboard at `http://localhost:3000/`. The default source dataset is `300000` alerts and `300000` embedded decisions under `/tmp/crowdsec-web-ui-load-test`. Load-test mode prints source seed timings, sync progress, `/api` requests, and event-loop stalls of at least 100ms to the console while it runs.
+   Load-test mode seeds a repeatable fake-LAPI source dataset in a separate SQLite database, builds the frontend, and starts a local backend. Authentication is enabled by default with the administrator login `load` / `test`; set `AUTH_ENABLED=false` to disable it. The load user also has a dummy passkey so the passkey button and authentication request can be exercised under load; the passkey authentication itself is expected to fail. On startup, the backend imports that source dataset through the normal bootstrap/full-sync path before serving it from the app cache. The UI opens on the default Dashboard at `http://localhost:3000/`. The default source dataset is `300000` alerts and `300000` embedded decisions under `/tmp/crowdsec-web-ui-load-test`. Load-test mode prints source seed timings, sync progress, `/api` requests, and event-loop stalls of at least 100ms to the console while it runs.
 
    Override the dataset with environment variables:
    ```bash
@@ -734,6 +734,7 @@ Active-decision refreshes use the same `CROWDSEC_ALERT_SYNC_CHUNK` windows as hi
    LOADTEST_ACTIVE_DECISION_RATIO=0.7
    LOADTEST_SIMULATION_RATIO=0.1
    LOADTEST_DUPLICATE_VALUE_RATIO=0.15
+   LOADTEST_BLOCKLIST_DECISIONS=100000
    LOADTEST_REFRESH_ALERTS=100
    LOADTEST_REFRESH_DECISIONS=100
    AUTH_ENABLED=true
@@ -749,7 +750,7 @@ Active-decision refreshes use the same `CROWDSEC_ALERT_SYNC_CHUNK` windows as hi
 
    The regular `AUTH_OIDC_*` environment variables are also supported in load-test mode, including issuer URL, client ID and secret, scope, group claim, role groups, and unmatched-role handling.
 
-   Both the initial source dataset and later refresh batches are exposed through the fake LAPI. On each due refresh batch it exposes `LOADTEST_REFRESH_ALERTS` new synthetic alerts and `LOADTEST_REFRESH_DECISIONS` new synthetic decisions, then the regular sync code imports them into SQLite.
+   Both the initial source dataset and later refresh batches are exposed through the fake LAPI. By default, one synthetic blocklist alert contains `100000` of the requested decisions so load testing covers very large single-alert payloads; `LOADTEST_BLOCKLIST_DECISIONS` changes that concentration without changing `LOADTEST_DECISIONS`. On each due refresh batch it exposes `LOADTEST_REFRESH_ALERTS` new synthetic alerts and `LOADTEST_REFRESH_DECISIONS` new synthetic decisions, then the regular sync code imports them into SQLite.
 
    The dev-build workflow publishes a containerized variant as `ghcr.io/theduffman85/crowdsec-web-ui:loadtest`. It is a drop-in replacement for the regular image: keep the same ports, authentication environment, OIDC environment, and `/app/data` volume, and change only the image tag. CrowdSec connection settings are ignored by the load-test server.
 

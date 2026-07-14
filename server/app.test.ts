@@ -2672,6 +2672,122 @@ describe('createApp', () => {
     }
   });
 
+  test('bounds sync transactions by decision volume so interactive writes can run between them', async () => {
+    const alerts = Array.from({ length: 4 }, (_, alertIndex) => sampleAlert({
+      id: 100 + alertIndex,
+      uuid: `alert-${100 + alertIndex}`,
+      decisions: Array.from({ length: 300 }, (_, decisionIndex) => ({
+        id: `${alertIndex}-${decisionIndex}`,
+        type: 'ban',
+        value: `10.${alertIndex}.${Math.floor(decisionIndex / 255)}.${decisionIndex % 255}`,
+        duration: '30m',
+        stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(),
+        origin: 'crowdsec',
+        simulated: false,
+      })),
+    }));
+    const syncWorker: NonNullable<CreateAppOptions['syncWorker']> = {
+      persistAlerts: vi.fn(async () => ({ changed: false })),
+      deleteAlertsMissingBetween: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      deleteCachedAlerts: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      deleteCachedDecisions: vi.fn(async () => 0),
+      beginDeferredSearchIndexUpdates: vi.fn(async () => {}),
+      rebuildSearchIndexes: vi.fn(async () => {}),
+      refreshDecisionDuplicateFlags: vi.fn(async () => {}),
+      cleanupOldData: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      clearSyncData: vi.fn(async () => {}),
+      runExclusive: vi.fn(async (operation) => operation()),
+      close: vi.fn(),
+    };
+    const { controller, database } = createController({
+      syncWorker,
+      fetchResolver: (url) => {
+        if (!url.includes('/v1/alerts?')) return undefined;
+        return Response.json(url.includes('has_active_decision=true') ? [] : alerts);
+      },
+    });
+
+    try {
+      const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+      expect(response.status).toBe(200);
+
+      const batches = vi.mocked(syncWorker.persistAlerts).mock.calls.map(([mutations]) => mutations);
+      expect(batches).toHaveLength(4);
+      expect(batches.every((mutations) =>
+        mutations.reduce((total, mutation) => total + mutation.decisions.length, 0) <= 500,
+      )).toBe(true);
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
+  test('splits a single blocklist alert across bounded decision transactions', async () => {
+    const decisionCount = 1_201;
+    const blocklistAlert = sampleAlert({
+      id: 200,
+      uuid: 'alert-200',
+      scenario: 'crowdsecurity/blocklist-import',
+      decisions: Array.from({ length: decisionCount }, (_, decisionIndex) => ({
+        id: `blocklist-${decisionIndex}`,
+        type: 'ban',
+        value: `198.51.${Math.floor(decisionIndex / 255)}.${decisionIndex % 255}`,
+        duration: '24h',
+        stop_at: new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString(),
+        origin: 'lists',
+        simulated: false,
+      })),
+    });
+    const syncWorker: NonNullable<CreateAppOptions['syncWorker']> = {
+      persistAlerts: vi.fn(async () => ({ changed: false })),
+      deleteAlertsMissingBetween: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      deleteCachedAlerts: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      deleteCachedDecisions: vi.fn(async () => 0),
+      beginDeferredSearchIndexUpdates: vi.fn(async () => {}),
+      rebuildSearchIndexes: vi.fn(async () => {}),
+      refreshDecisionDuplicateFlags: vi.fn(async () => {}),
+      cleanupOldData: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      clearSyncData: vi.fn(async () => {}),
+      runExclusive: vi.fn(async (operation) => operation()),
+      close: vi.fn(),
+    };
+    const { controller, database } = createController({
+      syncWorker,
+      fetchResolver: (url) => {
+        if (!url.includes('/v1/alerts?')) return undefined;
+        return Response.json(url.includes('has_active_decision=true') ? [] : [blocklistAlert]);
+      },
+    });
+
+    try {
+      const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+      expect(response.status).toBe(200);
+
+      const batches = vi.mocked(syncWorker.persistAlerts).mock.calls.map(([mutations]) => mutations);
+      expect(batches).toHaveLength(3);
+      expect(batches.map((mutations) =>
+        mutations.reduce((total, mutation) => total + mutation.decisions.length, 0),
+      )).toEqual([500, 500, 201]);
+
+      const fragments = batches.flat();
+      expect(fragments.filter((mutation) => mutation.alert)).toHaveLength(1);
+      expect(fragments.slice(0, -1).every((mutation) =>
+        mutation.reconcileDecisions === false && mutation.keepDecisionIds.length === 0,
+      )).toBe(true);
+      expect(fragments.at(-1)).toMatchObject({
+        alertId: 200,
+        reconcileDecisions: true,
+        keepDecisionIds: expect.arrayContaining(['blocklist-0', 'blocklist-1200']),
+      });
+      expect(fragments.at(-1)?.keepDecisionIds).toHaveLength(decisionCount);
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
   test('syncs active decisions in configured windows unless timeout splitting is needed', async () => {
     const { controller, database, fetchCalls } = createController({
       env: {

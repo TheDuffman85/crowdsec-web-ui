@@ -13,6 +13,11 @@ import {
   LOAD_TEST_PASSWORD,
   LOAD_TEST_USERNAME,
 } from './load-test-auth';
+import {
+  DEFAULT_LOAD_TEST_BLOCKLIST_DECISIONS,
+  getLoadTestSourceAlertIdForDecision,
+  normalizeLoadTestBlocklistDecisionCount,
+} from './load-test-shape';
 
 const LOADTEST_SOURCE_TABLE = 'loadtest_alert_source';
 installTimestampedConsole();
@@ -30,6 +35,11 @@ const eventLoopDelayReporter = setInterval(() => {
 }, 1_000);
 const initialAlertCount = parseIntegerEnv('LOADTEST_ALERTS', 300_000);
 const initialDecisionCount = parseIntegerEnv('LOADTEST_DECISIONS', 300_000);
+const initialBlocklistDecisionCount = normalizeLoadTestBlocklistDecisionCount(
+  initialAlertCount,
+  initialDecisionCount,
+  parseIntegerEnv('LOADTEST_BLOCKLIST_DECISIONS', DEFAULT_LOAD_TEST_BLOCKLIST_DECISIONS),
+);
 const refreshAlertCount = parseIntegerEnv('LOADTEST_REFRESH_ALERTS', 100);
 const refreshDecisionCount = parseIntegerEnv('LOADTEST_REFRESH_DECISIONS', 100);
 const loadTestSeed = parseIntegerEnv('LOADTEST_SEED', 1337);
@@ -403,10 +413,15 @@ function deleteSourceAlert(alertId: string | number): void {
 }
 
 function getSourceAlertIdForDecision(decisionId: string | number): string | null {
-  if (initialAlertCount <= 0) return null;
   const parsed = Number.parseInt(String(decisionId), 10);
-  if (!Number.isFinite(parsed) || parsed < 1 || parsed > initialDecisionCount) return null;
-  return String(((parsed - 1) % initialAlertCount) + 1);
+  if (!Number.isFinite(parsed)) return null;
+  const alertId = getLoadTestSourceAlertIdForDecision(
+    parsed,
+    initialAlertCount,
+    initialDecisionCount,
+    initialBlocklistDecisionCount,
+  );
+  return alertId === null ? null : String(alertId);
 }
 
 function deleteSourceDecision(decisionId: string | number): void {
@@ -642,6 +657,7 @@ const server = serve({
 console.log(`Load-test backend running at http://127.0.0.1:${controller.config.port}/`);
 if (authEnabled) {
   console.log(`Auth is enabled for load-test mode. Default login: ${LOAD_TEST_USERNAME} / ${LOAD_TEST_PASSWORD}`);
+  console.log('A dummy passkey is attached to the load-test user so the passkey login flow can be exercised. Authentication is expected to fail.');
 } else {
   console.log(`Auth is disabled for load-test mode.`);
 }

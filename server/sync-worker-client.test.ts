@@ -92,4 +92,55 @@ describe('DatabaseSyncWorker', () => {
 
     database.close();
   });
+
+  test('persists split alert decisions and reconciles stale rows only on the final fragment', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-sync-worker-'));
+    tempDirs.push(dir);
+    const dbPath = path.join(dir, 'test.db');
+    const database = new CrowdsecDatabase({ dbPath });
+    const worker = new DatabaseSyncWorker({ dbPath });
+    workers.push(worker);
+    const alert = {
+      $id: 1,
+      $uuid: 'blocklist-alert',
+      $created_at: '2026-07-14T00:00:00.000Z',
+      $message: 'Blocklist import',
+      $raw_data: JSON.stringify({ id: 1, decisions: [{ id: 'new-1' }, { id: 'new-2' }] }),
+    };
+    const decision = (id: string) => ({
+      $id: id,
+      $uuid: id,
+      $alert_id: 1,
+      $created_at: '2026-07-14T00:00:00.000Z',
+      $stop_at: '2026-07-15T00:00:00.000Z',
+      $value: '198.51.100.1',
+      $type: 'ban',
+      $origin: 'lists',
+      $scenario: 'crowdsecurity/blocklist-import',
+      $raw_data: JSON.stringify({ id, alert_id: 1 }),
+    });
+
+    database.insertAlert(alert);
+    database.insertDecision(decision('stale'));
+
+    await worker.persistAlerts([{
+      alert,
+      decisions: [decision('new-1')],
+      keepDecisionIds: [],
+      reconcileDecisions: false,
+    }]);
+    expect(database.getDecisionById('stale')).not.toBeNull();
+
+    await worker.persistAlerts([{
+      alertId: 1,
+      decisions: [decision('new-2')],
+      keepDecisionIds: ['new-1', 'new-2'],
+      reconcileDecisions: true,
+    }]);
+    expect(database.getDecisionById('new-1')).not.toBeNull();
+    expect(database.getDecisionById('new-2')).not.toBeNull();
+    expect(database.getDecisionById('stale')).toBeNull();
+
+    database.close();
+  });
 });

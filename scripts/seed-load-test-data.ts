@@ -3,6 +3,11 @@ import path from 'node:path';
 import { parseLookbackToMs } from '../server/config';
 import { CrowdsecDatabase } from '../server/database';
 import { installTimestampedConsole } from '../server/logging';
+import {
+  DEFAULT_LOAD_TEST_BLOCKLIST_DECISIONS,
+  getLoadTestDecisionIdsForAlert,
+  normalizeLoadTestBlocklistDecisionCount,
+} from './load-test-shape';
 
 const DEFAULT_ALERTS = 300_000;
 const DEFAULT_DECISIONS = 300_000;
@@ -21,6 +26,7 @@ interface LoadTestConfig {
   activeDecisionRatio: number;
   simulationRatio: number;
   duplicateValueRatio: number;
+  blocklistDecisions: number;
   lookbackMs: number;
 }
 
@@ -40,6 +46,7 @@ interface AlertTemplate {
   longitude: number;
   simulated: boolean;
   eventsCount: number;
+  isBlocklist: boolean;
 }
 
 interface DecisionTemplate {
@@ -129,14 +136,21 @@ function parseRatioEnv(name: string, defaultValue: number): number {
 }
 
 function readConfig(): LoadTestConfig {
+  const alerts = parseIntegerEnv('LOADTEST_ALERTS', DEFAULT_ALERTS);
+  const decisions = parseIntegerEnv('LOADTEST_DECISIONS', DEFAULT_DECISIONS);
   return {
-    alerts: parseIntegerEnv('LOADTEST_ALERTS', DEFAULT_ALERTS),
-    decisions: parseIntegerEnv('LOADTEST_DECISIONS', DEFAULT_DECISIONS),
+    alerts,
+    decisions,
     seed: parseIntegerEnv('LOADTEST_SEED', DEFAULT_SEED),
     dbDir: process.env.LOADTEST_DB_DIR || process.env.DB_DIR || DEFAULT_DB_DIR,
     activeDecisionRatio: parseRatioEnv('LOADTEST_ACTIVE_DECISION_RATIO', DEFAULT_ACTIVE_DECISION_RATIO),
     simulationRatio: parseRatioEnv('LOADTEST_SIMULATION_RATIO', DEFAULT_SIMULATION_RATIO),
     duplicateValueRatio: parseRatioEnv('LOADTEST_DUPLICATE_VALUE_RATIO', DEFAULT_DUPLICATE_VALUE_RATIO),
+    blocklistDecisions: normalizeLoadTestBlocklistDecisionCount(
+      alerts,
+      decisions,
+      parseIntegerEnv('LOADTEST_BLOCKLIST_DECISIONS', DEFAULT_LOAD_TEST_BLOCKLIST_DECISIONS),
+    ),
     lookbackMs: parseLookbackToMs(process.env.CROWDSEC_LOOKBACK_PERIOD || '30d'),
   };
 }
@@ -178,22 +192,24 @@ function buildAlertTemplate(id: number, config: LoadTestConfig, nowMs: number): 
   const countryTuple = pick(countries, id, config.seed, 17);
   const asTuple = pick(asNames, id, config.seed, 23);
   const createdAt = isoFromOffset(nowMs, Math.floor(fraction(id, config.seed, 29) * config.lookbackMs * 0.95));
+  const isBlocklist = id === 1 && config.blocklistDecisions > 0;
   return {
     id,
     createdAt,
-    scenario: scenarioTuple[0],
-    reason: scenarioTuple[1],
+    scenario: isBlocklist ? 'crowdsecurity/blocklist-import' : scenarioTuple[0],
+    reason: isBlocklist ? 'Synthetic blocklist import' : scenarioTuple[1],
     ip: ipFor(id, config.seed),
     country: countryTuple[0],
     asName: asTuple[0],
     asNumber: asTuple[1],
-    target: scenarioTuple[2],
+    target: isBlocklist ? 'blocklist' : scenarioTuple[2],
     machine: pick(machines, id, config.seed, 31),
-    origin: pick(origins, id, config.seed, 37),
+    origin: isBlocklist ? 'lists' : pick(origins, id, config.seed, 37),
     latitude: countryTuple[1] + (fraction(id, config.seed, 41) - 0.5) * 4,
     longitude: countryTuple[2] + (fraction(id, config.seed, 43) - 0.5) * 4,
     simulated: fraction(id, config.seed, 47) < config.simulationRatio,
-    eventsCount: 1 + Math.floor(fraction(id, config.seed, 53) * 120),
+    eventsCount: isBlocklist ? config.blocklistDecisions : 1 + Math.floor(fraction(id, config.seed, 53) * 120),
+    isBlocklist,
   };
 }
 
@@ -215,7 +231,11 @@ function buildDecisionTemplate(
     alertId: alert.id,
     createdAt: alert.createdAt,
     stopAt,
-    value: duplicate ? duplicateIpFor(id, config.seed) : alert.ip,
+    value: alert.isBlocklist
+      ? ipFor(20_000_000 + id, config.seed)
+      : duplicate
+        ? duplicateIpFor(id, config.seed)
+        : alert.ip,
     type: fraction(id, config.seed, 73) < 0.08 ? 'captcha' : 'ban',
     origin: alert.origin,
     scenario: alert.scenario,
@@ -258,7 +278,12 @@ function buildEvents(alert: AlertTemplate) {
 function buildEmbeddedDecisions(alert: AlertTemplate, config: LoadTestConfig, nowMs: number) {
   if (config.decisions === 0 || config.alerts === 0) return [];
   const decisions = [];
-  for (let decisionId = alert.id; decisionId <= config.decisions; decisionId += config.alerts) {
+  for (const decisionId of getLoadTestDecisionIdsForAlert(
+    alert.id,
+    config.alerts,
+    config.decisions,
+    config.blocklistDecisions,
+  )) {
     decisions.push(decisionSummary(buildDecisionTemplate(decisionId, alert, config, nowMs)));
   }
   return decisions;
@@ -272,7 +297,9 @@ function buildAlertRecord(alert: AlertTemplate, config: LoadTestConfig, nowMs: n
     created_at: alert.createdAt,
     scenario: alert.scenario,
     reason: alert.reason,
-    message: `${alert.eventsCount} events matched ${alert.scenario} from ${alert.ip}`,
+    message: alert.isBlocklist
+      ? `${decisions.length} decisions imported from the synthetic blocklist`
+      : `${alert.eventsCount} events matched ${alert.scenario} from ${alert.ip}`,
     machine_id: alert.machine,
     machine_alias: alert.machine,
     events_count: alert.eventsCount,
@@ -281,7 +308,7 @@ function buildAlertRecord(alert: AlertTemplate, config: LoadTestConfig, nowMs: n
     target: alert.target,
     simulated: alert.simulated,
     source: {
-      scope: 'ip',
+      scope: alert.isBlocklist ? 'lists:load-test-blocklist' : 'ip',
       value: alert.ip,
       ip: alert.ip,
       cn: alert.country,
@@ -349,6 +376,7 @@ const seedStartedAt = Date.now();
 console.log(`Seeding load-test database at ${dbPath}`);
 console.log(`Alerts: ${config.alerts.toLocaleString('en-US')}`);
 console.log(`Decisions: ${config.decisions.toLocaleString('en-US')}`);
+console.log(`Decisions in blocklist alert: ${config.blocklistDecisions.toLocaleString('en-US')}`);
 console.log(`Seed: ${config.seed}`);
 if (config.alerts === 0 && config.decisions > 0) {
   console.log('Warning: LOADTEST_DECISIONS requires alerts in CrowdSec alert payloads; no decisions will be generated when LOADTEST_ALERTS=0.');

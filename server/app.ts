@@ -288,6 +288,7 @@ const DASHBOARD_COLD_BUILD_ROW_LIMIT = 100_000;
 // Keep worker-message overhead reasonable while bounding each transaction so
 // interactive writes do not sit behind a long cache batch in the shared queue.
 const SYNC_WRITE_BATCH_SIZE = 100;
+const SYNC_WRITE_DECISION_BATCH_SIZE = 500;
 const LEGACY_UNFILTERED_ALERT_ORIGIN_TOKENS = new Set(['none']);
 const CAPI_ALERT_ORIGIN = 'CAPI';
 const LISTS_ALERT_ORIGIN = 'lists';
@@ -1767,6 +1768,70 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     };
   }
 
+  function* splitAlertMutation(mutation: SyncAlertMutation): Generator<SyncAlertMutation> {
+    if (!mutation.alert || mutation.decisions.length <= SYNC_WRITE_DECISION_BATCH_SIZE) {
+      yield mutation;
+      return;
+    }
+
+    for (let offset = 0; offset < mutation.decisions.length; offset += SYNC_WRITE_DECISION_BATCH_SIZE) {
+      const end = Math.min(offset + SYNC_WRITE_DECISION_BATCH_SIZE, mutation.decisions.length);
+      const isFirst = offset === 0;
+      const isFinal = end === mutation.decisions.length;
+      yield {
+        ...(isFirst ? { alert: mutation.alert } : { alertId: mutation.alert.$id }),
+        decisions: mutation.decisions.slice(offset, end),
+        keepDecisionIds: isFinal ? mutation.keepDecisionIds : [],
+        reconcileDecisions: isFinal,
+      };
+    }
+  }
+
+  function* createSyncWriteBatches(alerts: AlertRecord[]): Generator<SyncAlertMutation[]> {
+    let batch: SyncAlertMutation[] = [];
+    let alertCount = 0;
+    let decisionCount = 0;
+
+    const resetBatch = () => {
+      batch = [];
+      alertCount = 0;
+      decisionCount = 0;
+    };
+
+    for (const alert of alerts) {
+      const mutation = buildAlertMutation(alert);
+      if (!mutation) continue;
+
+      for (const fragment of splitAlertMutation(mutation)) {
+        const fragmentAlertCount = fragment.alert ? 1 : 0;
+        const fragmentDecisionCount = fragment.decisions.length;
+        if (
+          batch.length > 0
+          && (
+            alertCount + fragmentAlertCount > SYNC_WRITE_BATCH_SIZE
+            || decisionCount + fragmentDecisionCount > SYNC_WRITE_DECISION_BATCH_SIZE
+          )
+        ) {
+          yield batch;
+          resetBatch();
+        }
+
+        batch.push(fragment);
+        alertCount += fragmentAlertCount;
+        decisionCount += fragmentDecisionCount;
+        if (
+          alertCount >= SYNC_WRITE_BATCH_SIZE
+          || decisionCount >= SYNC_WRITE_DECISION_BATCH_SIZE
+        ) {
+          yield batch;
+          resetBatch();
+        }
+      }
+    }
+
+    if (batch.length > 0) yield batch;
+  }
+
   function resolveDecisionStopAt(decision: AlertDecision, createdAt: string, observedAt: string): string {
     if (decision.stop_at) {
       return decision.stop_at;
@@ -1788,11 +1853,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     let changed = false;
     const keepIds = alerts.map((alert) => alert.id);
 
-    for (let offset = 0; offset < alerts.length; offset += SYNC_WRITE_BATCH_SIZE) {
-      const mutations = alerts
-        .slice(offset, offset + SYNC_WRITE_BATCH_SIZE)
-        .map(buildAlertMutation)
-        .filter((mutation): mutation is SyncAlertMutation => mutation !== null);
+    for (const mutations of createSyncWriteBatches(alerts)) {
       const result = await syncWorker.persistAlerts(mutations);
       changed = result.changed || changed;
     }
@@ -1845,11 +1906,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       decisionCountsByAlertId.set(String(alert.id), Array.isArray(alert.decisions) ? alert.decisions.length : 0);
     }
 
-    for (let offset = 0; offset < alerts.length; offset += SYNC_WRITE_BATCH_SIZE) {
-      const mutations = alerts
-        .slice(offset, offset + SYNC_WRITE_BATCH_SIZE)
-        .map(buildAlertMutation)
-        .filter((mutation): mutation is SyncAlertMutation => mutation !== null);
+    for (const mutations of createSyncWriteBatches(alerts)) {
       const result = await syncWorker.persistAlerts(mutations);
       changed = result.changed || changed;
     }

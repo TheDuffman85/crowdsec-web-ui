@@ -30,14 +30,22 @@ function execute(request: WorkerRequest['request']): unknown {
     let changed = false;
     const persist = database.transaction<SyncAlertMutation[]>((items) => {
       for (const mutation of items) {
-        changed = database.insertAlert(mutation.alert) || changed;
+        const alertId = mutation.alert?.$id ?? mutation.alertId;
+        if (alertId === undefined) {
+          throw new Error('Split alert mutation is missing an alert ID');
+        }
+        if (mutation.alert) {
+          changed = database.insertAlert(mutation.alert) || changed;
+        }
         for (const decision of mutation.decisions) {
           changed = database.insertDecision(decision) || changed;
         }
-        changed = database.deleteDecisionsByAlertIdExcept(
-          mutation.alert.$id,
-          mutation.keepDecisionIds,
-        ) > 0 || changed;
+        if (mutation.reconcileDecisions !== false) {
+          changed = database.deleteDecisionsByAlertIdExcept(
+            alertId,
+            mutation.keepDecisionIds,
+          ) > 0 || changed;
+        }
       }
     });
     persist(mutations);
