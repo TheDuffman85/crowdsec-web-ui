@@ -570,7 +570,7 @@ export function WorldMapCard({
                         path.setAttribute('data-status', 'active');
                         path.style.opacity = '1';
                         path.style.stroke = '#38bdf8';
-                        path.style.strokeWidth = '2.5';
+                        path.style.strokeWidth = '1.5';
                         path.style.strokeLinejoin = 'round';
                         path.style.filter = 'drop-shadow(0 0 4px rgba(56, 189, 248, 0.65))';
                     } else {
