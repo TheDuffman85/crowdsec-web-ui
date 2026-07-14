@@ -741,7 +741,7 @@ export function Dashboard() {
                                 <button
                                     onClick={clearFilters}
                                     disabled={filterApplying || !hasActiveFilters}
-                                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md transition-colors disabled:cursor-wait disabled:opacity-60"
+                                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md transition-colors disabled:cursor-wait"
                                 >
                                     <FilterX className="w-4 h-4" />
                                     <span className="hidden sm:inline">{t('pages.dashboard.resetFilters')}</span>
@@ -774,7 +774,7 @@ export function Dashboard() {
                                         key={value}
                                         onClick={() => toggleFilter('simulation', value)}
                                         disabled={filterApplying}
-                                        className={`rounded-full px-3 py-1 text-xs font-medium transition-colors disabled:cursor-wait disabled:opacity-60 ${filters.simulation === value
+                                        className={`rounded-full px-3 py-1 text-xs font-medium transition-colors disabled:cursor-wait ${filters.simulation === value
                                             ? 'bg-primary-600 text-white'
                                             : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600'
                                             }`}
@@ -789,7 +789,7 @@ export function Dashboard() {
 
                 {/* Charts Area */}
                 <div
-                    className={`grid gap-8 transition-opacity md:grid-cols-2 ${filterApplying ? 'opacity-70' : ''}`}
+                    className="grid gap-8 md:grid-cols-2"
                     aria-busy={dashboardRefreshing}
                     aria-disabled={filterApplying}
                     inert={filterApplying ? true : undefined}
@@ -835,7 +835,7 @@ export function Dashboard() {
 
                 {/* Top Statistics Grid */}
                 <div
-                    className={`grid gap-8 transition-opacity md:grid-cols-2 xl:grid-cols-4 ${filterApplying ? 'opacity-70' : ''}`}
+                    className="grid gap-8 md:grid-cols-2 xl:grid-cols-4"
                     aria-busy={dashboardRefreshing}
                     aria-disabled={filterApplying}
                     inert={filterApplying ? true : undefined}

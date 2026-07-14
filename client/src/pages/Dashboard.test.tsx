@@ -520,6 +520,16 @@ describe('Dashboard page', () => {
     expect(screen.queryByText('Loading statistics...')).not.toBeInTheDocument();
     expect(screen.getByText('Refreshing dashboard...')).toBeInTheDocument();
 
+    const chartControls = screen.getByText('Chart').closest('[aria-disabled="true"]');
+    const statisticControls = screen.getByText('Top Countries').closest('[aria-disabled="true"]');
+    expect(chartControls).not.toBeNull();
+    expect(chartControls).not.toHaveClass('opacity-70');
+    expect(chartControls).not.toHaveClass('transition-opacity');
+    expect(statisticControls).not.toBeNull();
+    expect(statisticControls).not.toHaveClass('opacity-70');
+    expect(statisticControls).not.toHaveClass('transition-opacity');
+    expect(screen.getByRole('button', { name: 'Live' })).not.toHaveClass('disabled:opacity-60');
+
     deferred.resolve(buildDashboardStatsResponse({ simulation: 'live' }));
 
     await waitFor(() => {
