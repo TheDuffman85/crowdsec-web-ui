@@ -194,6 +194,7 @@
   "components.tableColumns.resetDefaults": "恢复默认",
   "components.tableColumns.title": "表格列",
   "components.worldMap.alerts": "告警",
+  "components.worldMap.attackMarkers": "攻击标记",
   "components.worldMap.resetView": "重置视图",
   "components.worldMap.simulationAlerts": "模拟告警",
   "components.worldMap.title": "世界地图",

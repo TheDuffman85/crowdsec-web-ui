@@ -81,6 +81,15 @@ function buildDashboardStatsResponse(filters?: Record<string, string>) {
         simulatedCount: simulatedAlertCount,
       },
     ],
+    attackLocations: [
+      {
+        latitude: 52.52,
+        longitude: 13.405,
+        count: allAlertCount,
+        liveCount: liveAlertCount,
+        simulatedCount: simulatedAlertCount,
+      },
+    ],
     topScenarios: liveAlertCount ? [{ label: 'crowdsecurity/ssh-bf', count: liveAlertCount }] : [],
     topAS: liveAlertCount ? [{ label: 'Hetzner', count: liveAlertCount }] : [],
     series: {
@@ -183,9 +192,11 @@ describe('Dashboard page', () => {
 
     const mapProps = mapSpy.mock.calls.at(-1)?.[0] as {
       simulationsEnabled?: boolean;
+      attackLocations?: Array<{ latitude: number; longitude: number; count: number }>;
       data?: Array<{ simulatedCount?: number }>;
     };
     expect(mapProps.simulationsEnabled).toBe(true);
+    expect(mapProps.attackLocations).toEqual([expect.objectContaining({ latitude: 52.52, longitude: 13.405, count: 2 })]);
     expect(mapProps.data?.some((item) => item.simulatedCount === 1)).toBe(true);
   });
 
@@ -303,6 +314,7 @@ describe('Dashboard page', () => {
       topTargets: [],
       topCountries: [],
       allCountries: [],
+      attackLocations: [],
       topScenarios: [],
       topAS: [],
     });
@@ -345,6 +357,7 @@ describe('Dashboard page', () => {
       topTargets: [],
       topCountries: [],
       allCountries: [],
+      attackLocations: [],
       topScenarios: [],
       topAS: [],
     }));

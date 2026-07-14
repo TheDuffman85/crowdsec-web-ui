@@ -31,6 +31,8 @@ function sampleAlert(overrides: Partial<AlertRecord> = {}): AlertRecord {
       value: '1.2.3.4',
       cn: 'DE',
       as_name: 'Hetzner',
+      latitude: 52.52,
+      longitude: 13.405,
     },
     target: 'ssh',
     events: [{ meta: [{ key: 'service', value: 'ssh' }] }],
@@ -64,6 +66,8 @@ function sampleSimulatedAlert(): AlertRecord {
       value: '5.6.7.8',
       cn: 'US',
       as_name: 'AWS',
+      latitude: 37.7749,
+      longitude: -122.4194,
     },
     target: 'nginx',
     events: [{ meta: [{ key: 'service', value: 'nginx' }] }],
@@ -1506,6 +1510,7 @@ describe('createApp', () => {
       filteredTotals: { alerts: number; decisions: number; simulatedAlerts: number; simulatedDecisions: number };
       series: { simulatedAlertsHistory: Array<{ count: number }> };
       allCountries: Array<{ simulatedCount?: number }>;
+      attackLocations: Array<{ latitude: number; longitude: number; count: number; simulatedCount: number }>;
     }).toEqual(
       expect.objectContaining({
         totals: { alerts: 2, decisions: 1, simulatedAlerts: 1, simulatedDecisions: 1 },
@@ -1514,6 +1519,10 @@ describe('createApp', () => {
           simulatedAlertsHistory: expect.arrayContaining([expect.objectContaining({ count: 1 })]),
         }),
         allCountries: expect.arrayContaining([expect.objectContaining({ countryCode: 'US', simulatedCount: 1 })]),
+        attackLocations: expect.arrayContaining([
+          expect.objectContaining({ latitude: 52.52, longitude: 13.405, count: 1 }),
+          expect.objectContaining({ latitude: 37.7749, longitude: -122.4194, count: 1, simulatedCount: 1 }),
+        ]),
       }),
     );
 
@@ -1747,7 +1756,7 @@ describe('createApp', () => {
         uuid: 'dashboard-alert-101',
         created_at: createdAt,
         scenario: 'crowdsecurity/ssh-bf',
-        source: { ip: '1.2.3.4', value: '1.2.3.4', cn: 'DE', as_name: 'Hetzner' },
+        source: { ip: '1.2.3.4', value: '1.2.3.4', cn: 'DE', as_name: 'Hetzner', latitude: 52.52, longitude: 13.405 },
         target: 'ssh',
         decisions: [
           { id: 1010, value: '1.2.3.4', stop_at: stopAt, type: 'ban', origin: 'manual', simulated: false },
@@ -1767,7 +1776,7 @@ describe('createApp', () => {
         uuid: 'dashboard-alert-102',
         created_at: createdAt,
         scenario: 'crowdsecurity/http-probing',
-        source: { ip: '9.9.9.9', value: '9.9.9.9', cn: 'DE', as_name: 'OVH' },
+        source: { ip: '9.9.9.9', value: '9.9.9.9', cn: 'DE', as_name: 'OVH', latitude: 52.51, longitude: 13.41 },
         target: 'http',
         decisions: [{ id: 1020, value: '9.9.9.9', stop_at: stopAt, type: 'ban', origin: 'manual', simulated: false }],
         simulated: false,
@@ -1777,7 +1786,7 @@ describe('createApp', () => {
         uuid: 'dashboard-alert-103',
         created_at: createdAt,
         scenario: 'crowdsecurity/nginx-bf',
-        source: { ip: '5.6.7.8', value: '5.6.7.8', cn: 'US', as_name: 'AWS' },
+        source: { ip: '5.6.7.8', value: '5.6.7.8', cn: 'US', as_name: 'AWS', latitude: 37.7749, longitude: -122.4194 },
         target: 'nginx',
         decisions: [{ id: 1030, value: '5.6.7.8', stop_at: stopAt, type: 'ban', origin: 'crowdsec', simulated: true }],
         simulated: true,
@@ -1803,11 +1812,13 @@ describe('createApp', () => {
       filteredTotals: { alerts: number; decisions: number; simulatedAlerts: number; simulatedDecisions: number };
       topCountries: Array<{ countryCode?: string; count: number }>;
       allCountries: Array<{ countryCode: string; liveDecisionCount?: number; activeLiveDecisionCount?: number }>;
+      attackLocations: Array<{ latitude: number; longitude: number; count: number }>;
       series: { decisionsHistory: Array<{ count: number }>; activeDecisionsHistory: Array<{ count: number }> };
     }).toEqual(expect.objectContaining({
       filteredTotals: { alerts: 2, decisions: 2, simulatedAlerts: 0, simulatedDecisions: 0 },
       topCountries: [expect.objectContaining({ countryCode: 'DE', count: 2 })],
       allCountries: [expect.objectContaining({ countryCode: 'DE', liveDecisionCount: 3, activeLiveDecisionCount: 2 })],
+      attackLocations: [expect.objectContaining({ latitude: 52.515, longitude: 13.4075, count: 2 })],
       series: expect.objectContaining({
         decisionsHistory: expect.arrayContaining([expect.objectContaining({ count: 3 })]),
         activeDecisionsHistory: expect.arrayContaining([expect.objectContaining({ count: 2 })]),

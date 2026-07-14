@@ -48,6 +48,11 @@ import { createNotificationOutboundGuard } from './notifications/outbound-guard'
 import { createNotificationSecretStore } from './notifications/secret-store';
 import { createUpdateChecker, type UpdateCheckOverrides, type UpdateChecker } from './update-check';
 import { getServerTranslator, normalizeLanguagePreference, saveLanguagePreference } from './i18n';
+import {
+  addDashboardAttackLocation,
+  dashboardAttackLocationData,
+  type DashboardAttackLocationAccumulator,
+} from './dashboard-locations';
 import { getAlertSourceValue, getAlertTarget, resolveAlertHistoryAt, resolveAlertReason, resolveAlertScenario, toSlimAlert } from './utils/alerts';
 import { parseGoDuration, toDuration } from './utils/duration';
 import { fetchCrowdsecMetrics } from './metrics';
@@ -240,6 +245,8 @@ interface DashboardAlertStatsRecord {
   scenario?: string;
   asName?: string;
   ip?: string;
+  latitude?: number;
+  longitude?: number;
   target?: string;
   simulated: boolean;
 }
@@ -259,6 +266,7 @@ interface DashboardStatsAccumulator {
   liveAlerts: number;
   simulatedAlerts: number;
   countries: Map<string, { count: number; liveCount: number; simulatedCount: number }>;
+  attackLocations: DashboardAttackLocationAccumulator;
   scenarios: Map<string, number>;
   asNames: Map<string, number>;
   targets: Map<string, number>;
@@ -3475,10 +3483,12 @@ ${errorSummary}  Status: ${syncSummary.state}
       scenario?: string | null;
       as_name?: string | null;
       source_ip?: string | null;
+      latitude?: number | null;
+      longitude?: number | null;
       target?: string | null;
       simulated?: number | null;
     }>(`
-      SELECT id, created_at, country, scenario, as_name, source_ip, target, simulated
+      SELECT id, created_at, country, scenario, as_name, source_ip, latitude, longitude, target, simulated
       FROM alerts
       ${batchWhere.toSql()}
       ORDER BY id ASC
@@ -3508,6 +3518,8 @@ ${errorSummary}  Status: ${syncSummary.state}
           scenario: row.scenario || undefined,
           asName: row.as_name || undefined,
           ip: row.source_ip || undefined,
+          latitude: normalizeDashboardCoordinate(row.latitude, -90, 90),
+          longitude: normalizeDashboardCoordinate(row.longitude, -180, 180),
           target: row.target || undefined,
           simulated,
         });
@@ -3633,6 +3645,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       topTargets: [],
       topCountries: [],
       allCountries: [],
+      attackLocations: [],
       topScenarios: [],
       topAS: [],
       series: {
@@ -3709,6 +3722,7 @@ ${errorSummary}  Status: ${syncSummary.state}
 
       if (matchesDashboardAlertFilters(alert, filters, true)) {
         addDashboardAlert(filteredAlertAccumulator, alert, filters);
+        addDashboardAttackLocation(filteredAlertAccumulator.attackLocations, alert);
         addDashboardAlert(chartAlertAccumulator, alert, filters);
         if (alert.ip) {
           filteredAlertIps.add(alert.ip);
@@ -3770,6 +3784,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       topTargets: topDashboardEntries(filteredAlertAccumulator.targets),
       topCountries: dashboardCountryList(filteredAlertAccumulator.countries, 10),
       allCountries: dashboardWorldMapData(filteredAlertAccumulator.countries, filteredDecisionAccumulator.countries),
+      attackLocations: dashboardAttackLocationData(filteredAlertAccumulator.attackLocations),
       topScenarios: topDashboardEntries(filteredAlertAccumulator.scenarios),
       topAS: topDashboardEntries(filteredAlertAccumulator.asNames),
       series: {
@@ -4571,6 +4586,7 @@ function createDashboardStatsAccumulator(): DashboardStatsAccumulator {
     liveAlerts: 0,
     simulatedAlerts: 0,
     countries: new Map(),
+    attackLocations: new Map(),
     scenarios: new Map(),
     asNames: new Map(),
     targets: new Map(),
@@ -4709,6 +4725,12 @@ function addDashboardDecision(
 function normalizeDashboardCountryCode(country: string | undefined): string | undefined {
   const normalized = country?.trim().toUpperCase();
   return normalized && /^[A-Z]{2}$/.test(normalized) ? normalized : undefined;
+}
+
+function normalizeDashboardCoordinate(value: unknown, minimum: number, maximum: number): number | undefined {
+  if (typeof value !== 'number' && typeof value !== 'string') return undefined;
+  const coordinate = typeof value === 'number' ? value : Number(value.trim());
+  return Number.isFinite(coordinate) && coordinate >= minimum && coordinate <= maximum ? coordinate : undefined;
 }
 
 function addDashboardDecisionCountry(

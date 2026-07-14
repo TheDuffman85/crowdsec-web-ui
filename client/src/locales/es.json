@@ -194,6 +194,7 @@
   "components.tableColumns.resetDefaults": "Restablecer valores predeterminados",
   "components.tableColumns.title": "Columnas de tabla",
   "components.worldMap.alerts": "Alertas",
+  "components.worldMap.attackMarkers": "Marcadores de ataques",
   "components.worldMap.resetView": "Restablecer vista",
   "components.worldMap.simulationAlerts": "Alertas de simulación",
   "components.worldMap.title": "Mapa mundial",

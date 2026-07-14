@@ -253,6 +253,14 @@ export interface DashboardWorldMapDatum {
   activeSimulatedDecisionCount?: number;
 }
 
+export interface DashboardAttackLocationDatum {
+  latitude: number;
+  longitude: number;
+  count: number;
+  liveCount: number;
+  simulatedCount: number;
+}
+
 export interface DashboardStatsTotals {
   alerts: number;
   decisions: number;
@@ -282,6 +290,7 @@ export interface DashboardStatsResponse {
   topTargets: DashboardStatListItem[];
   topCountries: DashboardStatListItem[];
   allCountries: DashboardWorldMapDatum[];
+  attackLocations: DashboardAttackLocationDatum[];
   topScenarios: DashboardStatListItem[];
   topAS: DashboardStatListItem[];
   series: DashboardStatsSeries;

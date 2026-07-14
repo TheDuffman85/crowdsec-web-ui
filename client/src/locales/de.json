@@ -194,6 +194,7 @@
   "components.tableColumns.resetDefaults": "Standardwerte zurücksetzen",
   "components.tableColumns.title": "Tabellenspalten",
   "components.worldMap.alerts": "Alarme",
+  "components.worldMap.attackMarkers": "Angriffsmarkierungen",
   "components.worldMap.resetView": "Ansicht zurücksetzen",
   "components.worldMap.simulationAlerts": "Simulationsalarme",
   "components.worldMap.title": "Weltkarte",

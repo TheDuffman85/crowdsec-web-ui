@@ -194,6 +194,7 @@
   "components.tableColumns.resetDefaults": "استعادة الافتراضيات",
   "components.tableColumns.title": "أعمدة الجدول",
   "components.worldMap.alerts": "التنبيهات",
+  "components.worldMap.attackMarkers": "علامات الهجوم",
   "components.worldMap.resetView": "إعادة ضبط العرض",
   "components.worldMap.simulationAlerts": "تنبيهات المحاكاة",
   "components.worldMap.title": "خريطة العالم",

@@ -7,6 +7,8 @@ export interface AlertIndexValues {
   historyAt: string;
   scenario: string | null;
   sourceIp: string | null;
+  latitude: number | null;
+  longitude: number | null;
   country: string | null;
   countryName: string | null;
   asName: string | null;
@@ -51,6 +53,8 @@ export function deriveAlertIndexValuesFromRecord(alert: AlertRecord | null | und
   const historyAt = resolvedHistoryAt && Number.isFinite(Date.parse(resolvedHistoryAt)) ? resolvedHistoryAt : fallback.createdAt;
   const scenario = alert ? resolveAlertScenario(alert) || fallback.scenario || null : fallback.scenario || null;
   const sourceIp = alert ? getAlertSourceValue(alert.source) || null : fallback.sourceIp || null;
+  const latitude = normalizeCoordinate(alert?.source?.latitude, -90, 90);
+  const longitude = normalizeCoordinate(alert?.source?.longitude, -180, 180);
   const country = normalizeCountryCode(alert?.source?.cn);
   const asName = normalizeText(alert?.source?.as_name);
   const target = alert ? normalizeText(alert.target || getAlertTarget(alert)) : null;
@@ -64,6 +68,8 @@ export function deriveAlertIndexValuesFromRecord(alert: AlertRecord | null | und
     historyAt,
     scenario,
     sourceIp,
+    latitude,
+    longitude,
     country,
     countryName,
     asName,
@@ -152,6 +158,12 @@ function normalizeText(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   return trimmed || null;
+}
+
+function normalizeCoordinate(value: unknown, minimum: number, maximum: number): number | null {
+  if (typeof value !== 'number' && typeof value !== 'string') return null;
+  const coordinate = typeof value === 'number' ? value : Number(value.trim());
+  return Number.isFinite(coordinate) && coordinate >= minimum && coordinate <= maximum ? coordinate : null;
 }
 
 function readString(value: unknown): string | null {

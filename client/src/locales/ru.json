@@ -194,6 +194,7 @@
   "components.tableColumns.resetDefaults": "Сбросить по умолчанию",
   "components.tableColumns.title": "Столбцы таблицы",
   "components.worldMap.alerts": "Оповещения",
+  "components.worldMap.attackMarkers": "Маркеры атак",
   "components.worldMap.resetView": "Сбросить вид",
   "components.worldMap.simulationAlerts": "Симуляционные оповещения",
   "components.worldMap.title": "Карта мира",

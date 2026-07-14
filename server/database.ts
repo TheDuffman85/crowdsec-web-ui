@@ -267,11 +267,11 @@ export class CrowdsecDatabase {
     this.insertAlertStatement = this.db.query(`
       INSERT INTO alerts (
         id, uuid, created_at, scenario, source_ip, message, raw_data,
-        country, country_name, as_name, target, machine, meta_search, origins, simulated, search_text
+        latitude, longitude, country, country_name, as_name, target, machine, meta_search, origins, simulated, search_text
       )
       VALUES (
         $id, $uuid, $created_at, $scenario, $source_ip, $message, $raw_data,
-        $country, $country_name, $as_name, $target, $machine, $meta_search, $origins, $simulated, $search_text
+        $latitude, $longitude, $country, $country_name, $as_name, $target, $machine, $meta_search, $origins, $simulated, $search_text
       )
       ON CONFLICT(id) DO UPDATE SET
         uuid = excluded.uuid,
@@ -280,6 +280,8 @@ export class CrowdsecDatabase {
         source_ip = excluded.source_ip,
         message = excluded.message,
         raw_data = excluded.raw_data,
+        latitude = excluded.latitude,
+        longitude = excluded.longitude,
         country = excluded.country,
         country_name = excluded.country_name,
         as_name = excluded.as_name,
@@ -295,6 +297,8 @@ export class CrowdsecDatabase {
         OR alerts.source_ip IS NOT excluded.source_ip
         OR alerts.message IS NOT excluded.message
         OR alerts.raw_data IS NOT excluded.raw_data
+        OR alerts.latitude IS NOT excluded.latitude
+        OR alerts.longitude IS NOT excluded.longitude
         OR alerts.country IS NOT excluded.country
         OR alerts.country_name IS NOT excluded.country_name
         OR alerts.as_name IS NOT excluded.as_name
@@ -661,6 +665,8 @@ export class CrowdsecDatabase {
       $created_at: index.historyAt,
       $scenario: index.scenario ?? params.$scenario,
       $source_ip: index.sourceIp ?? params.$source_ip,
+      $latitude: index.latitude,
+      $longitude: index.longitude,
       $country: index.country,
       $country_name: index.countryName,
       $as_name: index.asName,
@@ -1495,6 +1501,8 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
       source_ip TEXT,
       message TEXT,
       raw_data TEXT,
+      latitude REAL,
+      longitude REAL,
       country TEXT,
       country_name TEXT,
       as_name TEXT,
@@ -1706,7 +1714,14 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
 }
 
 function migrateRecordIndexColumns(db: Database): void {
+  const existingAlertColumns = new Set(
+    (db.query('PRAGMA table_info(alerts)').all() as Array<{ name: string }>).map((column) => column.name),
+  );
+  const shouldBackfillAlertLocations = !existingAlertColumns.has('latitude') || !existingAlertColumns.has('longitude');
+
   ensureColumns(db, 'alerts', [
+    ['latitude', 'REAL'],
+    ['longitude', 'REAL'],
     ['country', 'TEXT'],
     ['country_name', 'TEXT'],
     ['as_name', 'TEXT'],
@@ -1728,12 +1743,34 @@ function migrateRecordIndexColumns(db: Database): void {
     ['is_duplicate', 'INTEGER NOT NULL DEFAULT 0'],
   ]);
 
+  if (shouldBackfillAlertLocations) {
+    backfillAlertLocationColumns(db);
+  }
+
   // Replaced by idx_decisions_alert_created_id, which also satisfies the
   // deterministic decision paging order and covers the history predicate.
   db.exec('DROP INDEX IF EXISTS idx_decisions_alert_created_at');
   db.exec(CREATE_SYNC_SECONDARY_INDEXES_SQL);
 
   backfillRecordIndexes(db);
+}
+
+function backfillAlertLocationColumns(db: Database): void {
+  db.exec(`
+    UPDATE alerts
+    SET latitude = CASE
+          WHEN json_valid(raw_data)
+            AND CAST(json_extract(raw_data, '$.source.latitude') AS REAL) BETWEEN -90 AND 90
+          THEN CAST(json_extract(raw_data, '$.source.latitude') AS REAL)
+          ELSE NULL
+        END,
+        longitude = CASE
+          WHEN json_valid(raw_data)
+            AND CAST(json_extract(raw_data, '$.source.longitude') AS REAL) BETWEEN -180 AND 180
+          THEN CAST(json_extract(raw_data, '$.source.longitude') AS REAL)
+          ELSE NULL
+        END
+  `);
 }
 
 function ensureColumns(db: Database, tableName: string, columns: Array<[string, string]>): void {
@@ -1757,6 +1794,8 @@ function backfillRecordIndexes(db: Database): void {
     SET created_at = $created_at,
         scenario = $scenario,
         source_ip = $source_ip,
+        latitude = $latitude,
+        longitude = $longitude,
         country = $country,
         country_name = $country_name,
         as_name = $as_name,
@@ -1793,6 +1832,8 @@ function backfillRecordIndexes(db: Database): void {
           $created_at: index.historyAt,
           $scenario: index.scenario ?? row.scenario,
           $source_ip: index.sourceIp ?? row.source_ip,
+          $latitude: index.latitude,
+          $longitude: index.longitude,
           $country: index.country,
           $country_name: index.countryName,
           $as_name: index.asName,

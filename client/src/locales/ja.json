@@ -194,6 +194,7 @@
   "components.tableColumns.resetDefaults": "既定値にリセット",
   "components.tableColumns.title": "テーブル列",
   "components.worldMap.alerts": "アラート",
+  "components.worldMap.attackMarkers": "攻撃マーカー",
   "components.worldMap.resetView": "表示をリセット",
   "components.worldMap.simulationAlerts": "シミュレーションアラート",
   "components.worldMap.title": "世界地図",

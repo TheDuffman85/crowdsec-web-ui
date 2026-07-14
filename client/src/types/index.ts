@@ -10,6 +10,7 @@ export type {
   AlertRecord,
   AlertSource,
   ConfigResponse,
+  DashboardAttackLocationDatum,
   DashboardGranularity,
   DashboardSimulationFilter,
   DashboardStatListItem,

@@ -1,6 +1,7 @@
-import { useState, useEffect, useMemo, useRef, useLayoutEffect, useCallback } from 'react';
+import { useState, useEffect, useMemo, useRef, useLayoutEffect, useCallback, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { Choropleth, type ChoroplethBoundFeature } from '@nivo/geo';
+import { geoNaturalEarth1 } from 'd3-geo';
 import {
     TransformWrapper,
     TransformComponent,
@@ -8,9 +9,10 @@ import {
     type ReactZoomPanPinchRef,
 } from 'react-zoom-pan-pinch';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
+import { Switch } from './ui/Switch';
 import { Globe, ZoomIn, ZoomOut, RotateCcw, ShieldAlert, Gavel } from 'lucide-react';
 import { assetUrl } from '../lib/basePath';
-import type { WorldMapDatum } from '../types';
+import type { DashboardAttackLocationDatum, WorldMapDatum } from '../types';
 import { DASHBOARD_COLORS } from '../lib/dashboardColors';
 import { useI18n } from '../lib/i18n';
 import { getCountryName } from '../lib/utils';
@@ -18,6 +20,17 @@ import { CountryFlag } from './CountryFlag';
 
 // Using local Natural Earth data which has proper ISO properties
 const geoUrl = assetUrl("/world-50m.json");
+const MAP_ANIMATION_STORAGE_KEY = 'crowdsec-web-ui:dashboard:map-animation-enabled';
+
+function setAttackMarkerVisualScale(element: SVGSVGElement | null, scale: number): void {
+    if (!element || scale <= 0 || !Number.isFinite(scale)) return;
+
+    const inverseScale = 1 / scale;
+    element.style.setProperty('--world-map-attack-pulse-radius', `${3 * inverseScale}px`);
+    element.style.setProperty('--world-map-attack-pulse-stroke', `${1.5 * inverseScale}px`);
+    element.style.setProperty('--world-map-attack-dot-radius', `${2.5 * inverseScale}px`);
+    element.style.setProperty('--world-map-attack-dot-stroke', `${0.75 * inverseScale}px`);
+}
 
 interface GeoFeatureProperties {
     NAME?: string;
@@ -48,8 +61,16 @@ interface TooltipPosition {
     y: number;
 }
 
+interface AttackMarker {
+    latitude: number;
+    longitude: number;
+    x: number;
+    y: number;
+}
+
 interface WorldMapCardProps {
     data: WorldMapDatum[];
+    attackLocations?: DashboardAttackLocationDatum[];
     onCountrySelect: (countryCode: string) => void;
     selectedCountry: string | null;
     simulationsEnabled?: boolean;
@@ -122,18 +143,45 @@ function getFeatureCountryCode(feature: ChoroplethBoundFeature): string {
  * World Map Component for Dashboard
  * Shows all countries with alerts colored in red gradient based on intensity
  */
-export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulationsEnabled = false }: WorldMapCardProps) {
+export function WorldMapCard({
+    data,
+    attackLocations = [],
+    onCountrySelect,
+    selectedCountry,
+    simulationsEnabled = false,
+}: WorldMapCardProps) {
     const { language, t } = useI18n();
     const [geoFeatures, setGeoFeatures] = useState<GeoFeature[]>([]);
     const [isLoadingStats, setIsLoadingStats] = useState(true);
     const containerRef = useRef<HTMLDivElement | null>(null);
     const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
     const [initialScale, setInitialScale] = useState(() => window.innerWidth < 800 ? 0.7 : 1.0);
+    const mapTransformScaleRef = useRef(initialScale);
     const [tooltipEnabled, setTooltipEnabled] = useState(true);
+    const [animationEnabled, setAnimationEnabled] = useState(
+        () => window.localStorage.getItem(MAP_ANIMATION_STORAGE_KEY) !== 'false',
+    );
     const previousSelectedCountryRef = useRef<string | null>(selectedCountry);
     const touchTooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const tooltipRef = useRef<HTMLDivElement | null>(null);
+    const attackMarkerOverlayRef = useRef<SVGSVGElement | null>(null);
     const tooltipPositionRef = useRef<TooltipPosition>({ x: 0, y: 0 });
+    const [documentVisible, setDocumentVisible] = useState(() => document.visibilityState !== 'hidden');
+
+    useEffect(() => {
+        window.localStorage.setItem(MAP_ANIMATION_STORAGE_KEY, String(animationEnabled));
+    }, [animationEnabled]);
+
+    useEffect(() => {
+        if (!animationEnabled) return;
+
+        const handleVisibilityChange = () => {
+            setDocumentVisible(document.visibilityState !== 'hidden');
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+    }, [animationEnabled]);
 
     const hideTooltip = useCallback(() => {
         setTooltipEnabled((current) => current ? false : current);
@@ -394,6 +442,32 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
         return Math.max(...data.map(d => d.count), 0);
     }, [data]);
 
+    const attackMarkers = useMemo<AttackMarker[]>(() => {
+        if (!animationEnabled || geoFeatures.length === 0) return [];
+
+        const projection = geoNaturalEarth1()
+            .scale(projectionScale)
+            .translate([mapWidth / 2, mapHeight / 2])
+            .rotate([0, 0, 0]);
+        const markers: AttackMarker[] = [];
+
+        attackLocations.forEach((location) => {
+            if (location.count <= 0) return;
+
+            const longitude = Number(location.longitude);
+            const latitude = Number(location.latitude);
+            if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) return;
+            if (longitude < -180 || longitude > 180 || latitude < -90 || latitude > 90) return;
+
+            const point = projection([longitude, latitude]);
+            if (!point || !Number.isFinite(point[0]) || !Number.isFinite(point[1])) return;
+
+            markers.push({ latitude, longitude, x: point[0], y: point[1] });
+        });
+
+        return markers;
+    }, [animationEnabled, attackLocations, geoFeatures.length, mapHeight, mapWidth, projectionScale]);
+
     const isFiltered = selectedCountry !== null && selectedCountry !== undefined;
 
     // Handle selection visual state manually with robust DOM selector
@@ -462,11 +536,26 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
 
     return (
         <Card className="h-full flex flex-col overflow-hidden">
-            <CardHeader>
+            <CardHeader className="flex items-center justify-between gap-4">
                 <CardTitle className="flex items-center gap-2">
                     <Globe className="w-5 h-5 text-primary-600 dark:text-primary-400" />
                     {t('components.worldMap.title')}
                 </CardTitle>
+                <div className="flex items-center gap-2">
+                    <label
+                        id="world-map-attack-markers-label"
+                        htmlFor="world-map-attack-markers-toggle"
+                        className="whitespace-nowrap text-xs font-medium text-gray-600 dark:text-gray-300"
+                    >
+                        {t('components.worldMap.attackMarkers')}
+                    </label>
+                    <Switch
+                        id="world-map-attack-markers-toggle"
+                        checked={animationEnabled}
+                        onCheckedChange={setAnimationEnabled}
+                        ariaLabelledBy="world-map-attack-markers-label"
+                    />
+                </div>
             </CardHeader>
             <CardContent className="flex-1 flex flex-col overflow-hidden relative !p-0">
                 {isLoadingStats ? (
@@ -514,6 +603,12 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
                             panning={{ velocityDisabled: true }}
                             doubleClick={{ mode: 'zoomIn', step: 0.7 }}
                             limitToBounds={false}
+                            onTransform={(_ref, state) => {
+                                if (state.scale > 0 && Number.isFinite(state.scale)) {
+                                    mapTransformScaleRef.current = state.scale;
+                                    setAttackMarkerVisualScale(attackMarkerOverlayRef.current, state.scale);
+                                }
+                            }}
                             onPanning={() => {
                                 // Hide tooltip only when actual panning occurs
                                 hideTooltip();
@@ -571,7 +666,7 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
                                         </button>
                                     </div>
                                             <TransformComponent wrapperStyle={{ width: '100%', height: '100%' }} contentStyle={{ width: '100%', height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-                                        <div style={{ width: mapWidth, height: mapHeight }}>
+                                        <div className="relative" style={{ width: mapWidth, height: mapHeight }}>
                                             <Choropleth
                                                 width={mapWidth}
                                                 height={mapHeight}
@@ -598,6 +693,48 @@ export function WorldMapCard({ data, onCountrySelect, selectedCountry, simulatio
                                                 }}
                                                 tooltip={MapTooltip}
                                             />
+                                            {animationEnabled && attackMarkers.length > 0 && (
+                                                <svg
+                                                    ref={attackMarkerOverlayRef}
+                                                    className={`pointer-events-none absolute inset-0 ${documentVisible ? '' : 'world-map-attack-markers-paused'}`}
+                                                    width={mapWidth}
+                                                    height={mapHeight}
+                                                    viewBox={`0 0 ${mapWidth} ${mapHeight}`}
+                                                    style={{
+                                                        '--world-map-attack-pulse-radius': `${3 / mapTransformScaleRef.current}px`,
+                                                        '--world-map-attack-pulse-stroke': `${1.5 / mapTransformScaleRef.current}px`,
+                                                        '--world-map-attack-dot-radius': `${2.5 / mapTransformScaleRef.current}px`,
+                                                        '--world-map-attack-dot-stroke': `${0.75 / mapTransformScaleRef.current}px`,
+                                                    } as CSSProperties}
+                                                    aria-hidden="true"
+                                                    data-testid="world-map-attack-markers"
+                                                >
+                                                    {attackMarkers.map((marker, index) => (
+                                                        <g
+                                                            key={`${marker.latitude}:${marker.longitude}`}
+                                                            data-latitude={marker.latitude}
+                                                            data-longitude={marker.longitude}
+                                                            transform={`translate(${marker.x} ${marker.y})`}
+                                                        >
+                                                            <circle
+                                                                className="world-map-attack-pulse"
+                                                                r="3"
+                                                                fill="none"
+                                                                stroke="#dc2626"
+                                                                strokeWidth="1.5"
+                                                                style={{ animationDelay: `${-(index % 11) * 0.17}s` }}
+                                                            />
+                                                            <circle
+                                                                className="world-map-attack-dot"
+                                                                r="2.5"
+                                                                fill="#dc2626"
+                                                                stroke="#ffffff"
+                                                                strokeWidth="0.75"
+                                                            />
+                                                        </g>
+                                                    ))}
+                                                </svg>
+                                            )}
                                         </div>
                                     </TransformComponent>
                                 </>

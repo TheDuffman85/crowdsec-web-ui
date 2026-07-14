@@ -75,6 +75,7 @@ const EMPTY_DASHBOARD_STATS: DashboardStatsResponse = {
     topTargets: [],
     topCountries: [],
     allCountries: [],
+    attackLocations: [],
     topScenarios: [],
     topAS: [],
     series: {
@@ -825,6 +826,7 @@ export function Dashboard() {
                         <Suspense fallback={<div className="text-center p-8 text-gray-500">{t('common.loadingMap')}</div>}>
                             <WorldMapCard
                                 data={statistics.allCountries}
+                                attackLocations={dashboardData.attackLocations}
                                 onCountrySelect={(code) => toggleFilter('country', code)}
                                 selectedCountry={filters.country}
                                 simulationsEnabled={simulationsEnabled}

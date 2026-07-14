@@ -149,7 +149,7 @@ Bulk delete and cleanup responses use:
 | --- | --- | --- |
 | GET | `/api/stats/alerts` | Alert records shaped for chart/stat consumers within the configured lookback window. |
 | GET | `/api/stats/decisions` | Decision records shaped for chart/stat consumers within the configured lookback window. |
-| GET | `/api/dashboard/stats` | Aggregated dashboard totals, filtered totals, top targets/countries/scenarios/AS, world-map country data, and history series. |
+| GET | `/api/dashboard/stats` | Aggregated dashboard totals, filtered totals, top targets/countries/scenarios/AS, world-map country data, bounded source-location clusters, and history series. |
 
 Supported dashboard filters: `country`, `scenario`, `as`, `ip`, `target`, `dateStart`, `dateEnd`, `simulation`, `granularity`, `tz_offset`.
 

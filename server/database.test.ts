@@ -62,7 +62,7 @@ describe('CrowdsecDatabase', () => {
       $scenario: 'crowdsecurity/ssh-bf',
       $source_ip: '1.2.3.4',
       $message: 'alert',
-      $raw_data: JSON.stringify({ id: 1 }),
+      $raw_data: JSON.stringify({ id: 1, source: { latitude: '52.52', longitude: 13.405 } }),
     });
 
     db.insertDecision({
@@ -91,6 +91,10 @@ describe('CrowdsecDatabase', () => {
     );
     expect(db.getMeta('refresh_interval_ms')?.value).toBe('5000');
     expect(db.getAlertsBetween('2024-12-31T00:00:00.000Z', '2025-01-02T00:00:00.000Z')).toHaveLength(1);
+    expect(db.db.prepare('SELECT latitude, longitude FROM alerts WHERE id = 1').get()).toEqual({
+      latitude: 52.52,
+      longitude: 13.405,
+    });
 
     db.deleteDecision('10');
     db.deleteAlert(1);
@@ -401,6 +405,42 @@ describe('CrowdsecDatabase', () => {
     expect(indexes.map((index) => index.name)).not.toContain('idx_decisions_alert_created_at');
     expect(row.is_duplicate).toBe(0);
     expect(db.getDecisionById('10')?.stop_at).toBe('2030-01-01T00:00:00.000Z');
+
+    db.close();
+  });
+
+  test('adds and backfills source coordinates for legacy alerts', () => {
+    const dbPath = createTestDatabasePath();
+    const legacy = createLegacyDatabase(dbPath);
+    legacy.exec(`
+      CREATE TABLE alerts (
+        id INTEGER PRIMARY KEY,
+        uuid TEXT UNIQUE,
+        created_at TEXT NOT NULL,
+        scenario TEXT,
+        source_ip TEXT,
+        message TEXT,
+        raw_data TEXT
+      );
+      INSERT INTO alerts (id, uuid, created_at, scenario, source_ip, message, raw_data)
+      VALUES (
+        1,
+        'alert-1',
+        '2026-01-01T00:00:00.000Z',
+        'crowdsecurity/ssh-bf',
+        '1.2.3.4',
+        'alert',
+        '{"id":1,"source":{"latitude":"52.52","longitude":13.405}}'
+      );
+    `);
+    legacy.close();
+
+    const db = new CrowdsecDatabase({ dbPath });
+    const columns = db.db.prepare('PRAGMA table_info(alerts)').all() as Array<{ name: string }>;
+    const location = db.db.prepare('SELECT latitude, longitude FROM alerts WHERE id = 1').get();
+
+    expect(columns.map((column) => column.name)).toEqual(expect.arrayContaining(['latitude', 'longitude']));
+    expect(location).toEqual({ latitude: 52.52, longitude: 13.405 });
 
     db.close();
   });
