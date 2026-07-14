@@ -26,7 +26,7 @@ A self-hosted web dashboard for [CrowdSec](https://crowdsec.net/) to review aler
 
 ## Features
 
-- **Dashboard**: total alerts, live active decisions, drilldowns, top lists, dynamic filtering, and simulation-mode counts when enabled.
+- **Dashboard**: total alerts, live active decisions, source-location attack markers with hover details, drilldowns, top lists, dynamic filtering, and simulation-mode counts when enabled.
 - **Alerts and details**: searchable security-event history with simulation labels, attacker IP, AS, location map, and triggered-event breakdowns.
 - **Decisions**: active/expired ban management, duplicate hiding, simulation filters, and the same unified search used on Alerts.
 - **Manual actions**: add bans directly from the UI with custom duration and reason.
