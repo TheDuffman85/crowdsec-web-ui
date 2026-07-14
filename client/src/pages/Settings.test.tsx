@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { Settings } from './Settings';
 import { fetchConfig, updateMetricsSidebarPreference } from '../lib/api';
 import { useRefresh } from '../contexts/useRefresh';
+import { DateTimeContext, createDateTimeContextValue } from '../lib/dateTime';
 
 const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
   const translations: Record<string, string> = {
@@ -336,9 +337,15 @@ describe('Settings', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<Settings />);
+    const dateTime = createDateTimeContextValue({ timeZone: 'America/Los_Angeles', timeFormat: '24h' });
+    render(
+      <DateTimeContext.Provider value={dateTime}>
+        <Settings />
+      </DateTimeContext.Provider>,
+    );
 
     await screen.findByText('Authentication');
+    expect(screen.getByText(`Added ${dateTime.formatDate('2026-01-01T00:00:00.000Z')}`)).toBeInTheDocument();
     await user.click(screen.getByLabelText(/Disable password login/i));
 
     expect(fetchMock).not.toHaveBeenCalledWith(

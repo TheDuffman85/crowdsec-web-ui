@@ -24,6 +24,7 @@ import {
     type LanguagePreference,
 } from "../lib/i18n";
 import type { ConfigResponse } from "../types";
+import { useDateTime } from "../lib/dateTime";
 
 const REFRESH_OPTIONS = [
     { value: 0, labelKey: "components.sidebar.refresh.off" },
@@ -83,6 +84,7 @@ export function Settings() {
     const { intervalMs, setIntervalMs } = useRefresh();
     const { authEnabled, refresh: refreshAuth } = useAuth();
     const { browserLanguage, preference, setLanguagePreference, t } = useI18n();
+    const { formatDate } = useDateTime();
     const toast = useOptionalToast();
     const [config, setConfig] = useState<ConfigResponse | null>(null);
     const [passkeys, setPasskeys] = useState<PasskeySummary[]>([]);
@@ -762,7 +764,7 @@ export function Settings() {
                                                     {passkey.name || t("pages.settings.passkey")}
                                                 </p>
                                                 <p className="text-xs text-gray-500">
-                                                    {t("pages.settings.passkeyAdded", { date: new Date(passkey.createdAt).toLocaleDateString() })}
+                                                    {t("pages.settings.passkeyAdded", { date: formatDate(passkey.createdAt) })}
                                                 </p>
                                             </div>
                                             <button

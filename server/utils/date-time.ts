@@ -1,5 +1,56 @@
 import type { TimeFormat } from '../config';
 
+const TIMESTAMP_KEYS = new Set([
+  'timestamp',
+  'expiration',
+  'offline_since',
+  'last_check',
+]);
+
+export function normalizeIsoTimestamp(value: string): string {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : value;
+}
+
+function isTimestampKey(key: string): boolean {
+  return TIMESTAMP_KEYS.has(key) || key.endsWith('_at') || key.endsWith('At');
+}
+
+export function normalizeTimestampJson(rawData: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawData) as unknown;
+  } catch {
+    return rawData;
+  }
+
+  let changed = false;
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (!value || typeof value !== 'object') return;
+
+    for (const [key, entry] of Object.entries(value)) {
+      if (isTimestampKey(key) && typeof entry === 'string') {
+        const normalized = normalizeIsoTimestamp(entry);
+        if (normalized !== entry) {
+          (value as Record<string, unknown>)[key] = normalized;
+          changed = true;
+        }
+      } else if (entry && typeof entry === 'object') {
+        visit(entry);
+      }
+    }
+  };
+
+  visit(parsed);
+  return changed ? JSON.stringify(parsed) : rawData;
+}
+
+export const normalizeCrowdsecTimestampJson = normalizeTimestampJson;
+
 export function getHour12(timeFormat: TimeFormat): boolean | undefined {
   if (timeFormat === '12h') return true;
   if (timeFormat === '24h') return false;

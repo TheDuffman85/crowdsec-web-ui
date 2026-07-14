@@ -2,6 +2,7 @@ import type { AlertDecision, AlertRecord } from '../shared/contracts';
 import { resolveMachineName } from '../shared/machine';
 import { collectDistinctOrigins } from '../shared/origin';
 import { buildMetaSearch, getAlertSourceValue, getAlertTarget, resolveAlertHistoryAt, resolveAlertScenario } from './utils/alerts';
+import { normalizeIsoTimestamp } from './utils/date-time';
 
 export interface AlertIndexValues {
   historyAt: string;
@@ -50,7 +51,9 @@ export function deriveAlertIndexValuesFromRecord(alert: AlertRecord | null | und
   message?: string | null;
 }): AlertIndexValues {
   const resolvedHistoryAt = alert ? resolveAlertHistoryAt(alert) : null;
-  const historyAt = resolvedHistoryAt && Number.isFinite(Date.parse(resolvedHistoryAt)) ? resolvedHistoryAt : fallback.createdAt;
+  const historyAt = normalizeIsoTimestamp(
+    resolvedHistoryAt && Number.isFinite(Date.parse(resolvedHistoryAt)) ? resolvedHistoryAt : fallback.createdAt,
+  );
   const scenario = alert ? resolveAlertScenario(alert) || fallback.scenario || null : fallback.scenario || null;
   const sourceIp = alert ? getAlertSourceValue(alert.source) || null : fallback.sourceIp || null;
   const latitude = normalizeCoordinate(alert?.source?.latitude, -90, 90);

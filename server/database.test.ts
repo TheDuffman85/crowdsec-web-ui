@@ -104,6 +104,183 @@ describe('CrowdsecDatabase', () => {
     db.close();
   });
 
+  test('stores CrowdSec timestamps in a lexically sortable UTC format', () => {
+    const db = createTestDatabase();
+
+    db.insertAlert({
+      $id: 1,
+      $uuid: 'offset-alert',
+      $created_at: '2026-07-14T08:56:33-04:00',
+      $message: 'offset alert',
+      $raw_data: JSON.stringify({
+        id: 1,
+        created_at: '2026-07-14T08:56:33-04:00',
+        start_at: '2026-07-14T08:55:00-04:00',
+      }),
+    });
+    db.insertDecision({
+      $id: '10',
+      $uuid: 'offset-decision',
+      $alert_id: 1,
+      $created_at: '2026-07-14T08:56:33-04:00',
+      $stop_at: '2026-07-14T10:00:00-04:00',
+      $value: '1.2.3.4',
+      $type: 'ban',
+      $origin: 'crowdsec',
+      $scenario: 'crowdsecurity/ssh-bf',
+      $raw_data: JSON.stringify({
+        id: 10,
+        created_at: '2026-07-14T08:56:33-04:00',
+        stop_at: '2026-07-14T10:00:00-04:00',
+      }),
+    });
+
+    expect(db.getAlertsSince('2026-07-14T12:00:00.000Z')).toHaveLength(1);
+    expect(db.getActiveDecisions('2026-07-14T13:00:00.000Z')).toHaveLength(1);
+    expect(db.db.prepare('SELECT created_at FROM alerts WHERE id = 1').get()).toEqual({
+      created_at: '2026-07-14T12:55:00.000Z',
+    });
+    expect(db.db.prepare('SELECT created_at, stop_at, raw_data FROM decisions WHERE id = ?').get('10')).toEqual({
+      created_at: '2026-07-14T12:56:33.000Z',
+      stop_at: '2026-07-14T14:00:00.000Z',
+      raw_data: JSON.stringify({
+        id: 10,
+        created_at: '2026-07-14T12:56:33.000Z',
+        stop_at: '2026-07-14T14:00:00.000Z',
+      }),
+    });
+
+    db.close();
+  });
+
+  test('normalizes timestamps already stored by earlier versions', () => {
+    const dbPath = createTestDatabasePath();
+    const original = new CrowdsecDatabase({ dbPath });
+    original.insertAlert({
+      $id: 1,
+      $uuid: 'legacy-offset-alert',
+      $created_at: '2026-07-14T12:56:33.000Z',
+      $message: 'legacy offset alert',
+      $raw_data: JSON.stringify({ id: 1, created_at: '2026-07-14T12:56:33.000Z' }),
+    });
+    original.insertDecision({
+      $id: '10',
+      $uuid: 'legacy-offset-decision',
+      $alert_id: 1,
+      $created_at: '2026-07-14T12:56:33.000Z',
+      $stop_at: '2026-07-14T14:00:00.000Z',
+      $value: '1.2.3.4',
+      $type: 'ban',
+      $origin: 'crowdsec',
+      $scenario: 'crowdsecurity/ssh-bf',
+      $raw_data: JSON.stringify({
+        id: 10,
+        created_at: '2026-07-14T12:56:33.000Z',
+        stop_at: '2026-07-14T14:00:00.000Z',
+      }),
+    });
+    original.db.prepare(`
+      UPDATE alerts
+      SET created_at = ?, raw_data = ?
+      WHERE id = 1
+    `).run(
+      '2026-07-14T08:56:33-04:00',
+      JSON.stringify({ id: 1, created_at: '2026-07-14T08:56:33-04:00' }),
+    );
+    original.db.prepare(`
+      UPDATE decisions
+      SET created_at = ?, stop_at = ?, raw_data = ?
+      WHERE id = '10'
+    `).run(
+      '2026-07-14T08:56:33-04:00',
+      '2026-07-14T10:00:00-04:00',
+      JSON.stringify({
+        id: 10,
+        created_at: '2026-07-14T08:56:33-04:00',
+        stop_at: '2026-07-14T10:00:00-04:00',
+      }),
+    );
+    original.db.prepare(`
+      INSERT INTO notifications (
+        id, created_at, updated_at, rule_id, rule_name, rule_type, severity, title, message,
+        read_at, metadata_json, deliveries_json, dedupe_key
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'legacy-notification',
+      '2026-07-14T12:56:33Z',
+      '2026-07-14T08:56:34-04:00',
+      'legacy-rule',
+      'Legacy rule',
+      'new-alert-decision',
+      'info',
+      'Legacy notification',
+      'Legacy notification',
+      '2026-07-14T12:57:00Z',
+      JSON.stringify({ created_at: '2026-07-14T12:56:33Z' }),
+      JSON.stringify([{ attempted_at: '2026-07-14T08:56:35-04:00' }]),
+      'legacy-notification',
+    );
+    original.db.prepare(`
+      INSERT INTO notification_incidents (rule_id, incident_key, first_seen_at, last_seen_at, resolved_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      'legacy-rule',
+      'legacy-incident',
+      '2026-07-14T12:56:33Z',
+      '2026-07-14T08:57:00-04:00',
+      '2026-07-14T12:58:00Z',
+    );
+    original.db.prepare(`
+      INSERT INTO cve_cache (id, published_at, fetched_at)
+      VALUES (?, ?, ?)
+    `).run('CVE-2026-1234', '2026-07-14T12:00:00Z', '2026-07-14T08:59:00-04:00');
+    original.db.prepare(`
+      INSERT OR REPLACE INTO meta (key, value)
+      VALUES ('sync_timestamp_format_version', '1')
+    `).run();
+    original.close();
+
+    const migrated = new CrowdsecDatabase({ dbPath });
+    expect(migrated.db.prepare('SELECT created_at, raw_data FROM alerts WHERE id = 1').get()).toEqual({
+      created_at: '2026-07-14T12:56:33.000Z',
+      raw_data: JSON.stringify({ id: 1, created_at: '2026-07-14T12:56:33.000Z' }),
+    });
+    expect(migrated.db.prepare('SELECT created_at, stop_at, raw_data FROM decisions WHERE id = ?').get('10')).toEqual({
+      created_at: '2026-07-14T12:56:33.000Z',
+      stop_at: '2026-07-14T14:00:00.000Z',
+      raw_data: JSON.stringify({
+        id: 10,
+        created_at: '2026-07-14T12:56:33.000Z',
+        stop_at: '2026-07-14T14:00:00.000Z',
+      }),
+    });
+    expect(migrated.db.prepare(`
+      SELECT created_at, updated_at, read_at, metadata_json, deliveries_json
+      FROM notifications
+      WHERE id = 'legacy-notification'
+    `).get()).toEqual({
+      created_at: '2026-07-14T12:56:33.000Z',
+      updated_at: '2026-07-14T12:56:34.000Z',
+      read_at: '2026-07-14T12:57:00.000Z',
+      metadata_json: JSON.stringify({ created_at: '2026-07-14T12:56:33.000Z' }),
+      deliveries_json: JSON.stringify([{ attempted_at: '2026-07-14T12:56:35.000Z' }]),
+    });
+    expect(migrated.listNotificationIncidentsByRule('legacy-rule')).toEqual([
+      expect.objectContaining({
+        first_seen_at: '2026-07-14T12:56:33.000Z',
+        last_seen_at: '2026-07-14T12:57:00.000Z',
+        resolved_at: '2026-07-14T12:58:00.000Z',
+      }),
+    ]);
+    expect(migrated.getCveCacheEntry('CVE-2026-1234')).toEqual(expect.objectContaining({
+      published_at: '2026-07-14T12:00:00.000Z',
+      fetched_at: '2026-07-14T12:59:00.000Z',
+    }));
+    expect(migrated.getMeta('sync_timestamp_format_version')?.value).toBe('2');
+
+    migrated.close();
+  });
+
   test('transaction helper batches work', () => {
     const db = createTestDatabase();
     const insertMany = db.transaction<Array<number>>((ids) => {
@@ -745,6 +922,85 @@ describe('CrowdsecDatabase', () => {
     db.deleteNotificationChannel('channel-1');
     expect(db.listNotificationRules()).toHaveLength(0);
     expect(db.listNotificationChannels()).toHaveLength(0);
+
+    db.close();
+  });
+
+  test('normalizes every timestamp-bearing notification write', () => {
+    const db = createTestDatabase();
+
+    db.upsertNotificationChannel({
+      $id: 'channel-offset',
+      $created_at: '2025-01-01T00:00:00Z',
+      $updated_at: '2024-12-31T20:00:01-04:00',
+      $name: 'Offset channel',
+      $type: 'ntfy',
+      $enabled: 1,
+      $config_json: '{}',
+    });
+    db.upsertNotificationRule({
+      $id: 'rule-offset',
+      $created_at: '2025-01-01T00:00:00Z',
+      $updated_at: '2024-12-31T20:00:01-04:00',
+      $name: 'Offset rule',
+      $type: 'alert-threshold',
+      $enabled: 1,
+      $severity: 'warning',
+      $channel_ids_json: '[]',
+      $config_json: '{}',
+    });
+    db.insertNotification({
+      $id: 'notification-offset',
+      $created_at: '2025-01-01T00:00:00Z',
+      $updated_at: '2024-12-31T20:00:01-04:00',
+      $rule_id: 'rule-offset',
+      $rule_name: 'Offset rule',
+      $rule_type: 'alert-threshold',
+      $severity: 'warning',
+      $title: 'Offset notification',
+      $message: 'Offset notification',
+      $read_at: null,
+      $metadata_json: JSON.stringify({ created_at: '2024-12-31T20:00:00-04:00' }),
+      $deliveries_json: JSON.stringify([{ attempted_at: '2025-01-01T00:00:02Z' }]),
+      $dedupe_key: 'notification-offset',
+    });
+    db.upsertNotificationIncident({
+      $rule_id: 'rule-offset',
+      $incident_key: 'incident-offset',
+      $first_seen_at: '2025-01-01T00:00:00Z',
+      $last_seen_at: '2024-12-31T20:00:01-04:00',
+      $resolved_at: null,
+    });
+    db.upsertCveCacheEntry('CVE-2025-9999', '2025-01-01T00:00:00Z', '2024-12-31T20:00:01-04:00');
+    db.markNotificationRead('notification-offset', '2024-12-31T20:00:03-04:00');
+    db.resolveNotificationIncident('rule-offset', 'incident-offset', '2025-01-01T00:00:04Z');
+
+    expect(db.getNotificationChannelById('channel-offset')).toEqual(expect.objectContaining({
+      created_at: '2025-01-01T00:00:00.000Z',
+      updated_at: '2025-01-01T00:00:01.000Z',
+    }));
+    expect(db.getNotificationRuleById('rule-offset')).toEqual(expect.objectContaining({
+      created_at: '2025-01-01T00:00:00.000Z',
+      updated_at: '2025-01-01T00:00:01.000Z',
+    }));
+    expect(db.listNotifications()[0]).toEqual(expect.objectContaining({
+      created_at: '2025-01-01T00:00:00.000Z',
+      updated_at: '2025-01-01T00:00:03.000Z',
+      read_at: '2025-01-01T00:00:03.000Z',
+      metadata_json: JSON.stringify({ created_at: '2025-01-01T00:00:00.000Z' }),
+      deliveries_json: JSON.stringify([{ attempted_at: '2025-01-01T00:00:02.000Z' }]),
+    }));
+    expect(db.listNotificationIncidentsByRule('rule-offset')).toEqual([
+      expect.objectContaining({
+        first_seen_at: '2025-01-01T00:00:00.000Z',
+        last_seen_at: '2025-01-01T00:00:04.000Z',
+        resolved_at: '2025-01-01T00:00:04.000Z',
+      }),
+    ]);
+    expect(db.getCveCacheEntry('CVE-2025-9999')).toEqual(expect.objectContaining({
+      published_at: '2025-01-01T00:00:00.000Z',
+      fetched_at: '2025-01-01T00:00:01.000Z',
+    }));
 
     db.close();
   });

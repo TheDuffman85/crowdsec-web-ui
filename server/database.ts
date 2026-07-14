@@ -6,6 +6,7 @@ import BetterSqlite3 from 'better-sqlite3';
 import type { AlertDecision, AlertRecord } from '../shared/contracts';
 import { matchesIpSearchValue } from '../shared/search';
 import { deriveAlertIndexValues, deriveAlertIndexValuesFromRecord, deriveDecisionIndexValues, deriveDecisionIndexValuesFromRecord } from './record-index';
+import { normalizeCrowdsecTimestampJson, normalizeIsoTimestamp, normalizeTimestampJson } from './utils/date-time';
 
 type SqliteStatement = {
   run: (...params: any[]) => { changes: number };
@@ -663,6 +664,7 @@ export class CrowdsecDatabase {
     const result = this.insertAlertStatement.run({
       ...dbParams,
       $created_at: index.historyAt,
+      $raw_data: normalizeCrowdsecTimestampJson(params.$raw_data),
       $scenario: index.scenario ?? params.$scenario,
       $source_ip: index.sourceIp ?? params.$source_ip,
       $latitude: index.latitude,
@@ -744,6 +746,9 @@ export class CrowdsecDatabase {
     const { $record, ...dbParams } = params;
     const result = this.insertDecisionStatement.run({
       ...dbParams,
+      $created_at: normalizeIsoTimestamp(params.$created_at),
+      $stop_at: normalizeIsoTimestamp(params.$stop_at),
+      $raw_data: normalizeCrowdsecTimestampJson(params.$raw_data),
       $country: index.country,
       $country_name: index.countryName,
       $as_name: index.asName,
@@ -779,6 +784,8 @@ export class CrowdsecDatabase {
     const index = deriveDecisionIndexValues(params.$raw_data, fallback);
     this.updateDecisionStatement.run({
       ...params,
+      $stop_at: normalizeIsoTimestamp(params.$stop_at),
+      $raw_data: normalizeCrowdsecTimestampJson(params.$raw_data),
       $country: index.country,
       $country_name: index.countryName,
       $as_name: index.asName,
@@ -1154,7 +1161,11 @@ export class CrowdsecDatabase {
     $enabled: number;
     $config_json: string;
   }): void {
-    this.upsertNotificationChannelStatement.run(params);
+    this.upsertNotificationChannelStatement.run({
+      ...params,
+      $created_at: normalizeIsoTimestamp(params.$created_at),
+      $updated_at: normalizeIsoTimestamp(params.$updated_at),
+    });
   }
 
   deleteNotificationChannel(id: string): void {
@@ -1180,7 +1191,11 @@ export class CrowdsecDatabase {
     $channel_ids_json: string;
     $config_json: string;
   }): void {
-    this.upsertNotificationRuleStatement.run(params);
+    this.upsertNotificationRuleStatement.run({
+      ...params,
+      $created_at: normalizeIsoTimestamp(params.$created_at),
+      $updated_at: normalizeIsoTimestamp(params.$updated_at),
+    });
   }
 
   deleteNotificationRule(id: string): void {
@@ -1223,7 +1238,14 @@ export class CrowdsecDatabase {
     $deliveries_json: string;
     $dedupe_key: string;
   }): boolean {
-    return this.insertNotificationStatement.run(params).changes > 0;
+    return this.insertNotificationStatement.run({
+      ...params,
+      $created_at: normalizeIsoTimestamp(params.$created_at),
+      $updated_at: normalizeIsoTimestamp(params.$updated_at),
+      $read_at: params.$read_at === null ? null : normalizeIsoTimestamp(params.$read_at),
+      $metadata_json: normalizeTimestampJson(params.$metadata_json),
+      $deliveries_json: normalizeTimestampJson(params.$deliveries_json),
+    }).changes > 0;
   }
 
   listNotificationIncidentsByRule(ruleId: string): JsonRow[] {
@@ -1237,15 +1259,21 @@ export class CrowdsecDatabase {
     $last_seen_at: string;
     $resolved_at: string | null;
   }): void {
-    this.upsertNotificationIncidentStatement.run(params);
+    this.upsertNotificationIncidentStatement.run({
+      ...params,
+      $first_seen_at: normalizeIsoTimestamp(params.$first_seen_at),
+      $last_seen_at: normalizeIsoTimestamp(params.$last_seen_at),
+      $resolved_at: params.$resolved_at === null ? null : normalizeIsoTimestamp(params.$resolved_at),
+    });
   }
 
   resolveNotificationIncident(ruleId: string, incidentKey: string, resolvedAt: string): boolean {
+    const normalizedResolvedAt = normalizeIsoTimestamp(resolvedAt);
     return this.resolveNotificationIncidentStatement.run({
       $rule_id: ruleId,
       $incident_key: incidentKey,
-      $resolved_at: resolvedAt,
-      $last_seen_at: resolvedAt,
+      $resolved_at: normalizedResolvedAt,
+      $last_seen_at: normalizedResolvedAt,
     }).changes > 0;
   }
 
@@ -1262,20 +1290,30 @@ export class CrowdsecDatabase {
   }
 
   markNotificationRead(id: string, readAt: string): boolean {
-    return this.markNotificationReadStatement.run({ $id: id, $read_at: readAt, $updated_at: readAt }).changes > 0;
+    const normalizedReadAt = normalizeIsoTimestamp(readAt);
+    return this.markNotificationReadStatement.run({
+      $id: id,
+      $read_at: normalizedReadAt,
+      $updated_at: normalizedReadAt,
+    }).changes > 0;
   }
 
   markNotificationsRead(ids: string[], readAt: string): number {
+    const normalizedReadAt = normalizeIsoTimestamp(readAt);
     return runChunkedIdMutation(
       this.db,
       'UPDATE notifications SET read_at = ?, updated_at = ? WHERE read_at IS NULL AND id IN',
       ids,
-      [readAt, readAt],
+      [normalizedReadAt, normalizedReadAt],
     );
   }
 
   markAllNotificationsRead(readAt: string): number {
-    return this.markAllNotificationsReadStatement.run({ $read_at: readAt, $updated_at: readAt }).changes;
+    const normalizedReadAt = normalizeIsoTimestamp(readAt);
+    return this.markAllNotificationsReadStatement.run({
+      $read_at: normalizedReadAt,
+      $updated_at: normalizedReadAt,
+    }).changes;
   }
 
   deleteReadNotifications(): number {
@@ -1291,7 +1329,11 @@ export class CrowdsecDatabase {
   }
 
   upsertCveCacheEntry(id: string, publishedAt: string, fetchedAt: string): void {
-    this.upsertCveCacheEntryStatement.run({ $id: id, $published_at: publishedAt, $fetched_at: fetchedAt });
+    this.upsertCveCacheEntryStatement.run({
+      $id: id,
+      $published_at: normalizeIsoTimestamp(publishedAt),
+      $fetched_at: normalizeIsoTimestamp(fetchedAt),
+    });
   }
 
   transaction<T>(callback: (value: T) => void): (value: T) => void {
@@ -1683,8 +1725,8 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
             $id: String(decision.id),
             $uuid: decision.uuid,
             $alert_id: decision.alert_id,
-            $created_at: decision.created_at,
-            $stop_at: decision.stop_at,
+            $created_at: normalizeIsoTimestamp(String(decision.created_at)),
+            $stop_at: normalizeIsoTimestamp(String(decision.stop_at)),
             $value: decision.value,
             $type: decision.type,
             $origin: decision.origin,
@@ -1700,6 +1742,7 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
     db.exec(createDecisionsTable);
   }
 
+  migrateTimestamps(db);
   migrateRecordIndexColumns(db);
   migrateNotificationRulesTable(db, createNotificationRulesTable);
   migrateNotificationsTable(db, createNotificationsTable);
@@ -1711,6 +1754,70 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
     backfillSearchIndexes(db);
   }
   return searchIndexAvailable;
+}
+
+const TIMESTAMP_MIGRATIONS = [
+  { table: 'alerts', timestampColumns: ['created_at'], jsonColumns: ['raw_data'] },
+  { table: 'decisions', timestampColumns: ['created_at', 'stop_at'], jsonColumns: ['raw_data'] },
+  { table: 'auth_users', timestampColumns: ['created_at', 'updated_at'] },
+  { table: 'webauthn_credentials', timestampColumns: ['created_at'] },
+  { table: 'notification_channels', timestampColumns: ['created_at', 'updated_at'] },
+  { table: 'notification_rules', timestampColumns: ['created_at', 'updated_at'] },
+  {
+    table: 'notifications',
+    timestampColumns: ['created_at', 'updated_at', 'read_at'],
+    jsonColumns: ['metadata_json', 'deliveries_json'],
+  },
+  {
+    table: 'notification_incidents',
+    timestampColumns: ['first_seen_at', 'last_seen_at', 'resolved_at'],
+  },
+  { table: 'cve_cache', timestampColumns: ['published_at', 'fetched_at'] },
+] as const;
+
+function migrateTimestamps(db: Database): void {
+  const migrationKey = 'sync_timestamp_format_version';
+  const currentVersion = db.query('SELECT value FROM meta WHERE key = ?').get(migrationKey) as MetaRow | null;
+  if (currentVersion?.value === '2') return;
+
+  const migrate = db.transaction(() => {
+    for (const migration of TIMESTAMP_MIGRATIONS) {
+      const timestampColumns = [...migration.timestampColumns];
+      const jsonColumns = 'jsonColumns' in migration ? [...migration.jsonColumns] : [];
+      const columns = [...timestampColumns, ...jsonColumns];
+      const rows = db.query(`
+        SELECT rowid AS migration_rowid, ${columns.join(', ')}
+        FROM ${migration.table}
+      `).all() as Array<Record<string, unknown>>;
+      const update = db.query(`
+        UPDATE ${migration.table}
+        SET ${columns.map((column) => `${column} = $${column}`).join(', ')}
+        WHERE rowid = $migration_rowid
+      `);
+
+      for (const row of rows) {
+        let changed = false;
+        const params: Record<string, unknown> = { $migration_rowid: row.migration_rowid };
+        for (const column of timestampColumns) {
+          const original = row[column];
+          const normalized = typeof original === 'string' ? normalizeIsoTimestamp(original) : original;
+          params[`$${column}`] = normalized;
+          changed ||= normalized !== original;
+        }
+        for (const column of jsonColumns) {
+          const original = row[column];
+          const normalized = typeof original === 'string' ? normalizeTimestampJson(original) : original;
+          params[`$${column}`] = normalized;
+          changed ||= normalized !== original;
+        }
+        if (changed) {
+          update.run(params);
+        }
+      }
+    }
+    db.query('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(migrationKey, '2');
+  });
+  migrate();
 }
 
 function migrateRecordIndexColumns(db: Database): void {
@@ -2062,8 +2169,8 @@ function migrateNotificationRulesTable(db: Database, createNotificationRulesTabl
     for (const rule of rules) {
       (insertStatement as any).run({
         $id: String(rule.id),
-        $created_at: String(rule.created_at),
-        $updated_at: String(rule.updated_at),
+        $created_at: normalizeIsoTimestamp(String(rule.created_at)),
+        $updated_at: normalizeIsoTimestamp(String(rule.updated_at)),
         $name: String(rule.name),
         $type: String(rule.type),
         $enabled: Number(rule.enabled) === 1 ? 1 : 0,
@@ -2117,17 +2224,17 @@ function migrateNotificationsTable(db: Database, createNotificationsTable: strin
     for (const notification of notifications) {
       (insertStatement as any).run({
         $id: String(notification.id),
-        $created_at: String(notification.created_at),
-        $updated_at: String(notification.updated_at),
+        $created_at: normalizeIsoTimestamp(String(notification.created_at)),
+        $updated_at: normalizeIsoTimestamp(String(notification.updated_at)),
         $rule_id: String(notification.rule_id),
         $rule_name: String(notification.rule_name),
         $rule_type: String(notification.rule_type),
         $severity: String(notification.severity),
         $title: String(notification.title),
         $message: String(notification.message),
-        $read_at: notification.read_at == null ? null : String(notification.read_at),
-        $metadata_json: String(notification.metadata_json || '{}'),
-        $deliveries_json: String(notification.deliveries_json || '[]'),
+        $read_at: notification.read_at == null ? null : normalizeIsoTimestamp(String(notification.read_at)),
+        $metadata_json: normalizeTimestampJson(String(notification.metadata_json || '{}')),
+        $deliveries_json: normalizeTimestampJson(String(notification.deliveries_json || '[]')),
         $dedupe_key: String(notification.dedupe_key || ''),
       });
     }
@@ -2157,7 +2264,7 @@ function seedNotificationIncidentsFromHistoryIfEmpty(db: Database): void {
     const ruleId = String(row.rule_id || '');
     const ruleType = String(row.rule_type || '');
     const incidentKey = normalizeIncidentKeyForSeed(ruleId, ruleType, String(row.dedupe_key || ''));
-    const createdAt = String(row.created_at || '');
+    const createdAt = normalizeIsoTimestamp(String(row.created_at || ''));
     if (!ruleId || !incidentKey || !createdAt) {
       continue;
     }
