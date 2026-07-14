@@ -19,7 +19,7 @@ type SyncWorkerRequest =
   | { type: 'delete-alerts-missing-between'; start: string; end: string; keepIds: Array<string | number> }
   | { type: 'delete-cached-alerts'; ids: Array<string | number> }
   | { type: 'delete-cached-decisions'; ids: Array<string | number> }
-  | { type: 'begin-deferred-search-indexes' }
+  | { type: 'begin-deferred-search-indexes'; dropSecondaryIndexes: boolean }
   | { type: 'rebuild-search-indexes' }
   | { type: 'refresh-duplicate-flags'; now: string }
   | { type: 'cleanup-old-data'; cutoff: string }
@@ -70,8 +70,8 @@ export class DatabaseSyncWorker {
     return this.execute({ type: 'delete-cached-decisions', ids });
   }
 
-  beginDeferredSearchIndexUpdates(): Promise<void> {
-    return this.execute({ type: 'begin-deferred-search-indexes' });
+  beginDeferredSearchIndexUpdates(dropSecondaryIndexes = true): Promise<void> {
+    return this.execute({ type: 'begin-deferred-search-indexes', dropSecondaryIndexes });
   }
 
   rebuildSearchIndexes(): Promise<void> {

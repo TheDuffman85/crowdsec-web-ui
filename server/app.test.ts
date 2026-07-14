@@ -2906,9 +2906,11 @@ describe('createApp', () => {
 
     const alertsRequest = controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
     await vi.waitFor(() => expect(syncWorker.rebuildSearchIndexes).toHaveBeenCalled());
+    expect(syncWorker.beginDeferredSearchIndexUpdates).toHaveBeenCalledWith(true);
     expect(controller.getSyncStatus()).toEqual(expect.objectContaining({
       isSyncing: true,
-      progress: 100,
+      progress: 98,
+      message: 'Building search indexes...',
       completedAt: null,
     }));
 
@@ -2923,6 +2925,40 @@ describe('createApp', () => {
     controller.stopBackgroundTasks();
     database.close();
     destroyTempDir();
+  });
+
+  test('defers search writes while reconciling a populated startup cache', async () => {
+    const syncWorker: NonNullable<CreateAppOptions['syncWorker']> = {
+      persistAlerts: vi.fn(async () => ({ changed: false })),
+      deleteAlertsMissingBetween: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      deleteCachedAlerts: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      deleteCachedDecisions: vi.fn(async () => 0),
+      beginDeferredSearchIndexUpdates: vi.fn(async () => {}),
+      rebuildSearchIndexes: vi.fn(async () => {}),
+      refreshDecisionDuplicateFlags: vi.fn(async () => {}),
+      cleanupOldData: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      clearSyncData: vi.fn(async () => {}),
+      runExclusive: vi.fn(async (operation) => operation()),
+      close: vi.fn(),
+    };
+    const syncedAlert = sampleAlert({ id: 301, uuid: 'alert-301' });
+    const { controller, database } = createController({
+      syncWorker,
+      fetchResolver: (url) => url.includes('/v1/alerts?') ? Response.json([syncedAlert]) : undefined,
+    });
+    seedAlert(database, sampleAlert({ id: 300, uuid: 'alert-300' }));
+
+    try {
+      const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+      expect(response.status).toBe(200);
+      expect(syncWorker.beginDeferredSearchIndexUpdates).toHaveBeenCalledWith(false);
+      expect(syncWorker.deleteAlertsMissingBetween).toHaveBeenCalled();
+      expect(syncWorker.rebuildSearchIndexes).toHaveBeenCalledOnce();
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
   });
 
   test('does not run the active-decision failure path after complete historical bootstrap', async () => {
@@ -3053,6 +3089,75 @@ describe('createApp', () => {
       }));
     } finally {
       controller.stopBackgroundTasks();
+      vi.useRealTimers();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
+  test('pauses background refresh without scheduling retries during an active bootstrap', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    let releaseBootstrap!: () => void;
+    let bootstrapReleased = false;
+    const bootstrapGate = new Promise<void>((resolve) => {
+      releaseBootstrap = resolve;
+    });
+    const syncWorker: NonNullable<CreateAppOptions['syncWorker']> = {
+      persistAlerts: vi.fn(async () => ({ changed: false })),
+      deleteAlertsMissingBetween: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      deleteCachedAlerts: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      deleteCachedDecisions: vi.fn(async () => 0),
+      beginDeferredSearchIndexUpdates: vi.fn(() => bootstrapGate),
+      rebuildSearchIndexes: vi.fn(async () => {}),
+      refreshDecisionDuplicateFlags: vi.fn(async () => {}),
+      cleanupOldData: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      clearSyncData: vi.fn(async () => {}),
+      runExclusive: vi.fn(async (operation) => operation()),
+      close: vi.fn(),
+    };
+    const { controller, database, lapiClient } = createController({
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '30s',
+        CROWDSEC_HEARTBEAT_INTERVAL: '5m',
+        CROWDSEC_LAPI_REQUEST_TIMEOUT: '5m',
+        CROWDSEC_BOOTSTRAP_RETRY_DELAY: '10s',
+      },
+      syncWorker,
+    });
+    await lapiClient.login();
+    const realSetTimeout = globalThis.setTimeout;
+    vi.useFakeTimers();
+
+    try {
+      controller.startBackgroundTasks();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(syncWorker.beginDeferredSearchIndexUpdates).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(65_000);
+
+      const logs = logSpy.mock.calls.map((call) => String(call[0]));
+      expect(logs.filter((message) =>
+        message === 'Background refresh paused until bootstrap recovery completes.',
+      )).toHaveLength(1);
+      expect(logs.some((message) => message.startsWith('Next bootstrap attempt scheduled'))).toBe(false);
+      expect(logs.some((message) => message.includes('joining it (bootstrap retry)'))).toBe(false);
+
+      bootstrapReleased = true;
+      releaseBootstrap();
+      for (let attempt = 0; attempt < 100 && !logSpy.mock.calls.some((call) =>
+        String(call[0]).includes('Bootstrap recovery completed successfully'),
+      ); attempt += 1) {
+        await vi.advanceTimersByTimeAsync(100);
+        await new Promise((resolve) => realSetTimeout(resolve, 5));
+      }
+      expect(controller.getSyncStatus().state).toBe('complete');
+    } finally {
+      if (!bootstrapReleased) {
+        releaseBootstrap();
+        await vi.advanceTimersByTimeAsync(1_000);
+        await new Promise((resolve) => realSetTimeout(resolve, 0));
+      }
+      controller.stopBackgroundTasks();
+      logSpy.mockRestore();
       vi.useRealTimers();
       database.close();
       destroyTempDir();

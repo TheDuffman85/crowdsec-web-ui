@@ -187,6 +187,32 @@ describe('LapiClient', () => {
     });
   });
 
+  test('keeps the request timeout active while reading the response body', async () => {
+    const client = new LapiClient({
+      crowdsecUrl: 'http://crowdsec:8080',
+      auth: passwordAuth,
+      simulationsEnabled: true,
+      lookbackPeriod: '1h',
+      version: '1.0.0',
+      fetchImpl: async (_input, init) => {
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"alerts":'));
+            init?.signal?.addEventListener('abort', () => {
+              controller.error(new DOMException('Aborted', 'AbortError'));
+            });
+          },
+        });
+        return new Response(body, { headers: { 'content-type': 'application/json' } });
+      },
+    });
+
+    await expect(client.fetchLapi('/v1/alerts', { timeout: 1 })).rejects.toMatchObject({
+      message: 'Request timeout',
+      code: 'ETIMEDOUT',
+    });
+  });
+
   test('uses the configured default request timeout', async () => {
     const client = new LapiClient({
       crowdsecUrl: 'http://crowdsec:8080',

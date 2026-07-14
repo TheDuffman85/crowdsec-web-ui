@@ -620,11 +620,13 @@ export class CrowdsecDatabase {
     this.clearSearchIndexes();
   }
 
-  beginDeferredSearchIndexUpdates(): void {
+  beginDeferredSearchIndexUpdates(dropSecondaryIndexes = true): void {
     this.searchIndexUpdatesDeferred = true;
     if (this.searchIndexAvailable) this.clearSearchIndexes();
-    for (const indexName of SYNC_SECONDARY_INDEX_NAMES) {
-      this.db.exec(`DROP INDEX IF EXISTS ${indexName}`);
+    if (dropSecondaryIndexes) {
+      for (const indexName of SYNC_SECONDARY_INDEX_NAMES) {
+        this.db.exec(`DROP INDEX IF EXISTS ${indexName}`);
+      }
     }
   }
 

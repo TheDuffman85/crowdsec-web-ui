@@ -20,6 +20,15 @@ function translateSyncMessage(message: string | undefined, t: (key: string, valu
         return t('components.syncOverlay.statusActiveDecisions');
     }
 
+    const fixedMessages: Record<string, string> = {
+        'Finalizing decision data...': 'components.syncOverlay.statusFinalizingDecisions',
+        'Building search indexes...': 'components.syncOverlay.statusBuildingIndexes',
+        'Preparing dashboard data...': 'components.syncOverlay.statusPreparingDashboard',
+    };
+    if (fixedMessages[message]) {
+        return t(fixedMessages[message]);
+    }
+
     const removedMatch = message.match(/^Removed (\d+) stale cached alerts and (\d+) stale cached decisions before sync\.$/);
     if (removedMatch) {
         return t('components.syncOverlay.statusRemovedStale', {
@@ -34,6 +43,24 @@ function translateSyncMessage(message: string | undefined, t: (key: string, valu
             window: syncingMatch[1],
             alerts: Number(syncingMatch[2]),
             decisions: Number(syncingMatch[3]),
+        });
+    }
+
+    const fetchingMatch = message.match(/^Fetching: (.+) \((\d+) alerts and (\d+) decisions cached so far\)$/);
+    if (fetchingMatch) {
+        return t('components.syncOverlay.statusFetchingWindow', {
+            window: fetchingMatch[1],
+            alerts: Number(fetchingMatch[2]),
+            decisions: Number(fetchingMatch[3]),
+        });
+    }
+
+    const processingMatch = message.match(/^Processing (\d+) alerts and (\d+) decisions from (.+)\.\.\.$/);
+    if (processingMatch) {
+        return t('components.syncOverlay.statusProcessingWindow', {
+            alerts: Number(processingMatch[1]),
+            decisions: Number(processingMatch[2]),
+            window: processingMatch[3],
         });
     }
 
@@ -83,12 +110,12 @@ export function SyncOverlay({ syncStatus }: SyncOverlayProps) {
                 </div>
 
                 {/* Progress text */}
-                <div className="flex justify-between items-center text-sm">
-                    <span className="text-gray-500 dark:text-gray-400 flex items-center gap-2">
-                        <RefreshCw className="w-4 h-4 animate-spin" />
+                <div className="flex justify-between items-start gap-3 text-sm" aria-live="polite">
+                    <span className="min-w-0 flex-1 text-left text-gray-500 dark:text-gray-400 flex items-start gap-2">
+                        <RefreshCw className="w-4 h-4 mt-0.5 shrink-0 animate-spin" />
                         {statusMessage}
                     </span>
-                    <span className="font-semibold text-blue-600 dark:text-blue-400">
+                    <span className="shrink-0 font-semibold text-blue-600 dark:text-blue-400">
                         {progress}%
                     </span>
                 </div>

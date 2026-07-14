@@ -426,6 +426,36 @@ describe('CrowdsecDatabase', () => {
     db.close();
   });
 
+  test('defers only search indexes when reconciling a populated cache', () => {
+    const db = createTestDatabase();
+    const insertAlert = (id: number, message: string) => db.insertAlert({
+      $id: id,
+      $uuid: `cached-alert-${id}`,
+      $created_at: '2026-01-01T00:00:00.000Z',
+      $scenario: 'crowdsecurity/ssh-bf',
+      $source_ip: `192.0.2.${id}`,
+      $message: message,
+      $raw_data: JSON.stringify({ id, message }),
+    });
+
+    insertAlert(1, 'existing searchable alert');
+    db.beginDeferredSearchIndexUpdates(false);
+
+    const alertIndexes = db.db.prepare("PRAGMA index_list('alerts')").all() as Array<{ name: string }>;
+    const decisionIndexes = db.db.prepare("PRAGMA index_list('decisions')").all() as Array<{ name: string }>;
+    expect(alertIndexes.map((index) => index.name)).toContain('idx_alerts_created_at');
+    expect(decisionIndexes.map((index) => index.name)).toContain('idx_decisions_alert_id');
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts').get() as { count: number }).count).toBe(0);
+
+    insertAlert(2, 'new searchable alert');
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts').get() as { count: number }).count).toBe(0);
+
+    db.rebuildSearchIndexes();
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts').get() as { count: number }).count).toBe(2);
+
+    db.close();
+  });
+
   test('fresh databases default dashboard auth on', () => {
     const db = createTestDatabase();
 

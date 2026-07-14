@@ -2027,7 +2027,12 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     return [startMs, midpoint, endMs];
   }
 
-  async function syncHistoricalWindow(startMs: number, endMs: number, nowMs: number): Promise<WindowSyncSummary> {
+  async function syncHistoricalWindow(
+    startMs: number,
+    endMs: number,
+    nowMs: number,
+    onFetched?: (windowLabel: string, alerts: number, decisions: number) => void,
+  ): Promise<WindowSyncSummary> {
     const windowLabel = formatSyncWindow(startMs, endMs, nowMs);
     const sinceDuration = toDuration(startMs, nowMs);
     const untilDuration = toDuration(endMs, nowMs);
@@ -2035,6 +2040,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     try {
       const alerts = await fetchAlertsForSync(sinceDuration, untilDuration, false, { requireComplete: true });
       const decisionCount = countAlertDecisions(alerts);
+      onFetched?.(windowLabel, alerts.length, decisionCount);
       const pruned = await reconcileSyncedAlertWindow(
         alerts,
         new Date(startMs).toISOString(),
@@ -2059,8 +2065,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       if (isTimeoutError(error) && canSplitWindow(startMs, endMs)) {
         const [, midpoint] = splitWindow(startMs, endMs);
         console.warn(`Historical sync window timed out (${windowLabel}); splitting into smaller windows.`);
-        const first = await syncHistoricalWindow(startMs, midpoint, nowMs);
-        const second = await syncHistoricalWindow(midpoint, endMs, nowMs);
+        const first = await syncHistoricalWindow(startMs, midpoint, nowMs, onFetched);
+        const second = await syncHistoricalWindow(midpoint, endMs, nowMs, onFetched);
         return combineWindowSummaries(first, second);
       }
 
@@ -2180,7 +2186,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       const currentEnd = Math.min(currentStart + chunkSizeMs, now);
       const progress = Math.round(((currentEnd - lookbackStart) / totalDuration) * 100);
       const windowLabel = formatSyncWindow(currentStart, currentEnd, now);
-      const progressMessage = t('components.syncOverlay.statusSyncingWindow', {
+      const progressMessage = t('components.syncOverlay.statusFetchingWindow', {
         window: windowLabel,
         alerts: totalAlerts,
         decisions: totalDecisions,
@@ -2193,7 +2199,16 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       });
       console.log(progressLogMessage);
 
-      const result = await syncHistoricalWindow(currentStart, currentEnd, now);
+      const result = await syncHistoricalWindow(currentStart, currentEnd, now, (processedWindow, alerts, decisions) => {
+        updateSyncStatus({
+          progress: Math.min(progress, 90),
+          message: t('components.syncOverlay.statusProcessingWindow', {
+            window: processedWindow,
+            alerts,
+            decisions,
+          }),
+        });
+      });
       totalAlerts += result.alerts;
       totalDecisions += result.decisions;
       successfulWindows += result.successfulWindows;
@@ -2208,7 +2223,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       await delay(100);
     }
 
-    updateSyncStatus({ progress: 95, message: t('components.syncOverlay.statusActiveDecisions') });
+    updateSyncStatus({ progress: 92, message: t('components.syncOverlay.statusActiveDecisions') });
     const cachedAlertsBeforeActiveSync = database.countAlerts();
     const cachedDecisionsBeforeActiveSync = database.countDecisions();
     const activeWindowSummary = historicalErrors.length === 0
@@ -2264,7 +2279,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       // Keep the initial overlay open until initializeCache has finalized all
       // read-visible indexes and dashboard cache state.
       isSyncing: showOverlay,
-      progress: state === 'failed' ? 0 : 100,
+      progress: state === 'failed' ? 0 : showOverlay ? 95 : 100,
       message,
       completedAt: showOverlay ? null : new Date().toISOString(),
       state,
@@ -2297,20 +2312,37 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
 
     initializationPromise = (async () => {
-      const deferSecondaryIndexUpdates = !cache.isInitialized
+      const t = getServerTranslator(database);
+      const deferIndexUpdates = !cache.isInitialized;
+      const freshBulkImport = deferIndexUpdates
         && database.countAlerts() === 0
         && database.countDecisions() === 0;
       let deferredIndexesRebuilt = false;
-      isFreshBulkImport = deferSecondaryIndexUpdates;
-      if (deferSecondaryIndexUpdates) {
-        await syncWorker.beginDeferredSearchIndexUpdates();
+      isFreshBulkImport = freshBulkImport;
+      if (deferIndexUpdates) {
+        // A populated startup cache still benefits substantially from deferring
+        // FTS writes, but it must retain the alert_id indexes used to reconcile
+        // stale decisions. A brand-new cache can defer every secondary index.
+        await syncWorker.beginDeferredSearchIndexUpdates(freshBulkImport);
       }
       try {
         console.log('Initializing cache with chunked data load...');
         const syncSummary = await syncHistory();
+        if (syncStatus.isSyncing && syncSummary.state !== 'failed') {
+          updateSyncStatus({
+            progress: 96,
+            message: t('components.syncOverlay.statusFinalizingDecisions'),
+          });
+        }
         await refreshDecisionDuplicateFlags();
-        if (deferSecondaryIndexUpdates) {
+        if (deferIndexUpdates) {
           console.log('Building secondary and search indexes after initial cache load...');
+          if (syncStatus.isSyncing) {
+            updateSyncStatus({
+              progress: 98,
+              message: t('components.syncOverlay.statusBuildingIndexes'),
+            });
+          }
           const indexStartedAt = Date.now();
           await syncWorker.rebuildSearchIndexes();
           deferredIndexesRebuilt = true;
@@ -2324,6 +2356,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         cache.isComplete = syncSummary.state === 'complete';
         lapiClient.updateStatus(syncSummary.state === 'complete', syncSummary.errors[0] ? { message: syncSummary.errors[0] } : null);
         if (syncStatus.isSyncing && cache.isInitialized) {
+          updateSyncStatus({
+            progress: 99,
+            message: t('components.syncOverlay.statusPreparingDashboard'),
+          });
           try {
             await getDashboardStatsIndex();
           } catch (error: any) {
@@ -2332,6 +2368,18 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         }
         updateSyncStatus({
           isSyncing: false,
+          progress: syncSummary.state === 'failed' ? 0 : 100,
+          message: syncSummary.state === 'complete'
+            ? t('server.sync.complete', { alerts: syncSummary.cachedAlerts, decisions: syncSummary.cachedDecisions })
+            : syncSummary.state === 'partial'
+              ? t('server.sync.partial', {
+                  alerts: syncSummary.cachedAlerts,
+                  decisions: syncSummary.cachedDecisions,
+                  failures: syncSummary.errors.length,
+                })
+              : t('server.sync.failed', {
+                  reason: syncSummary.errors[0] || t('server.sync.failedNoWindows'),
+                }),
           completedAt: new Date().toISOString(),
         });
         await runNotificationEvaluation('cache initialization');
@@ -2380,7 +2428,7 @@ ${errorSummary}  Status: ${syncSummary.state}
         });
         return null;
       } finally {
-        if (deferSecondaryIndexUpdates && !deferredIndexesRebuilt) {
+        if (deferIndexUpdates && !deferredIndexesRebuilt) {
           try {
             await syncWorker.rebuildSearchIndexes();
           } catch (error: any) {
@@ -2494,7 +2542,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       return;
     }
 
-    console.log(`Bootstrap recovery will retry in ${getIntervalName(config.bootstrapRetryDelayMs)}: ${reason}.`);
+    console.log(`Next bootstrap attempt scheduled in ${getIntervalName(config.bootstrapRetryDelayMs)}: ${reason}.`);
     bootstrapRetryTimeout = setTimeout(() => {
       bootstrapRetryTimeout = null;
       void ensureBootstrapReady('bootstrap retry');
@@ -2532,10 +2580,13 @@ ${errorSummary}  Status: ${syncSummary.state}
     }
 
     if (bootstrapPromise) {
-      console.log(`Bootstrap recovery already in progress, waiting (${source})...`);
+      console.log(`Bootstrap recovery already in progress; joining it (${source})...`);
       return bootstrapPromise;
     }
 
+    // A manually or request-triggered recovery supersedes any older retry that
+    // was scheduled while the cache was unavailable.
+    clearBootstrapRetryTimeout();
     bootstrapSource = source;
     bootstrapPromise = (async () => {
       console.log(`Starting bootstrap recovery (${source})...`);
@@ -2588,9 +2639,13 @@ ${errorSummary}  Status: ${syncSummary.state}
       if (!cache.isInitialized) {
         if (!bootstrapWaitLogged) {
           bootstrapWaitLogged = true;
-          console.log('Background refresh is waiting for bootstrap recovery to complete.');
+          console.log(bootstrapPromise
+            ? 'Background refresh paused until bootstrap recovery completes.'
+            : 'Background refresh paused because the cache is not initialized.');
         }
-        scheduleBootstrapRetry('scheduler waiting for bootstrap');
+        if (!bootstrapPromise) {
+          scheduleBootstrapRetry('cache is not initialized');
+        }
       } else if (doFullRefresh) {
         console.log(`Triggering FULL refresh (last full: ${Math.round((now - lastFullRefreshTime) / 1000)}s ago)...`);
         await initializeCache();

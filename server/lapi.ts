@@ -203,8 +203,6 @@ export class LapiClient {
         ...(this.dispatcher ? { dispatcher: this.dispatcher } : {}),
       });
 
-      clearTimeout(timeoutId);
-
       if (response.status === 401 && !isRetry && !isLoginRequest) {
         const success = await this.login();
         if (success) {
@@ -233,13 +231,14 @@ export class LapiClient {
 
       return { data, status: response.status, headers: response.headers };
     } catch (error: any) {
-      clearTimeout(timeoutId);
-      if (error?.name === 'AbortError') {
+      if (controller.signal.aborted || error?.name === 'AbortError') {
         const timeoutError = new Error('Request timeout') as Error & { code?: string };
         timeoutError.code = 'ETIMEDOUT';
         throw timeoutError;
       }
       throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
