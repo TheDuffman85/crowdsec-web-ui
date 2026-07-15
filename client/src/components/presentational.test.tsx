@@ -95,7 +95,7 @@ describe('presentational components', () => {
       setLanguagePreference: () => undefined,
       t: (key) => ({
         'components.syncOverlay.description': 'Bitte warten',
-        'components.syncOverlay.statusActiveDecisions': 'Aktive Entscheidungen werden synchronisiert...',
+        'components.syncOverlay.statusStarting': 'Historische Daten werden gestartet...',
         'components.syncOverlay.title': 'Historische Daten werden synchronisiert',
       })[key] ?? key,
     };
@@ -106,7 +106,7 @@ describe('presentational components', () => {
           syncStatus={{
             isSyncing: true,
             progress: 95,
-            message: 'Syncing active decisions...',
+            message: 'Starting historical data sync...',
             startedAt: null,
             completedAt: null,
           }}
@@ -114,7 +114,7 @@ describe('presentational components', () => {
       </I18nContext.Provider>,
     );
 
-    expect(screen.getByText('Aktive Entscheidungen werden synchronisiert...')).toBeInTheDocument();
+    expect(screen.getByText('Historische Daten werden gestartet...')).toBeInTheDocument();
   });
 
   test('translates the processing stage and keeps its progress visible', () => {

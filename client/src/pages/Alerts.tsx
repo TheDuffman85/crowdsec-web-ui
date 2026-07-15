@@ -767,7 +767,8 @@ export function Alerts() {
             let resultMessage: string | null = null;
 
             if (pendingDeleteAction.kind === "single") {
-                await deleteAlert(pendingDeleteAction.alertId);
+                const result = await deleteAlert(pendingDeleteAction.alertId);
+                resultMessage = result ? summarizeDeleteResult(result, t) : null;
                 if (selectedAlert && selectedAlert.id === pendingDeleteAction.alertId) {
                     setSelectedAlert(null);
                 }
@@ -1101,6 +1102,18 @@ export function Alerts() {
                                                                 ) : (
                                                                     "-"
                                                                 )}
+                                                            </td>
+                                                        );
+                                                    case 'city':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[160px] truncate" title={alert.source?.city}>
+                                                                {alert.source?.city || "-"}
+                                                            </td>
+                                                        );
+                                                    case 'region':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[180px] truncate" title={alert.source?.region}>
+                                                                {alert.source?.region || "-"}
                                                             </td>
                                                         );
                                                     case 'as':

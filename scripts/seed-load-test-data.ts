@@ -37,6 +37,8 @@ interface AlertTemplate {
   reason: string;
   ip: string;
   country: string;
+  city: string;
+  region: string;
   asName: string;
   asNumber: number;
   target: string;
@@ -77,16 +79,16 @@ const scenarios = [
 ] as const;
 
 const countries = [
-  ['US', 37.7749, -122.4194],
-  ['DE', 50.1109, 8.6821],
-  ['NL', 52.3676, 4.9041],
-  ['FR', 48.8566, 2.3522],
-  ['GB', 51.5072, -0.1276],
-  ['BR', -23.5505, -46.6333],
-  ['IN', 28.6139, 77.2090],
-  ['JP', 35.6762, 139.6503],
-  ['SG', 1.3521, 103.8198],
-  ['AU', -33.8688, 151.2093],
+  ['US', 37.7749, -122.4194, 'San Francisco', 'California'],
+  ['DE', 50.1109, 8.6821, 'Frankfurt am Main', 'Hesse'],
+  ['NL', 52.3676, 4.9041, 'Amsterdam', 'North Holland'],
+  ['FR', 48.8566, 2.3522, 'Paris', 'Île-de-France'],
+  ['GB', 51.5072, -0.1276, 'London', 'England'],
+  ['BR', -23.5505, -46.6333, 'São Paulo', 'São Paulo'],
+  ['IN', 28.6139, 77.2090, 'New Delhi', 'Delhi'],
+  ['JP', 35.6762, 139.6503, 'Tokyo', 'Tokyo'],
+  ['SG', 1.3521, 103.8198, 'Singapore', 'Singapore'],
+  ['AU', -33.8688, 151.2093, 'Sydney', 'New South Wales'],
 ] as const;
 
 const asNames = [
@@ -200,6 +202,8 @@ function buildAlertTemplate(id: number, config: LoadTestConfig, nowMs: number): 
     reason: isBlocklist ? 'Synthetic blocklist import' : scenarioTuple[1],
     ip: ipFor(id, config.seed),
     country: countryTuple[0],
+    city: countryTuple[3],
+    region: countryTuple[4],
     asName: asTuple[0],
     asNumber: asTuple[1],
     target: isBlocklist ? 'blocklist' : scenarioTuple[2],
@@ -312,6 +316,8 @@ function buildAlertRecord(alert: AlertTemplate, config: LoadTestConfig, nowMs: n
       value: alert.ip,
       ip: alert.ip,
       cn: alert.country,
+      city: alert.city,
+      region: alert.region,
       as_name: alert.asName,
       as_number: alert.asNumber,
       latitude: Number(alert.latitude.toFixed(4)),
@@ -343,15 +349,12 @@ function ensureLoadTestSourceTable(database: CrowdsecDatabase): void {
     CREATE TABLE IF NOT EXISTS ${LOADTEST_SOURCE_TABLE} (
       id TEXT PRIMARY KEY,
       created_at TEXT NOT NULL,
-      has_active_decision INTEGER NOT NULL DEFAULT 0,
       scenario TEXT,
       origins TEXT,
       raw_data TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_${LOADTEST_SOURCE_TABLE}_created_at
       ON ${LOADTEST_SOURCE_TABLE}(created_at);
-    CREATE INDEX IF NOT EXISTS idx_${LOADTEST_SOURCE_TABLE}_active_created_at
-      ON ${LOADTEST_SOURCE_TABLE}(has_active_decision, created_at);
   `);
 }
 
@@ -361,10 +364,6 @@ function sourceOrigins(record: ReturnType<typeof buildAlertRecord>): string {
     if (decision.origin) origins.add(String(decision.origin));
   }
   return `\n${Array.from(origins).join('\n')}\n`;
-}
-
-function hasActiveSourceDecision(record: ReturnType<typeof buildAlertRecord>, nowMs: number): number {
-  return (record.decisions || []).some((decision) => Date.parse(decision.stop_at) > nowMs) ? 1 : 0;
 }
 
 installTimestampedConsole();
@@ -387,8 +386,8 @@ removeExistingDatabase(config.dbDir);
 const database = new CrowdsecDatabase({ dbDir: config.dbDir });
 ensureLoadTestSourceTable(database);
 const insertSourceAlert = database.db.prepare(`
-  INSERT INTO ${LOADTEST_SOURCE_TABLE} (id, created_at, has_active_decision, scenario, origins, raw_data)
-  VALUES (?, ?, ?, ?, ?, ?)
+  INSERT INTO ${LOADTEST_SOURCE_TABLE} (id, created_at, scenario, origins, raw_data)
+  VALUES (?, ?, ?, ?, ?)
 `);
 
 const insertSourceAlertsBatch = database.db.transaction((start: number, end: number) => {
@@ -400,7 +399,6 @@ const insertSourceAlertsBatch = database.db.transaction((start: number, end: num
     insertSourceAlert.run(
       String(alert.id),
       alert.createdAt,
-      hasActiveSourceDecision(record, nowMs),
       record.scenario || null,
       sourceOrigins(record),
       JSON.stringify(record),

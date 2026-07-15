@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { createCrowdsecAuthConfig, type CrowdsecAuthConfig } from './auth';
 import { resolveSecretEnv } from './env-secrets';
 
@@ -44,13 +45,19 @@ export interface RuntimeConfig {
   refreshIntervalMs: number;
   idleRefreshIntervalMs: number;
   idleThresholdMs: number;
-  fullRefreshIntervalMs: number;
   lapiRequestTimeoutMs: number;
+  bouncerPropagationDelayMs: number;
   prometheusUrl?: string;
   prometheusRequestTimeoutMs: number;
   heartbeatIntervalMs: number;
   alertSyncChunkMs: number;
   alertSyncMinChunkMs: number;
+  reconcileWindowMs: number;
+  reconcileRecentAgeMs: number;
+  reconcileRecentIntervalMs: number;
+  reconcileActiveIntervalMs: number;
+  reconcileOldIntervalMs: number;
+  reconcileWindowsPerRefresh: number;
   bootstrapRetryDelayMs: number;
   bootstrapRetryEnabled: boolean;
   dockerImageRef: string;
@@ -60,6 +67,7 @@ export interface RuntimeConfig {
   updateCheckEnabled: boolean;
   deploymentMode: 'standard' | 'load-test';
   dbDir: string;
+  geonamesDumpDir: string;
   notificationSecretKey?: string;
   notificationAllowPrivateAddresses: boolean;
   notificationDebugPayloads: boolean;
@@ -234,6 +242,23 @@ function parsePositiveIntervalEnv(value: string | undefined, defaultValue: strin
   return parseRefreshInterval(defaultValue);
 }
 
+function parseNonNegativeIntervalEnv(value: string | undefined, defaultValue: string): number {
+  const normalized = (value ?? defaultValue).trim().toLowerCase();
+  if (normalized === '0') return 0;
+
+  const match = normalized.match(/^(\d+)(ms|[smhd])$/);
+  if (match) {
+    if (match[2] === 'ms') return Number.parseInt(match[1], 10);
+    return parseRefreshInterval(normalized);
+  }
+  return parseRefreshInterval(defaultValue);
+}
+
+function parsePositiveIntegerEnv(value: string | undefined, defaultValue: number): number {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : defaultValue;
+}
+
 function parseAlertFilterConfig(env: NodeJS.ProcessEnv): Pick<
   RuntimeConfig,
   | 'alertFilterMode'
@@ -357,13 +382,19 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
     refreshIntervalMs,
     idleRefreshIntervalMs: parseRefreshInterval(env.CROWDSEC_IDLE_REFRESH_INTERVAL || '10m'),
     idleThresholdMs: parseRefreshInterval(env.CROWDSEC_IDLE_THRESHOLD || '2m'),
-    fullRefreshIntervalMs: parseRefreshInterval(env.CROWDSEC_FULL_REFRESH_INTERVAL || '3h'),
     lapiRequestTimeoutMs: parsePositiveIntervalEnv(env.CROWDSEC_LAPI_REQUEST_TIMEOUT, '30s'),
+    bouncerPropagationDelayMs: parseNonNegativeIntervalEnv(env.CROWDSEC_BOUNCER_PROPAGATION_DELAY, '15s'),
     prometheusUrl: env.CROWDSEC_PROMETHEUS_URL?.trim() || undefined,
     prometheusRequestTimeoutMs: parsePositiveIntervalEnv(env.CROWDSEC_PROMETHEUS_REQUEST_TIMEOUT, '5s'),
     heartbeatIntervalMs: parseRefreshInterval(env.CROWDSEC_HEARTBEAT_INTERVAL || '30s'),
     alertSyncChunkMs: parsePositiveIntervalEnv(env.CROWDSEC_ALERT_SYNC_CHUNK, '12h'),
     alertSyncMinChunkMs: parsePositiveIntervalEnv(env.CROWDSEC_ALERT_SYNC_MIN_CHUNK, '15m'),
+    reconcileWindowMs: parsePositiveIntervalEnv(env.CROWDSEC_RECONCILE_WINDOW, '1h'),
+    reconcileRecentAgeMs: parsePositiveIntervalEnv(env.CROWDSEC_RECONCILE_RECENT_AGE, '24h'),
+    reconcileRecentIntervalMs: parsePositiveIntervalEnv(env.CROWDSEC_RECONCILE_RECENT_INTERVAL, '15m'),
+    reconcileActiveIntervalMs: parsePositiveIntervalEnv(env.CROWDSEC_RECONCILE_ACTIVE_INTERVAL, '5m'),
+    reconcileOldIntervalMs: parsePositiveIntervalEnv(env.CROWDSEC_RECONCILE_OLD_INTERVAL, '3h'),
+    reconcileWindowsPerRefresh: parsePositiveIntegerEnv(env.CROWDSEC_RECONCILE_WINDOWS_PER_REFRESH, 2),
     bootstrapRetryDelayMs: parseRefreshInterval(env.CROWDSEC_BOOTSTRAP_RETRY_DELAY || '30s'),
     bootstrapRetryEnabled: parseBooleanEnv(env.CROWDSEC_BOOTSTRAP_RETRY_ENABLED, true),
     dockerImageRef: (env.DOCKER_IMAGE_REF || 'theduffman85/crowdsec-web-ui').toLowerCase(),
@@ -373,6 +404,7 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
     updateCheckEnabled: Boolean(env.VITE_COMMIT_HASH || env.VITE_VERSION),
     deploymentMode: env.CROWDSEC_WEB_UI_MODE === 'load-test' ? 'load-test' : 'standard',
     dbDir: env.DB_DIR || '/app/data',
+    geonamesDumpDir: env.GEONAMES_DUMP_DIR || path.resolve(process.cwd(), 'geonames'),
     notificationSecretKey,
     notificationAllowPrivateAddresses: parseBooleanEnv(env.NOTIFICATION_ALLOW_PRIVATE_ADDRESSES, true),
     notificationDebugPayloads: parseBooleanEnv(env.NOTIFICATION_DEBUG_PAYLOADS, false),

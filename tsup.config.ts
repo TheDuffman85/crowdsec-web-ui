@@ -16,5 +16,5 @@ export default defineConfig({
   sourcemap: true,
   splitting: false,
   dts: false,
-  external: ['better-sqlite3'],
+  external: ['better-sqlite3', 'local-reverse-geocoder'],
 });

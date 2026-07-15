@@ -174,8 +174,9 @@ describe('WorldMapCard', () => {
     const berlinMarker = overlay.querySelector('[data-latitude="52.52"][data-longitude="13.405"]');
     expect(berlinMarker).not.toBeNull();
     expect(overlay.querySelectorAll('[data-latitude]')).toHaveLength(1);
-    expect(berlinMarker?.querySelectorAll('.world-map-attack-pulse')).toHaveLength(1);
-    expect(berlinMarker?.querySelector('.world-map-attack-pulse')).toHaveAttribute('stroke', '#ffffff');
+    expect(berlinMarker?.querySelectorAll('.world-map-attack-pulse')).toHaveLength(2);
+    expect(berlinMarker?.querySelector('.world-map-attack-pulse-outline')).toHaveAttribute('stroke', '#7f1d1d');
+    expect(berlinMarker?.querySelector('.world-map-attack-pulse:not(.world-map-attack-pulse-outline)')).toHaveAttribute('stroke', '#ffffff');
     expect(berlinMarker?.querySelector('.world-map-attack-dot')).toHaveAttribute('fill', '#dc2626');
     expect(berlinMarker?.querySelector('.world-map-attack-dot')).toHaveAttribute('stroke-width', '0.75');
 
@@ -216,6 +217,7 @@ describe('WorldMapCard', () => {
     transformProps.onTransform?.({}, { scale: 4, positionX: 0, positionY: 0 });
 
     expect(overlay.style.getPropertyValue('--world-map-attack-pulse-radius')).toBe('0.75px');
+    expect(overlay.style.getPropertyValue('--world-map-attack-pulse-outline-stroke')).toBe('0.625px');
     expect(overlay.style.getPropertyValue('--world-map-attack-pulse-stroke')).toBe('0.25px');
     expect(overlay.style.getPropertyValue('--world-map-attack-dot-radius')).toBe('0.625px');
     expect(overlay.style.getPropertyValue('--world-map-attack-dot-stroke')).toBe('0.1875px');
@@ -227,7 +229,16 @@ describe('WorldMapCard', () => {
     render(
       <WorldMapCard
         data={[{ label: 'Germany', countryCode: 'DE', count: 5, liveCount: 3, simulatedCount: 2 }]}
-        attackLocations={[{ latitude: 52.52, longitude: 13.405, count: 5, liveCount: 3, simulatedCount: 2 }]}
+        attackLocations={[{
+          latitude: 52.52,
+          longitude: 13.405,
+          count: 5,
+          liveCount: 3,
+          simulatedCount: 2,
+          city: 'Berlin',
+          region: 'Berlin',
+          countryCode: 'DE',
+        }]}
         onCountrySelect={vi.fn()}
         selectedCountry={null}
         simulationsEnabled={true}
@@ -257,18 +268,20 @@ describe('WorldMapCard', () => {
       clientY: projectedCoordinates[1],
     });
 
-    const details = await screen.findByTestId('world-map-attack-coordinates');
+    const details = await screen.findByTestId('world-map-attack-location');
     expect(details).toHaveClass('border-t');
     expect(screen.getByText(/Alerts: 3 \(5 at this location\)/)).toBeInTheDocument();
-    expect(within(details).getByText('Approx. coordinates')).toBeInTheDocument();
-    expect(within(details).getByText('52.5200°, 13.4050°')).toBeInTheDocument();
+    expect(within(details).getByText('Approx. location')).toBeInTheDocument();
+    expect(within(details).getByText('Berlin, Germany')).toBeInTheDocument();
+    expect(within(details).queryByText('52.5200°, 13.4050°')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'GeoNames' })).toHaveAttribute('href', 'https://www.geonames.org/');
     expect(screen.queryByText('Attack location')).not.toBeInTheDocument();
 
     fireEvent.pointerMove(mapContainer, {
       clientX: projectedCoordinates[0] + 50,
       clientY: projectedCoordinates[1] + 50,
     });
-    await waitFor(() => expect(screen.queryByTestId('world-map-attack-coordinates')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByTestId('world-map-attack-location')).not.toBeInTheDocument());
     expect(screen.queryByText(/at location/)).not.toBeInTheDocument();
   });
 

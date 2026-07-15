@@ -255,6 +255,7 @@ Choose exactly one auth mode: password auth or mTLS auth.
 | `PORT` | `3000` | HTTP listen port. If you change this in Docker, also update port mappings and the container health check to match. |
 | `BASE_PATH` | empty | Serve the UI under a path prefix such as `/crowdsec`. Start with `/` and omit the trailing slash. |
 | `DB_DIR` | `/app/data` | Directory that stores the SQLite database and other persisted app data. If you change it, update your volume mounts too. |
+| `GEONAMES_DUMP_DIR` | `<working directory>/geonames` | Directory containing the local GeoNames `cities1000` and admin-1 data used for attack-marker and table location labels. Official Docker images include this data. |
 | `TZ` | browser local | Optional deployment-wide IANA timezone, such as `Europe/Berlin` or `UTC`. When set, the UI, dashboard grouping, filters, and server-generated timestamps all use it. |
 | `TIME_FORMAT` | browser locale | Optional deployment-wide clock format. Accepts `12h` or `24h`. When omitted, each browser's locale determines whether the UI uses a 12- or 24-hour clock. |
 | `PERMISSION_READ_ONLY` | `false` | Set to `true` to hide management actions in the UI and reject API requests that add/delete decisions, delete alerts, clean up by IP, clear the cache, change refresh cadence, manage notification destinations/rules, send notification tests, or delete notifications. Language and marking notifications as read remain writable. |
@@ -278,13 +279,19 @@ Choose exactly one auth mode: password auth or mTLS auth.
 | `CROWDSEC_REFRESH_INTERVAL` | `1m` | Normal background refresh interval. Accepts `0`, `manual`, `5s`, `30s`, `1m`, `5m`, or other `s`/`m`/`h`/`d` values. |
 | `CROWDSEC_IDLE_REFRESH_INTERVAL` | `10m` | Refresh interval used when the app considers itself idle. |
 | `CROWDSEC_IDLE_THRESHOLD` | `2m` | Inactivity period before the app switches to idle refresh behavior. |
-| `CROWDSEC_FULL_REFRESH_INTERVAL` | `3h` | Interval for full cache refreshes while active. |
 | `CROWDSEC_LAPI_REQUEST_TIMEOUT` | `30s` | Timeout for individual CrowdSec LAPI requests. Increase this for high-latency or very large CrowdSec datasets. |
+| `CROWDSEC_BOUNCER_PROPAGATION_DELAY` | `15s` | Backend grace period between expiring decisions and deleting their owning alerts, allowing bouncers to consume the deletion stream. Alert deletion requests return immediately; the durable job continues in the background and survives restarts. Accepts `ms`/`s`/`m`/`h`/`d` values. Set this at least as high as the slowest bouncer polling interval; `0` disables the delay. |
 | `CROWDSEC_PROMETHEUS_URL` | none | Optional CrowdSec Prometheus metrics endpoint. When unset, the Metrics page shows setup instructions; when set, it reads bouncer, machine, AppSec, parser, LAPI latency, and whitelist runtime metrics from this URL. |
 | `CROWDSEC_PROMETHEUS_REQUEST_TIMEOUT` | `5s` | Timeout for individual Prometheus metrics requests. Accepts the same interval syntax as refresh settings. |
 | `CROWDSEC_HEARTBEAT_INTERVAL` | `30s` | Interval for updating the Web UI machine heartbeat in CrowdSec. Use `0` or `manual` to disable heartbeat updates. |
 | `CROWDSEC_ALERT_SYNC_CHUNK` | `12h` | Window size used when syncing historical alerts from LAPI. Smaller chunks reduce per-request payload size. |
 | `CROWDSEC_ALERT_SYNC_MIN_CHUNK` | `15m` | Smallest window size used when retrying timed-out alert sync windows. |
+| `CROWDSEC_RECONCILE_WINDOW` | `1h` | Size of the fixed alert-history windows checked for additions and deletions after bootstrap. |
+| `CROWDSEC_RECONCILE_RECENT_AGE` | `24h` | Age boundary between recent and older reconciliation windows. |
+| `CROWDSEC_RECONCILE_RECENT_INTERVAL` | `15m` | Target cadence for windows within `CROWDSEC_RECONCILE_RECENT_AGE`. |
+| `CROWDSEC_RECONCILE_ACTIVE_INTERVAL` | `5m` | Target cadence for windows containing locally cached active decisions. These windows are prioritized, but every alert and decision in the window is queried. |
+| `CROWDSEC_RECONCILE_OLD_INTERVAL` | `3h` | Target cadence for older reconciliation windows. |
+| `CROWDSEC_RECONCILE_WINDOWS_PER_REFRESH` | `2` | Maximum number of due reconciliation windows processed by one refresh. Must be a positive integer. When the budget is greater than one, one slot is reserved for the least recently checked due window to prevent starvation. |
 | `CROWDSEC_BOOTSTRAP_RETRY_DELAY` | `30s` | Delay between background retries when initial CrowdSec bootstrap fails. |
 | `CROWDSEC_BOOTSTRAP_RETRY_ENABLED` | `true` | Enables background bootstrap retry after startup or login failures. |
 | `CROWDSEC_SIMULATIONS_ENABLED` | `false` | Include simulation-mode alerts and decisions from CrowdSec and expose the related UI indicators. |
@@ -329,6 +336,14 @@ AUTH_OIDC_ADMIN_GROUPS=crowdsec-admins,secops
 AUTH_OIDC_READ_ONLY_GROUPS=crowdsec-viewers
 AUTH_OIDC_UNMATCHED_ROLE=deny
 ```
+
+Register the following redirect (callback) URI for the CrowdSec Web UI client in your identity provider:
+
+```text
+https://<crowdsec-web-ui-host>/api/auth/oidc/callback
+```
+
+The URI must exactly match the public URL used to access the Web UI, including the scheme, host, and any non-default port. When `BASE_PATH` is configured, include it before `/api`; for example, `BASE_PATH=/crowdsec` uses `https://<crowdsec-web-ui-host>/crowdsec/api/auth/oidc/callback`. Behind a reverse proxy, forward the public host through `Host` or `X-Forwarded-Host` and set `X-Forwarded-Proto` so the application sends the same URI to the identity provider.
 
 OIDC Settings accepts the issuer URL, client ID, client secret, authorization scopes, groups claim, admin groups, read-only groups, and the unmatched-user policy. Saved Settings values override OIDC environment defaults. Authorization scopes must include `openid`; add provider-specific scopes such as `groups` only when your IdP requires them for the configured groups claim. By default, OIDC users who match no configured group are denied. Set the unmatched-user policy to `admin` or `read-only` only when every user who can complete OIDC sign-in should receive that fallback role.
 
@@ -444,6 +459,7 @@ location /crowdsec/ {
     proxy_pass http://localhost:3000/crowdsec/;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Host $http_host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
@@ -529,6 +545,7 @@ The Alerts and Decisions pages use a single search box that supports both normal
 - Fielded search: `country:germany`, `status:active`
 - Date comparisons: `date>=2026-03-24`, `date<2026-03-25T12:00:00Z`
 - Exact/negative checks: `country=DE`, `sim<>simulated`, `-sim:simulated`
+- Empty/non-empty fields: `origin:""`, `origin<>""`
 - Boolean logic and grouping: `AND`, `OR`, `NOT`, `country:(germany OR france)`
 
 Examples:
@@ -536,6 +553,7 @@ Examples:
 - Alerts: `country:germany ssh`
 - Alerts: `date>=2026-03-24 AND date<2026-03-25`
 - Alerts: `country:(germany OR france) AND -sim:simulated`
+- Alerts: `origin:""`
 - Decisions: `status:active AND action:ban`
 - Decisions: `date>=2026-03-24 AND action:ban`
 - Decisions: `alert:123 OR ip:"192.168.5.0/24"`
@@ -650,9 +668,11 @@ volumes:
 
 ### How It Works
 
-The Web UI maintains local alert and decision history. Data from CrowdSec LAPI is preserved across restarts, merged with new data on boot, and reconciled during successful full refreshes so alerts deleted outside the UI are removed locally too. Alerts and decisions keep the full raw CrowdSec payload for details and compatibility, while SQLite stores indexed derived fields for list filtering, search, pagination, and dashboard statistics. Alerts are indexed by CrowdSec `start_at` when present, falling back to `created_at`, so replayed alerts are shown at the original alert/event time rather than the replay import time. Alerts are kept for `CROWDSEC_LOOKBACK_PERIOD` (default: 7 days), then cleaned up automatically.
+The Web UI maintains local alert and decision history. Data from CrowdSec LAPI is preserved across restarts and merged with new data on boot. After bootstrap, each regular refresh imports the newest delta and reconciles a bounded number of alert-history windows for both additions and deletions. Recent windows are checked more often than old windows; windows that contain locally cached active decisions are prioritized. Reconciliation progress is persisted, replacing periodic full-cache refreshes without repeatedly fetching the entire lookback period.
 
-Active-decision refreshes use the same `CROWDSEC_ALERT_SYNC_CHUNK` windows as historical alert sync so large active-decision sets are processed incrementally. If a window times out, it is retried in smaller windows down to `CROWDSEC_ALERT_SYNC_MIN_CHUNK`. If LAPI is unavailable during startup, bootstrap retries continue in the background using `CROWDSEC_BOOTSTRAP_RETRY_DELAY`; if only some sync windows fail, the UI serves the imported cache and marks sync partial while retries continue. To force a full cache reset, use `POST /api/cache/clear`.
+Only changed alerts and added or deleted decisions are written during reconciliation. Unchanged alerts are compared without constructing decision-row mutations, which keeps large blocklist alerts cheap to check. A missing cached alert or decision is deleted only after every required LAPI query for that window succeeds. Relative LAPI time ranges are padded and then filtered back to exact local boundaries, so transport delay, timestamp rounding, or a partial scope response cannot cause destructive reconciliation. The moving current window shares the normal delta request when it is due, avoiding duplicate LAPI calls. Target cadences are triggered by the normal or idle refresh interval, and fair budget allocation prevents old due windows from being starved by active-window backlog.
+
+Alerts and decisions keep the full raw CrowdSec payload for details and compatibility, while SQLite stores indexed derived fields for list filtering, search, pagination, and dashboard statistics. Alerts are indexed by CrowdSec `start_at` when present, falling back to `created_at`, so replayed alerts are shown at the original alert/event time rather than the replay import time. Alerts are kept for `CROWDSEC_LOOKBACK_PERIOD` (default: 7 days), then cleaned up automatically. Historical and reconciliation requests that time out are retried in smaller windows down to `CROWDSEC_ALERT_SYNC_MIN_CHUNK`. If LAPI is unavailable during startup, bootstrap retries continue in the background using `CROWDSEC_BOOTSTRAP_RETRY_DELAY`; if only some bootstrap windows fail, the UI serves the imported cache and marks sync partial while retries continue. To force a full cache reset, use `POST /api/cache/clear`.
 
 ## Local Development
 
@@ -661,7 +681,10 @@ Active-decision refreshes use the same `CROWDSEC_ALERT_SYNC_CHUNK` windows as hi
    You need Node.js `24.18.0` and pnpm `11.9.0`.
    ```bash
    pnpm install
+   pnpm run geocoder:data
    ```
+
+   The second command downloads the GeoNames `cities1000` and admin-1 extracts used for local attack-marker and table location labels. Official Docker images already contain these files. GeoNames data is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 2. **Configure `.env`**
 
@@ -739,18 +762,23 @@ Active-decision refreshes use the same `CROWDSEC_ALERT_SYNC_CHUNK` windows as hi
    LOADTEST_REFRESH_DECISIONS=100
    AUTH_ENABLED=true
    CROWDSEC_REFRESH_INTERVAL=1m
-   CROWDSEC_FULL_REFRESH_INTERVAL=3h
    CROWDSEC_IDLE_REFRESH_INTERVAL=10m
    CROWDSEC_IDLE_THRESHOLD=2m
    CROWDSEC_LOOKBACK_PERIOD=30d
    CROWDSEC_ALERT_SYNC_CHUNK=12h
    CROWDSEC_ALERT_SYNC_MIN_CHUNK=15m
+   CROWDSEC_RECONCILE_WINDOW=1h
+   CROWDSEC_RECONCILE_RECENT_AGE=24h
+   CROWDSEC_RECONCILE_RECENT_INTERVAL=15m
+   CROWDSEC_RECONCILE_ACTIVE_INTERVAL=5m
+   CROWDSEC_RECONCILE_OLD_INTERVAL=3h
+   CROWDSEC_RECONCILE_WINDOWS_PER_REFRESH=2
    CROWDSEC_SIMULATIONS_ENABLED=true
    ```
 
    The regular `AUTH_OIDC_*` environment variables are also supported in load-test mode, including issuer URL, client ID and secret, scope, group claim, role groups, and unmatched-role handling.
 
-   Both the initial source dataset and later refresh batches are exposed through the fake LAPI. By default, one synthetic blocklist alert contains `100000` of the requested decisions so load testing covers very large single-alert payloads; `LOADTEST_BLOCKLIST_DECISIONS` changes that concentration without changing `LOADTEST_DECISIONS`. On each due refresh batch it exposes `LOADTEST_REFRESH_ALERTS` new synthetic alerts and `LOADTEST_REFRESH_DECISIONS` new synthetic decisions, then the regular sync code imports them into SQLite.
+   Both the initial source dataset and later refresh batches are exposed through the fake LAPI. By default, one synthetic blocklist alert contains `100000` of the requested decisions so load testing covers very large single-alert payloads; `LOADTEST_BLOCKLIST_DECISIONS` changes that concentration without changing `LOADTEST_DECISIONS`. On each due head refresh batch it exposes `LOADTEST_REFRESH_ALERTS` new synthetic alerts and `LOADTEST_REFRESH_DECISIONS` new synthetic decisions, timestamped inside that refresh's authoritative delta window, then the regular sync code imports them into SQLite. Historical reconciliation requests do not generate unrelated refresh batches.
 
    The dev-build workflow publishes a containerized variant as `ghcr.io/theduffman85/crowdsec-web-ui:loadtest`. It is a drop-in replacement for the regular image: keep the same ports, authentication environment, OIDC environment, and `/app/data` volume, and change only the image tag. CrowdSec connection settings are ignored by the load-test server.
 

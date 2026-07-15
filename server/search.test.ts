@@ -13,6 +13,8 @@ const baseAlert: SlimAlert = {
     ip: '1.2.3.4',
     value: '1.2.3.4',
     cn: 'DE',
+    region: 'State of Berlin',
+    city: 'Berlin',
     as_name: 'Hetzner',
   },
   target: 'ssh',
@@ -38,6 +40,8 @@ const baseDecision: DecisionListItem = {
     reason: 'crowdsecurity/ssh-bf',
     action: 'ban',
     country: 'DE',
+    region: 'State of Berlin',
+    city: 'Berlin',
     as: 'Hetzner',
     duration: '4h',
     alert_id: 123,
@@ -70,6 +74,8 @@ const secondDecision: DecisionListItem = {
     ...baseDecision.detail,
     reason: 'crowdsecurity/nginx-bf',
     country: 'US',
+    region: 'New York',
+    city: 'New York City',
     as: 'AWS',
     alert_id: 456,
     target: 'nginx',
@@ -117,6 +123,46 @@ describe('shared search compiler', () => {
 
     expect(compiled.predicate(baseAlert)).toBe(true);
     expect(compiled.predicate({ ...baseAlert, simulated: true })).toBe(false);
+  });
+
+  test('matches empty alert fields with quoted empty values', () => {
+    const emptyOrigin = compileAlertSearch('origin:""', { originEnabled: true });
+    const nonEmptyOrigin = compileAlertSearch('origin<>""', { originEnabled: true });
+    const emptyTarget = compileAlertSearch('target:""');
+    expect(emptyOrigin.ok).toBe(true);
+    expect(nonEmptyOrigin.ok).toBe(true);
+    expect(emptyTarget.ok).toBe(true);
+    if (!emptyOrigin.ok || !nonEmptyOrigin.ok || !emptyTarget.ok) {
+      return;
+    }
+
+    const alertWithoutOrigin = { ...baseAlert, decisions: [] };
+    const alertWithoutTarget = { ...baseAlert, target: undefined };
+    expect(emptyOrigin.predicate(alertWithoutOrigin)).toBe(true);
+    expect(emptyOrigin.predicate(baseAlert)).toBe(false);
+    expect(nonEmptyOrigin.predicate(baseAlert)).toBe(true);
+    expect(nonEmptyOrigin.predicate(alertWithoutOrigin)).toBe(false);
+    expect(emptyTarget.predicate(alertWithoutTarget)).toBe(true);
+    expect(emptyTarget.predicate(baseAlert)).toBe(false);
+  });
+
+  test('matches empty decision fields with quoted empty values', () => {
+    const emptyOrigin = compileDecisionSearch('origin=""', { originEnabled: true });
+    const nonEmptyOrigin = compileDecisionSearch('-origin:""', { originEnabled: true });
+    expect(emptyOrigin.ok).toBe(true);
+    expect(nonEmptyOrigin.ok).toBe(true);
+    if (!emptyOrigin.ok || !nonEmptyOrigin.ok) {
+      return;
+    }
+
+    const decisionWithoutOrigin = {
+      ...baseDecision,
+      detail: { ...baseDecision.detail, origin: '' },
+    };
+    expect(emptyOrigin.predicate(decisionWithoutOrigin)).toBe(true);
+    expect(emptyOrigin.predicate(baseDecision)).toBe(false);
+    expect(nonEmptyOrigin.predicate(baseDecision)).toBe(true);
+    expect(nonEmptyOrigin.predicate(decisionWithoutOrigin)).toBe(false);
   });
 
   test('supports simulation inequality without broadening invalid values', () => {
@@ -222,6 +268,15 @@ describe('shared search compiler', () => {
     expect(nameSearch.predicate(swedenAlert)).toBe(false);
   });
 
+  test('matches resolved city and region fields for alerts', () => {
+    const compiled = compileAlertSearch('city:berl AND region:"state of berl"');
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) return;
+
+    expect(compiled.predicate(baseAlert)).toBe(true);
+    expect(compiled.predicate(secondAlert)).toBe(false);
+  });
+
   test('matches alert source IPs and ranges contained in an IPv4 CIDR search', () => {
     const compiled = compileAlertSearch('ip:10.0.0.0/24');
     expect(compiled.ok).toBe(true);
@@ -297,6 +352,15 @@ describe('shared search compiler', () => {
 
     expect(nameSearch.predicate(baseDecision)).toBe(true);
     expect(nameSearch.predicate(swedenDecision)).toBe(false);
+  });
+
+  test('matches resolved city and region fields for decisions', () => {
+    const compiled = compileDecisionSearch('city:berl AND region:"state of berl"');
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) return;
+
+    expect(compiled.predicate(baseDecision)).toBe(true);
+    expect(compiled.predicate(secondDecision)).toBe(false);
   });
 
   test('matches decision IPs and ranges contained in IPv4 and IPv6 CIDR searches', () => {
@@ -401,7 +465,7 @@ describe('shared search compiler', () => {
   });
 
   test('builds alert help examples from provided alert rows', () => {
-    const help = getSearchHelpDefinition('alerts', {}, { alerts: [baseAlert, secondAlert] });
+    const help = getSearchHelpDefinition('alerts', { originEnabled: true }, { alerts: [baseAlert, secondAlert] });
 
     expect(help.examples.map((example) => example.query)).toEqual([
       'ssh hetzner',
@@ -410,12 +474,13 @@ describe('shared search compiler', () => {
       'date>=2026-03-24 AND date<2026-03-25',
       'country:(Germany OR "United States") AND -sim:simulated',
       'ip:1.2.3.4 AND target:ssh',
+      'origin:""',
     ]);
-    expect(help.examples.every((example) => !/\b(machine|origin)\b/i.test(example.query))).toBe(true);
+    expect(help.examples.every((example) => !/\bmachine\b/i.test(example.query))).toBe(true);
   });
 
   test('builds decision help examples from provided decision rows', () => {
-    const help = getSearchHelpDefinition('decisions', {}, { decisions: [baseDecision, secondDecision] });
+    const help = getSearchHelpDefinition('decisions', { originEnabled: true }, { decisions: [baseDecision, secondDecision] });
 
     expect(help.examples.map((example) => example.query)).toEqual([
       'ssh bf',
@@ -424,8 +489,9 @@ describe('shared search compiler', () => {
       'alert:123 OR ip:"1.2.3.4"',
       'country:(Germany OR "United States") AND -duplicate:true',
       'target:ssh AND sim:live',
+      'origin:""',
     ]);
-    expect(help.examples.every((example) => !/\b(machine|origin)\b/i.test(example.query))).toBe(true);
+    expect(help.examples.every((example) => !/\bmachine\b/i.test(example.query))).toBe(true);
   });
 
   test('falls back to generic help examples when no sample rows are provided', () => {

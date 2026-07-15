@@ -52,6 +52,56 @@ function createLegacyDatabase(dbPath: string): { exec: (sql: string) => unknown;
 }
 
 describe('CrowdsecDatabase', () => {
+  test('persists alert deletion tombstones and blocks sync from restoring queued records', () => {
+    const dbPath = createTestDatabasePath();
+    const original = new CrowdsecDatabase({ dbPath });
+    const alert = {
+      $id: 1,
+      $uuid: 'alert-1',
+      $created_at: '2025-01-01T00:00:00.000Z',
+      $scenario: 'crowdsecurity/ssh-bf',
+      $source_ip: '1.2.3.4',
+      $message: 'alert',
+      $raw_data: JSON.stringify({ id: 1 }),
+    };
+    const decision = {
+      $id: '10',
+      $uuid: 'decision-10',
+      $alert_id: 1,
+      $created_at: '2025-01-01T00:00:00.000Z',
+      $stop_at: '2030-01-01T00:00:00.000Z',
+      $value: '1.2.3.4',
+      $type: 'ban',
+      $origin: 'manual',
+      $scenario: 'crowdsecurity/ssh-bf',
+      $raw_data: JSON.stringify({ id: 10, alert_id: 1 }),
+    };
+    original.insertAlert(alert);
+    original.insertDecision(decision);
+
+    const requestedAt = '2026-07-15T12:00:00.000Z';
+    const queue = original.transaction(() => {
+      original.queueAlertDeletion(1, ['10'], requestedAt);
+      original.deleteDecisionsByAlertId(1);
+      original.deleteAlert(1);
+    });
+    queue(undefined);
+    original.close();
+
+    const reopened = new CrowdsecDatabase({ dbPath });
+    expect(reopened.getAlertDeletionTombstone(1)).toEqual(expect.objectContaining({
+      alert_id: '1',
+      decision_ids_json: '["10"]',
+      requested_at: requestedAt,
+      completed_at: null,
+    }));
+    expect(reopened.insertAlert(alert)).toBe(false);
+    expect(reopened.insertDecision(decision)).toBe(false);
+    expect(reopened.countAlerts()).toBe(0);
+    expect(reopened.countDecisions()).toBe(0);
+    reopened.close();
+  });
+
   test('stores alerts, decisions, and metadata', () => {
     const db = createTestDatabase();
 
@@ -91,6 +141,13 @@ describe('CrowdsecDatabase', () => {
     );
     expect(db.getMeta('refresh_interval_ms')?.value).toBe('5000');
     expect(db.getAlertsBetween('2024-12-31T00:00:00.000Z', '2025-01-02T00:00:00.000Z')).toHaveLength(1);
+    expect(db.getAlertDecisionSnapshot(1)).toEqual({
+      raw_data: JSON.stringify({ id: 1, source: { latitude: '52.52', longitude: 13.405 } }),
+      decision_count: 1,
+      origins: null,
+      simulated: 0,
+    });
+    expect(db.getAlertDecisionSnapshot('missing')).toBeNull();
     expect(db.db.prepare('SELECT latitude, longitude FROM alerts WHERE id = 1').get()).toEqual({
       latitude: 52.52,
       longitude: 13.405,

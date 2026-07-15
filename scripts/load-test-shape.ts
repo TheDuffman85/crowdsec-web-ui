@@ -1,5 +1,25 @@
 export const DEFAULT_LOAD_TEST_BLOCKLIST_DECISIONS = 100_000;
 
+export function getLoadTestHeadSyncEnd(
+  relativeWindowEndMs: number | null | undefined,
+  nowMs: number,
+  maxLagMs: number,
+): number | null {
+  if (!Number.isFinite(relativeWindowEndMs) || !Number.isFinite(nowMs) || !Number.isFinite(maxLagMs)) {
+    return null;
+  }
+
+  const endMs = relativeWindowEndMs as number;
+  if (endMs > nowMs || nowMs - endMs <= Math.max(0, maxLagMs)) {
+    return endMs;
+  }
+  return null;
+}
+
+export function getLoadTestBatchCreatedAtEnd(authoritativeEndMs: number, nowMs: number): number {
+  return Math.min(nowMs - 1, authoritativeEndMs - 1);
+}
+
 export function normalizeLoadTestBlocklistDecisionCount(
   alertCount: number,
   decisionCount: number,

@@ -113,7 +113,7 @@ vi.mock('../lib/api', () => {
       scenario: 'crowdsecurity/ssh-bf',
       machine_id: 'machine-1',
       machine_alias: 'host-a',
-      source: { ip: '1.2.3.4', value: '1.2.3.4', cn: 'DE', as_name: 'Hetzner' },
+      source: { ip: '1.2.3.4', value: '1.2.3.4', cn: 'DE', city: 'Berlin', region: 'State of Berlin', as_name: 'Hetzner' },
       target: 'ssh',
       meta_search: 'ssh',
       decisions: [{ id: 10, value: '1.2.3.4', type: 'ban', origin: 'manual', simulated: false, expired: false }],
@@ -363,6 +363,10 @@ describe('Alerts page', () => {
     expect(screen.queryByRole('columnheader', { name: 'ID' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Machine' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Origin' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Region' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'City' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Berlin')).not.toBeInTheDocument();
+    expect(screen.queryByText('State of Berlin')).not.toBeInTheDocument();
   });
 
   test('saves alert table columns from the modal', async () => {
@@ -376,12 +380,19 @@ describe('Alerts page', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Choose alert table columns' }));
     await userEvent.click(screen.getByLabelText('ID'));
+    await userEvent.click(screen.getByLabelText('Region'));
+    await userEvent.click(screen.getByLabelText('City'));
     await userEvent.click(screen.getByLabelText('Machine'));
     await userEvent.click(screen.getByLabelText('Origin'));
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(screen.getByRole('columnheader', { name: 'ID' })).toBeInTheDocument());
     expect(getVisibleColumnHeaderNames()[0]).toBe('ID');
+    const headers = getVisibleColumnHeaderNames();
+    expect(headers.indexOf('Country')).toBeLessThan(headers.indexOf('Region'));
+    expect(headers.indexOf('Region')).toBeLessThan(headers.indexOf('City'));
+    expect(screen.getByText('State of Berlin')).toBeInTheDocument();
+    expect(screen.getByText('Berlin')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Machine' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Origin' })).toBeInTheDocument();
   });
@@ -453,7 +464,7 @@ describe('Alerts page', () => {
 
     await waitFor(() => expect(getVisibleColumnHeaderNames()).toEqual(['Time', 'Scenario', 'Country', 'AS', 'IP / Range', 'Decisions', 'Actions']));
     expect(JSON.parse(window.localStorage.getItem('crowdsec-web-ui:alerts:table-column-order') || '[]'))
-      .toEqual(['id', 'time', 'scenario', 'country', 'as', 'source', 'machine', 'origin', 'decisions']);
+      .toEqual(['id', 'time', 'scenario', 'country', 'region', 'city', 'as', 'source', 'machine', 'origin', 'decisions']);
   });
 
   test('keeps saved order for hidden alert columns when they are enabled later', async () => {

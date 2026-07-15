@@ -156,12 +156,12 @@ async function handleApiError(res: Response, defaultMsg: string, operationName =
     }
 }
 
-export async function deleteAlert(id: string | number): Promise<unknown> {
+export async function deleteAlert(id: string | number): Promise<BulkDeleteResult | null> {
   const res = await fetch(apiUrl(`/api/alerts/${id}`), { method: 'DELETE' });
   await handleApiError(res, 'Failed to delete alert');
   clearGetCaches();
   if (res.status === 204) return null;
-  return res.json();
+  return res.json() as Promise<BulkDeleteResult>;
 }
 
 async function postDestructiveJson<TResponse, TBody>(input: string, body: TBody, defaultMsg: string): Promise<TResponse> {

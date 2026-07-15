@@ -15,6 +15,8 @@ import {
 } from './load-test-auth';
 import {
   DEFAULT_LOAD_TEST_BLOCKLIST_DECISIONS,
+  getLoadTestBatchCreatedAtEnd,
+  getLoadTestHeadSyncEnd,
   getLoadTestSourceAlertIdForDecision,
   normalizeLoadTestBlocklistDecisionCount,
 } from './load-test-shape';
@@ -73,7 +75,7 @@ let nextGeneratedDecisionId = initialDecisionCount + 1;
 const getSourceAlertStatement = database.db.prepare(`SELECT raw_data FROM ${LOADTEST_SOURCE_TABLE} WHERE id = ?`);
 const updateSourceAlertStatement = database.db.prepare(`
   UPDATE ${LOADTEST_SOURCE_TABLE}
-  SET has_active_decision = ?, scenario = ?, origins = ?, raw_data = ?
+  SET scenario = ?, origins = ?, raw_data = ?
   WHERE id = ?
 `);
 const deleteSourceAlertStatement = database.db.prepare(`DELETE FROM ${LOADTEST_SOURCE_TABLE} WHERE id = ?`);
@@ -96,16 +98,16 @@ const scenarios = [
 ] as const;
 
 const countries = [
-  ['US', 37.7749, -122.4194],
-  ['DE', 50.1109, 8.6821],
-  ['NL', 52.3676, 4.9041],
-  ['FR', 48.8566, 2.3522],
-  ['GB', 51.5072, -0.1276],
-  ['BR', -23.5505, -46.6333],
-  ['IN', 28.6139, 77.2090],
-  ['JP', 35.6762, 139.6503],
-  ['SG', 1.3521, 103.8198],
-  ['AU', -33.8688, 151.2093],
+  ['US', 37.7749, -122.4194, 'San Francisco', 'California'],
+  ['DE', 50.1109, 8.6821, 'Frankfurt am Main', 'Hesse'],
+  ['NL', 52.3676, 4.9041, 'Amsterdam', 'North Holland'],
+  ['FR', 48.8566, 2.3522, 'Paris', 'Île-de-France'],
+  ['GB', 51.5072, -0.1276, 'London', 'England'],
+  ['BR', -23.5505, -46.6333, 'São Paulo', 'São Paulo'],
+  ['IN', 28.6139, 77.2090, 'New Delhi', 'Delhi'],
+  ['JP', 35.6762, 139.6503, 'Tokyo', 'Tokyo'],
+  ['SG', 1.3521, 103.8198, 'Singapore', 'Singapore'],
+  ['AU', -33.8688, 151.2093, 'Sydney', 'New South Wales'],
 ] as const;
 
 const asNames = [
@@ -159,7 +161,6 @@ function ensureLoadTestSourceTable(database: CrowdsecDatabase): void {
     CREATE TABLE IF NOT EXISTS ${LOADTEST_SOURCE_TABLE} (
       id TEXT PRIMARY KEY,
       created_at TEXT NOT NULL,
-      has_active_decision INTEGER NOT NULL DEFAULT 0,
       scenario TEXT,
       origins TEXT,
       raw_data TEXT NOT NULL
@@ -168,9 +169,6 @@ function ensureLoadTestSourceTable(database: CrowdsecDatabase): void {
 
   const columns = database.db.prepare(`PRAGMA table_info(${LOADTEST_SOURCE_TABLE})`).all() as Array<{ name: string }>;
   const names = new Set(columns.map((column) => column.name));
-  if (!names.has('has_active_decision')) {
-    database.db.exec(`ALTER TABLE ${LOADTEST_SOURCE_TABLE} ADD COLUMN has_active_decision INTEGER NOT NULL DEFAULT 0`);
-  }
   if (!names.has('scenario')) {
     database.db.exec(`ALTER TABLE ${LOADTEST_SOURCE_TABLE} ADD COLUMN scenario TEXT`);
   }
@@ -181,8 +179,7 @@ function ensureLoadTestSourceTable(database: CrowdsecDatabase): void {
   database.db.exec(`
     CREATE INDEX IF NOT EXISTS idx_${LOADTEST_SOURCE_TABLE}_created_at
       ON ${LOADTEST_SOURCE_TABLE}(created_at);
-    CREATE INDEX IF NOT EXISTS idx_${LOADTEST_SOURCE_TABLE}_active_created_at
-      ON ${LOADTEST_SOURCE_TABLE}(has_active_decision, created_at);
+    DROP INDEX IF EXISTS idx_${LOADTEST_SOURCE_TABLE}_active_created_at;
   `);
 }
 
@@ -266,6 +263,8 @@ function buildGeneratedAlert(alertId: number, createdAt: string, decisions: Aler
       value: ip,
       ip,
       cn: countryTuple[0],
+      city: countryTuple[3],
+      region: countryTuple[4],
       as_name: asTuple[0],
       as_number: asTuple[1],
       latitude: Number((countryTuple[1] + (fraction(alertId, loadTestSeed, 41) - 0.5) * 4).toFixed(4)),
@@ -293,11 +292,26 @@ function buildGeneratedDecision(decisionId: number, alert: AlertRecord, createdA
   };
 }
 
-function generateLoadTestBatch(): void {
+type LoadTestFetchFilters = {
+  origin?: string;
+  scenario?: string;
+  includeCapi?: boolean;
+  relativeWindow?: {
+    startMs: number;
+    endMs: number;
+    paddingMs: number;
+  };
+};
+
+function generateLoadTestBatch(createdAtEndMs: number): void {
   const alertSlots = Math.max(refreshAlertCount, refreshDecisionCount > 0 && refreshAlertCount === 0 ? refreshDecisionCount : 0);
   if (alertSlots === 0 && refreshDecisionCount === 0) return;
 
-  const createdAtBase = Date.now() - 1_000;
+  // The application constrains the padded LAPI response back to its exact
+  // authoritative window. Anchor generated records immediately before that
+  // window's end so time spent planning the delta cannot make them too new for
+  // the refresh that caused the fake LAPI to expose them.
+  const createdAtBase = getLoadTestBatchCreatedAtEnd(createdAtEndMs, Date.now());
   const generated: AlertRecord[] = [];
   for (let index = 0; index < alertSlots; index += 1) {
     const alertId = nextGeneratedAlertId++;
@@ -322,17 +336,17 @@ function generateLoadTestBatch(): void {
   }
 }
 
-function generateDueLoadTestData(forceBatch = false): void {
+function generateDueLoadTestData(createdAtEndMs: number, forceBatch = false): void {
   if (config.refreshIntervalMs <= 0) {
     if (forceBatch) {
-      generateLoadTestBatch();
+      generateLoadTestBatch(createdAtEndMs);
     }
     return;
   }
 
   const dueBatches = Math.floor((Date.now() - loadTestStartedAt) / config.refreshIntervalMs);
   while (generatedBatches < dueBatches) {
-    generateLoadTestBatch();
+    generateLoadTestBatch(createdAtEndMs);
     generatedBatches += 1;
   }
 }
@@ -356,21 +370,13 @@ function getSyncWindow(since: string | null, until: string | null): { start: str
   };
 }
 
-function alertHasActiveDecision(alert: AlertRecord, nowMs: number): boolean {
-  return (alert.decisions || []).some((decision) => {
-    const stopAt = decision.stop_at ? Date.parse(decision.stop_at) : Number.NaN;
-    return Number.isFinite(stopAt) && stopAt > nowMs;
-  });
-}
-
 function alertOrigins(alert: AlertRecord): string[] {
   return (alert.decisions || [])
     .map((decision) => typeof decision.origin === 'string' ? decision.origin : '')
     .filter((origin) => origin.length > 0);
 }
 
-function matchesLoadTestFilters(alert: AlertRecord, hasActiveDecision: boolean, filters: { origin?: string; scenario?: string; includeCapi?: boolean }): boolean {
-  if (hasActiveDecision && !alertHasActiveDecision(alert, Date.now())) return false;
+function matchesLoadTestFilters(alert: AlertRecord, filters: { origin?: string; scenario?: string; includeCapi?: boolean }): boolean {
   if (filters.scenario && alert.scenario !== filters.scenario) return false;
 
   const originsForAlert = alertOrigins(alert);
@@ -400,7 +406,6 @@ function getSourceAlert(alertId: string | number): AlertRecord | null {
 
 function updateSourceAlert(alert: AlertRecord): void {
   updateSourceAlertStatement.run(
-    hasActiveDecisionFlag(alert),
     alert.scenario || null,
     sourceOrigins(alert),
     JSON.stringify(alert),
@@ -468,22 +473,14 @@ function sourceOrigins(alert: AlertRecord): string {
   return `\n${Array.from(origins).join('\n')}\n`;
 }
 
-function hasActiveDecisionFlag(alert: AlertRecord): number {
-  return alertHasActiveDecision(alert, Date.now()) ? 1 : 0;
-}
-
 function loadAlertsFromSourceWithFilters(
   start: string,
   end: string,
-  hasActiveDecision: boolean,
   filters: { origin?: string; scenario?: string; includeCapi?: boolean },
 ): AlertRecord[] {
   const conditions = ['created_at >= ?', 'created_at < ?'];
   const params: unknown[] = [start, end];
 
-  if (hasActiveDecision) {
-    conditions.push('has_active_decision = 1');
-  }
   if (filters.scenario) {
     conditions.push('scenario = ?');
     params.push(filters.scenario);
@@ -508,17 +505,24 @@ function loadAlertsFromSourceWithFilters(
   });
 }
 
-function loadSyntheticAlerts(since: string | null, until: string | null, hasActiveDecision: boolean, filters: { origin?: string; scenario?: string; includeCapi?: boolean }): AlertRecord[] {
-  generateDueLoadTestData(config.refreshIntervalMs <= 0 && !hasActiveDecision && until === null);
+function loadSyntheticAlerts(since: string | null, until: string | null, filters: LoadTestFetchFilters): AlertRecord[] {
   const window = getSyncWindow(since, until);
+  const headSyncEnd = getLoadTestHeadSyncEnd(
+    filters.relativeWindow?.endMs,
+    Date.now(),
+    config.lapiRequestTimeoutMs,
+  );
+  if (headSyncEnd !== null) {
+    generateDueLoadTestData(headSyncEnd, config.refreshIntervalMs <= 0);
+  }
   const merged = new Map<string, AlertRecord>();
 
-  for (const alert of loadAlertsFromSourceWithFilters(window.start, window.end, hasActiveDecision, filters)) {
+  for (const alert of loadAlertsFromSourceWithFilters(window.start, window.end, filters)) {
     merged.set(String(alert.id), alert);
   }
 
   for (const alert of dynamicAlerts.values()) {
-    if (alert.created_at >= window.start && alert.created_at < window.end && matchesLoadTestFilters(alert, hasActiveDecision, filters)) {
+    if (alert.created_at >= window.start && alert.created_at < window.end && matchesLoadTestFilters(alert, filters)) {
       merged.set(String(alert.id), alert);
     }
   }
@@ -548,9 +552,8 @@ const fakeLapiClient = {
   fetchAlerts: async (
     since: string | null = null,
     until: string | null = null,
-    hasActiveDecision = false,
-    filters: { origin?: string; scenario?: string; includeCapi?: boolean } = {},
-  ) => loadSyntheticAlerts(since, until, hasActiveDecision, filters),
+    filters: LoadTestFetchFilters = {},
+  ) => loadSyntheticAlerts(since, until, filters),
   getAlertById: async (alertId: string | number) => {
     const dynamicAlert = dynamicAlerts.get(String(alertId));
     if (dynamicAlert) return dynamicAlert;

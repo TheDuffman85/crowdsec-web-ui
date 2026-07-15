@@ -21,4 +21,22 @@ describe('SearchSyntaxModal', () => {
     expect(highlightedExample?.querySelector('[data-search-highlight-kind="field"]')).toHaveTextContent('status');
     expect(highlightedExample?.querySelector('[data-search-highlight-kind="booleanOperator"]')).toHaveTextContent('AND');
   });
+
+  test('keeps query examples out of the operator section', () => {
+    render(
+      <SearchSyntaxModal
+        help={getSearchHelpDefinition('alerts', { machineEnabled: true, originEnabled: true })}
+        searchFeatures={{ machineEnabled: true, originEnabled: true }}
+        isOpen
+        onClose={vi.fn()}
+      />,
+    );
+
+    const operatorSection = screen.getByRole('heading', { name: 'Operators' }).closest('section');
+    const exampleSection = screen.getByRole('heading', { name: 'Examples' }).closest('section');
+
+    expect(operatorSection).not.toHaveTextContent('country:germany');
+    expect(operatorSection).not.toHaveTextContent('date>2026-03-24');
+    expect(exampleSection).toHaveTextContent('origin:""');
+  });
 });

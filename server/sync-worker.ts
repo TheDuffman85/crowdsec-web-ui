@@ -27,6 +27,7 @@ parentPort?.on('message', (message: WorkerRequest) => {
 function execute(request: WorkerRequest['request']): unknown {
   if (request.type === 'persist-alerts') {
     const mutations = request.mutations as SyncAlertMutation[];
+    database.refreshAlertDeletionTombstones();
     let changed = false;
     const persist = database.transaction<SyncAlertMutation[]>((items) => {
       for (const mutation of items) {
@@ -35,7 +36,9 @@ function execute(request: WorkerRequest['request']): unknown {
           throw new Error('Split alert mutation is missing an alert ID');
         }
         if (mutation.alert) {
-          changed = database.insertAlert(mutation.alert) || changed;
+          changed = mutation.updateAlertRawDataOnly
+            ? database.updateAlertRawData(mutation.alert.$id, mutation.alert.$raw_data) || changed
+            : database.insertAlert(mutation.alert) || changed;
         }
         for (const decision of mutation.decisions) {
           changed = database.insertDecision(decision) || changed;
