@@ -174,8 +174,9 @@ describe('WorldMapCard', () => {
     const berlinMarker = overlay.querySelector('[data-latitude="52.52"][data-longitude="13.405"]');
     expect(berlinMarker).not.toBeNull();
     expect(overlay.querySelectorAll('[data-latitude]')).toHaveLength(1);
-    expect(berlinMarker?.querySelectorAll('.world-map-attack-pulse')).toHaveLength(1);
-    expect(berlinMarker?.querySelector('.world-map-attack-pulse')).toHaveAttribute('stroke', '#ffffff');
+    expect(berlinMarker?.querySelectorAll('.world-map-attack-pulse')).toHaveLength(2);
+    expect(berlinMarker?.querySelector('.world-map-attack-pulse-outline')).toHaveAttribute('stroke', '#7f1d1d');
+    expect(berlinMarker?.querySelector('.world-map-attack-pulse:not(.world-map-attack-pulse-outline)')).toHaveAttribute('stroke', '#ffffff');
     expect(berlinMarker?.querySelector('.world-map-attack-dot')).toHaveAttribute('fill', '#dc2626');
     expect(berlinMarker?.querySelector('.world-map-attack-dot')).toHaveAttribute('stroke-width', '0.75');
 
@@ -216,6 +217,7 @@ describe('WorldMapCard', () => {
     transformProps.onTransform?.({}, { scale: 4, positionX: 0, positionY: 0 });
 
     expect(overlay.style.getPropertyValue('--world-map-attack-pulse-radius')).toBe('0.75px');
+    expect(overlay.style.getPropertyValue('--world-map-attack-pulse-outline-stroke')).toBe('0.625px');
     expect(overlay.style.getPropertyValue('--world-map-attack-pulse-stroke')).toBe('0.25px');
     expect(overlay.style.getPropertyValue('--world-map-attack-dot-radius')).toBe('0.625px');
     expect(overlay.style.getPropertyValue('--world-map-attack-dot-stroke')).toBe('0.1875px');

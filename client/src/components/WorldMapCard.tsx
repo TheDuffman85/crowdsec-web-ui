@@ -27,6 +27,7 @@ function setAttackMarkerVisualScale(element: SVGSVGElement | null, scale: number
 
     const inverseScale = 1 / scale;
     element.style.setProperty('--world-map-attack-pulse-radius', `${3 * inverseScale}px`);
+    element.style.setProperty('--world-map-attack-pulse-outline-stroke', `${2.5 * inverseScale}px`);
     element.style.setProperty('--world-map-attack-pulse-stroke', `${1 * inverseScale}px`);
     element.style.setProperty('--world-map-attack-dot-radius', `${2.5 * inverseScale}px`);
     element.style.setProperty('--world-map-attack-dot-stroke', `${0.75 * inverseScale}px`);
@@ -767,6 +768,7 @@ export function WorldMapCard({
                                                     viewBox={`0 0 ${mapWidth} ${mapHeight}`}
                                                     style={{
                                                         '--world-map-attack-pulse-radius': `${3 / mapTransformScaleRef.current}px`,
+                                                        '--world-map-attack-pulse-outline-stroke': `${2.5 / mapTransformScaleRef.current}px`,
                                                         '--world-map-attack-pulse-stroke': `${1 / mapTransformScaleRef.current}px`,
                                                         '--world-map-attack-dot-radius': `${2.5 / mapTransformScaleRef.current}px`,
                                                         '--world-map-attack-dot-stroke': `${0.75 / mapTransformScaleRef.current}px`,
@@ -781,6 +783,14 @@ export function WorldMapCard({
                                                             data-longitude={marker.longitude}
                                                             transform={`translate(${marker.x} ${marker.y})`}
                                                         >
+                                                            <circle
+                                                                className="world-map-attack-pulse world-map-attack-pulse-outline"
+                                                                r="3"
+                                                                fill="none"
+                                                                stroke="#7f1d1d"
+                                                                strokeWidth="2.5"
+                                                                style={{ animationDelay: `${-(index % 11) * 0.17}s` }}
+                                                            />
                                                             <circle
                                                                 className="world-map-attack-pulse"
                                                                 r="3"

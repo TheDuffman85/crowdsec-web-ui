@@ -83,6 +83,10 @@ path:focus {
   transform-origin: center;
 }
 
+.world-map-attack-pulse-outline {
+  stroke-width: var(--world-map-attack-pulse-outline-stroke, 2.5px);
+}
+
 .world-map-attack-dot {
   r: var(--world-map-attack-dot-radius, 2.5px);
   stroke-width: var(--world-map-attack-dot-stroke, 0.75px);
