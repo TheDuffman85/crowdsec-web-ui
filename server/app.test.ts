@@ -2156,6 +2156,60 @@ describe('createApp', () => {
     destroyTempDir();
   });
 
+  test('filters alerts whose origin field is empty', async () => {
+    const alertWithOrigin = sampleAlert({
+      id: 1,
+      uuid: 'alert-1',
+      decisions: [{
+        id: 10,
+        value: '1.2.3.4',
+        stop_at: new Date(Date.now() + 30 * 60 * 1_000).toISOString(),
+        type: 'ban',
+        origin: 'manual',
+        simulated: false,
+      }],
+    });
+    const alertWithoutOrigin = sampleAlert({
+      id: 2,
+      uuid: 'alert-2',
+      source: { ip: '5.6.7.8', value: '5.6.7.8' },
+      decisions: [],
+    });
+    const { controller, database } = createController({
+      fetchResolver: (url) => url.includes('/v1/alerts?')
+        ? Response.json([alertWithOrigin, alertWithoutOrigin])
+        : undefined,
+    });
+    seedAlert(database, alertWithOrigin);
+    seedAlert(database, alertWithoutOrigin);
+
+    const emptyUrl = new URL('http://localhost/crowdsec/api/alerts?page=1&page_size=10');
+    emptyUrl.searchParams.set('q', 'origin:""');
+    const emptyResponse = await controller.fetch(new Request(emptyUrl));
+    expect(emptyResponse.status).toBe(200);
+    expect((await emptyResponse.json()) as { data: Array<{ id: number }>; pagination: { total: number } }).toEqual(
+      expect.objectContaining({
+        data: [expect.objectContaining({ id: 2 })],
+        pagination: expect.objectContaining({ total: 1 }),
+      }),
+    );
+
+    const nonEmptyUrl = new URL('http://localhost/crowdsec/api/alerts?page=1&page_size=10');
+    nonEmptyUrl.searchParams.set('q', 'origin<>""');
+    const nonEmptyResponse = await controller.fetch(new Request(nonEmptyUrl));
+    expect(nonEmptyResponse.status).toBe(200);
+    expect((await nonEmptyResponse.json()) as { data: Array<{ id: number }>; pagination: { total: number } }).toEqual(
+      expect.objectContaining({
+        data: [expect.objectContaining({ id: 1 })],
+        pagination: expect.objectContaining({ total: 1 }),
+      }),
+    );
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
   test('matches decision search queries against machine and origin', async () => {
     const searchAlerts = [
       sampleAlert({

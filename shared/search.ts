@@ -112,9 +112,13 @@ type SearchToken =
 type FieldMap = Map<string, SearchFieldDefinition>;
 type AlertMatcher = (alert: SlimAlert, value: string) => boolean;
 type DecisionMatcher = (decision: DecisionListItem, value: string) => boolean;
+type AlertEmptyMatcher = (alert: SlimAlert) => boolean;
+type DecisionEmptyMatcher = (decision: DecisionListItem) => boolean;
 
 type AlertFieldMatcherMap = Record<string, AlertMatcher>;
 type DecisionFieldMatcherMap = Record<string, DecisionMatcher>;
+type AlertFieldEmptyMatcherMap = Record<string, AlertEmptyMatcher>;
+type DecisionFieldEmptyMatcherMap = Record<string, DecisionEmptyMatcher>;
 
 type SearchCompileSuccess<T> = {
   ok: true;
@@ -173,6 +177,7 @@ const fallbackAlertExamples: SearchHelpExample[] = [
   { query: 'date>=2026-03-24 AND date<2026-03-25', description: 'Filter alerts by date or timestamp ranges', descriptionKey: 'components.searchSyntax.examples.alerts.dateRange' },
   { query: 'country:(germany OR france) AND -sim:simulated', description: 'Use grouping, boolean logic, and negation', descriptionKey: 'components.searchSyntax.examples.alerts.boolean' },
   { query: 'ip:1.2.3.4 AND target:ssh', description: 'Match a specific IP and target', descriptionKey: 'components.searchSyntax.examples.alerts.specificField' },
+  { query: 'origin:""', description: 'Find alerts whose origin is empty', descriptionKey: 'components.searchSyntax.examples.alerts.emptyOrigin' },
 ];
 
 const fallbackDecisionExamples: SearchHelpExample[] = [
@@ -182,6 +187,7 @@ const fallbackDecisionExamples: SearchHelpExample[] = [
   { query: 'alert:123 OR ip:"192.168.5.0/24"', description: 'Search by linked alert or a quoted IP/range', descriptionKey: 'components.searchSyntax.examples.decisions.linkedRecord' },
   { query: 'country:(germany OR france) AND -duplicate:true', description: 'Exclude duplicates while grouping countries', descriptionKey: 'components.searchSyntax.examples.decisions.boolean' },
   { query: 'target:ssh AND sim:live', description: 'Limit results to one target and simulation state', descriptionKey: 'components.searchSyntax.examples.decisions.simulation' },
+  { query: 'origin:""', description: 'Find decisions whose origin is empty', descriptionKey: 'components.searchSyntax.examples.decisions.emptyOrigin' },
 ];
 
 const searchHelpOperators: SearchHelpOperatorDefinition[] = [
@@ -189,25 +195,29 @@ const searchHelpOperators: SearchHelpOperatorDefinition[] = [
   { label: 'OR', insertText: ' OR ', description: 'Either expression may match', descriptionKey: 'components.searchSyntax.operators.or' },
   { label: 'NOT', insertText: 'NOT ', description: 'Negate the next expression', descriptionKey: 'components.searchSyntax.operators.not' },
   { label: '-', insertText: '-', description: 'Short negation for a single term or field', descriptionKey: 'components.searchSyntax.operators.minus' },
-  { label: ':', insertText: ':', description: 'Broad field match, for example `country:germany`', descriptionKey: 'components.searchSyntax.operators.contains' },
-  { label: '=', insertText: '=', description: 'Exact match, for example `country=DE` or `date=2026-03-24`', descriptionKey: 'components.searchSyntax.operators.equals' },
-  { label: '<>', insertText: '<>', description: 'Exclude a value, for example `sim<>simulated`', descriptionKey: 'components.searchSyntax.operators.notEquals' },
-  { label: '>', insertText: '>', description: 'Date is after the supplied value, for example `date>2026-03-24`', descriptionKey: 'components.searchSyntax.operators.greaterThan' },
-  { label: '>=', insertText: '>=', description: 'Date is on or after the supplied value, for example `date>=2026-03-24`', descriptionKey: 'components.searchSyntax.operators.greaterOrEqual' },
-  { label: '<', insertText: '<', description: 'Date is before the supplied value, for example `date<2026-03-24`', descriptionKey: 'components.searchSyntax.operators.lessThan' },
-  { label: '<=', insertText: '<=', description: 'Date is on or before the supplied value, for example `date<=2026-03-24`', descriptionKey: 'components.searchSyntax.operators.lessOrEqual' },
+  { label: ':', insertText: ':', description: 'Broad field match', descriptionKey: 'components.searchSyntax.operators.contains' },
+  { label: '=', insertText: '=', description: 'Exact field match', descriptionKey: 'components.searchSyntax.operators.equals' },
+  { label: '<>', insertText: '<>', description: 'Exclude an exact field value', descriptionKey: 'components.searchSyntax.operators.notEquals' },
+  { label: '>', insertText: '>', description: 'Date is after the supplied value', descriptionKey: 'components.searchSyntax.operators.greaterThan' },
+  { label: '>=', insertText: '>=', description: 'Date is on or after the supplied value', descriptionKey: 'components.searchSyntax.operators.greaterOrEqual' },
+  { label: '<', insertText: '<', description: 'Date is before the supplied value', descriptionKey: 'components.searchSyntax.operators.lessThan' },
+  { label: '<=', insertText: '<=', description: 'Date is on or before the supplied value', descriptionKey: 'components.searchSyntax.operators.lessOrEqual' },
 ];
 
 const EXAMPLE_STOP_WORDS = new Set(['crowdsecurity', 'crowdsec', 'manual', 'web', 'ui']);
 
-function getSearchHelpExamples(page: SearchPage, samples?: SearchHelpSampleData): SearchHelpExample[] {
+function getSearchHelpExamples(
+  page: SearchPage,
+  samples: SearchHelpSampleData | undefined,
+  features: SearchFeatureFlags,
+): SearchHelpExample[] {
   return page === 'alerts'
-    ? buildAlertExamples(samples?.alerts)
-    : buildDecisionExamples(samples?.decisions);
+    ? buildAlertExamples(samples?.alerts, features.originEnabled === true)
+    : buildDecisionExamples(samples?.decisions, features.originEnabled === true);
 }
 
-function buildAlertExamples(alerts?: SlimAlert[]): SearchHelpExample[] {
-  return [
+function buildAlertExamples(alerts: SlimAlert[] | undefined, includeOriginExample: boolean): SearchHelpExample[] {
+  const examples = [
     buildSearchHelpExample(fallbackAlertExamples[0], findAlertFreeTextExample(alerts)),
     buildSearchHelpExample(fallbackAlertExamples[1], findAlertPhraseExample(alerts)),
     buildSearchHelpExample(fallbackAlertExamples[2], findAlertMixedFieldExample(alerts)),
@@ -215,10 +225,11 @@ function buildAlertExamples(alerts?: SlimAlert[]): SearchHelpExample[] {
     buildSearchHelpExample(fallbackAlertExamples[4], findAlertBooleanExample(alerts)),
     buildSearchHelpExample(fallbackAlertExamples[5], findAlertSpecificFieldExample(alerts)),
   ];
+  return includeOriginExample ? [...examples, fallbackAlertExamples[6]] : examples;
 }
 
-function buildDecisionExamples(decisions?: DecisionListItem[]): SearchHelpExample[] {
-  return [
+function buildDecisionExamples(decisions: DecisionListItem[] | undefined, includeOriginExample: boolean): SearchHelpExample[] {
+  const examples = [
     buildSearchHelpExample(fallbackDecisionExamples[0], findDecisionFreeTextExample(decisions)),
     buildSearchHelpExample(fallbackDecisionExamples[1], findDecisionSemanticExample(decisions)),
     buildSearchHelpExample(fallbackDecisionExamples[2], findDecisionDateExample(decisions)),
@@ -226,6 +237,7 @@ function buildDecisionExamples(decisions?: DecisionListItem[]): SearchHelpExampl
     buildSearchHelpExample(fallbackDecisionExamples[4], findDecisionBooleanExample(decisions)),
     buildSearchHelpExample(fallbackDecisionExamples[5], findDecisionSimulationExample(decisions)),
   ];
+  return includeOriginExample ? [...examples, fallbackDecisionExamples[6]] : examples;
 }
 
 function buildSearchHelpExample(fallbackExample: SearchHelpExample, query: string | null): SearchHelpExample {
@@ -539,6 +551,38 @@ const decisionFieldMatchers: DecisionFieldMatcherMap = {
   origin: (decision, value) => includesNormalized(decision.detail.origin, value),
 };
 
+const alertFieldEmptyMatchers: AlertFieldEmptyMatcherMap = {
+  id: () => false,
+  scenario: (alert) => isEmptyValue(alert.scenario),
+  message: (alert) => isEmptyValue(alert.message),
+  ip: (alert) => [alert.source?.ip, alert.source?.value, alert.source?.range].every(isEmptyValue),
+  country: (alert) => isEmptyValue(alert.source?.cn),
+  as: (alert) => isEmptyValue(alert.source?.as_name),
+  target: (alert) => isEmptyValue(alert.target),
+  date: (alert) => isEmptyValue(alert.created_at),
+  sim: () => false,
+  machine: (alert) => isEmptyValue(resolveMachineName(alert)),
+  origin: (alert) => collectDistinctOrigins(alert.decisions).length === 0,
+};
+
+const decisionFieldEmptyMatchers: DecisionFieldEmptyMatcherMap = {
+  id: () => false,
+  alert: (decision) => isEmptyValue(decision.detail.alert_id),
+  scenario: (decision) => isEmptyValue(decision.detail.reason || decision.scenario),
+  ip: (decision) => isEmptyValue(decision.value),
+  country: (decision) => isEmptyValue(decision.detail.country),
+  as: (decision) => isEmptyValue(decision.detail.as),
+  target: (decision) => isEmptyValue(decision.detail.target),
+  date: (decision) => isEmptyValue(decision.created_at),
+  action: (decision) => isEmptyValue(decision.detail.action),
+  type: (decision) => isEmptyValue(decision.detail.type),
+  status: () => false,
+  duplicate: () => false,
+  sim: () => false,
+  machine: (decision) => isEmptyValue(decision.machine),
+  origin: (decision) => isEmptyValue(decision.detail.origin),
+};
+
 export function getSearchHelpDefinition(
   page: SearchPage,
   features: SearchFeatureFlags = {},
@@ -570,7 +614,7 @@ export function getSearchHelpDefinition(
     ],
     operators: searchHelpOperators,
     fields: getFieldDefinitions(page, features),
-    examples: getSearchHelpExamples(page, samples),
+    examples: getSearchHelpExamples(page, samples, features),
   };
 }
 
@@ -590,7 +634,15 @@ export function compileAlertSearch(
     ok: true,
     ast: parsed.ast,
     help,
-    predicate: (alert) => parsed.ast === null || evaluateNode(parsed.ast, alert, alertFieldMatchers, matchAlertFreeText, undefined, dateOptions),
+    predicate: (alert) => parsed.ast === null || evaluateNode(
+      parsed.ast,
+      alert,
+      alertFieldMatchers,
+      alertFieldEmptyMatchers,
+      matchAlertFreeText,
+      undefined,
+      dateOptions,
+    ),
   };
 }
 
@@ -610,7 +662,15 @@ export function compileDecisionSearch(
     ok: true,
     ast: parsed.ast,
     help,
-    predicate: (decision) => parsed.ast === null || evaluateNode(parsed.ast, decision, decisionFieldMatchers, matchDecisionFreeText, undefined, dateOptions),
+    predicate: (decision) => parsed.ast === null || evaluateNode(
+      parsed.ast,
+      decision,
+      decisionFieldMatchers,
+      decisionFieldEmptyMatchers,
+      matchDecisionFreeText,
+      undefined,
+      dateOptions,
+    ),
   };
 }
 
@@ -1211,6 +1271,7 @@ function evaluateNode<T>(
   node: SearchNode,
   item: T,
   fieldMatchers: Record<string, (item: T, value: string) => boolean>,
+  fieldEmptyMatchers: Record<string, (item: T) => boolean>,
   freeTextMatcher: (item: T, value: string) => boolean,
   scopedField?: string,
   dateOptions: SearchDateOptions = {},
@@ -1218,22 +1279,25 @@ function evaluateNode<T>(
   switch (node.kind) {
     case 'term':
       if (scopedField) {
+        if (isEmptyValue(node.value)) {
+          return fieldEmptyMatchers[scopedField]?.(item) === true;
+        }
         return fieldMatchers[scopedField]?.(item, node.value) === true;
       }
       return freeTextMatcher(item, node.value);
     case 'comparison':
-      return compareFieldValue(item, node.field, node.operator, node.value, fieldMatchers, dateOptions);
+      return compareFieldValue(item, node.field, node.operator, node.value, fieldMatchers, fieldEmptyMatchers, dateOptions);
     case 'field':
-      return evaluateNode(node.expression, item, fieldMatchers, freeTextMatcher, node.field, dateOptions);
+      return evaluateNode(node.expression, item, fieldMatchers, fieldEmptyMatchers, freeTextMatcher, node.field, dateOptions);
     case 'not':
-      return !evaluateNode(node.expression, item, fieldMatchers, freeTextMatcher, scopedField, dateOptions);
+      return !evaluateNode(node.expression, item, fieldMatchers, fieldEmptyMatchers, freeTextMatcher, scopedField, dateOptions);
     case 'binary':
       if (node.operator === 'AND') {
-        return evaluateNode(node.left, item, fieldMatchers, freeTextMatcher, scopedField, dateOptions) &&
-          evaluateNode(node.right, item, fieldMatchers, freeTextMatcher, scopedField, dateOptions);
+        return evaluateNode(node.left, item, fieldMatchers, fieldEmptyMatchers, freeTextMatcher, scopedField, dateOptions) &&
+          evaluateNode(node.right, item, fieldMatchers, fieldEmptyMatchers, freeTextMatcher, scopedField, dateOptions);
       }
-      return evaluateNode(node.left, item, fieldMatchers, freeTextMatcher, scopedField, dateOptions) ||
-        evaluateNode(node.right, item, fieldMatchers, freeTextMatcher, scopedField, dateOptions);
+      return evaluateNode(node.left, item, fieldMatchers, fieldEmptyMatchers, freeTextMatcher, scopedField, dateOptions) ||
+        evaluateNode(node.right, item, fieldMatchers, fieldEmptyMatchers, freeTextMatcher, scopedField, dateOptions);
     default:
       return false;
   }
@@ -1301,6 +1365,7 @@ function compareFieldValue<T>(
   operator: SearchComparisonOperator,
   value: string,
   fieldMatchers: Record<string, (item: T, value: string) => boolean>,
+  fieldEmptyMatchers: Record<string, (item: T) => boolean>,
   dateOptions: SearchDateOptions,
 ): boolean {
   if (field === 'date') {
@@ -1310,6 +1375,11 @@ function compareFieldValue<T>(
   const matcher = fieldMatchers[field];
   if (!matcher) {
     return false;
+  }
+
+  if (isEmptyValue(value)) {
+    const matchesEmpty = fieldEmptyMatchers[field]?.(item) === true;
+    return operator === '=' ? matchesEmpty : !matchesEmpty;
   }
 
   if (field === 'sim') {
@@ -1371,6 +1441,10 @@ function normalizeValue(value: string | number | null | undefined): string {
     return '';
   }
   return String(value).trim().toLowerCase();
+}
+
+function isEmptyValue(value: string | number | null | undefined): boolean {
+  return normalizeValue(value) === '';
 }
 
 function matchesCountryField(countryCode: string, value: string): boolean {

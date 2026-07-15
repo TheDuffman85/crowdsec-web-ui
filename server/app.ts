@@ -4181,6 +4181,10 @@ function freeTextSearchCondition(page: SearchPageForSql, value: string, searchIn
 }
 
 function alertFieldCondition(field: string, value: string): SqlCondition {
+  if (value.trim() === '') {
+    return alertEmptyFieldCondition(field);
+  }
+
   switch (field) {
     case 'id':
       return { sql: 'CAST(id AS TEXT) = ?', params: [value] };
@@ -4210,6 +4214,10 @@ function alertFieldCondition(field: string, value: string): SqlCondition {
 }
 
 function decisionFieldCondition(field: string, value: string, now: string, duplicateSql: string): SqlCondition {
+  if (value.trim() === '') {
+    return decisionEmptyFieldCondition(field);
+  }
+
   switch (field) {
     case 'id':
       return { sql: 'CAST(id AS TEXT) = ?', params: [value] };
@@ -4243,6 +4251,64 @@ function decisionFieldCondition(field: string, value: string, now: string, dupli
     default:
       return { sql: '0 = 1', params: [] };
   }
+}
+
+function alertEmptyFieldCondition(field: string): SqlCondition {
+  switch (field) {
+    case 'scenario':
+    case 'message':
+    case 'ip':
+    case 'country':
+    case 'as':
+    case 'target':
+    case 'machine':
+    case 'origin':
+      return emptyTextCondition({
+        scenario: 'scenario',
+        message: 'message',
+        ip: 'source_ip',
+        country: 'country',
+        as: 'as_name',
+        target: 'target',
+        machine: 'machine',
+        origin: 'origins',
+      }[field]);
+    default:
+      return { sql: '0 = 1', params: [] };
+  }
+}
+
+function decisionEmptyFieldCondition(field: string): SqlCondition {
+  switch (field) {
+    case 'alert':
+    case 'scenario':
+    case 'ip':
+    case 'country':
+    case 'as':
+    case 'target':
+    case 'action':
+    case 'type':
+    case 'machine':
+    case 'origin':
+      return emptyTextCondition({
+        alert: 'alert_id',
+        scenario: 'scenario',
+        ip: 'value',
+        country: 'country',
+        as: 'as_name',
+        target: 'target',
+        action: 'type',
+        type: 'type',
+        machine: 'machine',
+        origin: 'origin',
+      }[field]);
+    default:
+      return { sql: '0 = 1', params: [] };
+  }
+}
+
+function emptyTextCondition(columnSql: string): SqlCondition {
+  return { sql: `COALESCE(TRIM(${columnSql}), '') = ''`, params: [] };
 }
 
 function countryCondition(value: string): SqlCondition {

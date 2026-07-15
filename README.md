@@ -543,6 +543,7 @@ The Alerts and Decisions pages use a single search box that supports both normal
 - Fielded search: `country:germany`, `status:active`
 - Date comparisons: `date>=2026-03-24`, `date<2026-03-25T12:00:00Z`
 - Exact/negative checks: `country=DE`, `sim<>simulated`, `-sim:simulated`
+- Empty/non-empty fields: `origin:""`, `origin<>""`
 - Boolean logic and grouping: `AND`, `OR`, `NOT`, `country:(germany OR france)`
 
 Examples:
@@ -550,6 +551,7 @@ Examples:
 - Alerts: `country:germany ssh`
 - Alerts: `date>=2026-03-24 AND date<2026-03-25`
 - Alerts: `country:(germany OR france) AND -sim:simulated`
+- Alerts: `origin:""`
 - Decisions: `status:active AND action:ban`
 - Decisions: `date>=2026-03-24 AND action:ban`
 - Decisions: `alert:123 OR ip:"192.168.5.0/24"`

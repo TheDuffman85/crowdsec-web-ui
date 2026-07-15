@@ -47,6 +47,8 @@ List endpoints that support pagination use `page` and `page_size`. Pagination is
 
 Alert search fields: `id`, `scenario`, `message`, `ip`/`source`, `country`, `as`, `target`, `date`/`created`/`created_at`/`time`, `sim`/`simulation`, `machine`, `origin`.
 
+Use a quoted empty value to match an empty field, such as `origin:""`. Use `origin<>""` or `-origin:""` to require a non-empty value.
+
 Decision search fields: `id`, `alert`/`alert_id`, `scenario`/`reason`, `ip`/`value`, `country`, `as`, `target`, `date`/`created`/`created_at`/`time`, `action`, `type`, `status`, `duplicate`, `sim`/`simulation`, `machine`, `origin`.
 
 Date range filters use `dateStart` and `dateEnd`. Use `YYYY-MM-DD` for day buckets or values containing `T` for hour-level comparisons. `tz_offset` is an offset in minutes used for local bucket comparisons when the server has no fixed `TZ` configured.
