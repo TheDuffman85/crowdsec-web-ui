@@ -2781,6 +2781,12 @@ ${errorSummary}  Status: ${syncSummary.state}
   }
 
   async function activityTrackerMiddleware(context: HonoContext, next: HonoNext): Promise<void> {
+    const pathname = new URL(context.req.url).pathname;
+    if (pathname === '/api/health' || pathname === `${config.basePath}/api/health`) {
+      await next();
+      return;
+    }
+
     const now = Date.now();
     const wasIdle = now - lastRequestTime > config.idleThresholdMs;
     lastRequestTime = now;

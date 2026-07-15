@@ -383,6 +383,7 @@ function createController(options: {
   mqttPublishResolver?: (config: MqttPublishConfig, payload: string) => void | Promise<void>;
   syncWorker?: CreateAppOptions['syncWorker'];
   database?: CrowdsecDatabase;
+  initialCacheState?: CreateAppOptions['initialCacheState'];
 } = {}) {
   const authMode = options.authMode || 'password';
   const mtlsCertPath = path.join(tempDir, 'agent.pem');
@@ -503,6 +504,7 @@ function createController(options: {
       await options.mqttPublishResolver?.(config, payload);
     },
     syncWorker: options.syncWorker,
+    initialCacheState: options.initialCacheState,
   });
 
   return { controller, database, lapiClient, fetchCalls };
@@ -3089,6 +3091,52 @@ describe('createApp', () => {
       }));
     } finally {
       controller.stopBackgroundTasks();
+      vi.useRealTimers();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
+  test('ignores health checks when deciding whether the refresh scheduler is idle', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-15T06:00:00.000Z'));
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '2m',
+        CROWDSEC_IDLE_THRESHOLD: '1m',
+        CROWDSEC_IDLE_REFRESH_INTERVAL: '10m',
+        CROWDSEC_HEARTBEAT_INTERVAL: 'manual',
+      },
+      initialCacheState: {
+        isInitialized: true,
+        isComplete: true,
+        lastUpdate: new Date().toISOString(),
+      },
+    });
+
+    try {
+      controller.startBackgroundTasks();
+      await vi.advanceTimersByTimeAsync(61_000);
+
+      const rootHealth = await controller.fetch(new Request('http://localhost/api/health'));
+      const basePathHealth = await controller.fetch(new Request('http://localhost/crowdsec/api/health'));
+      expect(rootHealth.status).toBe(200);
+      expect(basePathHealth.status).toBe(200);
+
+      await vi.advanceTimersByTimeAsync(59_001);
+
+      const logs = logSpy.mock.calls.map((call) => String(call[0]));
+      expect(logs).toContain('Background refresh triggered (IDLE)...');
+
+      const configResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
+      expect(configResponse.status).toBe(200);
+      expect(logSpy.mock.calls.map((call) => String(call[0]))).toContain(
+        'System waking up from idle mode. Triggering immediate refresh...',
+      );
+    } finally {
+      controller.stopBackgroundTasks();
+      logSpy.mockRestore();
       vi.useRealTimers();
       database.close();
       destroyTempDir();
