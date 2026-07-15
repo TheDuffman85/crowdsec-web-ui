@@ -35,7 +35,9 @@ function execute(request: WorkerRequest['request']): unknown {
           throw new Error('Split alert mutation is missing an alert ID');
         }
         if (mutation.alert) {
-          changed = database.insertAlert(mutation.alert) || changed;
+          changed = mutation.updateAlertRawDataOnly
+            ? database.updateAlertRawData(mutation.alert.$id, mutation.alert.$raw_data) || changed
+            : database.insertAlert(mutation.alert) || changed;
         }
         for (const decision of mutation.decisions) {
           changed = database.insertDecision(decision) || changed;

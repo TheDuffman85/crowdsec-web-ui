@@ -73,7 +73,7 @@ let nextGeneratedDecisionId = initialDecisionCount + 1;
 const getSourceAlertStatement = database.db.prepare(`SELECT raw_data FROM ${LOADTEST_SOURCE_TABLE} WHERE id = ?`);
 const updateSourceAlertStatement = database.db.prepare(`
   UPDATE ${LOADTEST_SOURCE_TABLE}
-  SET has_active_decision = ?, scenario = ?, origins = ?, raw_data = ?
+  SET scenario = ?, origins = ?, raw_data = ?
   WHERE id = ?
 `);
 const deleteSourceAlertStatement = database.db.prepare(`DELETE FROM ${LOADTEST_SOURCE_TABLE} WHERE id = ?`);
@@ -159,7 +159,6 @@ function ensureLoadTestSourceTable(database: CrowdsecDatabase): void {
     CREATE TABLE IF NOT EXISTS ${LOADTEST_SOURCE_TABLE} (
       id TEXT PRIMARY KEY,
       created_at TEXT NOT NULL,
-      has_active_decision INTEGER NOT NULL DEFAULT 0,
       scenario TEXT,
       origins TEXT,
       raw_data TEXT NOT NULL
@@ -168,9 +167,6 @@ function ensureLoadTestSourceTable(database: CrowdsecDatabase): void {
 
   const columns = database.db.prepare(`PRAGMA table_info(${LOADTEST_SOURCE_TABLE})`).all() as Array<{ name: string }>;
   const names = new Set(columns.map((column) => column.name));
-  if (!names.has('has_active_decision')) {
-    database.db.exec(`ALTER TABLE ${LOADTEST_SOURCE_TABLE} ADD COLUMN has_active_decision INTEGER NOT NULL DEFAULT 0`);
-  }
   if (!names.has('scenario')) {
     database.db.exec(`ALTER TABLE ${LOADTEST_SOURCE_TABLE} ADD COLUMN scenario TEXT`);
   }
@@ -181,8 +177,7 @@ function ensureLoadTestSourceTable(database: CrowdsecDatabase): void {
   database.db.exec(`
     CREATE INDEX IF NOT EXISTS idx_${LOADTEST_SOURCE_TABLE}_created_at
       ON ${LOADTEST_SOURCE_TABLE}(created_at);
-    CREATE INDEX IF NOT EXISTS idx_${LOADTEST_SOURCE_TABLE}_active_created_at
-      ON ${LOADTEST_SOURCE_TABLE}(has_active_decision, created_at);
+    DROP INDEX IF EXISTS idx_${LOADTEST_SOURCE_TABLE}_active_created_at;
   `);
 }
 
@@ -356,21 +351,13 @@ function getSyncWindow(since: string | null, until: string | null): { start: str
   };
 }
 
-function alertHasActiveDecision(alert: AlertRecord, nowMs: number): boolean {
-  return (alert.decisions || []).some((decision) => {
-    const stopAt = decision.stop_at ? Date.parse(decision.stop_at) : Number.NaN;
-    return Number.isFinite(stopAt) && stopAt > nowMs;
-  });
-}
-
 function alertOrigins(alert: AlertRecord): string[] {
   return (alert.decisions || [])
     .map((decision) => typeof decision.origin === 'string' ? decision.origin : '')
     .filter((origin) => origin.length > 0);
 }
 
-function matchesLoadTestFilters(alert: AlertRecord, hasActiveDecision: boolean, filters: { origin?: string; scenario?: string; includeCapi?: boolean }): boolean {
-  if (hasActiveDecision && !alertHasActiveDecision(alert, Date.now())) return false;
+function matchesLoadTestFilters(alert: AlertRecord, filters: { origin?: string; scenario?: string; includeCapi?: boolean }): boolean {
   if (filters.scenario && alert.scenario !== filters.scenario) return false;
 
   const originsForAlert = alertOrigins(alert);
@@ -400,7 +387,6 @@ function getSourceAlert(alertId: string | number): AlertRecord | null {
 
 function updateSourceAlert(alert: AlertRecord): void {
   updateSourceAlertStatement.run(
-    hasActiveDecisionFlag(alert),
     alert.scenario || null,
     sourceOrigins(alert),
     JSON.stringify(alert),
@@ -468,22 +454,14 @@ function sourceOrigins(alert: AlertRecord): string {
   return `\n${Array.from(origins).join('\n')}\n`;
 }
 
-function hasActiveDecisionFlag(alert: AlertRecord): number {
-  return alertHasActiveDecision(alert, Date.now()) ? 1 : 0;
-}
-
 function loadAlertsFromSourceWithFilters(
   start: string,
   end: string,
-  hasActiveDecision: boolean,
   filters: { origin?: string; scenario?: string; includeCapi?: boolean },
 ): AlertRecord[] {
   const conditions = ['created_at >= ?', 'created_at < ?'];
   const params: unknown[] = [start, end];
 
-  if (hasActiveDecision) {
-    conditions.push('has_active_decision = 1');
-  }
   if (filters.scenario) {
     conditions.push('scenario = ?');
     params.push(filters.scenario);
@@ -508,17 +486,17 @@ function loadAlertsFromSourceWithFilters(
   });
 }
 
-function loadSyntheticAlerts(since: string | null, until: string | null, hasActiveDecision: boolean, filters: { origin?: string; scenario?: string; includeCapi?: boolean }): AlertRecord[] {
-  generateDueLoadTestData(config.refreshIntervalMs <= 0 && !hasActiveDecision && until === null);
+function loadSyntheticAlerts(since: string | null, until: string | null, filters: { origin?: string; scenario?: string; includeCapi?: boolean }): AlertRecord[] {
+  generateDueLoadTestData(config.refreshIntervalMs <= 0 && until === null);
   const window = getSyncWindow(since, until);
   const merged = new Map<string, AlertRecord>();
 
-  for (const alert of loadAlertsFromSourceWithFilters(window.start, window.end, hasActiveDecision, filters)) {
+  for (const alert of loadAlertsFromSourceWithFilters(window.start, window.end, filters)) {
     merged.set(String(alert.id), alert);
   }
 
   for (const alert of dynamicAlerts.values()) {
-    if (alert.created_at >= window.start && alert.created_at < window.end && matchesLoadTestFilters(alert, hasActiveDecision, filters)) {
+    if (alert.created_at >= window.start && alert.created_at < window.end && matchesLoadTestFilters(alert, filters)) {
       merged.set(String(alert.id), alert);
     }
   }
@@ -548,9 +526,8 @@ const fakeLapiClient = {
   fetchAlerts: async (
     since: string | null = null,
     until: string | null = null,
-    hasActiveDecision = false,
     filters: { origin?: string; scenario?: string; includeCapi?: boolean } = {},
-  ) => loadSyntheticAlerts(since, until, hasActiveDecision, filters),
+  ) => loadSyntheticAlerts(since, until, filters),
   getAlertById: async (alertId: string | number) => {
     const dynamicAlert = dynamicAlerts.get(String(alertId));
     if (dynamicAlert) return dynamicAlert;

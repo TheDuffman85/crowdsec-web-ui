@@ -120,13 +120,18 @@ describe('config helpers', () => {
       CROWDSEC_REFRESH_INTERVAL: '5s',
       CROWDSEC_IDLE_REFRESH_INTERVAL: '1m',
       CROWDSEC_IDLE_THRESHOLD: '30s',
-      CROWDSEC_FULL_REFRESH_INTERVAL: '5m',
       CROWDSEC_LAPI_REQUEST_TIMEOUT: '2m',
       CROWDSEC_PROMETHEUS_URL: 'http://crowdsec:6060/metrics',
       CROWDSEC_PROMETHEUS_REQUEST_TIMEOUT: '10s',
       CROWDSEC_HEARTBEAT_INTERVAL: '1m',
       CROWDSEC_ALERT_SYNC_CHUNK: '3h',
       CROWDSEC_ALERT_SYNC_MIN_CHUNK: '30m',
+      CROWDSEC_RECONCILE_WINDOW: '2h',
+      CROWDSEC_RECONCILE_RECENT_AGE: '12h',
+      CROWDSEC_RECONCILE_RECENT_INTERVAL: '10m',
+      CROWDSEC_RECONCILE_ACTIVE_INTERVAL: '2m',
+      CROWDSEC_RECONCILE_OLD_INTERVAL: '6h',
+      CROWDSEC_RECONCILE_WINDOWS_PER_REFRESH: '4',
       CROWDSEC_BOOTSTRAP_RETRY_DELAY: '1m',
       CROWDSEC_BOOTSTRAP_RETRY_ENABLED: 'false',
       DOCKER_IMAGE_REF: 'Example/Repo',
@@ -169,13 +174,18 @@ describe('config helpers', () => {
     expect(config.lookbackMs).toBe(172_800_000);
     expect(config.refreshIntervalMs).toBe(5_000);
     expect(config.idleRefreshIntervalMs).toBe(60_000);
-    expect(config.fullRefreshIntervalMs).toBe(300_000);
     expect(config.lapiRequestTimeoutMs).toBe(120_000);
     expect(config.prometheusUrl).toBe('http://crowdsec:6060/metrics');
     expect(config.prometheusRequestTimeoutMs).toBe(10_000);
     expect(config.heartbeatIntervalMs).toBe(60_000);
     expect(config.alertSyncChunkMs).toBe(10_800_000);
     expect(config.alertSyncMinChunkMs).toBe(1_800_000);
+    expect(config.reconcileWindowMs).toBe(7_200_000);
+    expect(config.reconcileRecentAgeMs).toBe(43_200_000);
+    expect(config.reconcileRecentIntervalMs).toBe(600_000);
+    expect(config.reconcileActiveIntervalMs).toBe(120_000);
+    expect(config.reconcileOldIntervalMs).toBe(21_600_000);
+    expect(config.reconcileWindowsPerRefresh).toBe(4);
     expect(config.bootstrapRetryEnabled).toBe(false);
     expect(config.dockerImageRef).toBe('example/repo');
     expect(config.updateCheckEnabled).toBe(true);
@@ -222,13 +232,18 @@ describe('config helpers', () => {
     expect(config.timeFormat).toBe('browser');
     expect(config.refreshIntervalMs).toBe(60_000);
     expect(config.idleRefreshIntervalMs).toBe(600_000);
-    expect(config.fullRefreshIntervalMs).toBe(10_800_000);
     expect(config.lapiRequestTimeoutMs).toBe(30_000);
     expect(config.prometheusUrl).toBeUndefined();
     expect(config.prometheusRequestTimeoutMs).toBe(5_000);
     expect(config.heartbeatIntervalMs).toBe(30_000);
     expect(config.alertSyncChunkMs).toBe(43_200_000);
     expect(config.alertSyncMinChunkMs).toBe(900_000);
+    expect(config.reconcileWindowMs).toBe(3_600_000);
+    expect(config.reconcileRecentAgeMs).toBe(86_400_000);
+    expect(config.reconcileRecentIntervalMs).toBe(900_000);
+    expect(config.reconcileActiveIntervalMs).toBe(300_000);
+    expect(config.reconcileOldIntervalMs).toBe(10_800_000);
+    expect(config.reconcileWindowsPerRefresh).toBe(2);
     expect(config.readOnly).toBe(false);
     expect(config.dashboardAuth.enabled).toBeNull();
     expect(config.dashboardAuth.oidcScope).toBe('openid profile email');

@@ -152,7 +152,6 @@
   "components.statCard.viewOnHub": "CrowdSec Hub पर देखें",
   "components.syncOverlay.description": "डेटा प्राप्त होने तक प्रतीक्षा करें...",
   "components.syncOverlay.synchronizing": "सिंक्रनाइज़ हो रहा है...",
-  "components.syncOverlay.statusActiveDecisions": "सक्रिय निर्णय सिंक हो रहे हैं...",
   "components.syncOverlay.statusBuildingIndexes": "खोज इंडेक्स बनाए जा रहे हैं...",
   "components.syncOverlay.statusFetchingWindow": "प्राप्त हो रहा है: {window} (अब तक {alerts} अलर्ट और {decisions} निर्णय कैश किए गए)",
   "components.syncOverlay.statusFinalizingDecisions": "निर्णय डेटा को अंतिम रूप दिया जा रहा है...",

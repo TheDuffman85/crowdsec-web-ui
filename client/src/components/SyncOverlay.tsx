@@ -16,10 +16,6 @@ function translateSyncMessage(message: string | undefined, t: (key: string, valu
         return t('components.syncOverlay.statusStarting');
     }
 
-    if (message === 'Syncing active decisions...') {
-        return t('components.syncOverlay.statusActiveDecisions');
-    }
-
     const fixedMessages: Record<string, string> = {
         'Finalizing decision data...': 'components.syncOverlay.statusFinalizingDecisions',
         'Building search indexes...': 'components.syncOverlay.statusBuildingIndexes',

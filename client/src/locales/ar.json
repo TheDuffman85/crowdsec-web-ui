@@ -152,7 +152,6 @@
   "components.statCard.viewOnHub": "عرض في CrowdSec Hub",
   "components.syncOverlay.description": "يرجى الانتظار أثناء جلب البيانات...",
   "components.syncOverlay.synchronizing": "جارٍت المزامنة...",
-  "components.syncOverlay.statusActiveDecisions": "جارٍت مزامنة القرارات النشطة...",
   "components.syncOverlay.statusBuildingIndexes": "جارٍ إنشاء فهارس البحث...",
   "components.syncOverlay.statusFetchingWindow": "جارٍ الجلب: {window} (تم تخزين {alerts} تنبيهًا و{decisions} قرارًا حتى الآن)",
   "components.syncOverlay.statusFinalizingDecisions": "جارٍ إنهاء بيانات القرارات...",

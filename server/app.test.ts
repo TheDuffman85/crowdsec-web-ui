@@ -1855,6 +1855,45 @@ describe('createApp', () => {
     destroyTempDir();
   });
 
+  test('refreshes cached dashboard active totals when a decision expires without a database mutation', async () => {
+    vi.useRealTimers();
+    const stopAt = new Date(Date.now() + 1_000).toISOString();
+    const alert = sampleAlert({
+      id: 104,
+      uuid: 'dashboard-expiring-alert',
+      created_at: new Date().toISOString(),
+      decisions: [{ id: 1040, value: '1.2.3.4', stop_at: stopAt, type: 'ban', origin: 'crowdsec', simulated: false }],
+    });
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    seedAlert(database, alert);
+    const { controller } = createController({
+      database,
+      env: { CROWDSEC_REFRESH_INTERVAL: '0', CROWDSEC_LOOKBACK_PERIOD: '1h' },
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+      fetchResolver: (url) => {
+        if (!url.includes('/v1/alerts?')) return undefined;
+        return Response.json([alert]);
+      },
+    });
+
+    try {
+      const firstResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats'));
+      expect((await firstResponse.json()) as { filteredTotals: { decisions: number } }).toEqual(
+        expect.objectContaining({ filteredTotals: expect.objectContaining({ decisions: 1 }) }),
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      const secondResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats'));
+      expect((await secondResponse.json()) as { filteredTotals: { decisions: number } }).toEqual(
+        expect.objectContaining({ filteredTotals: expect.objectContaining({ decisions: 0 }) }),
+      );
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
   test('serves finalized dashboard stats immediately after initial sync', async () => {
     const alert = sampleAlert({
       id: 301,
@@ -2665,18 +2704,16 @@ describe('createApp', () => {
       expect(alerts.status).toBe(200);
 
       const logs = logSpy.mock.calls.map((call) => String(call[0])).join('\n');
-      expect(logs).toContain('Imported 1 alerts and 2 decisions.');
+      expect(logs).toContain('Fetched 1 alerts and 2 decisions.');
       expect(logs).toContain(
         `Cache initialized successfully:
   Historical: 1 alerts and 2 decisions fetched
-  Active decisions: checked 1 alerts and 2 decisions; no cache changes
   Cache: 1 alerts and 2 decisions
   Status: complete
   Refresh Interval: 30s
 `,
       );
       expect(logs).not.toContain('Historical chunk sync complete');
-      expect(logs).not.toContain('-> Synced 1 active-decision alerts');
     } finally {
       logSpy.mockRestore();
       controller.stopBackgroundTasks();
@@ -2716,7 +2753,7 @@ describe('createApp', () => {
       syncWorker,
       fetchResolver: (url) => {
         if (!url.includes('/v1/alerts?')) return undefined;
-        return Response.json(url.includes('has_active_decision=true') ? [] : alerts);
+        return Response.json(alerts);
       },
     });
 
@@ -2769,7 +2806,7 @@ describe('createApp', () => {
       syncWorker,
       fetchResolver: (url) => {
         if (!url.includes('/v1/alerts?')) return undefined;
-        return Response.json(url.includes('has_active_decision=true') ? [] : [blocklistAlert]);
+        return Response.json([blocklistAlert]);
       },
     });
 
@@ -2800,35 +2837,257 @@ describe('createApp', () => {
     }
   });
 
-  test('does not refetch active decisions after a complete historical bootstrap', async () => {
+  test('skips database writes when a reconciled alert is unchanged', async () => {
+    const decisionCount = 1_201;
+    const activeAlert = sampleAlert({
+      id: 205,
+      uuid: 'alert-205',
+      decisions: Array.from({ length: decisionCount }, (_, decisionIndex) => ({
+        id: `active-${decisionIndex}`,
+        type: 'ban',
+        value: `198.51.${Math.floor(decisionIndex / 255)}.${decisionIndex % 255}`,
+        duration: '24h',
+        stop_at: new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString(),
+        origin: 'lists',
+        simulated: false,
+      })),
+    });
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    seedAlert(database, activeAlert);
+    const syncWorker: NonNullable<CreateAppOptions['syncWorker']> = {
+      persistAlerts: vi.fn(async () => ({ changed: false })),
+      deleteAlertsMissingBetween: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      deleteCachedAlerts: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      deleteCachedDecisions: vi.fn(async () => 0),
+      beginDeferredSearchIndexUpdates: vi.fn(async () => {}),
+      rebuildSearchIndexes: vi.fn(async () => {}),
+      refreshDecisionDuplicateFlags: vi.fn(async () => {}),
+      cleanupOldData: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      clearSyncData: vi.fn(async () => {}),
+      runExclusive: vi.fn(async (operation) => operation()),
+      close: vi.fn(),
+    };
+    const { controller } = createController({
+      database,
+      syncWorker,
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '0',
+        CROWDSEC_LOOKBACK_PERIOD: '1m',
+      },
+      initialCacheState: {
+        isInitialized: true,
+        isComplete: true,
+        lastUpdate: new Date().toISOString(),
+      },
+      fetchResolver: (url) => {
+        if (!url.includes('/v1/alerts?')) return undefined;
+        return Response.json(new URL(url).searchParams.has('until') ? [activeAlert] : []);
+      },
+    });
+
+    try {
+      const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=10'));
+      expect(response.status).toBe(200);
+      expect(syncWorker.persistAlerts).not.toHaveBeenCalled();
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
+  test('writes only added decisions and does not replay survivors during window reconciliation', async () => {
+    const initialAlert = sampleAlert({
+      id: 207,
+      uuid: 'alert-207',
+      decisions: Array.from({ length: 1_201 }, (_, index) => ({
+        id: `delta-${index}`,
+        type: 'ban',
+        value: `203.0.${Math.floor(index / 255)}.${index % 255}`,
+        stop_at: new Date(Date.now() + 60_000).toISOString(),
+      })),
+    });
+    const addedAlert = {
+      ...initialAlert,
+      decisions: [
+        ...(initialAlert.decisions || []),
+        { id: 'delta-new', type: 'ban', value: '203.0.113.250', stop_at: new Date(Date.now() + 60_000).toISOString() },
+      ],
+    };
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    seedAlert(database, initialAlert);
+    const syncWorker: NonNullable<CreateAppOptions['syncWorker']> = {
+      persistAlerts: vi.fn(async () => ({ changed: true })),
+      deleteAlertsMissingBetween: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      deleteCachedAlerts: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      deleteCachedDecisions: vi.fn(async () => 0),
+      beginDeferredSearchIndexUpdates: vi.fn(async () => {}),
+      rebuildSearchIndexes: vi.fn(async () => {}),
+      refreshDecisionDuplicateFlags: vi.fn(async () => {}),
+      cleanupOldData: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      clearSyncData: vi.fn(async () => {}),
+      runExclusive: vi.fn(async (operation) => operation()),
+      close: vi.fn(),
+    };
+    const { controller } = createController({
+      database,
+      syncWorker,
+      env: { CROWDSEC_REFRESH_INTERVAL: '0', CROWDSEC_LOOKBACK_PERIOD: '1m' },
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+      fetchResolver: (url) => {
+        if (!url.includes('/v1/alerts?')) return undefined;
+        return Response.json(new URL(url).searchParams.has('until') ? [addedAlert] : []);
+      },
+    });
+
+    try {
+      const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=10'));
+      expect(response.status).toBe(200);
+      const mutations = vi.mocked(syncWorker.persistAlerts).mock.calls.flatMap(([batch]) => batch);
+      expect(mutations).toHaveLength(1);
+      expect(mutations[0]?.decisions.map((decision) => decision.$id)).toEqual(['delta-new']);
+      expect(mutations[0]?.keepDecisionIds).toEqual([]);
+      expect(mutations[0]?.reconcileDecisions).toBe(false);
+      expect(mutations[0]?.updateAlertRawDataOnly).toBe(true);
+      expect(syncWorker.deleteCachedDecisions).not.toHaveBeenCalled();
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
+  test('deletes a missing decision without replaying survivors during window reconciliation', async () => {
+    const initialAlert = sampleAlert({
+      id: 208,
+      uuid: 'alert-208',
+      decisions: Array.from({ length: 1_201 }, (_, index) => ({
+        id: `delete-delta-${index}`,
+        type: 'ban',
+        value: `192.0.${Math.floor(index / 255)}.${index % 255}`,
+        stop_at: new Date(Date.now() + 60_000).toISOString(),
+      })),
+    });
+    const refreshedAlert = { ...initialAlert, decisions: initialAlert.decisions?.slice(0, -1) };
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    seedAlert(database, initialAlert);
+    const syncWorker: NonNullable<CreateAppOptions['syncWorker']> = {
+      persistAlerts: vi.fn(async () => ({ changed: true })),
+      deleteAlertsMissingBetween: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      deleteCachedAlerts: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      deleteCachedDecisions: vi.fn(async () => 0),
+      beginDeferredSearchIndexUpdates: vi.fn(async () => {}),
+      rebuildSearchIndexes: vi.fn(async () => {}),
+      refreshDecisionDuplicateFlags: vi.fn(async () => {}),
+      cleanupOldData: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      clearSyncData: vi.fn(async () => {}),
+      runExclusive: vi.fn(async (operation) => operation()),
+      close: vi.fn(),
+    };
+    const { controller } = createController({
+      database,
+      syncWorker,
+      env: { CROWDSEC_REFRESH_INTERVAL: '0', CROWDSEC_LOOKBACK_PERIOD: '1m' },
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+      fetchResolver: (url) => {
+        if (!url.includes('/v1/alerts?')) return undefined;
+        return Response.json(new URL(url).searchParams.has('until') ? [refreshedAlert] : []);
+      },
+    });
+
+    try {
+      const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=10'));
+      expect(response.status).toBe(200);
+      const mutations = vi.mocked(syncWorker.persistAlerts).mock.calls.flatMap(([batch]) => batch);
+      expect(mutations).toHaveLength(1);
+      expect(mutations[0]?.decisions).toEqual([]);
+      expect(mutations[0]?.keepDecisionIds).toEqual([]);
+      expect(mutations[0]?.reconcileDecisions).toBe(false);
+      expect(mutations[0]?.updateAlertRawDataOnly).toBe(true);
+      expect(syncWorker.deleteCachedDecisions).toHaveBeenCalledWith(['delete-delta-1200']);
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
+  test('repairs an incomplete decision cache even when the cached alert lists every decision', async () => {
+    const activeAlert = sampleAlert({
+      id: 206,
+      uuid: 'alert-206',
+      decisions: [
+        { id: 2060, type: 'ban', value: '198.51.100.1', stop_at: new Date(Date.now() + 60_000).toISOString() },
+        { id: 2061, type: 'ban', value: '198.51.100.2', stop_at: new Date(Date.now() + 60_000).toISOString() },
+      ],
+    });
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    seedAlert(database, activeAlert);
+    database.deleteDecision('2061');
+    const syncWorker: NonNullable<CreateAppOptions['syncWorker']> = {
+      persistAlerts: vi.fn(async () => ({ changed: true })),
+      deleteAlertsMissingBetween: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      deleteCachedAlerts: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      deleteCachedDecisions: vi.fn(async () => 0),
+      beginDeferredSearchIndexUpdates: vi.fn(async () => {}),
+      rebuildSearchIndexes: vi.fn(async () => {}),
+      refreshDecisionDuplicateFlags: vi.fn(async () => {}),
+      cleanupOldData: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      clearSyncData: vi.fn(async () => {}),
+      runExclusive: vi.fn(async (operation) => operation()),
+      close: vi.fn(),
+    };
+    const { controller } = createController({
+      database,
+      syncWorker,
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '0',
+        CROWDSEC_LOOKBACK_PERIOD: '1m',
+      },
+      initialCacheState: {
+        isInitialized: true,
+        isComplete: true,
+        lastUpdate: new Date().toISOString(),
+      },
+      fetchResolver: (url) => {
+        if (!url.includes('/v1/alerts?')) return undefined;
+        return Response.json(new URL(url).searchParams.has('until') ? [activeAlert] : []);
+      },
+    });
+
+    try {
+      const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=10'));
+      expect(response.status).toBe(200);
+      expect(syncWorker.persistAlerts).toHaveBeenCalled();
+      expect(vi.mocked(syncWorker.persistAlerts).mock.calls.flatMap(([mutations]) => mutations).flatMap((mutation) => mutation.decisions)).toHaveLength(2);
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
+  test('queries every alert scope for each bootstrap window', async () => {
     const { controller, database, fetchCalls } = createController({
       env: {
         CROWDSEC_LOOKBACK_PERIOD: '2h',
         CROWDSEC_ALERT_SYNC_CHUNK: '1h',
       },
-      fetchResolver: (url) => {
-        if (url.includes('/v1/alerts?') && url.includes('has_active_decision=true')) {
-          return Response.json([]);
-        }
-        return undefined;
-      },
+      fetchResolver: () => undefined,
     });
 
     const alerts = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
     expect(alerts.status).toBe(200);
 
-    const activeRequests = fetchCalls.filter((call) =>
-      call.url.includes('/v1/alerts?') && call.url.includes('has_active_decision=true'),
-    );
-    expect(activeRequests).toHaveLength(0);
+    expect(fetchCalls.filter((call) => call.url.includes('/v1/alerts?'))).toHaveLength(6);
 
     controller.stopBackgroundTasks();
     database.close();
     destroyTempDir();
   });
 
-  test('falls back to split active-decision windows when historical bootstrap is incomplete', async () => {
-    const activeAlert = sampleAlert({
+  test('keeps an incomplete bootstrap partial without using a filtered deletion fallback', async () => {
+    const importedAlert = sampleAlert({
       id: 81,
       uuid: 'alert-81',
       decisions: [{
@@ -2840,34 +3099,22 @@ describe('createApp', () => {
         simulated: false,
       }],
     });
-    const { controller, database, fetchCalls } = createController({
+    const { controller, database } = createController({
       env: {
         CROWDSEC_LOOKBACK_PERIOD: '1h',
-        CROWDSEC_ALERT_SYNC_CHUNK: '1h',
-        CROWDSEC_ALERT_SYNC_MIN_CHUNK: '15m',
+        CROWDSEC_ALERT_SYNC_CHUNK: '30m',
+        CROWDSEC_ALERT_SYNC_MIN_CHUNK: '30m',
       },
       fetchResolver: (url) => {
         if (!url.includes('/v1/alerts?')) return undefined;
         const parsed = new URL(url);
         const params = parsed.searchParams;
-        if (params.get('has_active_decision') !== 'true') {
+        if (params.get('since')?.startsWith('1h')) {
           const error = new Error('Historical request timeout') as Error & { code?: string };
           error.code = 'ETIMEDOUT';
           throw error;
         }
-        if (
-          params.get('has_active_decision') === 'true' &&
-          params.get('since')?.startsWith('1h') &&
-          params.get('until') === '0h0m0s'
-        ) {
-          const error = new Error('Request timeout') as Error & { code?: string };
-          error.code = 'ETIMEDOUT';
-          throw error;
-        }
-        if (params.get('has_active_decision') === 'true') {
-          return Response.json([activeAlert]);
-        }
-        return Response.json([]);
+        return Response.json([importedAlert]);
       },
     });
 
@@ -2876,10 +3123,261 @@ describe('createApp', () => {
     expect(database.getDecisionById('810')).not.toBeNull();
     expect(controller.getSyncStatus().state).toBe('partial');
 
-    const activeRequests = fetchCalls.filter((call) =>
-      call.url.includes('/v1/alerts?') && call.url.includes('has_active_decision=true'),
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('prioritizes an older window that contains active decisions without using an active-only query', async () => {
+    const alert = sampleAlert({
+      id: 82,
+      uuid: 'alert-82',
+      created_at: new Date(Date.now() - 2 * 60 * 60 * 1_000).toISOString(),
+      decisions: [{
+        id: 820,
+        type: 'ban',
+        value: '8.8.4.4',
+        stop_at: new Date(Date.now() + 60 * 60 * 1_000).toISOString(),
+      }],
+    });
+    let bootstrap = true;
+    const { controller, database, fetchCalls } = createController({
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '0',
+        CROWDSEC_LOOKBACK_PERIOD: '3h',
+        CROWDSEC_ALERT_SYNC_CHUNK: '3h',
+        CROWDSEC_RECONCILE_WINDOW: '1h',
+        CROWDSEC_RECONCILE_RECENT_AGE: '1h',
+        CROWDSEC_RECONCILE_RECENT_INTERVAL: '1s',
+        CROWDSEC_RECONCILE_ACTIVE_INTERVAL: '1s',
+        CROWDSEC_RECONCILE_OLD_INTERVAL: '1h',
+        CROWDSEC_RECONCILE_WINDOWS_PER_REFRESH: '1',
+      },
+      fetchResolver: (url) => {
+        if (!url.includes('/v1/alerts?')) return undefined;
+        const params = new URL(url).searchParams;
+        if (bootstrap) return Response.json([alert]);
+        return Response.json(params.has('until') ? [alert] : []);
+      },
+    });
+
+    const initial = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(initial.status).toBe(200);
+    bootstrap = false;
+    const callsBeforeRefresh = fetchCalls.length;
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+
+    const refreshed = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(refreshed.status).toBe(200);
+    const refreshCalls = fetchCalls.slice(callsBeforeRefresh).filter((call) => call.url.includes('/v1/alerts?'));
+    const unscopedCalls = refreshCalls.filter((call) => !new URL(call.url).searchParams.has('scope'));
+    expect(unscopedCalls).toHaveLength(2);
+    const observedAt = Date.now();
+    const alertCreatedAt = Date.parse(alert.created_at);
+    expect(unscopedCalls.some((call) => {
+      const params = new URL(call.url).searchParams;
+      const start = observedAt - parseGoDuration(params.get('since'));
+      const end = observedAt - parseGoDuration(params.get('until'));
+      return alertCreatedAt >= start && alertCreatedAt < end;
+    })).toBe(true);
+    expect(database.getDecisionById('820')).not.toBeNull();
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('reserves reconciliation capacity for the least recently checked due window', async () => {
+    const now = Date.now();
+    const lookbackStart = now - 6 * 60 * 60 * 1_000;
+    const firstWindowEnd = (Math.floor(lookbackStart / (60 * 60 * 1_000)) + 1) * 60 * 60 * 1_000;
+    const oldCreatedAt = new Date(lookbackStart + Math.max(1, Math.floor((firstWindowEnd - lookbackStart) / 2))).toISOString();
+    const activeCreatedAt = new Date(now - 2 * 60 * 60 * 1_000).toISOString();
+    const oldAlert = sampleAlert({ id: 85, uuid: 'alert-85', created_at: oldCreatedAt, decisions: [] });
+    const activeAlert = sampleAlert({
+      id: 86,
+      uuid: 'alert-86',
+      created_at: activeCreatedAt,
+      decisions: [{ id: 860, value: '8.6.0.1', stop_at: new Date(now + 60 * 60 * 1_000).toISOString() }],
+    });
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    seedAlert(database, oldAlert);
+    seedAlert(database, activeAlert);
+    const { controller, fetchCalls } = createController({
+      database,
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '0',
+        CROWDSEC_LOOKBACK_PERIOD: '6h',
+        CROWDSEC_RECONCILE_WINDOW: '1h',
+        CROWDSEC_RECONCILE_WINDOWS_PER_REFRESH: '2',
+      },
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+      fetchResolver: (url) => url.includes('/v1/alerts?') ? Response.json([oldAlert, activeAlert]) : undefined,
+    });
+
+    const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50'));
+    expect(response.status).toBe(200);
+    const unscopedCalls = fetchCalls.filter((call) =>
+      call.url.includes('/v1/alerts?') && !new URL(call.url).searchParams.has('scope'),
     );
-    expect(activeRequests.length).toBeGreaterThan(3);
+    expect(unscopedCalls).toHaveLength(3);
+    const observedAt = Date.now();
+    const requestedRanges = unscopedCalls.map((call) => {
+      const params = new URL(call.url).searchParams;
+      return {
+        start: observedAt - parseGoDuration(params.get('since')),
+        end: observedAt - parseGoDuration(params.get('until')),
+      };
+    });
+    expect(requestedRanges.some((range) => Date.parse(oldCreatedAt) >= range.start && Date.parse(oldCreatedAt) < range.end)).toBe(true);
+    expect(requestedRanges.some((range) => Date.parse(activeCreatedAt) >= range.start && Date.parse(activeCreatedAt) < range.end)).toBe(true);
+    expect(Math.min(...requestedRanges.map((range) => range.start))).toBeGreaterThanOrEqual(lookbackStart - 35_000);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('pads relative LAPI boundaries before exact local reconciliation', async () => {
+    const now = Date.now();
+    const windowMs = 60 * 60 * 1_000;
+    const boundary = Math.floor((now - 2 * windowMs) / windowMs) * windowMs;
+    const boundaryAlert = sampleAlert({
+      id: 87,
+      uuid: 'alert-87',
+      created_at: new Date(boundary).toISOString(),
+      decisions: [{ id: 870, value: '8.7.0.1', stop_at: new Date(now + windowMs).toISOString() }],
+    });
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    seedAlert(database, boundaryAlert);
+    const { controller } = createController({
+      database,
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '0',
+        CROWDSEC_LOOKBACK_PERIOD: '3h',
+        CROWDSEC_LAPI_REQUEST_TIMEOUT: '5s',
+        CROWDSEC_RECONCILE_WINDOW: '1h',
+        CROWDSEC_RECONCILE_WINDOWS_PER_REFRESH: '2',
+      },
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+      fetchResolver: (url) => {
+        if (!url.includes('/v1/alerts?')) return undefined;
+        const params = new URL(url).searchParams;
+        const requestNow = Date.now();
+        const requestStart = requestNow - parseGoDuration(params.get('since'));
+        const requestEnd = requestNow - parseGoDuration(params.get('until'));
+        return Response.json(boundary >= requestStart && boundary < requestEnd ? [boundaryAlert] : []);
+      },
+    });
+
+    const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50'));
+    expect(response.status).toBe(200);
+    expect(database.getAlertsSince(new Date(boundary).toISOString()).map((row) => JSON.parse(row.raw_data).id)).toContain(87);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('reuses the delta request when the moving head is due', async () => {
+    const alert = sampleAlert({
+      id: 88,
+      uuid: 'alert-88',
+      created_at: new Date(Date.now() - 30_000).toISOString(),
+      decisions: [{ id: 880, value: '8.8.0.1', stop_at: new Date(Date.now() + 60 * 60 * 1_000).toISOString() }],
+    });
+    let bootstrap = true;
+    const { controller, database, fetchCalls } = createController({
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '0',
+        CROWDSEC_LOOKBACK_PERIOD: '2h',
+        CROWDSEC_ALERT_SYNC_CHUNK: '2h',
+        CROWDSEC_RECONCILE_WINDOW: '1h',
+        CROWDSEC_RECONCILE_ACTIVE_INTERVAL: '1s',
+        CROWDSEC_RECONCILE_RECENT_INTERVAL: '1h',
+        CROWDSEC_RECONCILE_OLD_INTERVAL: '1h',
+        CROWDSEC_RECONCILE_WINDOWS_PER_REFRESH: '1',
+      },
+      fetchResolver: (url) => {
+        if (!url.includes('/v1/alerts?')) return undefined;
+        if (bootstrap) return Response.json([alert]);
+        return Response.json([alert]);
+      },
+    });
+
+    expect((await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'))).status).toBe(200);
+    bootstrap = false;
+    const callsBeforeRefresh = fetchCalls.length;
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    expect((await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'))).status).toBe(200);
+
+    const refreshAlertCalls = fetchCalls.slice(callsBeforeRefresh).filter((call) => call.url.includes('/v1/alerts?'));
+    expect(refreshAlertCalls).toHaveLength(3);
+    expect(refreshAlertCalls.every((call) => new URL(call.url).searchParams.has('until'))).toBe(true);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('reuses persisted reconciliation progress after restart', async () => {
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const env = {
+      CROWDSEC_REFRESH_INTERVAL: '0',
+      CROWDSEC_LOOKBACK_PERIOD: '2h',
+      CROWDSEC_ALERT_SYNC_CHUNK: '2h',
+      CROWDSEC_RECONCILE_WINDOW: '1h',
+      CROWDSEC_RECONCILE_ACTIVE_INTERVAL: '1h',
+      CROWDSEC_RECONCILE_RECENT_INTERVAL: '1h',
+      CROWDSEC_RECONCILE_OLD_INTERVAL: '1h',
+      CROWDSEC_RECONCILE_WINDOWS_PER_REFRESH: '2',
+    };
+    const first = createController({
+      database,
+      env,
+      fetchResolver: (url) => url.includes('/v1/alerts?') ? Response.json([]) : undefined,
+    });
+    expect((await first.controller.fetch(new Request('http://localhost/crowdsec/api/alerts'))).status).toBe(200);
+    first.controller.stopBackgroundTasks();
+
+    const second = createController({
+      database,
+      env,
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+      fetchResolver: (url) => url.includes('/v1/alerts?') ? Response.json([]) : undefined,
+    });
+    expect((await second.controller.fetch(new Request('http://localhost/crowdsec/api/alerts'))).status).toBe(200);
+    expect(second.fetchCalls.filter((call) => call.url.includes('/v1/alerts?'))).toHaveLength(3);
+
+    second.controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('does not delete cached alerts when any reconciliation scope fails', async () => {
+    const createdAt = new Date(Date.now() - 30_000).toISOString();
+    const keptAlert = sampleAlert({ id: 83, uuid: 'alert-83', created_at: createdAt });
+    const cachedOnlyAlert = sampleAlert({ id: 84, uuid: 'alert-84', created_at: createdAt });
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    seedAlert(database, keptAlert);
+    seedAlert(database, cachedOnlyAlert);
+    const { controller } = createController({
+      database,
+      env: { CROWDSEC_REFRESH_INTERVAL: '0' },
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+      fetchResolver: (url) => {
+        if (!url.includes('/v1/alerts?')) return undefined;
+        const params = new URL(url).searchParams;
+        if (!params.has('until')) return Response.json([]);
+        if (params.get('scope') === 'ip') throw new Error('ip scope failed');
+        return Response.json([keptAlert]);
+      },
+    });
+
+    const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50'));
+    expect(response.status).toBe(200);
+    expect((await response.json() as { pagination: { total: number } }).pagination.total).toBe(2);
+    expect(database.getAlertsSince(new Date(Date.now() - 60_000).toISOString())).toHaveLength(2);
 
     controller.stopBackgroundTasks();
     database.close();
@@ -2963,7 +3461,7 @@ describe('createApp', () => {
     }
   });
 
-  test('does not run the active-decision failure path after complete historical bootstrap', async () => {
+  test('completes historical bootstrap without a follow-up filtered sync', async () => {
     const activeAlert = sampleAlert({
       id: 91,
       uuid: 'alert-91',
@@ -2987,11 +3485,6 @@ describe('createApp', () => {
       },
       fetchResolver: (url) => {
         if (!url.includes('/v1/alerts?')) return undefined;
-        if (url.includes('has_active_decision=true')) {
-          const error = new Error('Request timeout') as Error & { code?: string };
-          error.code = 'ETIMEDOUT';
-          throw error;
-        }
         return Response.json([activeAlert]);
       },
     });
@@ -3004,10 +3497,7 @@ describe('createApp', () => {
         state: 'complete',
         errors: [],
       }));
-      const activeRequests = fetchCalls.filter((call) =>
-        call.url.includes('/v1/alerts?') && call.url.includes('has_active_decision=true'),
-      );
-      expect(activeRequests).toHaveLength(0);
+      expect(fetchCalls.filter((call) => call.url.includes('/v1/alerts?'))).toHaveLength(3);
 
       const logs = logSpy.mock.calls.map((call) => String(call[0])).join('\n');
       const warnings = warnSpy.mock.calls.map((call) => String(call[0])).join('\n');
@@ -3515,8 +4005,8 @@ describe('createApp', () => {
     destroyTempDir();
   });
 
-  test('removes stale decisions during active-decision delta refresh and updates alert payloads to match', async () => {
-    const createdAt = new Date().toISOString();
+  test('removes stale decisions during scheduled window reconciliation and updates alert payloads to match', async () => {
+    const createdAt = new Date(Date.now() - 30_000).toISOString();
     const initialStopAt = new Date(Date.now() + 30 * 60 * 1_000).toISOString();
     const staleStopAt = new Date(Date.now() + 45 * 60 * 1_000).toISOString();
     const initialAlert = sampleAlert({
@@ -3572,42 +4062,28 @@ describe('createApp', () => {
       ],
       simulated: false,
     });
-    let phase: 'initial' | 'delta' = 'initial';
-
-    const { controller, database } = createController({
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    seedAlert(database, initialAlert);
+    const { controller } = createController({
+      database,
       env: {
         CROWDSEC_REFRESH_INTERVAL: '0',
+      },
+      initialCacheState: {
+        isInitialized: true,
+        isComplete: true,
+        lastUpdate: new Date().toISOString(),
       },
       fetchResolver: (url) => {
         if (url.endsWith('/v1/watchers/login')) {
           return Response.json({ code: 200, token: 'token' });
         }
         if (url.includes('/v1/alerts?')) {
-          if (phase === 'initial') {
-            return Response.json([initialAlert]);
-          }
-          if (url.includes('has_active_decision=true')) {
-            return Response.json([refreshedAlert]);
-          }
-          return Response.json([]);
+          return Response.json(new URL(url).searchParams.has('until') ? [refreshedAlert] : []);
         }
         return undefined;
       },
     });
-
-    const initialAlertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50'));
-    expect(initialAlertsResponse.status).toBe(200);
-
-    const initialDecisionsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions?page=1&page_size=50&alert_id=210&include_expired=true'));
-    expect(initialDecisionsResponse.status).toBe(200);
-    const initialDecisionsJson = await initialDecisionsResponse.json() as {
-      data: Array<{ id: number }>;
-      pagination: { total: number };
-    };
-    expect(initialDecisionsJson.pagination.total).toBe(2);
-    expect(initialDecisionsJson.data.map((decision) => decision.id).sort()).toEqual([2101, 2102]);
-
-    phase = 'delta';
 
     const refreshedAlertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50'));
     expect(refreshedAlertsResponse.status).toBe(200);
@@ -3807,9 +4283,6 @@ describe('createApp', () => {
         if (url.endsWith('/v1/watchers/login')) {
           return Response.json({ code: 200, token: 'token' });
         }
-        if (url.includes('/v1/alerts?') && url.includes('has_active_decision=true')) {
-          return Response.json([]);
-        }
         if (url.includes('/v1/alerts?')) {
           const params = new URL(url).searchParams;
           const sinceMs = parseGoDuration(params.get('since'));
@@ -3875,9 +4348,6 @@ describe('createApp', () => {
         if (url.endsWith('/v1/watchers/login')) {
           return Response.json({ code: 200, token: 'token' });
         }
-        if (url.includes('/v1/alerts?') && url.includes('has_active_decision=true')) {
-          return Response.json([]);
-        }
         if (url.includes('/v1/alerts?')) {
           return Response.json(phase === 'initial' ? [keptAlert, deletedAlert] : [keptAlert]);
         }
@@ -3907,7 +4377,7 @@ describe('createApp', () => {
     destroyTempDir();
   });
 
-  test('prunes stale cached alerts from active-decision refresh only', async () => {
+  test('prunes stale cached alerts only from a complete unfiltered reconciliation window', async () => {
     const createdAt = new Date(Date.now() - 30_000).toISOString();
     const keptAlert = sampleAlert({
       id: 260,
@@ -3943,31 +4413,29 @@ describe('createApp', () => {
         },
       ],
     });
-    let phase: 'initial' | 'refresh' = 'initial';
-
-    const { controller, database } = createController({
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    seedAlert(database, keptAlert);
+    seedAlert(database, deletedActiveAlert);
+    const { controller } = createController({
+      database,
       env: {
         CROWDSEC_REFRESH_INTERVAL: '0',
+      },
+      initialCacheState: {
+        isInitialized: true,
+        isComplete: true,
+        lastUpdate: new Date().toISOString(),
       },
       fetchResolver: (url) => {
         if (url.endsWith('/v1/watchers/login')) {
           return Response.json({ code: 200, token: 'token' });
         }
-        if (url.includes('/v1/alerts?') && url.includes('has_active_decision=true')) {
-          return Response.json(phase === 'initial' ? [keptAlert, deletedActiveAlert] : [keptAlert]);
-        }
         if (url.includes('/v1/alerts?')) {
-          return Response.json(phase === 'initial' ? [keptAlert, deletedActiveAlert] : []);
+          return Response.json(new URL(url).searchParams.has('until') ? [keptAlert] : []);
         }
         return undefined;
       },
     });
-
-    const initialResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50'));
-    expect(initialResponse.status).toBe(200);
-    expect(((await initialResponse.json()) as { pagination: { total: number } }).pagination.total).toBe(2);
-
-    phase = 'refresh';
 
     const refreshedResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50'));
     expect(refreshedResponse.status).toBe(200);
@@ -4969,9 +5437,6 @@ describe('createApp', () => {
         }
         if (url.includes('/v1/alerts?') && url.includes('scope=range')) {
           return Response.json([rangeAlert]);
-        }
-        if (url.includes('/v1/alerts?') && url.includes('scope=ip') && url.includes('has_active_decision=true')) {
-          return Response.json([crowdsecAlert]);
         }
         if (url.includes('/v1/alerts?') && url.includes('scope=ip')) {
           return Response.json([crowdsecAlert]);
@@ -5996,11 +6461,8 @@ describe('createApp', () => {
         if (url.endsWith('/v1/watchers/login')) {
           return Response.json({ code: 200, token: 'token' });
         }
-        if (url.includes('/v1/alerts?') && !url.includes('has_active_decision=true')) {
-          return Response.json([replayAlert]);
-        }
         if (url.includes('/v1/alerts?')) {
-          return Response.json([]);
+          return Response.json([replayAlert]);
         }
         return undefined;
       },

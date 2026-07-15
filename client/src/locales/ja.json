@@ -152,7 +152,6 @@
   "components.statCard.viewOnHub": "CrowdSec Hub で表示",
   "components.syncOverlay.description": "データを取得しています。しばらくお待ちください...",
   "components.syncOverlay.synchronizing": "同期中...",
-  "components.syncOverlay.statusActiveDecisions": "有効な決定を同期中...",
   "components.syncOverlay.statusBuildingIndexes": "検索インデックスを構築中...",
   "components.syncOverlay.statusFetchingWindow": "取得中: {window}（これまでにアラート {alerts} 件、決定 {decisions} 件をキャッシュ済み）",
   "components.syncOverlay.statusFinalizingDecisions": "決定データを最終処理中...",

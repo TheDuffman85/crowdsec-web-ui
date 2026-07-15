@@ -121,9 +121,16 @@ export interface DatabaseOptions {
 
 type RowWithRawData = { raw_data: string; created_at?: string; stop_at?: string; alert_id?: string | number | null };
 export type DecisionDataRow = { raw_data: string; stop_at: string; alert_id?: string | number | null };
+export type AlertDecisionSnapshotRow = {
+  raw_data: string;
+  decision_count: number;
+  origins: string | null;
+  simulated: number;
+};
 type MetaRow = { value: string };
 type CountRow = { count: number };
 type IdRow = { id: string | number };
+type DecisionDuplicateKeyRow = { value: string; simulated: number };
 type JsonRow = {
   id: string;
   created_at: string;
@@ -191,12 +198,16 @@ export class CrowdsecDatabase {
   public readonly searchIndexAvailable: boolean;
   private searchIndexUpdatesDeferred = false;
   private decisionDuplicateFlagsDirty = true;
+  private decisionDuplicateFlagsInitialized = false;
+  private lastDecisionDuplicateRefreshAt: string | null = null;
 
   private readonly insertAlertStatement: any;
   private readonly getAllAlertsStatement: any;
   private readonly getAlertsStatement: any;
   private readonly getAlertsBetweenStatement: any;
   private readonly getAlertIdsBetweenStatement: any;
+  private readonly getAlertDecisionSnapshotStatement: any;
+  private readonly updateAlertRawDataStatement: any;
   private readonly countAlertsStatement: any;
   private readonly countDecisionsStatement: any;
   private readonly insertDecisionStatement: any;
@@ -328,6 +339,24 @@ export class CrowdsecDatabase {
     this.getAlertIdsBetweenStatement = this.db.query(`
       SELECT id FROM alerts
       WHERE created_at >= $start AND created_at < $end
+    `);
+    this.getAlertDecisionSnapshotStatement = this.db.query(`
+      SELECT
+        alerts.raw_data,
+        alerts.origins,
+        alerts.simulated,
+        (
+          SELECT COUNT(*)
+          FROM decisions
+          WHERE decisions.alert_id = alerts.id
+        ) AS decision_count
+      FROM alerts
+      WHERE alerts.id = $id
+    `);
+    this.updateAlertRawDataStatement = this.db.query(`
+      UPDATE alerts
+      SET raw_data = $raw_data
+      WHERE id = $id AND raw_data IS NOT $raw_data
     `);
 
     this.countAlertsStatement = this.db.query('SELECT COUNT(*) as count FROM alerts');
@@ -622,6 +651,7 @@ export class CrowdsecDatabase {
 
   beginDeferredSearchIndexUpdates(dropSecondaryIndexes = true): void {
     this.searchIndexUpdatesDeferred = true;
+    this.setMeta('decision_duplicate_tracking_enabled', 'false');
     if (this.searchIndexAvailable) this.clearSearchIndexes();
     if (dropSecondaryIndexes) {
       for (const indexName of SYNC_SECONDARY_INDEX_NAMES) {
@@ -639,16 +669,21 @@ export class CrowdsecDatabase {
       }
     } finally {
       this.searchIndexUpdatesDeferred = false;
+      this.setMeta('decision_duplicate_tracking_enabled', 'true');
     }
   }
 
   async rebuildSearchIndexesCooperative(yieldControl: () => Promise<void>, batchSize = 1_000): Promise<void> {
-    if (!this.searchIndexAvailable) return;
+    if (!this.searchIndexAvailable) {
+      this.setMeta('decision_duplicate_tracking_enabled', 'true');
+      return;
+    }
     try {
       this.clearSearchIndexes();
       await backfillSearchIndexesCooperative(this.db, yieldControl, batchSize);
     } finally {
       this.searchIndexUpdatesDeferred = false;
+      this.setMeta('decision_duplicate_tracking_enabled', 'true');
     }
   }
 
@@ -698,6 +733,17 @@ export class CrowdsecDatabase {
 
   getAlertsBetween(start: string, end: string): RowWithRawData[] {
     return this.getAlertsBetweenStatement.all({ $start: start, $end: end }) as RowWithRawData[];
+  }
+
+  getAlertDecisionSnapshot(id: string | number): AlertDecisionSnapshotRow | null {
+    return (this.getAlertDecisionSnapshotStatement.get({ $id: id }) as AlertDecisionSnapshotRow | null) || null;
+  }
+
+  updateAlertRawData(id: string | number, rawData: string): boolean {
+    return this.updateAlertRawDataStatement.run({
+      $id: id,
+      $raw_data: normalizeCrowdsecTimestampJson(rawData),
+    }).changes > 0;
   }
 
   deleteAlertsMissingBetween(start: string, end: string, keepIds: Array<string | number>): { alerts: number; decisions: number } {
@@ -953,9 +999,8 @@ export class CrowdsecDatabase {
   }
 
   refreshDecisionDuplicateFlags(now: string, force = false): number {
-    if (!force && !this.decisionDuplicateFlagsDirty) return 0;
-
-    const result = this.db.prepare(`
+    if (force || !this.decisionDuplicateFlagsInitialized) {
+      const result = this.db.prepare(`
       WITH ranked AS (
         SELECT
           id,
@@ -979,9 +1024,79 @@ export class CrowdsecDatabase {
       FROM desired
       WHERE decisions.id = desired.id
         AND decisions.is_duplicate <> desired.is_duplicate
-    `).run(now);
+      `).run(now);
+      this.db.prepare('DELETE FROM decision_duplicate_dirty').run();
+      this.decisionDuplicateFlagsDirty = false;
+      this.decisionDuplicateFlagsInitialized = true;
+      this.lastDecisionDuplicateRefreshAt = now;
+      return result.changes;
+    }
+
+    const dirtyKeys = this.db.prepare(`
+      SELECT value, simulated
+      FROM decision_duplicate_dirty
+    `).all() as DecisionDuplicateKeyRow[];
+    if (this.lastDecisionDuplicateRefreshAt) {
+      dirtyKeys.push(...this.db.prepare(`
+        SELECT DISTINCT COALESCE(value, '') AS value, simulated
+        FROM decisions
+        WHERE stop_at > ? AND stop_at <= ?
+      `).all(this.lastDecisionDuplicateRefreshAt, now) as DecisionDuplicateKeyRow[]);
+    }
+
+    const uniqueKeys = new Map<string, DecisionDuplicateKeyRow>();
+    for (const key of dirtyKeys) {
+      uniqueKeys.set(`${key.simulated}\u0000${key.value}`, key);
+    }
+    if (uniqueKeys.size === 0 && !this.decisionDuplicateFlagsDirty) {
+      this.lastDecisionDuplicateRefreshAt = now;
+      return 0;
+    }
+
+    let changes = 0;
+    const refreshGroups = this.db.transaction((keys: DecisionDuplicateKeyRow[]) => {
+      changes += this.db.prepare(`
+        UPDATE decisions
+        SET is_duplicate = 0
+        WHERE stop_at <= ? AND is_duplicate <> 0
+      `).run(now).changes;
+
+      const createRefreshGroupStatement = (valuePredicate: string) => this.db.prepare(`
+        WITH ranked AS (
+          SELECT
+            id,
+            ROW_NUMBER() OVER (
+              ORDER BY
+                stop_at DESC,
+                CASE WHEN id GLOB '[0-9]*' THEN CAST(id AS INTEGER) ELSE 9223372036854775807 END ASC
+            ) AS duplicate_rank
+          FROM decisions
+          WHERE stop_at > $now
+            AND ${valuePredicate}
+            AND simulated = $simulated
+        )
+        UPDATE decisions
+        SET is_duplicate = CASE WHEN ranked.duplicate_rank > 1 THEN 1 ELSE 0 END
+        FROM ranked
+        WHERE decisions.id = ranked.id
+          AND decisions.is_duplicate <> CASE WHEN ranked.duplicate_rank > 1 THEN 1 ELSE 0 END
+      `);
+      const refreshGroup = createRefreshGroupStatement('value = $value');
+      const refreshEmptyGroup = createRefreshGroupStatement("($value = '' AND (value IS NULL OR value = ''))");
+      for (const key of keys) {
+        changes += (key.value ? refreshGroup : refreshEmptyGroup).run({
+          now,
+          value: key.value,
+          simulated: key.simulated,
+        }).changes;
+      }
+      this.db.prepare('DELETE FROM decision_duplicate_dirty').run();
+    });
+    refreshGroups(Array.from(uniqueKeys.values()));
     this.decisionDuplicateFlagsDirty = false;
-    return result.changes;
+    this.decisionDuplicateFlagsInitialized = true;
+    this.lastDecisionDuplicateRefreshAt = now;
+    return changes;
   }
 
   getMeta(key: string): MetaRow | null {
@@ -1746,6 +1861,7 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
 
   migrateTimestamps(db);
   migrateRecordIndexColumns(db);
+  initDecisionDuplicateDirtyTracking(db);
   migrateNotificationRulesTable(db, createNotificationRulesTable);
   migrateNotificationsTable(db, createNotificationsTable);
   migrateAuthUsersTable(db);
@@ -1756,6 +1872,50 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
     backfillSearchIndexes(db);
   }
   return searchIndexAvailable;
+}
+
+function initDecisionDuplicateDirtyTracking(db: Database): void {
+  db.exec(`
+    DROP TRIGGER IF EXISTS decisions_duplicate_dirty_insert;
+    DROP TRIGGER IF EXISTS decisions_duplicate_dirty_delete;
+    DROP TRIGGER IF EXISTS decisions_duplicate_dirty_update;
+  `);
+  db.exec(`
+    INSERT OR IGNORE INTO meta(key, value)
+    VALUES ('decision_duplicate_tracking_enabled', 'true');
+    CREATE TABLE IF NOT EXISTS decision_duplicate_dirty (
+      value TEXT NOT NULL,
+      simulated INTEGER NOT NULL,
+      PRIMARY KEY (value, simulated)
+    );
+    CREATE TRIGGER IF NOT EXISTS decisions_duplicate_dirty_insert
+    AFTER INSERT ON decisions
+    WHEN COALESCE((SELECT value FROM meta WHERE key = 'decision_duplicate_tracking_enabled'), 'true') = 'true'
+    BEGIN
+      INSERT INTO decision_duplicate_dirty(value, simulated)
+      VALUES (COALESCE(NEW.value, ''), NEW.simulated)
+      ON CONFLICT(value, simulated) DO NOTHING;
+    END;
+    CREATE TRIGGER IF NOT EXISTS decisions_duplicate_dirty_delete
+    AFTER DELETE ON decisions
+    WHEN COALESCE((SELECT value FROM meta WHERE key = 'decision_duplicate_tracking_enabled'), 'true') = 'true'
+    BEGIN
+      INSERT INTO decision_duplicate_dirty(value, simulated)
+      VALUES (COALESCE(OLD.value, ''), OLD.simulated)
+      ON CONFLICT(value, simulated) DO NOTHING;
+    END;
+    CREATE TRIGGER IF NOT EXISTS decisions_duplicate_dirty_update
+    AFTER UPDATE OF value, simulated, stop_at ON decisions
+    WHEN COALESCE((SELECT value FROM meta WHERE key = 'decision_duplicate_tracking_enabled'), 'true') = 'true'
+    BEGIN
+      INSERT INTO decision_duplicate_dirty(value, simulated)
+      VALUES (COALESCE(OLD.value, ''), OLD.simulated)
+      ON CONFLICT(value, simulated) DO NOTHING;
+      INSERT INTO decision_duplicate_dirty(value, simulated)
+      VALUES (COALESCE(NEW.value, ''), NEW.simulated)
+      ON CONFLICT(value, simulated) DO NOTHING;
+    END;
+  `);
 }
 
 const TIMESTAMP_MIGRATIONS = [

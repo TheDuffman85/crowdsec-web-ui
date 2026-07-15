@@ -91,6 +91,13 @@ describe('CrowdsecDatabase', () => {
     );
     expect(db.getMeta('refresh_interval_ms')?.value).toBe('5000');
     expect(db.getAlertsBetween('2024-12-31T00:00:00.000Z', '2025-01-02T00:00:00.000Z')).toHaveLength(1);
+    expect(db.getAlertDecisionSnapshot(1)).toEqual({
+      raw_data: JSON.stringify({ id: 1, source: { latitude: '52.52', longitude: 13.405 } }),
+      decision_count: 1,
+      origins: null,
+      simulated: 0,
+    });
+    expect(db.getAlertDecisionSnapshot('missing')).toBeNull();
     expect(db.db.prepare('SELECT latitude, longitude FROM alerts WHERE id = 1').get()).toEqual({
       latitude: 52.52,
       longitude: 13.405,

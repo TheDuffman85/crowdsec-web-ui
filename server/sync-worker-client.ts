@@ -7,6 +7,7 @@ interface SyncAlertMutationBase {
   decisions: DecisionInsertParams[];
   keepDecisionIds: string[];
   reconcileDecisions?: boolean;
+  updateAlertRawDataOnly?: boolean;
 }
 
 export type SyncAlertMutation = SyncAlertMutationBase & (

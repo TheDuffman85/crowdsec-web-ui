@@ -343,15 +343,12 @@ function ensureLoadTestSourceTable(database: CrowdsecDatabase): void {
     CREATE TABLE IF NOT EXISTS ${LOADTEST_SOURCE_TABLE} (
       id TEXT PRIMARY KEY,
       created_at TEXT NOT NULL,
-      has_active_decision INTEGER NOT NULL DEFAULT 0,
       scenario TEXT,
       origins TEXT,
       raw_data TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_${LOADTEST_SOURCE_TABLE}_created_at
       ON ${LOADTEST_SOURCE_TABLE}(created_at);
-    CREATE INDEX IF NOT EXISTS idx_${LOADTEST_SOURCE_TABLE}_active_created_at
-      ON ${LOADTEST_SOURCE_TABLE}(has_active_decision, created_at);
   `);
 }
 
@@ -361,10 +358,6 @@ function sourceOrigins(record: ReturnType<typeof buildAlertRecord>): string {
     if (decision.origin) origins.add(String(decision.origin));
   }
   return `\n${Array.from(origins).join('\n')}\n`;
-}
-
-function hasActiveSourceDecision(record: ReturnType<typeof buildAlertRecord>, nowMs: number): number {
-  return (record.decisions || []).some((decision) => Date.parse(decision.stop_at) > nowMs) ? 1 : 0;
 }
 
 installTimestampedConsole();
@@ -387,8 +380,8 @@ removeExistingDatabase(config.dbDir);
 const database = new CrowdsecDatabase({ dbDir: config.dbDir });
 ensureLoadTestSourceTable(database);
 const insertSourceAlert = database.db.prepare(`
-  INSERT INTO ${LOADTEST_SOURCE_TABLE} (id, created_at, has_active_decision, scenario, origins, raw_data)
-  VALUES (?, ?, ?, ?, ?, ?)
+  INSERT INTO ${LOADTEST_SOURCE_TABLE} (id, created_at, scenario, origins, raw_data)
+  VALUES (?, ?, ?, ?, ?)
 `);
 
 const insertSourceAlertsBatch = database.db.transaction((start: number, end: number) => {
@@ -400,7 +393,6 @@ const insertSourceAlertsBatch = database.db.transaction((start: number, end: num
     insertSourceAlert.run(
       String(alert.id),
       alert.createdAt,
-      hasActiveSourceDecision(record, nowMs),
       record.scenario || null,
       sourceOrigins(record),
       JSON.stringify(record),

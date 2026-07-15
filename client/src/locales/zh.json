@@ -152,7 +152,6 @@
   "components.statCard.viewOnHub": "在 CrowdSec Hub 中查看",
   "components.syncOverlay.description": "正在获取数据，请稍候...",
   "components.syncOverlay.synchronizing": "正在同步...",
-  "components.syncOverlay.statusActiveDecisions": "正在同步有效决策...",
   "components.syncOverlay.statusBuildingIndexes": "正在构建搜索索引...",
   "components.syncOverlay.statusFetchingWindow": "正在获取：{window}（目前已缓存 {alerts} 条告警和 {decisions} 条决策）",
   "components.syncOverlay.statusFinalizingDecisions": "正在完成决策数据处理...",

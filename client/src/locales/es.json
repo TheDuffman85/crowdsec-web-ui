@@ -152,7 +152,6 @@
   "components.statCard.viewOnHub": "Ver en CrowdSec Hub",
   "components.syncOverlay.description": "Espera mientras se obtienen los datos...",
   "components.syncOverlay.synchronizing": "Sincronizando...",
-  "components.syncOverlay.statusActiveDecisions": "Sincronizando decisiones activas...",
   "components.syncOverlay.statusBuildingIndexes": "Creando índices de búsqueda...",
   "components.syncOverlay.statusFetchingWindow": "Obteniendo: {window} ({alerts} alertas y {decisions} decisiones almacenadas hasta ahora)",
   "components.syncOverlay.statusFinalizingDecisions": "Finalizando los datos de decisiones...",

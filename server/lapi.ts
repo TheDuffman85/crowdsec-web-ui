@@ -40,6 +40,20 @@ export interface FetchAlertsFilters {
   includeCapi?: boolean;
   singleScopeOnly?: boolean;
   requireAllScopes?: boolean;
+  relativeWindow?: {
+    startMs: number;
+    endMs: number;
+    paddingMs: number;
+  };
+}
+
+function formatRelativeDuration(milliseconds: number, round: 'up' | 'down'): string {
+  const seconds = round === 'up'
+    ? Math.ceil(Math.max(0, milliseconds) / 1_000)
+    : Math.floor(Math.max(0, milliseconds) / 1_000);
+  const hours = Math.floor(seconds / 3_600);
+  const minutes = Math.floor((seconds % 3_600) / 60);
+  return `${hours}h${minutes}m${seconds % 60}s`;
 }
 
 interface MachineInfo {
@@ -326,7 +340,6 @@ export class LapiClient {
   async fetchAlerts(
     since: string | null = null,
     until: string | null = null,
-    hasActiveDecision = false,
     filters: FetchAlertsFilters = {},
   ): Promise<unknown[]> {
     const sinceParam = since || this.lookbackPeriod;
@@ -335,12 +348,19 @@ export class LapiClient {
     const isListsOrigin = normalizedOrigin === 'lists';
     const includeCapi = filters.includeCapi ?? isCapiOrigin;
     const buildParams = (scope?: 'ip' | 'range'): URLSearchParams => {
+      const relativeNow = Date.now();
+      const relativeWindow = filters.relativeWindow;
+      const resolvedSince = relativeWindow
+        ? formatRelativeDuration(relativeNow - relativeWindow.startMs + relativeWindow.paddingMs, 'up')
+        : sinceParam;
+      const resolvedUntil = relativeWindow
+        ? formatRelativeDuration(relativeNow - relativeWindow.endMs - relativeWindow.paddingMs, 'down')
+        : until;
       const params = new URLSearchParams();
-      params.append('since', sinceParam);
+      params.append('since', resolvedSince);
       params.append('limit', '0');
-      if (until) params.append('until', until);
+      if (resolvedUntil) params.append('until', resolvedUntil);
       if (this.simulationsEnabled) params.append('simulated', 'true');
-      if (hasActiveDecision) params.append('has_active_decision', 'true');
       if (filters.origin) params.append('origin', filters.origin);
       if (filters.scenario) params.append('scenario', filters.scenario);
       params.append('include_capi', String(includeCapi));

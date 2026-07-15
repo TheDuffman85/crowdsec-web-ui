@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -33,6 +33,7 @@ function createMtlsAuth() {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   globalThis.fetch = originalFetch;
   setGlobalDispatcher(originalUndiciDispatcher);
 
@@ -441,7 +442,7 @@ describe('LapiClient', () => {
       },
     });
 
-    await expect(client.fetchAlerts(null, null, false, { requireAllScopes: true })).rejects.toThrow('ip scope failed');
+    await expect(client.fetchAlerts(null, null, { requireAllScopes: true })).rejects.toThrow('ip scope failed');
   });
 
   test('does not request simulated alerts when simulations are disabled', async () => {
@@ -460,6 +461,8 @@ describe('LapiClient', () => {
 
     await expect(client.fetchAlerts()).resolves.toEqual([]);
     expect(calls).toHaveLength(3);
+    const requestParams = calls.map((call) => new URL(call).searchParams);
+    expect(requestParams.map((value) => value.get('scope'))).toEqual([null, 'ip', 'range']);
     expect(calls[0]).toContain('/v1/alerts?since=1h&limit=0');
     expect(calls[1]).toContain('/v1/alerts?since=1h&limit=0');
     expect(calls[2]).toContain('/v1/alerts?since=1h&limit=0');
@@ -489,16 +492,48 @@ describe('LapiClient', () => {
     });
 
     await expect(
-      client.fetchAlerts('30m', '10m', true, {
+      client.fetchAlerts('30m', '10m', {
         origin: 'crowdsec',
         scenario: 'manual/web-ui',
       }),
     ).resolves.toEqual([{ id: 9 }, { id: 10 }, { id: 11 }]);
-
     expect(calls).toHaveLength(3);
-    expect(calls.some((call) => call.includes('/v1/alerts?since=30m&limit=0&until=10m&simulated=true&has_active_decision=true&origin=crowdsec&scenario=manual%2Fweb-ui&include_capi=false') && !call.includes('scope='))).toBe(true);
-    expect(calls.some((call) => call.includes('/v1/alerts?since=30m&limit=0&until=10m&simulated=true&has_active_decision=true&origin=crowdsec&scenario=manual%2Fweb-ui&include_capi=false&scope=ip'))).toBe(true);
-    expect(calls.some((call) => call.includes('/v1/alerts?since=30m&limit=0&until=10m&simulated=true&has_active_decision=true&origin=crowdsec&scenario=manual%2Fweb-ui&include_capi=false&scope=range'))).toBe(true);
+    const params = calls.map((call) => new URL(call).searchParams);
+    expect(params.map((value) => value.get('scope'))).toEqual([null, 'ip', 'range']);
+    expect(params.every((value) => value.get('since') === '30m')).toBe(true);
+    expect(params.every((value) => value.get('until') === '10m')).toBe(true);
+    expect(params.every((value) => value.get('origin') === 'crowdsec')).toBe(true);
+    expect(params.every((value) => value.get('scenario') === 'manual/web-ui')).toBe(true);
+  });
+
+  test('recalculates relative window boundaries for each sequential alert scope', async () => {
+    const calls: string[] = [];
+    let now = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const client = new LapiClient({
+      crowdsecUrl: 'http://crowdsec:8080',
+      auth: passwordAuth,
+      simulationsEnabled: false,
+      lookbackPeriod: '1h',
+      version: '1.0.0',
+      fetchImpl: async (input) => {
+        calls.push(String(input));
+        now += 2_000;
+        return Response.json([]);
+      },
+    });
+
+    await expect(client.fetchAlerts('unused', 'unused', {
+      relativeWindow: {
+        startMs: 940_000,
+        endMs: 970_000,
+        paddingMs: 5_000,
+      },
+    })).resolves.toEqual([]);
+
+    const params = calls.map((call) => new URL(call).searchParams);
+    expect(params.map((value) => value.get('since'))).toEqual(['0h1m5s', '0h1m7s', '0h1m9s']);
+    expect(params.map((value) => value.get('until'))).toEqual(['0h0m25s', '0h0m27s', '0h0m29s']);
   });
 
   test('uses an unscoped alert query for CAPI origins', async () => {
@@ -515,7 +550,7 @@ describe('LapiClient', () => {
       },
     });
 
-    await expect(client.fetchAlerts('24h', null, false, { origin: 'CAPI' })).resolves.toEqual([{ id: 5 }]);
+    await expect(client.fetchAlerts('24h', null, { origin: 'CAPI' })).resolves.toEqual([{ id: 5 }]);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]).toContain('/v1/alerts?since=24h&limit=0&origin=CAPI&include_capi=true');
@@ -536,7 +571,7 @@ describe('LapiClient', () => {
       },
     });
 
-    await expect(client.fetchAlerts('24h', null, false, { origin: 'lists' })).resolves.toEqual([{ id: 6 }]);
+    await expect(client.fetchAlerts('24h', null, { origin: 'lists' })).resolves.toEqual([{ id: 6 }]);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]).toContain('/v1/alerts?since=24h&limit=0&origin=lists&include_capi=false');

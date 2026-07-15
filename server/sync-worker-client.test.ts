@@ -143,4 +143,40 @@ describe('DatabaseSyncWorker', () => {
 
     database.close();
   });
+
+  test('updates reconciled decision references without recalculating alert indexes', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-sync-worker-'));
+    tempDirs.push(dir);
+    const dbPath = path.join(dir, 'test.db');
+    const database = new CrowdsecDatabase({ dbPath });
+    const worker = new DatabaseSyncWorker({ dbPath });
+    workers.push(worker);
+    database.insertAlert({
+      $id: 1,
+      $uuid: 'active-alert',
+      $created_at: '2026-07-14T00:00:00.000Z',
+      $message: 'indexed message',
+      $raw_data: JSON.stringify({ id: 1, decisions: [{ id: 'old' }] }),
+    });
+
+    await worker.persistAlerts([{
+      alert: {
+        $id: 1,
+        $uuid: 'active-alert',
+        $created_at: '2026-07-14T00:00:00.000Z',
+        $message: 'must not replace indexed fields',
+        $raw_data: JSON.stringify({ id: 1, decisions: [{ id: 'new' }] }),
+      },
+      decisions: [],
+      keepDecisionIds: [],
+      reconcileDecisions: false,
+      updateAlertRawDataOnly: true,
+    }]);
+
+    expect(database.db.prepare('SELECT message, raw_data FROM alerts WHERE id = 1').get()).toEqual({
+      message: 'indexed message',
+      raw_data: JSON.stringify({ id: 1, decisions: [{ id: 'new' }] }),
+    });
+    database.close();
+  });
 });

@@ -278,13 +278,18 @@ Choose exactly one auth mode: password auth or mTLS auth.
 | `CROWDSEC_REFRESH_INTERVAL` | `1m` | Normal background refresh interval. Accepts `0`, `manual`, `5s`, `30s`, `1m`, `5m`, or other `s`/`m`/`h`/`d` values. |
 | `CROWDSEC_IDLE_REFRESH_INTERVAL` | `10m` | Refresh interval used when the app considers itself idle. |
 | `CROWDSEC_IDLE_THRESHOLD` | `2m` | Inactivity period before the app switches to idle refresh behavior. |
-| `CROWDSEC_FULL_REFRESH_INTERVAL` | `3h` | Interval for full cache refreshes while active. |
 | `CROWDSEC_LAPI_REQUEST_TIMEOUT` | `30s` | Timeout for individual CrowdSec LAPI requests. Increase this for high-latency or very large CrowdSec datasets. |
 | `CROWDSEC_PROMETHEUS_URL` | none | Optional CrowdSec Prometheus metrics endpoint. When unset, the Metrics page shows setup instructions; when set, it reads bouncer, machine, AppSec, parser, LAPI latency, and whitelist runtime metrics from this URL. |
 | `CROWDSEC_PROMETHEUS_REQUEST_TIMEOUT` | `5s` | Timeout for individual Prometheus metrics requests. Accepts the same interval syntax as refresh settings. |
 | `CROWDSEC_HEARTBEAT_INTERVAL` | `30s` | Interval for updating the Web UI machine heartbeat in CrowdSec. Use `0` or `manual` to disable heartbeat updates. |
 | `CROWDSEC_ALERT_SYNC_CHUNK` | `12h` | Window size used when syncing historical alerts from LAPI. Smaller chunks reduce per-request payload size. |
 | `CROWDSEC_ALERT_SYNC_MIN_CHUNK` | `15m` | Smallest window size used when retrying timed-out alert sync windows. |
+| `CROWDSEC_RECONCILE_WINDOW` | `1h` | Size of the fixed alert-history windows checked for additions and deletions after bootstrap. |
+| `CROWDSEC_RECONCILE_RECENT_AGE` | `24h` | Age boundary between recent and older reconciliation windows. |
+| `CROWDSEC_RECONCILE_RECENT_INTERVAL` | `15m` | Target cadence for windows within `CROWDSEC_RECONCILE_RECENT_AGE`. |
+| `CROWDSEC_RECONCILE_ACTIVE_INTERVAL` | `5m` | Target cadence for windows containing locally cached active decisions. These windows are prioritized, but every alert and decision in the window is queried. |
+| `CROWDSEC_RECONCILE_OLD_INTERVAL` | `3h` | Target cadence for older reconciliation windows. |
+| `CROWDSEC_RECONCILE_WINDOWS_PER_REFRESH` | `2` | Maximum number of due reconciliation windows processed by one refresh. Must be a positive integer. When the budget is greater than one, one slot is reserved for the least recently checked due window to prevent starvation. |
 | `CROWDSEC_BOOTSTRAP_RETRY_DELAY` | `30s` | Delay between background retries when initial CrowdSec bootstrap fails. |
 | `CROWDSEC_BOOTSTRAP_RETRY_ENABLED` | `true` | Enables background bootstrap retry after startup or login failures. |
 | `CROWDSEC_SIMULATIONS_ENABLED` | `false` | Include simulation-mode alerts and decisions from CrowdSec and expose the related UI indicators. |
@@ -659,9 +664,11 @@ volumes:
 
 ### How It Works
 
-The Web UI maintains local alert and decision history. Data from CrowdSec LAPI is preserved across restarts, merged with new data on boot, and reconciled during successful full refreshes so alerts deleted outside the UI are removed locally too. Alerts and decisions keep the full raw CrowdSec payload for details and compatibility, while SQLite stores indexed derived fields for list filtering, search, pagination, and dashboard statistics. Alerts are indexed by CrowdSec `start_at` when present, falling back to `created_at`, so replayed alerts are shown at the original alert/event time rather than the replay import time. Alerts are kept for `CROWDSEC_LOOKBACK_PERIOD` (default: 7 days), then cleaned up automatically.
+The Web UI maintains local alert and decision history. Data from CrowdSec LAPI is preserved across restarts and merged with new data on boot. After bootstrap, each regular refresh imports the newest delta and reconciles a bounded number of alert-history windows for both additions and deletions. Recent windows are checked more often than old windows; windows that contain locally cached active decisions are prioritized. Reconciliation progress is persisted, replacing periodic full-cache refreshes without repeatedly fetching the entire lookback period.
 
-Active-decision refreshes use the same `CROWDSEC_ALERT_SYNC_CHUNK` windows as historical alert sync so large active-decision sets are processed incrementally. If a window times out, it is retried in smaller windows down to `CROWDSEC_ALERT_SYNC_MIN_CHUNK`. If LAPI is unavailable during startup, bootstrap retries continue in the background using `CROWDSEC_BOOTSTRAP_RETRY_DELAY`; if only some sync windows fail, the UI serves the imported cache and marks sync partial while retries continue. To force a full cache reset, use `POST /api/cache/clear`.
+Only changed alerts and added or deleted decisions are written during reconciliation. Unchanged alerts are compared without constructing decision-row mutations, which keeps large blocklist alerts cheap to check. A missing cached alert or decision is deleted only after every required LAPI query for that window succeeds. Relative LAPI time ranges are padded and then filtered back to exact local boundaries, so transport delay, timestamp rounding, or a partial scope response cannot cause destructive reconciliation. The moving current window shares the normal delta request when it is due, avoiding duplicate LAPI calls. Target cadences are triggered by the normal or idle refresh interval, and fair budget allocation prevents old due windows from being starved by active-window backlog.
+
+Alerts and decisions keep the full raw CrowdSec payload for details and compatibility, while SQLite stores indexed derived fields for list filtering, search, pagination, and dashboard statistics. Alerts are indexed by CrowdSec `start_at` when present, falling back to `created_at`, so replayed alerts are shown at the original alert/event time rather than the replay import time. Alerts are kept for `CROWDSEC_LOOKBACK_PERIOD` (default: 7 days), then cleaned up automatically. Historical and reconciliation requests that time out are retried in smaller windows down to `CROWDSEC_ALERT_SYNC_MIN_CHUNK`. If LAPI is unavailable during startup, bootstrap retries continue in the background using `CROWDSEC_BOOTSTRAP_RETRY_DELAY`; if only some bootstrap windows fail, the UI serves the imported cache and marks sync partial while retries continue. To force a full cache reset, use `POST /api/cache/clear`.
 
 ## Local Development
 
@@ -748,12 +755,17 @@ Active-decision refreshes use the same `CROWDSEC_ALERT_SYNC_CHUNK` windows as hi
    LOADTEST_REFRESH_DECISIONS=100
    AUTH_ENABLED=true
    CROWDSEC_REFRESH_INTERVAL=1m
-   CROWDSEC_FULL_REFRESH_INTERVAL=3h
    CROWDSEC_IDLE_REFRESH_INTERVAL=10m
    CROWDSEC_IDLE_THRESHOLD=2m
    CROWDSEC_LOOKBACK_PERIOD=30d
    CROWDSEC_ALERT_SYNC_CHUNK=12h
    CROWDSEC_ALERT_SYNC_MIN_CHUNK=15m
+   CROWDSEC_RECONCILE_WINDOW=1h
+   CROWDSEC_RECONCILE_RECENT_AGE=24h
+   CROWDSEC_RECONCILE_RECENT_INTERVAL=15m
+   CROWDSEC_RECONCILE_ACTIVE_INTERVAL=5m
+   CROWDSEC_RECONCILE_OLD_INTERVAL=3h
+   CROWDSEC_RECONCILE_WINDOWS_PER_REFRESH=2
    CROWDSEC_SIMULATIONS_ENABLED=true
    ```
 

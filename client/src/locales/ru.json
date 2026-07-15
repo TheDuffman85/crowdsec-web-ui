@@ -152,7 +152,6 @@
   "components.statCard.viewOnHub": "Открыть в CrowdSec Hub",
   "components.syncOverlay.description": "Подождите, идет получение данных...",
   "components.syncOverlay.synchronizing": "Синхронизация...",
-  "components.syncOverlay.statusActiveDecisions": "Синхронизация активных решений...",
   "components.syncOverlay.statusBuildingIndexes": "Создание поисковых индексов...",
   "components.syncOverlay.statusFetchingWindow": "Получение: {window} (в кэше уже {alerts} оповещений и {decisions} решений)",
   "components.syncOverlay.statusFinalizingDecisions": "Завершение обработки данных решений...",
