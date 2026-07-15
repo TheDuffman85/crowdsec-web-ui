@@ -255,6 +255,7 @@ Choose exactly one auth mode: password auth or mTLS auth.
 | `PORT` | `3000` | HTTP listen port. If you change this in Docker, also update port mappings and the container health check to match. |
 | `BASE_PATH` | empty | Serve the UI under a path prefix such as `/crowdsec`. Start with `/` and omit the trailing slash. |
 | `DB_DIR` | `/app/data` | Directory that stores the SQLite database and other persisted app data. If you change it, update your volume mounts too. |
+| `GEONAMES_DUMP_DIR` | `<working directory>/geonames` | Directory containing the local GeoNames `cities1000` and admin-1 data used for attack-marker and table location labels. Official Docker images include this data. |
 | `TZ` | browser local | Optional deployment-wide IANA timezone, such as `Europe/Berlin` or `UTC`. When set, the UI, dashboard grouping, filters, and server-generated timestamps all use it. |
 | `TIME_FORMAT` | browser locale | Optional deployment-wide clock format. Accepts `12h` or `24h`. When omitted, each browser's locale determines whether the UI uses a 12- or 24-hour clock. |
 | `PERMISSION_READ_ONLY` | `false` | Set to `true` to hide management actions in the UI and reject API requests that add/delete decisions, delete alerts, clean up by IP, clear the cache, change refresh cadence, manage notification destinations/rules, send notification tests, or delete notifications. Language and marking notifications as read remain writable. |
@@ -680,7 +681,10 @@ Alerts and decisions keep the full raw CrowdSec payload for details and compatib
    You need Node.js `24.18.0` and pnpm `11.9.0`.
    ```bash
    pnpm install
+   pnpm run geocoder:data
    ```
+
+   The second command downloads the GeoNames `cities1000` and admin-1 extracts used for local attack-marker and table location labels. Official Docker images already contain these files. GeoNames data is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 2. **Configure `.env`**
 

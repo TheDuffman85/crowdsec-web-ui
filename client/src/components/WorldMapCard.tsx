@@ -66,6 +66,9 @@ interface AttackMarker {
     latitude: number;
     longitude: number;
     count: number;
+    city?: string;
+    region?: string;
+    countryCode?: string;
     x: number;
     y: number;
 }
@@ -262,6 +265,18 @@ export function WorldMapCard({
         const featureId = getFeatureCountryCode(feature);
         const isDimmedByCountryFilter = selectedCountry !== null && selectedCountry !== featureId;
         const showMetricRows = !isDimmedByCountryFilter && (feature.data !== undefined || selectedCountry === featureId);
+        const approximateLocation = hoveredAttackMarker
+            ? [
+                hoveredAttackMarker.city,
+                hoveredAttackMarker.region,
+                getCountryName(hoveredAttackMarker.countryCode, language),
+            ].reduce<string[]>((parts, part) => {
+                if (part && !parts.some((current) => current.toLocaleLowerCase(language) === part.toLocaleLowerCase(language))) {
+                    parts.push(part);
+                }
+                return parts;
+            }, []).join(', ')
+            : '';
 
         return createPortal(
             <div
@@ -312,18 +327,18 @@ export function WorldMapCard({
                         )}
                     </>
                 )}
-                {hoveredAttackMarker && (
+                {hoveredAttackMarker && approximateLocation && (
                     <div
-                        data-testid="world-map-attack-coordinates"
+                        data-testid="world-map-attack-location"
                         className="mt-2 flex items-start gap-1.5 border-t border-gray-200 pt-2 text-gray-500 dark:border-gray-700 dark:text-gray-400"
                     >
                         <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                         <div className="min-w-0">
                             <div className="text-[10px] font-medium uppercase tracking-wide">
-                                {t('components.worldMap.approximateCoordinates')}
+                                {t('components.worldMap.approximateLocation')}
                             </div>
-                            <div className="mt-0.5 whitespace-nowrap font-mono text-xs tabular-nums text-gray-700 dark:text-gray-200">
-                                {hoveredAttackMarker.latitude.toFixed(4)}°, {hoveredAttackMarker.longitude.toFixed(4)}°
+                            <div className="mt-0.5 text-xs font-medium text-gray-700 dark:text-gray-200">
+                                {approximateLocation}
                             </div>
                         </div>
                     </div>
@@ -489,6 +504,9 @@ export function WorldMapCard({
                 latitude,
                 longitude,
                 count: location.count,
+                city: location.city,
+                region: location.region,
+                countryCode: location.countryCode,
                 x: point[0],
                 y: point[1],
             });
@@ -815,6 +833,19 @@ export function WorldMapCard({
                                 </>
                             )}
                         </TransformWrapper>
+                    </div>
+                )}
+                {attackLocations.some((location) => location.city || location.region) && (
+                    <div className="pointer-events-none absolute bottom-1 right-2 z-20 text-[10px] text-gray-500 dark:text-gray-400">
+                        Location data ©{' '}
+                        <a
+                            className="pointer-events-auto underline hover:text-gray-700 dark:hover:text-gray-200"
+                            href="https://www.geonames.org/"
+                            target="_blank"
+                            rel="noreferrer"
+                        >
+                            GeoNames
+                        </a>
                     </div>
                 )}
             </CardContent>

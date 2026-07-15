@@ -98,16 +98,16 @@ const scenarios = [
 ] as const;
 
 const countries = [
-  ['US', 37.7749, -122.4194],
-  ['DE', 50.1109, 8.6821],
-  ['NL', 52.3676, 4.9041],
-  ['FR', 48.8566, 2.3522],
-  ['GB', 51.5072, -0.1276],
-  ['BR', -23.5505, -46.6333],
-  ['IN', 28.6139, 77.2090],
-  ['JP', 35.6762, 139.6503],
-  ['SG', 1.3521, 103.8198],
-  ['AU', -33.8688, 151.2093],
+  ['US', 37.7749, -122.4194, 'San Francisco', 'California'],
+  ['DE', 50.1109, 8.6821, 'Frankfurt am Main', 'Hesse'],
+  ['NL', 52.3676, 4.9041, 'Amsterdam', 'North Holland'],
+  ['FR', 48.8566, 2.3522, 'Paris', 'Île-de-France'],
+  ['GB', 51.5072, -0.1276, 'London', 'England'],
+  ['BR', -23.5505, -46.6333, 'São Paulo', 'São Paulo'],
+  ['IN', 28.6139, 77.2090, 'New Delhi', 'Delhi'],
+  ['JP', 35.6762, 139.6503, 'Tokyo', 'Tokyo'],
+  ['SG', 1.3521, 103.8198, 'Singapore', 'Singapore'],
+  ['AU', -33.8688, 151.2093, 'Sydney', 'New South Wales'],
 ] as const;
 
 const asNames = [
@@ -263,6 +263,8 @@ function buildGeneratedAlert(alertId: number, createdAt: string, decisions: Aler
       value: ip,
       ip,
       cn: countryTuple[0],
+      city: countryTuple[3],
+      region: countryTuple[4],
       as_name: asTuple[0],
       as_number: asTuple[1],
       latitude: Number((countryTuple[1] + (fraction(alertId, loadTestSeed, 41) - 0.5) * 4).toFixed(4)),

@@ -12,6 +12,8 @@ export interface AlertIndexValues {
   longitude: number | null;
   country: string | null;
   countryName: string | null;
+  region: string | null;
+  city: string | null;
   asName: string | null;
   target: string | null;
   machine: string | null;
@@ -24,6 +26,8 @@ export interface AlertIndexValues {
 export interface DecisionIndexValues {
   country: string | null;
   countryName: string | null;
+  region: string | null;
+  city: string | null;
   asName: string | null;
   target: string | null;
   machine: string | null;
@@ -59,6 +63,8 @@ export function deriveAlertIndexValuesFromRecord(alert: AlertRecord | null | und
   const latitude = normalizeCoordinate(alert?.source?.latitude, -90, 90);
   const longitude = normalizeCoordinate(alert?.source?.longitude, -180, 180);
   const country = normalizeCountryCode(alert?.source?.cn);
+  const region = normalizeText(alert?.source?.region);
+  const city = normalizeText(alert?.source?.city);
   const asName = normalizeText(alert?.source?.as_name);
   const target = alert ? normalizeText(alert.target || getAlertTarget(alert)) : null;
   const machine = alert ? normalizeText(resolveMachineName(alert)) : null;
@@ -75,6 +81,8 @@ export function deriveAlertIndexValuesFromRecord(alert: AlertRecord | null | und
     longitude,
     country,
     countryName,
+    region,
+    city,
     asName,
     target,
     machine,
@@ -89,6 +97,8 @@ export function deriveAlertIndexValuesFromRecord(alert: AlertRecord | null | und
       sourceIp,
       country,
       countryName,
+      region,
+      city,
       asName,
       target,
       machine,
@@ -116,6 +126,8 @@ export function deriveDecisionIndexValuesFromRecord(decision: (AlertDecision & R
   scenario?: string | null;
 }): DecisionIndexValues {
   const country = normalizeCountryCode(readString(decision?.country));
+  const region = normalizeText(readString(decision?.region));
+  const city = normalizeText(readString(decision?.city));
   const asName = normalizeText(readString(decision?.as));
   const target = normalizeText(readString(decision?.target));
   const machine = normalizeText(readString(decision?.machine));
@@ -129,6 +141,8 @@ export function deriveDecisionIndexValuesFromRecord(decision: (AlertDecision & R
   return {
     country,
     countryName,
+    region,
+    city,
     asName,
     target,
     machine,
@@ -139,6 +153,8 @@ export function deriveDecisionIndexValuesFromRecord(decision: (AlertDecision & R
       scenario,
       country,
       countryName,
+      region,
+      city,
       asName,
       target,
       machine,

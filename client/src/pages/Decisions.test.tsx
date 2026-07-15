@@ -183,6 +183,8 @@ beforeEach(() => {
           origin: 'manual',
           reason: 'crowdsecurity/ssh-bf',
           country: 'DE',
+          city: 'Berlin',
+          region: 'State of Berlin',
           as: 'Hetzner',
           action: 'ban',
           duration: '4h',
@@ -359,6 +361,10 @@ describe('Decisions page', () => {
     expect(screen.queryByRole('columnheader', { name: 'ID' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Machine' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Origin' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Region' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'City' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Berlin')).not.toBeInTheDocument();
+    expect(screen.queryByText('State of Berlin')).not.toBeInTheDocument();
   });
 
   test('counts decision expiration down live from the absolute stop time', async () => {
@@ -414,12 +420,19 @@ describe('Decisions page', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Choose decision table columns' }));
     await userEvent.click(screen.getByLabelText('ID'));
+    await userEvent.click(screen.getByLabelText('Region'));
+    await userEvent.click(screen.getByLabelText('City'));
     await userEvent.click(screen.getByLabelText('Machine'));
     await userEvent.click(screen.getByLabelText('Origin'));
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(screen.getByRole('columnheader', { name: 'ID' })).toBeInTheDocument());
     expect(getVisibleColumnHeaderNames()[0]).toBe('ID');
+    const headers = getVisibleColumnHeaderNames();
+    expect(headers.indexOf('Country')).toBeLessThan(headers.indexOf('Region'));
+    expect(headers.indexOf('Region')).toBeLessThan(headers.indexOf('City'));
+    expect(screen.getByText('State of Berlin')).toBeInTheDocument();
+    expect(screen.getByText('Berlin')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Machine' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Origin' })).toBeInTheDocument();
   });

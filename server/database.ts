@@ -28,6 +28,8 @@ const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SYNC_SECONDARY_INDEX_NAMES = [
   'idx_alerts_created_at',
   'idx_alerts_country',
+  'idx_alerts_region',
+  'idx_alerts_city',
   'idx_alerts_scenario',
   'idx_alerts_as_name',
   'idx_alerts_target',
@@ -43,6 +45,8 @@ const SYNC_SECONDARY_INDEX_NAMES = [
   'idx_decisions_stop_alert_id',
   'idx_decisions_value_stop_at',
   'idx_decisions_country',
+  'idx_decisions_region',
+  'idx_decisions_city',
   'idx_decisions_scenario',
   'idx_decisions_as_name',
   'idx_decisions_target',
@@ -57,6 +61,8 @@ const SYNC_SECONDARY_INDEX_NAMES = [
 const CREATE_SYNC_SECONDARY_INDEXES_SQL = `
   CREATE INDEX IF NOT EXISTS idx_alerts_created_at ON alerts(created_at);
   CREATE INDEX IF NOT EXISTS idx_alerts_country ON alerts(country);
+  CREATE INDEX IF NOT EXISTS idx_alerts_region ON alerts(region);
+  CREATE INDEX IF NOT EXISTS idx_alerts_city ON alerts(city);
   CREATE INDEX IF NOT EXISTS idx_alerts_scenario ON alerts(scenario);
   CREATE INDEX IF NOT EXISTS idx_alerts_as_name ON alerts(as_name);
   CREATE INDEX IF NOT EXISTS idx_alerts_target ON alerts(target);
@@ -72,6 +78,8 @@ const CREATE_SYNC_SECONDARY_INDEXES_SQL = `
   CREATE INDEX IF NOT EXISTS idx_decisions_stop_alert_id ON decisions(stop_at, alert_id);
   CREATE INDEX IF NOT EXISTS idx_decisions_value_stop_at ON decisions(value, stop_at DESC);
   CREATE INDEX IF NOT EXISTS idx_decisions_country ON decisions(country);
+  CREATE INDEX IF NOT EXISTS idx_decisions_region ON decisions(region);
+  CREATE INDEX IF NOT EXISTS idx_decisions_city ON decisions(city);
   CREATE INDEX IF NOT EXISTS idx_decisions_scenario ON decisions(scenario);
   CREATE INDEX IF NOT EXISTS idx_decisions_as_name ON decisions(as_name);
   CREATE INDEX IF NOT EXISTS idx_decisions_target ON decisions(target);
@@ -292,11 +300,11 @@ export class CrowdsecDatabase {
     this.insertAlertStatement = this.db.query(`
       INSERT INTO alerts (
         id, uuid, created_at, scenario, source_ip, message, raw_data,
-        latitude, longitude, country, country_name, as_name, target, machine, meta_search, origins, simulated, search_text
+        latitude, longitude, country, country_name, region, city, as_name, target, machine, meta_search, origins, simulated, search_text
       )
       VALUES (
         $id, $uuid, $created_at, $scenario, $source_ip, $message, $raw_data,
-        $latitude, $longitude, $country, $country_name, $as_name, $target, $machine, $meta_search, $origins, $simulated, $search_text
+        $latitude, $longitude, $country, $country_name, $region, $city, $as_name, $target, $machine, $meta_search, $origins, $simulated, $search_text
       )
       ON CONFLICT(id) DO UPDATE SET
         uuid = excluded.uuid,
@@ -309,6 +317,8 @@ export class CrowdsecDatabase {
         longitude = excluded.longitude,
         country = excluded.country,
         country_name = excluded.country_name,
+        region = excluded.region,
+        city = excluded.city,
         as_name = excluded.as_name,
         target = excluded.target,
         machine = excluded.machine,
@@ -326,6 +336,8 @@ export class CrowdsecDatabase {
         OR alerts.longitude IS NOT excluded.longitude
         OR alerts.country IS NOT excluded.country
         OR alerts.country_name IS NOT excluded.country_name
+        OR alerts.region IS NOT excluded.region
+        OR alerts.city IS NOT excluded.city
         OR alerts.as_name IS NOT excluded.as_name
         OR alerts.target IS NOT excluded.target
         OR alerts.machine IS NOT excluded.machine
@@ -378,11 +390,11 @@ export class CrowdsecDatabase {
     this.insertDecisionStatement = this.db.query(`
       INSERT INTO decisions (
         id, uuid, alert_id, created_at, stop_at, value, type, origin, scenario, raw_data,
-        country, country_name, as_name, target, machine, simulated, search_text, is_duplicate
+        country, country_name, region, city, as_name, target, machine, simulated, search_text, is_duplicate
       )
       VALUES (
         $id, $uuid, $alert_id, $created_at, $stop_at, $value, $type, $origin, $scenario, $raw_data,
-        $country, $country_name, $as_name, $target, $machine, $simulated, $search_text, 0
+        $country, $country_name, $region, $city, $as_name, $target, $machine, $simulated, $search_text, 0
       )
       ON CONFLICT(id) DO UPDATE SET
         uuid = excluded.uuid,
@@ -396,6 +408,8 @@ export class CrowdsecDatabase {
         raw_data = excluded.raw_data,
         country = excluded.country,
         country_name = excluded.country_name,
+        region = excluded.region,
+        city = excluded.city,
         as_name = excluded.as_name,
         target = excluded.target,
         machine = excluded.machine,
@@ -413,6 +427,8 @@ export class CrowdsecDatabase {
         OR decisions.raw_data IS NOT excluded.raw_data
         OR decisions.country IS NOT excluded.country
         OR decisions.country_name IS NOT excluded.country_name
+        OR decisions.region IS NOT excluded.region
+        OR decisions.city IS NOT excluded.city
         OR decisions.as_name IS NOT excluded.as_name
         OR decisions.target IS NOT excluded.target
         OR decisions.machine IS NOT excluded.machine
@@ -426,6 +442,8 @@ export class CrowdsecDatabase {
         raw_data = $raw_data,
         country = $country,
         country_name = $country_name,
+        region = $region,
+        city = $city,
         as_name = $as_name,
         target = $target,
         machine = $machine,
@@ -722,6 +740,8 @@ export class CrowdsecDatabase {
       $longitude: index.longitude,
       $country: index.country,
       $country_name: index.countryName,
+      $region: index.region,
+      $city: index.city,
       $as_name: index.asName,
       $target: index.target,
       $machine: index.machine,
@@ -815,6 +835,8 @@ export class CrowdsecDatabase {
       $raw_data: normalizeCrowdsecTimestampJson(params.$raw_data),
       $country: index.country,
       $country_name: index.countryName,
+      $region: index.region,
+      $city: index.city,
       $as_name: index.asName,
       $target: index.target,
       $machine: index.machine,
@@ -852,6 +874,8 @@ export class CrowdsecDatabase {
       $raw_data: normalizeCrowdsecTimestampJson(params.$raw_data),
       $country: index.country,
       $country_name: index.countryName,
+      $region: index.region,
+      $city: index.city,
       $as_name: index.asName,
       $target: index.target,
       $machine: index.machine,
@@ -1749,6 +1773,8 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
       longitude REAL,
       country TEXT,
       country_name TEXT,
+      region TEXT,
+      city TEXT,
       as_name TEXT,
       target TEXT,
       machine TEXT,
@@ -1773,6 +1799,8 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
       raw_data TEXT,
       country TEXT,
       country_name TEXT,
+      region TEXT,
+      city TEXT,
       as_name TEXT,
       target TEXT,
       machine TEXT,
@@ -2096,12 +2124,19 @@ function migrateRecordIndexColumns(db: Database): void {
     (db.query('PRAGMA table_info(alerts)').all() as Array<{ name: string }>).map((column) => column.name),
   );
   const shouldBackfillAlertLocations = !existingAlertColumns.has('latitude') || !existingAlertColumns.has('longitude');
+  const shouldBackfillResolvedAlertLocations = !existingAlertColumns.has('region') || !existingAlertColumns.has('city');
+  const existingDecisionColumns = new Set(
+    (db.query('PRAGMA table_info(decisions)').all() as Array<{ name: string }>).map((column) => column.name),
+  );
+  const shouldBackfillResolvedDecisionLocations = !existingDecisionColumns.has('region') || !existingDecisionColumns.has('city');
 
   ensureColumns(db, 'alerts', [
     ['latitude', 'REAL'],
     ['longitude', 'REAL'],
     ['country', 'TEXT'],
     ['country_name', 'TEXT'],
+    ['region', 'TEXT'],
+    ['city', 'TEXT'],
     ['as_name', 'TEXT'],
     ['target', 'TEXT'],
     ['machine', 'TEXT'],
@@ -2113,6 +2148,8 @@ function migrateRecordIndexColumns(db: Database): void {
   ensureColumns(db, 'decisions', [
     ['country', 'TEXT'],
     ['country_name', 'TEXT'],
+    ['region', 'TEXT'],
+    ['city', 'TEXT'],
     ['as_name', 'TEXT'],
     ['target', 'TEXT'],
     ['machine', 'TEXT'],
@@ -2123,6 +2160,9 @@ function migrateRecordIndexColumns(db: Database): void {
 
   if (shouldBackfillAlertLocations) {
     backfillAlertLocationColumns(db);
+  }
+  if (shouldBackfillResolvedAlertLocations || shouldBackfillResolvedDecisionLocations) {
+    backfillResolvedLocationColumns(db);
   }
 
   // Replaced by idx_decisions_alert_created_id, which also satisfies the
@@ -2151,6 +2191,17 @@ function backfillAlertLocationColumns(db: Database): void {
   `);
 }
 
+function backfillResolvedLocationColumns(db: Database): void {
+  db.exec(`
+    UPDATE alerts
+    SET region = CASE WHEN json_valid(raw_data) THEN json_extract(raw_data, '$.source.region') ELSE NULL END,
+        city = CASE WHEN json_valid(raw_data) THEN json_extract(raw_data, '$.source.city') ELSE NULL END;
+    UPDATE decisions
+    SET region = CASE WHEN json_valid(raw_data) THEN json_extract(raw_data, '$.region') ELSE NULL END,
+        city = CASE WHEN json_valid(raw_data) THEN json_extract(raw_data, '$.city') ELSE NULL END;
+  `);
+}
+
 function ensureColumns(db: Database, tableName: string, columns: Array<[string, string]>): void {
   const existing = new Set((db.query(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>).map((column) => column.name));
   for (const [name, definition] of columns) {
@@ -2176,6 +2227,8 @@ function backfillRecordIndexes(db: Database): void {
         longitude = $longitude,
         country = $country,
         country_name = $country_name,
+        region = $region,
+        city = $city,
         as_name = $as_name,
         target = $target,
         machine = $machine,
@@ -2214,6 +2267,8 @@ function backfillRecordIndexes(db: Database): void {
           $longitude: index.longitude,
           $country: index.country,
           $country_name: index.countryName,
+          $region: index.region,
+          $city: index.city,
           $as_name: index.asName,
           $target: index.target,
           $machine: index.machine,
@@ -2237,6 +2292,8 @@ function backfillRecordIndexes(db: Database): void {
     UPDATE decisions
     SET country = $country,
         country_name = $country_name,
+        region = $region,
+        city = $city,
         as_name = $as_name,
         target = $target,
         machine = $machine,
@@ -2268,6 +2325,8 @@ function backfillRecordIndexes(db: Database): void {
           $id: row.id,
           $country: index.country,
           $country_name: index.countryName,
+          $region: index.region,
+          $city: index.city,
           $as_name: index.asName,
           $target: index.target,
           $machine: index.machine,

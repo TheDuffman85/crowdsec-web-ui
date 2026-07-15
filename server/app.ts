@@ -53,6 +53,7 @@ import {
   dashboardAttackLocationData,
   type DashboardAttackLocationAccumulator,
 } from './dashboard-locations';
+import { createAttackLocationResolver, type AttackLocationResolver } from './attack-location-geocoder';
 import { getAlertSourceValue, getAlertTarget, resolveAlertHistoryAt, resolveAlertReason, resolveAlertScenario, toSlimAlert } from './utils/alerts';
 import { parseGoDuration, toDuration } from './utils/duration';
 import { fetchCrowdsecMetrics } from './metrics';
@@ -97,6 +98,7 @@ export interface CreateAppOptions {
     | 'runExclusive'
     | 'close'
   >;
+  attackLocationResolver?: AttackLocationResolver;
 }
 
 export interface AppController {
@@ -404,6 +406,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   });
   const queryWorker = options.queryWorker || new DatabaseQueryWorker({ dbPath: database.dbPath });
   const syncWorker = options.syncWorker || new DatabaseSyncWorker({ dbPath: database.dbPath });
+  const attackLocationResolver = options.attackLocationResolver || createAttackLocationResolver({
+    dumpDirectory: config.geonamesDumpDir,
+  });
   const notificationService = createNotificationService({
     database,
     queryWorker,
@@ -655,7 +660,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         .map((alert) => toSlimAlert(alert))
         .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
 
-      return context.json(alerts);
+      return context.json(await enrichAlertLocations(alerts));
     } catch (error: any) {
       if (error instanceof QueryWorkerTimeoutError) {
         console.warn('Timed out serving alerts from database:', error.message);
@@ -776,6 +781,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         ? database.getDecisionsSince(since, now)
         : database.getActiveDecisions(now);
 
+      const alertCoordinates = await getAlertCoordinatesByIds(rows.map((row) => row.alert_id));
+
       let decisions = rows.map((row) => {
         const decision = JSON.parse(row.raw_data) as AlertDecision & Record<string, unknown>;
         if (decision.alert_id === undefined && row.alert_id !== undefined && row.alert_id !== null) {
@@ -788,6 +795,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       }
       decisions = markDuplicateDecisions(decisions);
       decisions.sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
+      decisions = await enrichDecisionLocations(decisions, alertCoordinates);
 
       return context.json(decisions);
     } catch (error: any) {
@@ -1842,6 +1850,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         value: decision.value || sourceValue,
         type: decision.type || 'ban',
         country: alertSource?.cn,
+        region: alertSource?.region,
+        city: alertSource?.city,
         as: alertSource?.as_name,
         machine,
         target,
@@ -1979,6 +1989,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   }
 
   async function persistChangedAlerts(alerts: AlertRecord[]): Promise<boolean> {
+    alerts = await enrichAlertRecordLocations(alerts);
     if (isFreshBulkImport) {
       let changed = false;
       for (const mutations of createSyncWriteBatches(alerts)) {
@@ -3652,10 +3663,10 @@ ${errorSummary}  Status: ${syncSummary.state}
       LIMIT ? OFFSET ?
     `, [...filteredWhere.params, pageRequest.pageSize, offset]);
 
-    const data = hydrateAlertsBatch(rows)
+    const data = await enrichAlertLocations(hydrateAlertsBatch(rows)
       .map((alert) => applySimulationModeToAlert(alert, config.simulationsEnabled))
       .filter((alert): alert is AlertRecord => alert !== null)
-      .map((alert) => toSlimAlert(alert));
+      .map((alert) => toSlimAlert(alert)));
 
     return {
       data,
@@ -3706,22 +3717,33 @@ ${errorSummary}  Status: ${syncSummary.state}
       raw_data: string;
       alert_id?: string | number | null;
       is_duplicate?: number;
+      latitude?: number | null;
+      longitude?: number | null;
     }>(`
-      SELECT raw_data, alert_id, ${duplicateSql} AS is_duplicate
+      SELECT raw_data, alert_id, ${duplicateSql} AS is_duplicate,
+        (SELECT latitude FROM alerts WHERE alerts.id = decisions.alert_id) AS latitude,
+        (SELECT longitude FROM alerts WHERE alerts.id = decisions.alert_id) AS longitude
       FROM ${decisionsTable}
       ${filteredWhere.toSql()}
       ORDER BY created_at DESC, id DESC
       LIMIT ? OFFSET ?
     `, [...filteredWhere.params, pageRequest.pageSize, offset]);
 
-    const data = rows.map((row) => {
+    const alertCoordinates = new Map<string, { latitude: number; longitude: number }>();
+    const decisions = rows.map((row) => {
       const decision = JSON.parse(row.raw_data) as AlertDecision & Record<string, unknown>;
       if (decision.alert_id === undefined && row.alert_id !== undefined && row.alert_id !== null) {
         decision.alert_id = row.alert_id;
       }
+      const latitude = normalizeDashboardCoordinate(row.latitude, -90, 90);
+      const longitude = normalizeDashboardCoordinate(row.longitude, -180, 180);
+      if (row.alert_id !== undefined && row.alert_id !== null && latitude !== undefined && longitude !== undefined) {
+        alertCoordinates.set(String(row.alert_id), { latitude, longitude });
+      }
       decision.is_duplicate = row.is_duplicate === 1;
       return toDecisionListItem(decision, includeExpired);
     });
+    const data = await enrichDecisionLocations(decisions, alertCoordinates);
 
     return {
       data,
@@ -3741,6 +3763,111 @@ ${errorSummary}  Status: ${syncSummary.state}
   async function queryCount(tableName: 'alerts' | 'decisions', where: SqlWhere): Promise<number> {
     const row = await queryWorker.get<{ count: number }>(`SELECT COUNT(*) AS count FROM ${tableName} ${where.toSql()}`, where.params);
     return row.count;
+  }
+
+  async function enrichAlertLocations(alerts: SlimAlert[]): Promise<SlimAlert[]> {
+    const coordinates = alerts.flatMap((alert, index) => {
+      if (alert.source?.city && alert.source.region) return [];
+      const latitude = normalizeDashboardCoordinate(alert.source?.latitude, -90, 90);
+      const longitude = normalizeDashboardCoordinate(alert.source?.longitude, -180, 180);
+      return latitude === undefined || longitude === undefined ? [] : [{ index, latitude, longitude }];
+    });
+    if (coordinates.length === 0) return alerts;
+
+    const resolved = await attackLocationResolver.resolve(coordinates);
+    const locationByIndex = new Map(resolved.map((location) => [location.index, location]));
+    return alerts.map((alert, index) => {
+      const location = locationByIndex.get(index);
+      if (!alert.source || (!location?.city && !location?.region)) return alert;
+      return {
+        ...alert,
+        source: {
+          ...alert.source,
+          city: location.city || alert.source.city,
+          region: location.region || alert.source.region,
+        },
+      };
+    });
+  }
+
+  async function enrichAlertRecordLocations(alerts: AlertRecord[]): Promise<AlertRecord[]> {
+    const coordinates = alerts.flatMap((alert, index) => {
+      if (alert.source?.city && alert.source.region) return [];
+      const latitude = normalizeDashboardCoordinate(alert.source?.latitude, -90, 90);
+      const longitude = normalizeDashboardCoordinate(alert.source?.longitude, -180, 180);
+      return latitude === undefined || longitude === undefined ? [] : [{ index, latitude, longitude }];
+    });
+    if (coordinates.length === 0) return alerts;
+
+    const resolved = await attackLocationResolver.resolve(coordinates);
+    const locationByIndex = new Map(resolved.map((location) => [location.index, location]));
+    return alerts.map((alert, index) => {
+      const location = locationByIndex.get(index);
+      if (!alert.source || (!location?.city && !location?.region)) return alert;
+      return {
+        ...alert,
+        source: {
+          ...alert.source,
+          city: location.city || alert.source.city,
+          region: location.region || alert.source.region,
+        },
+      };
+    });
+  }
+
+  async function enrichDecisionLocations(
+    decisions: DecisionListItem[],
+    alertCoordinates: Map<string, { latitude: number; longitude: number }>,
+  ): Promise<DecisionListItem[]> {
+    const coordinates = decisions.flatMap((decision, index) => {
+      if (decision.detail.city && decision.detail.region) return [];
+      const alertId = decision.detail.alert_id;
+      const coordinate = alertId === undefined ? undefined : alertCoordinates.get(String(alertId));
+      return coordinate ? [{ index, ...coordinate }] : [];
+    });
+    if (coordinates.length === 0) return decisions;
+
+    const resolved = await attackLocationResolver.resolve(coordinates);
+    const locationByIndex = new Map(resolved.map((location) => [location.index, location]));
+    return decisions.map((decision, index) => {
+      const location = locationByIndex.get(index);
+      if (!location?.city && !location?.region) return decision;
+      return {
+        ...decision,
+        detail: {
+          ...decision.detail,
+          city: location.city || decision.detail.city,
+          region: location.region || decision.detail.region,
+          country: decision.detail.country && decision.detail.country !== 'Unknown'
+            ? decision.detail.country
+            : location.countryCode,
+        },
+      };
+    });
+  }
+
+  async function getAlertCoordinatesByIds(
+    alertIds: Array<string | number | null | undefined>,
+  ): Promise<Map<string, { latitude: number; longitude: number }>> {
+    const uniqueIds = [...new Set(alertIds.filter((id): id is string | number => id !== null && id !== undefined).map(String))];
+    const coordinates = new Map<string, { latitude: number; longitude: number }>();
+    for (let offset = 0; offset < uniqueIds.length; offset += 800) {
+      const ids = uniqueIds.slice(offset, offset + 800);
+      const placeholders = ids.map(() => '?').join(', ');
+      const rows = await queryWorker.all<{
+        id: string | number;
+        latitude?: number | null;
+        longitude?: number | null;
+      }>(`SELECT id, latitude, longitude FROM alerts WHERE id IN (${placeholders})`, ids);
+      for (const row of rows) {
+        const latitude = normalizeDashboardCoordinate(row.latitude, -90, 90);
+        const longitude = normalizeDashboardCoordinate(row.longitude, -180, 180);
+        if (latitude !== undefined && longitude !== undefined) {
+          coordinates.set(String(row.id), { latitude, longitude });
+        }
+      }
+    }
+    return coordinates;
   }
 
   function shouldUseDefaultDecisionPagingIndex(filters: DecisionListFilters, searchAst: SearchNode | null, includeExpired: boolean): boolean {
@@ -4176,6 +4303,10 @@ ${errorSummary}  Status: ${syncSummary.state}
       }
     }
 
+    const attackLocations = await attackLocationResolver.resolve(
+      dashboardAttackLocationData(filteredAlertAccumulator.attackLocations),
+    );
+
     const response: DashboardStatsResponse = {
       totals: statsIndex.totals,
       filteredTotals: {
@@ -4188,7 +4319,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       topTargets: topDashboardEntries(filteredAlertAccumulator.targets),
       topCountries: dashboardCountryList(filteredAlertAccumulator.countries, 10),
       allCountries: dashboardWorldMapData(filteredAlertAccumulator.countries, filteredDecisionAccumulator.countries),
-      attackLocations: dashboardAttackLocationData(filteredAlertAccumulator.attackLocations),
+      attackLocations,
       topScenarios: topDashboardEntries(filteredAlertAccumulator.scenarios),
       topAS: topDashboardEntries(filteredAlertAccumulator.asNames),
       series: {
@@ -4382,6 +4513,10 @@ function alertFieldCondition(field: string, value: string): SqlCondition {
       return ipCondition('source_ip', value);
     case 'country':
       return countryCondition(value);
+    case 'region':
+      return textCondition('LOWER(region)', value);
+    case 'city':
+      return textCondition('LOWER(city)', value);
     case 'as':
       return textCondition('LOWER(as_name)', value);
     case 'target':
@@ -4415,6 +4550,10 @@ function decisionFieldCondition(field: string, value: string, now: string, dupli
       return ipCondition('value', value);
     case 'country':
       return countryCondition(value);
+    case 'region':
+      return textCondition('LOWER(region)', value);
+    case 'city':
+      return textCondition('LOWER(city)', value);
     case 'as':
       return textCondition('LOWER(as_name)', value);
     case 'target':
@@ -4445,6 +4584,8 @@ function alertEmptyFieldCondition(field: string): SqlCondition {
     case 'message':
     case 'ip':
     case 'country':
+    case 'region':
+    case 'city':
     case 'as':
     case 'target':
     case 'machine':
@@ -4454,6 +4595,8 @@ function alertEmptyFieldCondition(field: string): SqlCondition {
         message: 'message',
         ip: 'source_ip',
         country: 'country',
+        region: 'region',
+        city: 'city',
         as: 'as_name',
         target: 'target',
         machine: 'machine',
@@ -4470,6 +4613,8 @@ function decisionEmptyFieldCondition(field: string): SqlCondition {
     case 'scenario':
     case 'ip':
     case 'country':
+    case 'region':
+    case 'city':
     case 'as':
     case 'target':
     case 'action':
@@ -4481,6 +4626,8 @@ function decisionEmptyFieldCondition(field: string): SqlCondition {
         scenario: 'scenario',
         ip: 'value',
         country: 'country',
+        region: 'region',
+        city: 'city',
         as: 'as_name',
         target: 'target',
         action: 'type',
@@ -4898,6 +5045,8 @@ function toDecisionListItem(
       reason: typeof decision.scenario === 'string' ? decision.scenario : undefined,
       action: typeof decision.type === 'string' ? decision.type : undefined,
       country: typeof decision.country === 'string' ? decision.country : 'Unknown',
+      region: typeof decision.region === 'string' ? decision.region : undefined,
+      city: typeof decision.city === 'string' ? decision.city : undefined,
       as: typeof decision.as === 'string' ? decision.as : 'Unknown',
       events_count: typeof decision.events_count === 'number' ? decision.events_count : 0,
       duration: typeof decision.duration === 'string' ? decision.duration : 'N/A',

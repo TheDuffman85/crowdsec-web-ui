@@ -1104,6 +1104,18 @@ export function Alerts() {
                                                                 )}
                                                             </td>
                                                         );
+                                                    case 'city':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[160px] truncate" title={alert.source?.city}>
+                                                                {alert.source?.city || "-"}
+                                                            </td>
+                                                        );
+                                                    case 'region':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[180px] truncate" title={alert.source?.region}>
+                                                                {alert.source?.region || "-"}
+                                                            </td>
+                                                        );
                                                     case 'as':
                                                         return (
                                                             <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[150px] truncate" title={alert.source?.as_name}>

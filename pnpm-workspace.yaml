@@ -1,6 +1,7 @@
 allowBuilds:
   better-sqlite3: true
   esbuild: true
+  local-reverse-geocoder: false
 overrides:
   ip-address: 10.1.1
   ws: 8.21.0

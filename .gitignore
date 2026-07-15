@@ -15,3 +15,4 @@ coverage
 frontend/coverage
 client/coverage
 /dist
+/geonames

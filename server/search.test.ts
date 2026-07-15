@@ -13,6 +13,8 @@ const baseAlert: SlimAlert = {
     ip: '1.2.3.4',
     value: '1.2.3.4',
     cn: 'DE',
+    region: 'State of Berlin',
+    city: 'Berlin',
     as_name: 'Hetzner',
   },
   target: 'ssh',
@@ -38,6 +40,8 @@ const baseDecision: DecisionListItem = {
     reason: 'crowdsecurity/ssh-bf',
     action: 'ban',
     country: 'DE',
+    region: 'State of Berlin',
+    city: 'Berlin',
     as: 'Hetzner',
     duration: '4h',
     alert_id: 123,
@@ -70,6 +74,8 @@ const secondDecision: DecisionListItem = {
     ...baseDecision.detail,
     reason: 'crowdsecurity/nginx-bf',
     country: 'US',
+    region: 'New York',
+    city: 'New York City',
     as: 'AWS',
     alert_id: 456,
     target: 'nginx',
@@ -262,6 +268,15 @@ describe('shared search compiler', () => {
     expect(nameSearch.predicate(swedenAlert)).toBe(false);
   });
 
+  test('matches resolved city and region fields for alerts', () => {
+    const compiled = compileAlertSearch('city:berl AND region:"state of berl"');
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) return;
+
+    expect(compiled.predicate(baseAlert)).toBe(true);
+    expect(compiled.predicate(secondAlert)).toBe(false);
+  });
+
   test('matches alert source IPs and ranges contained in an IPv4 CIDR search', () => {
     const compiled = compileAlertSearch('ip:10.0.0.0/24');
     expect(compiled.ok).toBe(true);
@@ -337,6 +352,15 @@ describe('shared search compiler', () => {
 
     expect(nameSearch.predicate(baseDecision)).toBe(true);
     expect(nameSearch.predicate(swedenDecision)).toBe(false);
+  });
+
+  test('matches resolved city and region fields for decisions', () => {
+    const compiled = compileDecisionSearch('city:berl AND region:"state of berl"');
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) return;
+
+    expect(compiled.predicate(baseDecision)).toBe(true);
+    expect(compiled.predicate(secondDecision)).toBe(false);
   });
 
   test('matches decision IPs and ranges contained in IPv4 and IPv6 CIDR searches', () => {

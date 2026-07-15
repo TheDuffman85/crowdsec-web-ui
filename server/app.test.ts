@@ -384,6 +384,7 @@ function createController(options: {
   syncWorker?: CreateAppOptions['syncWorker'];
   database?: CrowdsecDatabase;
   initialCacheState?: CreateAppOptions['initialCacheState'];
+  attackLocationResolver?: CreateAppOptions['attackLocationResolver'];
 } = {}) {
   const authMode = options.authMode || 'password';
   const mtlsCertPath = path.join(tempDir, 'agent.pem');
@@ -503,6 +504,9 @@ function createController(options: {
     },
     mqttPublishImpl: async (config, payload) => {
       await options.mqttPublishResolver?.(config, payload);
+    },
+    attackLocationResolver: options.attackLocationResolver || {
+      resolve: async (locations) => locations,
     },
     syncWorker: options.syncWorker,
     initialCacheState: options.initialCacheState,
@@ -1237,6 +1241,8 @@ function seedAlert(database: CrowdsecDatabase, alert: AlertRecord): void {
         type: decision.type || 'ban',
         origin: decision.origin || 'manual',
         country: alert.source?.cn,
+        region: alert.source?.region,
+        city: alert.source?.city,
         as: alert.source?.as_name,
         machine: resolveMachineName(alert),
         target: alert.target,
@@ -1344,6 +1350,76 @@ describe('resolveOidcClaims', () => {
 });
 
 describe('createApp', () => {
+  test('adds resolved city and region to paginated alerts and linked decisions', async () => {
+    const alert = sampleAlert({
+      source: {
+        ...sampleAlert().source,
+        city: 'Berlin',
+        region: 'State of Berlin',
+      },
+    });
+    const { controller, database, lapiClient } = createController({
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+      attackLocationResolver: {
+        resolve: async (locations) => locations.map((location) => ({
+          ...location,
+          city: 'Berlin',
+          region: 'State of Berlin',
+          countryCode: 'DE',
+        })),
+      },
+    });
+    seedAlert(database, alert);
+    await lapiClient.login();
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=10'));
+    expect(alertsResponse.status).toBe(200);
+    expect((await alertsResponse.json()) as PaginatedResponse<SlimAlert>).toEqual(expect.objectContaining({
+      data: [expect.objectContaining({
+        source: expect.objectContaining({ city: 'Berlin', region: 'State of Berlin' }),
+      })],
+    }));
+
+    const decisionsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions?page=1&page_size=10'));
+    expect(decisionsResponse.status).toBe(200);
+    expect(await decisionsResponse.json()).toEqual(expect.objectContaining({
+      data: [expect.objectContaining({
+        detail: expect.objectContaining({ city: 'Berlin', region: 'State of Berlin' }),
+      })],
+    }));
+
+    const cityAlertsResponse = await controller.fetch(new Request(
+      'http://localhost/crowdsec/api/alerts?page=1&page_size=10&q=city:berl',
+    ));
+    expect(cityAlertsResponse.status).toBe(200);
+    expect(await cityAlertsResponse.json()).toEqual(expect.objectContaining({
+      data: [expect.objectContaining({ id: alert.id })],
+      pagination: expect.objectContaining({ total: 1 }),
+    }));
+
+    const regionDecisionsResponse = await controller.fetch(new Request(
+      'http://localhost/crowdsec/api/decisions?page=1&page_size=10&q=region:%22state%20of%20berl%22',
+    ));
+    expect(regionDecisionsResponse.status).toBe(200);
+    expect(await regionDecisionsResponse.json()).toEqual(expect.objectContaining({
+      data: [expect.objectContaining({ id: alert.decisions?.[0]?.id })],
+      pagination: expect.objectContaining({ total: 1 }),
+    }));
+
+    const unmatchedCityResponse = await controller.fetch(new Request(
+      'http://localhost/crowdsec/api/alerts?page=1&page_size=10&q=city:Baixa',
+    ));
+    expect(unmatchedCityResponse.status).toBe(200);
+    expect(await unmatchedCityResponse.json()).toEqual(expect.objectContaining({
+      data: [],
+      pagination: expect.objectContaining({ total: 0 }),
+    }));
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
   test('serves health, config, alerts, decisions, stats, update-check, and mutations', async () => {
     const alert = sampleAlert();
     const simulatedAlert = sampleSimulatedAlert();
@@ -2423,9 +2499,9 @@ describe('createApp', () => {
     const insert = database.db.prepare(`
       INSERT INTO alerts (
         id, uuid, created_at, scenario, source_ip, message, raw_data,
-        country, country_name, as_name, target, machine, meta_search, origins, simulated, search_text
+        country, country_name, region, city, as_name, target, machine, meta_search, origins, simulated, search_text
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertSearch = database.db.prepare('INSERT INTO alerts_fts(rowid, alert_id, search_text) VALUES (?, ?, ?)');
     const insertMany = database.db.transaction((count: number) => {
@@ -2445,13 +2521,15 @@ describe('createApp', () => {
             uuid: `perf-alert-${index}`,
             created_at: createdAt,
             scenario: 'perf/scenario',
-            source: { ip, value: ip, cn: 'DE', as_name: 'Perf AS' },
+            source: { ip, value: ip, cn: 'DE', region: 'State of Berlin', city: 'Berlin', as_name: 'Perf AS' },
             target: 'ssh',
             decisions: [],
             simulated: false,
           }),
           'DE',
           'Germany',
+          'State of Berlin',
+          'Berlin',
           'Perf AS',
           'ssh',
           'perf-host',
@@ -2471,6 +2549,15 @@ describe('createApp', () => {
     expect(payload.data).toHaveLength(50);
     expect(payload.pagination.total).toBe(100_000);
     expect(payload.selectable_ids).toHaveLength(50);
+
+    const cityResponse = await controller.fetch(new Request(
+      'http://localhost/crowdsec/api/alerts?page=1&page_size=50&q=city:Berlin%20AND%20region:%22State%20of%20Berlin%22',
+    ));
+    expect(cityResponse.status).toBe(200);
+    const cityPayload = await cityResponse.json() as PaginatedResponse<SlimAlert>;
+    expect(cityPayload.data).toHaveLength(50);
+    expect(cityPayload.pagination.total).toBe(100_000);
+    expect(cityPayload.data[0]?.source).toMatchObject({ city: 'Berlin', region: 'State of Berlin' });
 
     controller.stopBackgroundTasks();
     database.close();

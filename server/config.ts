@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { createCrowdsecAuthConfig, type CrowdsecAuthConfig } from './auth';
 import { resolveSecretEnv } from './env-secrets';
 
@@ -66,6 +67,7 @@ export interface RuntimeConfig {
   updateCheckEnabled: boolean;
   deploymentMode: 'standard' | 'load-test';
   dbDir: string;
+  geonamesDumpDir: string;
   notificationSecretKey?: string;
   notificationAllowPrivateAddresses: boolean;
   notificationDebugPayloads: boolean;
@@ -402,6 +404,7 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
     updateCheckEnabled: Boolean(env.VITE_COMMIT_HASH || env.VITE_VERSION),
     deploymentMode: env.CROWDSEC_WEB_UI_MODE === 'load-test' ? 'load-test' : 'standard',
     dbDir: env.DB_DIR || '/app/data',
+    geonamesDumpDir: env.GEONAMES_DUMP_DIR || path.resolve(process.cwd(), 'geonames'),
     notificationSecretKey,
     notificationAllowPrivateAddresses: parseBooleanEnv(env.NOTIFICATION_ALLOW_PRIVATE_ADDRESSES, true),
     notificationDebugPayloads: parseBooleanEnv(env.NOTIFICATION_DEBUG_PAYLOADS, false),

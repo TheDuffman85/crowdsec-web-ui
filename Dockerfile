@@ -54,6 +54,10 @@ COPY docker-entrypoint.sh ./
 COPY run.sh ./
 COPY run.ps1 ./
 
+# Cache the compact GeoNames dataset in the image so reverse geocoding never
+# depends on network access at runtime.
+RUN node scripts/download-geonames-data.mjs
+
 # Build the application with VITE_* variables available
 RUN pnpm exec vite build \
     && pnpm exec tsup \
@@ -95,6 +99,7 @@ COPY --from=builder /app/node_modules ./node_modules
 
 # Copy built application artifacts
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/geonames ./geonames
 
 # Copy runtime files for the existing pnpm start contract
 COPY package.json ./

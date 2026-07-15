@@ -17,8 +17,8 @@ export interface PaginatedResponse<T> {
 }
 
 export type TableColumnPreferenceTable = 'alerts' | 'decisions';
-export type AlertTableColumnId = 'id' | 'time' | 'scenario' | 'country' | 'as' | 'source' | 'machine' | 'origin' | 'decisions';
-export type DecisionTableColumnId = 'id' | 'time' | 'scenario' | 'country' | 'as' | 'source' | 'action' | 'expiration' | 'machine' | 'origin' | 'alert';
+export type AlertTableColumnId = 'id' | 'time' | 'scenario' | 'country' | 'region' | 'city' | 'as' | 'source' | 'machine' | 'origin' | 'decisions';
+export type DecisionTableColumnId = 'id' | 'time' | 'scenario' | 'country' | 'region' | 'city' | 'as' | 'source' | 'action' | 'expiration' | 'machine' | 'origin' | 'alert';
 export type TableColumnId = AlertTableColumnId | DecisionTableColumnId;
 
 export interface TableColumnDefinition {
@@ -35,6 +35,8 @@ export const TABLE_COLUMN_DEFINITIONS: Record<TableColumnPreferenceTable, TableC
     { id: 'time', label: 'Time', defaultVisible: true },
     { id: 'scenario', label: 'Scenario', defaultVisible: true },
     { id: 'country', label: 'Country', defaultVisible: true },
+    { id: 'region', label: 'Region', defaultVisible: false },
+    { id: 'city', label: 'City', defaultVisible: false },
     { id: 'as', label: 'AS', defaultVisible: true },
     { id: 'source', label: 'IP / Range', defaultVisible: true },
     { id: 'machine', label: 'Machine', defaultVisible: false },
@@ -46,6 +48,8 @@ export const TABLE_COLUMN_DEFINITIONS: Record<TableColumnPreferenceTable, TableC
     { id: 'time', label: 'Time', defaultVisible: true },
     { id: 'scenario', label: 'Scenario', defaultVisible: true },
     { id: 'country', label: 'Country', defaultVisible: true },
+    { id: 'region', label: 'Region', defaultVisible: false },
+    { id: 'city', label: 'City', defaultVisible: false },
     { id: 'as', label: 'AS', defaultVisible: true },
     { id: 'source', label: 'IP / Range', defaultVisible: true },
     { id: 'action', label: 'Action', defaultVisible: true },
@@ -113,6 +117,8 @@ export interface AlertSource {
   scope?: string;
   latitude?: string | number;
   longitude?: string | number;
+  city?: string;
+  region?: string;
   range?: string;
   [key: string]: unknown;
 }
@@ -185,6 +191,8 @@ export interface DecisionListDetail {
   reason?: string;
   action?: string;
   country?: string;
+  city?: string;
+  region?: string;
   as?: string;
   events_count?: number;
   duration?: string;
@@ -210,7 +218,7 @@ export interface StatsAlert {
   created_at: string;
   kind?: string;
   scenario?: string;
-  source: Pick<AlertSource, 'ip' | 'value' | 'range' | 'cn' | 'as_name' | 'scope'> | null;
+  source: Pick<AlertSource, 'ip' | 'value' | 'range' | 'cn' | 'city' | 'region' | 'as_name' | 'scope'> | null;
   target?: string;
   simulated?: boolean;
 }
@@ -259,6 +267,9 @@ export interface DashboardAttackLocationDatum {
   count: number;
   liveCount: number;
   simulatedCount: number;
+  city?: string;
+  region?: string;
+  countryCode?: string;
 }
 
 export interface DashboardStatsTotals {

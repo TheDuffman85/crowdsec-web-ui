@@ -148,6 +148,7 @@ describe('config helpers', () => {
       VITE_BRANCH: 'dev',
       VITE_COMMIT_HASH: 'abc123',
       DB_DIR: '/tmp/app',
+      GEONAMES_DUMP_DIR: '/tmp/geonames',
       NOTIFICATION_SECRET_KEY: 'notif-secret',
       NOTIFICATION_ALLOW_PRIVATE_ADDRESSES: 'true',
       NOTIFICATION_DEBUG_PAYLOADS: 'true',
@@ -200,6 +201,7 @@ describe('config helpers', () => {
     expect(config.dockerImageRef).toBe('example/repo');
     expect(config.updateCheckEnabled).toBe(true);
     expect(config.dbDir).toBe('/tmp/app');
+    expect(config.geonamesDumpDir).toBe('/tmp/geonames');
     expect(config.notificationSecretKey).toBe('notif-secret');
     expect(config.notificationAllowPrivateAddresses).toBe(true);
     expect(config.notificationDebugPayloads).toBe(true);

@@ -229,7 +229,16 @@ describe('WorldMapCard', () => {
     render(
       <WorldMapCard
         data={[{ label: 'Germany', countryCode: 'DE', count: 5, liveCount: 3, simulatedCount: 2 }]}
-        attackLocations={[{ latitude: 52.52, longitude: 13.405, count: 5, liveCount: 3, simulatedCount: 2 }]}
+        attackLocations={[{
+          latitude: 52.52,
+          longitude: 13.405,
+          count: 5,
+          liveCount: 3,
+          simulatedCount: 2,
+          city: 'Berlin',
+          region: 'Berlin',
+          countryCode: 'DE',
+        }]}
         onCountrySelect={vi.fn()}
         selectedCountry={null}
         simulationsEnabled={true}
@@ -259,18 +268,20 @@ describe('WorldMapCard', () => {
       clientY: projectedCoordinates[1],
     });
 
-    const details = await screen.findByTestId('world-map-attack-coordinates');
+    const details = await screen.findByTestId('world-map-attack-location');
     expect(details).toHaveClass('border-t');
     expect(screen.getByText(/Alerts: 3 \(5 at this location\)/)).toBeInTheDocument();
-    expect(within(details).getByText('Approx. coordinates')).toBeInTheDocument();
-    expect(within(details).getByText('52.5200°, 13.4050°')).toBeInTheDocument();
+    expect(within(details).getByText('Approx. location')).toBeInTheDocument();
+    expect(within(details).getByText('Berlin, Germany')).toBeInTheDocument();
+    expect(within(details).queryByText('52.5200°, 13.4050°')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'GeoNames' })).toHaveAttribute('href', 'https://www.geonames.org/');
     expect(screen.queryByText('Attack location')).not.toBeInTheDocument();
 
     fireEvent.pointerMove(mapContainer, {
       clientX: projectedCoordinates[0] + 50,
       clientY: projectedCoordinates[1] + 50,
     });
-    await waitFor(() => expect(screen.queryByTestId('world-map-attack-coordinates')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByTestId('world-map-attack-location')).not.toBeInTheDocument());
     expect(screen.queryByText(/at location/)).not.toBeInTheDocument();
   });
 

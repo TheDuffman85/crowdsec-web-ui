@@ -37,6 +37,8 @@ interface AlertTemplate {
   reason: string;
   ip: string;
   country: string;
+  city: string;
+  region: string;
   asName: string;
   asNumber: number;
   target: string;
@@ -77,16 +79,16 @@ const scenarios = [
 ] as const;
 
 const countries = [
-  ['US', 37.7749, -122.4194],
-  ['DE', 50.1109, 8.6821],
-  ['NL', 52.3676, 4.9041],
-  ['FR', 48.8566, 2.3522],
-  ['GB', 51.5072, -0.1276],
-  ['BR', -23.5505, -46.6333],
-  ['IN', 28.6139, 77.2090],
-  ['JP', 35.6762, 139.6503],
-  ['SG', 1.3521, 103.8198],
-  ['AU', -33.8688, 151.2093],
+  ['US', 37.7749, -122.4194, 'San Francisco', 'California'],
+  ['DE', 50.1109, 8.6821, 'Frankfurt am Main', 'Hesse'],
+  ['NL', 52.3676, 4.9041, 'Amsterdam', 'North Holland'],
+  ['FR', 48.8566, 2.3522, 'Paris', 'Île-de-France'],
+  ['GB', 51.5072, -0.1276, 'London', 'England'],
+  ['BR', -23.5505, -46.6333, 'São Paulo', 'São Paulo'],
+  ['IN', 28.6139, 77.2090, 'New Delhi', 'Delhi'],
+  ['JP', 35.6762, 139.6503, 'Tokyo', 'Tokyo'],
+  ['SG', 1.3521, 103.8198, 'Singapore', 'Singapore'],
+  ['AU', -33.8688, 151.2093, 'Sydney', 'New South Wales'],
 ] as const;
 
 const asNames = [
@@ -200,6 +202,8 @@ function buildAlertTemplate(id: number, config: LoadTestConfig, nowMs: number): 
     reason: isBlocklist ? 'Synthetic blocklist import' : scenarioTuple[1],
     ip: ipFor(id, config.seed),
     country: countryTuple[0],
+    city: countryTuple[3],
+    region: countryTuple[4],
     asName: asTuple[0],
     asNumber: asTuple[1],
     target: isBlocklist ? 'blocklist' : scenarioTuple[2],
@@ -312,6 +316,8 @@ function buildAlertRecord(alert: AlertTemplate, config: LoadTestConfig, nowMs: n
       value: alert.ip,
       ip: alert.ip,
       cn: alert.country,
+      city: alert.city,
+      region: alert.region,
       as_name: alert.asName,
       as_number: alert.asNumber,
       latitude: Number(alert.latitude.toFixed(4)),
