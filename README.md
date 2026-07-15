@@ -330,6 +330,14 @@ AUTH_OIDC_READ_ONLY_GROUPS=crowdsec-viewers
 AUTH_OIDC_UNMATCHED_ROLE=deny
 ```
 
+Register the following redirect (callback) URI for the CrowdSec Web UI client in your identity provider:
+
+```text
+https://<crowdsec-web-ui-host>/api/auth/oidc/callback
+```
+
+The URI must exactly match the public URL used to access the Web UI, including the scheme, host, and any non-default port. When `BASE_PATH` is configured, include it before `/api`; for example, `BASE_PATH=/crowdsec` uses `https://<crowdsec-web-ui-host>/crowdsec/api/auth/oidc/callback`. Behind a reverse proxy, forward the public host through `Host` or `X-Forwarded-Host` and set `X-Forwarded-Proto` so the application sends the same URI to the identity provider.
+
 OIDC Settings accepts the issuer URL, client ID, client secret, authorization scopes, groups claim, admin groups, read-only groups, and the unmatched-user policy. Saved Settings values override OIDC environment defaults. Authorization scopes must include `openid`; add provider-specific scopes such as `groups` only when your IdP requires them for the configured groups claim. By default, OIDC users who match no configured group are denied. Set the unmatched-user policy to `admin` or `read-only` only when every user who can complete OIDC sign-in should receive that fallback role.
 
 OIDC group mapping is lightweight RBAC. `PERMISSION_READ_ONLY=true` is still instance-wide and overrides user roles. For OIDC, admin group matches get full access, read-only group matches can view data and keep allowed preferences, and users with no matching group follow `AUTH_OIDC_UNMATCHED_ROLE`.
@@ -444,6 +452,7 @@ location /crowdsec/ {
     proxy_pass http://localhost:3000/crowdsec/;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Host $http_host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
