@@ -492,6 +492,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   let bootstrapPromise: Promise<boolean> | null = null;
   let bootstrapSource: string | null = null;
   let bootstrapWaitLogged = false;
+  let pendingAlertDeletionTimeout: ReturnType<typeof setTimeout> | null = null;
+  let pendingAlertDeletionPromise: Promise<void> | null = null;
+  let pendingAlertDeletionRerunRequested = false;
+  let pendingAlertDeletionStopped = false;
 
   function emptyReconcileWindowState(): ReconcileWindowState {
     return {
@@ -676,7 +680,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         return context.json({ error: 'Alert IDs must be numeric' }, 400);
       }
 
-      const result = await deleteAlertsByIdsInChunks(ids);
+      const result = await deleteAlertsByIds(ids);
       if (result.deleted_decisions > 0) {
         void runNotificationEvaluation('bulk alert delete');
       }
@@ -727,13 +731,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
 
     const doRequest = async () => {
-      const result = await deleteAlertFromLapi(alertId);
-      await syncWorker.runExclusive(() => {
-        database.deleteAlert(alertId);
-        database.deleteDecisionsByAlertId(alertId);
-      });
-      invalidateDashboardStatsCache();
-      return context.json((result as object) || { message: 'Deleted' });
+      const result = await deleteAlertsByIds([alertId]);
+      if (result.deleted_decisions > 0) {
+        void runNotificationEvaluation('alert decision delete');
+      }
+      return context.json(result);
     };
 
     try {
@@ -1273,6 +1275,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       }
 
       const result = await lapiClient.addDecision(ip, type, duration, reason.slice(0, 256));
+      console.log(`[decisions] Added ${type} decision for ${ip} (${duration}).`);
       console.log('Refreshing cache after adding decision...');
       await updateCacheDelta();
       void runNotificationEvaluation('manual decision add');
@@ -2769,6 +2772,11 @@ ${errorSummary}  Status: ${syncSummary.state}
         }
       }
 
+      // Pending deletions are durable tombstones. Process their current phase
+      // before history sync so a restart cannot reintroduce a user-deleted
+      // alert while its delayed LAPI deletion is still outstanding.
+      await processPendingAlertDeletions(`before historical sync: ${source}`);
+
       const syncSummary = await initializeCache();
       if (syncSummary?.state === 'complete') {
         finalizeBootstrapRecovery();
@@ -3109,52 +3117,261 @@ ${errorSummary}  Status: ${syncSummary.state}
     };
   }
 
-  async function deleteAlertsByIds(ids: string[]): Promise<BulkDeleteResult> {
-    const result = createDeleteResult({ requested_alerts: ids.length });
-    const deletedAlertIds: string[] = [];
-
-    for (const id of ids) {
-      try {
-        await deleteAlertFromLapi(id);
-        deletedAlertIds.push(id);
-      } catch (error) {
-        const typedError = error as AnyError;
-        if (isPermissionError(typedError)) {
-          throw typedError;
+  function getLinkedDecisionIds(alert: CachedAlertRecord): string[] {
+    const ids = new Set<string>();
+    try {
+      const parsedAlert = JSON.parse(alert.raw_data) as AlertRecord;
+      for (const decision of parsedAlert.decisions || []) {
+        if (decision?.id !== undefined && decision?.id !== null) {
+          ids.add(String(decision.id));
         }
-        result.failed.push(toFailure('alert', id, typedError));
+      }
+    } catch {
+      // The normalized decision table below remains authoritative when the
+      // cached alert payload cannot be parsed.
+    }
+
+    for (const id of getDecisionIdsForAlertIds([alert.id])) ids.add(id);
+    return Array.from(ids);
+  }
+
+  async function getAlertForDeletion(id: string): Promise<CachedAlertRecord | null> {
+    const snapshot = database.getAlertDecisionSnapshot(id);
+    if (!snapshot) {
+      try {
+        const alert = await lapiClient.getAlertById(id) as AlertRecord;
+        return {
+          id,
+          sourceValue: getAlertSourceValue(alert.source),
+          raw_data: JSON.stringify(alert),
+        };
+      } catch (error) {
+        if (isAlreadyGoneError(error as AnyError)) return null;
+        throw error;
       }
     }
 
-    const deletedDecisionIds = new Set(getDecisionIdsForAlertIds(deletedAlertIds));
-    if (deletedAlertIds.length > 0) {
-      await syncWorker.runExclusive(() => {
-        const removeAlerts = database.transaction<string[]>((alertIds) => {
-          for (const id of alertIds) {
-            database.deleteAlert(id);
-            database.deleteDecisionsByAlertId(id);
-          }
-        });
-        removeAlerts(deletedAlertIds);
-      });
-      invalidateDashboardStatsCache();
+    try {
+      const alert = JSON.parse(snapshot.raw_data) as AlertRecord;
+      return {
+        id,
+        sourceValue: getAlertSourceValue(alert.source),
+        raw_data: snapshot.raw_data,
+      };
+    } catch {
+      return { id, raw_data: snapshot.raw_data };
     }
-
-    result.deleted_alerts = deletedAlertIds.length;
-    result.deleted_decisions = deletedDecisionIds.size;
-    return result;
   }
 
-  async function deleteAlertsByIdsInChunks(ids: string[]): Promise<BulkDeleteResult> {
-    const aggregate = createDeleteResult({ requested_alerts: ids.length });
-    const chunkSize = 100;
-    for (let offset = 0; offset < ids.length; offset += chunkSize) {
-      const result = await deleteAlertsByIds(ids.slice(offset, offset + chunkSize));
-      aggregate.deleted_alerts += result.deleted_alerts;
-      aggregate.deleted_decisions += result.deleted_decisions;
-      aggregate.failed.push(...result.failed);
+  function parsePendingDecisionIds(value: string): string[] {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return Array.isArray(parsed)
+        ? parsed.map(String).filter((id) => /^\d+$/.test(id))
+        : [];
+    } catch {
+      return [];
     }
-    return aggregate;
+  }
+
+  function clearPendingAlertDeletionTimeout(): void {
+    if (!pendingAlertDeletionTimeout) return;
+    clearTimeout(pendingAlertDeletionTimeout);
+    pendingAlertDeletionTimeout = null;
+  }
+
+  function processPendingAlertDeletionsInBackground(source: string): void {
+    void processPendingAlertDeletions(source).catch((error) => {
+      console.error(`Pending alert deletion processor failed (${source}): ${(error as Error).message}`);
+    });
+  }
+
+  function getPendingAlertDeletionNextRunAt(
+    rows: ReturnType<CrowdsecDatabase['getPendingAlertDeletions']>,
+    now: number,
+  ): number | null {
+    if (rows.length === 0) return null;
+    const retryDelayMs = 30_000;
+    return Math.min(...rows.map((row) => {
+      const lastAttempt = row.last_attempt_at ? Date.parse(row.last_attempt_at) : 0;
+      const retryAt = row.last_error && lastAttempt > 0 ? lastAttempt + retryDelayMs : 0;
+      if (!row.decisions_deleted_at) return retryAt || now;
+      const deleteAt = row.delete_after ? Date.parse(row.delete_after) : now;
+      return Math.max(deleteAt, retryAt);
+    }));
+  }
+
+  function logPendingAlertDeletionQueue(
+    rows: ReturnType<CrowdsecDatabase['getPendingAlertDeletions']>,
+    context: string,
+    nextRunAt: number | null = getPendingAlertDeletionNextRunAt(rows, Date.now()),
+  ): void {
+    if (rows.length === 0) {
+      console.log('[deletion-queue] Queue is empty.');
+      return;
+    }
+
+    const failed = rows.filter((row) => Boolean(row.last_error)).length;
+    const nextRun = nextRunAt === null ? 'none' : new Date(nextRunAt).toISOString();
+    console.log(
+      `[deletion-queue] ${context}: ${rows.length} pending, ${failed} failed; next run ${nextRun}.`,
+    );
+  }
+
+  function schedulePendingAlertDeletionProcessing(): void {
+    clearPendingAlertDeletionTimeout();
+    if (pendingAlertDeletionStopped) return;
+    const rows = database.getPendingAlertDeletions();
+    if (rows.length === 0) {
+      logPendingAlertDeletionQueue(rows, 'scheduler');
+      return;
+    }
+
+    const now = Date.now();
+    const nextAt = getPendingAlertDeletionNextRunAt(rows, now) ?? now;
+    logPendingAlertDeletionQueue(rows, 'scheduler', nextAt);
+    pendingAlertDeletionTimeout = setTimeout(() => {
+      pendingAlertDeletionTimeout = null;
+      processPendingAlertDeletionsInBackground('scheduled retry');
+    }, Math.max(0, nextAt - now));
+    pendingAlertDeletionTimeout.unref?.();
+  }
+
+  async function processPendingAlertDeletions(source: string): Promise<void> {
+    if (pendingAlertDeletionStopped) return;
+    if (pendingAlertDeletionPromise) {
+      pendingAlertDeletionRerunRequested = true;
+      return pendingAlertDeletionPromise;
+    }
+
+    clearPendingAlertDeletionTimeout();
+    pendingAlertDeletionPromise = (async () => {
+      const rows = database.getPendingAlertDeletions();
+      if (rows.length > 0) {
+        logPendingAlertDeletionQueue(rows, `processing (${source})`);
+      }
+
+      for (const row of rows) {
+        let decisionsDeletedAt = row.decisions_deleted_at;
+        let deleteAfter = row.delete_after;
+
+        if (!decisionsDeletedAt) {
+          try {
+            const decisionIds = parsePendingDecisionIds(row.decision_ids_json);
+            for (const decisionId of decisionIds) {
+              await deleteDecisionFromLapi(decisionId);
+            }
+            const deletedAt = new Date().toISOString();
+            const delayMs = decisionIds.length > 0 ? config.bouncerPropagationDelayMs : 0;
+            const dueAt = new Date(Date.now() + delayMs).toISOString();
+            await syncWorker.runExclusive(() => {
+              database.markAlertDeletionDecisionsExpired(row.alert_id, deletedAt, dueAt);
+            });
+            decisionsDeletedAt = deletedAt;
+            deleteAfter = dueAt;
+          } catch (error) {
+            const typedError = error as AnyError;
+            if (typedError.response?.status === 401 && await lapiClient.login('pending alert decision deletion')) {
+              pendingAlertDeletionRerunRequested = true;
+            }
+            const attemptedAt = new Date().toISOString();
+            await syncWorker.runExclusive(() => {
+              database.recordAlertDeletionFailure(row.alert_id, attemptedAt, typedError.message || 'Decision deletion failed');
+            });
+            console.error(`[deletion-queue] Alert ${row.alert_id} decision deletion failed and remains queued: ${typedError.message}`);
+            continue;
+          }
+        }
+
+        if (!decisionsDeletedAt || (deleteAfter && Date.parse(deleteAfter) > Date.now())) {
+          continue;
+        }
+
+        try {
+          await deleteAlertFromLapi(row.alert_id);
+          const completedAt = new Date().toISOString();
+          await syncWorker.runExclusive(() => {
+            database.completeAlertDeletion(row.alert_id, completedAt);
+          });
+          const decisionCount = parsePendingDecisionIds(row.decision_ids_json).length;
+          console.log(`[deletion-queue] Deleted alert ${row.alert_id} and ${decisionCount} linked decision(s).`);
+        } catch (error) {
+          const typedError = error as AnyError;
+          if (typedError.response?.status === 401 && await lapiClient.login('pending alert deletion')) {
+            pendingAlertDeletionRerunRequested = true;
+          }
+          const attemptedAt = new Date().toISOString();
+          await syncWorker.runExclusive(() => {
+            database.recordAlertDeletionFailure(row.alert_id, attemptedAt, typedError.message || 'Alert deletion failed');
+          });
+          console.error(`[deletion-queue] Alert ${row.alert_id} deletion failed and remains queued: ${typedError.message}`);
+        }
+      }
+
+      const tombstoneRetentionMs = Math.max(config.lookbackMs, config.lapiRequestTimeoutMs * 2, 60_000);
+      const completedBefore = new Date(Date.now() - tombstoneRetentionMs).toISOString();
+      const purged = await syncWorker.runExclusive(() => database.purgeCompletedAlertDeletions(completedBefore));
+      if (purged > 0) {
+        console.log(`[deletion-queue] Purged ${purged} completed deletion tombstone(s).`);
+      }
+    })();
+
+    try {
+      await pendingAlertDeletionPromise;
+    } finally {
+      pendingAlertDeletionPromise = null;
+      if (pendingAlertDeletionStopped) {
+        pendingAlertDeletionRerunRequested = false;
+      } else if (pendingAlertDeletionRerunRequested) {
+        pendingAlertDeletionRerunRequested = false;
+        processPendingAlertDeletionsInBackground('queued while processor was active');
+      } else {
+        schedulePendingAlertDeletionProcessing();
+      }
+    }
+  }
+
+  async function queueAlertsForDeletion(linkedDecisionIdsByAlert: Map<string, string[]>): Promise<void> {
+    const requestedAt = new Date().toISOString();
+    await syncWorker.runExclusive(() => {
+      const queue = database.transaction<Map<string, string[]>>((entries) => {
+        for (const [alertId, decisionIds] of entries) {
+          database.queueAlertDeletion(alertId, decisionIds, requestedAt);
+          database.deleteDecisionsByAlertId(alertId);
+          database.deleteAlert(alertId);
+        }
+      });
+      try {
+        queue(linkedDecisionIdsByAlert);
+      } finally {
+        database.refreshAlertDeletionTombstones();
+      }
+    });
+    const decisionCount = new Set(Array.from(linkedDecisionIdsByAlert.values()).flat()).size;
+    console.log(
+      `[deletion-queue] Queued ${linkedDecisionIdsByAlert.size} alert deletion(s) and ${decisionCount} decision deletion(s).`,
+    );
+    invalidateDashboardStatsCache();
+    processPendingAlertDeletionsInBackground('new deletion request');
+  }
+
+  async function deleteAlertsByIds(ids: string[]): Promise<BulkDeleteResult> {
+    const result = createDeleteResult({ requested_alerts: ids.length });
+    const linkedDecisionIdsByAlert = new Map<string, string[]>();
+    const decisionIdsToDelete = new Set<string>();
+
+    for (const id of ids) {
+      const alert = await getAlertForDeletion(id);
+      const linkedDecisionIds = alert ? getLinkedDecisionIds(alert) : [];
+      linkedDecisionIdsByAlert.set(id, linkedDecisionIds);
+      for (const decisionId of linkedDecisionIds) decisionIdsToDelete.add(decisionId);
+    }
+
+    result.requested_decisions = decisionIdsToDelete.size;
+    await queueAlertsForDeletion(linkedDecisionIdsByAlert);
+    result.deleted_alerts = linkedDecisionIdsByAlert.size;
+    result.deleted_decisions = decisionIdsToDelete.size;
+    return result;
   }
 
   function getDecisionIdsForAlertIds(alertIds: string[]): string[] {
@@ -3217,86 +3434,53 @@ ${errorSummary}  Status: ${syncSummary.state}
   async function deleteEntriesByIp(ip: string): Promise<BulkDeleteResult> {
     const alerts = getCachedAlertsForDeletion().filter((alert) => alert.sourceValue === ip);
     const decisions = getCachedDecisionsForDeletion().filter((decision) => decision.value === ip);
-    const result = createDeleteResult({
-      requested_alerts: alerts.length,
-      requested_decisions: decisions.length,
-      ip,
-    });
-    const deletedAlertIds: string[] = [];
-    const alertDecisionIds = new Set<string>();
-    const deletedDecisionIds = new Set<string>();
+    const linkedDecisionIdsByAlert = new Map<string, string[]>();
+    const linkedDecisionIds = new Set<string>();
 
     for (const alert of alerts) {
-      try {
-        await deleteAlertFromLapi(alert.id);
-        deletedAlertIds.push(alert.id);
+      const ids = getLinkedDecisionIds(alert);
+      linkedDecisionIdsByAlert.set(alert.id, ids);
+      for (const decisionId of ids) linkedDecisionIds.add(decisionId);
+    }
 
-        try {
-          const parsedAlert = JSON.parse(alert.raw_data) as AlertRecord;
-          for (const decision of parsedAlert.decisions || []) {
-            if (decision?.id !== undefined && decision?.id !== null) {
-              const decisionId = String(decision.id);
-              alertDecisionIds.add(decisionId);
-              deletedDecisionIds.add(decisionId);
-            }
-          }
-        } catch {
-          // Keep going even if cache payload is malformed.
-        }
+    const standaloneDecisionIds = decisions
+      .map((decision) => decision.id)
+      .filter((decisionId) => !linkedDecisionIds.has(decisionId));
+    const requestedDecisionIds = new Set([...linkedDecisionIds, ...standaloneDecisionIds]);
+    const result = createDeleteResult({
+      requested_alerts: alerts.length,
+      requested_decisions: requestedDecisionIds.size,
+      ip,
+    });
+
+    if (linkedDecisionIdsByAlert.size > 0) {
+      await queueAlertsForDeletion(linkedDecisionIdsByAlert);
+    }
+
+    const deletedStandaloneDecisionIds: string[] = [];
+    for (const decisionId of standaloneDecisionIds) {
+      try {
+        await deleteDecisionFromLapi(decisionId);
+        deletedStandaloneDecisionIds.push(decisionId);
       } catch (error) {
         const typedError = error as AnyError;
-        if (isPermissionError(typedError)) {
-          throw typedError;
-        }
-        result.failed.push(toFailure('alert', alert.id, typedError));
+        if (isPermissionError(typedError)) throw typedError;
+        result.failed.push(toFailure('decision', decisionId, typedError));
       }
     }
 
-    for (const decision of decisions) {
-      if (deletedDecisionIds.has(decision.id)) {
-        continue;
-      }
-
-      try {
-        await deleteDecisionFromLapi(decision.id);
-        deletedDecisionIds.add(decision.id);
-      } catch (error) {
-        const typedError = error as AnyError;
-        if (isPermissionError(typedError)) {
-          throw typedError;
-        }
-        result.failed.push(toFailure('decision', decision.id, typedError));
-      }
-    }
-
-    if (deletedAlertIds.length > 0) {
-      await syncWorker.runExclusive(() => {
-        const removeAlerts = database.transaction<string[]>((alertIds) => {
-          for (const id of alertIds) {
-            database.deleteAlert(id);
-            database.deleteDecisionsByAlertId(id);
-          }
-        });
-        removeAlerts(deletedAlertIds);
-      });
-      invalidateDashboardStatsCache();
-    }
-
-    const decisionIdsToDelete = Array.from(deletedDecisionIds).filter((id) => !alertDecisionIds.has(id));
-    if (decisionIdsToDelete.length > 0) {
+    if (deletedStandaloneDecisionIds.length > 0) {
       await syncWorker.runExclusive(() => {
         const removeDecisions = database.transaction<string[]>((decisionIds) => {
-          for (const id of decisionIds) {
-            database.deleteDecision(id);
-          }
+          for (const decisionId of decisionIds) database.deleteDecision(decisionId);
         });
-        removeDecisions(decisionIdsToDelete);
+        removeDecisions(deletedStandaloneDecisionIds);
       });
       invalidateDashboardStatsCache();
     }
 
-    result.deleted_alerts = deletedAlertIds.length;
-    result.deleted_decisions = deletedDecisionIds.size;
+    result.deleted_alerts = linkedDecisionIdsByAlert.size;
+    result.deleted_decisions = linkedDecisionIds.size + deletedStandaloneDecisionIds.length;
     return result;
   }
 
@@ -4084,8 +4268,10 @@ ${errorSummary}  Status: ${syncSummary.state}
     lapiClient,
     startBackgroundTasks,
     stopBackgroundTasks: () => {
+      pendingAlertDeletionStopped = true;
       stopRefreshScheduler();
       stopHeartbeatScheduler();
+      clearPendingAlertDeletionTimeout();
       queryWorker.close();
       syncWorker.close();
     },

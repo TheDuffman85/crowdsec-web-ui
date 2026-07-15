@@ -279,6 +279,7 @@ Choose exactly one auth mode: password auth or mTLS auth.
 | `CROWDSEC_IDLE_REFRESH_INTERVAL` | `10m` | Refresh interval used when the app considers itself idle. |
 | `CROWDSEC_IDLE_THRESHOLD` | `2m` | Inactivity period before the app switches to idle refresh behavior. |
 | `CROWDSEC_LAPI_REQUEST_TIMEOUT` | `30s` | Timeout for individual CrowdSec LAPI requests. Increase this for high-latency or very large CrowdSec datasets. |
+| `CROWDSEC_BOUNCER_PROPAGATION_DELAY` | `15s` | Backend grace period between expiring decisions and deleting their owning alerts, allowing bouncers to consume the deletion stream. Alert deletion requests return immediately; the durable job continues in the background and survives restarts. Accepts `ms`/`s`/`m`/`h`/`d` values. Set this at least as high as the slowest bouncer polling interval; `0` disables the delay. |
 | `CROWDSEC_PROMETHEUS_URL` | none | Optional CrowdSec Prometheus metrics endpoint. When unset, the Metrics page shows setup instructions; when set, it reads bouncer, machine, AppSec, parser, LAPI latency, and whitelist runtime metrics from this URL. |
 | `CROWDSEC_PROMETHEUS_REQUEST_TIMEOUT` | `5s` | Timeout for individual Prometheus metrics requests. Accepts the same interval syntax as refresh settings. |
 | `CROWDSEC_HEARTBEAT_INTERVAL` | `30s` | Interval for updating the Web UI machine heartbeat in CrowdSec. Use `0` or `manual` to disable heartbeat updates. |

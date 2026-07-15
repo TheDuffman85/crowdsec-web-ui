@@ -767,7 +767,8 @@ export function Alerts() {
             let resultMessage: string | null = null;
 
             if (pendingDeleteAction.kind === "single") {
-                await deleteAlert(pendingDeleteAction.alertId);
+                const result = await deleteAlert(pendingDeleteAction.alertId);
+                resultMessage = result ? summarizeDeleteResult(result, t) : null;
                 if (selectedAlert && selectedAlert.id === pendingDeleteAction.alertId) {
                     setSelectedAlert(null);
                 }

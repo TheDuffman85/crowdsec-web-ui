@@ -101,8 +101,8 @@ These routes are mounted below `/api/auth`. Auth setup/login routes are availabl
 | --- | --- | --- |
 | GET | `/api/alerts` | List synced alerts. Without `page`, returns an array. With `page`, returns a paginated response. |
 | GET | `/api/alerts/:id` | Fetch alert details from CrowdSec LAPI, hydrate with decisions, and apply simulation visibility. `:id` must be numeric. |
-| POST | `/api/alerts/bulk-delete` | Delete multiple alerts by numeric ID. Body: `{ "ids": [1, "2"] }`. Also deletes cached linked decisions. Blocked in read-only mode. |
-| DELETE | `/api/alerts/:id` | Delete one alert from CrowdSec LAPI and local cache. `:id` must be numeric. Blocked in read-only mode. |
+| POST | `/api/alerts/bulk-delete` | Immediately hide multiple alerts and durably queue deletion of them and their linked decisions. Body: `{ "ids": [1, "2"] }`. Blocked in read-only mode. |
+| DELETE | `/api/alerts/:id` | Immediately hide one alert and durably queue deletion of it and its linked decisions. `:id` must be numeric. Blocked in read-only mode. |
 
 Supported paginated alert filters: `q`, `ip`, `country`, `scenario`, `as`, `date`, `dateStart`, `dateEnd`, `target`, `simulation`, `tz_offset`.
 
@@ -130,7 +130,7 @@ Supported decision query parameters: `include_expired`, `page`, `page_size`, `q`
 | POST | `/api/cleanup/by-ip` | Delete cached/LAPI alerts and decisions for one IP address or range. Body: `{ "ip": "1.2.3.4" }`. Blocked in read-only mode. |
 | POST | `/api/cache/clear` | Clear synced alert/decision data and run a bootstrap sync. Blocked in read-only mode. |
 
-Bulk delete and cleanup responses use:
+Alert deletion, bulk deletion, and cleanup responses use:
 
 ```json
 {
@@ -143,7 +143,7 @@ Bulk delete and cleanup responses use:
 }
 ```
 
-`ip` is only included for cleanup-by-IP responses.
+Alert deletion requests return after a durable deletion tombstone is stored and the alert is removed from the visible cache. A backend worker expires linked decisions, waits for the configured bouncer propagation delay, and then deletes the owning alert. Pending work survives restarts, is processed before historical sync, and prevents sync from restoring the hidden alert. `ip` is only included for cleanup-by-IP responses.
 
 ## Stats and Dashboard
 

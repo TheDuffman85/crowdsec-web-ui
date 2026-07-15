@@ -127,6 +127,17 @@ export type AlertDecisionSnapshotRow = {
   origins: string | null;
   simulated: number;
 };
+export type PendingAlertDeletionRow = {
+  alert_id: string;
+  decision_ids_json: string;
+  requested_at: string;
+  decisions_deleted_at: string | null;
+  delete_after: string | null;
+  completed_at: string | null;
+  attempt_count: number;
+  last_attempt_at: string | null;
+  last_error: string | null;
+};
 type MetaRow = { value: string };
 type CountRow = { count: number };
 type IdRow = { id: string | number };
@@ -200,6 +211,7 @@ export class CrowdsecDatabase {
   private decisionDuplicateFlagsDirty = true;
   private decisionDuplicateFlagsInitialized = false;
   private lastDecisionDuplicateRefreshAt: string | null = null;
+  private alertDeletionTombstones = new Set<string>();
 
   private readonly insertAlertStatement: any;
   private readonly getAllAlertsStatement: any;
@@ -275,6 +287,7 @@ export class CrowdsecDatabase {
     this.db = openDatabase(resolvedPath);
     const freshDatabase = isDatabaseFresh(this.db);
     this.searchIndexAvailable = initSchema(this.db, freshDatabase);
+    this.refreshAlertDeletionTombstones();
 
     this.insertAlertStatement = this.db.query(`
       INSERT INTO alerts (
@@ -688,6 +701,7 @@ export class CrowdsecDatabase {
   }
 
   insertAlert(params: AlertInsertParams): boolean {
+    if (this.alertDeletionTombstones.has(String(params.$id))) return false;
     const fallback = {
       createdAt: params.$created_at,
       scenario: params.$scenario,
@@ -740,6 +754,7 @@ export class CrowdsecDatabase {
   }
 
   updateAlertRawData(id: string | number, rawData: string): boolean {
+    if (this.alertDeletionTombstones.has(String(id))) return false;
     return this.updateAlertRawDataStatement.run({
       $id: id,
       $raw_data: normalizeCrowdsecTimestampJson(rawData),
@@ -782,6 +797,7 @@ export class CrowdsecDatabase {
   }
 
   insertDecision(params: DecisionInsertParams): boolean {
+    if (this.alertDeletionTombstones.has(String(params.$alert_id))) return false;
     const fallback = {
       value: params.$value,
       type: params.$type,
@@ -990,6 +1006,75 @@ export class CrowdsecDatabase {
   deleteAlert(id: string | number): void {
     this.deleteAlertStatement.run({ $id: id });
     this.deleteAlertSearchIndex(id);
+  }
+
+  queueAlertDeletion(alertId: string | number, decisionIds: string[], requestedAt: string): void {
+    this.db.prepare(`
+      INSERT INTO pending_alert_deletions (
+        alert_id, decision_ids_json, requested_at, decisions_deleted_at,
+        delete_after, completed_at, attempt_count, last_attempt_at, last_error
+      ) VALUES (?, ?, ?, NULL, NULL, NULL, 0, NULL, NULL)
+      ON CONFLICT(alert_id) DO NOTHING
+    `).run(String(alertId), JSON.stringify(Array.from(new Set(decisionIds.map(String)))), requestedAt);
+    this.alertDeletionTombstones.add(String(alertId));
+  }
+
+  refreshAlertDeletionTombstones(): void {
+    const rows = this.db.prepare('SELECT alert_id FROM pending_alert_deletions').all() as Array<{ alert_id: string | number }>;
+    this.alertDeletionTombstones = new Set(rows.map((row) => String(row.alert_id)));
+  }
+
+  getPendingAlertDeletions(): PendingAlertDeletionRow[] {
+    return this.db.prepare(`
+      SELECT alert_id, decision_ids_json, requested_at, decisions_deleted_at,
+             delete_after, completed_at, attempt_count, last_attempt_at, last_error
+      FROM pending_alert_deletions
+      WHERE completed_at IS NULL
+      ORDER BY requested_at, alert_id
+    `).all() as PendingAlertDeletionRow[];
+  }
+
+  markAlertDeletionDecisionsExpired(alertId: string | number, deletedAt: string, deleteAfter: string): void {
+    this.db.prepare(`
+      UPDATE pending_alert_deletions
+      SET decisions_deleted_at = ?, delete_after = ?,
+          attempt_count = attempt_count + 1, last_attempt_at = ?, last_error = NULL
+      WHERE alert_id = ? AND completed_at IS NULL
+    `).run(deletedAt, deleteAfter, deletedAt, String(alertId));
+  }
+
+  recordAlertDeletionFailure(alertId: string | number, attemptedAt: string, error: string): void {
+    this.db.prepare(`
+      UPDATE pending_alert_deletions
+      SET attempt_count = attempt_count + 1, last_attempt_at = ?, last_error = ?
+      WHERE alert_id = ? AND completed_at IS NULL
+    `).run(attemptedAt, error, String(alertId));
+  }
+
+  completeAlertDeletion(alertId: string | number, completedAt: string): void {
+    this.db.prepare(`
+      UPDATE pending_alert_deletions
+      SET completed_at = ?, last_attempt_at = ?, last_error = NULL
+      WHERE alert_id = ? AND completed_at IS NULL
+    `).run(completedAt, completedAt, String(alertId));
+  }
+
+  purgeCompletedAlertDeletions(completedBefore: string): number {
+    const changes = this.db.prepare(`
+      DELETE FROM pending_alert_deletions
+      WHERE completed_at IS NOT NULL AND completed_at < ?
+    `).run(completedBefore).changes;
+    if (changes > 0) this.refreshAlertDeletionTombstones();
+    return changes;
+  }
+
+  getAlertDeletionTombstone(alertId: string | number): PendingAlertDeletionRow | null {
+    return (this.db.prepare(`
+      SELECT alert_id, decision_ids_json, requested_at, decisions_deleted_at,
+             delete_after, completed_at, attempt_count, last_attempt_at, last_error
+      FROM pending_alert_deletions
+      WHERE alert_id = ?
+    `).get(String(alertId)) as PendingAlertDeletionRow | null) || null;
   }
 
   deleteDecisionsByAlertId(alertId: string | number): void {
@@ -1805,6 +1890,22 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
     );
   `;
 
+  const createPendingAlertDeletionsTable = `
+    CREATE TABLE IF NOT EXISTS pending_alert_deletions (
+      alert_id TEXT PRIMARY KEY,
+      decision_ids_json TEXT NOT NULL,
+      requested_at TEXT NOT NULL,
+      decisions_deleted_at TEXT,
+      delete_after TEXT,
+      completed_at TEXT,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      last_attempt_at TEXT,
+      last_error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_pending_alert_deletions_due
+      ON pending_alert_deletions(completed_at, delete_after, requested_at);
+  `;
+
   db.exec(createAlertsTable);
   db.exec(createMetaTable);
   db.exec(`
@@ -1818,6 +1919,7 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
   db.exec(createNotificationsTable);
   db.exec(createNotificationIncidentsTable);
   db.exec(createCveCacheTable);
+  db.exec(createPendingAlertDeletionsTable);
 
   const tableInfo = db.query('PRAGMA table_info(decisions)').all() as Array<{ name: string; type: string }>;
   const idColumn = tableInfo.find((column) => column.name === 'id');
@@ -1858,6 +1960,13 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
   } else {
     db.exec(createDecisionsTable);
   }
+
+  db.exec(`
+    DROP TRIGGER IF EXISTS alerts_pending_deletion_insert_guard;
+    DROP TRIGGER IF EXISTS alerts_pending_deletion_update_guard;
+    DROP TRIGGER IF EXISTS decisions_pending_alert_deletion_insert_guard;
+    DROP TRIGGER IF EXISTS decisions_pending_alert_deletion_update_guard;
+  `);
 
   migrateTimestamps(db);
   migrateRecordIndexColumns(db);

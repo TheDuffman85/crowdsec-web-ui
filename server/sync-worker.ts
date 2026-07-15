@@ -27,6 +27,7 @@ parentPort?.on('message', (message: WorkerRequest) => {
 function execute(request: WorkerRequest['request']): unknown {
   if (request.type === 'persist-alerts') {
     const mutations = request.mutations as SyncAlertMutation[];
+    database.refreshAlertDeletionTombstones();
     let changed = false;
     const persist = database.transaction<SyncAlertMutation[]>((items) => {
       for (const mutation of items) {

@@ -103,6 +103,14 @@ describe('config helpers', () => {
     expect(createRuntimeConfig({ CROWDSEC_WEB_UI_MODE: 'load-test' }).deploymentMode).toBe('load-test');
   });
 
+  test('uses a configurable grace period for bouncer deletion propagation', () => {
+    expect(createRuntimeConfig({}).bouncerPropagationDelayMs).toBe(15_000);
+    expect(createRuntimeConfig({ CROWDSEC_BOUNCER_PROPAGATION_DELAY: '0' }).bouncerPropagationDelayMs).toBe(0);
+    expect(createRuntimeConfig({ CROWDSEC_BOUNCER_PROPAGATION_DELAY: '0s' }).bouncerPropagationDelayMs).toBe(0);
+    expect(createRuntimeConfig({ CROWDSEC_BOUNCER_PROPAGATION_DELAY: '25ms' }).bouncerPropagationDelayMs).toBe(25);
+    expect(createRuntimeConfig({ CROWDSEC_BOUNCER_PROPAGATION_DELAY: 'invalid' }).bouncerPropagationDelayMs).toBe(15_000);
+  });
+
   test('createRuntimeConfig reads relevant environment values', () => {
     const config = createRuntimeConfig({
       PORT: '4000',
@@ -121,6 +129,7 @@ describe('config helpers', () => {
       CROWDSEC_IDLE_REFRESH_INTERVAL: '1m',
       CROWDSEC_IDLE_THRESHOLD: '30s',
       CROWDSEC_LAPI_REQUEST_TIMEOUT: '2m',
+      CROWDSEC_BOUNCER_PROPAGATION_DELAY: '20s',
       CROWDSEC_PROMETHEUS_URL: 'http://crowdsec:6060/metrics',
       CROWDSEC_PROMETHEUS_REQUEST_TIMEOUT: '10s',
       CROWDSEC_HEARTBEAT_INTERVAL: '1m',
@@ -175,6 +184,7 @@ describe('config helpers', () => {
     expect(config.refreshIntervalMs).toBe(5_000);
     expect(config.idleRefreshIntervalMs).toBe(60_000);
     expect(config.lapiRequestTimeoutMs).toBe(120_000);
+    expect(config.bouncerPropagationDelayMs).toBe(20_000);
     expect(config.prometheusUrl).toBe('http://crowdsec:6060/metrics');
     expect(config.prometheusRequestTimeoutMs).toBe(10_000);
     expect(config.heartbeatIntervalMs).toBe(60_000);

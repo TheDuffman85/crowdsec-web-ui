@@ -45,6 +45,7 @@ export interface RuntimeConfig {
   idleRefreshIntervalMs: number;
   idleThresholdMs: number;
   lapiRequestTimeoutMs: number;
+  bouncerPropagationDelayMs: number;
   prometheusUrl?: string;
   prometheusRequestTimeoutMs: number;
   heartbeatIntervalMs: number;
@@ -239,6 +240,18 @@ function parsePositiveIntervalEnv(value: string | undefined, defaultValue: strin
   return parseRefreshInterval(defaultValue);
 }
 
+function parseNonNegativeIntervalEnv(value: string | undefined, defaultValue: string): number {
+  const normalized = (value ?? defaultValue).trim().toLowerCase();
+  if (normalized === '0') return 0;
+
+  const match = normalized.match(/^(\d+)(ms|[smhd])$/);
+  if (match) {
+    if (match[2] === 'ms') return Number.parseInt(match[1], 10);
+    return parseRefreshInterval(normalized);
+  }
+  return parseRefreshInterval(defaultValue);
+}
+
 function parsePositiveIntegerEnv(value: string | undefined, defaultValue: number): number {
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : defaultValue;
@@ -368,6 +381,7 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
     idleRefreshIntervalMs: parseRefreshInterval(env.CROWDSEC_IDLE_REFRESH_INTERVAL || '10m'),
     idleThresholdMs: parseRefreshInterval(env.CROWDSEC_IDLE_THRESHOLD || '2m'),
     lapiRequestTimeoutMs: parsePositiveIntervalEnv(env.CROWDSEC_LAPI_REQUEST_TIMEOUT, '30s'),
+    bouncerPropagationDelayMs: parseNonNegativeIntervalEnv(env.CROWDSEC_BOUNCER_PROPAGATION_DELAY, '15s'),
     prometheusUrl: env.CROWDSEC_PROMETHEUS_URL?.trim() || undefined,
     prometheusRequestTimeoutMs: parsePositiveIntervalEnv(env.CROWDSEC_PROMETHEUS_REQUEST_TIMEOUT, '5s'),
     heartbeatIntervalMs: parseRefreshInterval(env.CROWDSEC_HEARTBEAT_INTERVAL || '30s'),
