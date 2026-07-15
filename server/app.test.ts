@@ -4431,6 +4431,69 @@ describe('createApp', () => {
     destroyTempDir();
   });
 
+  test('imports a real LAPI alert created after one delta cutoff on the next overlapped refresh', async () => {
+    vi.useFakeTimers();
+    const firstCutoff = Date.parse('2026-07-15T13:10:02.116Z');
+    vi.setSystemTime(firstCutoff);
+    const lateAlert = sampleAlert({
+      id: 252,
+      uuid: 'alert-252',
+      created_at: new Date(firstCutoff + 1_000).toISOString(),
+      decisions: [{
+        id: 2520,
+        type: 'ban',
+        value: '192.0.2.252',
+        stop_at: new Date(firstCutoff + 60 * 60_000).toISOString(),
+        origin: 'crowdsec',
+        simulated: false,
+      }],
+    });
+    let advancedPastFirstCutoff = false;
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '0',
+      },
+      initialCacheState: {
+        isInitialized: true,
+        isComplete: true,
+        lastUpdate: new Date(firstCutoff - 30_000).toISOString(),
+      },
+      fetchResolver: (url) => {
+        if (!url.includes('/v1/alerts?')) return undefined;
+        if (!advancedPastFirstCutoff) {
+          // Emulate CrowdSec creating an alert while the first delta request is
+          // in flight. The padded response may contain it, but the application
+          // must not advance its authoritative cursor past the earlier cutoff.
+          advancedPastFirstCutoff = true;
+          vi.setSystemTime(firstCutoff + 2_000);
+        }
+        return Response.json([lateAlert]);
+      },
+    });
+
+    try {
+      const firstResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50'));
+      expect(firstResponse.status).toBe(200);
+      expect(((await firstResponse.json()) as { pagination: { total: number } }).pagination.total).toBe(0);
+      expect(database.getAlertDecisionSnapshot(252)).toBeNull();
+
+      const secondResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50'));
+      expect(secondResponse.status).toBe(200);
+      const secondJson = await secondResponse.json() as {
+        data: Array<{ id: number }>;
+        pagination: { total: number };
+      };
+      expect(secondJson.pagination.total).toBe(1);
+      expect(secondJson.data.map((alert) => alert.id)).toEqual([252]);
+      expect(database.getDecisionById('2520')).not.toBeNull();
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      vi.useRealTimers();
+      destroyTempDir();
+    }
+  });
+
   test('prunes stale cached alerts only from a complete unfiltered reconciliation window', async () => {
     const createdAt = new Date(Date.now() - 30_000).toISOString();
     const keptAlert = sampleAlert({

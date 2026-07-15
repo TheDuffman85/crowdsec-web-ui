@@ -15,6 +15,8 @@ import {
 } from './load-test-auth';
 import {
   DEFAULT_LOAD_TEST_BLOCKLIST_DECISIONS,
+  getLoadTestBatchCreatedAtEnd,
+  getLoadTestHeadSyncEnd,
   getLoadTestSourceAlertIdForDecision,
   normalizeLoadTestBlocklistDecisionCount,
 } from './load-test-shape';
@@ -288,11 +290,26 @@ function buildGeneratedDecision(decisionId: number, alert: AlertRecord, createdA
   };
 }
 
-function generateLoadTestBatch(): void {
+type LoadTestFetchFilters = {
+  origin?: string;
+  scenario?: string;
+  includeCapi?: boolean;
+  relativeWindow?: {
+    startMs: number;
+    endMs: number;
+    paddingMs: number;
+  };
+};
+
+function generateLoadTestBatch(createdAtEndMs: number): void {
   const alertSlots = Math.max(refreshAlertCount, refreshDecisionCount > 0 && refreshAlertCount === 0 ? refreshDecisionCount : 0);
   if (alertSlots === 0 && refreshDecisionCount === 0) return;
 
-  const createdAtBase = Date.now() - 1_000;
+  // The application constrains the padded LAPI response back to its exact
+  // authoritative window. Anchor generated records immediately before that
+  // window's end so time spent planning the delta cannot make them too new for
+  // the refresh that caused the fake LAPI to expose them.
+  const createdAtBase = getLoadTestBatchCreatedAtEnd(createdAtEndMs, Date.now());
   const generated: AlertRecord[] = [];
   for (let index = 0; index < alertSlots; index += 1) {
     const alertId = nextGeneratedAlertId++;
@@ -317,17 +334,17 @@ function generateLoadTestBatch(): void {
   }
 }
 
-function generateDueLoadTestData(forceBatch = false): void {
+function generateDueLoadTestData(createdAtEndMs: number, forceBatch = false): void {
   if (config.refreshIntervalMs <= 0) {
     if (forceBatch) {
-      generateLoadTestBatch();
+      generateLoadTestBatch(createdAtEndMs);
     }
     return;
   }
 
   const dueBatches = Math.floor((Date.now() - loadTestStartedAt) / config.refreshIntervalMs);
   while (generatedBatches < dueBatches) {
-    generateLoadTestBatch();
+    generateLoadTestBatch(createdAtEndMs);
     generatedBatches += 1;
   }
 }
@@ -486,9 +503,16 @@ function loadAlertsFromSourceWithFilters(
   });
 }
 
-function loadSyntheticAlerts(since: string | null, until: string | null, filters: { origin?: string; scenario?: string; includeCapi?: boolean }): AlertRecord[] {
-  generateDueLoadTestData(config.refreshIntervalMs <= 0 && until === null);
+function loadSyntheticAlerts(since: string | null, until: string | null, filters: LoadTestFetchFilters): AlertRecord[] {
   const window = getSyncWindow(since, until);
+  const headSyncEnd = getLoadTestHeadSyncEnd(
+    filters.relativeWindow?.endMs,
+    Date.now(),
+    config.lapiRequestTimeoutMs,
+  );
+  if (headSyncEnd !== null) {
+    generateDueLoadTestData(headSyncEnd, config.refreshIntervalMs <= 0);
+  }
   const merged = new Map<string, AlertRecord>();
 
   for (const alert of loadAlertsFromSourceWithFilters(window.start, window.end, filters)) {
@@ -526,7 +550,7 @@ const fakeLapiClient = {
   fetchAlerts: async (
     since: string | null = null,
     until: string | null = null,
-    filters: { origin?: string; scenario?: string; includeCapi?: boolean } = {},
+    filters: LoadTestFetchFilters = {},
   ) => loadSyntheticAlerts(since, until, filters),
   getAlertById: async (alertId: string | number) => {
     const dynamicAlert = dynamicAlerts.get(String(alertId));

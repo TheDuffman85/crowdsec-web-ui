@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
+  getLoadTestBatchCreatedAtEnd,
+  getLoadTestHeadSyncEnd,
   getLoadTestDecisionIdsForAlert,
   getLoadTestSourceAlertIdForDecision,
   normalizeLoadTestBlocklistDecisionCount,
@@ -28,5 +30,15 @@ describe('load-test dataset shape', () => {
     expect(normalizeLoadTestBlocklistDecisionCount(1, 3, 100_000)).toBe(3);
     expect(Array.from(getLoadTestDecisionIdsForAlert(1, 1, 3, 100_000))).toEqual([1, 2, 3]);
     expect(normalizeLoadTestBlocklistDecisionCount(0, 3, 100_000)).toBe(0);
+  });
+
+  test('generates refresh data only for a current authoritative sync window', () => {
+    const now = Date.parse('2026-07-15T13:10:03.853Z');
+    const deltaEnd = Date.parse('2026-07-15T13:10:02.116Z');
+
+    expect(getLoadTestHeadSyncEnd(deltaEnd, now, 30_000)).toBe(deltaEnd);
+    expect(getLoadTestBatchCreatedAtEnd(deltaEnd, now)).toBe(deltaEnd - 1);
+    expect(getLoadTestHeadSyncEnd(now - 60 * 60_000, now, 30_000)).toBeNull();
+    expect(getLoadTestHeadSyncEnd(undefined, now, 30_000)).toBeNull();
   });
 });
