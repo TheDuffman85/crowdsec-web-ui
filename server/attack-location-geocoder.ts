@@ -50,20 +50,17 @@ interface CreateAttackLocationResolverOptions {
   warn?: (message: string) => void;
 }
 
-function hasDumpFile(dumpDirectory: string, subdirectory: string, basename: string): boolean {
+function hasImmutableDumpFile(dumpDirectory: string, subdirectory: string, basename: string): boolean {
   try {
-    return fs.readdirSync(path.join(dumpDirectory, subdirectory)).some((filename) => (
-      filename === `${basename}.txt`
-      || (filename.startsWith(`${basename}_`) && filename.endsWith('.txt'))
-    ));
+    return fs.statSync(path.join(dumpDirectory, subdirectory, `${basename}.txt`)).isFile();
   } catch {
     return false;
   }
 }
 
 export function hasGeoNamesAttackLocationData(dumpDirectory: string): boolean {
-  return hasDumpFile(dumpDirectory, 'cities1000', 'cities1000')
-    && hasDumpFile(dumpDirectory, 'admin1_codes', 'admin1CodesASCII');
+  return hasImmutableDumpFile(dumpDirectory, 'cities1000', 'cities1000')
+    && hasImmutableDumpFile(dumpDirectory, 'admin1_codes', 'admin1CodesASCII');
 }
 
 function normalizeText(value: unknown): string | undefined {

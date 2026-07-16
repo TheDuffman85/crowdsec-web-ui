@@ -1,6 +1,13 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
+import { makeGeoNamesSnapshotsImmutable } from '../scripts/geonames-snapshot.mjs';
 import type { DashboardAttackLocationDatum } from '../shared/contracts';
-import { createAttackLocationResolver } from './attack-location-geocoder';
+import {
+  createAttackLocationResolver,
+  hasGeoNamesAttackLocationData,
+} from './attack-location-geocoder';
 
 const berlinLocation: DashboardAttackLocationDatum = {
   latitude: 52.52,
@@ -18,6 +25,36 @@ function createClient(results: Array<Array<Record<string, unknown>>>) {
 }
 
 describe('attack location geocoder', () => {
+  test('promotes downloaded files to immutable snapshots that cannot trigger runtime refreshes', async () => {
+    const dumpDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'crowdsec-geonames-'));
+    const citiesDirectory = path.join(dumpDirectory, 'cities1000');
+    const admin1Directory = path.join(dumpDirectory, 'admin1_codes');
+
+    try {
+      fs.mkdirSync(citiesDirectory);
+      fs.mkdirSync(admin1Directory);
+      fs.writeFileSync(path.join(citiesDirectory, 'cities1000_2026-07-15.txt'), 'cities');
+      fs.writeFileSync(path.join(admin1Directory, 'admin1CodesASCII_2026-07-15.txt'), 'regions');
+
+      expect(hasGeoNamesAttackLocationData(dumpDirectory)).toBe(false);
+      const datedClient = createClient([]);
+      const datedResolver = createAttackLocationResolver({
+        dumpDirectory,
+        client: datedClient,
+      });
+      await expect(datedResolver.resolve([berlinLocation])).resolves.toEqual([berlinLocation]);
+      expect(datedClient.init).not.toHaveBeenCalled();
+
+      makeGeoNamesSnapshotsImmutable(dumpDirectory);
+
+      expect(hasGeoNamesAttackLocationData(dumpDirectory)).toBe(true);
+      expect(fs.existsSync(path.join(citiesDirectory, 'cities1000_2026-07-15.txt'))).toBe(false);
+      expect(fs.existsSync(path.join(admin1Directory, 'admin1CodesASCII_2026-07-15.txt'))).toBe(false);
+    } finally {
+      fs.rmSync(dumpDirectory, { recursive: true, force: true });
+    }
+  });
+
   test('resolves a nearby city, admin region, and country from cities1000', async () => {
     const client = createClient([[
       {

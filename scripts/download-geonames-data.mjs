@@ -1,5 +1,6 @@
 import path from 'node:path';
 import localReverseGeocoder from 'local-reverse-geocoder';
+import { makeGeoNamesSnapshotsImmutable } from './geonames-snapshot.mjs';
 
 const dumpDirectory = path.resolve(
   process.env.GEONAMES_DUMP_DIR || process.argv[2] || 'geonames',
@@ -19,6 +20,12 @@ localReverseGeocoder.init(
     },
   },
   () => {
-    console.log('GeoNames cities1000 data is ready.');
+    try {
+      makeGeoNamesSnapshotsImmutable(dumpDirectory);
+      console.log('Immutable GeoNames cities1000 snapshot is ready.');
+    } catch (error) {
+      console.error(error);
+      process.exitCode = 1;
+    }
   },
 );
