@@ -43,6 +43,7 @@ export interface RuntimeConfig {
   lookbackPeriod: string;
   lookbackMs: number;
   refreshIntervalMs: number;
+  manualRefreshEnabled: boolean;
   idleRefreshIntervalMs: number;
   idleThresholdMs: number;
   lapiRequestTimeoutMs: number;
@@ -66,6 +67,7 @@ export interface RuntimeConfig {
   commitHash: string;
   updateCheckEnabled: boolean;
   deploymentMode: 'standard' | 'load-test';
+  loadTestProfile: string | null;
   dbDir: string;
   geonamesDumpDir: string;
   notificationSecretKey?: string;
@@ -380,6 +382,7 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
     lookbackPeriod,
     lookbackMs: parseLookbackToMs(lookbackPeriod),
     refreshIntervalMs,
+    manualRefreshEnabled: parseBooleanEnv(env.CROWDSEC_MANUAL_REFRESH_ENABLED, false),
     idleRefreshIntervalMs: parseRefreshInterval(env.CROWDSEC_IDLE_REFRESH_INTERVAL || '10m'),
     idleThresholdMs: parseRefreshInterval(env.CROWDSEC_IDLE_THRESHOLD || '2m'),
     lapiRequestTimeoutMs: parsePositiveIntervalEnv(env.CROWDSEC_LAPI_REQUEST_TIMEOUT, '30s'),
@@ -403,6 +406,9 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
     commitHash: env.VITE_COMMIT_HASH || '',
     updateCheckEnabled: Boolean(env.VITE_COMMIT_HASH || env.VITE_VERSION),
     deploymentMode: env.CROWDSEC_WEB_UI_MODE === 'load-test' ? 'load-test' : 'standard',
+    loadTestProfile: env.CROWDSEC_WEB_UI_MODE === 'load-test'
+      ? env.LOADTEST_PROFILE?.trim() || 'default'
+      : null,
     dbDir: env.DB_DIR || '/app/data',
     geonamesDumpDir: env.GEONAMES_DUMP_DIR || path.resolve(process.cwd(), 'geonames'),
     notificationSecretKey,

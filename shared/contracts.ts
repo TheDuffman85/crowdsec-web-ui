@@ -169,6 +169,14 @@ export interface SlimDecision {
   simulated?: boolean;
 }
 
+export interface AlertDecisionSummary {
+  origins: string[];
+  active_count: number;
+  expired_count: number;
+  simulated_active_count: number;
+  simulated_expired_count: number;
+}
+
 export interface SlimAlert {
   id: string | number;
   created_at: string;
@@ -182,6 +190,7 @@ export interface SlimAlert {
   target?: string;
   meta_search: string;
   decisions: SlimDecision[];
+  decision_summary?: AlertDecisionSummary;
   simulated?: boolean;
 }
 
@@ -452,9 +461,12 @@ export interface ConfigResponse {
   lookback_hours: number;
   lookback_days: number;
   refresh_interval: number;
+  manual_refresh_enabled?: boolean;
   current_interval_name: string;
   lapi_status: LapiStatus;
   sync_status: SyncStatus;
+  cache_last_update?: string | null;
+  next_refresh_at?: string | null;
   simulations_enabled: boolean;
   machine_features_enabled: boolean;
   origin_features_enabled: boolean;
@@ -463,6 +475,7 @@ export interface ConfigResponse {
   metrics_enabled?: boolean;
   metrics_sidebar_visible?: boolean;
   deployment_mode?: 'load-test';
+  load_test_profile?: string;
   permissions?: {
     mode: 'admin' | 'read-only';
     can_manage_enforcement: boolean;
@@ -472,6 +485,10 @@ export interface ConfigResponse {
 
 export interface UpdateMetricsSidebarPreferenceRequest {
   visible: boolean;
+}
+
+export interface UpdateManualRefreshSettingRequest {
+  enabled: boolean;
 }
 
 export interface CrowdsecMetricsApiEntity {

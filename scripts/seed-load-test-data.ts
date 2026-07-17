@@ -5,8 +5,10 @@ import { CrowdsecDatabase } from '../server/database';
 import { installTimestampedConsole } from '../server/logging';
 import {
   DEFAULT_LOAD_TEST_BLOCKLIST_DECISIONS,
-  getLoadTestDecisionIdsForAlert,
-  normalizeLoadTestBlocklistDecisionCount,
+  getLoadTestDecisionIdsForAlertLayout,
+  isLoadTestListOrigin,
+  normalizeLoadTestBlocklistDecisionCounts,
+  withoutLoadTestListAlertAddress,
 } from './load-test-shape';
 
 const DEFAULT_ALERTS = 300_000;
@@ -26,7 +28,11 @@ interface LoadTestConfig {
   activeDecisionRatio: number;
   simulationRatio: number;
   duplicateValueRatio: number;
-  blocklistDecisions: number;
+  blocklistDecisionCounts: number[];
+  blocklistDecisionTotal: number;
+  emptyAlerts: number;
+  expiredAlerts: number;
+  expiringSoonDecisions: number;
   lookbackMs: number;
 }
 
@@ -49,6 +55,8 @@ interface AlertTemplate {
   simulated: boolean;
   eventsCount: number;
   isBlocklist: boolean;
+  blocklistDecisionCount: number;
+  isExpiredDecisionAlert: boolean;
 }
 
 interface DecisionTemplate {
@@ -137,9 +145,38 @@ function parseRatioEnv(name: string, defaultValue: number): number {
   return parsed;
 }
 
+function parseIntegerListEnv(name: string): number[] | null {
+  const raw = process.env[name];
+  if (raw === undefined) return null;
+  if (!raw.trim()) return [];
+  return raw.split(',').map((value) => {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      throw new Error(`${name} must be a comma-separated list of non-negative integers.`);
+    }
+    return parsed;
+  });
+}
+
 function readConfig(): LoadTestConfig {
   const alerts = parseIntegerEnv('LOADTEST_ALERTS', DEFAULT_ALERTS);
   const decisions = parseIntegerEnv('LOADTEST_DECISIONS', DEFAULT_DECISIONS);
+  const requestedBlocklistCounts = parseIntegerListEnv('LOADTEST_BLOCKLIST_SIZES')
+    ?? [parseIntegerEnv('LOADTEST_BLOCKLIST_DECISIONS', DEFAULT_LOAD_TEST_BLOCKLIST_DECISIONS)];
+  const blocklistDecisionCounts = normalizeLoadTestBlocklistDecisionCounts(
+    alerts,
+    decisions,
+    requestedBlocklistCounts,
+  );
+  const blocklistDecisionTotal = blocklistDecisionCounts.reduce((total, count) => total + count, 0);
+  const regularAlertCapacity = Math.max(0, alerts - blocklistDecisionCounts.length);
+  const requestedEmptyAlerts = parseIntegerEnv('LOADTEST_EMPTY_ALERTS', 0);
+  const maximumEmptyAlerts = Math.max(0, regularAlertCapacity - (decisions > blocklistDecisionTotal ? 1 : 0));
+  const emptyAlerts = Math.min(requestedEmptyAlerts, maximumEmptyAlerts);
+  const expiredAlerts = Math.min(
+    parseIntegerEnv('LOADTEST_EXPIRED_ALERTS', 0),
+    Math.max(0, regularAlertCapacity - emptyAlerts),
+  );
   return {
     alerts,
     decisions,
@@ -148,10 +185,13 @@ function readConfig(): LoadTestConfig {
     activeDecisionRatio: parseRatioEnv('LOADTEST_ACTIVE_DECISION_RATIO', DEFAULT_ACTIVE_DECISION_RATIO),
     simulationRatio: parseRatioEnv('LOADTEST_SIMULATION_RATIO', DEFAULT_SIMULATION_RATIO),
     duplicateValueRatio: parseRatioEnv('LOADTEST_DUPLICATE_VALUE_RATIO', DEFAULT_DUPLICATE_VALUE_RATIO),
-    blocklistDecisions: normalizeLoadTestBlocklistDecisionCount(
-      alerts,
-      decisions,
-      parseIntegerEnv('LOADTEST_BLOCKLIST_DECISIONS', DEFAULT_LOAD_TEST_BLOCKLIST_DECISIONS),
+    blocklistDecisionCounts,
+    blocklistDecisionTotal,
+    emptyAlerts,
+    expiredAlerts,
+    expiringSoonDecisions: Math.min(
+      parseIntegerEnv('LOADTEST_EXPIRING_SOON_DECISIONS', 0),
+      Math.max(0, decisions - blocklistDecisionTotal),
     ),
     lookbackMs: parseLookbackToMs(process.env.CROWDSEC_LOOKBACK_PERIOD || '30d'),
   };
@@ -193,8 +233,20 @@ function buildAlertTemplate(id: number, config: LoadTestConfig, nowMs: number): 
   const scenarioTuple = pick(scenarios, id, config.seed, 11);
   const countryTuple = pick(countries, id, config.seed, 17);
   const asTuple = pick(asNames, id, config.seed, 23);
-  const createdAt = isoFromOffset(nowMs, Math.floor(fraction(id, config.seed, 29) * config.lookbackMs * 0.95));
-  const isBlocklist = id === 1 && config.blocklistDecisions > 0;
+  const blocklistDecisionCount = config.blocklistDecisionCounts[id - 1] || 0;
+  const isBlocklist = blocklistDecisionCount > 0;
+  const createdAt = isBlocklist
+    ? isoFromOffset(nowMs, id * 30_000)
+    : isoFromOffset(nowMs, Math.floor(fraction(id, config.seed, 29) * config.lookbackMs * 0.95));
+  const decisionBearingAlertEnd = config.alerts - config.emptyAlerts;
+  const expiredAlertStart = Math.max(
+    config.blocklistDecisionCounts.length + 1,
+    decisionBearingAlertEnd - config.expiredAlerts + 1,
+  );
+  const isExpiredDecisionAlert = !isBlocklist
+    && config.expiredAlerts > 0
+    && id >= expiredAlertStart
+    && id <= decisionBearingAlertEnd;
   return {
     id,
     createdAt,
@@ -208,12 +260,14 @@ function buildAlertTemplate(id: number, config: LoadTestConfig, nowMs: number): 
     asNumber: asTuple[1],
     target: isBlocklist ? 'blocklist' : scenarioTuple[2],
     machine: pick(machines, id, config.seed, 31),
-    origin: isBlocklist ? 'lists' : pick(origins, id, config.seed, 37),
+    origin: isBlocklist ? (id % 2 === 0 ? 'CAPI' : 'lists') : pick(origins, id, config.seed, 37),
     latitude: countryTuple[1] + (fraction(id, config.seed, 41) - 0.5) * 4,
     longitude: countryTuple[2] + (fraction(id, config.seed, 43) - 0.5) * 4,
     simulated: fraction(id, config.seed, 47) < config.simulationRatio,
-    eventsCount: isBlocklist ? config.blocklistDecisions : 1 + Math.floor(fraction(id, config.seed, 53) * 120),
+    eventsCount: isBlocklist ? blocklistDecisionCount : 1 + Math.floor(fraction(id, config.seed, 53) * 120),
     isBlocklist,
+    blocklistDecisionCount,
+    isExpiredDecisionAlert,
   };
 }
 
@@ -223,11 +277,18 @@ function buildDecisionTemplate(
   config: LoadTestConfig,
   nowMs: number,
 ): DecisionTemplate {
-  const active = fraction(id, config.seed, 59) < config.activeDecisionRatio;
+  const regularDecisionOrdinal = id - config.blocklistDecisionTotal;
+  const expiringSoon = !alert.isExpiredDecisionAlert
+    && regularDecisionOrdinal > 0
+    && regularDecisionOrdinal <= config.expiringSoonDecisions;
+  const active = expiringSoon || (!alert.isExpiredDecisionAlert && fraction(id, config.seed, 59) < config.activeDecisionRatio);
   const duplicate = fraction(id, config.seed, 61) < config.duplicateValueRatio;
   const simulated = alert.simulated || fraction(id, config.seed, 67) < config.simulationRatio;
-  const hours = 1 + Math.floor(fraction(id, config.seed, 71) * 168);
-  const stopOffsetMs = hours * 3_600_000;
+  const hours = alert.isExpiredDecisionAlert
+    ? 1 + Math.floor(fraction(id, config.seed, 71) * 72)
+    : 1 + Math.floor(fraction(id, config.seed, 71) * 168);
+  const expiringSoonMinutes = 5 + Math.floor(fraction(id, config.seed, 79) * 11);
+  const stopOffsetMs = expiringSoon ? expiringSoonMinutes * 60_000 : hours * 3_600_000;
   const stopAt = new Date(nowMs + (active ? stopOffsetMs : -stopOffsetMs)).toISOString();
 
   return {
@@ -248,7 +309,7 @@ function buildDecisionTemplate(
     asName: alert.asName,
     target: alert.target,
     simulated,
-    duration: `${hours}h`,
+    duration: expiringSoon ? `${expiringSoonMinutes}m` : `${hours}h`,
   };
 }
 
@@ -282,12 +343,12 @@ function buildEvents(alert: AlertTemplate) {
 function buildEmbeddedDecisions(alert: AlertTemplate, config: LoadTestConfig, nowMs: number) {
   if (config.decisions === 0 || config.alerts === 0) return [];
   const decisions = [];
-  for (const decisionId of getLoadTestDecisionIdsForAlert(
-    alert.id,
-    config.alerts,
-    config.decisions,
-    config.blocklistDecisions,
-  )) {
+  for (const decisionId of getLoadTestDecisionIdsForAlertLayout(alert.id, {
+    alertCount: config.alerts,
+    decisionCount: config.decisions,
+    blocklistDecisionCounts: config.blocklistDecisionCounts,
+    emptyAlertCount: config.emptyAlerts,
+  })) {
     decisions.push(decisionSummary(buildDecisionTemplate(decisionId, alert, config, nowMs)));
   }
   return decisions;
@@ -295,6 +356,19 @@ function buildEmbeddedDecisions(alert: AlertTemplate, config: LoadTestConfig, no
 
 function buildAlertRecord(alert: AlertTemplate, config: LoadTestConfig, nowMs: number) {
   const decisions = buildEmbeddedDecisions(alert, config, nowMs);
+  const listOrigin = isLoadTestListOrigin(alert.origin);
+  const source = withoutLoadTestListAlertAddress({
+    scope: listOrigin ? `lists:load-test-blocklist-${alert.id}` : 'ip',
+    value: alert.ip,
+    ip: alert.ip,
+    cn: alert.country,
+    city: alert.city,
+    region: alert.region,
+    as_name: alert.asName,
+    as_number: alert.asNumber,
+    latitude: Number(alert.latitude.toFixed(4)),
+    longitude: Number(alert.longitude.toFixed(4)),
+  }, [alert.origin]);
   return {
     id: alert.id,
     uuid: `loadtest-alert-${alert.id}`,
@@ -303,7 +377,7 @@ function buildAlertRecord(alert: AlertTemplate, config: LoadTestConfig, nowMs: n
     reason: alert.reason,
     message: alert.isBlocklist
       ? `${decisions.length} decisions imported from the synthetic blocklist`
-      : `${alert.eventsCount} events matched ${alert.scenario} from ${alert.ip}`,
+      : `${alert.eventsCount} events matched ${alert.scenario}${listOrigin ? '' : ` from ${alert.ip}`}`,
     machine_id: alert.machine,
     machine_alias: alert.machine,
     events_count: alert.eventsCount,
@@ -311,18 +385,7 @@ function buildAlertRecord(alert: AlertTemplate, config: LoadTestConfig, nowMs: n
     decisions,
     target: alert.target,
     simulated: alert.simulated,
-    source: {
-      scope: alert.isBlocklist ? 'lists:load-test-blocklist' : 'ip',
-      value: alert.ip,
-      ip: alert.ip,
-      cn: alert.country,
-      city: alert.city,
-      region: alert.region,
-      as_name: alert.asName,
-      as_number: alert.asNumber,
-      latitude: Number(alert.latitude.toFixed(4)),
-      longitude: Number(alert.longitude.toFixed(4)),
-    },
+    source,
   };
 }
 
@@ -375,7 +438,10 @@ const seedStartedAt = Date.now();
 console.log(`Seeding load-test database at ${dbPath}`);
 console.log(`Alerts: ${config.alerts.toLocaleString('en-US')}`);
 console.log(`Decisions: ${config.decisions.toLocaleString('en-US')}`);
-console.log(`Decisions in blocklist alert: ${config.blocklistDecisions.toLocaleString('en-US')}`);
+console.log(`Blocklist decision sizes: ${config.blocklistDecisionCounts.length > 0 ? config.blocklistDecisionCounts.map((count) => count.toLocaleString('en-US')).join(', ') : 'none'}`);
+console.log(`Alerts without decisions: ${config.emptyAlerts.toLocaleString('en-US')}`);
+console.log(`Alerts with expired decisions: ${config.expiredAlerts.toLocaleString('en-US')}`);
+console.log(`Decisions expiring 5-15 minutes after seed: ${config.expiringSoonDecisions.toLocaleString('en-US')}`);
 console.log(`Seed: ${config.seed}`);
 if (config.alerts === 0 && config.decisions > 0) {
   console.log('Warning: LOADTEST_DECISIONS requires alerts in CrowdSec alert payloads; no decisions will be generated when LOADTEST_ALERTS=0.');

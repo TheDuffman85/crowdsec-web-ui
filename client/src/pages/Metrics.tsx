@@ -684,7 +684,7 @@ function AppsecEngineList({ items }: { items?: CrowdsecMetricsAppsecEngine[] }) 
 
 export function Metrics() {
   const { t } = useI18n();
-  const { refreshSignal, setLastUpdated } = useRefresh();
+  const { refreshSignal } = useRefresh();
   const [state, setState] = useState<MetricsState>({ status: 'loading' });
   const [showChildParserNodes, setShowChildParserNodes] = useState(readStoredShowChildParserNodes);
 
@@ -704,12 +704,11 @@ export function Metrics() {
       }
 
       const data = await fetchCrowdsecMetrics();
-      setLastUpdated(new Date());
       setState({ status: 'ready', data });
     } catch (error: unknown) {
       setState({ status: 'error', message: getErrorMessage(error, t('pages.metrics.fetchFailed')) });
     }
-  }, [setLastUpdated, t]);
+  }, [t]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {

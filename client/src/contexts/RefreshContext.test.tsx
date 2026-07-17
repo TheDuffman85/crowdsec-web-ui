@@ -1,9 +1,45 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { RefreshProvider } from './RefreshContext';
 import { useRefresh } from './useRefresh';
 import { fetchConfig } from '../lib/api';
+
+class MockWebSocket {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSING = 2;
+  static readonly CLOSED = 3;
+  static instances: MockWebSocket[] = [];
+  static autoOpen = true;
+
+  readonly url: string;
+  readyState = MockWebSocket.CONNECTING;
+  onopen: (() => void) | null = null;
+  onmessage: ((event: { data: string }) => void) | null = null;
+  onerror: (() => void) | null = null;
+  onclose: (() => void) | null = null;
+
+  constructor(url: string) {
+    this.url = url;
+    MockWebSocket.instances.push(this);
+    queueMicrotask(() => {
+      if (!MockWebSocket.autoOpen || this.readyState !== MockWebSocket.CONNECTING) return;
+      this.readyState = MockWebSocket.OPEN;
+      this.onopen?.();
+    });
+  }
+
+  close(): void {
+    if (this.readyState >= MockWebSocket.CLOSING) return;
+    this.readyState = MockWebSocket.CLOSED;
+    this.onclose?.();
+  }
+
+  emit(message: unknown): void {
+    this.onmessage?.({ data: JSON.stringify(message) });
+  }
+}
 
 vi.mock('../lib/api', () => ({
   fetchConfig: vi.fn(async () => ({
@@ -28,20 +64,25 @@ vi.mock('../lib/api', () => ({
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useRealTimers();
+  MockWebSocket.instances = [];
+  MockWebSocket.autoOpen = true;
+  vi.stubGlobal('WebSocket', MockWebSocket);
 });
 
 function Consumer() {
-  const { intervalMs, refreshSignal, syncStatus, setIntervalMs } = useRefresh();
+  const { intervalMs, lastUpdated, refreshSignal, syncStatus, setIntervalMs } = useRefresh();
 
   return (
     <div>
       <span data-testid="interval">{intervalMs}</span>
       <span data-testid="refresh">{refreshSignal}</span>
+      <span data-testid="last-updated">{lastUpdated?.toISOString() || 'never'}</span>
       <span data-testid="sync">{syncStatus?.message}</span>
       <button type="button" onClick={() => void setIntervalMs(30000).catch(() => undefined)}>
         update
@@ -60,7 +101,114 @@ function IntervalConsumer({ value }: { value: number }) {
   );
 }
 
+function ManualRefreshConsumer() {
+  const { refreshNow, syncStatus } = useRefresh();
+
+  return (
+    <div>
+      <span data-testid="manual-sync">{syncStatus?.message}</span>
+      <button type="button" onClick={() => void refreshNow?.('full')}>full-refresh</button>
+    </div>
+  );
+}
+
 describe('RefreshContext', () => {
+  test('shows historical sync status immediately while a full refresh runs', async () => {
+    let releaseRefresh: ((response: Response) => void) | null = null;
+    const fetchSpy = vi.fn(async () => new Promise<Response>((resolve) => {
+      releaseRefresh = resolve;
+    }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    render(
+      <RefreshProvider>
+        <ManualRefreshConsumer />
+      </RefreshProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('manual-sync')).toHaveTextContent('done'));
+    await userEvent.click(screen.getByRole('button', { name: 'full-refresh' }));
+    expect(screen.getByTestId('manual-sync')).toHaveTextContent('Starting historical data sync...');
+    expect(fetchSpy).toHaveBeenCalledWith('/api/cache/refresh', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ mode: 'full' }),
+    }));
+
+    const release = releaseRefresh as unknown;
+    if (typeof release !== 'function') throw new Error('Refresh request was not held');
+    release(Response.json({ success: true }));
+    await waitFor(() => expect(screen.getByTestId('manual-sync')).toHaveTextContent('done'));
+  });
+
+  test('uses the backend cache revision for the last refresh time', async () => {
+    vi.mocked(fetchConfig).mockResolvedValueOnce({
+      ...await vi.mocked(fetchConfig)(),
+      cache_last_update: '2026-07-17T07:59:00.000Z',
+    });
+
+    render(
+      <RefreshProvider>
+        <Consumer />
+      </RefreshProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('last-updated')).toHaveTextContent('2026-07-17T07:59:00.000Z'));
+  });
+
+  test('refreshes immediately when the backend publishes a completed cache update', async () => {
+    render(
+      <RefreshProvider>
+        <Consumer />
+      </RefreshProvider>,
+    );
+
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    expect(MockWebSocket.instances[0].url).toBe('ws://localhost:3000/api/cache-updates');
+    act(() => MockWebSocket.instances[0].emit({ type: 'ready', updated_at: '2026-07-17T08:00:00.000Z' }));
+    expect(screen.getByTestId('refresh')).toHaveTextContent('0');
+    expect(screen.getByTestId('last-updated')).toHaveTextContent('2026-07-17T08:00:00.000Z');
+
+    act(() => MockWebSocket.instances[0].emit({ type: 'cache-updated', updated_at: '2026-07-17T08:01:00.000Z' }));
+    await waitFor(() => expect(screen.getByTestId('refresh')).toHaveTextContent('1'));
+    expect(screen.getByTestId('last-updated')).toHaveTextContent('2026-07-17T08:01:00.000Z');
+  });
+
+  test('keeps the interval fallback active while the WebSocket is open', async () => {
+    vi.useFakeTimers();
+    render(
+      <RefreshProvider>
+        <Consumer />
+      </RefreshProvider>,
+    );
+
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(MockWebSocket.instances[0].readyState).toBe(MockWebSocket.OPEN);
+    expect(screen.getByTestId('interval')).toHaveTextContent('5000');
+
+    await act(async () => vi.advanceTimersByTimeAsync(5_000));
+    expect(screen.getByTestId('refresh')).toHaveTextContent('1');
+    vi.useRealTimers();
+  });
+
+  test('times out stalled sockets and retries with bounded backoff', async () => {
+    vi.useFakeTimers();
+    MockWebSocket.autoOpen = false;
+
+    render(
+      <RefreshProvider>
+        <Consumer />
+      </RefreshProvider>,
+    );
+
+    expect(MockWebSocket.instances).toHaveLength(1);
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(MockWebSocket.instances[0].readyState).toBe(MockWebSocket.CLOSED);
+    await act(async () => vi.advanceTimersByTimeAsync(1_000));
+    expect(MockWebSocket.instances).toHaveLength(2);
+    vi.useRealTimers();
+  });
+
   test('loads config and updates interval via API', async () => {
     vi.stubGlobal(
       'fetch',

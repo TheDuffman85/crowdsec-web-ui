@@ -37,6 +37,14 @@ import type { UpdateChecker } from './update-check';
 import { getServerTranslator, type Translator } from './i18n';
 import type { TimeFormat } from './config';
 import { formatDateTime } from './utils/date-time';
+import {
+  ALERT_RECORD_COLUMNS,
+  DECISION_RECORD_COLUMNS,
+  alertFromRow,
+  decisionFromRow,
+  type NormalizedAlertRow,
+  type NormalizedDecisionRow,
+} from './normalized-record';
 import type { DatabaseQueryWorker } from './query-worker-client';
 import type { DatabaseWrite } from './sync-worker-client';
 
@@ -921,8 +929,8 @@ export function createNotificationService(options: NotificationServiceOptions): 
     const alerts: AlertRecord[] = [];
     let lastId = 0;
     while (true) {
-      const rows = await queryWorker.all<{ id: number; raw_data: string }>(`
-        SELECT id, raw_data
+      const rows = await queryWorker.all<NormalizedAlertRow>(`
+        SELECT ${ALERT_RECORD_COLUMNS}
         FROM alerts
         WHERE ${condition.sql} AND id > ?
         ORDER BY id ASC
@@ -930,14 +938,10 @@ export function createNotificationService(options: NotificationServiceOptions): 
       `, [...condition.params, lastId]);
       if (rows.length === 0) break;
       for (const row of rows) {
-        try {
-          const alert = JSON.parse(row.raw_data) as AlertRecord;
-          if (matchesAlertFilters(alert, filters)) alerts.push(alert);
-        } catch {
-          // Ignore malformed cached rows; the next sync can replace them.
-        }
+        const alert = alertFromRow(row);
+        if (matchesAlertFilters(alert, filters)) alerts.push(alert);
       }
-      lastId = rows[rows.length - 1].id;
+      lastId = Number(rows[rows.length - 1].id);
     }
     return alerts;
   }
@@ -952,8 +956,8 @@ export function createNotificationService(options: NotificationServiceOptions): 
     const decisions: Array<AlertDecision & Record<string, unknown>> = [];
     let lastRowId = 0;
     while (true) {
-      const rows = await queryWorker.all<{ rowid: number; raw_data: string }>(`
-        SELECT rowid, raw_data
+      const rows = await queryWorker.all<NormalizedDecisionRow & { rowid: number }>(`
+        SELECT rowid, ${DECISION_RECORD_COLUMNS}
         FROM decisions
         WHERE ${condition.sql} AND rowid > ?
         ORDER BY rowid ASC
@@ -961,8 +965,8 @@ export function createNotificationService(options: NotificationServiceOptions): 
       `, [...condition.params, lastRowId]);
       if (rows.length === 0) break;
       for (const row of rows) {
-        const decision = parseDecisionRow(row.raw_data);
-        if (decision && matchesDecisionFilters(decision, filters)) decisions.push(decision);
+        const decision = decisionFromRow(row);
+        if (matchesDecisionFilters(decision, filters)) decisions.push(decision);
       }
       lastRowId = rows[rows.length - 1].rowid;
     }
@@ -1001,15 +1005,6 @@ export function createNotificationService(options: NotificationServiceOptions): 
 
   function escapeSqlLike(value: string): string {
     return value.replace(/[\\%_]/g, (character) => `\\${character}`);
-  }
-
-  function parseDecisionRow(rawData: string): (AlertDecision & Record<string, unknown>) | null {
-    try {
-      const parsed = JSON.parse(rawData) as AlertDecision & Record<string, unknown>;
-      return parsed && typeof parsed === 'object' ? parsed : null;
-    } catch {
-      return null;
-    }
   }
 
   async function getCvePublishedAt(cveId: string): Promise<Date | null> {

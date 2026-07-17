@@ -572,10 +572,14 @@ describe('Alerts page', () => {
         source: { ip: '1.2.3.4', value: '1.2.3.4', cn: 'DE', as_name: 'Hetzner' },
         target: 'ssh',
         meta_search: 'ssh',
-        decisions: [
-          { id: 10, value: '1.2.3.4', type: 'ban', origin: 'manual', simulated: false, expired: false },
-          { id: 11, value: '1.2.3.4', type: 'ban', origin: 'CAPI', simulated: false, expired: false },
-        ],
+        decisions: [],
+        decision_summary: {
+          origins: ['CAPI', 'manual'],
+          active_count: 2,
+          expired_count: 0,
+          simulated_active_count: 0,
+          simulated_expired_count: 0,
+        },
       },
       {
         id: 2,
@@ -584,9 +588,14 @@ describe('Alerts page', () => {
         source: { ip: '5.6.7.8', value: '5.6.7.8', cn: 'US', as_name: 'AWS' },
         target: 'nginx',
         meta_search: 'nginx',
-        decisions: [
-          { id: 20, value: '5.6.7.8', type: 'ban', origin: 'crowdsec', simulated: false, expired: false },
-        ],
+        decisions: [],
+        decision_summary: {
+          origins: ['crowdsec'],
+          active_count: 1,
+          expired_count: 0,
+          simulated_active_count: 0,
+          simulated_expired_count: 0,
+        },
       },
     ];
 
@@ -605,7 +614,7 @@ describe('Alerts page', () => {
     vi.mocked(api.fetchAlertsPaginated).mockImplementation(async (page, pageSize, filters) => {
       const query = (filters?.q || '').toLowerCase();
       const filteredAlerts = query
-        ? originAlerts.filter((alert) => alert.decisions.some((decision) => (decision.origin || '').toLowerCase().includes(query)))
+        ? originAlerts.filter((alert) => alert.decision_summary?.origins.some((origin) => origin.toLowerCase().includes(query)))
         : originAlerts;
       return toPaginatedAlerts(filteredAlerts, page, pageSize, originAlerts.length);
     });
@@ -619,6 +628,7 @@ describe('Alerts page', () => {
     await waitFor(() => expect(screen.getByRole('columnheader', { name: 'Origin' })).toBeInTheDocument());
     await waitFor(() => expect(screen.getByText('Mixed')).toBeInTheDocument());
     expect(screen.getByText('crowdsec')).toBeInTheDocument();
+    expect(screen.getByText('Active: 2')).toBeInTheDocument();
 
     await userEvent.type(screen.getByPlaceholderText('Filter alerts...'), 'capi');
 

@@ -116,7 +116,7 @@ function summarizeDeleteResult(result: BulkDeleteResult, t: I18nContextValue['t'
 export function Decisions() {
     const { language, t } = useI18n();
     const { timeZone } = useDateTime();
-    const { refreshSignal, setLastUpdated } = useRefresh();
+    const { refreshSignal } = useRefresh();
     const [searchParams, setSearchParams] = useSearchParams();
     const initialQueryParam = searchParams.get("q") ?? "";
     const [decisions, setDecisions] = useState<DecisionListItem[]>([]);
@@ -341,7 +341,6 @@ export function Decisions() {
             hasLoadedDecisionsRef.current = true;
             setHasLoadedDecisions(true);
 
-            setLastUpdated(new Date());
             completedSuccessfully = true;
         } catch (error) {
             console.error(error);
@@ -357,7 +356,7 @@ export function Decisions() {
                 setBackgroundLoading(false);
             }
         }
-    }, [appliedQuery, buildServerFilters, loadConfig, searchParams, setLastUpdated]);
+    }, [appliedQuery, buildServerFilters, loadConfig, searchParams]);
 
     useEffect(() => {
         loadDecisionsRef.current = loadDecisions;

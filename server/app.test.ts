@@ -4,7 +4,7 @@ import path from 'path';
 import { tmpdir } from 'os';
 import crypto from 'node:crypto';
 import { generate } from 'otplib';
-import type { AlertRecord, PaginatedResponse, SlimAlert } from '../shared/contracts';
+import type { AlertRecord, DashboardStatsResponse, PaginatedResponse, SlimAlert } from '../shared/contracts';
 import { resolveMachineName } from '../shared/machine';
 import { createRuntimeConfig } from './config';
 import { CrowdsecDatabase } from './database';
@@ -416,6 +416,7 @@ function createController(options: {
     CROWDSEC_SIMULATIONS_ENABLED: options.simulationsEnabled === false ? 'false' : 'true',
     CROWDSEC_LOOKBACK_PERIOD: '1m',
     CROWDSEC_REFRESH_INTERVAL: '30s',
+    CROWDSEC_MANUAL_REFRESH_ENABLED: 'true',
     CROWDSEC_BOUNCER_PROPAGATION_DELAY: '0',
     VITE_VERSION: '1.0.0',
     VITE_BRANCH: 'main',
@@ -622,13 +623,17 @@ test('CrowdSec metrics endpoint is disabled until Prometheus URL is configured',
 
 test('config endpoint identifies the load-test deployment mode', async () => {
   const { controller } = createController({
-    env: { CROWDSEC_WEB_UI_MODE: 'load-test' },
+    env: { CROWDSEC_WEB_UI_MODE: 'load-test', LOADTEST_PROFILE: 'blocklists-mixed' },
   });
 
   const response = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
 
   expect(response.status).toBe(200);
-  expect(await response.json()).toEqual(expect.objectContaining({ deployment_mode: 'load-test' }));
+  expect(await response.json()).toEqual(expect.objectContaining({
+    cache_last_update: null,
+    deployment_mode: 'load-test',
+    load_test_profile: 'blocklists-mixed',
+  }));
 });
 
 test('CrowdSec metrics endpoint proxies and summarizes Prometheus metrics', async () => {
@@ -1350,6 +1355,159 @@ describe('resolveOidcClaims', () => {
 });
 
 describe('createApp', () => {
+  test('reports the next scheduled automatic refresh', async () => {
+    const { controller } = createController({
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+    });
+    const beforeUpdate = Date.now();
+
+    const update = await controller.fetch(new Request('http://localhost/crowdsec/api/config/refresh-interval', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ interval: '5s' }),
+    }));
+    expect(update.status).toBe(200);
+    const updatePayload = await update.json() as { next_refresh_at: string | null };
+    expect(Date.parse(updatePayload.next_refresh_at || '')).toBeGreaterThanOrEqual(beforeUpdate + 4_900);
+
+    const config = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
+    expect(await config.json()).toMatchObject({ next_refresh_at: updatePayload.next_refresh_at });
+    controller.stopBackgroundTasks();
+  });
+
+  test('disables manual refresh by default and allows it to be enabled in settings', async () => {
+    const { controller, database } = createController({
+      env: { CROWDSEC_MANUAL_REFRESH_ENABLED: 'false' },
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+    });
+
+    const initialConfig = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
+    expect(await initialConfig.json()).toEqual(expect.objectContaining({ manual_refresh_enabled: false }));
+
+    const blockedRefresh = await controller.fetch(new Request('http://localhost/crowdsec/api/cache/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'delta' }),
+    }));
+    expect(blockedRefresh.status).toBe(403);
+    expect(await blockedRefresh.json()).toEqual({
+      error: 'Manual refresh is disabled',
+      code: 'MANUAL_REFRESH_DISABLED',
+    });
+
+    const invalidUpdate = await controller.fetch(new Request('http://localhost/crowdsec/api/config/manual-refresh', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: 'yes' }),
+    }));
+    expect(invalidUpdate.status).toBe(400);
+
+    const update = await controller.fetch(new Request('http://localhost/crowdsec/api/config/manual-refresh', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    }));
+    expect(update.status).toBe(200);
+    expect(await update.json()).toEqual({ success: true, manual_refresh_enabled: true });
+    expect(database.getMeta('manual_refresh_enabled')?.value).toBe('true');
+
+    const updatedConfig = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
+    expect(await updatedConfig.json()).toEqual(expect.objectContaining({ manual_refresh_enabled: true }));
+  });
+
+  test('validates manual refresh modes and exposes full refresh as a historical sync', async () => {
+    let releaseFirstAlertRequest: ((response: Response) => void) | null = null;
+    let holdFirstAlertRequest = true;
+    const { controller, lapiClient } = createController({
+      env: { CROWDSEC_REFRESH_INTERVAL: '1s' },
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+      fetchResolver: (url) => {
+        if (holdFirstAlertRequest && url.includes('/v1/alerts?')) {
+          holdFirstAlertRequest = false;
+          return new Promise<Response>((resolve) => {
+            releaseFirstAlertRequest = resolve;
+          });
+        }
+        return undefined;
+      },
+    });
+    await lapiClient.login();
+
+    const invalid = await controller.fetch(new Request('http://localhost/crowdsec/api/cache/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'recent' }),
+    }));
+    expect(invalid.status).toBe(400);
+
+    const fullRefreshPromise = controller.fetch(new Request('http://localhost/crowdsec/api/cache/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'full' }),
+    }));
+
+    await vi.waitFor(() => expect(controller.getSyncStatus()).toMatchObject({
+      isSyncing: true,
+      state: 'syncing',
+    }));
+    await vi.waitFor(() => expect(releaseFirstAlertRequest).not.toBeNull());
+
+    controller.startBackgroundTasks();
+    const scheduledBefore = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
+    const scheduledBeforeAt = Date.parse((await scheduledBefore.json() as { next_refresh_at: string }).next_refresh_at);
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    const scheduledAfter = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
+    const scheduledAfterAt = Date.parse((await scheduledAfter.json() as { next_refresh_at: string }).next_refresh_at);
+    expect(scheduledAfterAt).toBeGreaterThan(scheduledBeforeAt);
+
+    const manualInterval = await controller.fetch(new Request('http://localhost/crowdsec/api/config/refresh-interval', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ interval: '0' }),
+    }));
+    expect(manualInterval.status).toBe(200);
+
+    const readWhileRefreshing = await Promise.race([
+      controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=10')),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 250)),
+    ]);
+    expect(readWhileRefreshing).not.toBeNull();
+    expect(readWhileRefreshing?.status).toBe(200);
+
+    const release = releaseFirstAlertRequest as unknown;
+    if (typeof release !== 'function') throw new Error('Alert request was not held');
+    release(Response.json([]));
+
+    const fullRefresh = await fullRefreshPromise;
+    expect(fullRefresh.status).toBe(200);
+    expect(await fullRefresh.json()).toMatchObject({ success: true, mode: 'full' });
+    expect(controller.getSyncStatus()).toMatchObject({ isSyncing: false, state: 'complete' });
+    controller.stopBackgroundTasks();
+  });
+
+  test('runs delta and latest-window manual refresh modes', async () => {
+    const { controller, lapiClient, fetchCalls } = createController({
+      initialCacheState: {
+        isInitialized: true,
+        isComplete: true,
+        lastUpdate: new Date(Date.now() - 5_000).toISOString(),
+      },
+    });
+    await lapiClient.login();
+
+    for (const mode of ['delta', 'latest'] as const) {
+      const response = await controller.fetch(new Request('http://localhost/crowdsec/api/cache/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      }));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ success: true, mode });
+    }
+
+    expect(fetchCalls.some((call) => call.url.includes('/v1/alerts?'))).toBe(true);
+  });
+
   test('adds resolved city and region to paginated alerts and linked decisions', async () => {
     const alert = sampleAlert({
       source: {
@@ -1414,6 +1572,63 @@ describe('createApp', () => {
       data: [],
       pagination: expect.objectContaining({ total: 0 }),
     }));
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('summarizes paginated alert decisions without embedding decision rows', async () => {
+    const now = Date.now();
+    const alert = sampleAlert({
+      id: 77,
+      uuid: 'alert-77',
+      decisions: [
+        { id: 7701, stop_at: new Date(now + 60_000).toISOString(), origin: 'lists', simulated: false },
+        { id: 7702, stop_at: new Date(now + 60_000).toISOString(), origin: 'CAPI', simulated: true },
+        { id: 7703, stop_at: new Date(now - 60_000).toISOString(), origin: 'lists', simulated: false },
+        { id: 7704, stop_at: new Date(now - 60_000).toISOString(), origin: 'CAPI', simulated: true },
+      ],
+      simulated: false,
+    });
+    const { controller, database } = createController({
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+      alertDetailPayload: alert,
+    });
+    seedAlert(database, alert);
+
+    const response = await controller.fetch(new Request(
+      'http://localhost/crowdsec/api/alerts?page=1&page_size=10&include_decisions=false',
+    ));
+    expect(response.status).toBe(200);
+    const payload = await response.json() as PaginatedResponse<SlimAlert>;
+    expect(payload.data[0]).toMatchObject({
+      id: 77,
+      decisions: [],
+      decision_summary: {
+        origins: ['CAPI', 'lists'],
+        active_count: 2,
+        expired_count: 2,
+        simulated_active_count: 1,
+        simulated_expired_count: 1,
+      },
+    });
+
+    const fullListResponse = await controller.fetch(new Request(
+      'http://localhost/crowdsec/api/alerts?page=1&page_size=10',
+    ));
+    expect(fullListResponse.status).toBe(200);
+    expect((await fullListResponse.json() as PaginatedResponse<SlimAlert>).data[0].decisions).toHaveLength(4);
+
+    const detailResponse = await controller.fetch(new Request(
+      'http://localhost/crowdsec/api/alerts/77?include_decisions=false',
+    ));
+    expect(detailResponse.status).toBe(200);
+    expect(await detailResponse.json()).toEqual(expect.objectContaining({ id: 77, decisions: [] }));
+
+    const fullDetailResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts/1'));
+    expect(fullDetailResponse.status).toBe(200);
+    expect((await fullDetailResponse.json() as AlertRecord).decisions).toHaveLength(4);
 
     controller.stopBackgroundTasks();
     database.close();
@@ -1750,6 +1965,11 @@ describe('createApp', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ interval: '5s' }),
       }),
+      new Request('http://localhost/crowdsec/api/config/manual-refresh', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: false }),
+      }),
       new Request('http://localhost/crowdsec/api/notifications/bulk-delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1997,6 +2217,43 @@ describe('createApp', () => {
     }).toEqual(expect.objectContaining({
       totals: expect.objectContaining({ alerts: 1, decisions: 1 }),
       topCountries: [expect.objectContaining({ countryCode: 'DE', count: 1 })],
+    }));
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('serves a fresh dashboard snapshot on the first request after invalidation', async () => {
+    const alert = sampleAlert({
+      id: 302,
+      uuid: 'dashboard-alert-302',
+      created_at: new Date().toISOString(),
+    });
+    const { controller, database } = createController({
+      initialCacheState: {
+        isInitialized: true,
+        isComplete: true,
+        lastUpdate: new Date().toISOString(),
+      },
+      alertDetailPayload: alert,
+    });
+    seedAlert(database, alert);
+
+    const initialResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats'));
+    expect((await initialResponse.json() as DashboardStatsResponse).totals.alerts).toBe(1);
+
+    const deleteResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts/302', {
+      method: 'DELETE',
+    }));
+    expect(deleteResponse.status).toBe(200);
+
+    vi.spyOn(database, 'countAlerts').mockReturnValue(100_001);
+    const readyResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats'));
+    const readyPayload = await readyResponse.json() as DashboardStatsResponse;
+    expect(readyPayload.pending).toBeUndefined();
+    expect(readyPayload).toEqual(expect.objectContaining({
+      totals: expect.objectContaining({ alerts: 0 }),
     }));
 
     controller.stopBackgroundTasks();
@@ -2477,7 +2734,7 @@ describe('createApp', () => {
     expect(decisionsResponse.status).toBe(200);
     expect((await decisionsResponse.json()) as { data: Array<{ id: number }>; pagination: { total: number } }).toEqual(
       expect.objectContaining({
-        data: [expect.objectContaining({ id: 10 })],
+        data: [expect.objectContaining({ id: 11 })],
         pagination: expect.objectContaining({ total: 1 }),
       }),
     );
@@ -3283,6 +3540,7 @@ describe('createApp', () => {
     });
     const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
     seedAlert(database, activeAlert);
+    const decisionStopAtLookup = vi.spyOn(database, 'getDecisionStopAtBatch');
     const syncWorker: NonNullable<CreateAppOptions['syncWorker']> = {
       persistAlerts: vi.fn(async () => ({ changed: false })),
       deleteAlertsMissingBetween: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
@@ -3318,6 +3576,7 @@ describe('createApp', () => {
       const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=10'));
       expect(response.status).toBe(200);
       expect(syncWorker.persistAlerts).not.toHaveBeenCalled();
+      expect(decisionStopAtLookup).not.toHaveBeenCalled();
     } finally {
       controller.stopBackgroundTasks();
       database.close();
@@ -3358,11 +3617,12 @@ describe('createApp', () => {
       runExclusive: vi.fn(async (operation) => operation()),
       close: vi.fn(),
     };
+    const initialSyncCursor = new Date(Date.now() - 60_000).toISOString();
     const { controller } = createController({
       database,
       syncWorker,
       env: { CROWDSEC_REFRESH_INTERVAL: '0', CROWDSEC_LOOKBACK_PERIOD: '1m' },
-      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: initialSyncCursor },
       fetchResolver: (url) => {
         if (!url.includes('/v1/alerts?')) return undefined;
         return Response.json(new URL(url).searchParams.has('until') ? [addedAlert] : []);
@@ -3370,7 +3630,10 @@ describe('createApp', () => {
     });
 
     try {
+      const cacheUpdates: string[] = [];
+      const unsubscribe = controller.subscribeCacheUpdates((updatedAt) => cacheUpdates.push(updatedAt));
       const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=10'));
+      unsubscribe();
       expect(response.status).toBe(200);
       const mutations = vi.mocked(syncWorker.persistAlerts).mock.calls.flatMap(([batch]) => batch);
       expect(mutations).toHaveLength(1);
@@ -3379,6 +3642,61 @@ describe('createApp', () => {
       expect(mutations[0]?.reconcileDecisions).toBe(false);
       expect(mutations[0]?.updateAlertRawDataOnly).toBe(true);
       expect(syncWorker.deleteCachedDecisions).not.toHaveBeenCalled();
+      expect(cacheUpdates).toEqual([controller.getCacheLastUpdate()]);
+      expect(controller.getCacheLastUpdate()).not.toBe(initialSyncCursor);
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
+  test('defers search-index writes while importing a large delta alert', async () => {
+    const largeDeltaAlert = sampleAlert({
+      id: 209,
+      uuid: 'alert-209',
+      decisions: Array.from({ length: 10_001 }, (_, index) => ({
+        id: `large-delta-${index}`,
+        type: 'ban',
+        value: `198.${Math.floor(index / 65_025)}.${Math.floor(index / 255) % 255}.${index % 255}`,
+        stop_at: new Date(Date.now() + 60_000).toISOString(),
+        origin: 'lists',
+      })),
+    });
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const syncWorker: NonNullable<CreateAppOptions['syncWorker']> = {
+      persistAlerts: vi.fn(async () => ({ changed: true })),
+      deleteAlertsMissingBetween: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      deleteCachedAlerts: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      deleteCachedDecisions: vi.fn(async () => 0),
+      beginDeferredSearchIndexUpdates: vi.fn(async () => {}),
+      rebuildSearchIndexes: vi.fn(async () => {}),
+      refreshDecisionDuplicateFlags: vi.fn(async () => {}),
+      cleanupOldData: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      clearSyncData: vi.fn(async () => {}),
+      runExclusive: vi.fn(async (operation) => operation()),
+      close: vi.fn(),
+    };
+    const { controller } = createController({
+      database,
+      syncWorker,
+      env: { CROWDSEC_REFRESH_INTERVAL: '0', CROWDSEC_LOOKBACK_PERIOD: '1m' },
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+      fetchResolver: (url) => {
+        if (!url.includes('/v1/alerts?')) return undefined;
+        return Response.json(new URL(url).searchParams.has('until') ? [largeDeltaAlert] : []);
+      },
+    });
+
+    try {
+      const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=10'));
+      expect(response.status).toBe(200);
+      expect(syncWorker.beginDeferredSearchIndexUpdates).toHaveBeenCalledWith(false, false);
+      expect(syncWorker.rebuildSearchIndexes).toHaveBeenCalledOnce();
+      expect(vi.mocked(syncWorker.persistAlerts).mock.calls).toHaveLength(21);
+      expect(vi.mocked(syncWorker.persistAlerts).mock.calls.every(([mutations]) =>
+        mutations.reduce((total, mutation) => total + mutation.decisions.length, 0) <= 500,
+      )).toBe(true);
     } finally {
       controller.stopBackgroundTasks();
       database.close();
@@ -3488,7 +3806,7 @@ describe('createApp', () => {
       const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=10'));
       expect(response.status).toBe(200);
       expect(syncWorker.persistAlerts).toHaveBeenCalled();
-      expect(vi.mocked(syncWorker.persistAlerts).mock.calls.flatMap(([mutations]) => mutations).flatMap((mutation) => mutation.decisions)).toHaveLength(2);
+      expect(vi.mocked(syncWorker.persistAlerts).mock.calls.flatMap(([mutations]) => mutations).flatMap((mutation) => mutation.decisions)).toHaveLength(1);
     } finally {
       controller.stopBackgroundTasks();
       database.close();
@@ -4411,13 +4729,18 @@ describe('createApp', () => {
       }),
     });
 
-    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50'));
+    const alertsResponse = await controller.fetch(new Request(
+      'http://localhost/crowdsec/api/alerts?page=1&page_size=50&include_decisions=false',
+    ));
     expect(alertsResponse.status).toBe(200);
     const alertsJson = await alertsResponse.json() as {
-      data: Array<{ id: number; decisions: Array<{ id: number; expired?: boolean }> }>;
+      data: Array<{ id: number; decisions: unknown[]; decision_summary: { active_count: number; expired_count: number } }>;
     };
     const alertRow = alertsJson.data.find((alert) => alert.id === 200);
-    expect(alertRow?.decisions.filter((decision) => decision.expired !== true)).toHaveLength(1);
+    expect(alertRow).toMatchObject({
+      decisions: [],
+      decision_summary: { active_count: 1, expired_count: 0 },
+    });
 
     const decisionsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions?page=1&page_size=50&alert_id=200&include_expired=true'));
     expect(decisionsResponse.status).toBe(200);
@@ -4514,13 +4837,18 @@ describe('createApp', () => {
       },
     });
 
-    const refreshedAlertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50'));
+    const refreshedAlertsResponse = await controller.fetch(new Request(
+      'http://localhost/crowdsec/api/alerts?page=1&page_size=50&include_decisions=false',
+    ));
     expect(refreshedAlertsResponse.status).toBe(200);
     const refreshedAlertsJson = await refreshedAlertsResponse.json() as {
-      data: Array<{ id: number; decisions: Array<{ id: number; expired?: boolean }> }>;
+      data: Array<{ id: number; decisions: unknown[]; decision_summary: { active_count: number; expired_count: number } }>;
     };
     const refreshedAlertRow = refreshedAlertsJson.data.find((alert) => alert.id === 210);
-    expect(refreshedAlertRow?.decisions.filter((decision) => decision.expired !== true).map((decision) => decision.id)).toEqual([2101]);
+    expect(refreshedAlertRow).toMatchObject({
+      decisions: [],
+      decision_summary: { active_count: 1, expired_count: 0 },
+    });
 
     const refreshedDecisionsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions?page=1&page_size=50&alert_id=210&include_expired=true'));
     expect(refreshedDecisionsResponse.status).toBe(200);
@@ -5391,6 +5719,138 @@ describe('createApp', () => {
     destroyTempDir();
   });
 
+  test('marks an externally deleted decision inactive when LAPI retains it on the historical alert', async () => {
+    const createdAt = new Date(Date.now() - 45 * 60 * 1_000).toISOString();
+    const cachedOldAlert = sampleManualWebUiAlert({
+      id: 390,
+      uuid: 'alert-390',
+      created_at: createdAt,
+      decisions: [{
+        id: 3900,
+        type: 'ban',
+        value: '1.2.3.4',
+        duration: '4h',
+        stop_at: new Date(Date.now() + 3 * 60 * 60 * 1_000).toISOString(),
+        origin: 'cscli',
+        scenario: 'manual/web-ui',
+        simulated: false,
+      }],
+    });
+    const expiredOldAlert = sampleManualWebUiAlert({
+      ...cachedOldAlert,
+      decisions: [{
+        id: 3900,
+        type: 'ban',
+        value: '1.2.3.4',
+        duration: '-1s',
+        origin: 'cscli',
+        scenario: 'manual/web-ui',
+        simulated: false,
+      }],
+    });
+    const replacementAlert = sampleManualWebUiAlert({
+      id: 391,
+      uuid: 'alert-391',
+      created_at: new Date().toISOString(),
+      decisions: [{
+        id: 3910,
+        type: 'ban',
+        value: '1.2.3.4',
+        duration: '4h',
+        origin: 'cscli',
+        scenario: 'manual/web-ui',
+        simulated: false,
+      }],
+    });
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    seedAlert(database, cachedOldAlert);
+    const { controller } = createController({
+      database,
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '0',
+        CROWDSEC_LOOKBACK_PERIOD: '1h',
+      },
+      fetchResolver: (url) => url.includes('/v1/alerts?')
+        ? Response.json([replacementAlert, expiredOldAlert])
+        : undefined,
+    });
+
+    const activeResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions?page=1&page_size=50'));
+    expect(activeResponse.status).toBe(200);
+    const activeJson = await activeResponse.json() as { data: Array<{ id: number; expired: boolean }> };
+    expect(activeJson.data).toEqual([
+      expect.objectContaining({ id: 3910, expired: false }),
+    ]);
+
+    const allResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions?page=1&page_size=50&include_expired=true'));
+    expect(allResponse.status).toBe(200);
+    const allJson = await allResponse.json() as { data: Array<{ id: number; expired: boolean }> };
+    expect(allJson.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 3900, expired: true }),
+      expect.objectContaining({ id: 3910, expired: false }),
+    ]));
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('uses a shared observation time and prefers the newest equal-expiry duplicate', async () => {
+    const createdAt = new Date(Date.now() - 4 * 60 * 60 * 1_000).toISOString();
+    const olderAlert = sampleManualWebUiAlert({
+      id: 388,
+      uuid: 'alert-388',
+      created_at: createdAt,
+      decisions: [{
+        id: 3880,
+        type: 'ban',
+        value: '1.2.3.4',
+        duration: '44m40s',
+        origin: 'crowdsec',
+        simulated: false,
+      }],
+    });
+    const newerAlert = sampleManualWebUiAlert({
+      id: 389,
+      uuid: 'alert-389',
+      created_at: createdAt,
+      decisions: [{
+        id: 3890,
+        type: 'ban',
+        value: '1.2.3.4',
+        duration: '44m40s',
+        origin: 'crowdsec',
+        simulated: false,
+      }],
+    });
+
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '0',
+        CROWDSEC_LOOKBACK_PERIOD: '168h',
+      },
+      fetchResolver: (url) => url.includes('/v1/alerts?')
+        ? Response.json([newerAlert, olderAlert])
+        : undefined,
+    });
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alertsResponse.status).toBe(200);
+    expect(database.getDecisionById('3880')?.stop_at).toBe(database.getDecisionById('3890')?.stop_at);
+
+    const decisionsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions'));
+    expect(decisionsResponse.status).toBe(200);
+    const decisions = await decisionsResponse.json() as Array<{ id: number; is_duplicate: boolean }>;
+    expect(decisions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 3880, is_duplicate: true }),
+      expect.objectContaining({ id: 3890, is_duplicate: false }),
+    ]));
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
   test('stores notification channel secrets encrypted at rest', async () => {
     const { controller, database } = createController();
 
@@ -6066,9 +6526,9 @@ describe('createApp', () => {
     expect(decisionCount).toBe(3);
     expect(controller.getSyncStatus().message).toContain('3 alerts and 3 decisions cached');
 
-    const storedAlerts = database.db.query('SELECT raw_data FROM alerts').all() as Array<{ raw_data: string }>;
+    const storedAlerts = database.db.query('SELECT scenario, record_scenario FROM alerts').all() as Array<{ scenario?: string; record_scenario?: string }>;
     expect(
-      storedAlerts.some((row) => String((JSON.parse(row.raw_data) as AlertRecord).scenario) === 'crowdsec-blocklist-import/external_blocklist'),
+      storedAlerts.some((row) => [row.scenario, row.record_scenario].includes('crowdsec-blocklist-import/external_blocklist')),
     ).toBe(false);
 
     controller.stopBackgroundTasks();
@@ -6148,15 +6608,14 @@ describe('createApp', () => {
     expect(alertRequests.some((call) => call.url.includes('origin=cscli-import') && call.url.includes('scope=ip'))).toBe(true);
     expect(alertRequests.some((call) => call.url.includes('origin=cscli-import') && call.url.includes('scope=range'))).toBe(true);
 
-    const storedAlert = database.db.query('SELECT raw_data FROM alerts WHERE id = 17511').get() as { raw_data: string };
-    const storedAlertPayload = JSON.parse(storedAlert.raw_data) as AlertRecord;
+    const storedAlert = database.getAlertDecisionSnapshot(17511);
+    const storedAlertPayload = JSON.parse(storedAlert?.raw_data || 'null') as AlertRecord;
     expect(storedAlertPayload).toEqual(expect.objectContaining({
       id: 17511,
       kind: 'cscli',
-      decisions: [{ id: 26211171 }],
     }));
-    expect(storedAlertPayload.decisions?.[0]).not.toHaveProperty('value');
-    expect(storedAlertPayload.decisions?.[0]).not.toHaveProperty('origin');
+    expect(storedAlertPayload).not.toHaveProperty('decisions');
+    expect(database.getDecisionIdsByAlertId(17511)).toEqual(['26211171']);
 
     controller.stopBackgroundTasks();
     database.close();
@@ -6318,11 +6777,9 @@ describe('createApp', () => {
     const decisionCount = (database.db.query('SELECT COUNT(*) AS count FROM decisions').get() as { count: number }).count;
     expect(decisionCount).toBe(2);
 
-    const storedDecisions = database.db.query('SELECT raw_data FROM decisions').all() as Array<{ raw_data: string }>;
-    expect(storedDecisions.map((row) => JSON.parse(row.raw_data))).toEqual(expect.arrayContaining([
-      expect.objectContaining({ origin: 'crowdsec' }),
-      expect.objectContaining({ origin: 'CAPI' }),
-    ]));
+    const storedDecisions = database.db.query('SELECT origin, raw_data FROM decisions').all() as Array<{ origin: string; raw_data: string | null }>;
+    expect(storedDecisions.map((row) => row.origin)).toEqual(expect.arrayContaining(['crowdsec', 'CAPI']));
+    expect(storedDecisions.every((row) => row.raw_data === null)).toBe(true);
 
     controller.stopBackgroundTasks();
     database.close();
@@ -7117,8 +7574,8 @@ describe('createApp', () => {
     expect(alertRequests.some((call) => call.url.includes('origin=crowdsec') && call.url.includes('include_capi=false') && call.url.includes('scope=ip'))).toBe(true);
     expect(alertRequests.some((call) => call.url.includes('origin=crowdsec') && call.url.includes('include_capi=false') && call.url.includes('scope=range'))).toBe(true);
 
-    const storedAlert = database.db.query('SELECT raw_data FROM alerts WHERE id = 6').get() as { raw_data: string };
-    expect(JSON.parse(storedAlert.raw_data)).toEqual(expect.objectContaining({
+    const storedAlert = database.getAlertDecisionSnapshot(6);
+    expect(JSON.parse(storedAlert?.raw_data || 'null')).toEqual(expect.objectContaining({
       scenario: 'crowdsecurity/appsec-vpatch',
     }));
 

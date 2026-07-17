@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
 import { CrowdsecDatabase } from './database';
+import { decisionFromRow } from './normalized-record';
 
 const tempDirs: string[] = [];
 
@@ -142,7 +143,8 @@ describe('CrowdsecDatabase', () => {
     expect(db.getMeta('refresh_interval_ms')?.value).toBe('5000');
     expect(db.getAlertsBetween('2024-12-31T00:00:00.000Z', '2025-01-02T00:00:00.000Z')).toHaveLength(1);
     expect(db.getAlertDecisionSnapshot(1)).toEqual({
-      raw_data: JSON.stringify({ id: 1, source: { latitude: '52.52', longitude: 13.405 } }),
+      raw_data: expect.any(String),
+      metadata_hash: expect.any(String),
       decision_count: 1,
       origins: null,
       simulated: 0,
@@ -200,13 +202,83 @@ describe('CrowdsecDatabase', () => {
     expect(db.db.prepare('SELECT created_at, stop_at, raw_data FROM decisions WHERE id = ?').get('10')).toEqual({
       created_at: '2026-07-14T12:56:33.000Z',
       stop_at: '2026-07-14T14:00:00.000Z',
-      raw_data: JSON.stringify({
-        id: 10,
-        created_at: '2026-07-14T12:56:33.000Z',
-        stop_at: '2026-07-14T14:00:00.000Z',
-      }),
+      raw_data: null,
     });
 
+    db.close();
+  });
+
+  test('normalizes CrowdSec records and retains only unknown extensions as JSON', () => {
+    const db = createTestDatabase();
+    const createdAt = '2026-07-17T08:00:00.000Z';
+    const alert = {
+      id: 42,
+      uuid: 'alert-42',
+      created_at: createdAt,
+      scenario: 'crowdsecurity/ssh-bf',
+      kind: 'capi',
+      source: { ip: '192.0.2.42', scope: 'ip', provider: 'example' },
+      events: [{ timestamp: createdAt, meta: [{ key: 'service', value: 'ssh' }] }],
+      decisions: [{ id: 420 }],
+      simulated: false,
+    };
+    db.insertAlert({
+      $id: alert.id,
+      $uuid: alert.uuid,
+      $created_at: alert.created_at,
+      $scenario: alert.scenario,
+      $source_ip: alert.source.ip,
+      $message: '',
+      $record: alert,
+    });
+    const decision = {
+      id: 420,
+      alert_id: 42,
+      created_at: createdAt,
+      stop_at: '2026-07-18T08:00:00.000Z',
+      value: '192.0.2.42',
+      type: 'ban',
+      scope: 'ip',
+      remediation: 'custom-extension',
+      simulated: false,
+    };
+    db.insertDecision({
+      $id: '420',
+      $uuid: '420',
+      $alert_id: 42,
+      $created_at: decision.created_at,
+      $stop_at: decision.stop_at,
+      $value: decision.value,
+      $type: decision.type,
+      $record: decision,
+    });
+
+    const storedAlert = db.db.prepare('SELECT raw_data, extra_data, source_extra_data FROM alerts WHERE id = 42').get() as {
+      raw_data: string | null;
+      extra_data: string;
+      source_extra_data: string;
+    };
+    expect(storedAlert.raw_data).toBeNull();
+    expect(JSON.parse(storedAlert.extra_data)).toEqual({ kind: 'capi', events: alert.events });
+    expect(JSON.parse(storedAlert.source_extra_data)).toEqual({ provider: 'example' });
+
+    const storedDecision = db.db.prepare('SELECT raw_data, extra_data FROM decisions WHERE id = ?').get('420') as {
+      raw_data: string | null;
+      extra_data: string;
+    };
+    expect(storedDecision.raw_data).toBeNull();
+    expect(JSON.parse(storedDecision.extra_data)).toEqual({ remediation: 'custom-extension' });
+    expect(decisionFromRow(db.getDecisionById('420')!)).toEqual(expect.objectContaining({
+      id: 420,
+      scope: 'ip',
+      remediation: 'custom-extension',
+    }));
+    expect(JSON.parse(db.getAlertsSince('2026-07-17T00:00:00.000Z')[0].raw_data)).toEqual(expect.objectContaining({
+      id: 42,
+      kind: 'capi',
+      events: alert.events,
+      source: expect.objectContaining({ provider: 'example', scope: 'ip' }),
+    }));
     db.close();
   });
 
@@ -300,16 +372,12 @@ describe('CrowdsecDatabase', () => {
     const migrated = new CrowdsecDatabase({ dbPath });
     expect(migrated.db.prepare('SELECT created_at, raw_data FROM alerts WHERE id = 1').get()).toEqual({
       created_at: '2026-07-14T12:56:33.000Z',
-      raw_data: JSON.stringify({ id: 1, created_at: '2026-07-14T12:56:33.000Z' }),
+      raw_data: null,
     });
     expect(migrated.db.prepare('SELECT created_at, stop_at, raw_data FROM decisions WHERE id = ?').get('10')).toEqual({
       created_at: '2026-07-14T12:56:33.000Z',
       stop_at: '2026-07-14T14:00:00.000Z',
-      raw_data: JSON.stringify({
-        id: 10,
-        created_at: '2026-07-14T12:56:33.000Z',
-        stop_at: '2026-07-14T14:00:00.000Z',
-      }),
+      raw_data: null,
     });
     expect(migrated.db.prepare(`
       SELECT created_at, updated_at, read_at, metadata_json, deliveries_json
@@ -433,6 +501,129 @@ describe('CrowdsecDatabase', () => {
       { id: '11', is_duplicate: 0 },
       { id: '12', is_duplicate: 1 },
     ]);
+
+    db.close();
+  });
+
+  test('keeps the newest decision visible when duplicate expirations are equal', () => {
+    const db = createTestDatabase();
+    const insertDecision = (id: string) => db.insertDecision({
+      $id: id,
+      $uuid: id,
+      $alert_id: 1,
+      $created_at: '2026-01-01T00:00:00.000Z',
+      $stop_at: '2030-01-03T00:00:00.000Z',
+      $value: '1.2.3.4',
+      $type: 'ban',
+      $origin: 'crowdsec',
+      $scenario: 'crowdsecurity/ssh-bf',
+      $raw_data: JSON.stringify({ id, value: '1.2.3.4', stop_at: '2030-01-03T00:00:00.000Z' }),
+    });
+
+    insertDecision('10');
+    insertDecision('12');
+
+    expect(db.refreshDecisionDuplicateFlags('2029-01-01T00:00:00.000Z')).toBe(1);
+    expect(db.db.prepare('SELECT id, is_duplicate FROM decisions ORDER BY id').all()).toEqual([
+      { id: '10', is_duplicate: 1 },
+      { id: '12', is_duplicate: 0 },
+    ]);
+
+    db.close();
+  });
+
+  test('rebuilds persisted duplicate flags after the ranking algorithm changes', () => {
+    const dbPath = createTestDatabasePath();
+    let db = new CrowdsecDatabase({ dbPath });
+    const insertDecision = (id: string) => db.insertDecision({
+      $id: id,
+      $uuid: id,
+      $alert_id: 1,
+      $created_at: '2026-01-01T00:00:00.000Z',
+      $stop_at: '2030-01-03T00:00:00.000Z',
+      $value: '1.2.3.4',
+      $type: 'ban',
+      $origin: 'crowdsec',
+      $scenario: 'crowdsecurity/ssh-bf',
+      $raw_data: JSON.stringify({ id, value: '1.2.3.4', stop_at: '2030-01-03T00:00:00.000Z' }),
+    });
+
+    insertDecision('10');
+    insertDecision('12');
+    db.refreshDecisionDuplicateFlags('2029-01-01T00:00:00.000Z');
+    db.db.prepare("UPDATE decisions SET is_duplicate = CASE id WHEN '10' THEN 0 ELSE 1 END").run();
+    db.db.prepare("DELETE FROM meta WHERE key = 'decision_duplicate_rank_version'").run();
+    db.close();
+
+    db = new CrowdsecDatabase({ dbPath });
+    expect(db.refreshDecisionDuplicateFlags('2029-01-01T00:01:00.000Z')).toBe(2);
+    expect(db.db.prepare('SELECT id, is_duplicate FROM decisions ORDER BY id').all()).toEqual([
+      { id: '10', is_duplicate: 1 },
+      { id: '12', is_duplicate: 0 },
+    ]);
+
+    db.close();
+  });
+
+  test('refreshes many independent duplicate groups without multiplying the decisions scan', () => {
+    const db = createTestDatabase();
+    const insertRange = db.transaction(({ start, count }: { start: number; count: number }) => {
+      for (let index = start; index < start + count; index += 1) {
+        const id = String(index);
+        const value = `198.51.${Math.floor(index / 256) % 256}.${index % 256}`;
+        db.insertDecision({
+          $id: id,
+          $uuid: id,
+          $alert_id: 1,
+          $created_at: '2026-01-01T00:00:00.000Z',
+          $stop_at: '2030-01-01T00:00:00.000Z',
+          $value: value,
+          $type: 'ban',
+          $origin: 'lists',
+          $scenario: 'crowdsecurity/blocklist-import',
+          $raw_data: JSON.stringify({ id, value, stop_at: '2030-01-01T00:00:00.000Z' }),
+        });
+      }
+    });
+
+    insertRange({ start: 1, count: 2_000 });
+    expect(db.refreshDecisionDuplicateFlags('2029-01-01T00:00:00.000Z')).toBe(0);
+    insertRange({ start: 2_001, count: 2_000 });
+    expect(db.refreshDecisionDuplicateFlags('2029-01-01T00:00:01.000Z')).toBe(0);
+    expect(db.getMeta('decision_duplicate_flags_dirty')?.value).toBe('false');
+
+    db.close();
+  });
+
+  test('deleting retained expired decisions does not dirty active duplicate flags', () => {
+    const db = createTestDatabase();
+    const insertDecision = (id: string, stopAt: string) => db.insertDecision({
+      $id: id,
+      $uuid: id,
+      $alert_id: 1,
+      $created_at: '2026-01-01T00:00:00.000Z',
+      $stop_at: stopAt,
+      $value: '1.2.3.4',
+      $type: 'ban',
+      $origin: 'crowdsec',
+      $scenario: 'crowdsecurity/ssh-bf',
+      $raw_data: JSON.stringify({ id, value: '1.2.3.4', stop_at: stopAt }),
+    });
+
+    insertDecision('expired', '2025-01-01T00:00:00.000Z');
+    insertDecision('active-1', '2030-01-03T00:00:00.000Z');
+    insertDecision('active-2', '2030-01-02T00:00:00.000Z');
+    expect(db.refreshDecisionDuplicateFlags('2029-01-01T00:00:00.000Z')).toBe(1);
+    expect(db.getMeta('decision_duplicate_flags_dirty')?.value).toBe('false');
+
+    expect(db.deleteOldDecisions('2026-01-01T00:00:00.000Z')).toBe(1);
+    expect(db.getMeta('decision_duplicate_flags_dirty')?.value).toBe('false');
+    expect(db.refreshDecisionDuplicateFlags('2029-01-01T00:00:00.000Z')).toBe(0);
+    expect(db.db.prepare('SELECT id, is_duplicate FROM decisions ORDER BY id').all()).toEqual([
+      { id: 'active-1', is_duplicate: 0 },
+      { id: 'active-2', is_duplicate: 1 },
+    ]);
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM decisions_fts').get() as { count: number }).count).toBe(2);
 
     db.close();
   });
@@ -663,8 +854,10 @@ describe('CrowdsecDatabase', () => {
     expect(columns.map((column) => column.name)).toEqual(expect.arrayContaining(['is_duplicate', 'search_text', 'simulated']));
     expect(indexes.map((index) => index.name)).toEqual(expect.arrayContaining([
       'idx_decisions_alert_created_id',
-      'idx_decisions_duplicate_active',
-      'idx_decisions_duplicate_created_at',
+      'idx_decisions_duplicate_paging',
+      'idx_decisions_duplicate_filters',
+      'idx_decisions_duplicate_value_paging',
+      'idx_decisions_duplicate_primary',
     ]));
     expect(indexes.map((index) => index.name)).not.toContain('idx_decisions_alert_created_at');
     expect(row.is_duplicate).toBe(0);

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, type MouseEvent as ReactMouseEvent } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { fetchAlertsPaginated, fetchAlert, deleteAlert, bulkDeleteAlerts, cleanupByIp, fetchConfig, fetchDecisionsPaginated } from "../lib/api";
-import { isSimulatedAlert, isSimulatedDecision, matchesSimulationFilter, parseSimulationFilter } from "../lib/simulation";
+import { isSimulatedAlert, isSimulatedDecision, parseSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
@@ -106,6 +106,43 @@ function getAlertSourceValue(source: AlertSource | null | undefined): string | u
     return values.find((value): value is string => typeof value === 'string' && value.length > 0);
 }
 
+function getAlertOrigins(alert: AlertListItem): string[] {
+    return alert.decision_summary?.origins ?? collectDistinctOrigins(alert.decisions);
+}
+
+function getAlertDecisionCounts(
+    alert: AlertListItem,
+    simulationsEnabled: boolean,
+    simulationFilter: SimulationFilter,
+): { active: number; expired: number } {
+    const summary = alert.decision_summary;
+    if (summary) {
+        if (simulationsEnabled && simulationFilter === 'simulated') {
+            return {
+                active: summary.simulated_active_count,
+                expired: summary.simulated_expired_count,
+            };
+        }
+        if (simulationsEnabled && simulationFilter === 'live') {
+            return {
+                active: summary.active_count - summary.simulated_active_count,
+                expired: summary.expired_count - summary.simulated_expired_count,
+            };
+        }
+        return { active: summary.active_count, expired: summary.expired_count };
+    }
+
+    const visibleDecisions = simulationsEnabled && simulationFilter !== 'all'
+        ? alert.decisions.filter((decision) => simulationFilter === 'simulated'
+            ? isSimulatedDecision(decision)
+            : !isSimulatedDecision(decision))
+        : alert.decisions;
+    return {
+        active: visibleDecisions.filter((decision) => decision.expired !== true).length,
+        expired: visibleDecisions.filter((decision) => decision.expired === true).length,
+    };
+}
+
 function buildDecisionListHref(
     alertId: string | number,
     options: { includeExpired?: boolean; simulation?: SimulationFilter } = {},
@@ -143,7 +180,7 @@ function summarizeDeleteResult(result: BulkDeleteResult, t: I18nContextValue['t'
 export function Alerts() {
     const { language, t } = useI18n();
     const { formatDateTime, timeZone } = useDateTime();
-    const { refreshSignal, setLastUpdated } = useRefresh();
+    const { refreshSignal } = useRefresh();
     const [searchParams, setSearchParams] = useSearchParams();
     const initialQueryParam = searchParams.get("q") ?? "";
     const [alerts, setAlerts] = useState<AlertListItem[]>([]);
@@ -409,7 +446,6 @@ export function Alerts() {
                 }
             }
 
-            setLastUpdated(new Date());
             completedSuccessfully = true;
 
         } catch (err) {
@@ -426,7 +462,7 @@ export function Alerts() {
                 setBackgroundLoading(false);
             }
         }
-    }, [alertIdParam, appliedQuery, buildServerFilters, loadConfig, searchParams, setLastUpdated]);
+    }, [alertIdParam, appliedQuery, buildServerFilters, loadConfig, searchParams]);
 
     useEffect(() => {
         loadAlertsRef.current = loadAlerts;
@@ -1044,7 +1080,7 @@ export function Alerts() {
                                 visibleAlerts.map((alert, index) => {
                                     const isLastElement = index === visibleAlerts.length - 1;
                                     const sourceValue = getAlertSourceValue(alert.source);
-                                    const alertOrigins = collectDistinctOrigins(alert.decisions);
+                                    const alertOrigins = getAlertOrigins(alert);
                                     const alertOriginDisplay = getOriginDisplayValue(alertOrigins);
                                     const alertOriginTitle = getOriginTitle(alertOrigins);
                                     const isSelected = selectedAlertIds.includes(String(alert.id));
@@ -1144,40 +1180,39 @@ export function Alerts() {
                                                         return (
                                                             <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
                                                                 {(() => {
-                                                                    const visibleDecisions = simulationsEnabled && currentSimulationFilter !== 'all'
-                                                                        ? alert.decisions.filter((decision) => matchesSimulationFilter(
-                                                                            { simulated: isSimulatedDecision(decision) },
-                                                                            currentSimulationFilter,
-                                                                        ))
-                                                                        : alert.decisions;
-                                                                    const activeDecisions = visibleDecisions.filter((decision) => decision.expired !== true);
-                                                                    const expiredDecisions = visibleDecisions.filter((decision) => decision.expired === true);
+                                                                    const decisionCounts = getAlertDecisionCounts(
+                                                                        alert,
+                                                                        simulationsEnabled,
+                                                                        currentSimulationFilter,
+                                                                    );
+                                                                    const activeDecisionCount = decisionCounts.active;
+                                                                    const expiredDecisionCount = decisionCounts.expired;
                                                                     const decisionFilter = simulationsEnabled && currentSimulationFilter !== 'all'
                                                                         ? currentSimulationFilter
                                                                         : undefined;
 
-                                                                    if (activeDecisions.length > 0 || expiredDecisions.length > 0) {
+                                                                    if (activeDecisionCount > 0 || expiredDecisionCount > 0) {
                                                                         return (
                                                                             <div className="flex flex-wrap gap-2">
-                                                                                {activeDecisions.length > 0 && (
+                                                                                {activeDecisionCount > 0 && (
                                                                                     <Link
                                                                                         to={buildDecisionListHref(alert.id, { simulation: decisionFilter })}
                                                                                         className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors border border-primary-200 dark:border-primary-800"
-                                                                                        title={t('pages.alerts.viewActiveDecisions', { count: activeDecisions.length })}
+                                                                                        title={t('pages.alerts.viewActiveDecisions', { count: activeDecisionCount })}
                                                                                     >
                                                                                         <Shield size={14} className="fill-current" />
-                                                                                        <span className="text-xs font-semibold">{t('common.active')}: {activeDecisions.length}</span>
+                                                                                        <span className="text-xs font-semibold">{t('common.active')}: {activeDecisionCount}</span>
                                                                                         <ExternalLink size={12} className="ml-0.5" />
                                                                                     </Link>
                                                                                 )}
-                                                                                {expiredDecisions.length > 0 && (
+                                                                                {expiredDecisionCount > 0 && (
                                                                                     <Link
                                                                                         to={buildDecisionListHref(alert.id, { includeExpired: true, simulation: decisionFilter })}
                                                                                         className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-                                                                                        title={t('pages.alerts.viewExpiredDecisions', { count: expiredDecisions.length })}
+                                                                                        title={t('pages.alerts.viewExpiredDecisions', { count: expiredDecisionCount })}
                                                                                     >
                                                                                         <Shield size={14} className="opacity-50" />
-                                                                                        <span className="text-xs font-medium">{t('common.inactive')}: {expiredDecisions.length}</span>
+                                                                                        <span className="text-xs font-medium">{t('common.inactive')}: {expiredDecisionCount}</span>
                                                                                     </Link>
                                                                                 )}
                                                                             </div>

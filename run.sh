@@ -9,6 +9,8 @@ FRONTEND_PORT=5173
 PNPM_SHIM_DIR=""
 PNPM_CMD=("pnpm")
 MODE="${1:-normal}"
+LOADTEST_PROFILE="${2:-default}"
+LOADTEST_PROFILE_DIR="$SCRIPT_DIR/scripts/load-test-profiles"
 
 # Keep corepack-managed pnpm non-interactive on first use.
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
@@ -86,8 +88,15 @@ LOADTEST_ENV_NAMES=(
     LOADTEST_SIMULATION_RATIO
     LOADTEST_DUPLICATE_VALUE_RATIO
     LOADTEST_BLOCKLIST_DECISIONS
+    LOADTEST_BLOCKLIST_SIZES
+    LOADTEST_EMPTY_ALERTS
+    LOADTEST_EXPIRED_ALERTS
+    LOADTEST_EXPIRING_SOON_DECISIONS
     LOADTEST_REFRESH_ALERTS
     LOADTEST_REFRESH_DECISIONS
+    LOADTEST_REFRESH_DECISIONS_MIN_PER_ALERT
+    LOADTEST_REFRESH_DECISIONS_MAX_PER_ALERT
+    LOADTEST_REFRESH_DECISION_ORIGINS
     TIME_FORMAT
     AUTH_ENABLED
     AUTH_SECRET
@@ -127,6 +136,7 @@ LOADTEST_ENV_NAMES=(
     CROWDSEC_LOOKBACK_PERIOD
     CROWDSEC_ALERT_SYNC_CHUNK
     CROWDSEC_ALERT_SYNC_MIN_CHUNK
+    CROWDSEC_ALERT_INCLUDE_CAPI
     CROWDSEC_RECONCILE_WINDOW
     CROWDSEC_RECONCILE_RECENT_AGE
     CROWDSEC_RECONCILE_RECENT_INTERVAL
@@ -143,6 +153,33 @@ capture_loadtest_overrides() {
             LOADTEST_ENV_OVERRIDES+=("$name=${!name}")
         fi
     done
+}
+
+configure_loadtest_profile() {
+    case "$LOADTEST_PROFILE" in
+        default)
+            profile_file="$LOADTEST_PROFILE_DIR/default.sh"
+            ;;
+        blocklist)
+            profile_file="$LOADTEST_PROFILE_DIR/blocklist.sh"
+            ;;
+        blocklists-mixed)
+            profile_file="$LOADTEST_PROFILE_DIR/blocklists-mixed.sh"
+            ;;
+        *)
+            log "Error: unknown load-test profile '$LOADTEST_PROFILE'."
+            log "Available profiles: default, blocklist, blocklists-mixed"
+            exit 1
+            ;;
+    esac
+
+    # Profile values only fill unset variables, so command-line and .env
+    # overrides retain precedence. Non-default profiles then inherit any
+    # shared values they do not specialize from the explicit default profile.
+    source "$profile_file"
+    if [ "$LOADTEST_PROFILE" != "default" ]; then
+        source "$LOADTEST_PROFILE_DIR/default.sh"
+    fi
 }
 
 restore_loadtest_overrides() {
@@ -168,32 +205,8 @@ load_env_file() {
     fi
 }
 
-configure_loadtest_defaults() {
-    : "${LOADTEST_ALERTS:=300000}"
-    : "${LOADTEST_DECISIONS:=300000}"
-    : "${LOADTEST_SEED:=1337}"
-    : "${LOADTEST_DB_DIR:=${TMPDIR:-/tmp}/crowdsec-web-ui-load-test}"
-    : "${LOADTEST_BACKEND_PORT:=3000}"
-    : "${LOADTEST_ACTIVE_DECISION_RATIO:=0.7}"
-    : "${LOADTEST_SIMULATION_RATIO:=0.1}"
-    : "${LOADTEST_DUPLICATE_VALUE_RATIO:=0.15}"
-    : "${LOADTEST_BLOCKLIST_DECISIONS:=100000}"
-    : "${LOADTEST_REFRESH_ALERTS:=100}"
-    : "${LOADTEST_REFRESH_DECISIONS:=100}"
-    : "${CROWDSEC_REFRESH_INTERVAL:=1m}"
-    : "${CROWDSEC_IDLE_REFRESH_INTERVAL:=10m}"
-    : "${CROWDSEC_IDLE_THRESHOLD:=2m}"
-    : "${CROWDSEC_LOOKBACK_PERIOD:=30d}"
-    : "${CROWDSEC_ALERT_SYNC_CHUNK:=12h}"
-    : "${CROWDSEC_ALERT_SYNC_MIN_CHUNK:=15m}"
-    : "${CROWDSEC_RECONCILE_WINDOW:=1h}"
-    : "${CROWDSEC_RECONCILE_RECENT_AGE:=24h}"
-    : "${CROWDSEC_RECONCILE_RECENT_INTERVAL:=15m}"
-    : "${CROWDSEC_RECONCILE_ACTIVE_INTERVAL:=5m}"
-    : "${CROWDSEC_RECONCILE_OLD_INTERVAL:=3h}"
-    : "${CROWDSEC_RECONCILE_WINDOWS_PER_REFRESH:=2}"
-    : "${CROWDSEC_SIMULATIONS_ENABLED:=true}"
-
+export_loadtest_config() {
+    export LOADTEST_PROFILE
     export LOADTEST_ALERTS
     export LOADTEST_DECISIONS
     export LOADTEST_SEED
@@ -203,14 +216,22 @@ configure_loadtest_defaults() {
     export LOADTEST_SIMULATION_RATIO
     export LOADTEST_DUPLICATE_VALUE_RATIO
     export LOADTEST_BLOCKLIST_DECISIONS
+    export LOADTEST_BLOCKLIST_SIZES
+    export LOADTEST_EMPTY_ALERTS
+    export LOADTEST_EXPIRED_ALERTS
+    export LOADTEST_EXPIRING_SOON_DECISIONS
     export LOADTEST_REFRESH_ALERTS
     export LOADTEST_REFRESH_DECISIONS
+    export LOADTEST_REFRESH_DECISIONS_MIN_PER_ALERT
+    export LOADTEST_REFRESH_DECISIONS_MAX_PER_ALERT
+    export LOADTEST_REFRESH_DECISION_ORIGINS
     export CROWDSEC_REFRESH_INTERVAL
     export CROWDSEC_IDLE_REFRESH_INTERVAL
     export CROWDSEC_IDLE_THRESHOLD
     export CROWDSEC_LOOKBACK_PERIOD
     export CROWDSEC_ALERT_SYNC_CHUNK
     export CROWDSEC_ALERT_SYNC_MIN_CHUNK
+    export CROWDSEC_ALERT_INCLUDE_CAPI
     export CROWDSEC_RECONCILE_WINDOW
     export CROWDSEC_RECONCILE_RECENT_AGE
     export CROWDSEC_RECONCILE_RECENT_INTERVAL
@@ -289,7 +310,8 @@ fi
 load_env_file
 
 if [ "$MODE" == "loadtest" ]; then
-    configure_loadtest_defaults
+    configure_loadtest_profile
+    export_loadtest_config
     log "Checking for running load-test services..."
     shutdown_service $BACKEND_PORT "load-test backend"
 fi
@@ -310,11 +332,21 @@ cd "$PROJECT_ROOT" || exit 1
 
 if [ "$MODE" == "loadtest" ]; then
     log "Starting in LOAD TEST mode..."
+    log "Profile: $LOADTEST_PROFILE"
+    log "Workload: $LOADTEST_PROFILE_DESCRIPTION"
     log "DB directory: $LOADTEST_DB_DIR"
     log "Alerts: $LOADTEST_ALERTS"
     log "Decisions: $LOADTEST_DECISIONS"
-    log "Decisions in blocklist alert: $LOADTEST_BLOCKLIST_DECISIONS"
-    log "Refresh additions: $LOADTEST_REFRESH_ALERTS alerts, $LOADTEST_REFRESH_DECISIONS decisions"
+    log "Blocklist decision sizes: ${LOADTEST_BLOCKLIST_SIZES:-$LOADTEST_BLOCKLIST_DECISIONS}"
+    log "Alerts without decisions: $LOADTEST_EMPTY_ALERTS"
+    log "Alerts with expired decisions: $LOADTEST_EXPIRED_ALERTS"
+    log "Decisions expiring 5-15 minutes after seed: $LOADTEST_EXPIRING_SOON_DECISIONS"
+    if [ "$LOADTEST_REFRESH_DECISIONS_MAX_PER_ALERT" -gt 0 ]; then
+        log "Refresh additions: $LOADTEST_REFRESH_ALERTS alerts, $LOADTEST_REFRESH_DECISIONS_MIN_PER_ALERT-$LOADTEST_REFRESH_DECISIONS_MAX_PER_ALERT decisions per alert"
+    else
+        log "Refresh additions: $LOADTEST_REFRESH_ALERTS alerts, $LOADTEST_REFRESH_DECISIONS decisions"
+    fi
+    log "Refresh decision origins: ${LOADTEST_REFRESH_DECISION_ORIGINS:-mixed}"
     log "Refresh interval: $CROWDSEC_REFRESH_INTERVAL"
     log "Reconciliation: $CROWDSEC_RECONCILE_WINDOWS_PER_REFRESH window(s) of $CROWDSEC_RECONCILE_WINDOW per refresh"
     log "Seed: $LOADTEST_SEED"

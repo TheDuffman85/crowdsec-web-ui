@@ -175,7 +175,7 @@ describe('DatabaseSyncWorker', () => {
 
     expect(database.db.prepare('SELECT message, raw_data FROM alerts WHERE id = 1').get()).toEqual({
       message: 'indexed message',
-      raw_data: JSON.stringify({ id: 1, decisions: [{ id: 'new' }] }),
+      raw_data: null,
     });
     database.close();
   });

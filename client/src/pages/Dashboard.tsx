@@ -214,7 +214,7 @@ export function Dashboard() {
     const { language, t } = useI18n();
     const { formatDate, formatTime } = useDateTime();
     const navigate = useNavigate();
-    const { refreshSignal, setLastUpdated } = useRefresh();
+    const { refreshSignal } = useRefresh();
     const [initialLoading, setInitialLoading] = useState(true);
     const [backgroundRefreshing, setBackgroundRefreshing] = useState(false);
     const [filterApplying, setFilterApplying] = useState(false);
@@ -232,7 +232,11 @@ export function Dashboard() {
     const [dashboardStats, setDashboardStats] = useState<DashboardStatsResponse | null>(null);
     const [dashboardStatsLoadKey, setDashboardStatsLoadKey] = useState<string | null>(null);
     const dashboardStatsRef = useRef<DashboardStatsResponse | null>(null);
-    const loadDataRef = useRef<(isBackground?: boolean, signal?: AbortSignal) => Promise<void>>(async () => {});
+    const loadDataRef = useRef<(
+        isBackground?: boolean,
+        signal?: AbortSignal,
+        force?: boolean,
+    ) => Promise<void>>(async () => {});
     const lastRefreshSignalRef = useRef(refreshSignal);
     const inFlightLoadKeysRef = useRef(new Map<string, InFlightDashboardLoad>());
     const nextLoadRequestIdRef = useRef(0);
@@ -314,17 +318,17 @@ export function Dashboard() {
         return requestFilters;
     }, [filters, granularity]);
 
-    const loadData = useCallback(async (isBackground = false, signal?: AbortSignal) => {
+    const loadData = useCallback(async (isBackground = false, signal?: AbortSignal, force = false) => {
         const requestFilters = buildDashboardStatsFilters();
         const loadKey = JSON.stringify(requestFilters);
         const isFilterApplication = filterApplyingRef.current &&
             filterApplicationVersion === latestFilterApplicationVersionRef.current;
         const lastCompletedLoad = lastCompletedLoadRef.current;
         const inFlightLoad = inFlightLoadKeysRef.current.get(loadKey);
-        if (
+        if (!force && (
             (inFlightLoad && !inFlightLoad.signal?.aborted) ||
             (lastCompletedLoad?.key === loadKey && Date.now() - lastCompletedLoad.completedAt < 250)
-        ) {
+        )) {
             if (isFilterApplication) {
                 finishFilterApplication();
             }
@@ -378,8 +382,6 @@ export function Dashboard() {
                 setIsOnline(true);
             }
 
-            setLastUpdated(new Date());
-
         } catch (error) {
             if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
                 return;
@@ -406,7 +408,7 @@ export function Dashboard() {
                 finishFilterApplication();
             }
         }
-    }, [buildDashboardStatsFilters, filterApplicationVersion, finishFilterApplication, setLastUpdated]);
+    }, [buildDashboardStatsFilters, filterApplicationVersion, finishFilterApplication]);
 
     useEffect(() => {
         loadDataRef.current = loadData;
@@ -435,7 +437,7 @@ export function Dashboard() {
 
         lastRefreshSignalRef.current = refreshSignal;
         const controller = new AbortController();
-        void loadDataRef.current(true, controller.signal);
+        void loadDataRef.current(true, controller.signal, true);
         return () => controller.abort();
     }, [refreshSignal]);
 

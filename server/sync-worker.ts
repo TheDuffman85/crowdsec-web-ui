@@ -69,7 +69,10 @@ function execute(request: WorkerRequest['request']): unknown {
     return database.deleteCachedDecisions(request.ids as Array<string | number>);
   }
   if (request.type === 'begin-deferred-search-indexes') {
-    database.beginDeferredSearchIndexUpdates(request.dropSecondaryIndexes !== false);
+    database.beginDeferredSearchIndexUpdates(
+      request.dropSecondaryIndexes !== false,
+      request.clearSearchIndexes !== false,
+    );
     return undefined;
   }
   if (request.type === 'rebuild-search-indexes') {

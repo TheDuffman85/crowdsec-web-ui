@@ -35,7 +35,7 @@ A self-hosted web dashboard for [CrowdSec](https://crowdsec.net/) to review aler
 - **Notifications**: rules for alert spikes, thresholds, new alerts/decisions, IP bans, recent CVEs, LAPI availability, and application updates; delivery to Email, Gotify, MQTT, ntfy, and Webhooks.
 - **Unified search**: free text plus quoted phrases, `field:value`, `AND`, `OR`, `NOT`, unary `-`, parentheses, and page-specific help from the `Info` button.
 - **Modern UI**: dark/light themes, responsive layouts, and fast React interactions.
-- **Settings**: language, refresh cadence, password login, passkeys, and OIDC SSO in one page.
+- **Settings**: language, refresh cadence, manual refresh availability, password login, passkeys, and OIDC SSO in one page.
 - **Localization**: Arabic, English, German, French, Hindi, Japanese, Portuguese, Spanish, Russian, and Chinese. Browser-default language affects the UI; an explicitly saved language also localizes server-generated sync and notification text. Browser-default server messages stay English because background jobs do not have browser locale context.
 - **Authentication**: password login, passkeys, and OIDC SSO can protect the browser UI and protected API routes. New installs start with authentication enabled and initial admin setup; older migrated installs stay disabled until `AUTH_ENABLED=true`.
 
@@ -64,7 +64,7 @@ A self-hosted web dashboard for [CrowdSec](https://crowdsec.net/) to review aler
 
 > [!CAUTION]
 > **Security Notice**: CrowdSec Web UI includes built-in authentication, but public deployments should still run behind HTTPS and a hardened reverse proxy. For centralized access control, configure OIDC SSO with an Identity Provider (IdP) such as [Authentik](https://goauthentik.io/), [Authelia](https://www.authelia.com/), or [Keycloak](https://www.keycloak.org/). Existing installs upgraded from versions without authentication remain unauthenticated until `AUTH_ENABLED=true` is set.
-> Set `PERMISSION_READ_ONLY=true` to run an instance that can view data but cannot perform CrowdSec write actions or management actions such as changing refresh cadence, managing notification destinations/rules, sending notification tests, or deleting notifications. Language and marking notifications as read remain writable. This is an instance-wide safety mode, not user management or per-user RBAC.
+> Set `PERMISSION_READ_ONLY=true` to run an instance that can view data but cannot perform CrowdSec write actions or management actions such as changing refresh settings, managing notification destinations/rules, sending notification tests, or deleting notifications. Language and marking notifications as read remain writable. This is an instance-wide safety mode, not user management or per-user RBAC.
 
 ## Architecture
 
@@ -255,10 +255,10 @@ Choose exactly one auth mode: password auth or mTLS auth.
 | `PORT` | `3000` | HTTP listen port. If you change this in Docker, also update port mappings and the container health check to match. |
 | `BASE_PATH` | empty | Serve the UI under a path prefix such as `/crowdsec`. Start with `/` and omit the trailing slash. |
 | `DB_DIR` | `/app/data` | Directory that stores the SQLite database and other persisted app data. If you change it, update your volume mounts too. |
-| `GEONAMES_DUMP_DIR` | `<working directory>/geonames` | Directory containing an immutable local GeoNames `cities1000` and admin-1 snapshot used for attack-marker and table location labels. Official Docker images include this data and never refresh it at runtime. |
+| `GEONAMES_DUMP_DIR` | `<working directory>/geonames` | Directory containing an immutable local GeoNames `cities5000` and admin-1 snapshot used for attack-marker and table location labels. Official Docker images include this data and never refresh it at runtime. |
 | `TZ` | browser local | Optional deployment-wide IANA timezone, such as `Europe/Berlin` or `UTC`. When set, the UI, dashboard grouping, filters, and server-generated timestamps all use it. |
 | `TIME_FORMAT` | browser locale | Optional deployment-wide clock format. Accepts `12h` or `24h`. When omitted, each browser's locale determines whether the UI uses a 12- or 24-hour clock. |
-| `PERMISSION_READ_ONLY` | `false` | Set to `true` to hide management actions in the UI and reject API requests that add/delete decisions, delete alerts, clean up by IP, clear the cache, change refresh cadence, manage notification destinations/rules, send notification tests, or delete notifications. Language and marking notifications as read remain writable. |
+| `PERMISSION_READ_ONLY` | `false` | Set to `true` to hide management actions in the UI and reject API requests that add/delete decisions, delete alerts, clean up by IP, clear the cache, change refresh settings, manage notification destinations/rules, send notification tests, or delete notifications. Language and marking notifications as read remain writable. |
 | `AUTH_ENABLED` | new installs: `true`; migrated existing installs: `false` | Enables authentication for the UI and API. Set to `false` to run without login. Existing databases from older releases are marked disabled during migration so upgrades do not lock out current deployments. |
 | `AUTH_SECRET` | auto-generated and persisted | Optional fixed secret used to sign session cookies and encrypt saved auth settings. It is also the fallback TOTP encryption key when `AUTH_TOTP_SECRET` is unset. If unset, the app generates one and stores it in app metadata. |
 | `AUTH_SECRET_FILE` | auto-generated and persisted | Optional Docker Secrets alternative: read `AUTH_SECRET` from a file. Do not set both variables. |
@@ -276,7 +276,8 @@ Choose exactly one auth mode: password auth or mTLS auth.
 | `AUTH_OIDC_READ_ONLY_GROUPS` | empty | Optional comma-separated OIDC groups that receive read-only permissions. Can also be configured from Settings. |
 | `AUTH_OIDC_UNMATCHED_ROLE` | `deny` | Controls OIDC users who match no configured admin or read-only group. Accepts `deny`, `admin`, or `read-only`. Can also be configured from Settings. |
 | `CROWDSEC_LOOKBACK_PERIOD` | `168h` | Alert/history retention window used for sync and cleanup. Accepts values like `12h`, `7d`, or `30m`. |
-| `CROWDSEC_REFRESH_INTERVAL` | `1m` | Normal background refresh interval. Accepts `0`, `manual`, `5s`, `30s`, `1m`, `5m`, or other `s`/`m`/`h`/`d` values. |
+| `CROWDSEC_REFRESH_INTERVAL` | `1m` | Normal cadence for importing changes from CrowdSec LAPI. Connected browsers receive a WebSocket event and update immediately after each successful import; this value is not a page-polling delay. Accepts `0`, `manual`, `5s`, `30s`, `1m`, `5m`, or other `s`/`m`/`h`/`d` values. |
+| `CROWDSEC_MANUAL_REFRESH_ENABLED` | `false` | Set to `true` to enable manual cache refreshes and show the manual refresh controls in the sidebar. The value is used as the default until it is overridden in General settings; saved settings take precedence on later restarts. |
 | `CROWDSEC_IDLE_REFRESH_INTERVAL` | `10m` | Refresh interval used when the app considers itself idle. |
 | `CROWDSEC_IDLE_THRESHOLD` | `2m` | Inactivity period before the app switches to idle refresh behavior. |
 | `CROWDSEC_LAPI_REQUEST_TIMEOUT` | `30s` | Timeout for individual CrowdSec LAPI requests. Increase this for high-latency or very large CrowdSec datasets. |
@@ -672,7 +673,7 @@ The Web UI maintains local alert and decision history. Data from CrowdSec LAPI i
 
 Only changed alerts and added or deleted decisions are written during reconciliation. Unchanged alerts are compared without constructing decision-row mutations, which keeps large blocklist alerts cheap to check. A missing cached alert or decision is deleted only after every required LAPI query for that window succeeds. Relative LAPI time ranges are padded and then filtered back to exact local boundaries, so transport delay, timestamp rounding, or a partial scope response cannot cause destructive reconciliation. The moving current window shares the normal delta request when it is due, avoiding duplicate LAPI calls. Target cadences are triggered by the normal or idle refresh interval, and fair budget allocation prevents old due windows from being starved by active-window backlog.
 
-Alerts and decisions keep the full raw CrowdSec payload for details and compatibility, while SQLite stores indexed derived fields for list filtering, search, pagination, and dashboard statistics. Alerts are indexed by CrowdSec `start_at` when present, falling back to `created_at`, so replayed alerts are shown at the original alert/event time rather than the replay import time. Alerts are kept for `CROWDSEC_LOOKBACK_PERIOD` (default: 7 days), then cleaned up automatically. Historical and reconciliation requests that time out are retried in smaller windows down to `CROWDSEC_ALERT_SYNC_MIN_CHUNK`. If LAPI is unavailable during startup, bootstrap retries continue in the background using `CROWDSEC_BOOTSTRAP_RETRY_DELAY`; if only some bootstrap windows fail, the UI serves the imported cache and marks sync partial while retries continue. To force a full cache reset, use `POST /api/cache/clear`.
+Alerts and decisions are stored as normalized SQLite columns. The `decisions.alert_id` relationship is authoritative, so alert rows do not duplicate embedded decision objects or ID arrays. Only unknown CrowdSec extension fields and open-ended event metadata remain as compact JSON; legacy full-payload columns are cleared during migration. Active duplicate winners are refreshed in batches after sync and stored as indexed flags, so decision paging does not recalculate duplicate groups for every row. Alerts are indexed by CrowdSec `start_at` when present, falling back to `created_at`, so replayed alerts are shown at the original alert/event time rather than the replay import time. Alerts are kept for `CROWDSEC_LOOKBACK_PERIOD` (default: 7 days), then cleaned up automatically. Historical and reconciliation requests that time out are retried in smaller windows down to `CROWDSEC_ALERT_SYNC_MIN_CHUNK`. If LAPI is unavailable during startup, bootstrap retries continue in the background using `CROWDSEC_BOOTSTRAP_RETRY_DELAY`; if only some bootstrap windows fail, the UI serves the imported cache and marks sync partial while retries continue. To force a full cache reset, use `POST /api/cache/clear`.
 
 ## Local Development
 
@@ -684,7 +685,7 @@ Alerts and decisions keep the full raw CrowdSec payload for details and compatib
    pnpm run geocoder:data
    ```
 
-   The second command downloads the GeoNames `cities1000` and admin-1 extracts used for local attack-marker and table location labels, then saves them as an immutable snapshot. Re-run it after deleting the `geonames` directory when you want to refresh local development data. Official Docker images contain a snapshot from image build time and never download GeoNames data at runtime. GeoNames data is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+   The second command downloads the GeoNames `cities5000` and admin-1 extracts used for local attack-marker and table location labels, then saves them as an immutable snapshot. Re-run it after deleting the `geonames` directory when you want to refresh local development data. Official Docker images contain a snapshot from image build time and never download GeoNames data at runtime. GeoNames data is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 2. **Configure `.env`**
 
@@ -735,10 +736,26 @@ Alerts and decisions keep the full raw CrowdSec payload for details and compatib
 
 4. **Manual large-dataset UI load test**
 
-   To test the UI against a repeatable synthetic cache without using a large production CrowdSec instance, start load-test mode:
+   To test the UI against a repeatable synthetic cache without using a large production CrowdSec instance, start the explicit `default` profile. Omitting the profile is equivalent:
    ```bash
+   ./run.sh loadtest default
    ./run.sh loadtest
    ```
+
+   The available named profiles reproduce different workloads:
+   ```bash
+   ./run.sh loadtest default
+   ./run.sh loadtest blocklist
+   ./run.sh loadtest blocklists-mixed
+   ```
+
+   The `default` profile is a broad baseline for bootstrap, dashboard, filtering, paging, and refresh testing. It creates 300,000 alerts and 300,000 decisions over a 30-day lookback. One recent LISTS blocklist owns 100,000 decisions, while the remaining decisions are distributed across regular alerts. Decisions include active, expired, simulated, and duplicate-value cases. Every minute the fake LAPI adds 100 alerts and 100 decisions with a deterministic mix of regular origins.
+
+   The `blocklist` profile mirrors a large CAPI/LISTS workload: 7,582 alerts, 410,463 decisions, and refresh batches containing 53,500 decisions split across LISTS and CAPI alerts.
+
+   The `blocklists-mixed` profile exercises a more varied newest-window workload: 10,000 alerts and 500,000 decisions, with three recent blocklists containing 125,000, 100,000, and 60,000 decisions. The remaining 215,000 decisions are spread evenly across regular alerts. It also includes 1,000 alerts without decisions, 500 alerts whose decisions are already expired, and 8,000 decisions that expire 5–15 minutes after seeding so startup and early refreshes cross expiration boundaries. Each synthetic delta adds three blocklist alerts with a deterministic 1,000–25,000 decisions per alert, alternating their decision origins between LISTS and CAPI.
+
+   Profile defaults live in `scripts/load-test-profiles/`, with one file per profile. Environment variables still take precedence over profile values.
 
    Load-test mode seeds a repeatable fake-LAPI source dataset in a separate SQLite database, builds the frontend, and starts a local backend. Authentication is enabled by default with the administrator login `load` / `test`; set `AUTH_ENABLED=false` to disable it. The load user also has a dummy passkey so the passkey button and authentication request can be exercised under load; the passkey authentication itself is expected to fail. On startup, the backend imports that source dataset through the normal bootstrap/full-sync path before serving it from the app cache. The UI opens on the default Dashboard at `http://localhost:3000/`. The default source dataset is `300000` alerts and `300000` embedded decisions under `/tmp/crowdsec-web-ui-load-test`. Load-test mode prints source seed timings, sync progress, `/api` requests, and event-loop stalls of at least 100ms to the console while it runs.
 
@@ -758,8 +775,15 @@ Alerts and decisions keep the full raw CrowdSec payload for details and compatib
    LOADTEST_SIMULATION_RATIO=0.1
    LOADTEST_DUPLICATE_VALUE_RATIO=0.15
    LOADTEST_BLOCKLIST_DECISIONS=100000
+   LOADTEST_BLOCKLIST_SIZES=
+   LOADTEST_EMPTY_ALERTS=0
+   LOADTEST_EXPIRED_ALERTS=0
+   LOADTEST_EXPIRING_SOON_DECISIONS=0
    LOADTEST_REFRESH_ALERTS=100
    LOADTEST_REFRESH_DECISIONS=100
+   LOADTEST_REFRESH_DECISIONS_MIN_PER_ALERT=0
+   LOADTEST_REFRESH_DECISIONS_MAX_PER_ALERT=0
+   LOADTEST_REFRESH_DECISION_ORIGINS=
    AUTH_ENABLED=true
    CROWDSEC_REFRESH_INTERVAL=1m
    CROWDSEC_IDLE_REFRESH_INTERVAL=10m
@@ -778,7 +802,7 @@ Alerts and decisions keep the full raw CrowdSec payload for details and compatib
 
    The regular `AUTH_OIDC_*` environment variables are also supported in load-test mode, including issuer URL, client ID and secret, scope, group claim, role groups, and unmatched-role handling.
 
-   Both the initial source dataset and later refresh batches are exposed through the fake LAPI. By default, one synthetic blocklist alert contains `100000` of the requested decisions so load testing covers very large single-alert payloads; `LOADTEST_BLOCKLIST_DECISIONS` changes that concentration without changing `LOADTEST_DECISIONS`. On each due head refresh batch it exposes `LOADTEST_REFRESH_ALERTS` new synthetic alerts and `LOADTEST_REFRESH_DECISIONS` new synthetic decisions, timestamped inside that refresh's authoritative delta window, then the regular sync code imports them into SQLite. Historical reconciliation requests do not generate unrelated refresh batches.
+   Both the initial source dataset and later refresh batches are exposed through the fake LAPI. By default, one synthetic blocklist alert contains `100000` of the requested decisions so load testing covers a very large single-alert payload; `LOADTEST_BLOCKLIST_DECISIONS` changes that concentration without changing `LOADTEST_DECISIONS`. `LOADTEST_BLOCKLIST_SIZES` takes precedence when set and accepts comma-separated sizes such as `125000,100000,60000`; each size creates a separate blocklist alert in the newest sync window, and decisions after those fixed blocks are distributed evenly among the remaining decision-bearing alerts. `LOADTEST_EMPTY_ALERTS` reserves trailing alerts with no decisions, `LOADTEST_EXPIRED_ALERTS` makes the preceding decision-bearing alerts contain only expired decisions, and `LOADTEST_EXPIRING_SOON_DECISIONS` makes that many of the evenly distributed decisions expire 5–15 minutes after the seed timestamp. On each due head refresh batch the fake LAPI exposes `LOADTEST_REFRESH_ALERTS` new synthetic alerts and `LOADTEST_REFRESH_DECISIONS` new synthetic decisions, timestamped inside that refresh's authoritative delta window, then the regular sync code imports them into SQLite. Setting `LOADTEST_REFRESH_DECISIONS_MAX_PER_ALERT` above zero switches delta generation to per-alert blocklists; their sizes are selected deterministically between `LOADTEST_REFRESH_DECISIONS_MIN_PER_ALERT` and the maximum, inclusive, instead of using `LOADTEST_REFRESH_DECISIONS`. Historical reconciliation requests do not generate unrelated refresh batches.
 
    The dev-build workflow publishes a containerized variant as `ghcr.io/theduffman85/crowdsec-web-ui:loadtest`. It is a drop-in replacement for the regular image: keep the same ports, authentication environment, OIDC environment, and `/app/data` volume, and change only the image tag. CrowdSec connection settings are ignored by the load-test server.
 

@@ -4,6 +4,7 @@ import type { SyncStatus } from '../../../shared/contracts';
 export type {
   AddDecisionRequest,
   AlertDecision,
+  AlertDecisionSummary,
   AlertEvent,
   AlertMeta,
   AlertMetaValue,
@@ -57,6 +58,7 @@ export type {
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
   UpdateMetricsSidebarPreferenceRequest,
+  UpdateManualRefreshSettingRequest,
   UpdateCheckResponse,
 } from '../../../shared/contracts';
 
@@ -105,14 +107,17 @@ export interface WorldMapDatum {
 }
 
 export type ActivityChartSeriesPoint = AggregatedChartPoint;
+export type ManualRefreshMode = 'delta' | 'latest' | 'full';
 
 export interface RefreshContextValue {
   lastUpdated: Date | null;
   setLastUpdated: Dispatch<SetStateAction<Date | null>>;
   intervalMs: number;
+  nextRefreshAt: Date | null;
   setIntervalMs: (newIntervalMs: number) => Promise<void>;
   refreshSignal: number;
   syncStatus: SyncStatus | null;
+  refreshNow?: (mode: ManualRefreshMode) => Promise<void>;
 }
 
 export interface NotificationUnreadContextValue {
