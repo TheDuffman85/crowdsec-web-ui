@@ -10,18 +10,20 @@ const {
   mapSpy,
   fetchConfigMock,
   fetchDashboardStatsMock,
+  setLastUpdatedMock,
 } = vi.hoisted(() => ({
   chartSpy: vi.fn(),
   mapSpy: vi.fn(),
   fetchConfigMock: vi.fn(),
   fetchDashboardStatsMock: vi.fn(),
+  setLastUpdatedMock: vi.fn(),
 }));
 let refreshSignalMock = 0;
 
 vi.mock('../contexts/useRefresh', () => ({
   useRefresh: () => ({
     refreshSignal: refreshSignalMock,
-    setLastUpdated: vi.fn(),
+    setLastUpdated: setLastUpdatedMock,
   }),
 }));
 
@@ -121,6 +123,7 @@ beforeEach(() => {
   chartSpy.mockClear();
   mapSpy.mockClear();
   fetchDashboardStatsMock.mockClear();
+  setLastUpdatedMock.mockClear();
   fetchConfigMock.mockResolvedValue({
     lookback_period: '7d',
     lookback_hours: 168,
@@ -668,6 +671,40 @@ describe('Dashboard page', () => {
     await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledTimes(2));
     const alertsCard = await screen.findByText('Total Alerts');
     expect(within(alertsCard.closest('a') as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('2');
+    expect(setLastUpdatedMock).not.toHaveBeenCalled();
+  });
+
+  test('reloads dashboard totals for a cache refresh even inside the duplicate-request window', async () => {
+    const { rerender } = render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    const alertsLabel = await screen.findByText('Total Alerts');
+    expect(within(alertsLabel.closest('a') as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('2');
+
+    fetchDashboardStatsMock.mockResolvedValue({
+      ...buildDashboardStatsResponse(),
+      totals: {
+        alerts: 5,
+        decisions: 3,
+        simulatedAlerts: 2,
+        simulatedDecisions: 2,
+      },
+    });
+    refreshSignalMock += 1;
+    rerender(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(within(screen.getByText('Total Alerts').closest('a') as HTMLElement)
+        .getByRole('heading', { level: 3 })).toHaveTextContent('5');
+    });
+    expect(fetchDashboardStatsMock).toHaveBeenCalledTimes(2);
   });
 
   test('does not trigger a duplicate dashboard load when filters change after a refresh signal', async () => {

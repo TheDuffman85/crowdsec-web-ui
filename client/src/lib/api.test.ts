@@ -55,10 +55,9 @@ describe('api helpers', () => {
         if (String(input).includes('/api/notifications')) {
           return Response.json({ data: [{ id: 1 }], pagination: { page: 1, page_size: 50, total: 1, total_pages: 1, unfiltered_total: 1 }, selectable_ids: ['1'], unread_count: 1 });
         }
-        if (String(input).endsWith('/api/alerts/1')) {
+        if (String(input).includes('/api/alerts/1?')) {
           return Response.json([{ id: 1 }]);
         }
-
         return Response.json([{ id: 1 }]);
       }),
     );
@@ -73,6 +72,7 @@ describe('api helpers', () => {
     await expect(fetchNotificationSettings()).resolves.toEqual([{ id: 1 }]);
     await expect(fetchNotifications()).resolves.toEqual({ data: [{ id: 1 }], pagination: { page: 1, page_size: 50, total: 1, total_pages: 1, unfiltered_total: 1 }, selectable_ids: ['1'], unread_count: 1 });
     await expect(fetchNotificationsPaginated()).resolves.toEqual({ data: [{ id: 1 }], pagination: { page: 1, page_size: 50, total: 1, total_pages: 1, unfiltered_total: 1 }, selectable_ids: ['1'], unread_count: 1 });
+    expect(String(vi.mocked(fetch).mock.calls.find(([input]) => String(input).includes('/api/alerts/1'))?.[0])).toContain('include_decisions=false');
   });
 
   test('paginated helpers include only populated filters', async () => {
@@ -85,7 +85,9 @@ describe('api helpers', () => {
     await expect(fetchDecisionsPaginated(3, 10, { ip: '1.2.3.4', target: '' })).resolves.toEqual({ items: [], total: 0 });
     await expect(fetchNotificationsPaginated(4, 20)).resolves.toEqual({ items: [], total: 0 });
 
-    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/api/alerts?page=2&page_size=25&scenario=ssh');
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      '/api/alerts?page=2&page_size=25&include_decisions=false&scenario=ssh',
+    );
     expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain('country=');
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/api/decisions?page=3&page_size=10&ip=1.2.3.4');
     expect(String(fetchMock.mock.calls[1]?.[0])).not.toContain('target=');
@@ -136,7 +138,7 @@ describe('api helpers', () => {
   test('fetchAlert handles direct payloads and empty array payloads', async () => {
     mockFetch(
       vi.fn(async (input) => {
-        if (String(input).endsWith('/api/alerts/direct')) {
+        if (String(input).includes('/api/alerts/direct?')) {
           return Response.json({ id: 'direct' });
         }
 

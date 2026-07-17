@@ -69,11 +69,14 @@ function execute(request: WorkerRequest['request']): unknown {
     return database.deleteCachedDecisions(request.ids as Array<string | number>);
   }
   if (request.type === 'begin-deferred-search-indexes') {
-    database.beginDeferredSearchIndexUpdates(request.dropSecondaryIndexes !== false);
+    database.beginDeferredSearchIndexUpdates(
+      request.dropSecondaryIndexes !== false,
+      request.clearSearchIndexes !== false,
+    );
     return undefined;
   }
   if (request.type === 'rebuild-search-indexes') {
-    database.rebuildSearchIndexes();
+    database.rebuildSearchIndexes(request.scope as Parameters<typeof database.rebuildSearchIndexes>[0]);
     return undefined;
   }
   if (request.type === 'refresh-duplicate-flags') {

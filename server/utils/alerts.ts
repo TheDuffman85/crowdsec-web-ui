@@ -107,7 +107,7 @@ export function toSlimAlert(alert: AlertRecord): SlimAlert {
     machine_alias: alert.machine_alias,
     source: alert.source || null,
     target: alert.target,
-    meta_search: buildMetaSearch(alert.events),
+    meta_search: typeof alert.meta_search === 'string' ? alert.meta_search : buildMetaSearch(alert.events),
     decisions: (alert.decisions || []).map(toSlimDecision),
     simulated: alert.simulated === true,
   };

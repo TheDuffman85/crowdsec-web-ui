@@ -835,19 +835,6 @@ export function WorldMapCard({
                         </TransformWrapper>
                     </div>
                 )}
-                {attackLocations.some((location) => location.city || location.region) && (
-                    <div className="pointer-events-none absolute bottom-1 right-2 z-20 text-[10px] text-gray-500 dark:text-gray-400">
-                        Location data ©{' '}
-                        <a
-                            className="pointer-events-auto underline hover:text-gray-700 dark:hover:text-gray-200"
-                            href="https://www.geonames.org/"
-                            target="_blank"
-                            rel="noreferrer"
-                        >
-                            GeoNames
-                        </a>
-                    </div>
-                )}
             </CardContent>
         </Card >
     );

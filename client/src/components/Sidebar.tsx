@@ -1,18 +1,22 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, ShieldAlert, Gavel, Bell, X, Sun, Moon, ArrowUpCircle, BarChart3, Menu, PanelLeftClose, Settings as SettingsIcon, LogOut } from "lucide-react";
+import { LayoutDashboard, ShieldAlert, Gavel, Bell, X, Sun, Moon, ArrowUpCircle, BarChart3, Menu, PanelLeftClose, Settings as SettingsIcon, LogOut, RefreshCw, ChevronDown } from "lucide-react";
 import { Badge } from "./ui/Badge";
 import { useAuth } from "../contexts/AuthContext";
 import { useNotificationUnreadCount } from "../contexts/useNotificationUnreadCount";
 import { useRefresh } from "../contexts/useRefresh";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { apiUrl, assetUrl } from "../lib/basePath";
 import { fetchConfig } from "../lib/api";
 import type { UpdateCheckResponse } from '../types';
 import { useI18n } from "../lib/i18n";
 import { useDateTime } from "../lib/dateTime";
+import { useOptionalToast } from "../contexts/useToast";
+import { Modal } from "./ui/Modal";
+import type { ManualRefreshMode } from "../types";
 
 type ThemeMode = 'light' | 'dark';
 const METRICS_SIDEBAR_PREFERENCE_EVENT = 'metrics-sidebar-preference-changed';
+const MANUAL_REFRESH_SETTING_EVENT = 'manual-refresh-setting-changed';
 
 interface SidebarProps {
     isOpen: boolean;
@@ -62,13 +66,19 @@ function compareReleaseVersions(left: string, right: string): number {
 
 export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: SidebarProps) {
     const { authEnabled, logout, user } = useAuth();
-    const { lastUpdated, refreshSignal } = useRefresh();
+    const { lastUpdated, refreshSignal, syncStatus, refreshNow } = useRefresh();
     const { unreadCount } = useNotificationUnreadCount();
     const { t } = useI18n();
     const { formatTime } = useDateTime();
     const [updateStatus, setUpdateStatus] = useState<UpdateCheckResponse | null>(null);
     const [showMetricsNav, setShowMetricsNav] = useState(false);
-    const [isLoadTest, setIsLoadTest] = useState(false);
+    const [loadTestProfile, setLoadTestProfile] = useState<string | null>(null);
+    const [manualRefreshEnabled, setManualRefreshEnabled] = useState(false);
+    const [refreshMenuOpen, setRefreshMenuOpen] = useState(false);
+    const [refreshing, setRefreshing] = useState(false);
+    const [confirmFullRefresh, setConfirmFullRefresh] = useState(false);
+    const refreshMenuRef = useRef<HTMLDivElement>(null);
+    const toast = useOptionalToast();
 
     const links = [
         { to: "/", label: "components.sidebar.nav.dashboard", icon: LayoutDashboard },
@@ -114,12 +124,19 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
     useEffect(() => {
         let cancelled = false;
 
-        const loadMetricsAvailability = async () => {
+        const loadSidebarConfig = async () => {
             try {
                 const config = await fetchConfig();
                 if (!cancelled) {
                     setShowMetricsNav(config.metrics_sidebar_visible !== false);
-                    setIsLoadTest(config.deployment_mode === 'load-test');
+                    setManualRefreshEnabled(config.manual_refresh_enabled === true);
+                    if (config.manual_refresh_enabled !== true) {
+                        setRefreshMenuOpen(false);
+                        setConfirmFullRefresh(false);
+                    }
+                    setLoadTestProfile(config.deployment_mode === 'load-test'
+                        ? config.load_test_profile || 'default'
+                        : null);
                 }
             } catch (error) {
                 if (!cancelled) {
@@ -128,14 +145,64 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
             }
         };
 
-        void loadMetricsAvailability();
-        window.addEventListener(METRICS_SIDEBAR_PREFERENCE_EVENT, loadMetricsAvailability);
+        void loadSidebarConfig();
+        window.addEventListener(METRICS_SIDEBAR_PREFERENCE_EVENT, loadSidebarConfig);
+        window.addEventListener(MANUAL_REFRESH_SETTING_EVENT, loadSidebarConfig);
 
         return () => {
             cancelled = true;
-            window.removeEventListener(METRICS_SIDEBAR_PREFERENCE_EVENT, loadMetricsAvailability);
+            window.removeEventListener(METRICS_SIDEBAR_PREFERENCE_EVENT, loadSidebarConfig);
+            window.removeEventListener(MANUAL_REFRESH_SETTING_EVENT, loadSidebarConfig);
         };
     }, []);
+
+    useEffect(() => {
+        if (!refreshMenuOpen) return;
+
+        const closeMenu = (event: MouseEvent) => {
+            if (!refreshMenuRef.current?.contains(event.target as Node)) setRefreshMenuOpen(false);
+        };
+        const closeOnEscape = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') setRefreshMenuOpen(false);
+        };
+        document.addEventListener('mousedown', closeMenu);
+        document.addEventListener('keydown', closeOnEscape);
+        return () => {
+            document.removeEventListener('mousedown', closeMenu);
+            document.removeEventListener('keydown', closeOnEscape);
+        };
+    }, [refreshMenuOpen]);
+
+    useEffect(() => {
+        if (isOpen) return;
+        const timeoutId = window.setTimeout(() => setRefreshMenuOpen(false), 0);
+        return () => window.clearTimeout(timeoutId);
+    }, [isOpen]);
+
+    const runRefresh = async (mode: ManualRefreshMode) => {
+        setRefreshMenuOpen(false);
+        setRefreshing(true);
+        try {
+            if (refreshNow) {
+                await refreshNow(mode);
+            } else {
+                const response = await fetch(apiUrl('/api/cache/refresh'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode }),
+                });
+                const data = await response.json().catch(() => ({})) as { error?: string };
+                if (!response.ok) throw new Error(data.error || t('components.sidebar.refresh.failed'));
+            }
+            toast?.addToast(t('components.sidebar.refresh.completed'), 'success');
+        } catch (error) {
+            toast?.addToast(error instanceof Error ? error.message : t('components.sidebar.refresh.failed'), 'danger');
+        } finally {
+            setRefreshing(false);
+        }
+    };
+
+    const refreshBusy = refreshing || Boolean(syncStatus?.isSyncing);
 
     const formatLastUpdatedTime = (date: Date | null) => {
         if (!date) return "";
@@ -244,14 +311,65 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                             {lastUpdated ? formatLastUpdatedTime(lastUpdated) : t('components.sidebar.lastRefreshNever')}
                         </p>
                     </div>
-                    <button
-                        onClick={toggleTheme}
-                        className="shrink-0 rounded-md p-1.5 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
-                        aria-label={theme === "light" ? t('components.sidebar.darkMode') : t('components.sidebar.lightMode')}
-                        title={theme === "light" ? t('components.sidebar.darkMode') : t('components.sidebar.lightMode')}
-                    >
-                        {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
-                    </button>
+                    <div className="flex shrink-0 items-center gap-1">
+                        {manualRefreshEnabled && <div ref={refreshMenuRef} className="relative flex items-center">
+                            <button
+                                type="button"
+                                onClick={() => void runRefresh('delta')}
+                                disabled={refreshBusy}
+                                className="flex min-h-11 min-w-11 items-center justify-center rounded-l-md text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-900 disabled:cursor-wait disabled:opacity-60 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+                                aria-label={t('components.sidebar.refresh.deltaNow')}
+                                title={t('components.sidebar.refresh.deltaNow')}
+                            >
+                                <RefreshCw size={18} className={refreshBusy ? 'animate-spin' : undefined} />
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setRefreshMenuOpen((open) => !open)}
+                                disabled={refreshBusy}
+                                className="flex min-h-11 min-w-9 items-center justify-center rounded-r-md border-l border-gray-200 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-900 disabled:cursor-wait disabled:opacity-60 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+                                aria-label={t('components.sidebar.refresh.chooseType')}
+                                aria-haspopup="menu"
+                                aria-expanded={refreshMenuOpen}
+                            >
+                                <ChevronDown size={15} />
+                            </button>
+                            {refreshMenuOpen && (
+                                <div
+                                    role="menu"
+                                    className="absolute bottom-full right-0 z-20 mb-2 w-52 overflow-hidden rounded-lg border border-gray-200 bg-white p-1 shadow-xl dark:border-gray-700 dark:bg-gray-800"
+                                >
+                                    <button
+                                        type="button"
+                                        role="menuitem"
+                                        onClick={() => void runRefresh('latest')}
+                                        className="flex min-h-11 w-full items-center rounded-md px-3 text-left text-sm font-medium text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700"
+                                    >
+                                        {t('components.sidebar.refresh.latestNow')}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        role="menuitem"
+                                        onClick={() => {
+                                            setRefreshMenuOpen(false);
+                                            setConfirmFullRefresh(true);
+                                        }}
+                                        className="flex min-h-11 w-full items-center rounded-md px-3 text-left text-sm font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30"
+                                    >
+                                        {t('components.sidebar.refresh.fullNow')}
+                                    </button>
+                                </div>
+                            )}
+                        </div>}
+                        <button
+                            onClick={toggleTheme}
+                            className="flex min-h-11 min-w-9 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
+                            aria-label={theme === "light" ? t('components.sidebar.darkMode') : t('components.sidebar.lightMode')}
+                            title={theme === "light" ? t('components.sidebar.darkMode') : t('components.sidebar.lightMode')}
+                        >
+                            {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
+                        </button>
+                    </div>
                 </div>
 
                 {authEnabled && user && (
@@ -303,8 +421,10 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                 )}
 
                 <p className="text-xs text-center text-gray-400 dark:text-gray-500 flex flex-col items-center gap-1">
-                    {isLoadTest ? (
-                        <span>{t('components.sidebar.loadTest')}</span>
+                    {loadTestProfile ? (
+                        <span>
+                            {t('components.sidebar.loadTest')}: <span className="font-mono">{loadTestProfile}</span>
+                        </span>
                     ) : import.meta.env.VITE_VERSION ? (
                         <>
                             <a
@@ -339,6 +459,35 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                 </p>
             </div>
         </aside>
+
+        <Modal
+            isOpen={manualRefreshEnabled && confirmFullRefresh}
+            onClose={() => setConfirmFullRefresh(false)}
+            title={t('components.sidebar.refresh.fullConfirmTitle')}
+        >
+            <p className="text-sm leading-6 text-gray-600 dark:text-gray-300">
+                {t('components.sidebar.refresh.fullConfirmDescription')}
+            </p>
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                <button
+                    type="button"
+                    onClick={() => setConfirmFullRefresh(false)}
+                    className="min-h-11 rounded-lg border border-gray-300 px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
+                >
+                    {t('common.cancel')}
+                </button>
+                <button
+                    type="button"
+                    onClick={() => {
+                        setConfirmFullRefresh(false);
+                        void runRefresh('full');
+                    }}
+                    className="min-h-11 rounded-lg bg-red-600 px-4 text-sm font-semibold text-white hover:bg-red-700"
+                >
+                    {t('components.sidebar.refresh.confirmFull')}
+                </button>
+            </div>
+        </Modal>
 
         {/* Collapsed sidebar desktop and tablet */}
         <aside

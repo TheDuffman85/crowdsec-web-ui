@@ -18,6 +18,7 @@ import type {
   StatsAlert,
   StatsDecision,
   UpdateMetricsSidebarPreferenceRequest,
+  UpdateManualRefreshSettingRequest,
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
 } from '../types';
@@ -94,7 +95,11 @@ export async function fetchAlertsPaginated(
     pageSize = 50,
     filters?: Record<string, string>,
 ): Promise<PaginatedResponse<SlimAlert>> {
-    const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+    const params = new URLSearchParams({
+        page: String(page),
+        page_size: String(pageSize),
+        include_decisions: 'false',
+    });
     for (const [key, value] of Object.entries(filters ?? {})) {
         if (value) params.set(key, value);
     }
@@ -102,7 +107,7 @@ export async function fetchAlertsPaginated(
 }
 
 export async function fetchAlert(id: string | number): Promise<AlertRecord> {
-    const payload = await fetchJson<AlertRecord | AlertRecord[]>(`/api/alerts/${id}`, undefined, 'Failed to fetch alert');
+    const payload = await fetchJson<AlertRecord | AlertRecord[]>(`/api/alerts/${id}?include_decisions=false`, undefined, 'Failed to fetch alert');
     if (Array.isArray(payload)) {
         const alert = payload[0];
         if (!alert) {
@@ -261,6 +266,17 @@ export async function updateMetricsSidebarPreference(data: UpdateMetricsSidebarP
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
     }, 'Failed to update metrics sidebar preference');
+}
+
+export async function updateManualRefreshSetting(data: UpdateManualRefreshSettingRequest): Promise<{
+    success: boolean;
+    manual_refresh_enabled: boolean;
+}> {
+    return sendJson('/api/config/manual-refresh', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    }, 'Failed to update manual refresh setting');
 }
 
 export async function updateLanguagePreference(language: string): Promise<{

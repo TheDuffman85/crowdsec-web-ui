@@ -3,9 +3,10 @@ interface SwitchProps {
     onCheckedChange: (next: boolean) => void;
     id?: string;
     ariaLabelledBy?: string;
+    disabled?: boolean;
 }
 
-export function Switch({ checked, onCheckedChange, id, ariaLabelledBy }: SwitchProps) {
+export function Switch({ checked, onCheckedChange, id, ariaLabelledBy, disabled = false }: SwitchProps) {
     return (
         <button
             id={id}
@@ -13,6 +14,7 @@ export function Switch({ checked, onCheckedChange, id, ariaLabelledBy }: SwitchP
             role="switch"
             aria-checked={checked}
             aria-labelledby={ariaLabelledBy}
+            disabled={disabled}
             onClick={() => onCheckedChange(!checked)}
             className={`
                 relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent 
@@ -20,6 +22,7 @@ export function Switch({ checked, onCheckedChange, id, ariaLabelledBy }: SwitchP
                 focus-visible:ring-primary-600 focus-visible:ring-offset-2 focus-visible:ring-offset-white 
                 dark:focus-visible:ring-offset-gray-950
                 ${checked ? 'bg-primary-600' : 'bg-gray-200 dark:bg-gray-700'}
+                ${disabled ? 'cursor-not-allowed opacity-60' : ''}
             `}
         >
             <span

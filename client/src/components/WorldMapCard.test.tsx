@@ -274,7 +274,7 @@ describe('WorldMapCard', () => {
     expect(within(details).getByText('Approx. location')).toBeInTheDocument();
     expect(within(details).getByText('Berlin, Germany')).toBeInTheDocument();
     expect(within(details).queryByText('52.5200°, 13.4050°')).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'GeoNames' })).toHaveAttribute('href', 'https://www.geonames.org/');
+    expect(screen.queryByText(/Location data/)).not.toBeInTheDocument();
     expect(screen.queryByText('Attack location')).not.toBeInTheDocument();
 
     fireEvent.pointerMove(mapContainer, {

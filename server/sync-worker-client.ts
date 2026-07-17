@@ -1,5 +1,5 @@
 import { Worker } from 'node:worker_threads';
-import type { AlertInsertParams, DecisionInsertParams } from './database';
+import type { AlertInsertParams, DecisionInsertParams, SearchIndexRebuildScope } from './database';
 
 export type DatabaseWrite = <T>(operation: () => T | Promise<T>) => Promise<T>;
 
@@ -20,8 +20,8 @@ type SyncWorkerRequest =
   | { type: 'delete-alerts-missing-between'; start: string; end: string; keepIds: Array<string | number> }
   | { type: 'delete-cached-alerts'; ids: Array<string | number> }
   | { type: 'delete-cached-decisions'; ids: Array<string | number> }
-  | { type: 'begin-deferred-search-indexes'; dropSecondaryIndexes: boolean }
-  | { type: 'rebuild-search-indexes' }
+  | { type: 'begin-deferred-search-indexes'; dropSecondaryIndexes: boolean; clearSearchIndexes: boolean }
+  | { type: 'rebuild-search-indexes'; scope?: SearchIndexRebuildScope }
   | { type: 'refresh-duplicate-flags'; now: string }
   | { type: 'cleanup-old-data'; cutoff: string }
   | { type: 'clear-sync-data' };
@@ -31,6 +31,8 @@ type SyncWorkerResponse = {
   result?: unknown;
   error?: string;
 };
+
+const DUPLICATE_REFRESH_TIMEOUT_MS = 2 * 60_000;
 
 type PendingRequest = {
   resolve: (value: unknown) => void;
@@ -71,16 +73,16 @@ export class DatabaseSyncWorker {
     return this.execute({ type: 'delete-cached-decisions', ids });
   }
 
-  beginDeferredSearchIndexUpdates(dropSecondaryIndexes = true): Promise<void> {
-    return this.execute({ type: 'begin-deferred-search-indexes', dropSecondaryIndexes });
+  beginDeferredSearchIndexUpdates(dropSecondaryIndexes = true, clearSearchIndexes = true): Promise<void> {
+    return this.execute({ type: 'begin-deferred-search-indexes', dropSecondaryIndexes, clearSearchIndexes });
   }
 
-  rebuildSearchIndexes(): Promise<void> {
-    return this.execute({ type: 'rebuild-search-indexes' });
+  rebuildSearchIndexes(scope?: SearchIndexRebuildScope): Promise<void> {
+    return this.execute({ type: 'rebuild-search-indexes', scope });
   }
 
   refreshDecisionDuplicateFlags(now: string): Promise<void> {
-    return this.execute({ type: 'refresh-duplicate-flags', now });
+    return this.execute({ type: 'refresh-duplicate-flags', now }, DUPLICATE_REFRESH_TIMEOUT_MS);
   }
 
   cleanupOldData(cutoff: string): Promise<{ alerts: number; decisions: number }> {
@@ -108,19 +110,19 @@ export class DatabaseSyncWorker {
     }
   }
 
-  private execute<T>(request: SyncWorkerRequest): Promise<T> {
-    return this.runExclusive(() => this.dispatch<T>(request));
+  private execute<T>(request: SyncWorkerRequest, timeoutMs = this.timeoutMs): Promise<T> {
+    return this.runExclusive(() => this.dispatch<T>(request, timeoutMs));
   }
 
-  private dispatch<T>(request: SyncWorkerRequest): Promise<T> {
+  private dispatch<T>(request: SyncWorkerRequest, timeoutMs: number): Promise<T> {
     const worker = this.getWorker();
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
       const timeout = setTimeout(() => {
         if (!this.pending.delete(id)) return;
-        reject(new Error(`Database maintenance exceeded ${this.timeoutMs}ms timeout`));
+        reject(new Error(`Database maintenance exceeded ${timeoutMs}ms timeout`));
         this.restartWorker();
-      }, this.timeoutMs);
+      }, timeoutMs);
       this.pending.set(id, {
         resolve: (value) => resolve(value as T),
         reject,

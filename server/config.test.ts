@@ -99,8 +99,18 @@ describe('config helpers', () => {
   });
 
   test('marks the dedicated load-test runtime mode', () => {
-    expect(createRuntimeConfig({}).deploymentMode).toBe('standard');
-    expect(createRuntimeConfig({ CROWDSEC_WEB_UI_MODE: 'load-test' }).deploymentMode).toBe('load-test');
+    expect(createRuntimeConfig({})).toEqual(expect.objectContaining({
+      deploymentMode: 'standard',
+      loadTestProfile: null,
+    }));
+    expect(createRuntimeConfig({ CROWDSEC_WEB_UI_MODE: 'load-test' })).toEqual(expect.objectContaining({
+      deploymentMode: 'load-test',
+      loadTestProfile: 'default',
+    }));
+    expect(createRuntimeConfig({
+      CROWDSEC_WEB_UI_MODE: 'load-test',
+      LOADTEST_PROFILE: 'blocklists-mixed',
+    }).loadTestProfile).toBe('blocklists-mixed');
   });
 
   test('uses a configurable grace period for bouncer deletion propagation', () => {
@@ -126,6 +136,7 @@ describe('config helpers', () => {
       CROWDSEC_SIMULATIONS_ENABLED: 'false',
       CROWDSEC_LOOKBACK_PERIOD: '2d',
       CROWDSEC_REFRESH_INTERVAL: '5s',
+      CROWDSEC_MANUAL_REFRESH_ENABLED: 'true',
       CROWDSEC_IDLE_REFRESH_INTERVAL: '1m',
       CROWDSEC_IDLE_THRESHOLD: '30s',
       CROWDSEC_LAPI_REQUEST_TIMEOUT: '2m',
@@ -183,6 +194,7 @@ describe('config helpers', () => {
     expect(config.simulationsEnabled).toBe(false);
     expect(config.lookbackMs).toBe(172_800_000);
     expect(config.refreshIntervalMs).toBe(5_000);
+    expect(config.manualRefreshEnabled).toBe(true);
     expect(config.idleRefreshIntervalMs).toBe(60_000);
     expect(config.lapiRequestTimeoutMs).toBe(120_000);
     expect(config.bouncerPropagationDelayMs).toBe(20_000);
@@ -243,6 +255,7 @@ describe('config helpers', () => {
     expect(config.timeZone).toBeNull();
     expect(config.timeFormat).toBe('browser');
     expect(config.refreshIntervalMs).toBe(60_000);
+    expect(config.manualRefreshEnabled).toBe(false);
     expect(config.idleRefreshIntervalMs).toBe(600_000);
     expect(config.lapiRequestTimeoutMs).toBe(30_000);
     expect(config.prometheusUrl).toBeUndefined();

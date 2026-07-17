@@ -8,7 +8,7 @@ import { Switch } from "../components/ui/Switch";
 import { Badge } from "../components/ui/Badge";
 import { useRefresh } from "../contexts/useRefresh";
 import { useOptionalToast } from "../contexts/useToast";
-import { fetchConfig, updateMetricsSidebarPreference } from "../lib/api";
+import { fetchConfig, updateManualRefreshSetting, updateMetricsSidebarPreference } from "../lib/api";
 import { apiUrl } from "../lib/basePath";
 import { useAuth } from "../contexts/AuthContext";
 import {
@@ -35,6 +35,7 @@ const REFRESH_OPTIONS = [
 ] as const;
 
 const METRICS_SIDEBAR_PREFERENCE_EVENT = 'metrics-sidebar-preference-changed';
+const MANUAL_REFRESH_SETTING_EVENT = 'manual-refresh-setting-changed';
 
 interface PasskeySummary {
     id: number;
@@ -92,6 +93,7 @@ export function Settings() {
     const [isLoading, setIsLoading] = useState(true);
     const [languagePreference, setLanguagePreferenceValue] = useState<LanguagePreference>(preference);
     const [refreshInterval, setRefreshInterval] = useState(intervalMs);
+    const [manualRefreshEnabled, setManualRefreshEnabled] = useState(false);
     const [metricsSidebarVisible, setMetricsSidebarVisible] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
     const [disablePasswordLogin, setDisablePasswordLogin] = useState(false);
@@ -132,6 +134,7 @@ export function Settings() {
                 if (!cancelled) {
                     setConfig(nextConfig);
                     setRefreshInterval(nextConfig.refresh_interval);
+                    setManualRefreshEnabled(nextConfig.manual_refresh_enabled === true);
                     setMetricsSidebarVisible(nextConfig.metrics_sidebar_visible !== false);
                 }
             })
@@ -221,6 +224,8 @@ export function Settings() {
     const canManageSettings = config ? config.permissions?.can_manage_settings !== false : false;
     const hasLanguageChange = languagePreference !== preference;
     const hasRefreshChange = refreshInterval !== intervalMs;
+    const savedManualRefreshEnabled = config?.manual_refresh_enabled === true;
+    const hasManualRefreshChange = manualRefreshEnabled !== savedManualRefreshEnabled;
     const savedMetricsSidebarVisible = config?.metrics_sidebar_visible !== false;
     const hasMetricsSidebarChange = metricsSidebarVisible !== savedMetricsSidebarVisible;
     const canManageAuthSettings = canManageSettings;
@@ -243,6 +248,14 @@ export function Settings() {
         try {
             if (canManageSettings && hasRefreshChange) {
                 await setIntervalMs(refreshInterval);
+            }
+            if (canManageSettings && hasManualRefreshChange) {
+                const payload = await updateManualRefreshSetting({ enabled: manualRefreshEnabled });
+                setConfig((current) => current ? {
+                    ...current,
+                    manual_refresh_enabled: payload.manual_refresh_enabled,
+                } : current);
+                window.dispatchEvent(new Event(MANUAL_REFRESH_SETTING_EVENT));
             }
             if (hasLanguageChange) {
                 setLanguagePreference(languagePreference);
@@ -589,7 +602,26 @@ export function Settings() {
                             <p className="text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.refreshHelp")}</p>
                         </div>
 
-                        <div className="space-y-2 xl:col-span-2">
+                        <div className="space-y-2">
+                            <div className="flex items-start gap-4 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+                                <Switch
+                                    id="settings-manual-refresh"
+                                    checked={manualRefreshEnabled}
+                                    onCheckedChange={setManualRefreshEnabled}
+                                    disabled={!canManageSettings || isSaving}
+                                />
+                                <div className="min-w-0">
+                                    <label htmlFor="settings-manual-refresh" className={labelClass}>
+                                        {t("pages.settings.enableManualRefresh")}
+                                    </label>
+                                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                        {t("pages.settings.enableManualRefreshHelp")}
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="space-y-2">
                             <div className="flex items-start gap-4 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
                                 <Switch
                                     id="settings-metrics-sidebar"

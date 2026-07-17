@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const snapshots = [
-  { directory: 'cities1000', basename: 'cities1000' },
+  { directory: 'cities5000', basename: 'cities5000' },
   { directory: 'admin1_codes', basename: 'admin1CodesASCII' },
 ];
 

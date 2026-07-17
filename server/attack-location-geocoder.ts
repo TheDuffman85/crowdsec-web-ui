@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import localReverseGeocoder from 'local-reverse-geocoder';
+import { makeGeoNamesSnapshotsImmutable } from '../scripts/geonames-snapshot.mjs';
 export const ATTACK_LOCATION_MAX_DISTANCE_KM = 100;
 const ATTACK_LOCATION_CANDIDATE_LIMIT = 10;
 
@@ -59,8 +60,23 @@ function hasImmutableDumpFile(dumpDirectory: string, subdirectory: string, basen
 }
 
 export function hasGeoNamesAttackLocationData(dumpDirectory: string): boolean {
-  return hasImmutableDumpFile(dumpDirectory, 'cities1000', 'cities1000')
+  return hasImmutableDumpFile(dumpDirectory, 'cities5000', 'cities5000')
     && hasImmutableDumpFile(dumpDirectory, 'admin1_codes', 'admin1CodesASCII');
+}
+
+function prepareGeoNamesAttackLocationData(dumpDirectory: string): boolean {
+  if (hasGeoNamesAttackLocationData(dumpDirectory)) return true;
+
+  try {
+    // Releases before the immutable-snapshot migration left valid downloads
+    // under dated filenames. Promote those files locally so upgrades keep
+    // location labels without letting the geocoder refresh data at runtime.
+    makeGeoNamesSnapshotsImmutable(dumpDirectory);
+  } catch {
+    return false;
+  }
+
+  return hasGeoNamesAttackLocationData(dumpDirectory);
 }
 
 function normalizeText(value: unknown): string | undefined {
@@ -84,7 +100,7 @@ export function createAttackLocationResolver(
 ): AttackLocationResolver {
   const client = options.client || localReverseGeocoder as LocalReverseGeocoderClient;
   const maxDistanceKm = options.maxDistanceKm ?? ATTACK_LOCATION_MAX_DISTANCE_KM;
-  const dataAvailable = options.dataAvailable || (() => hasGeoNamesAttackLocationData(options.dumpDirectory));
+  const dataAvailable = options.dataAvailable || (() => prepareGeoNamesAttackLocationData(options.dumpDirectory));
   const warn = options.warn || ((message: string) => console.warn(message));
   let initialization: Promise<void> | null = null;
   let warned = false;
@@ -102,7 +118,7 @@ export function createAttackLocationResolver(
       try {
         client.init({
           dumpDirectory: options.dumpDirectory,
-          citiesFileOverride: 'cities1000',
+          citiesFileOverride: 'cities5000',
           load: {
             admin1: true,
             admin2: false,

@@ -1,16 +1,21 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import userEvent from '@testing-library/user-event';
 import { Sidebar } from './Sidebar';
 import { useNotificationUnreadCount } from '../contexts/useNotificationUnreadCount';
+
+const { refreshNowMock } = vi.hoisted(() => ({ refreshNowMock: vi.fn() }));
 
 vi.mock('../contexts/useRefresh', () => ({
   useRefresh: () => ({
     intervalMs: 0,
+    nextRefreshAt: null,
     setIntervalMs: vi.fn(),
     lastUpdated: null,
     refreshSignal: 0,
     syncStatus: null,
+    refreshNow: refreshNowMock,
   }),
 }));
 
@@ -36,13 +41,15 @@ describe('Sidebar', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    refreshNowMock.mockReset();
+    refreshNowMock.mockResolvedValue(undefined);
     vi.stubEnv('VITE_VERSION', '2026.5.2');
     vi.stubEnv('VITE_BRANCH', 'main');
     vi.stubEnv('VITE_COMMIT_HASH', 'abc123');
     fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
       if (url.includes('/api/config')) {
-        return Response.json({ metrics_enabled: false, metrics_sidebar_visible: true });
+        return Response.json({ metrics_enabled: false, metrics_sidebar_visible: true, manual_refresh_enabled: true });
       }
       return Response.json({ update_available: false });
     });
@@ -50,6 +57,7 @@ describe('Sidebar', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllEnvs();
   });
 
@@ -161,6 +169,7 @@ describe('Sidebar', () => {
           metrics_enabled: false,
           metrics_sidebar_visible: true,
           deployment_mode: 'load-test',
+          load_test_profile: 'blocklists-mixed',
         });
       }
       return Response.json({ update_available: false });
@@ -168,7 +177,8 @@ describe('Sidebar', () => {
 
     renderSidebar();
 
-    expect(await screen.findByText('Load test')).toBeInTheDocument();
+    expect(await screen.findByText('blocklists-mixed')).toBeInTheDocument();
+    expect(screen.getByText(/Load test:/)).toBeInTheDocument();
     expect(screen.queryByText('v2026.5.2')).not.toBeInTheDocument();
   });
 
@@ -184,5 +194,76 @@ describe('Sidebar', () => {
     expect(screen.getAllByRole('link', { name: 'Settings' }).map((link) => link.getAttribute('href'))).toContain('/settings');
     expect(screen.queryByLabelText('Language')).not.toBeInTheDocument();
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+  });
+
+  test('hides manual refresh controls when the feature is disabled', async () => {
+    vi.mocked(useNotificationUnreadCount).mockReturnValue({
+      unreadCount: 0,
+      setUnreadCount: vi.fn(),
+      refreshUnreadCount: vi.fn(),
+    });
+    fetchMock.mockImplementation(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        return Response.json({
+          metrics_enabled: false,
+          metrics_sidebar_visible: true,
+          manual_refresh_enabled: false,
+        });
+      }
+      return Response.json({ update_available: false });
+    });
+
+    renderSidebar();
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/config'), undefined));
+    expect(screen.queryByRole('button', { name: 'Delta Refresh' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Choose refresh type' })).not.toBeInTheDocument();
+  });
+
+  test('runs a delta refresh from the compact default button', async () => {
+    vi.mocked(useNotificationUnreadCount).mockReturnValue({
+      unreadCount: 0,
+      setUnreadCount: vi.fn(),
+      refreshUnreadCount: vi.fn(),
+    });
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await user.click(await screen.findByRole('button', { name: 'Delta Refresh' }));
+
+    expect(refreshNowMock).toHaveBeenCalledWith('delta');
+  });
+
+  test('offers latest-window refresh in the dropdown', async () => {
+    vi.mocked(useNotificationUnreadCount).mockReturnValue({
+      unreadCount: 0,
+      setUnreadCount: vi.fn(),
+      refreshUnreadCount: vi.fn(),
+    });
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await user.click(await screen.findByRole('button', { name: 'Choose refresh type' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Latest Window' }));
+
+    expect(refreshNowMock).toHaveBeenCalledWith('latest');
+  });
+
+  test('requires confirmation before starting a full historical refresh', async () => {
+    vi.mocked(useNotificationUnreadCount).mockReturnValue({
+      unreadCount: 0,
+      setUnreadCount: vi.fn(),
+      refreshUnreadCount: vi.fn(),
+    });
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await user.click(await screen.findByRole('button', { name: 'Choose refresh type' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Full' }));
+    expect(refreshNowMock).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Run full refresh' }));
+    expect(refreshNowMock).toHaveBeenCalledWith('full');
   });
 });

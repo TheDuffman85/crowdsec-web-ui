@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'node:crypto';
+import { isIP } from 'node:net';
 import { Hono } from 'hono';
 import { compress } from 'hono/compress';
 import { bodyLimit } from 'hono/body-limit';
@@ -8,6 +9,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import type {
   AddDecisionRequest,
   AlertDecision,
+  AlertDecisionSummary,
   AlertRecord,
   BulkDeleteRequest,
   BulkDeleteResult,
@@ -29,6 +31,7 @@ import type {
   StatsAlert,
   StatsDecision,
   SyncStatus,
+  UpdateManualRefreshSettingRequest,
   UpdateMetricsSidebarPreferenceRequest,
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
@@ -40,6 +43,15 @@ import { compileAlertSearch, compileDecisionSearch, matchesIpSearchValue, type S
 import { createRuntimeConfig, getIntervalName, parseRefreshInterval, type RuntimeConfig } from './config';
 import { getDateTimeKey, getTimeZoneOffsetMs, getZonedHourlyBucketKeys } from './utils/date-time';
 import { CrowdsecDatabase, type AlertInsertParams, type DecisionInsertParams } from './database';
+import {
+  ALERT_RECORD_COLUMNS,
+  DECISION_RECORD_COLUMNS,
+  alertFromRow,
+  alertMetadataFingerprint,
+  decisionFromRow,
+  type NormalizedAlertRow,
+  type NormalizedDecisionRow,
+} from './normalized-record';
 import { LapiClient } from './lapi';
 import { createDashboardAuth } from './app-auth';
 import { createNotificationService } from './notifications';
@@ -111,10 +123,13 @@ export interface AppController {
   stopBackgroundTasks: () => void;
   getSyncStatus: () => SyncStatus;
   getLapiStatus: () => LapiStatus;
+  getCacheLastUpdate: () => string | null;
+  subscribeCacheUpdates: (listener: (updatedAt: string) => void) => () => void;
 }
 
 interface PersistedConfig {
   refresh_interval_ms?: number;
+  manual_refresh_enabled?: boolean;
 }
 
 const METRICS_SIDEBAR_VISIBLE_META_KEY = 'metrics_sidebar_visible';
@@ -184,7 +199,6 @@ interface ReconcilePlan {
 interface CachedDecisionRecord {
   id: string;
   value?: string;
-  raw_data: string;
 }
 
 interface CachedAlertRecord {
@@ -305,11 +319,11 @@ const API_BODY_LIMIT_BYTES = 1024 * 1024;
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 const DASHBOARD_LOOP_YIELD_INTERVAL = 5_000;
 const DASHBOARD_INDEX_BATCH_SIZE = 5_000;
-const DASHBOARD_COLD_BUILD_ROW_LIMIT = 100_000;
 // Keep worker-message overhead reasonable while bounding each transaction so
 // interactive writes do not sit behind a long cache batch in the shared queue.
 const SYNC_WRITE_BATCH_SIZE = 100;
 const SYNC_WRITE_DECISION_BATCH_SIZE = 500;
+const SYNC_DEFER_SEARCH_INDEX_DECISION_THRESHOLD = 10_000;
 const LEGACY_UNFILTERED_ALERT_ORIGIN_TOKENS = new Set(['none']);
 const CAPI_ALERT_ORIGIN = 'CAPI';
 const LISTS_ALERT_ORIGIN = 'lists';
@@ -460,15 +474,34 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     isComplete: options.initialCacheState?.isComplete ?? false,
     lastUpdate: options.initialCacheState?.lastUpdate ?? null,
   };
+  // Keep the LAPI cursor separate from the timestamp exposed to clients. The
+  // cursor marks the authoritative end of the fetched window, while this value
+  // only advances after all post-import maintenance is complete and the new
+  // data is safe for every API consumer to read.
+  let cacheRefreshCompletedAt = options.initialCacheState?.lastUpdate ?? null;
+  const cacheUpdateListeners = new Set<(updatedAt: string) => void>();
+
+  function publishCacheUpdate(updatedAt: string): void {
+    for (const listener of cacheUpdateListeners) {
+      try {
+        listener(updatedAt);
+      } catch (error) {
+        console.error('Cache update listener failed:', error);
+      }
+    }
+  }
   let dashboardStatsCache: DashboardStatsCache | null = null;
   let dashboardStatsCacheVersion = 0;
+  let dashboardStatsReadyPublishedVersion = -1;
   const dashboardStatsResponseCache = new Map<string, DashboardStatsResponse>();
   const staleDashboardStatsResponseCache = new Map<string, DashboardStatsResponse>();
   const dashboardStatsIndexPromises = new Map<string, Promise<DashboardStatsCache>>();
   const dashboardStatsResponsePromises = new Map<string, Promise<DashboardStatsResponse>>();
+  let lastDashboardStatsFilters: DashboardStatsFilters | null = null;
 
   const persistedConfig = loadPersistedConfig(database);
   let refreshIntervalMs = persistedConfig.refresh_interval_ms ?? config.refreshIntervalMs;
+  let manualRefreshEnabled = persistedConfig.manual_refresh_enabled ?? config.manualRefreshEnabled;
   const reconcileConfigFingerprint = crypto.createHash('sha256').update(JSON.stringify({
     lookbackMs: config.lookbackMs,
     reconcileWindowMs: config.reconcileWindowMs,
@@ -488,6 +521,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   let isFreshBulkImport = false;
   let lastRequestTime = Date.now();
   let schedulerTimeout: ReturnType<typeof setTimeout> | null = null;
+  let nextRefreshAt: string | null = null;
   let isSchedulerRunning = false;
   let heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
   let isHeartbeatSchedulerRunning = false;
@@ -497,6 +531,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   let bootstrapPromise: Promise<boolean> | null = null;
   let bootstrapSource: string | null = null;
   let bootstrapWaitLogged = false;
+  let cacheRefreshPromise: Promise<void> | null = null;
   let pendingAlertDeletionTimeout: ReturnType<typeof setTimeout> | null = null;
   let pendingAlertDeletionPromise: Promise<void> | null = null;
   let pendingAlertDeletionRerunRequested = false;
@@ -543,6 +578,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   console.log(`Cache Configuration:
   Lookback Period: ${config.lookbackPeriod} (${config.lookbackMs}ms)
   Refresh Interval: ${getIntervalName(refreshIntervalMs)} (${persistedConfig.refresh_interval_ms !== undefined ? 'from saved config' : 'from env'})
+  Manual Refresh: ${manualRefreshEnabled ? 'Enabled' : 'Disabled'} (${persistedConfig.manual_refresh_enabled !== undefined ? 'from saved config' : 'from env'})
   LAPI Request Timeout: ${getIntervalName(config.lapiRequestTimeoutMs)}
   Alert Sync Chunk: ${getIntervalName(config.alertSyncChunkMs)}
   Alert Sync Min Chunk: ${getIntervalName(config.alertSyncMinChunkMs)}
@@ -632,7 +668,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   app.get(`${config.basePath}/api/alerts`, ensureAuth, async (context) => {
     try {
       if (refreshIntervalMs === 0) {
-        await updateCache();
+        await updateCache({ skipIfBusy: true });
       }
 
       await prepareReadCache('alerts request');
@@ -650,7 +686,12 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         if (!compiledSearch.ok) {
           return context.json(toSearchErrorResponse(compiledSearch.error), 400);
         }
-        return context.json(await queryPaginatedAlerts(pageRequest, filters, compiledSearch.ast));
+        return context.json(await queryPaginatedAlerts(
+          pageRequest,
+          filters,
+          compiledSearch.ast,
+          context.req.query('include_decisions') !== 'false',
+        ));
       }
 
       const since = new Date(Date.now() - config.lookbackMs).toISOString();
@@ -706,6 +747,19 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
 
     const doRequest = async () => {
+      if (context.req.query('include_decisions') === 'false') {
+        const snapshot = database.getAlertDecisionSnapshot(alertId);
+        let alert = snapshot ? normalizeAlertDetail(JSON.parse(snapshot.raw_data), alertId) : null;
+        if (!alert) {
+          alert = normalizeAlertDetail(await lapiClient.getAlertById(alertId), alertId);
+        }
+        if (!alert) {
+          return context.json({ error: 'Alert not found' }, 404);
+        }
+        const payload = applySimulationModeToAlert({ ...alert, decisions: [] }, config.simulationsEnabled);
+        return payload ? context.json(payload) : context.json({ error: 'Alert not found' }, 404);
+      }
+
       const alertData = await lapiClient.getAlertById(alertId);
       const normalizedAlert = normalizeAlertDetail(alertData, alertId);
       if (!normalizedAlert) {
@@ -753,7 +807,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   app.get(`${config.basePath}/api/decisions`, ensureAuth, async (context) => {
     try {
       if (refreshIntervalMs === 0) {
-        await updateCache();
+        await updateCache({ skipIfBusy: true });
       }
 
       await prepareReadCache('decisions request');
@@ -783,13 +837,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
       const alertCoordinates = await getAlertCoordinatesByIds(rows.map((row) => row.alert_id));
 
-      let decisions = rows.map((row) => {
-        const decision = JSON.parse(row.raw_data) as AlertDecision & Record<string, unknown>;
-        if (decision.alert_id === undefined && row.alert_id !== undefined && row.alert_id !== null) {
-          decision.alert_id = row.alert_id;
-        }
-        return toDecisionListItem(decision, includeExpired);
-      });
+      let decisions = rows.map((row) => toDecisionListItem(decisionFromRow(row), includeExpired));
       if (!config.simulationsEnabled) {
         decisions = decisions.filter((decision) => !decision.simulated);
       }
@@ -815,9 +863,12 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       lookback_hours: hours,
       lookback_days: Math.max(1, Math.round(hours / 24)),
       refresh_interval: refreshIntervalMs,
+      manual_refresh_enabled: manualRefreshEnabled,
       current_interval_name: getIntervalName(refreshIntervalMs),
       lapi_status: lapiClient.getStatus(),
       sync_status: syncStatus,
+      cache_last_update: cacheRefreshCompletedAt,
+      next_refresh_at: nextRefreshAt,
       simulations_enabled: config.simulationsEnabled,
       machine_features_enabled: true,
       origin_features_enabled: true,
@@ -826,6 +877,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       metrics_enabled: Boolean(config.prometheusUrl),
       metrics_sidebar_visible: loadMetricsSidebarVisible(database),
       ...(config.deploymentMode === 'load-test' ? { deployment_mode: config.deploymentMode } : {}),
+      ...(config.loadTestProfile ? { load_test_profile: config.loadTestProfile } : {}),
       permissions: dashboardAuth.getPermissions(context),
     };
 
@@ -900,11 +952,76 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         old_interval: previous,
         new_interval: interval,
         new_interval_ms: nextInterval,
+        next_refresh_at: nextRefreshAt,
         message: `Refresh interval updated to ${interval}`,
       });
     } catch (error: any) {
       console.error('Error updating refresh interval:', error.message);
       return context.json({ error: 'Failed to update refresh interval' }, 500);
+    }
+  });
+
+  app.put(`${config.basePath}/api/config/manual-refresh`, ensureAuth, async (context) => {
+    const readOnlyResponse = ensureCanManageSettings(context);
+    if (readOnlyResponse) return readOnlyResponse;
+
+    try {
+      const body = await context.req.json<UpdateManualRefreshSettingRequest>();
+      if (typeof body.enabled !== 'boolean') {
+        return context.json({ error: 'enabled must be a boolean' }, 400);
+      }
+
+      manualRefreshEnabled = body.enabled;
+      await syncWorker.runExclusive(() => savePersistedConfig(database, {
+        manual_refresh_enabled: manualRefreshEnabled,
+      }));
+      console.log(`Manual refresh ${manualRefreshEnabled ? 'enabled' : 'disabled'}`);
+
+      return context.json({
+        success: true,
+        manual_refresh_enabled: manualRefreshEnabled,
+      });
+    } catch (error: any) {
+      console.error('Error updating manual refresh setting:', error.message);
+      return context.json({ error: 'Failed to update manual refresh setting' }, 500);
+    }
+  });
+
+  app.post(`${config.basePath}/api/cache/refresh`, ensureAuth, async (context) => {
+    if (!manualRefreshEnabled) {
+      return context.json({
+        error: 'Manual refresh is disabled',
+        code: 'MANUAL_REFRESH_DISABLED',
+      }, 403);
+    }
+
+    let body: { mode?: string };
+    try {
+      body = await context.req.json<{ mode?: string }>();
+    } catch {
+      return context.json({ error: 'A JSON request body is required' }, 400);
+    }
+
+    if (body.mode !== 'delta' && body.mode !== 'latest' && body.mode !== 'full') {
+      return context.json({ error: 'mode must be one of: delta, latest, full' }, 400);
+    }
+    if (cacheRefreshPromise || initializationPromise || bootstrapPromise) {
+      return context.json({ error: 'A cache refresh is already in progress', code: 'REFRESH_IN_PROGRESS' }, 409);
+    }
+
+    try {
+      if (body.mode === 'delta') {
+        await updateCache({ throwOnError: true, reconcile: false });
+      } else if (body.mode === 'latest') {
+        await refreshLatestWindow();
+      } else {
+        await refreshFullHistory();
+      }
+      return context.json({ success: true, mode: body.mode, completed_at: cacheRefreshCompletedAt });
+    } catch (error: any) {
+      const message = error?.message || 'Cache refresh failed';
+      console.error(`Manual ${body.mode} refresh failed:`, message);
+      return context.json({ error: message }, 502);
     }
   });
 
@@ -1105,6 +1222,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       resetReconcileWindowState();
       cache.isInitialized = false;
       cache.lastUpdate = null;
+      cacheRefreshCompletedAt = null;
       staleDashboardStatsResponseCache.clear();
       invalidateDashboardStatsCache();
       isFirstSync = true;
@@ -1124,7 +1242,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   app.get(`${config.basePath}/api/stats/alerts`, ensureAuth, async (context) => {
     try {
       if (refreshIntervalMs === 0) {
-        await updateCache();
+        await updateCache({ skipIfBusy: true });
       }
 
       await prepareReadCache('stats alerts request');
@@ -1177,7 +1295,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   app.get(`${config.basePath}/api/stats/decisions`, ensureAuth, async (context) => {
     try {
       if (refreshIntervalMs === 0) {
-        await updateCache();
+        await updateCache({ skipIfBusy: true });
       }
 
       await prepareReadCache('stats decisions request');
@@ -1225,12 +1343,13 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   app.get(`${config.basePath}/api/dashboard/stats`, ensureAuth, async (context) => {
     try {
       if (refreshIntervalMs === 0) {
-        await updateCache();
+        await updateCache({ skipIfBusy: true });
       }
 
       await prepareReadCache('dashboard stats request');
       const filters = getDashboardStatsFilters(context, config.timeZone);
-      if (shouldServeEmptyDashboardStats()) {
+      lastDashboardStatsFilters = { ...filters };
+      if (isDashboardStatsBuildInProgress(filters)) {
         warmDashboardStatsCache(filters);
         const staleResponse = staleDashboardStatsResponseCache.get(getStaleDashboardStatsResponseCacheKey(filters));
         if (staleResponse) {
@@ -1337,7 +1456,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     const doRequest = async () => {
       const result = await deleteDecisionFromLapi(decisionId);
       console.log(`Removing decision ${decisionId} from local cache...`);
-      await syncWorker.runExclusive(() => database.deleteDecision(decisionId));
+      await syncWorker.runExclusive(() => {
+        database.deleteDecision(decisionId);
+        database.refreshDecisionDuplicateFlags(new Date().toISOString());
+      });
       invalidateDashboardStatsCache();
       void runNotificationEvaluation('decision delete');
       return context.json((result as object) || { message: 'Deleted' });
@@ -1457,10 +1579,6 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     } catch (error: any) {
       console.error(`Notification evaluation failed during ${source}:`, error.message);
     }
-  }
-
-  async function refreshDecisionDuplicateFlags(): Promise<void> {
-    await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
   }
 
   function getLegacyAlertSyncQueries(): AlertSyncQuery[] {
@@ -1669,7 +1787,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   }
 
   async function pruneCachedEntriesForCurrentAlertFilters(): Promise<{ alerts: number; decisions: number }> {
-    const cachedAlerts = await queryWorker.all<{ raw_data: string; origins?: string | null }>('SELECT raw_data, origins FROM alerts');
+    const cachedAlerts = await queryWorker.all<NormalizedAlertRow & { origins?: string | null }>(
+      `SELECT ${ALERT_RECORD_COLUMNS}, origins FROM alerts`,
+    );
     const allAlertIds = new Set<string>();
     const staleAlertIds: string[] = [];
     const staleAlertIdSet = new Set<string>();
@@ -1680,7 +1800,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       }
       const row = cachedAlerts[index];
       try {
-        const alert = JSON.parse(row.raw_data) as AlertRecord;
+        const alert = alertFromRow(row);
         if (!alert?.id) {
           continue;
         }
@@ -1710,32 +1830,22 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     const prunedAlerts = await syncWorker.deleteCachedAlerts(staleAlertIds);
     const staleDecisionIds: string[] = [];
     const cachedDecisions = await queryWorker.all<{
-      raw_data: string;
+      id: string | number;
       alert_id?: string | number | null;
-    }>('SELECT raw_data, alert_id FROM decisions');
+      origin?: string | null;
+    }>('SELECT id, alert_id, origin FROM decisions');
 
     for (let index = 0; index < cachedDecisions.length; index += 1) {
       if (index > 0 && index % SYNC_WRITE_BATCH_SIZE === 0) {
         await delay(0);
       }
       const row = cachedDecisions[index];
-      try {
-        const decision = JSON.parse(row.raw_data) as { id?: string | number; alert_id?: string | number; origin?: unknown };
-        if (decision.id === undefined || decision.id === null) {
-          continue;
-        }
-
-        const alertId = row.alert_id ?? decision.alert_id;
-        if (alertId !== undefined && alertId !== null && remainingAlertIds.has(String(alertId))) {
-          continue;
-        }
-
-        const origin = normalizeOrigin(decision.origin);
-        if (!isDecisionOriginAllowedByCurrentFilter(origin)) {
-          staleDecisionIds.push(String(decision.id));
-        }
-      } catch {
-        // Keep malformed decision rows for the same reason as malformed alert rows.
+      if (row.alert_id !== undefined && row.alert_id !== null && remainingAlertIds.has(String(row.alert_id))) {
+        continue;
+      }
+      const origin = normalizeOrigin(row.origin);
+      if (!isDecisionOriginAllowedByCurrentFilter(origin)) {
+        staleDecisionIds.push(String(row.id));
       }
     }
 
@@ -1794,6 +1904,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     reconcileDecisions = true,
     decisionIdsToPersist: Set<string> | null = null,
     updateAlertRawDataOnly = false,
+    observedAt = new Date().toISOString(),
   ): SyncAlertMutation | null {
     if (!alert || !alert.id) return null;
     const decisions = alert.decisions || [];
@@ -1807,14 +1918,6 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       target,
       simulated,
     };
-    // Decisions are authoritative in the decisions table. Keep only stable ID
-    // references in the alert payload so large embedded decision objects are not
-    // persisted a third time (source alert, cached alert, and decision row).
-    const cachedAlert: AlertRecord = {
-      ...enrichedAlert,
-      decisions: decisions.map((decision) => ({ id: decision.id })),
-    };
-
     const alertHistoryAt = resolveAlertHistoryAt(alert);
     const alertData: AlertInsertParams = {
       $id: alert.id,
@@ -1823,13 +1926,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       $scenario: alert.scenario,
       $source_ip: sourceValue,
       $message: alert.message || '',
-      $raw_data: JSON.stringify(cachedAlert),
       $record: enrichedAlert,
     };
 
     const currentDecisionIds: string[] = [];
     const decisionData: DecisionInsertParams[] = [];
-    const observedAt = new Date().toISOString();
     for (const decision of decisions) {
       const decisionId = String(decision.id);
       if (reconcileDecisions) currentDecisionIds.push(decisionId);
@@ -1869,7 +1970,6 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         $type: decision.type,
         $origin: enrichedDecision.origin,
         $scenario: enrichedDecision.scenario,
-        $raw_data: JSON.stringify(enrichedDecision),
         $record: enrichedDecision,
       });
     }
@@ -1908,7 +2008,12 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     decisionIdsToPersistByAlertId: Map<string, Set<string>> | null = null,
     rawDataOnlyAlertIds: Set<string> | null = null,
     skipDecisionReconciliationAlertIds: Set<string> | null = null,
+    observedAt = new Date().toISOString(),
   ): Generator<SyncAlertMutation[]> {
+    // LAPI serializes duration-only decisions as time remaining at response
+    // time. Use one observation point for the whole response so processing
+    // order cannot introduce artificial expiry differences between duplicate
+    // decisions that actually expire together.
     let batch: SyncAlertMutation[] = [];
     let alertCount = 0;
     let decisionCount = 0;
@@ -1925,6 +2030,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         !isFreshBulkImport && !skipDecisionReconciliationAlertIds?.has(String(alert.id)),
         decisionIdsToPersistByAlertId?.get(String(alert.id)) || null,
         rawDataOnlyAlertIds?.has(String(alert.id)) === true,
+        observedAt,
       );
       if (!mutation) continue;
 
@@ -2004,14 +2110,22 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     const rawDataOnlyAlertIds = new Set<string>();
     const skipDecisionReconciliationAlertIds = new Set<string>();
     const removedDecisionIds = new Set<string>();
+    const affectedDecisionIds = new Set<string>();
+    const observedAt = new Date().toISOString();
+    let decisionMutationCount = 0;
     for (const alert of alerts) {
       const decisions = Array.isArray(alert.decisions) ? alert.decisions : [];
       const alertId = String(alert.id);
-      const delta = getAlertSyncDelta(alert, decisions);
+      const delta = getAlertSyncDelta(alert, decisions, observedAt);
       if (delta) {
         alertsToPersist.push(alert);
         if (delta.decisionIdsToPersist) {
           decisionIdsToPersistByAlertId.set(alertId, delta.decisionIdsToPersist);
+          decisionMutationCount += delta.decisionIdsToPersist.size;
+          for (const id of delta.decisionIdsToPersist) affectedDecisionIds.add(id);
+        } else {
+          decisionMutationCount += decisions.length;
+          for (const decision of decisions) affectedDecisionIds.add(String(decision.id));
         }
         if (delta.reconcileDecisions === false) {
           skipDecisionReconciliationAlertIds.add(alertId);
@@ -2021,75 +2135,94 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         }
         for (const id of delta.removedIds) {
           removedDecisionIds.add(id);
+          affectedDecisionIds.add(id);
         }
       }
     }
 
+    const deferSearchIndexes = decisionMutationCount >= SYNC_DEFER_SEARCH_INDEX_DECISION_THRESHOLD;
+    if (deferSearchIndexes) {
+      await syncWorker.beginDeferredSearchIndexUpdates(false, false);
+    }
+
     let changed = false;
-    for (const mutations of createSyncWriteBatches(
-      alertsToPersist,
-      decisionIdsToPersistByAlertId,
-      rawDataOnlyAlertIds,
-      skipDecisionReconciliationAlertIds,
-    )) {
-      const result = await syncWorker.persistAlerts(mutations);
-      changed = result.changed || changed;
+    try {
+      for (const mutations of createSyncWriteBatches(
+        alertsToPersist,
+        decisionIdsToPersistByAlertId,
+        rawDataOnlyAlertIds,
+        skipDecisionReconciliationAlertIds,
+        observedAt,
+      )) {
+        const result = await syncWorker.persistAlerts(mutations);
+        changed = result.changed || changed;
+      }
+      const removedIds = Array.from(removedDecisionIds);
+      for (let offset = 0; offset < removedIds.length; offset += SYNC_WRITE_DECISION_BATCH_SIZE) {
+        const chunk = removedIds.slice(offset, offset + SYNC_WRITE_DECISION_BATCH_SIZE);
+        changed = (await syncWorker.deleteCachedDecisions(chunk)) > 0 || changed;
+      }
+      return changed;
+    } finally {
+      if (deferSearchIndexes) {
+        await syncWorker.rebuildSearchIndexes({
+          alertIds: alertsToPersist.map((alert) => String(alert.id)),
+          decisionIds: Array.from(affectedDecisionIds),
+        });
+      }
     }
-    const removedIds = Array.from(removedDecisionIds);
-    for (let offset = 0; offset < removedIds.length; offset += SYNC_WRITE_DECISION_BATCH_SIZE) {
-      const chunk = removedIds.slice(offset, offset + SYNC_WRITE_DECISION_BATCH_SIZE);
-      changed = (await syncWorker.deleteCachedDecisions(chunk)) > 0 || changed;
-    }
-    return changed;
   }
 
-  function getAlertSyncDelta(alert: AlertRecord, decisions: AlertDecision[]): {
+  function getAlertSyncDelta(alert: AlertRecord, decisions: AlertDecision[], observedAt: string): {
     decisionIdsToPersist: Set<string> | null;
     removedIds: Set<string>;
     reconcileDecisions: boolean;
     updateAlertRawDataOnly: boolean;
   } | null {
-    // CrowdSec decisions are immutable: a membership change is represented by
-    // adding or deleting an ID. Compare IDs before constructing any decision
-    // row mutations so unchanged large blocklist alerts stay allocation-light.
+    // Most CrowdSec decision changes are membership changes. Expiration is the
+    // exception: LAPI retains the ID on its historical alert and changes the
+    // remaining duration to zero/negative. Track only those rare candidates so
+    // unchanged large blocklist alerts retain the allocation-light ID path.
     const allDecisionIds = new Set<string>();
-    for (const decision of decisions) allDecisionIds.add(String(decision.id));
+    const inactiveDecisionIds: string[] = [];
+    for (const decision of decisions) {
+      const id = String(decision.id);
+      allDecisionIds.add(id);
+      if (isIncomingDecisionInactive(decision)) inactiveDecisionIds.push(id);
+    }
     const snapshot = database.getAlertDecisionSnapshot(alert.id);
     if (!snapshot) {
       return { decisionIdsToPersist: null, removedIds: new Set(), reconcileDecisions: true, updateAlertRawDataOnly: false };
     }
 
-    let cachedAlert: AlertRecord;
-    try {
-      cachedAlert = JSON.parse(snapshot.raw_data) as AlertRecord;
-    } catch {
-      return { decisionIdsToPersist: null, removedIds: new Set(), reconcileDecisions: true, updateAlertRawDataOnly: false };
-    }
-
-    const cachedDecisions = Array.isArray(cachedAlert.decisions) ? cachedAlert.decisions : [];
-    if (snapshot.decision_count !== cachedDecisions.length) {
-      return { decisionIdsToPersist: null, removedIds: new Set(), reconcileDecisions: true, updateAlertRawDataOnly: false };
-    }
-
-    const { decisions: _cachedDecisions, ...cachedAlertMetadata } = cachedAlert;
     const { decisions: _incomingDecisions, ...incomingAlertMetadata } = alert;
-    const cachedMetadata = stableSerialize(cachedAlertMetadata);
-    const incomingMetadata = stableSerialize({
+    const incomingMetadata = {
       ...incomingAlertMetadata,
       target: getAlertTarget(alert),
       simulated: isAlertSimulated(alert),
-    });
-    if (cachedMetadata !== incomingMetadata) {
+    } as AlertRecord;
+    if (snapshot.metadata_hash !== alertMetadataFingerprint(incomingMetadata)) {
       // Alert metadata is copied into decision indexes, so let the guarded
       // upserts inspect every decision only when that metadata changed.
       return { decisionIdsToPersist: null, removedIds: new Set(), reconcileDecisions: true, updateAlertRawDataOnly: false };
     }
 
-    const cachedIds = new Set<string>();
-    for (const decision of cachedDecisions) cachedIds.add(String(decision.id));
+    const cachedIds = new Set(database.getDecisionIdsByAlertId(alert.id));
+    if (snapshot.decision_count !== cachedIds.size) {
+      return { decisionIdsToPersist: null, removedIds: new Set(), reconcileDecisions: true, updateAlertRawDataOnly: false };
+    }
     const addedIds = new Set<string>();
     for (const id of allDecisionIds) {
       if (!cachedIds.delete(id)) addedIds.add(id);
+    }
+
+    if (inactiveDecisionIds.length > 0) {
+      const observedAtMs = Date.parse(observedAt);
+      const cachedStopAtById = database.getDecisionStopAtBatch(inactiveDecisionIds);
+      for (const id of inactiveDecisionIds) {
+        const cachedStopAt = cachedStopAtById.get(id);
+        if (cachedStopAt && Date.parse(cachedStopAt) > observedAtMs) addedIds.add(id);
+      }
     }
 
     if (addedIds.size === 0 && cachedIds.size === 0) return null;
@@ -2103,18 +2236,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     };
   }
 
-  function stableSerialize(value: unknown): string {
-    if (Array.isArray(value)) {
-      return `[${value.map((item) => stableSerialize(item)).join(',')}]`;
-    }
-    if (value && typeof value === 'object') {
-      return `{${Object.entries(value as Record<string, unknown>)
-        .filter(([, item]) => item !== undefined)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, item]) => `${JSON.stringify(key)}:${stableSerialize(item)}`)
-        .join(',')}}`;
-    }
-    return JSON.stringify(value);
+  function isIncomingDecisionInactive(decision: AlertDecision): boolean {
+    const duration = decision.duration?.trim();
+    return duration === '0s' || duration?.startsWith('-') === true;
   }
 
   function isTimeoutError(error: unknown): boolean {
@@ -2386,8 +2510,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     return summary;
   }
 
-  async function syncHistory(): Promise<SyncHistorySummary> {
-    const showOverlay = isFirstSync;
+  async function syncHistory(forceOverlay = false): Promise<SyncHistorySummary> {
+    const showOverlay = forceOverlay || isFirstSync;
     isFirstSync = false;
     const t = getServerTranslator(database);
     console.log('Starting historical data sync...');
@@ -2505,7 +2629,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     };
   }
 
-  async function initializeCache(): Promise<SyncHistorySummary | null> {
+  async function initializeCache(options: { showOverlay?: boolean } = {}): Promise<SyncHistorySummary | null> {
     if (initializationPromise) {
       console.log('Cache initialization already in progress, waiting...');
       return initializationPromise;
@@ -2527,14 +2651,20 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       }
       try {
         console.log('Initializing cache with chunked data load...');
-        const syncSummary = await syncHistory();
+        const syncSummary = await syncHistory(options.showOverlay);
         if (syncStatus.isSyncing && syncSummary.state !== 'failed') {
           updateSyncStatus({
             progress: 96,
             message: t('components.syncOverlay.statusFinalizingDecisions'),
           });
         }
-        await refreshDecisionDuplicateFlags();
+        let duplicateFlagsRefreshed = false;
+        if (deferIndexUpdates && freshBulkImport) {
+          const duplicateRefreshStartedAt = Date.now();
+          await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
+          duplicateFlagsRefreshed = true;
+          console.log(`Decision duplicate index refreshed in ${formatElapsedTime(Date.now() - duplicateRefreshStartedAt)}.`);
+        }
         if (deferIndexUpdates) {
           console.log('Building secondary and search indexes after initial cache load...');
           if (syncStatus.isSyncing) {
@@ -2547,6 +2677,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
           await syncWorker.rebuildSearchIndexes();
           deferredIndexesRebuilt = true;
           console.log(`Secondary and search indexes built in ${formatElapsedTime(Date.now() - indexStartedAt)}.`);
+        }
+        if (!duplicateFlagsRefreshed) {
+          const duplicateRefreshStartedAt = Date.now();
+          await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
+          console.log(`Decision duplicate index refreshed in ${formatElapsedTime(Date.now() - duplicateRefreshStartedAt)}.`);
         }
         if (syncSummary.changed) {
           invalidateDashboardStatsCache();
@@ -2569,6 +2704,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
             console.error('Failed to prepare dashboard data before completing initial sync:', error.message);
           }
         }
+        const completedAt = new Date().toISOString();
         updateSyncStatus({
           isSyncing: false,
           progress: syncSummary.state === 'failed' ? 0 : 100,
@@ -2583,9 +2719,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
               : t('server.sync.failed', {
                   reason: syncSummary.errors[0] || t('server.sync.failedNoWindows'),
                 }),
-          completedAt: new Date().toISOString(),
+          completedAt,
         });
         await runNotificationEvaluation('cache initialization');
+        cacheRefreshCompletedAt = new Date().toISOString();
+        publishCacheUpdate(cacheRefreshCompletedAt);
         const errorSummary = syncSummary.errors.length > 0
           ? `  Errors: ${syncSummary.errors.length} window${syncSummary.errors.length === 1 ? '' : 's'} failed
 `
@@ -2632,10 +2770,11 @@ ${errorSummary}  Status: ${syncSummary.state}
     return initializationPromise;
   }
 
-  async function updateCacheDelta(): Promise<void> {
+  async function updateCacheDelta(options: { throwOnError?: boolean; reconcile?: boolean } = {}): Promise<void> {
     if (!cache.isInitialized || !cache.lastUpdate) {
       console.log('Cache not initialized, performing full load...');
-      await ensureBootstrapReady('delta update full load');
+      const ready = await ensureBootstrapReady('delta update full load');
+      if (!ready && options.throwOnError) throw new Error('The cache could not be initialized');
       return;
     }
 
@@ -2643,8 +2782,8 @@ ${errorSummary}  Status: ${syncSummary.state}
       const deltaStartedAt = Date.now();
       const diffSeconds = Math.ceil((deltaStartedAt - new Date(cache.lastUpdate).getTime()) / 1_000) + 10;
       const normalDeltaStart = deltaStartedAt - diffSeconds * 1_000;
-      const reconcilePlan = await planDueReconcileWindows(deltaStartedAt);
-      const headWindow = reconcilePlan.windows.find((window) => window.head);
+      const reconcilePlan = options.reconcile === false ? null : await planDueReconcileWindows(deltaStartedAt);
+      const headWindow = reconcilePlan?.windows.find((window) => window.head);
       const deltaStart = Math.min(normalDeltaStart, headWindow?.start ?? normalDeltaStart);
       console.log(`Fetching delta updates (${formatSyncWindow(deltaStart, deltaStartedAt, deltaStartedAt)})...`);
       const deltaSummary = await syncAlertWindow(deltaStart, deltaStartedAt, deltaStartedAt);
@@ -2658,18 +2797,28 @@ ${errorSummary}  Status: ${syncSummary.state}
       }
 
       const excludedKeys = headWindow ? new Set([headWindow.key]) : new Set<string>();
-      const reconcileSummary = await runPlannedReconcileWindows(reconcilePlan, deltaStartedAt, excludedKeys);
-      finishReconcilePlan(reconcilePlan);
-      const changed = deltaSummary.changed || reconcileSummary.changed;
-
-      if (changed) {
-        await refreshDecisionDuplicateFlags();
-        invalidateDashboardStatsCache();
+      const reconcileSummary: WindowSyncSummary = reconcilePlan
+        ? await runPlannedReconcileWindows(reconcilePlan, deltaStartedAt, excludedKeys)
+        : { alerts: 0, decisions: 0, errors: [], successfulWindows: 0, changed: false };
+      if (reconcilePlan) finishReconcilePlan(reconcilePlan);
+      const duplicateRefreshStartedAt = Date.now();
+      await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
+      console.log(`Decision duplicate index refreshed in ${formatElapsedTime(Date.now() - duplicateRefreshStartedAt)}.`);
+      // Rebuild before announcing completion so the refresh does not transfer
+      // its most expensive database scan to the first dashboard request. This
+      // also refreshes time-dependent active totals when no SQLite rows changed.
+      invalidateDashboardStatsCache();
+      const dashboardRefreshStartedAt = Date.now();
+      try {
+        if (await prepareDashboardStatsAfterRefresh()) {
+          console.log(`Dashboard statistics prepared in ${formatElapsedTime(Date.now() - dashboardRefreshStartedAt)}.`);
+        }
+      } catch (error: any) {
+        // Dashboard requests retain their normal lazy-build fallback if cache
+        // preparation fails; a reporting-cache failure must not lose a valid
+        // LAPI delta or prevent the next refresh from running.
+        console.error('Failed to prepare dashboard statistics after delta update:', error.message);
       }
-      // Active status changes with time even when SQLite rows do not. Rebuild
-      // cached dashboard responses after every successful refresh so an
-      // expired decision cannot remain counted until the next data mutation.
-      dashboardStatsResponseCache.clear();
       // Advance only through the exact authoritative delta end. Work performed
       // after this timestamp is intentionally picked up by the next overlap.
       cache.lastUpdate = new Date(deltaStartedAt).toISOString();
@@ -2679,10 +2828,59 @@ ${errorSummary}  Status: ${syncSummary.state}
       console.log(
         `Delta update complete: ${deltaSummary.alerts} alerts and ${deltaSummary.decisions} decisions synced; ${completedReconcileWindows} reconciliation window${completedReconcileWindows === 1 ? '' : 's'} completed`,
       );
+      cacheRefreshCompletedAt = new Date().toISOString();
+      publishCacheUpdate(cacheRefreshCompletedAt);
     } catch (error: any) {
       console.error('Failed to update cache delta:', error.message);
       lapiClient.updateStatus(false, error);
+      if (options.throwOnError) throw error;
     }
+  }
+
+  async function refreshLatestWindow(): Promise<void> {
+    return runCacheRefresh(async () => {
+      if (!cache.isInitialized) {
+        throw new Error('The cache must be initialized before refreshing the latest window');
+      }
+
+      const now = Date.now();
+      const currentWindowStart = Math.floor(now / config.reconcileWindowMs) * config.reconcileWindowMs;
+      const start = Math.max(now - config.lookbackMs, currentWindowStart);
+      console.log(`Manual latest-window refresh (${formatSyncWindow(start, now, now)})...`);
+      const summary = await syncAlertWindow(start, now, now);
+      if (summary.errors.length > 0) {
+        const error = summary.lastError || new Error(`Latest-window refresh incomplete: ${summary.errors.join('; ')}`);
+        lapiClient.updateStatus(false, error);
+        throw error;
+      }
+
+      reconcileWindowState.headLastSuccess = now;
+      saveReconcileWindowState();
+      await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
+      invalidateDashboardStatsCache();
+      try {
+        await prepareDashboardStatsAfterRefresh();
+      } catch (error: any) {
+        console.error('Failed to prepare dashboard statistics after latest-window refresh:', error.message);
+      }
+      cache.lastUpdate = new Date(now).toISOString();
+      lapiClient.updateStatus(true, null);
+      await cleanupOldData();
+      await runNotificationEvaluation('manual latest-window refresh');
+      cacheRefreshCompletedAt = new Date().toISOString();
+      publishCacheUpdate(cacheRefreshCompletedAt);
+      console.log(`Latest-window refresh complete: ${summary.alerts} alerts and ${summary.decisions} decisions synced.`);
+    });
+  }
+
+  async function refreshFullHistory(): Promise<void> {
+    return runCacheRefresh(async () => {
+      const summary = await initializeCache({ showOverlay: true });
+      if (!summary || summary.state === 'failed') {
+        throw new Error(summary?.errors[0] || 'Full historical refresh failed');
+      }
+      await cleanupOldData();
+    });
   }
 
   async function cleanupOldData(): Promise<void> {
@@ -2695,10 +2893,21 @@ ${errorSummary}  Status: ${syncSummary.state}
     }
   }
 
-  async function updateCache(): Promise<void> {
-    await updateCacheDelta();
-    await cleanupOldData();
-    await runNotificationEvaluation('cache update');
+  function runCacheRefresh(operation: () => Promise<void>, skipIfBusy = false): Promise<void> {
+    if (cacheRefreshPromise) return skipIfBusy ? Promise.resolve() : cacheRefreshPromise;
+
+    cacheRefreshPromise = operation().finally(() => {
+      cacheRefreshPromise = null;
+    });
+    return cacheRefreshPromise;
+  }
+
+  async function updateCache(options: { throwOnError?: boolean; reconcile?: boolean; skipIfBusy?: boolean } = {}): Promise<void> {
+    return runCacheRefresh(async () => {
+      await updateCacheDelta(options);
+      await cleanupOldData();
+      await runNotificationEvaluation('cache update');
+    }, options.skipIfBusy);
   }
 
   function clearBootstrapRetryTimeout(): void {
@@ -2817,24 +3026,31 @@ ${errorSummary}  Status: ${syncSummary.state}
 
   async function runSchedulerLoop(): Promise<void> {
     if (!isSchedulerRunning) return;
+    schedulerTimeout = null;
+    nextRefreshAt = null;
 
     const now = Date.now();
     const isIdle = now - lastRequestTime > config.idleThresholdMs;
 
     try {
-      if (!cache.isInitialized) {
+      if (bootstrapPromise || initializationPromise) {
         if (!bootstrapWaitLogged) {
           bootstrapWaitLogged = true;
-          console.log(bootstrapPromise
-            ? 'Background refresh paused until bootstrap recovery completes.'
-            : 'Background refresh paused because the cache is not initialized.');
+          console.log('Background refresh paused until bootstrap recovery completes.');
         }
-        if (!bootstrapPromise) {
-          scheduleBootstrapRetry('cache is not initialized');
+      } else if (!cache.isInitialized) {
+        if (!bootstrapWaitLogged) {
+          bootstrapWaitLogged = true;
+          console.log('Background refresh paused because the cache is not initialized.');
         }
+        scheduleBootstrapRetry('cache is not initialized');
       } else {
-        console.log(`Background refresh triggered (${isIdle ? 'IDLE' : 'ACTIVE'})...`);
-        await updateCache();
+        if (cacheRefreshPromise) {
+          console.log('Background refresh skipped because another refresh is already in progress.');
+        } else {
+          console.log(`Background refresh triggered (${isIdle ? 'IDLE' : 'ACTIVE'})...`);
+          await updateCache({ skipIfBusy: true });
+        }
       }
     } catch (error) {
       console.error('Scheduler update failed:', error);
@@ -2859,6 +3075,7 @@ ${errorSummary}  Status: ${syncSummary.state}
     schedulerTimeout = setTimeout(() => {
       void runSchedulerLoop();
     }, nextInterval);
+    nextRefreshAt = new Date(Date.now() + nextInterval).toISOString();
   }
 
   function startRefreshScheduler(): void {
@@ -2873,6 +3090,7 @@ ${errorSummary}  Status: ${syncSummary.state}
     schedulerTimeout = setTimeout(() => {
       void runSchedulerLoop();
     }, refreshIntervalMs);
+    nextRefreshAt = new Date(Date.now() + refreshIntervalMs).toISOString();
   }
 
   function stopRefreshScheduler(logStop = true): void {
@@ -2880,6 +3098,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       console.log('Stopping refresh scheduler...');
     }
     isSchedulerRunning = false;
+    nextRefreshAt = null;
     if (schedulerTimeout) {
       clearTimeout(schedulerTimeout);
       schedulerTimeout = null;
@@ -2973,7 +3192,9 @@ ${errorSummary}  Status: ${syncSummary.state}
       console.log('System waking up from idle mode. Triggering immediate refresh...');
       if (schedulerTimeout) {
         clearTimeout(schedulerTimeout);
+        schedulerTimeout = null;
       }
+      nextRefreshAt = null;
       void runSchedulerLoop();
     }
 
@@ -3099,22 +3320,10 @@ ${errorSummary}  Status: ${syncSummary.state}
   function getCachedDecisionsForDeletion(): CachedDecisionRecord[] {
     const since = new Date(Date.now() - config.lookbackMs).toISOString();
     const now = new Date().toISOString();
-    return database.getDecisionsSince(since, now).flatMap((row) => {
-      try {
-        const decision = JSON.parse(row.raw_data) as { id?: string | number; value?: string };
-        if (decision.id === undefined || decision.id === null) {
-          return [];
-        }
-
-        return [{
-          id: String(decision.id),
-          value: typeof decision.value === 'string' ? decision.value : undefined,
-          raw_data: row.raw_data,
-        }];
-      } catch {
-        return [];
-      }
-    });
+    return database.getDecisionsSince(since, now).map((row) => ({
+      id: String(row.id),
+      value: typeof row.value === 'string' ? row.value : undefined,
+    }));
   }
 
   function createDeleteResult(overrides: Partial<BulkDeleteResult> = {}): BulkDeleteResult {
@@ -3129,21 +3338,7 @@ ${errorSummary}  Status: ${syncSummary.state}
   }
 
   function getLinkedDecisionIds(alert: CachedAlertRecord): string[] {
-    const ids = new Set<string>();
-    try {
-      const parsedAlert = JSON.parse(alert.raw_data) as AlertRecord;
-      for (const decision of parsedAlert.decisions || []) {
-        if (decision?.id !== undefined && decision?.id !== null) {
-          ids.add(String(decision.id));
-        }
-      }
-    } catch {
-      // The normalized decision table below remains authoritative when the
-      // cached alert payload cannot be parsed.
-    }
-
-    for (const id of getDecisionIdsForAlertIds([alert.id])) ids.add(id);
-    return Array.from(ids);
+    return getDecisionIdsForAlertIds([alert.id]);
   }
 
   async function getAlertForDeletion(id: string): Promise<CachedAlertRecord | null> {
@@ -3354,6 +3549,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       });
       try {
         queue(linkedDecisionIdsByAlert);
+        database.refreshDecisionDuplicateFlags(new Date().toISOString());
       } finally {
         database.refreshAlertDeletionTombstones();
       }
@@ -3423,6 +3619,7 @@ ${errorSummary}  Status: ${syncSummary.state}
           }
         });
         removeDecisions(deletedDecisionIds);
+        database.refreshDecisionDuplicateFlags(new Date().toISOString());
       });
       invalidateDashboardStatsCache();
     }
@@ -3486,6 +3683,7 @@ ${errorSummary}  Status: ${syncSummary.state}
           for (const decisionId of decisionIds) database.deleteDecision(decisionId);
         });
         removeDecisions(deletedStandaloneDecisionIds);
+        database.refreshDecisionDuplicateFlags(new Date().toISOString());
       });
       invalidateDashboardStatsCache();
     }
@@ -3526,49 +3724,13 @@ ${errorSummary}  Status: ${syncSummary.state}
     return context.json({ error: 'Internal server error' }, 500);
   }
 
-  function parseCachedDecision(rawData: string | undefined): AlertDecision | null {
-    if (!rawData) return null;
-    try {
-      const decision = JSON.parse(rawData) as AlertDecision;
-      return decision && decision.id !== undefined && decision.id !== null ? decision : null;
-    } catch {
-      return null;
-    }
-  }
-
   function hydrateAlertWithDecisions(alert: AlertRecord): AlertRecord {
     const clone: AlertRecord = { ...alert };
     const decisions = Array.isArray(clone.decisions) ? clone.decisions : [];
 
     clone.decisions = decisions.map((decisionReference) => {
       const databaseDecision = database.getDecisionById(decisionReference.id);
-      const decision = parseCachedDecision(databaseDecision?.raw_data) || decisionReference;
-      const now = new Date();
-      const stopAt = databaseDecision?.stop_at
-        ? new Date(databaseDecision.stop_at)
-        : decision.stop_at
-          ? new Date(decision.stop_at)
-          : null;
-      const isExpired = !stopAt || stopAt < now;
-
-      let duration = decision.duration;
-      if (stopAt && !isExpired) {
-        const remainingMs = stopAt.getTime() - now.getTime();
-        const hours = Math.floor(remainingMs / 3_600_000);
-        const minutes = Math.floor((remainingMs % 3_600_000) / 60_000);
-        const seconds = Math.floor((remainingMs % 60_000) / 1_000);
-        duration = `${hours > 0 ? `${hours}h` : ''}${minutes > 0 || hours > 0 ? `${minutes}m` : ''}${seconds}s`;
-      } else if (isExpired) {
-        duration = '0s';
-      }
-
-      return {
-        ...decision,
-        stop_at: stopAt ? stopAt.toISOString() : decision.stop_at,
-        duration,
-        expired: isExpired,
-        simulated: normalizeDecisionSimulated(decision, clone),
-      };
+      return hydrateDecisionForAlert(databaseDecision ? decisionFromRow(databaseDecision) : decisionReference, clone);
     });
 
     clone.reason = resolveAlertReason(clone);
@@ -3580,42 +3742,13 @@ ${errorSummary}  Status: ${syncSummary.state}
 
   function hydrateAlertWithDecisionsBatch(
     alert: AlertRecord,
-    decisionDataMap: ReturnType<CrowdsecDatabase['getDecisionDataBatch']>,
+    decisionRows: NormalizedDecisionRow[],
   ): AlertRecord {
     const clone: AlertRecord = { ...alert };
-    const decisions = Array.isArray(clone.decisions) ? clone.decisions : [];
-
-    clone.decisions = decisions.map((decisionReference) => {
-      const cachedDecision = decisionDataMap.get(String(decisionReference.id));
-      const decision = parseCachedDecision(cachedDecision?.raw_data) || decisionReference;
-      const cachedStopAt = cachedDecision?.stop_at;
-      const now = new Date();
-      const stopAt = cachedStopAt
-        ? new Date(cachedStopAt)
-        : decision.stop_at
-          ? new Date(decision.stop_at)
-          : null;
-      const isExpired = !stopAt || stopAt < now;
-
-      let duration = decision.duration;
-      if (stopAt && !isExpired) {
-        const remainingMs = stopAt.getTime() - now.getTime();
-        const hours = Math.floor(remainingMs / 3_600_000);
-        const minutes = Math.floor((remainingMs % 3_600_000) / 60_000);
-        const seconds = Math.floor((remainingMs % 60_000) / 1_000);
-        duration = `${hours > 0 ? `${hours}h` : ''}${minutes > 0 || hours > 0 ? `${minutes}m` : ''}${seconds}s`;
-      } else if (isExpired) {
-        duration = '0s';
-      }
-
-      return {
-        ...decision,
-        stop_at: stopAt ? stopAt.toISOString() : decision.stop_at,
-        duration,
-        expired: isExpired,
-        simulated: normalizeDecisionSimulated(decision, clone),
-      };
-    });
+    const normalizedDecisions = decisionRows.length > 0
+      ? decisionRows.map(decisionFromRow)
+      : Array.isArray(clone.decisions) ? clone.decisions : [];
+    clone.decisions = normalizedDecisions.map((decision) => hydrateDecisionForAlert(decision, clone));
 
     clone.reason = resolveAlertReason(clone);
     clone.scenario = resolveAlertScenario(clone);
@@ -3625,18 +3758,48 @@ ${errorSummary}  Status: ${syncSummary.state}
   }
 
   function hydrateAlertsBatch(rows: Array<{ raw_data: string }>): AlertRecord[] {
-    const parsedAlerts = rows.map((row) => JSON.parse(row.raw_data) as AlertRecord);
-    const decisionIds = parsedAlerts.flatMap((alert) =>
-      (Array.isArray(alert.decisions) ? alert.decisions : []).map((decision) => String(decision.id)),
-    );
-    const decisionDataMap = database.getDecisionDataBatch(decisionIds);
-    return parsedAlerts.map((alert) => hydrateAlertWithDecisionsBatch(alert, decisionDataMap));
+    return hydrateAlertRecordsBatch(rows.map((row) => JSON.parse(row.raw_data) as AlertRecord));
+  }
+
+  function hydrateAlertRecordsBatch(parsedAlerts: AlertRecord[]): AlertRecord[] {
+    const decisionsByAlertId = database.getDecisionDataByAlertIds(parsedAlerts.map((alert) => alert.id));
+    return parsedAlerts.map((alert) => hydrateAlertWithDecisionsBatch(
+      alert,
+      decisionsByAlertId.get(String(alert.id)) || [],
+    ));
+  }
+
+  function hydrateDecisionForAlert(
+    decision: AlertDecision & Record<string, unknown>,
+    alert: AlertRecord,
+  ): AlertDecision {
+    const now = new Date();
+    const stopAt = decision.stop_at ? new Date(decision.stop_at) : null;
+    const isExpired = !stopAt || stopAt < now;
+    let duration = decision.duration;
+    if (stopAt && !isExpired) {
+      const remainingMs = stopAt.getTime() - now.getTime();
+      const hours = Math.floor(remainingMs / 3_600_000);
+      const minutes = Math.floor((remainingMs % 3_600_000) / 60_000);
+      const seconds = Math.floor((remainingMs % 60_000) / 1_000);
+      duration = `${hours > 0 ? `${hours}h` : ''}${minutes > 0 || hours > 0 ? `${minutes}m` : ''}${seconds}s`;
+    } else if (isExpired) {
+      duration = '0s';
+    }
+    return {
+      ...decision,
+      stop_at: stopAt ? stopAt.toISOString() : decision.stop_at,
+      duration,
+      expired: isExpired,
+      simulated: normalizeDecisionSimulated(decision, alert),
+    };
   }
 
   async function queryPaginatedAlerts(
     pageRequest: PageRequest,
     filters: AlertListFilters,
     searchAst: SearchNode | null,
+    includeDecisions: boolean,
   ): Promise<PaginatedResponse<SlimAlert>> {
     const since = new Date(Date.now() - config.lookbackMs).toISOString();
     const baseWhere = createSqlWhere();
@@ -3652,21 +3815,22 @@ ${errorSummary}  Status: ${syncSummary.state}
       filteredWhere.add(searchWhere.sql, ...searchWhere.params);
     }
 
-    const unfilteredTotal = await queryCount('alerts', baseWhere);
-    const total = await queryCount('alerts', filteredWhere);
     const offset = (pageRequest.page - 1) * pageRequest.pageSize;
-    const rows = await queryWorker.all<{ raw_data: string }>(`
-      SELECT raw_data
-      FROM alerts
-      ${filteredWhere.toSql()}
-      ORDER BY created_at DESC, id DESC
-      LIMIT ? OFFSET ?
-    `, [...filteredWhere.params, pageRequest.pageSize, offset]);
+    const [unfilteredTotal, total, rows] = await Promise.all([
+      queryCount('alerts', baseWhere),
+      queryCount('alerts', filteredWhere),
+      queryWorker.all<NormalizedAlertRow>(`
+        SELECT ${ALERT_RECORD_COLUMNS}
+        FROM alerts
+        ${filteredWhere.toSql()}
+        ORDER BY created_at DESC, id DESC
+        LIMIT ? OFFSET ?
+      `, [...filteredWhere.params, pageRequest.pageSize, offset]),
+    ]);
 
-    const data = await enrichAlertLocations(hydrateAlertsBatch(rows)
-      .map((alert) => applySimulationModeToAlert(alert, config.simulationsEnabled))
-      .filter((alert): alert is AlertRecord => alert !== null)
-      .map((alert) => toSlimAlert(alert)));
+    const data = includeDecisions
+      ? await buildFullSlimAlertList(rows)
+      : await buildSlimAlertList(rows);
 
     return {
       data,
@@ -3681,6 +3845,79 @@ ${errorSummary}  Status: ${syncSummary.state}
     };
   }
 
+  async function buildFullSlimAlertList(rows: NormalizedAlertRow[]): Promise<SlimAlert[]> {
+    return enrichAlertLocations(hydrateAlertRecordsBatch(rows.map(alertFromRow))
+      .map((alert) => applySimulationModeToAlert(alert, config.simulationsEnabled))
+      .filter((alert): alert is AlertRecord => alert !== null)
+      .map(toSlimAlert));
+  }
+
+  async function buildSlimAlertList(rows: NormalizedAlertRow[]): Promise<SlimAlert[]> {
+    const decisionSummaries = await queryAlertDecisionSummaries(rows.map((row) => row.id));
+    return enrichAlertLocations(rows.map(alertFromRow)
+      .map((alert) => applySimulationModeToAlert(alert, config.simulationsEnabled))
+      .filter((alert): alert is AlertRecord => alert !== null)
+      .map((alert) => ({
+        ...toSlimAlert(alert),
+        decisions: [],
+        decision_summary: decisionSummaries.get(String(alert.id)) || emptyAlertDecisionSummary(),
+      })));
+  }
+
+  async function queryAlertDecisionSummaries(alertIds: Array<string | number>): Promise<Map<string, AlertDecisionSummary>> {
+    const summaries = new Map<string, AlertDecisionSummary>();
+    if (alertIds.length === 0) return summaries;
+
+    const now = new Date().toISOString();
+    const filterByAlertIds = alertIds.length <= 900;
+    const placeholders = filterByAlertIds ? alertIds.map(() => '?').join(', ') : '';
+    const rows = await queryWorker.all<{
+      alert_id: string | number;
+      origin?: string | null;
+      simulated?: number | boolean | null;
+      active_count: number;
+      expired_count: number;
+    }>(`
+      SELECT alert_id, origin, simulated,
+        SUM(CASE WHEN stop_at > ? THEN 1 ELSE 0 END) AS active_count,
+        SUM(CASE WHEN stop_at <= ? THEN 1 ELSE 0 END) AS expired_count
+      FROM decisions INDEXED BY idx_decisions_alert_summary
+      ${filterByAlertIds ? `WHERE alert_id IN (${placeholders})` : ''}
+      GROUP BY alert_id, origin, simulated
+    `, filterByAlertIds ? [now, now, ...alertIds] : [now, now]);
+
+    const originsByAlertId = new Map<string, Set<string>>();
+    for (const row of rows) {
+      const simulated = row.simulated === true || row.simulated === 1;
+      if (!config.simulationsEnabled && simulated) continue;
+
+      const alertId = String(row.alert_id);
+      const summary = summaries.get(alertId) || emptyAlertDecisionSummary();
+      const activeCount = Number(row.active_count) || 0;
+      const expiredCount = Number(row.expired_count) || 0;
+      summary.active_count += activeCount;
+      summary.expired_count += expiredCount;
+      if (simulated) {
+        summary.simulated_active_count += activeCount;
+        summary.simulated_expired_count += expiredCount;
+      }
+      summaries.set(alertId, summary);
+
+      const origin = normalizeOrigin(row.origin);
+      if (origin) {
+        const origins = originsByAlertId.get(alertId) || new Set<string>();
+        origins.add(origin);
+        originsByAlertId.set(alertId, origins);
+      }
+    }
+
+    for (const [alertId, origins] of originsByAlertId) {
+      const summary = summaries.get(alertId);
+      if (summary) summary.origins = [...origins].sort((left, right) => left.localeCompare(right));
+    }
+    return summaries;
+  }
+
   async function queryPaginatedDecisions(
     pageRequest: PageRequest,
     filters: DecisionListFilters,
@@ -3689,7 +3926,7 @@ ${errorSummary}  Status: ${syncSummary.state}
   ): Promise<PaginatedResponse<DecisionListItem>> {
     const since = new Date(Date.now() - config.lookbackMs).toISOString();
     const now = new Date().toISOString();
-    const duplicateSql = getDecisionDuplicateSql(now);
+    const duplicateSql = '(decisions.is_duplicate = 1)';
     const baseWhere = createSqlWhere();
     if (includeExpired) {
       baseWhere.add('(created_at >= ? OR stop_at > ?)', since, now);
@@ -3701,40 +3938,35 @@ ${errorSummary}  Status: ${syncSummary.state}
     }
 
     const filteredWhere = baseWhere.clone();
-    addDecisionSqlFilters(filteredWhere, filters, now, duplicateSql, true, !includeExpired);
-    const searchWhere = compileDecisionSearchSql(searchAst, filters, now, duplicateSql);
+    addDecisionSqlFilters(filteredWhere, filters, true);
+    const searchWhere = compileDecisionSearchSql(searchAst, filters, now);
     if (searchWhere) {
       filteredWhere.add(searchWhere.sql, ...searchWhere.params);
     }
 
-    const unfilteredTotal = await queryCount('decisions', baseWhere);
-    const total = await queryCount('decisions', filteredWhere);
     const offset = (pageRequest.page - 1) * pageRequest.pageSize;
-    const decisionsTable = shouldUseDefaultDecisionPagingIndex(filters, searchAst, includeExpired)
-      ? 'decisions INDEXED BY idx_decisions_duplicate_created_at'
-      : 'decisions';
-    const rows = await queryWorker.all<{
-      raw_data: string;
-      alert_id?: string | number | null;
-      is_duplicate?: number;
-      latitude?: number | null;
-      longitude?: number | null;
-    }>(`
-      SELECT raw_data, alert_id, ${duplicateSql} AS is_duplicate,
-        (SELECT latitude FROM alerts WHERE alerts.id = decisions.alert_id) AS latitude,
-        (SELECT longitude FROM alerts WHERE alerts.id = decisions.alert_id) AS longitude
-      FROM ${decisionsTable}
-      ${filteredWhere.toSql()}
-      ORDER BY created_at DESC, id DESC
-      LIMIT ? OFFSET ?
-    `, [...filteredWhere.params, pageRequest.pageSize, offset]);
+    const decisionsTable = `decisions ${getDecisionPageIndexHint(filters, searchAst)}`.trim();
+    const [unfilteredTotal, total, rows] = await Promise.all([
+      queryCount('decisions', baseWhere),
+      queryCount('decisions', filteredWhere),
+      queryWorker.all<NormalizedDecisionRow & {
+        is_duplicate?: number;
+        latitude?: number | null;
+        longitude?: number | null;
+      }>(`
+        SELECT ${DECISION_RECORD_COLUMNS}, ${duplicateSql} AS is_duplicate,
+          (SELECT latitude FROM alerts WHERE alerts.id = decisions.alert_id) AS latitude,
+          (SELECT longitude FROM alerts WHERE alerts.id = decisions.alert_id) AS longitude
+        FROM ${decisionsTable}
+        ${filteredWhere.toSql()}
+        ORDER BY created_at DESC, id DESC
+        LIMIT ? OFFSET ?
+      `, [...filteredWhere.params, pageRequest.pageSize, offset]),
+    ]);
 
     const alertCoordinates = new Map<string, { latitude: number; longitude: number }>();
     const decisions = rows.map((row) => {
-      const decision = JSON.parse(row.raw_data) as AlertDecision & Record<string, unknown>;
-      if (decision.alert_id === undefined && row.alert_id !== undefined && row.alert_id !== null) {
-        decision.alert_id = row.alert_id;
-      }
+      const decision = decisionFromRow(row);
       const latitude = normalizeDashboardCoordinate(row.latitude, -90, 90);
       const longitude = normalizeDashboardCoordinate(row.longitude, -180, 180);
       if (row.alert_id !== undefined && row.alert_id !== null && latitude !== undefined && longitude !== undefined) {
@@ -3870,26 +4102,15 @@ ${errorSummary}  Status: ${syncSummary.state}
     return coordinates;
   }
 
-  function shouldUseDefaultDecisionPagingIndex(filters: DecisionListFilters, searchAst: SearchNode | null, includeExpired: boolean): boolean {
-    return !includeExpired &&
-      !searchAst &&
-      !filters.showDuplicates &&
-      !filters.q &&
-      !filters.alertId &&
-      !filters.country &&
-      !filters.scenario &&
-      !filters.as &&
-      !filters.ip &&
-      !filters.target &&
-      !filters.dateStart &&
-      !filters.dateEnd &&
-      filters.simulation === 'all';
-  }
-
   function addAlertSqlFilters(where: SqlWhere, filters: AlertListFilters): void {
     if (filters.ip) addIpCondition(where, 'source_ip', filters.ip);
     if (filters.country) {
-      where.add('(LOWER(country) LIKE ? OR LOWER(country_name) LIKE ?)', likeParam(filters.country), likeParam(filters.country));
+      const country = filters.country.trim();
+      if (/^[a-z]{2}$/i.test(country)) {
+        where.add('country = ?', country.toUpperCase());
+      } else {
+        where.add('(LOWER(country) LIKE ? OR LOWER(country_name) LIKE ?)', likeParam(country), likeParam(country));
+      }
     }
     if (filters.scenario) addLike(where, 'LOWER(scenario)', filters.scenario);
     if (filters.as) addLike(where, 'LOWER(as_name)', filters.as);
@@ -3902,17 +4123,10 @@ ${errorSummary}  Status: ${syncSummary.state}
   function addDecisionSqlFilters(
     where: SqlWhere,
     filters: DecisionListFilters,
-    now: string,
-    duplicateSql: string,
     includeDuplicateFilter: boolean,
-    activeOnly = false,
   ): void {
     if (includeDuplicateFilter && !filters.showDuplicates) {
-      if (activeOnly) {
-        where.add('is_duplicate = 0');
-      } else {
-        where.add(`NOT (${duplicateSql})`);
-      }
+      where.add('decisions.is_duplicate = 0');
     }
     if (filters.alertId) where.add('alert_id = ?', filters.alertId);
     addSimulationFilter(where, filters.simulation);
@@ -3924,7 +4138,6 @@ ${errorSummary}  Status: ${syncSummary.state}
       where.add('(LOWER(value) LIKE ? OR LOWER(target) LIKE ?)', likeParam(filters.target), likeParam(filters.target));
     }
     addDateRangeFilter(where, 'created_at', filters.dateStart, filters.dateEnd, filters.timezoneOffsetMinutes, filters.timeZone);
-    void now;
   }
 
   function addSimulationFilter(where: SqlWhere, filter: string): void {
@@ -3963,13 +4176,19 @@ ${errorSummary}  Status: ${syncSummary.state}
     ast: SearchNode | null,
     filters: DecisionListFilters,
     now: string,
-    duplicateSql: string,
   ): SqlCondition | null {
     return compileSearchNodeSql(ast, {
       page: 'decisions',
       dateOptions: filters,
-      fieldCondition: (field, value) => decisionFieldCondition(field, value, now, duplicateSql),
-      freeTextCondition: (value) => freeTextSearchCondition('decisions', value, database.searchIndexAvailable),
+      fieldCondition: (field, value) => decisionFieldCondition(field, value, now),
+      // The default decision view contains only one row per duplicate group.
+      // Scanning that small indexed set is substantially cheaper than asking
+      // FTS to materialize every matching duplicate ID from large blocklists.
+      freeTextCondition: (value) => freeTextSearchCondition(
+        'decisions',
+        value,
+        database.searchIndexAvailable && filters.showDuplicates,
+      ),
     });
   }
 
@@ -4194,26 +4413,40 @@ ${errorSummary}  Status: ${syncSummary.state}
     };
   }
 
-  function shouldServeEmptyDashboardStats(): boolean {
-    if (dashboardStatsCache?.key === getDashboardStatsCacheKey()) {
-      return false;
+  function isDashboardStatsBuildInProgress(filters: DashboardStatsFilters): boolean {
+    const indexKey = getDashboardStatsCacheKey();
+    if (dashboardStatsCache?.key !== indexKey) {
+      return dashboardStatsIndexPromises.has(indexKey);
     }
 
-    if (dashboardStatsIndexPromises.size > 0 || dashboardStatsResponsePromises.size > 0) {
-      return true;
-    }
-
-    try {
-      return database.countAlerts() + database.countDecisions() > DASHBOARD_COLD_BUILD_ROW_LIMIT;
-    } catch {
-      return false;
-    }
+    return dashboardStatsResponsePromises.has(getDashboardStatsResponseCacheKey(indexKey, filters));
   }
 
   function warmDashboardStatsCache(filters: DashboardStatsFilters): void {
-    void buildDashboardStats(filters).catch((error: any) => {
+    const warmingVersion = dashboardStatsCacheVersion;
+    void buildDashboardStats(filters).then(() => {
+      if (
+        warmingVersion !== dashboardStatsCacheVersion ||
+        dashboardStatsReadyPublishedVersion === warmingVersion ||
+        !cacheRefreshCompletedAt
+      ) {
+        return;
+      }
+
+      // A cold dashboard request initially receives the previous response with
+      // pending=true. Notify clients again when the new index and response are
+      // read-visible so a superseded retry cannot leave the page stale.
+      dashboardStatsReadyPublishedVersion = warmingVersion;
+      publishCacheUpdate(cacheRefreshCompletedAt);
+    }).catch((error: any) => {
       console.error('Failed to warm dashboard statistics cache:', error.message);
     });
+  }
+
+  async function prepareDashboardStatsAfterRefresh(): Promise<boolean> {
+    if (!lastDashboardStatsFilters) return false;
+    await buildDashboardStats(lastDashboardStatsFilters);
+    return true;
   }
 
   async function buildDashboardStatsResponse(
@@ -4405,9 +4638,15 @@ ${errorSummary}  Status: ${syncSummary.state}
       clearPendingAlertDeletionTimeout();
       queryWorker.close();
       syncWorker.close();
+      cacheUpdateListeners.clear();
     },
     getSyncStatus: () => ({ ...syncStatus }),
     getLapiStatus: () => lapiClient.getStatus(),
+    getCacheLastUpdate: () => cacheRefreshCompletedAt,
+    subscribeCacheUpdates: (listener) => {
+      cacheUpdateListeners.add(listener);
+      return () => cacheUpdateListeners.delete(listener);
+    },
   };
 
   function startBackgroundTasks(): void {
@@ -4454,11 +4693,76 @@ function createSqlWhere(): SqlWhere {
   return new SqlWhere();
 }
 
+const DECISION_COVERED_SEARCH_FIELDS = new Set([
+  'id', 'alert', 'scenario', 'ip', 'country', 'region', 'city', 'as', 'target',
+  'date', 'action', 'type', 'status', 'duplicate', 'sim', 'machine', 'origin',
+]);
+
+function getDecisionPageIndexHint(filters: DecisionListFilters, searchAst: SearchNode | null): string {
+  if (filters.showDuplicates || filters.alertId || searchAstContainsField(searchAst, 'id', 'alert')) {
+    return '';
+  }
+
+  const simpleIp = getSimpleSearchFieldValue(searchAst, 'ip');
+  if (isIP((simpleIp || filters.ip).trim()) !== 0) {
+    return 'INDEXED BY idx_decisions_duplicate_value_paging';
+  }
+
+  if (searchAst && isDecisionSearchCoveredByFilterIndex(searchAst)) {
+    return 'INDEXED BY idx_decisions_duplicate_filters';
+  }
+  if (filters.country || filters.scenario || filters.as || filters.ip || filters.target) {
+    return 'INDEXED BY idx_decisions_duplicate_filters';
+  }
+  return 'INDEXED BY idx_decisions_duplicate_paging';
+}
+
+function searchAstContainsField(node: SearchNode | null, ...fields: string[]): boolean {
+  if (!node) return false;
+  if (node.kind === 'field' || node.kind === 'comparison') {
+    if (fields.includes(node.field)) return true;
+    return node.kind === 'field' && searchAstContainsField(node.expression, ...fields);
+  }
+  if (node.kind === 'not') return searchAstContainsField(node.expression, ...fields);
+  if (node.kind === 'binary') {
+    return searchAstContainsField(node.left, ...fields) || searchAstContainsField(node.right, ...fields);
+  }
+  return false;
+}
+
+function getSimpleSearchFieldValue(node: SearchNode | null, field: string): string {
+  if (!node) return '';
+  if (node.kind === 'field' && node.field === field && node.expression.kind === 'term') {
+    return node.expression.value;
+  }
+  if (node.kind === 'comparison' && node.field === field && node.operator === '=') {
+    return node.value;
+  }
+  return '';
+}
+
+function isDecisionSearchCoveredByFilterIndex(node: SearchNode, fieldContext = false): boolean {
+  if (node.kind === 'term') return fieldContext;
+  if (node.kind === 'comparison') return DECISION_COVERED_SEARCH_FIELDS.has(node.field);
+  if (node.kind === 'field') {
+    return DECISION_COVERED_SEARCH_FIELDS.has(node.field)
+      && isDecisionSearchCoveredByFilterIndex(node.expression, true);
+  }
+  if (node.kind === 'not') return isDecisionSearchCoveredByFilterIndex(node.expression, fieldContext);
+  return isDecisionSearchCoveredByFilterIndex(node.left, fieldContext)
+    && isDecisionSearchCoveredByFilterIndex(node.right, fieldContext);
+}
+
 function addLike(where: SqlWhere, columnSql: string, value: string): void {
   where.add(`${columnSql} LIKE ?`, likeParam(value));
 }
 
 function addIpCondition(where: SqlWhere, column: string, value: string): void {
+  const normalized = value.trim().toLowerCase();
+  if (isIP(normalized) !== 0) {
+    where.add(`${column} = ?`, normalized);
+    return;
+  }
   where.add(`(matches_ip_search_value(${column}, ?) = 1 OR LOWER(${column}) LIKE ?)`, value, likeParam(value));
 }
 
@@ -4467,6 +4771,10 @@ function textCondition(columnSql: string, value: string): SqlCondition {
 }
 
 function ipCondition(column: string, value: string): SqlCondition {
+  const normalized = value.trim().toLowerCase();
+  if (isIP(normalized) !== 0) {
+    return { sql: `${column} = ?`, params: [normalized] };
+  }
   return {
     sql: `(matches_ip_search_value(${column}, ?) = 1 OR LOWER(${column}) LIKE ?)`,
     params: [value, likeParam(value)],
@@ -4534,7 +4842,7 @@ function alertFieldCondition(field: string, value: string): SqlCondition {
   }
 }
 
-function decisionFieldCondition(field: string, value: string, now: string, duplicateSql: string): SqlCondition {
+function decisionFieldCondition(field: string, value: string, now: string): SqlCondition {
   if (value.trim() === '') {
     return decisionEmptyFieldCondition(field);
   }
@@ -4566,7 +4874,7 @@ function decisionFieldCondition(field: string, value: string, now: string, dupli
     case 'status':
       return decisionStatusCondition(value, now);
     case 'duplicate':
-      return booleanCondition(value, duplicateSql);
+      return booleanColumnCondition(value, 'decisions.is_duplicate');
     case 'sim':
       return simulationTermCondition(value);
     case 'machine':
@@ -4647,7 +4955,7 @@ function emptyTextCondition(columnSql: string): SqlCondition {
 function countryCondition(value: string): SqlCondition {
   const normalized = value.trim().toLowerCase();
   if (/^[a-z]{2}$/.test(normalized)) {
-    return { sql: 'LOWER(country) = ?', params: [normalized] };
+    return { sql: 'country = ?', params: [normalized.toUpperCase()] };
   }
   return {
     sql: '(LOWER(country_name) LIKE ? OR LOWER(country) = ?)',
@@ -4709,6 +5017,17 @@ function booleanCondition(value: string, trueSql: string): SqlCondition {
   }
   if (['false', 'no', '0', 'off'].includes(normalized)) {
     return { sql: `NOT (${trueSql})`, params: [] };
+  }
+  return { sql: '0 = 1', params: [] };
+}
+
+function booleanColumnCondition(value: string, columnSql: string): SqlCondition {
+  const normalized = value.trim().toLowerCase();
+  if (['true', 'yes', '1', 'on'].includes(normalized)) {
+    return { sql: `${columnSql} = 1`, params: [] };
+  }
+  if (['false', 'no', '0', 'off'].includes(normalized)) {
+    return { sql: `${columnSql} = 0`, params: [] };
   }
   return { sql: '0 = 1', params: [] };
 }
@@ -4831,18 +5150,6 @@ function getDateFilterBoundary(
   return new Date(Number.isFinite(timestamp) ? timestamp : 0);
 }
 
-function getDecisionDuplicateSql(now: string): string {
-  const nowLiteral = quoteSqlLiteral(now);
-  return `(
-    decisions.stop_at > ${nowLiteral}
-    AND decisions.is_duplicate = 1
-  )`;
-}
-
-function quoteSqlLiteral(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
-}
-
 function likeParam(value: string): string {
   return `%${escapeLike(value.trim().toLowerCase())}%`;
 }
@@ -4879,9 +5186,16 @@ function saveMetricsSidebarVisible(database: CrowdsecDatabase, visible: boolean)
 
 function loadPersistedConfig(database: CrowdsecDatabase): PersistedConfig {
   try {
-    const row = database.getMeta('refresh_interval_ms');
-    if (row?.value !== undefined) {
-      const config = { refresh_interval_ms: Number.parseInt(row.value, 10) };
+    const refreshInterval = database.getMeta('refresh_interval_ms')?.value;
+    const manualRefresh = database.getMeta('manual_refresh_enabled')?.value;
+    const config: PersistedConfig = {};
+    if (refreshInterval !== undefined) {
+      config.refresh_interval_ms = Number.parseInt(refreshInterval, 10);
+    }
+    if (manualRefresh !== undefined) {
+      config.manual_refresh_enabled = manualRefresh === 'true';
+    }
+    if (Object.keys(config).length > 0) {
       console.log('Loaded persisted config from database:', config);
       return config;
     }
@@ -4896,6 +5210,9 @@ function savePersistedConfig(database: CrowdsecDatabase, config: PersistedConfig
   try {
     if (config.refresh_interval_ms !== undefined) {
       database.setMeta('refresh_interval_ms', String(config.refresh_interval_ms));
+    }
+    if (config.manual_refresh_enabled !== undefined) {
+      database.setMeta('manual_refresh_enabled', String(config.manual_refresh_enabled));
     }
     console.log('Saved config to database:', config);
   } catch (error) {
@@ -5070,22 +5387,16 @@ function markDuplicateDecisions(decisions: DecisionListItem[]): DecisionListItem
     if (
       current === undefined ||
       expirationMs > current.expirationMs ||
-      (expirationMs === current.expirationMs && numericId < current.numericId)
+      (expirationMs === current.expirationMs && numericId > current.numericId)
     ) {
       primaryMap.set(key, { id: decision.id, expirationMs, numericId });
     }
   }
 
   return decisions.map((decision) => {
-    if (decision.expired) {
-      return { ...decision, is_duplicate: false };
-    }
-
+    if (decision.expired) return { ...decision, is_duplicate: false };
     const primaryId = primaryMap.get(`${decision.value ?? ''}|${decision.simulated === true ? 'simulated' : 'live'}`);
-    return {
-      ...decision,
-      is_duplicate: String(decision.id) !== String(primaryId?.id),
-    };
+    return { ...decision, is_duplicate: String(decision.id) !== String(primaryId?.id) };
   });
 }
 
@@ -5096,11 +5407,19 @@ function getDecisionExpirationMs(decision: DecisionListItem): number {
 
 function getNumericDecisionId(id: string | number): number {
   const value = String(id);
-  if (value.startsWith('dup_')) {
-    return Number.POSITIVE_INFINITY;
-  }
+  if (value.startsWith('dup_')) return Number.NEGATIVE_INFINITY;
   const numeric = Number.parseInt(value, 10);
-  return Number.isNaN(numeric) ? Number.POSITIVE_INFINITY : numeric;
+  return Number.isNaN(numeric) ? Number.NEGATIVE_INFINITY : numeric;
+}
+
+function emptyAlertDecisionSummary(): AlertDecisionSummary {
+  return {
+    origins: [],
+    active_count: 0,
+    expired_count: 0,
+    simulated_active_count: 0,
+    simulated_expired_count: 0,
+  };
 }
 
 function getPageRequest(context: HonoContext): PageRequest | null {

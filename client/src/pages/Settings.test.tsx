@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { Settings } from './Settings';
-import { fetchConfig, updateMetricsSidebarPreference } from '../lib/api';
+import { fetchConfig, updateManualRefreshSetting, updateMetricsSidebarPreference } from '../lib/api';
 import { useRefresh } from '../contexts/useRefresh';
 import { DateTimeContext, createDateTimeContextValue } from '../lib/dateTime';
 
@@ -28,9 +28,11 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
     'pages.settings.languageHelp': 'Browser default help.',
     'pages.settings.readOnlyRefresh': 'Read-only mode is enabled.',
     'pages.settings.refresh': 'Refresh',
-    'pages.settings.refreshDescription': 'Control automatic refreshes.',
-    'pages.settings.refreshHelp': 'Refresh help.',
+    'pages.settings.refreshDescription': 'Control how often the backend imports CrowdSec changes.',
+    'pages.settings.refreshHelp': 'Pages update immediately after each LAPI refresh.',
     'pages.settings.refreshInterval': 'Refresh interval',
+    'pages.settings.enableManualRefresh': 'Enable manual refresh',
+    'pages.settings.enableManualRefreshHelp': 'Manual refresh help.',
     'pages.settings.showMetricsInSidebar': 'Show Metrics in sidebar',
     'pages.settings.showMetricsInSidebarHelp': 'Metrics sidebar help.',
     'pages.settings.authDisabledHint': 'Dashboard authentication is disabled. Set AUTH_ENABLED=true and restart the web UI to enable sign-in and account settings.',
@@ -122,6 +124,7 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
 
 vi.mock('../lib/api', () => ({
   fetchConfig: vi.fn(),
+  updateManualRefreshSetting: vi.fn(),
   updateMetricsSidebarPreference: vi.fn(),
 }));
 
@@ -159,6 +162,11 @@ describe('Settings', () => {
   beforeEach(() => {
     setLanguagePreferenceMock.mockReset();
     vi.mocked(updateMetricsSidebarPreference).mockReset();
+    vi.mocked(updateManualRefreshSetting).mockReset();
+    vi.mocked(updateManualRefreshSetting).mockResolvedValue({
+      success: true,
+      manual_refresh_enabled: true,
+    });
     useAuthMock.mockReset();
     useAuthMock.mockReturnValue({
       authEnabled: false,
@@ -179,6 +187,7 @@ describe('Settings', () => {
     });
     vi.mocked(useRefresh).mockReturnValue({
       intervalMs: 30000,
+      nextRefreshAt: null,
       setIntervalMs: vi.fn(),
       lastUpdated: null,
       setLastUpdated: vi.fn(),
@@ -269,6 +278,36 @@ describe('Settings', () => {
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
     expect(updateMetricsSidebarPreference).toHaveBeenCalledWith({ visible: false });
+  });
+
+  test('enables manual refresh from the general settings form', async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchConfig).mockResolvedValue({
+      lookback_period: '1h',
+      lookback_hours: 1,
+      lookback_days: 1,
+      refresh_interval: 30000,
+      manual_refresh_enabled: false,
+      current_interval_name: '30s',
+      lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
+      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+      simulations_enabled: true,
+      machine_features_enabled: false,
+      origin_features_enabled: false,
+      permissions: {
+        mode: 'admin',
+        can_manage_enforcement: true,
+        can_manage_settings: true,
+      },
+    });
+
+    render(<Settings />);
+    await waitFor(() => expect(fetchConfig).toHaveBeenCalled());
+
+    await user.click(screen.getByRole('switch', { name: 'Enable manual refresh' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(updateManualRefreshSetting).toHaveBeenCalledWith({ enabled: true });
   });
 
   test('saves password login setting only from its own save button', async () => {
