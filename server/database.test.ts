@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, test } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
+import { spawnSync } from 'child_process';
 import path from 'path';
 import { tmpdir } from 'os';
 import { CrowdsecDatabase } from './database';
@@ -1332,6 +1333,48 @@ describe('CrowdsecDatabase', () => {
     expect(entrypoint).toContain('export DB_DIR="$LOADTEST_DB_DIR"');
     expect(entrypoint).not.toContain('${DB_DIR:-');
     expect(entrypoint).not.toContain('chown -R node:node /app/data');
+  });
+
+  test('load-test Docker entrypoint applies a selected profile and keeps environment overrides', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-loadtest-entrypoint-'));
+    tempDirs.push(dir);
+    const binDir = path.join(dir, 'bin');
+    const dbDir = path.join(dir, 'db');
+    const mkdirResult = spawnSync('/bin/mkdir', ['-p', binDir]);
+    expect(mkdirResult.status).toBe(0);
+
+    const nodeStub = path.join(binDir, 'node');
+    const gosuStub = path.join(binDir, 'gosu');
+    const chownStub = path.join(binDir, 'chown');
+    writeFileSync(nodeStub, '#!/bin/sh\nexit 0\n', 'utf8');
+    writeFileSync(gosuStub, '#!/bin/sh\nshift\nexec "$@"\n', 'utf8');
+    writeFileSync(chownStub, '#!/bin/sh\nexit 0\n', 'utf8');
+    chmodSync(nodeStub, 0o755);
+    chmodSync(gosuStub, 0o755);
+    chmodSync(chownStub, 0o755);
+
+    const result = spawnSync(
+      '/bin/bash',
+      [path.resolve(process.cwd(), 'docker-loadtest-entrypoint.sh'), '/usr/bin/env'],
+      {
+        encoding: 'utf8',
+        env: {
+          PATH: `${binDir}:/usr/bin:/bin`,
+          LOADTEST_PROFILE: 'blocklist',
+          LOADTEST_PROFILE_DIR: path.resolve(process.cwd(), 'scripts/load-test-profiles'),
+          LOADTEST_DB_DIR: dbDir,
+          LOADTEST_ALERTS: '42',
+        },
+      },
+    );
+
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('LOADTEST_PROFILE=blocklist\n');
+    expect(result.stdout).toContain('LOADTEST_ALERTS=42\n');
+    expect(result.stdout).toContain('LOADTEST_DECISIONS=410463\n');
+    expect(result.stdout).toContain('LOADTEST_SEED=1337\n');
+    expect(result.stdout).toContain(`DB_DIR=${dbDir}\n`);
   });
 
   test('migrates legacy notification rules, notifications, and seeds incidents from history', () => {

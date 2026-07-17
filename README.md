@@ -815,11 +815,10 @@ Alerts and decisions are stored as normalized SQLite columns. The `decisions.ale
        volumes:
          - ./data:/app/data
        environment:
-         LOADTEST_ALERTS: 300000
-         LOADTEST_DECISIONS: 300000
+         LOADTEST_PROFILE: blocklists-mixed
    ```
 
-   The load-test image always ignores the regular `DB_DIR` setting. Its synthetic database defaults to `/tmp/crowdsec-web-ui-load-test` inside the container, so seeding cannot overwrite the database mounted at `/app/data`. The synthetic database is recreated whenever the container starts. `LOADTEST_DB_DIR` can override the container-local location when needed.
+   Set `LOADTEST_PROFILE` to `default`, `blocklist`, or `blocklists-mixed`; it defaults to `default`. Individual `LOADTEST_*` environment variables can still override values from the selected profile. The load-test image always ignores the regular `DB_DIR` setting. Its synthetic database defaults to `/tmp/crowdsec-web-ui-load-test` inside the container, so seeding cannot overwrite the database mounted at `/app/data`. The synthetic database is recreated whenever the container starts. `LOADTEST_DB_DIR` can override the container-local location when needed.
 
 5. **CrowdSec mTLS smoke test**
 

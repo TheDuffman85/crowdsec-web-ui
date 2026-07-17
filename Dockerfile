@@ -132,7 +132,8 @@ FROM runner AS loadtest
 
 # Keep synthetic data away from /app/data so this image can replace the regular
 # image in an existing deployment without touching its mounted database.
-ENV LOADTEST_DB_DIR="/tmp/crowdsec-web-ui-load-test"
+ENV LOADTEST_DB_DIR="/tmp/crowdsec-web-ui-load-test" \
+    LOADTEST_PROFILE="default"
 
 COPY docker-loadtest-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-loadtest-entrypoint.sh
