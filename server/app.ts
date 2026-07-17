@@ -2110,6 +2110,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     const rawDataOnlyAlertIds = new Set<string>();
     const skipDecisionReconciliationAlertIds = new Set<string>();
     const removedDecisionIds = new Set<string>();
+    const affectedDecisionIds = new Set<string>();
     const observedAt = new Date().toISOString();
     let decisionMutationCount = 0;
     for (const alert of alerts) {
@@ -2121,8 +2122,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         if (delta.decisionIdsToPersist) {
           decisionIdsToPersistByAlertId.set(alertId, delta.decisionIdsToPersist);
           decisionMutationCount += delta.decisionIdsToPersist.size;
+          for (const id of delta.decisionIdsToPersist) affectedDecisionIds.add(id);
         } else {
           decisionMutationCount += decisions.length;
+          for (const decision of decisions) affectedDecisionIds.add(String(decision.id));
         }
         if (delta.reconcileDecisions === false) {
           skipDecisionReconciliationAlertIds.add(alertId);
@@ -2132,6 +2135,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         }
         for (const id of delta.removedIds) {
           removedDecisionIds.add(id);
+          affectedDecisionIds.add(id);
         }
       }
     }
@@ -2161,7 +2165,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       return changed;
     } finally {
       if (deferSearchIndexes) {
-        await syncWorker.rebuildSearchIndexes();
+        await syncWorker.rebuildSearchIndexes({
+          alertIds: alertsToPersist.map((alert) => String(alert.id)),
+          decisionIds: Array.from(affectedDecisionIds),
+        });
       }
     }
   }

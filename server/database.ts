@@ -145,6 +145,11 @@ export interface DecisionUpdateParams {
   $raw_data: string;
 }
 
+export interface SearchIndexRebuildScope {
+  alertIds: Array<string | number>;
+  decisionIds: Array<string | number>;
+}
+
 export interface DatabaseOptions {
   dbDir?: string;
   dbPath?: string;
@@ -771,16 +776,66 @@ export class CrowdsecDatabase {
     }
   }
 
-  rebuildSearchIndexes(): void {
+  rebuildSearchIndexes(scope?: SearchIndexRebuildScope): void {
     try {
-      this.db.exec(CREATE_SYNC_SECONDARY_INDEXES_SQL);
-      if (this.searchIndexAvailable) {
-        this.clearSearchIndexes();
-        backfillSearchIndexes(this.db);
+      if (scope) {
+        this.rebuildScopedSearchIndexes(scope);
+      } else {
+        this.db.exec(CREATE_SYNC_SECONDARY_INDEXES_SQL);
+        if (this.searchIndexAvailable) {
+          this.clearSearchIndexes();
+          backfillSearchIndexes(this.db);
+        }
       }
     } finally {
       this.searchIndexUpdatesDeferred = false;
     }
+  }
+
+  private rebuildScopedSearchIndexes(scope: SearchIndexRebuildScope): void {
+    if (!this.searchIndexAvailable) return;
+
+    const alertIds = Array.from(new Set(scope.alertIds.map(String)));
+    const decisionIds = Array.from(new Set(scope.decisionIds.map(String)));
+    const rebuild = this.db.transaction(() => {
+      runChunkedIdMutation(this.db, 'DELETE FROM alerts_fts WHERE alert_id IN', alertIds);
+      runChunkedIdMutation(this.db, 'DELETE FROM decisions_fts WHERE decision_id IN', decisionIds);
+
+      for (let offset = 0; offset < alertIds.length; offset += 900) {
+        const chunk = alertIds.slice(offset, offset + 900);
+        if (chunk.length === 0) continue;
+        const placeholders = chunk.map(() => '?').join(',');
+        const rows = this.db.prepare(`
+          SELECT id, search_text
+          FROM alerts
+          WHERE id IN (${placeholders})
+            AND search_text IS NOT NULL
+            AND search_text <> ''
+        `).all(...chunk) as Array<{ id: string | number; search_text: string }>;
+        for (const row of rows) {
+          const numericId = Number(row.id);
+          if (!Number.isSafeInteger(numericId) || numericId < 1) continue;
+          this.insertAlertSearchIndexStatement?.run(numericId, String(row.id), row.search_text);
+        }
+      }
+
+      for (let offset = 0; offset < decisionIds.length; offset += 900) {
+        const chunk = decisionIds.slice(offset, offset + 900);
+        if (chunk.length === 0) continue;
+        const placeholders = chunk.map(() => '?').join(',');
+        const rows = this.db.prepare(`
+          SELECT id, search_text
+          FROM decisions
+          WHERE id IN (${placeholders})
+            AND search_text IS NOT NULL
+            AND search_text <> ''
+        `).all(...chunk) as Array<{ id: string | number; search_text: string }>;
+        for (const row of rows) {
+          this.insertDecisionSearchIndexStatement?.run(String(row.id), row.search_text);
+        }
+      }
+    });
+    rebuild();
   }
 
   async rebuildSearchIndexesCooperative(yieldControl: () => Promise<void>, batchSize = 1_000): Promise<void> {

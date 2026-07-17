@@ -1,5 +1,5 @@
 import { Worker } from 'node:worker_threads';
-import type { AlertInsertParams, DecisionInsertParams } from './database';
+import type { AlertInsertParams, DecisionInsertParams, SearchIndexRebuildScope } from './database';
 
 export type DatabaseWrite = <T>(operation: () => T | Promise<T>) => Promise<T>;
 
@@ -21,7 +21,7 @@ type SyncWorkerRequest =
   | { type: 'delete-cached-alerts'; ids: Array<string | number> }
   | { type: 'delete-cached-decisions'; ids: Array<string | number> }
   | { type: 'begin-deferred-search-indexes'; dropSecondaryIndexes: boolean; clearSearchIndexes: boolean }
-  | { type: 'rebuild-search-indexes' }
+  | { type: 'rebuild-search-indexes'; scope?: SearchIndexRebuildScope }
   | { type: 'refresh-duplicate-flags'; now: string }
   | { type: 'cleanup-old-data'; cutoff: string }
   | { type: 'clear-sync-data' };
@@ -77,8 +77,8 @@ export class DatabaseSyncWorker {
     return this.execute({ type: 'begin-deferred-search-indexes', dropSecondaryIndexes, clearSearchIndexes });
   }
 
-  rebuildSearchIndexes(): Promise<void> {
-    return this.execute({ type: 'rebuild-search-indexes' });
+  rebuildSearchIndexes(scope?: SearchIndexRebuildScope): Promise<void> {
+    return this.execute({ type: 'rebuild-search-indexes', scope });
   }
 
   refreshDecisionDuplicateFlags(now: string): Promise<void> {

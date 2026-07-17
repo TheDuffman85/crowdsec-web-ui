@@ -3692,7 +3692,10 @@ describe('createApp', () => {
       const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=10'));
       expect(response.status).toBe(200);
       expect(syncWorker.beginDeferredSearchIndexUpdates).toHaveBeenCalledWith(false, false);
-      expect(syncWorker.rebuildSearchIndexes).toHaveBeenCalledOnce();
+      expect(syncWorker.rebuildSearchIndexes).toHaveBeenCalledWith({
+        alertIds: ['209'],
+        decisionIds: largeDeltaAlert.decisions?.map((decision) => String(decision.id)),
+      });
       expect(vi.mocked(syncWorker.persistAlerts).mock.calls).toHaveLength(21);
       expect(vi.mocked(syncWorker.persistAlerts).mock.calls.every(([mutations]) =>
         mutations.reduce((total, mutation) => total + mutation.decisions.length, 0) <= 500,

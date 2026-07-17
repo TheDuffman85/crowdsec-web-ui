@@ -705,6 +705,58 @@ describe('CrowdsecDatabase', () => {
     db.close();
   });
 
+  test('rebuilds only touched search rows after a large populated-cache delta', () => {
+    const db = createTestDatabase();
+    const insertAlert = (id: number, message: string) => db.insertAlert({
+      $id: id,
+      $uuid: `alert-${id}`,
+      $created_at: '2026-01-01T00:00:00.000Z',
+      $scenario: 'crowdsecurity/ssh-bf',
+      $source_ip: `192.0.2.${id}`,
+      $message: message,
+      $raw_data: JSON.stringify({ id, message }),
+    });
+    const insertDecision = (id: string, alertId: number, origin: string) => db.insertDecision({
+      $id: id,
+      $uuid: `decision-${id}`,
+      $alert_id: alertId,
+      $created_at: '2026-01-01T00:00:00.000Z',
+      $stop_at: '2027-01-01T00:00:00.000Z',
+      $value: `198.51.100.${id}`,
+      $type: 'ban',
+      $origin: origin,
+      $scenario: 'crowdsecurity/ssh-bf',
+      $raw_data: JSON.stringify({ id, alert_id: alertId, origin }),
+    });
+
+    insertAlert(1, 'old touched alert');
+    insertAlert(2, 'preserved untouched alert');
+    insertAlert(4, 'other untouched alert');
+    insertDecision('10', 1, 'old-touched-origin');
+    insertDecision('20', 2, 'removed-origin');
+    insertDecision('40', 4, 'preserved-origin');
+
+    db.beginDeferredSearchIndexUpdates(false, false);
+    insertAlert(1, 'new touched alert');
+    insertAlert(3, 'new delta alert');
+    insertDecision('10', 1, 'new-touched-origin');
+    insertDecision('30', 3, 'new-delta-origin');
+    db.deleteDecision('20');
+    db.rebuildSearchIndexes({ alertIds: [1, 3], decisionIds: ['10', '20', '30'] });
+
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts').get() as { count: number }).count).toBe(4);
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM decisions_fts').get() as { count: number }).count).toBe(3);
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts WHERE alerts_fts MATCH ?').get('old') as { count: number }).count).toBe(0);
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts WHERE alerts_fts MATCH ?').get('new') as { count: number }).count).toBe(2);
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts WHERE alerts_fts MATCH ?').get('preserved') as { count: number }).count).toBe(1);
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM decisions_fts WHERE decisions_fts MATCH ?').get('old') as { count: number }).count).toBe(0);
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM decisions_fts WHERE decisions_fts MATCH ?').get('new') as { count: number }).count).toBe(2);
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM decisions_fts WHERE decisions_fts MATCH ?').get('preserved') as { count: number }).count).toBe(1);
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM decisions_fts WHERE decisions_fts MATCH ?').get('removed') as { count: number }).count).toBe(0);
+
+    db.close();
+  });
+
   test('fresh databases default dashboard auth on', () => {
     const db = createTestDatabase();
 

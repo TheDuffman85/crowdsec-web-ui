@@ -76,7 +76,7 @@ function execute(request: WorkerRequest['request']): unknown {
     return undefined;
   }
   if (request.type === 'rebuild-search-indexes') {
-    database.rebuildSearchIndexes();
+    database.rebuildSearchIndexes(request.scope as Parameters<typeof database.rebuildSearchIndexes>[0]);
     return undefined;
   }
   if (request.type === 'refresh-duplicate-flags') {
