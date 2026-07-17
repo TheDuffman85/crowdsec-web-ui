@@ -22,7 +22,7 @@ import {
 import { normalizeIsoTimestamp, normalizeTimestampJson } from './utils/date-time';
 
 type SqliteStatement = {
-  run: (...params: any[]) => { changes: number };
+  run: (...params: any[]) => { changes: number; lastInsertRowid?: number | bigint };
   get: (...params: any[]) => unknown;
   all: (...params: any[]) => unknown[];
 };
@@ -53,7 +53,7 @@ const SYNC_SECONDARY_INDEX_NAMES = [
   'idx_alerts_country_created_at',
   'idx_alerts_scenario_created_at',
   'idx_decisions_stop_at',
-  'idx_decisions_alert_id',
+  'idx_decisions_alert_summary',
   'idx_decisions_value',
   'idx_decisions_created_at',
   'idx_decisions_created_id_stop_at',
@@ -88,7 +88,7 @@ const CREATE_SYNC_SECONDARY_INDEXES_SQL = `
   CREATE INDEX IF NOT EXISTS idx_alerts_country_created_at ON alerts(country, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_alerts_scenario_created_at ON alerts(scenario, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_decisions_stop_at ON decisions(stop_at);
-  CREATE INDEX IF NOT EXISTS idx_decisions_alert_id ON decisions(alert_id);
+  CREATE INDEX IF NOT EXISTS idx_decisions_alert_summary ON decisions(alert_id, origin, simulated, stop_at);
   CREATE INDEX IF NOT EXISTS idx_decisions_value ON decisions(value);
   CREATE INDEX IF NOT EXISTS idx_decisions_created_at ON decisions(created_at);
   CREATE INDEX IF NOT EXISTS idx_decisions_created_id_stop_at ON decisions(created_at DESC, id DESC, stop_at);
@@ -319,7 +319,9 @@ export class CrowdsecDatabase {
   private readonly deleteAlertSearchIndexStatement: any | null;
   private readonly insertAlertSearchIndexStatement: any | null;
   private readonly deleteDecisionSearchIndexStatement: any | null;
+  private readonly deleteDecisionSearchRowStatement: any | null;
   private readonly insertDecisionSearchIndexStatement: any | null;
+  private readonly upsertDecisionSearchRowStatement: any | null;
 
   constructor(options: DatabaseOptions = {}) {
     const resolvedPath = resolveDatabasePath(options);
@@ -732,10 +734,27 @@ export class CrowdsecDatabase {
       ? this.db.prepare('INSERT INTO alerts_fts(rowid, alert_id, search_text) VALUES (?, ?, ?)')
       : null;
     this.deleteDecisionSearchIndexStatement = this.searchIndexAvailable
-      ? this.db.prepare('DELETE FROM decisions_fts WHERE decision_id = ?')
+      ? this.db.prepare(`
+          DELETE FROM decisions_fts
+          WHERE rowid = (
+            SELECT fts_rowid
+            FROM decision_fts_rows
+            WHERE decision_id = ?
+          )
+        `)
+      : null;
+    this.deleteDecisionSearchRowStatement = this.searchIndexAvailable
+      ? this.db.prepare('DELETE FROM decision_fts_rows WHERE decision_id = ?')
       : null;
     this.insertDecisionSearchIndexStatement = this.searchIndexAvailable
       ? this.db.prepare('INSERT INTO decisions_fts(decision_id, search_text) VALUES (?, ?)')
+      : null;
+    this.upsertDecisionSearchRowStatement = this.searchIndexAvailable
+      ? this.db.prepare(`
+          INSERT INTO decision_fts_rows (decision_id, fts_rowid)
+          VALUES (?, ?)
+          ON CONFLICT(decision_id) DO UPDATE SET fts_rowid = excluded.fts_rowid
+        `)
       : null;
   }
 
@@ -799,7 +818,7 @@ export class CrowdsecDatabase {
     const decisionIds = Array.from(new Set(scope.decisionIds.map(String)));
     const rebuild = this.db.transaction(() => {
       runChunkedIdMutation(this.db, 'DELETE FROM alerts_fts WHERE alert_id IN', alertIds);
-      runChunkedIdMutation(this.db, 'DELETE FROM decisions_fts WHERE decision_id IN', decisionIds);
+      this.deleteDecisionSearchIndexes(decisionIds);
 
       for (let offset = 0; offset < alertIds.length; offset += 900) {
         const chunk = alertIds.slice(offset, offset + 900);
@@ -831,7 +850,7 @@ export class CrowdsecDatabase {
             AND search_text <> ''
         `).all(...chunk) as Array<{ id: string | number; search_text: string }>;
         for (const row of rows) {
-          this.insertDecisionSearchIndexStatement?.run(String(row.id), row.search_text);
+          this.insertDecisionSearchIndexRow(String(row.id), row.search_text);
         }
       }
     });
@@ -1078,6 +1097,15 @@ export class CrowdsecDatabase {
       if (!this.searchIndexUpdatesDeferred && this.searchIndexAvailable) {
         this.db.prepare(`
           DELETE FROM decisions_fts
+          WHERE rowid IN (
+            SELECT search_rows.fts_rowid
+            FROM decision_fts_rows AS search_rows
+            JOIN decisions ON decisions.id = search_rows.decision_id
+            WHERE decisions.stop_at < ?
+          )
+        `).run(threshold);
+        this.db.prepare(`
+          DELETE FROM decision_fts_rows
           WHERE decision_id IN (
             SELECT id
             FROM decisions
@@ -1899,6 +1927,7 @@ export class CrowdsecDatabase {
     if (!this.searchIndexAvailable) return;
     this.runSearchIndexStatement('DELETE FROM alerts_fts');
     this.runSearchIndexStatement('DELETE FROM decisions_fts');
+    this.runSearchIndexStatement('DELETE FROM decision_fts_rows');
   }
 
   private upsertAlertSearchIndex(id: string | number, searchText: string): void {
@@ -1918,11 +1947,18 @@ export class CrowdsecDatabase {
     if (this.searchIndexUpdatesDeferred) return;
     if (!this.searchIndexAvailable || !this.deleteDecisionSearchIndexStatement || !this.insertDecisionSearchIndexStatement) return;
     try {
-      this.deleteDecisionSearchIndexStatement.run(String(id));
-      this.insertDecisionSearchIndexStatement.run(String(id), searchText);
+      this.deleteDecisionSearchIndex(id);
+      this.insertDecisionSearchIndexRow(String(id), searchText);
     } catch {
       // Search indexing is an optimization; core table data remains authoritative.
     }
+  }
+
+  private insertDecisionSearchIndexRow(id: string, searchText: string): void {
+    if (!this.insertDecisionSearchIndexStatement || !this.upsertDecisionSearchRowStatement) return;
+    const result = this.insertDecisionSearchIndexStatement.run(id, searchText);
+    if (result.lastInsertRowid === undefined) return;
+    this.upsertDecisionSearchRowStatement.run(id, result.lastInsertRowid);
   }
 
   private deleteAlertSearchIndex(id: string | number): void {
@@ -1942,19 +1978,31 @@ export class CrowdsecDatabase {
   }
 
   private deleteDecisionSearchIndex(id: string | number): void {
-    if (this.searchIndexUpdatesDeferred) return;
-    if (!this.searchIndexAvailable || !this.deleteDecisionSearchIndexStatement) return;
+    if (!this.searchIndexAvailable || !this.deleteDecisionSearchIndexStatement || !this.deleteDecisionSearchRowStatement) return;
     try {
       this.deleteDecisionSearchIndexStatement.run(String(id));
+      this.deleteDecisionSearchRowStatement.run(String(id));
     } catch {
       // Search indexing is an optimization; core table data remains authoritative.
     }
   }
 
   private deleteDecisionSearchIndexes(ids: string[]): void {
-    if (this.searchIndexUpdatesDeferred) return;
     if (!this.searchIndexAvailable || ids.length === 0) return;
-    runChunkedIdMutation(this.db, 'DELETE FROM decisions_fts WHERE decision_id IN', ids);
+    const chunkSize = 900;
+    for (let offset = 0; offset < ids.length; offset += chunkSize) {
+      const chunk = ids.slice(offset, offset + chunkSize);
+      const placeholders = chunk.map(() => '?').join(',');
+      this.db.prepare(`
+        DELETE FROM decisions_fts
+        WHERE rowid IN (
+          SELECT fts_rowid
+          FROM decision_fts_rows
+          WHERE decision_id IN (${placeholders})
+        )
+      `).run(...chunk);
+      this.db.prepare(`DELETE FROM decision_fts_rows WHERE decision_id IN (${placeholders})`).run(...chunk);
+    }
   }
 
   private deleteDecisionSearchIndexesByAlertIds(alertIds: string[]): void {
@@ -2499,6 +2547,9 @@ function migrateRecordIndexColumns(db: Database): void {
   // Replaced by idx_decisions_alert_created_id, which also satisfies the
   // deterministic decision paging order and covers the history predicate.
   db.exec('DROP INDEX IF EXISTS idx_decisions_alert_created_at');
+  // Replaced by a covering index so alert-list summaries do not have to read
+  // every matching decision row or build a temporary GROUP BY table.
+  db.exec('DROP INDEX IF EXISTS idx_decisions_alert_id');
   db.exec('DROP INDEX IF EXISTS idx_decisions_duplicate_created_at');
   db.exec('DROP INDEX IF EXISTS idx_decisions_duplicate_active');
   db.exec(CREATE_SYNC_SECONDARY_INDEXES_SQL);
@@ -2801,7 +2852,12 @@ function initSearchIndexes(db: Database): boolean {
         search_text,
         tokenize = 'unicode61'
       );
+      CREATE TABLE IF NOT EXISTS decision_fts_rows (
+        decision_id TEXT PRIMARY KEY,
+        fts_rowid INTEGER NOT NULL UNIQUE
+      );
     `);
+    synchronizeDecisionSearchRows(db);
     return true;
   } catch (error) {
     console.warn('SQLite FTS5 is unavailable; falling back to LIKE search.', (error as Error).message);
@@ -2834,6 +2890,23 @@ function backfillSearchIndexes(db: Database): void {
         AND search_text <> ''
     `);
   }
+  synchronizeDecisionSearchRows(db);
+}
+
+function synchronizeDecisionSearchRows(db: Database): void {
+  const searchCount = (db.query('SELECT COUNT(*) AS count FROM decisions_fts').get() as CountRow | null)?.count || 0;
+  const mappingCount = (db.query('SELECT COUNT(*) AS count FROM decision_fts_rows').get() as CountRow | null)?.count || 0;
+  if (searchCount === mappingCount) return;
+
+  const synchronize = db.transaction(() => {
+    db.exec('DELETE FROM decision_fts_rows');
+    db.exec(`
+      INSERT OR REPLACE INTO decision_fts_rows (decision_id, fts_rowid)
+      SELECT CAST(decision_id AS TEXT), rowid
+      FROM decisions_fts
+    `);
+  });
+  synchronize();
 }
 
 async function backfillSearchIndexesCooperative(db: Database, yieldControl: () => Promise<void>, batchSize: number): Promise<void> {
@@ -2876,8 +2949,12 @@ async function backfillSearchIndexesCooperative(db: Database, yieldControl: () =
   `);
   const insertDecisions = db.transaction((rows: Array<{ id: string; rowid: number; search_text: string }>) => {
     const insert = db.prepare('INSERT INTO decisions_fts(decision_id, search_text) VALUES (?, ?)');
+    const insertMapping = db.prepare('INSERT OR REPLACE INTO decision_fts_rows(decision_id, fts_rowid) VALUES (?, ?)');
     for (const row of rows) {
-      insert.run(String(row.id), row.search_text);
+      const result = insert.run(String(row.id), row.search_text);
+      if (result.lastInsertRowid !== undefined) {
+        insertMapping.run(String(row.id), result.lastInsertRowid);
+      }
     }
   });
 

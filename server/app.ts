@@ -3033,16 +3033,17 @@ ${errorSummary}  Status: ${syncSummary.state}
     const isIdle = now - lastRequestTime > config.idleThresholdMs;
 
     try {
-      if (!cache.isInitialized) {
+      if (bootstrapPromise || initializationPromise) {
         if (!bootstrapWaitLogged) {
           bootstrapWaitLogged = true;
-          console.log(bootstrapPromise
-            ? 'Background refresh paused until bootstrap recovery completes.'
-            : 'Background refresh paused because the cache is not initialized.');
+          console.log('Background refresh paused until bootstrap recovery completes.');
         }
-        if (!bootstrapPromise) {
-          scheduleBootstrapRetry('cache is not initialized');
+      } else if (!cache.isInitialized) {
+        if (!bootstrapWaitLogged) {
+          bootstrapWaitLogged = true;
+          console.log('Background refresh paused because the cache is not initialized.');
         }
+        scheduleBootstrapRetry('cache is not initialized');
       } else {
         if (cacheRefreshPromise) {
           console.log('Background refresh skipped because another refresh is already in progress.');
@@ -3880,7 +3881,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       SELECT alert_id, origin, simulated,
         SUM(CASE WHEN stop_at > ? THEN 1 ELSE 0 END) AS active_count,
         SUM(CASE WHEN stop_at <= ? THEN 1 ELSE 0 END) AS expired_count
-      FROM decisions INDEXED BY idx_decisions_alert_id
+      FROM decisions INDEXED BY idx_decisions_alert_summary
       ${filterByAlertIds ? `WHERE alert_id IN (${placeholders})` : ''}
       GROUP BY alert_id, origin, simulated
     `, filterByAlertIds ? [now, now, ...alertIds] : [now, now]);

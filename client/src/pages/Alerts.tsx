@@ -226,6 +226,7 @@ export function Alerts() {
     const selectedAlertIdRef = useRef<string | number | null>(null);
 
     const PAGE_SIZE = 50;
+    const MAX_MODAL_DECISION_REFRESH_SIZE = 200;
     const hasMoreAlerts = currentPage < totalPages;
     const observer = useRef<IntersectionObserver | null>(null);
     const decisionContainerRef = useRef<HTMLDivElement | null>(null);
@@ -645,37 +646,50 @@ export function Alerts() {
         }
 
         try {
-            const result = await fetchDecisionsPaginated(page, PAGE_SIZE, {
+            const requestedPageSize = !append && preserveLoadedPages
+                ? Math.min(MAX_MODAL_DECISION_REFRESH_SIZE, Math.max(PAGE_SIZE, modalDecisionsPageRef.current * PAGE_SIZE))
+                : PAGE_SIZE;
+            const result = await fetchDecisionsPaginated(page, requestedPageSize, {
                 alert_id: alertId,
                 include_expired: "true",
                 tz_offset: String(new Date().getTimezoneOffset()),
             });
 
-            let decisionsData = result.data;
             let nextPage = result.pagination.page;
+            const modalTotalPages = Math.ceil(result.pagination.total / PAGE_SIZE);
 
             if (!append && preserveLoadedPages) {
                 const loadedPageCount = Math.max(1, modalDecisionsPageRef.current);
-                const maxPageToRefresh = Math.max(1, Math.min(loadedPageCount, result.pagination.total_pages || 1));
-                if (maxPageToRefresh > 1) {
-                    const remainingPages = await Promise.all(
-                        Array.from({ length: maxPageToRefresh - 1 }, (_, index) => (
-                            fetchDecisionsPaginated(index + 2, PAGE_SIZE, {
-                                alert_id: alertId,
-                                include_expired: "true",
-                                tz_offset: String(new Date().getTimezoneOffset()),
-                            })
-                        )),
-                    );
-                    decisionsData = [result, ...remainingPages].flatMap((pageResult) => pageResult.data);
-                }
-                nextPage = maxPageToRefresh;
+                nextPage = Math.max(1, Math.min(loadedPageCount, modalTotalPages || 1));
             }
 
-            setModalDecisions((current) => append ? [...current, ...result.data] : decisionsData);
+            setModalDecisions((current) => {
+                if (append) {
+                    const existingIds = new Set(current.map((decision) => String(decision.id)));
+                    return [
+                        ...current,
+                        ...result.data.filter((decision) => !existingIds.has(String(decision.id))),
+                    ];
+                }
+
+                if (preserveLoadedPages) {
+                    // Refresh as much of the visible range as one bounded request permits, then
+                    // retain the older tail. Re-fetching every loaded page creates a request burst
+                    // that grows every time the user scrolls farther into a large blocklist.
+                    const refreshedIds = new Set(result.data.map((decision) => String(decision.id)));
+                    const refreshed = [
+                        ...result.data,
+                        ...current.filter((decision) => !refreshedIds.has(String(decision.id))),
+                    ];
+                    const loadedDecisionCount = Math.max(current.length, nextPage * PAGE_SIZE);
+                    return refreshed.slice(0, Math.min(result.pagination.total, loadedDecisionCount));
+                }
+
+                return result.data;
+            });
             modalDecisionsPageRef.current = nextPage;
             setModalDecisionsPage(nextPage);
-            setModalDecisionsTotalPages(result.pagination.total_pages);
+            setModalDecisionsTotalPages(modalTotalPages);
             setModalDecisionsTotal(result.pagination.total);
         } catch (error) {
             console.error("Failed to load alert decisions", error);

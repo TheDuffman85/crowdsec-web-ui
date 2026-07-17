@@ -382,6 +382,7 @@ function createController(options: {
   metricsFetchResolver?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
   mqttPublishResolver?: (config: MqttPublishConfig, payload: string) => void | Promise<void>;
   syncWorker?: CreateAppOptions['syncWorker'];
+  queryWorker?: CreateAppOptions['queryWorker'];
   database?: CrowdsecDatabase;
   initialCacheState?: CreateAppOptions['initialCacheState'];
   attackLocationResolver?: CreateAppOptions['attackLocationResolver'];
@@ -510,6 +511,7 @@ function createController(options: {
       resolve: async (locations) => locations,
     },
     syncWorker: options.syncWorker,
+    queryWorker: options.queryWorker,
     initialCacheState: options.initialCacheState,
   });
 
@@ -4444,6 +4446,73 @@ describe('createApp', () => {
         await vi.advanceTimersByTimeAsync(1_000);
         await new Promise((resolve) => realSetTimeout(resolve, 0));
       }
+      controller.stopBackgroundTasks();
+      logSpy.mockRestore();
+      vi.useRealTimers();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
+  test('does not start a refresh after cache data is visible while bootstrap is still finalizing', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    let releaseDashboard!: () => void;
+    let dashboardReleased = false;
+    let dashboardQueryStarted!: () => void;
+    const dashboardGate = new Promise<void>((resolve) => {
+      releaseDashboard = resolve;
+    });
+    const dashboardStarted = new Promise<void>((resolve) => {
+      dashboardQueryStarted = resolve;
+    });
+    const queryWorker = {
+      all: vi.fn(async () => {
+        dashboardQueryStarted();
+        await dashboardGate;
+        return [];
+      }),
+      get: vi.fn(async () => ({ count: 0 })),
+      close: vi.fn(),
+    } as unknown as NonNullable<CreateAppOptions['queryWorker']>;
+    const syncWorker: NonNullable<CreateAppOptions['syncWorker']> = {
+      persistAlerts: vi.fn(async () => ({ changed: false })),
+      deleteAlertsMissingBetween: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      deleteCachedAlerts: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      deleteCachedDecisions: vi.fn(async () => 0),
+      beginDeferredSearchIndexUpdates: vi.fn(async () => {}),
+      rebuildSearchIndexes: vi.fn(async () => {}),
+      refreshDecisionDuplicateFlags: vi.fn(async () => {}),
+      cleanupOldData: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+      clearSyncData: vi.fn(async () => {}),
+      runExclusive: vi.fn(async (operation) => operation()),
+      close: vi.fn(),
+    };
+    const { controller, database, lapiClient } = createController({
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '30s',
+        CROWDSEC_HEARTBEAT_INTERVAL: 'manual',
+      },
+      queryWorker,
+      syncWorker,
+    });
+    await lapiClient.login();
+    vi.useFakeTimers();
+
+    try {
+      controller.startBackgroundTasks();
+      await vi.advanceTimersByTimeAsync(0);
+      await dashboardStarted;
+      await vi.advanceTimersByTimeAsync(30_001);
+
+      const logs = logSpy.mock.calls.map((call) => String(call[0]));
+      expect(logs).toContain('Background refresh paused until bootstrap recovery completes.');
+      expect(logs).not.toContain('Background refresh triggered (ACTIVE)...');
+
+      dashboardReleased = true;
+      releaseDashboard();
+      await vi.advanceTimersByTimeAsync(1_000);
+    } finally {
+      if (!dashboardReleased) releaseDashboard();
       controller.stopBackgroundTasks();
       logSpy.mockRestore();
       vi.useRealTimers();

@@ -1193,13 +1193,14 @@ describe('Alerts page', () => {
       events: [],
     });
 
+    let refreshedDecisionList = largeDecisionList;
     const fetchDecisionsPaginatedMock = vi.mocked(api.fetchDecisionsPaginated).mockImplementation(async (page, pageSize, filters) => {
       expect(filters).toEqual(expect.objectContaining({
         alert_id: '1',
         include_expired: 'true',
       }));
 
-      const decisions: DecisionListItem[] = largeDecisionList.map((decision) => ({
+      const decisions: DecisionListItem[] = refreshedDecisionList.map((decision) => ({
         id: decision.id,
         created_at: '2026-03-23T11:00:00.000Z',
         value: decision.value,
@@ -1235,6 +1236,15 @@ describe('Alerts page', () => {
     await waitFor(() => expect(screen.getByText('#1074')).toBeInTheDocument());
 
     const callCountBeforeRefresh = fetchDecisionsPaginatedMock.mock.calls.length;
+    refreshedDecisionList = [{
+      id: 2000,
+      value: '198.51.100.200',
+      type: 'ban',
+      duration: '24h',
+      simulated: false,
+      expired: false,
+      origin: 'CAPI',
+    }, ...largeDecisionList];
     refreshSignalMock = 1;
 
     rerender(
@@ -1243,8 +1253,10 @@ describe('Alerts page', () => {
       </MemoryRouter>,
     );
 
-    await waitFor(() => expect(fetchDecisionsPaginatedMock.mock.calls.length).toBeGreaterThanOrEqual(callCountBeforeRefresh + 2));
-    expect(fetchDecisionsPaginatedMock.mock.calls.slice(callCountBeforeRefresh, callCountBeforeRefresh + 2).map(([page]) => page)).toEqual([1, 2]);
+    await waitFor(() => expect(fetchDecisionsPaginatedMock.mock.calls.length).toBe(callCountBeforeRefresh + 1));
+    expect(fetchDecisionsPaginatedMock.mock.calls.at(-1)?.[0]).toBe(1);
+    expect(fetchDecisionsPaginatedMock.mock.calls.at(-1)?.[1]).toBe(100);
+    expect(screen.getByText('#2000')).toBeInTheDocument();
     expect(screen.getByText('#1074')).toBeInTheDocument();
   });
 

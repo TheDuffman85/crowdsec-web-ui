@@ -655,6 +655,7 @@ describe('CrowdsecDatabase', () => {
     expect(rebuiltAlertIndexes.map((index) => index.name)).toContain('idx_alerts_created_at');
     expect(rebuiltDecisionIndexes.map((index) => index.name)).toContain('idx_decisions_stop_alert_id');
     expect(rebuiltDecisionIndexes.map((index) => index.name)).toContain('idx_decisions_alert_created_id');
+    expect(rebuiltDecisionIndexes.map((index) => index.name)).toContain('idx_decisions_alert_summary');
     expect(
       (db.db.prepare("PRAGMA index_info('idx_decisions_alert_created_id')").all() as Array<{ name: string }>).map((column) => column.name),
     ).toEqual(['alert_id', 'created_at', 'id', 'stop_at']);
@@ -670,6 +671,27 @@ describe('CrowdsecDatabase', () => {
       'USING INDEX idx_decisions_alert_created_id (alert_id=?)',
     );
     expect(alertDecisionPagingPlan.map((step) => step.detail).join('\n')).not.toContain('USE TEMP B-TREE');
+    expect(
+      (db.db.prepare("PRAGMA index_info('idx_decisions_alert_summary')").all() as Array<{ name: string }>).map((column) => column.name),
+    ).toEqual(['alert_id', 'origin', 'simulated', 'stop_at']);
+    const alertDecisionSummaryPlan = db.db.prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT alert_id, origin, simulated,
+        SUM(CASE WHEN stop_at > ? THEN 1 ELSE 0 END) AS active_count,
+        SUM(CASE WHEN stop_at <= ? THEN 1 ELSE 0 END) AS expired_count
+      FROM decisions INDEXED BY idx_decisions_alert_summary
+      WHERE alert_id IN (?, ?)
+      GROUP BY alert_id, origin, simulated
+    `).all(
+      '2026-01-01T00:00:00.000Z',
+      '2026-01-01T00:00:00.000Z',
+      1,
+      2,
+    ) as Array<{ detail: string }>;
+    expect(alertDecisionSummaryPlan.map((step) => step.detail).join('\n')).toContain(
+      'USING COVERING INDEX idx_decisions_alert_summary (alert_id=?)',
+    );
+    expect(alertDecisionSummaryPlan.map((step) => step.detail).join('\n')).not.toContain('USE TEMP B-TREE');
     expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts WHERE alerts_fts MATCH ?').get('deferred') as { count: number }).count).toBe(1);
 
     db.close();
@@ -693,7 +715,7 @@ describe('CrowdsecDatabase', () => {
     const alertIndexes = db.db.prepare("PRAGMA index_list('alerts')").all() as Array<{ name: string }>;
     const decisionIndexes = db.db.prepare("PRAGMA index_list('decisions')").all() as Array<{ name: string }>;
     expect(alertIndexes.map((index) => index.name)).toContain('idx_alerts_created_at');
-    expect(decisionIndexes.map((index) => index.name)).toContain('idx_decisions_alert_id');
+    expect(decisionIndexes.map((index) => index.name)).toContain('idx_decisions_alert_summary');
     expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts').get() as { count: number }).count).toBe(0);
 
     insertAlert(2, 'new searchable alert');
@@ -746,6 +768,13 @@ describe('CrowdsecDatabase', () => {
 
     expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts').get() as { count: number }).count).toBe(4);
     expect((db.db.prepare('SELECT COUNT(*) AS count FROM decisions_fts').get() as { count: number }).count).toBe(3);
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM decision_fts_rows').get() as { count: number }).count).toBe(3);
+    expect((db.db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM decision_fts_rows AS search_rows
+      JOIN decisions_fts ON decisions_fts.rowid = search_rows.fts_rowid
+      WHERE decisions_fts.decision_id = search_rows.decision_id
+    `).get() as { count: number }).count).toBe(3);
     expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts WHERE alerts_fts MATCH ?').get('old') as { count: number }).count).toBe(0);
     expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts WHERE alerts_fts MATCH ?').get('new') as { count: number }).count).toBe(2);
     expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts WHERE alerts_fts MATCH ?').get('preserved') as { count: number }).count).toBe(1);
@@ -754,6 +783,33 @@ describe('CrowdsecDatabase', () => {
     expect((db.db.prepare('SELECT COUNT(*) AS count FROM decisions_fts WHERE decisions_fts MATCH ?').get('preserved') as { count: number }).count).toBe(1);
     expect((db.db.prepare('SELECT COUNT(*) AS count FROM decisions_fts WHERE decisions_fts MATCH ?').get('removed') as { count: number }).count).toBe(0);
 
+    db.close();
+  });
+
+  test('adds rowid mappings for an existing decision search index', () => {
+    const dbPath = createTestDatabasePath();
+    let db = new CrowdsecDatabase({ dbPath });
+    db.insertDecision({
+      $id: 'legacy-search-row',
+      $uuid: 'legacy-search-row',
+      $alert_id: 1,
+      $created_at: '2026-01-01T00:00:00.000Z',
+      $stop_at: '2027-01-01T00:00:00.000Z',
+      $value: '198.51.100.1',
+      $type: 'ban',
+      $origin: 'lists',
+      $scenario: 'crowdsecurity/ssh-bf',
+      $raw_data: JSON.stringify({ id: 'legacy-search-row' }),
+    });
+    db.db.exec('DROP TABLE decision_fts_rows');
+    db.close();
+
+    db = new CrowdsecDatabase({ dbPath });
+    expect(db.db.prepare(`
+      SELECT search_rows.decision_id
+      FROM decision_fts_rows AS search_rows
+      JOIN decisions_fts ON decisions_fts.rowid = search_rows.fts_rowid
+    `).all()).toEqual([{ decision_id: 'legacy-search-row' }]);
     db.close();
   });
 
