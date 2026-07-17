@@ -28,6 +28,12 @@ describe('presentational components', () => {
     expect(screen.getByText(/2025/)).toBeInTheDocument();
   });
 
+  test('preserves invalid timestamps for troubleshooting', () => {
+    render(<TimeDisplay timestamp="not-a-timestamp" className="raw-time" />);
+
+    expect(screen.getByText('not-a-timestamp')).toHaveClass('raw-time');
+  });
+
   test('only shows the sync overlay while syncing', () => {
     const { rerender } = render(
       <SyncOverlay
@@ -146,5 +152,50 @@ describe('presentational components', () => {
 
     expect(screen.getByText('22 Alarme und 18278 Entscheidungen aus 12h0m0s -> 0h0m0s ago werden verarbeitet...')).toBeInTheDocument();
     expect(screen.getByText('90%')).toBeInTheDocument();
+  });
+
+  test.each([
+    ['Finalizing decision data...', 'components.syncOverlay.statusFinalizingDecisions'],
+    [
+      'Removed 12 stale cached alerts and 34 stale cached decisions before sync.',
+      'components.syncOverlay.statusRemovedStale:12:34',
+    ],
+    [
+      'Syncing: 24h0m0s -> 12h0m0s ago (56 alerts, 78 decisions)',
+      'components.syncOverlay.statusSyncingWindow:24h0m0s -> 12h0m0s ago:56:78',
+    ],
+    [
+      'Fetching: 12h0m0s -> 0h0m0s ago (90 alerts and 123 decisions cached so far)',
+      'components.syncOverlay.statusFetchingWindow:12h0m0s -> 0h0m0s ago:90:123',
+    ],
+  ])('translates the sync stage %s', (message, expected) => {
+    const i18nValue: I18nContextValue = {
+      language: 'en',
+      preference: 'en',
+      browserLanguage: 'en',
+      setLanguagePreference: () => undefined,
+      t: (key, values) => [
+        key,
+        values?.window,
+        values?.alerts,
+        values?.decisions,
+      ].filter((value) => value !== undefined).join(':'),
+    };
+
+    render(
+      <I18nContext.Provider value={i18nValue}>
+        <SyncOverlay
+          syncStatus={{
+            isSyncing: true,
+            progress: 50,
+            message,
+            startedAt: null,
+            completedAt: null,
+          }}
+        />
+      </I18nContext.Provider>,
+    );
+
+    expect(screen.getByText(expected)).toBeInTheDocument();
   });
 });

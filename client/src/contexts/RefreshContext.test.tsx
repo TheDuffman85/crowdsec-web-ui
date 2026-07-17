@@ -76,13 +76,14 @@ beforeEach(() => {
 });
 
 function Consumer() {
-  const { intervalMs, lastUpdated, refreshSignal, syncStatus, setIntervalMs } = useRefresh();
+  const { intervalMs, lastUpdated, nextRefreshAt, refreshSignal, syncStatus, setIntervalMs } = useRefresh();
 
   return (
     <div>
       <span data-testid="interval">{intervalMs}</span>
       <span data-testid="refresh">{refreshSignal}</span>
       <span data-testid="last-updated">{lastUpdated?.toISOString() || 'never'}</span>
+      <span data-testid="next-refresh">{nextRefreshAt?.toISOString() || 'never'}</span>
       <span data-testid="sync">{syncStatus?.message}</span>
       <button type="button" onClick={() => void setIntervalMs(30000).catch(() => undefined)}>
         update
@@ -101,15 +102,41 @@ function IntervalConsumer({ value }: { value: number }) {
   );
 }
 
-function ManualRefreshConsumer() {
+function ManualRefreshConsumer({ onError }: { onError?: (error: unknown) => void }) {
   const { refreshNow, syncStatus } = useRefresh();
+  const reportError = onError ?? (() => undefined);
 
   return (
     <div>
       <span data-testid="manual-sync">{syncStatus?.message}</span>
-      <button type="button" onClick={() => void refreshNow?.('full')}>full-refresh</button>
+      <button type="button" onClick={() => void refreshNow?.('full').catch(reportError)}>full-refresh</button>
+      <button type="button" onClick={() => void refreshNow?.('delta').catch(reportError)}>delta-refresh</button>
     </div>
   );
+}
+
+function makeConfig(
+  overrides: Partial<NonNullable<Awaited<ReturnType<typeof fetchConfig>>>> = {},
+): Awaited<ReturnType<typeof fetchConfig>> {
+  return {
+    lookback_period: '1h',
+    lookback_hours: 1,
+    lookback_days: 1,
+    refresh_interval: 5000,
+    current_interval_name: '5s',
+    lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
+    sync_status: {
+      isSyncing: false,
+      progress: 100,
+      message: 'done',
+      startedAt: null,
+      completedAt: null,
+    },
+    simulations_enabled: true,
+    machine_features_enabled: false,
+    origin_features_enabled: false,
+    ...overrides,
+  };
 }
 
 describe('RefreshContext', () => {
@@ -153,6 +180,50 @@ describe('RefreshContext', () => {
     );
 
     await waitFor(() => expect(screen.getByTestId('last-updated')).toHaveTextContent('2026-07-17T07:59:00.000Z'));
+  });
+
+  test('normalizes invalid, null, and valid backend refresh timestamps', async () => {
+    vi.mocked(fetchConfig)
+      .mockResolvedValueOnce(makeConfig({
+        refresh_interval: 0,
+        cache_last_update: 'invalid-cache-date',
+        next_refresh_at: 'invalid-next-date',
+      }))
+      .mockResolvedValueOnce(makeConfig({
+        refresh_interval: 0,
+        cache_last_update: '2026-07-17T07:59:00.000Z',
+        next_refresh_at: null,
+      }))
+      .mockResolvedValueOnce(makeConfig({
+        refresh_interval: 0,
+        next_refresh_at: '2026-07-17T08:05:00.000Z',
+      }));
+
+    const invalidDates = render(
+      <RefreshProvider>
+        <Consumer />
+      </RefreshProvider>,
+    );
+    await waitFor(() => expect(fetchConfig).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId('last-updated')).toHaveTextContent('never');
+    expect(screen.getByTestId('next-refresh')).toHaveTextContent('never');
+    invalidDates.unmount();
+
+    const nullNextRefresh = render(
+      <RefreshProvider>
+        <Consumer />
+      </RefreshProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId('last-updated')).toHaveTextContent('2026-07-17T07:59:00.000Z'));
+    expect(screen.getByTestId('next-refresh')).toHaveTextContent('never');
+    nullNextRefresh.unmount();
+
+    render(
+      <RefreshProvider>
+        <Consumer />
+      </RefreshProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId('next-refresh')).toHaveTextContent('2026-07-17T08:05:00.000Z'));
   });
 
   test('refreshes immediately when the backend publishes a completed cache update', async () => {
@@ -230,6 +301,118 @@ describe('RefreshContext', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'update' }));
     await waitFor(() => expect(screen.getByTestId('interval')).toHaveTextContent('30000'));
+  });
+
+  test('normalizes scheduler timestamps returned by interval updates', async () => {
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(Response.json({ new_interval_ms: 30000, next_refresh_at: null }))
+      .mockResolvedValueOnce(Response.json({ new_interval_ms: 30000, next_refresh_at: 'invalid-date' }))
+      .mockResolvedValueOnce(Response.json({
+        new_interval_ms: 30000,
+        next_refresh_at: '2026-07-17T08:10:00.000Z',
+      }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    render(
+      <RefreshProvider>
+        <Consumer />
+      </RefreshProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId('sync')).toHaveTextContent('done'));
+
+    await userEvent.click(screen.getByRole('button', { name: 'update' }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId('next-refresh')).toHaveTextContent('never');
+
+    await userEvent.click(screen.getByRole('button', { name: 'update' }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId('next-refresh')).toHaveTextContent('never');
+
+    await userEvent.click(screen.getByRole('button', { name: 'update' }));
+    await waitFor(() => expect(screen.getByTestId('next-refresh')).toHaveTextContent('2026-07-17T08:10:00.000Z'));
+  });
+
+  test('surfaces delta refresh errors and falls back when the response is not JSON', async () => {
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(Response.json({ error: 'Backend refresh failed' }, { status: 500 }))
+      .mockResolvedValueOnce(new Response('not-json', { status: 500 }));
+    const errorSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+
+    render(
+      <RefreshProvider>
+        <ManualRefreshConsumer onError={errorSpy} />
+      </RefreshProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId('manual-sync')).toHaveTextContent('done'));
+
+    await userEvent.click(screen.getByRole('button', { name: 'delta-refresh' }));
+    await waitFor(() => expect(errorSpy).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'Backend refresh failed',
+    })));
+
+    await userEvent.click(screen.getByRole('button', { name: 'delta-refresh' }));
+    await waitFor(() => expect(errorSpy).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'Refresh failed',
+    })));
+  });
+
+  test('ignores unsupported push messages and handles socket errors', async () => {
+    const view = render(
+      <RefreshProvider>
+        <Consumer />
+      </RefreshProvider>,
+    );
+
+    await waitFor(() => expect(MockWebSocket.instances[0]?.readyState).toBe(MockWebSocket.OPEN));
+    const socket = MockWebSocket.instances[0];
+
+    act(() => {
+      socket.emit({ type: 'extension-message' });
+      socket.emit({ type: 'ready' });
+      socket.emit({ type: 'ready', updated_at: 'invalid-date' });
+      socket.emit({ type: 'ready', updated_at: '2026-07-17T08:15:00.000Z' });
+      socket.onmessage?.({ data: 'not-json' });
+    });
+
+    expect(screen.getByTestId('refresh')).toHaveTextContent('1');
+    expect(screen.getByTestId('last-updated')).toHaveTextContent('2026-07-17T08:15:00.000Z');
+
+    act(() => socket.onerror?.());
+    expect(socket.readyState).toBe(MockWebSocket.CLOSED);
+    act(() => socket.onerror?.());
+    view.unmount();
+  });
+
+  test('works without WebSocket support', async () => {
+    vi.stubGlobal('WebSocket', undefined);
+
+    render(
+      <RefreshProvider>
+        <Consumer />
+      </RefreshProvider>,
+    );
+
+    await waitFor(() => expect(fetchConfig).toHaveBeenCalled());
+    expect(MockWebSocket.instances).toHaveLength(0);
+  });
+
+  test('closes an idle push connection', async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetchConfig).mockResolvedValueOnce(makeConfig({ refresh_interval: 0 }));
+
+    const view = render(
+      <RefreshProvider>
+        <Consumer />
+      </RefreshProvider>,
+    );
+
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    expect(MockWebSocket.instances[0]?.readyState).toBe(MockWebSocket.OPEN);
+    await act(async () => vi.advanceTimersByTimeAsync(70_000));
+    expect(MockWebSocket.instances[0]?.readyState).toBe(MockWebSocket.CLOSED);
+    view.unmount();
+    vi.useRealTimers();
   });
 
   test('polls while syncing and logs update failures without crashing', async () => {
