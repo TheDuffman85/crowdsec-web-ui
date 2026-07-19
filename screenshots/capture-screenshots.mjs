@@ -325,13 +325,16 @@ async function main() {
     try {
       await prepareSession(cdp);
 
-      await navigate(cdp, "/");
+      await navigate(cdp, "/?instance=primary");
       await clickByText(cdp, "Hour");
       await screenshot(cdp, "dashboard.png");
 
       await screenshot(cdp, "update_available.png");
 
-      await navigate(cdp, "/alerts");
+      await navigate(cdp, "/alerts?instance=all");
+      await screenshot(cdp, "multi_instance.png");
+
+      await navigate(cdp, "/alerts?instance=primary");
       await screenshot(cdp, "alerts.png");
 
       await clickFirst(cdp, "tbody tr");
@@ -341,13 +344,13 @@ async function main() {
       await clickFirst(cdp, "button[aria-label='Search syntax help']");
       await screenshot(cdp, "search_syntax.png");
 
-      await navigate(cdp, "/decisions");
+      await navigate(cdp, "/decisions?instance=primary");
       await screenshot(cdp, "decisions.png");
 
       await clickByText(cdp, "Add Decision");
       await screenshot(cdp, "add_decision.png");
 
-      await navigate(cdp, "/metrics");
+      await navigate(cdp, "/metrics?instance=primary");
       await screenshot(cdp, "metrics.png");
 
       await navigate(cdp, "/notifications");

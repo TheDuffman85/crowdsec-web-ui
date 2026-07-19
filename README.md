@@ -31,6 +31,7 @@ A self-hosted web dashboard for [CrowdSec](https://crowdsec.net/) to review aler
 - **Decisions**: active/expired ban management, duplicate hiding, simulation filters, and the same unified search used on Alerts.
 - **Manual actions**: add bans directly from the UI with custom duration and reason.
 - **Runtime metrics**: optional Prometheus-backed views for bouncer and machine API activity, AppSec, parser flow, LAPI latency, parsing-time, and whitelist activity.
+- **Multiple CrowdSec instances**: connect several CrowdSec LAPIs and switch between individual instances or a Combined scope.
 - **Performance and scale**: backend caching and optimized sync reduce resource pressure and support larger deployments with multiple machines or high alert/decision volumes.
 - **Notifications**: rules for alert spikes, thresholds, new alerts/decisions, IP bans, recent CVEs, LAPI availability, and application updates; delivery to Email, Gotify, MQTT, ntfy, and Webhooks.
 - **Unified search**: free text plus quoted phrases, `field:value`, `AND`, `OR`, `NOT`, unary `-`, parentheses, and page-specific help from the `Info` button.
@@ -43,22 +44,25 @@ A self-hosted web dashboard for [CrowdSec](https://crowdsec.net/) to review aler
 
 <p>
   <a href="screenshots/dashboard.png"><img src="screenshots/dashboard.png" alt="Dashboard" width="48%"></a>
+  <a href="screenshots/multi_instance.png"><img src="screenshots/multi_instance.png" alt="Combined multi-instance alerts" width="48%"></a>
+</p>
+<p>
   <a href="screenshots/alerts.png"><img src="screenshots/alerts.png" alt="Alerts" width="48%"></a>
-</p>
-<p>
   <a href="screenshots/alert_details.png"><img src="screenshots/alert_details.png" alt="Alert Details" width="48%"></a>
+</p>
+<p>
   <a href="screenshots/search_syntax.png"><img src="screenshots/search_syntax.png" alt="Search Syntax" width="48%"></a>
-</p>
-<p>
   <a href="screenshots/decisions.png"><img src="screenshots/decisions.png" alt="Decisions" width="48%"></a>
+</p>
+<p>
   <a href="screenshots/add_decision.png"><img src="screenshots/add_decision.png" alt="Add Decision" width="48%"></a>
-</p>
-<p>
   <a href="screenshots/notifications.png"><img src="screenshots/notifications.png" alt="Notification Center" width="48%"></a>
-  <a href="screenshots/notification_rule.png"><img src="screenshots/notification_rule.png" alt="Notification Rule" width="48%"></a>
 </p>
 <p>
+  <a href="screenshots/notification_rule.png"><img src="screenshots/notification_rule.png" alt="Notification Rule" width="48%"></a>
   <a href="screenshots/metrics.png"><img src="screenshots/metrics.png" alt="Runtime Metrics" width="48%"></a>
+</p>
+<p>
   <a href="screenshots/settings.png"><img src="screenshots/settings.png" alt="Settings" width="48%"></a>
 </p>
 

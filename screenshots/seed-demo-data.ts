@@ -5,12 +5,14 @@ import { CrowdsecDatabase } from '../server/database';
 
 const dbDir = process.env.DB_DIR || path.join(process.env.TMPDIR || '/tmp', 'crowdsec-web-ui-screenshots');
 const dbPath = path.join(dbDir, 'crowdsec.db');
+const configPath = path.join(dbDir, 'screenshot-config.yaml');
 const demoUsername = process.env.CROWDSEC_SCREENSHOT_USERNAME || 'admin';
 const demoPassword = process.env.CROWDSEC_SCREENSHOT_PASSWORD || 'Screenshot123';
 
 rmSync(dbPath, { force: true });
 rmSync(`${dbPath}-shm`, { force: true });
 rmSync(`${dbPath}-wal`, { force: true });
+rmSync(configPath, { force: true });
 
 const database = new CrowdsecDatabase({ dbDir });
 
@@ -27,6 +29,7 @@ const futureIso = (hoursFromNow: number) => new Date(now.getTime() + hoursFromNo
 const pastIso = (hoursAgo: number) => new Date(now.getTime() - hoursAgo * 3_600_000).toISOString();
 
 type DemoAlertOptions = {
+  instanceId?: string;
   id: number;
   minutesAgo: number;
   scenario: string;
@@ -67,6 +70,7 @@ function buildEvents(alert: DemoAlertOptions) {
 }
 
 function insertAlert(options: DemoAlertOptions) {
+  const instanceId = options.instanceId || 'primary';
   const createdAt = iso(options.minutesAgo);
   const decisions = (options.decisions || []).map((decision) => ({
     id: decision.id,
@@ -81,7 +85,8 @@ function insertAlert(options: DemoAlertOptions) {
   }));
   const alert = {
     id: options.id,
-    uuid: `demo-alert-${options.id}`,
+    instance_id: instanceId,
+    uuid: `demo-alert-${instanceId}-${options.id}`,
     created_at: createdAt,
     scenario: options.scenario,
     reason: options.reason,
@@ -107,6 +112,7 @@ function insertAlert(options: DemoAlertOptions) {
 
   database.insertAlert({
     $id: String(options.id),
+    $instance_id: instanceId,
     $uuid: String(alert.uuid),
     $created_at: createdAt,
     $scenario: options.scenario,
@@ -118,7 +124,8 @@ function insertAlert(options: DemoAlertOptions) {
   for (const decision of decisions) {
     database.insertDecision({
       $id: String(decision.id),
-      $uuid: `demo-decision-${decision.id}`,
+      $instance_id: instanceId,
+      $uuid: `demo-decision-${instanceId}-${decision.id}`,
       $alert_id: String(options.id),
       $created_at: createdAt,
       $stop_at: String(decision.stop_at),
@@ -161,6 +168,7 @@ insertAlert({
 });
 
 insertAlert({
+  instanceId: 'branch',
   id: 1041,
   minutesAgo: 0,
   scenario: 'crowdsecurity/http-probing',
@@ -181,6 +189,7 @@ insertAlert({
 });
 
 insertAlert({
+  instanceId: 'edge',
   id: 1040,
   minutesAgo: 0,
   scenario: 'crowdsecurity/appsec-vpatch',
@@ -221,6 +230,7 @@ insertAlert({
 });
 
 insertAlert({
+  instanceId: 'edge',
   id: 1038,
   minutesAgo: 0,
   scenario: 'crowdsecurity/ssh-bf',
@@ -243,6 +253,7 @@ insertAlert({
 
 database.insertDecision({
   $id: '4206',
+  $instance_id: 'branch',
   $uuid: 'demo-decision-4206',
   $alert_id: '1041',
   $created_at: pastIso(12),
@@ -367,6 +378,7 @@ database.insertNotification({
 });
 
 database.setMeta('refresh_interval_ms', '300000');
+database.setMeta('multi_instance_cache_schema_ready', 'true');
 database.close();
 
 console.log(`Seeded screenshot database at ${dbPath}`);

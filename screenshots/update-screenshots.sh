@@ -47,6 +47,12 @@ if [[ -z "${CHROME_PATH:-}" ]]; then
   exit 1
 fi
 
+if command -v pnpm >/dev/null 2>&1; then
+  PNPM=(pnpm)
+else
+  PNPM=(corepack pnpm)
+fi
+
 BACKEND_PID=""
 FRONTEND_PID=""
 
@@ -83,15 +89,15 @@ wait_for_url() {
 cd "$REPO_ROOT"
 
 echo "Seeding screenshot database: $DB_DIR/crowdsec.db"
-pnpm exec tsx "$SCRIPT_DIR/seed-demo-data.ts"
+"${PNPM[@]}" exec tsx "$SCRIPT_DIR/seed-demo-data.ts"
 
 echo "Starting screenshot backend on port $CROWDSEC_SCREENSHOT_BACKEND_PORT"
-pnpm exec tsx "$SCRIPT_DIR/demo-server.ts" &
+"${PNPM[@]}" exec tsx "$SCRIPT_DIR/demo-server.ts" &
 BACKEND_PID="$!"
 wait_for_url "http://127.0.0.1:${CROWDSEC_SCREENSHOT_BACKEND_PORT}/api/health" "backend"
 
 echo "Starting frontend on ${CROWDSEC_SCREENSHOT_FRONTEND_HOST}:${CROWDSEC_SCREENSHOT_FRONTEND_PORT}"
-pnpm exec vite --host "$CROWDSEC_SCREENSHOT_FRONTEND_HOST" --port "$CROWDSEC_SCREENSHOT_FRONTEND_PORT" &
+"${PNPM[@]}" exec vite --host "$CROWDSEC_SCREENSHOT_FRONTEND_HOST" --port "$CROWDSEC_SCREENSHOT_FRONTEND_PORT" &
 FRONTEND_PID="$!"
 wait_for_url "$CROWDSEC_SCREENSHOT_BASE_URL" "frontend"
 

@@ -5,6 +5,7 @@ import { createRuntimeConfig } from '../server/config';
 import { CrowdsecDatabase } from '../server/database';
 
 const dbDir = process.env.DB_DIR || path.join(process.env.TMPDIR || '/tmp', 'crowdsec-web-ui-screenshots');
+const configFile = path.join(dbDir, 'screenshot-config.yaml');
 const port = Number(process.env.CROWDSEC_SCREENSHOT_BACKEND_PORT || process.env.PORT || 3001);
 const database = new CrowdsecDatabase({ dbDir });
 const demoPrometheusMetrics = `
@@ -61,33 +62,69 @@ const config = createRuntimeConfig({
   VITE_VERSION: process.env.VITE_VERSION || '2026.06.05',
   VITE_BRANCH: process.env.VITE_BRANCH || 'main',
   VITE_COMMIT_HASH: process.env.VITE_COMMIT_HASH || 'screenshot',
-});
+}, { defaultConfigFile: configFile });
 
-const fakeLapiClient = {
-  hasAuthConfig: () => true,
-  hasToken: () => true,
-  login: async () => true,
-  updateStatus: () => {},
-  getStatus: () => ({
-    isConnected: true,
-    lastCheck: new Date().toISOString(),
-    lastError: null,
-    offline_since: null,
-  }),
-  heartbeat: async () => {},
-  sendUsageMetrics: async () => {},
-  fetchAlerts: async () => database.getAllAlerts().map((row) => JSON.parse(row.raw_data)),
-  getAlertById: async (alertId: string | number) => {
-    const alert = database
-      .getAllAlerts()
-      .map((row) => JSON.parse(row.raw_data) as { id: string | number })
-      .find((item) => String(item.id) === String(alertId));
-    return alert || null;
+const primaryInstance = config.instances[0];
+config.instances = [
+  {
+    ...primaryInstance,
+    id: 'primary',
+    name: 'Primary',
+    icon: '🏢',
+    lapiUrl: 'http://primary.screenshot-demo.local:8080',
   },
-  addDecision: async () => ({ message: 'Decision added for screenshot demo' }),
-  deleteDecision: async () => ({ message: 'Decision deleted for screenshot demo' }),
-  deleteAlert: async () => ({ message: 'Alert deleted for screenshot demo' }),
+  {
+    ...primaryInstance,
+    id: 'branch',
+    name: 'Branch Office',
+    icon: '🏪',
+    lapiUrl: 'http://branch.screenshot-demo.local:8080',
+    prometheus: [],
+  },
+  {
+    ...primaryInstance,
+    id: 'edge',
+    name: 'Edge',
+    icon: '🛰️',
+    lapiUrl: 'http://edge.screenshot-demo.local:8080',
+    prometheus: [],
+  },
+];
+
+function createFakeLapiClient(instanceId: string) {
+  return {
+    hasAuthConfig: () => true,
+    hasToken: () => true,
+    login: async () => true,
+    updateStatus: () => {},
+    getStatus: () => ({
+      isConnected: true,
+      lastCheck: new Date().toISOString(),
+      lastError: null,
+      offline_since: null,
+    }),
+    heartbeat: async () => {},
+    sendUsageMetrics: async () => {},
+    fetchAlerts: async () => database.getAllAlerts()
+      .map((row) => JSON.parse(row.raw_data) as { instance_id?: string })
+      .filter((alert) => alert.instance_id === instanceId),
+    getAlertById: async (alertId: string | number) => {
+      const alert = database
+        .getAllAlerts()
+        .map((row) => JSON.parse(row.raw_data) as { id: string | number; instance_id?: string })
+        .find((item) => item.instance_id === instanceId && String(item.id) === String(alertId));
+      return alert || null;
+    },
+    addDecision: async () => ({ message: 'Decision added for screenshot demo' }),
+    deleteDecision: async () => ({ message: 'Decision deleted for screenshot demo' }),
+    deleteAlert: async () => ({ message: 'Alert deleted for screenshot demo' }),
+  };
 };
+
+const fakeLapiClients = new Map(config.instances.map((instance) => [
+  instance.id,
+  createFakeLapiClient(instance.id),
+]));
 
 const updateChecker = async () => ({
   update_available: true,
@@ -101,7 +138,12 @@ const updateChecker = async () => ({
 const controller = createApp({
   config,
   database,
-  lapiClient: fakeLapiClient as never,
+  lapiClients: fakeLapiClients as never,
+  initialCacheState: {
+    isInitialized: true,
+    isComplete: true,
+    lastUpdate: new Date().toISOString(),
+  },
   startBackgroundTasks: false,
   updateChecker,
   metricsFetchImpl: async () => new Response(demoPrometheusMetrics, {
