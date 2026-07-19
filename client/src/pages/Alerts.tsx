@@ -31,6 +31,11 @@ type AlertDeleteAction =
     | { kind: "selected"; refs: InstanceEntityRef[] }
     | { kind: "ip"; ip: string };
 
+const ALERT_DETAIL_CARD_CLASS_NAME = "p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50";
+const ALERT_DETAIL_LABEL_CLASS_NAME = "text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2";
+const ALERT_DETAIL_PRIMARY_CLASS_NAME = "text-lg font-medium text-gray-900 dark:text-gray-100";
+const ALERT_DETAIL_SECONDARY_CLASS_NAME = "text-sm text-gray-500 dark:text-gray-400";
+
 function alertKey(alert: Pick<AlertListItem, 'id' | 'instance_id'>): string {
     return `${alert.instance_id || 'default'}\u0000${String(alert.id)}`;
 }
@@ -974,6 +979,9 @@ export function Alerts() {
     const selectedAlertEvents = selectedAlert && hasAlertEvents(selectedAlert) ? selectedAlert.events ?? [] : [];
     const selectedAlertIsSimulated = selectedAlert ? isSimulatedAlert(selectedAlert) : false;
     const selectedAlertSourceValue = getAlertSourceValue(selectedAlert?.source);
+    const alertSummaryGridColumns = multipleInstances
+        ? (isAlertColumnVisible('machine') ? 'md:grid-cols-5' : 'md:grid-cols-4')
+        : (isAlertColumnVisible('machine') ? 'md:grid-cols-4' : 'md:grid-cols-3');
     const deleteActionTitle = pendingDeleteAction?.kind === "single"
         ? t('pages.alerts.deleteAlertTitle')
         : pendingDeleteAction?.kind === "selected"
@@ -1382,37 +1390,48 @@ export function Alerts() {
                         </p>
 
                         {/* Summary Cards */}
-                        <div className={`grid grid-cols-1 ${isAlertColumnVisible('machine') ? 'md:grid-cols-4' : 'md:grid-cols-3'} gap-4`}>
+                        <div className={`grid grid-cols-1 ${alertSummaryGridColumns} gap-4`}>
+                            {multipleInstances && (
+                                <div className={ALERT_DETAIL_CARD_CLASS_NAME}>
+                                    <h4 className={ALERT_DETAIL_LABEL_CLASS_NAME}>
+                                        {t('tableColumns.instance', { defaultValue: 'Instance' })}
+                                    </h4>
+                                    <div className={`${ALERT_DETAIL_PRIMARY_CLASS_NAME} break-words`}>
+                                        {selectedAlert.instance_name || selectedAlert.instance_id || '-'}
+                                    </div>
+                                </div>
+                            )}
                             {isAlertColumnVisible('machine') && (
-                                <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
-                                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{t('tableColumns.machine')}</h4>
-                                    <div className="text-lg text-gray-900 dark:text-gray-100 font-medium">
+                                <div className={ALERT_DETAIL_CARD_CLASS_NAME}>
+                                    <h4 className={ALERT_DETAIL_LABEL_CLASS_NAME}>{t('tableColumns.machine')}</h4>
+                                    <div className={ALERT_DETAIL_PRIMARY_CLASS_NAME}>
                                         {resolveMachineName(selectedAlert) || "-"}
                                     </div>
                                 </div>
                             )}
-                            <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
-                                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{t('tableColumns.scenario')}</h4>
-                                <div className="font-medium text-gray-900 dark:text-gray-100 break-words">
+                            <div className={ALERT_DETAIL_CARD_CLASS_NAME}>
+                                <h4 className={ALERT_DETAIL_LABEL_CLASS_NAME}>{t('tableColumns.scenario')}</h4>
+                                <div className="break-words">
                                     <ScenarioName
                                         name={selectedAlert.scenario}
                                         reason={selectedAlert.reason}
                                         showLink={true}
                                         showReason={true}
                                         simulated={simulationsEnabled && selectedAlertIsSimulated}
+                                        size="lg"
                                     />
                                 </div>
                             </div>
-                            <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
-                                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{t('pages.alerts.location')}</h4>
-                                <div className="text-lg text-gray-900 dark:text-gray-100 font-medium flex items-center gap-2">
+                            <div className={ALERT_DETAIL_CARD_CLASS_NAME}>
+                                <h4 className={ALERT_DETAIL_LABEL_CLASS_NAME}>{t('pages.alerts.location')}</h4>
+                                <div className={`${ALERT_DETAIL_PRIMARY_CLASS_NAME} flex items-center gap-2`}>
                                     {selectedAlert.source?.cn && (
                                         <CountryFlag code={selectedAlert.source.cn} />
                                     )}
                                     {getCountryName(selectedAlert.source?.cn, language) || "-"}
                                 </div>
                                 {selectedAlert.source?.latitude && selectedAlert.source?.longitude && (
-                                    <div className="text-xs text-gray-400 font-mono mt-1">
+                                    <div className={`${ALERT_DETAIL_SECONDARY_CLASS_NAME} font-mono mt-1`}>
                                         <a
                                             href={`https://www.google.com/maps?q=${encodeURIComponent(String(selectedAlert.source.latitude))},${encodeURIComponent(String(selectedAlert.source.longitude))}`}
                                             target="_blank"
@@ -1426,30 +1445,30 @@ export function Alerts() {
                                     </div>
                                 )}
                             </div>
-                            <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50">
-                                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{t('tableColumns.source')}</h4>
+                            <div className={ALERT_DETAIL_CARD_CLASS_NAME}>
+                                <h4 className={ALERT_DETAIL_LABEL_CLASS_NAME}>{t('tableColumns.source')}</h4>
                                 <div className="flex items-center gap-2">
                                     {selectedAlertSourceValue ? (
                                         <a
                                             href={`https://app.crowdsec.net/cti/${encodeURIComponent(String(selectedAlertSourceValue))}`}
                                             target="_blank"
                                             rel="noopener noreferrer"
-                                            className="font-mono text-lg font-bold text-gray-900 dark:text-white hover:text-primary-600 dark:hover:text-primary-400 transition-colors inline-flex items-center gap-1"
+                                            className={`${ALERT_DETAIL_PRIMARY_CLASS_NAME} font-mono hover:text-primary-600 dark:hover:text-primary-400 transition-colors inline-flex items-center gap-1`}
                                             title={t('pages.alerts.viewOnCti')}
                                         >
                                             {selectedAlertSourceValue}
                                             <ExternalLink size={14} />
                                         </a>
                                     ) : (
-                                        <span className="font-mono text-lg font-bold text-gray-900 dark:text-white">-</span>
+                                        <span className={`${ALERT_DETAIL_PRIMARY_CLASS_NAME} font-mono`}>-</span>
                                     )}
                                 </div>
                                 {selectedAlert.source?.range && selectedAlert.source.range !== selectedAlertSourceValue && (
-                                    <div className="text-xs text-gray-400 font-mono mt-1">
+                                    <div className={`${ALERT_DETAIL_SECONDARY_CLASS_NAME} font-mono mt-1`}>
                                         {t('pages.alerts.range', { range: selectedAlert.source.range })}
                                     </div>
                                 )}
-                                <div className="text-sm text-gray-500 mt-1">
+                                <div className={`${ALERT_DETAIL_SECONDARY_CLASS_NAME} mt-1`}>
                                     {selectedAlert.source?.as_number && (
                                         <a
                                             href={`https://bgp.he.net/AS${encodeURIComponent(selectedAlert.source.as_number)}`}

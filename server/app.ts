@@ -4825,7 +4825,7 @@ ${errorSummary}  Status: ${syncSummary.state}
     return compileSearchNodeSql(ast, {
       page: 'alerts',
       dateOptions: filters,
-      fieldCondition: (field, value) => alertFieldCondition(field, value),
+      fieldCondition: (field, value) => alertFieldCondition(field, value, config.instances),
       freeTextCondition: (value) => freeTextSearchCondition('alerts', value, database.searchIndexAvailable),
     });
   }
@@ -4838,7 +4838,7 @@ ${errorSummary}  Status: ${syncSummary.state}
     return compileSearchNodeSql(ast, {
       page: 'decisions',
       dateOptions: filters,
-      fieldCondition: (field, value) => decisionFieldCondition(field, value, now),
+      fieldCondition: (field, value) => decisionFieldCondition(field, value, now, config.instances),
       // The default decision view contains only one row per duplicate group.
       // Scanning that small indexed set is substantially cheaper than asking
       // FTS to materialize every matching duplicate ID from large blocklists.
@@ -5672,7 +5672,11 @@ function freeTextSearchCondition(page: SearchPageForSql, value: string, searchIn
   };
 }
 
-function alertFieldCondition(field: string, value: string): SqlCondition {
+function alertFieldCondition(
+  field: string,
+  value: string,
+  instances: ReadonlyArray<{ id: string; name: string }>,
+): SqlCondition {
   if (value.trim() === '') {
     return alertEmptyFieldCondition(field);
   }
@@ -5681,7 +5685,7 @@ function alertFieldCondition(field: string, value: string): SqlCondition {
     case 'id':
       return { sql: 'CAST(upstream_id AS TEXT) = ?', params: [value] };
     case 'instance':
-      return textCondition('LOWER(instance_id)', value);
+      return instanceFieldCondition(value, instances);
     case 'scenario':
       return textCondition('LOWER(scenario)', value);
     case 'message':
@@ -5711,7 +5715,12 @@ function alertFieldCondition(field: string, value: string): SqlCondition {
   }
 }
 
-function decisionFieldCondition(field: string, value: string, now: string): SqlCondition {
+function decisionFieldCondition(
+  field: string,
+  value: string,
+  now: string,
+  instances: ReadonlyArray<{ id: string; name: string }>,
+): SqlCondition {
   if (value.trim() === '') {
     return decisionEmptyFieldCondition(field);
   }
@@ -5720,7 +5729,7 @@ function decisionFieldCondition(field: string, value: string, now: string): SqlC
     case 'id':
       return { sql: 'CAST(upstream_id AS TEXT) = ?', params: [value] };
     case 'instance':
-      return textCondition('LOWER(instance_id)', value);
+      return instanceFieldCondition(value, instances);
     case 'alert':
       return { sql: 'alert_upstream_id = ?', params: [value] };
     case 'scenario':
@@ -5755,6 +5764,24 @@ function decisionFieldCondition(field: string, value: string, now: string): SqlC
     default:
       return { sql: '0 = 1', params: [] };
   }
+}
+
+function instanceFieldCondition(
+  value: string,
+  instances: ReadonlyArray<{ id: string; name: string }>,
+): SqlCondition {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return { sql: '0 = 1', params: [] };
+
+  const matchingIds = instances
+    .filter((instance) => `${instance.id} ${instance.name}`.trim().toLowerCase().includes(normalized))
+    .map((instance) => instance.id);
+  if (matchingIds.length === 0) return { sql: '0 = 1', params: [] };
+
+  return {
+    sql: `instance_id IN (${matchingIds.map(() => '?').join(',')})`,
+    params: matchingIds,
+  };
 }
 
 function alertEmptyFieldCondition(field: string): SqlCondition {

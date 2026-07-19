@@ -36,6 +36,7 @@ function fakeClient(name: string, options: { failAdd?: boolean } = {}) {
 function createMultiController(options: {
   secondaryAddFails?: boolean;
   secondarySyncNeverCompletes?: boolean;
+  secondaryName?: string;
   startBackgroundTasks?: boolean;
 } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-multi-test-'));
@@ -51,7 +52,7 @@ function createMultiController(options: {
   const base = config.instances[0];
   config.instances = [
     { ...base, id: 'primary', name: 'Primary', lapiUrl: 'http://primary:8080' },
-    { ...base, id: 'secondary', name: 'Secondary', lapiUrl: 'http://secondary:8080' },
+    { ...base, id: 'secondary', name: options.secondaryName || 'Secondary', lapiUrl: 'http://secondary:8080' },
   ];
   const database = new CrowdsecDatabase({ dbDir: dir });
   const primary = fakeClient('primary');
@@ -499,6 +500,55 @@ describe('multi-instance API', () => {
       const secondaryAlerts = await controller.fetch(new Request('http://localhost/api/alerts?page=1&page_size=50&include_decisions=false&instance=secondary'));
       expect((await secondaryAlerts.json() as any).data).toEqual([
         expect.objectContaining({ instance_id: 'secondary', instance_name: 'Secondary' }),
+      ]);
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+    }
+  });
+
+  test('filters alerts and decisions by configured instance name', async () => {
+    const { controller, database } = createMultiController({ secondaryName: 'Branch Office' });
+    const createdAt = new Date().toISOString();
+    const stopAt = new Date(Date.now() + 3_600_000).toISOString();
+    try {
+      for (const instanceId of ['primary', 'secondary']) {
+        database.insertAlert({
+          $id: 7,
+          $instance_id: instanceId,
+          $uuid: `${instanceId}-alert-uuid`,
+          $created_at: createdAt,
+          $message: `${instanceId} alert`,
+          $record: { id: 7, uuid: `${instanceId}-alert-uuid`, created_at: createdAt, message: `${instanceId} alert`, decisions: [] },
+        });
+        database.insertDecision({
+          $id: '9',
+          $instance_id: instanceId,
+          $uuid: `${instanceId}-decision-uuid`,
+          $alert_id: 7,
+          $created_at: createdAt,
+          $stop_at: stopAt,
+          $value: '1.2.3.4',
+          $record: { id: 9, uuid: `${instanceId}-decision-uuid`, alert_id: 7, created_at: createdAt, stop_at: stopAt, value: '1.2.3.4', type: 'ban' },
+        });
+      }
+
+      const query = new URLSearchParams({
+        page: '1',
+        page_size: '50',
+        instance: 'all',
+        q: 'instance:"Branch Office"',
+      });
+      const alerts = await controller.fetch(new Request(`http://localhost/api/alerts?${query}`));
+      const decisions = await controller.fetch(new Request(`http://localhost/api/decisions?${query}`));
+
+      expect(alerts.status).toBe(200);
+      expect((await alerts.json() as any).data).toEqual([
+        expect.objectContaining({ instance_id: 'secondary', instance_name: 'Branch Office' }),
+      ]);
+      expect(decisions.status).toBe(200);
+      expect((await decisions.json() as any).data).toEqual([
+        expect.objectContaining({ instance_id: 'secondary', instance_name: 'Branch Office' }),
       ]);
     } finally {
       controller.stopBackgroundTasks();

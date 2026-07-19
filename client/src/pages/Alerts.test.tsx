@@ -560,6 +560,73 @@ describe('Alerts page', () => {
     expect(screen.getAllByText('Machine').length).toBeGreaterThan(1);
   });
 
+  test('shows the instance in alert details only when multiple instances are configured', async () => {
+    const config = createDefaultConfigResponse();
+    vi.mocked(api.fetchConfig).mockResolvedValue({
+      ...config,
+      instances: [
+        { id: 'primary', name: 'Primary', lapi_status: config.lapi_status, sync_status: config.sync_status, prometheus: [] },
+        { id: 'branch', name: 'Branch Office', lapi_status: config.lapi_status, sync_status: config.sync_status, prometheus: [] },
+      ],
+    });
+    vi.mocked(api.fetchAlert).mockResolvedValueOnce({
+      id: 1,
+      instance_id: 'branch',
+      instance_name: 'Branch Office',
+      created_at: '2026-03-23T10:00:00.000Z',
+      scenario: 'crowdsecurity/ssh-bf',
+      source: { ip: '1.2.3.4', value: '1.2.3.4', cn: 'DE', as_name: 'Hetzner' },
+      target: 'ssh',
+      simulated: false,
+      decisions: [],
+      events: [],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/alerts?id=1']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    const dialog = await screen.findByRole('dialog', { name: 'Alert Details #1' });
+    expect(within(dialog).getByText('Instance')).toHaveClass('text-xs', 'text-gray-500', 'dark:text-gray-400');
+    expect(within(dialog).getByText('Branch Office')).toHaveClass('text-lg', 'font-medium', 'text-gray-900', 'dark:text-gray-100');
+    expect(within(dialog).getByText('ssh-bf')).toHaveClass('text-lg', 'font-medium', 'text-gray-900', 'dark:text-gray-100');
+    expect(within(dialog).getByRole('link', { name: '1.2.3.4' })).toHaveClass('text-lg', 'font-medium', 'text-gray-900', 'dark:text-gray-100');
+  });
+
+  test('omits the instance from alert details for a single configured instance', async () => {
+    const config = createDefaultConfigResponse();
+    vi.mocked(api.fetchConfig).mockResolvedValue({
+      ...config,
+      instances: [
+        { id: 'primary', name: 'Primary', lapi_status: config.lapi_status, sync_status: config.sync_status, prometheus: [] },
+      ],
+    });
+    vi.mocked(api.fetchAlert).mockResolvedValueOnce({
+      id: 1,
+      instance_id: 'primary',
+      instance_name: 'Primary',
+      created_at: '2026-03-23T10:00:00.000Z',
+      scenario: 'crowdsecurity/ssh-bf',
+      source: { ip: '1.2.3.4', value: '1.2.3.4', cn: 'DE', as_name: 'Hetzner' },
+      target: 'ssh',
+      simulated: false,
+      decisions: [],
+      events: [],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/alerts?id=1']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    const dialog = await screen.findByRole('dialog', { name: 'Alert Details #1' });
+    expect(within(dialog).queryByText('Instance')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('Primary')).not.toBeInTheDocument();
+  });
+
   test('shows origin column, renders mixed origins, and filters alerts by origin when enabled', async () => {
     window.localStorage.setItem('crowdsec-web-ui:table-column-preferences', JSON.stringify({
       alerts: ['time', 'scenario', 'country', 'as', 'source', 'origin', 'decisions'],

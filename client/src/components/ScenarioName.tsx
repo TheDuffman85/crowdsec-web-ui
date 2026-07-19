@@ -10,6 +10,7 @@ interface ScenarioNameProps {
     showReason?: boolean;
     className?: string;
     simulated?: boolean;
+    size?: "sm" | "lg";
 }
 
 export function ScenarioName({
@@ -19,6 +20,7 @@ export function ScenarioName({
     showReason = false,
     className = "",
     simulated = false,
+    size = "sm",
 }: ScenarioNameProps) {
     const { t } = useI18n();
 
@@ -38,9 +40,15 @@ export function ScenarioName({
 
     return (
         <div className={`flex flex-col items-start leading-tight min-w-0 ${className}`}>
-            {namespace && <span className="text-xs text-gray-500 font-normal leading-none">{namespace}</span>}
+            {namespace && (
+                <span className={`${size === "lg" ? "text-sm" : "text-xs"} text-gray-500 dark:text-gray-400 font-normal leading-none`}>
+                    {namespace}
+                </span>
+            )}
             <div className="flex items-center gap-1 min-w-0 w-full">
-                <span className="font-medium truncate text-gray-900 dark:text-gray-200 text-sm leading-tight min-w-0">{shortName}</span>
+                <span className={`font-medium truncate text-gray-900 dark:text-gray-100 ${size === "lg" ? "text-lg leading-snug" : "text-sm leading-tight"} min-w-0`}>
+                    {shortName}
+                </span>
                 {simulated && (
                     <Badge variant="warning" className="flex-shrink-0">
                         {t('pages.dashboard.simulation')}
@@ -55,12 +63,12 @@ export function ScenarioName({
                         title={t('components.statCard.viewOnHub')}
                         onClick={(event) => event.stopPropagation()}
                     >
-                        <ExternalLink size={14} />
+                        <ExternalLink size={size === "lg" ? 16 : 14} />
                     </a>
                 )}
             </div>
             {showReason && reason && reason !== name && (
-                <span className="text-xs text-gray-500 dark:text-gray-400 truncate max-w-full mt-0.5" title={reason}>
+                <span className={`${size === "lg" ? "text-sm" : "text-xs"} text-gray-500 dark:text-gray-400 truncate max-w-full mt-0.5`} title={reason}>
                     {reason}
                 </span>
             )}
