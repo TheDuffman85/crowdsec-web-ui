@@ -9,3 +9,7 @@ crowdsec.db-shm
 crowdsec.db-wal
 *.md
 .env*
+config.yaml
+config.dev.yaml
+data/
+secrets/

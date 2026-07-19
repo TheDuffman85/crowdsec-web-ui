@@ -63,6 +63,11 @@ function record(value: unknown, label: string): UnknownRecord {
   return value as UnknownRecord;
 }
 
+function knownKeys(input: UnknownRecord, allowed: readonly string[], label: string): void {
+  const unknown = Object.keys(input).filter((key) => !allowed.includes(key));
+  if (unknown.length > 0) throw new Error(`Configuration error: unknown ${label} setting(s): ${unknown.join(', ')}.`);
+}
+
 function string(value: unknown, label: string): string {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error(`Configuration error: ${label} must be a non-empty string.`);
@@ -121,25 +126,27 @@ function readableFile(value: unknown, label: string): string | undefined {
 }
 
 function secret(
-  input: UnknownRecord,
-  prefix: 'password' | 'token',
+  value: unknown,
   env: NodeJS.ProcessEnv,
   label: string,
 ): string {
-  if (Object.prototype.hasOwnProperty.call(input, prefix)) {
-    throw new Error(`Configuration error: plaintext ${label}.${prefix} is not supported; use ${prefix}Env or ${prefix}File.`);
+  if (typeof value === 'string') {
+    if (value.length === 0) throw new Error(`Configuration error: ${label} must be a non-empty string.`);
+    return value;
   }
-  const envKey = optionalString(input[`${prefix}Env`], `${label}.${prefix}Env`);
-  const file = optionalString(input[`${prefix}File`], `${label}.${prefix}File`);
+  const reference = record(value, label);
+  knownKeys(reference, ['env', 'file'], label);
+  const envKey = optionalString(reference.env, `${label}.env`);
+  const file = optionalString(reference.file, `${label}.file`);
   if ((envKey ? 1 : 0) + (file ? 1 : 0) !== 1) {
-    throw new Error(`Configuration error: ${label} must set exactly one of ${prefix}Env or ${prefix}File.`);
+    throw new Error(`Configuration error: ${label} must set exactly one of env or file.`);
   }
   if (envKey) {
     const value = env[envKey];
-    if (!value) throw new Error(`Configuration error: ${label}.${prefix}Env references missing or empty ${envKey}.`);
+    if (!value) throw new Error(`Configuration error: ${label}.env references missing or empty ${envKey}.`);
     return value;
   }
-  const readable = readableFile(file, `${label}.${prefix}File`)!;
+  const readable = readableFile(file, `${label}.file`)!;
   return fs.readFileSync(readable, 'utf8').replace(/[\r\n]+$/g, '');
 }
 
@@ -163,38 +170,51 @@ function parseTls(value: unknown, label: string): EndpointTlsConfig {
 function parseLapiAuth(value: unknown, env: NodeJS.ProcessEnv, label: string): { auth: CrowdsecAuthConfig; tlsClient: EndpointTlsConfig } {
   const input = record(value, label);
   const type = string(input.type, `${label}.type`);
+  if (type === 'none') {
+    knownKeys(input, ['type'], label);
+    return { auth: { mode: 'none' }, tlsClient: {} };
+  }
   if (type === 'password') {
+    knownKeys(input, ['type', 'username', 'password'], label);
     return {
       auth: {
         mode: 'password',
         user: string(input.username, `${label}.username`),
-        password: secret(input, 'password', env, label),
+        password: secret(input.password, env, `${label}.password`),
       },
       tlsClient: {},
     };
   }
   if (type === 'mtls') {
+    knownKeys(input, ['type', 'certFile', 'keyFile'], label);
     const certPath = readableFile(input.certFile, `${label}.certFile`);
     const keyPath = readableFile(input.keyFile, `${label}.keyFile`);
     if (!certPath || !keyPath) throw new Error(`Configuration error: ${label} requires certFile and keyFile.`);
     return { auth: { mode: 'mtls', certPath, keyPath }, tlsClient: { certFile: certPath, keyFile: keyPath } };
   }
-  throw new Error(`Configuration error: ${label}.type must be password or mtls.`);
+  throw new Error(`Configuration error: ${label}.type must be none, password, or mtls.`);
 }
 
 function parsePrometheusAuth(value: unknown, env: NodeJS.ProcessEnv, label: string): PrometheusAuthConfig {
   if (value === undefined) return { type: 'none' };
   const input = record(value, label);
   const type = string(input.type, `${label}.type`);
-  if (type === 'none') return { type: 'none' };
+  if (type === 'none') {
+    knownKeys(input, ['type'], label);
+    return { type: 'none' };
+  }
   if (type === 'basic') {
+    knownKeys(input, ['type', 'username', 'password'], label);
     return {
       type: 'basic',
       username: string(input.username, `${label}.username`),
-      password: secret(input, 'password', env, label),
+      password: secret(input.password, env, `${label}.password`),
     };
   }
-  if (type === 'bearer') return { type: 'bearer', token: secret(input, 'token', env, label) };
+  if (type === 'bearer') {
+    knownKeys(input, ['type', 'token'], label);
+    return { type: 'bearer', token: secret(input.token, env, `${label}.token`) };
+  }
   throw new Error(`Configuration error: ${label}.type must be none, basic, or bearer.`);
 }
 
@@ -246,14 +266,7 @@ function parseSync(value: unknown, label: string): InstanceSyncOverrides {
   };
 }
 
-export function loadInstancesConfig(file: string, env: NodeJS.ProcessEnv): CrowdsecInstanceConfig[] {
-  let parsed: unknown;
-  try {
-    parsed = parseYaml(fs.readFileSync(file, 'utf8'));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Configuration error: failed to read CROWDSEC_INSTANCES_CONFIG_FILE at "${file}": ${message}`);
-  }
+export function parseInstancesConfig(parsed: unknown, env: NodeJS.ProcessEnv): CrowdsecInstanceConfig[] {
   const root = record(parsed, 'instances config');
   if (!Array.isArray(root.instances) || root.instances.length === 0) {
     throw new Error('Configuration error: instances must contain at least one entry.');
@@ -308,6 +321,17 @@ export function loadInstancesConfig(file: string, env: NodeJS.ProcessEnv): Crowd
       sync: parseSync(input.sync, `${label}.sync`),
     };
   });
+}
+
+export function loadInstancesConfig(file: string, env: NodeJS.ProcessEnv): CrowdsecInstanceConfig[] {
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Configuration error: failed to read CROWDSEC_INSTANCES_CONFIG_FILE at "${file}": ${message}`);
+  }
+  return parseInstancesConfig(parsed, env);
 }
 
 export function hasLegacyConnectionEnvironment(env: NodeJS.ProcessEnv): string[] {

@@ -1,14 +1,14 @@
 # CrowdSec Web UI API
 
-All API routes return JSON unless a route explicitly redirects for OIDC login/callback. Routes are served below `/api`, or below `${BASE_PATH}/api` when `BASE_PATH` is configured. `GET /api/health` is always registered at the root path; when `BASE_PATH` is set, `${BASE_PATH}/api/health` is registered too.
+All API routes return JSON unless a route explicitly redirects for OIDC login/callback. Routes are served below `/api`, or below the configured `server.basePath` when set. `GET /api/health` is always registered at the root path and below the configured base path.
 
 API request bodies are limited to 1 MiB. Browser requests using state-changing methods must be same-origin; non-browser clients that do not send `Origin` or `Sec-Fetch-Site` remain supported. API responses are marked `private, no-store`.
 
-The browser UI authenticates with the HTTP-only `crowdsec_web_ui_session` cookie. There is no bearer-token API in this codebase. Authentication is enabled for new installs by default; migrated databases from older unauthenticated versions stay disabled until `AUTH_ENABLED=true` is set. When auth is enabled, protected API routes return `401` without a valid session.
+The browser UI authenticates with the HTTP-only `crowdsec_web_ui_session` cookie. There is no bearer-token API in this codebase. Authentication is enabled for new installs by default; migrated databases from older unauthenticated versions retain their prior state until `auth.enabled` is explicitly configured. When auth is enabled, protected API routes return `401` without a valid session.
 
 Protected application routes also ensure the backend can authenticate to CrowdSec LAPI. If LAPI login fails, they return `502`.
 
-`PERMISSION_READ_ONLY=true` or a read-only user role blocks enforcement and management writes. Blocked requests return:
+`ui.readOnly: true` or a read-only user role blocks enforcement and management writes. Blocked requests return:
 
 ```json
 { "error": "Read-only mode is enabled", "code": "READ_ONLY" }
@@ -75,7 +75,7 @@ These routes are mounted below `/api/auth`. Auth setup/login routes are availabl
 | POST | `/api/auth/change-password` | Change the current user's password. The user must be logged in with password auth. |
 | POST | `/api/auth/totp/setup` | Start TOTP enrollment for the current password-authenticated user. Returns a base32 secret and `otpauth://` URI for QR setup. |
 | POST | `/api/auth/totp/enable` | Complete TOTP enrollment with `{ "code": "123456" }`. |
-| DELETE | `/api/auth/totp` | Disable Settings-enrolled TOTP for the current password-authenticated user with `{ "currentPassword": "..." }`. TOTP supplied through `AUTH_TOTP_SEED` remains environment-managed and cannot be disabled through the API. |
+| DELETE | `/api/auth/totp` | Disable Settings-enrolled TOTP for the current password-authenticated user with `{ "currentPassword": "..." }`. TOTP supplied through `auth.totpSeed` remains deployment-managed and cannot be disabled through the API. |
 | GET | `/api/auth/passkeys` | List passkeys for the current user. |
 | PATCH | `/api/auth/passkeys/:id` | Rename a passkey with `{ "name": "..." }`. |
 | DELETE | `/api/auth/passkeys/:id` | Delete one of the current user's passkeys. |
@@ -163,7 +163,7 @@ Supported dashboard filters: `country`, `scenario`, `as`, `ip`, `target`, `dateS
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| GET | `/api/metrics/crowdsec` | Fetch and normalize CrowdSec Prometheus metrics. Returns `404` when `CROWDSEC_PROMETHEUS_URL` is not configured and `502` when the metrics fetch fails. |
+| GET | `/api/metrics/crowdsec` | Fetch and normalize the selected CrowdSec metrics endpoint. Returns `404` when no endpoint is configured and `502` when the metrics fetch fails. |
 
 The response includes `fetched_at`, `totals`, `bouncers`, `machines`, `parserSources`, `parserNodes`, `whitelists`, and `parserTimings`. It can also include runtime-only observability sections: `lapiRoutes` and `appsecEngines`.
 

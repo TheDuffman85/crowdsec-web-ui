@@ -47,7 +47,7 @@ function createMultiController(options: {
     CROWDSEC_REFRESH_INTERVAL: '1h',
     CROWDSEC_BOUNCER_PROPAGATION_DELAY: '0',
     AUTH_ENABLED: 'false',
-  });
+  }, { defaultConfigFile: path.join(dir, 'config.yaml') });
   const base = config.instances[0];
   config.instances = [
     { ...base, id: 'primary', name: 'Primary', lapiUrl: 'http://primary:8080' },
@@ -86,7 +86,7 @@ describe('multi-instance API', () => {
       CROWDSEC_REFRESH_INTERVAL: '1h',
       CROWDSEC_MANUAL_REFRESH_ENABLED: 'true',
       AUTH_ENABLED: 'false',
-    });
+    }, { defaultConfigFile: path.join(dir, 'config.yaml') });
     const base = config.instances[0];
     config.instances = [
       { ...base, id: 'primary', name: 'Primary', lapiUrl: 'http://primary:8080' },
@@ -179,7 +179,7 @@ describe('multi-instance API', () => {
       CROWDSEC_REFRESH_INTERVAL: '1h',
       CROWDSEC_MANUAL_REFRESH_ENABLED: 'true',
       AUTH_ENABLED: 'false',
-    });
+    }, { defaultConfigFile: path.join(dir, 'config.yaml') });
     const base = config.instances[0];
     config.instances = [
       { ...base, id: 'primary', name: 'Primary', lapiUrl: 'http://primary:8080' },
@@ -243,7 +243,7 @@ describe('multi-instance API', () => {
       CROWDSEC_REFRESH_INTERVAL: '1h',
       CROWDSEC_MANUAL_REFRESH_ENABLED: 'true',
       AUTH_ENABLED: 'false',
-    });
+    }, { defaultConfigFile: path.join(dir, 'config.yaml') });
     const base = config.instances[0];
     config.instances = [
       { ...base, id: 'primary', name: 'Primary', lapiUrl: 'http://primary:8080' },
@@ -324,7 +324,7 @@ describe('multi-instance API', () => {
       CROWDSEC_PASSWORD: 'secret',
       CROWDSEC_REFRESH_INTERVAL: '1h',
       AUTH_ENABLED: 'false',
-    });
+    }, { defaultConfigFile: path.join(dir, 'config.yaml') });
     const base = config.instances[0];
     config.instances = [
       { ...base, id: 'primary', name: 'Primary', lapiUrl: 'http://primary:8080' },

@@ -760,8 +760,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
   console.log(`Cache Configuration:
   Lookback Period: ${config.lookbackPeriod} (${config.lookbackMs}ms)
-  Refresh Interval: ${getIntervalName(refreshIntervalMs)} (${persistedConfig.refresh_interval_ms !== undefined ? 'from saved config' : 'from env'})
-  Manual Refresh: ${manualRefreshEnabled ? 'Enabled' : 'Disabled'} (${persistedConfig.manual_refresh_enabled !== undefined ? 'from saved config' : 'from env'})
+  Refresh Interval: ${getIntervalName(refreshIntervalMs)} (${persistedConfig.refresh_interval_ms !== undefined ? 'from saved config' : 'from startup configuration'})
+  Manual Refresh: ${manualRefreshEnabled ? 'Enabled' : 'Disabled'} (${persistedConfig.manual_refresh_enabled !== undefined ? 'from saved config' : 'from startup configuration'})
   LAPI Request Timeout: ${getIntervalName(config.lapiRequestTimeoutMs)}
   Alert Sync Chunk: ${getIntervalName(config.alertSyncChunkMs)}
   Alert Sync Min Chunk: ${getIntervalName(config.alertSyncMinChunkMs)}
@@ -792,7 +792,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
   if (!lapiClient.hasAuthConfig()) {
     console.warn(
-      'WARNING: CrowdSec LAPI authentication is not configured. Set CROWDSEC_USER with CROWDSEC_PASSWORD or CROWDSEC_PASSWORD_FILE, or CROWDSEC_TLS_CERT_PATH/CROWDSEC_TLS_KEY_PATH for full functionality.',
+      'WARNING: CrowdSec LAPI authentication is not configured. Configure instances[].lapi.auth in the application YAML (recommended), or use the legacy CrowdSec authentication environment variables.',
     );
   }
 

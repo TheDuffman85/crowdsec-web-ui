@@ -331,6 +331,11 @@ fi
 # 2. Load environment variables
 load_env_file
 
+if [ "$MODE" != "loadtest" ] && [ -z "${CONFIG_FILE:-}" ] && [ -z "${DB_DIR:-}" ]; then
+    export DB_DIR="$PROJECT_ROOT/data"
+    log "Using default configuration path $DB_DIR/config.yaml."
+fi
+
 if [ "$MODE" == "loadtest" ]; then
     configure_loadtest_profile
     export_loadtest_config

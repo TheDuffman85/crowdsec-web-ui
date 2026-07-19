@@ -37,7 +37,7 @@ A self-hosted web dashboard for [CrowdSec](https://crowdsec.net/) to review aler
 - **Modern UI**: dark/light themes, responsive layouts, and fast React interactions.
 - **Settings**: language, refresh cadence, manual refresh availability, password login, passkeys, and OIDC SSO in one page.
 - **Localization**: Arabic, English, German, French, Hindi, Japanese, Portuguese, Spanish, Russian, and Chinese. Browser-default language affects the UI; an explicitly saved language also localizes server-generated sync and notification text. Browser-default server messages stay English because background jobs do not have browser locale context.
-- **Authentication**: password login, passkeys, and OIDC SSO can protect the browser UI and protected API routes. New installs start with authentication enabled and initial admin setup; older migrated installs stay disabled until `AUTH_ENABLED=true`.
+- **Authentication**: password login, passkeys, and OIDC SSO can protect the browser UI and protected API routes. New installs start with authentication enabled and initial admin setup; older migrated installs retain their prior authentication state until they opt in.
 
 ### Screenshots
 
@@ -63,8 +63,8 @@ A self-hosted web dashboard for [CrowdSec](https://crowdsec.net/) to review aler
 </p>
 
 > [!CAUTION]
-> **Security Notice**: CrowdSec Web UI includes built-in authentication, but public deployments should still run behind HTTPS and a hardened reverse proxy. For centralized access control, configure OIDC SSO with an Identity Provider (IdP) such as [Authentik](https://goauthentik.io/), [Authelia](https://www.authelia.com/), or [Keycloak](https://www.keycloak.org/). Existing installs upgraded from versions without authentication remain unauthenticated until `AUTH_ENABLED=true` is set.
-> Set `PERMISSION_READ_ONLY=true` to run an instance that can view data but cannot perform CrowdSec write actions or management actions such as changing refresh settings, managing notification destinations/rules, sending notification tests, or deleting notifications. Language and marking notifications as read remain writable. This is an instance-wide safety mode, not user management or per-user RBAC.
+> **Security Notice**: CrowdSec Web UI includes built-in authentication, but public deployments should still run behind HTTPS and a hardened reverse proxy. For centralized access control, configure OIDC SSO with an Identity Provider (IdP) such as [Authentik](https://goauthentik.io/), [Authelia](https://www.authelia.com/), or [Keycloak](https://www.keycloak.org/). Existing installs upgraded from versions without authentication remain unauthenticated until they explicitly enable it.
+> Set `ui.readOnly: true` to run an instance that can view data but cannot perform CrowdSec write actions or management actions such as changing refresh settings, managing notification destinations/rules, sending notification tests, or deleting notifications. Language and marking notifications as read remain writable. This is an instance-wide safety mode, not user management or per-user RBAC.
 
 ## Architecture
 
@@ -111,14 +111,124 @@ You need a running CrowdSec instance and exactly one CrowdSec LAPI authenticatio
 
 > [!IMPORTANT]
 > Choose exactly one auth mode:
-> - Password auth: `CROWDSEC_USER` + either `CROWDSEC_PASSWORD` or `CROWDSEC_PASSWORD_FILE`
-> - mTLS auth: `CROWDSEC_TLS_CERT_PATH` + `CROWDSEC_TLS_KEY_PATH` with optional `CROWDSEC_TLS_CA_CERT_PATH`
+> - Password auth: `instances[].lapi.auth.type: password` with `password` set directly or referencing exactly one `env` or `file`
+> - mTLS auth: `instances[].lapi.auth.type: mtls` with `certFile` and `keyFile`
 >
-> Do not set both modes at the same time. The container will fail fast on mixed or partial auth configuration.
+> Plaintext secrets are supported, but mounted secret files are recommended so credentials do not end up in source control, backups, or configuration-management logs.
+
+## Configuration
+
+The application always uses YAML configuration. In Docker it loads `/app/data/config.yaml` by default; `CONFIG_FILE` is only needed to select a different path. Copy [`config.example.yaml`](config.example.yaml) to `data/config.yaml` for a complete, commented starting point. Configuration is loaded once during startup, so restart the process after changing the file or rotating a referenced secret.
+
+If the default file does not exist, the application creates it once from deprecated application environment variables and immediately loads it. The saved YAML is authoritative from then on and is never overwritten: later changes to deprecated setting variables have no effect. Secret values are not embedded; generated secret fields retain explicit environment or file references. When `CONFIG_FILE` selects a custom path, that file must already exist and be readable.
+
+```yaml
+server:
+  port: 3000
+  basePath: ""
+storage:
+  dataDir: /app/data
+ui:
+  timeZone: browser
+  timeFormat: browser
+  readOnly: false
+crowdsec:
+  simulationsEnabled: false
+  sync:
+    lookback: 168h
+    refreshInterval: 1m
+instances:
+  - id: default
+    name: CrowdSec
+    lapi:
+      url: http://crowdsec:8080
+      auth:
+        type: password
+        username: crowdsec-web-ui
+        password:
+          file: /run/secrets/crowdsec_password
+    metrics: []
+```
+
+### Secret values
+
+Secrets can be written directly, read from a file, or read from an environment variable. Direct values are convenient for small private deployments, but file references are safer and are used by the examples.
+
+```yaml
+auth:
+  sessionSecret: a-direct-secret
+  totpSecret:
+    file: /run/secrets/totp_secret
+  oidc:
+    clientSecret:
+      env: OIDC_CLIENT_SECRET
+
+instances:
+  - id: default
+    # ...
+    lapi:
+      auth:
+        type: password
+        username: crowdsec-web-ui
+        password:
+          file: /run/secrets/crowdsec_password
+```
+
+All secret fields use the same shape: a direct string or an object containing exactly one of `file` or `env`. This applies to application secrets, LAPI and basic-metrics `password`, and bearer-metrics `token`. Referenced files must be readable at startup. Avoid committing configurations containing direct secrets.
+
+### YAML reference
+
+| Section | Fields |
+| --- | --- |
+| `server` | `port` (default `3000`), `basePath` (default empty). |
+| `storage` | `dataDir` (SQLite and persistent state), `geonamesDir` (local GeoNames snapshot). |
+| `ui` | `timeZone` (`browser` or an IANA zone), `timeFormat` (`browser`, `12h`, or `24h`), `readOnly`. |
+| `auth` | `enabled` (`auto`, `true`, or `false`), `sessionSecret`, `totpSecret`, `totpSeed`, and `oidc`. `auto` enables auth for new databases while preserving the state of migrated databases. |
+| `auth.oidc` | `issuerUrl`, `clientId`, `clientSecret`, `scope`, `groupsClaim`, `adminGroups`, `readOnlyGroups`, `unmatchedRole` (`deny`, `admin`, or `read-only`). |
+| `notifications` | `secretKey`, `allowPrivateAddresses`, `debugPayloads`. |
+| `updates` | `enabled`, controlling the built-in application update check. |
+| `crowdsec` | `simulationsEnabled`, `alertFilters`, and global `sync` defaults. |
+| `instances` | One or more CrowdSec LAPI definitions with optional metrics endpoints and per-instance sync overrides. |
+
+An empty or omitted `crowdsec.alertFilters` uses the standard non-CAPI feed. Set any of `includeOrigins`, `excludeOrigins`, `includeCapi`, `includeOriginEmpty`, and `excludeOriginEmpty` to configure explicit filtering.
+
+Global synchronization settings live under `crowdsec.sync`:
+
+| Field | Default | Purpose |
+| --- | --- | --- |
+| `lookback` | `168h` | Imported history and retention window. |
+| `refreshInterval` | `1m` | Active refresh cadence; `0` or `manual` disables scheduled refreshes. |
+| `manualRefreshEnabled` | `false` | Enables manual refresh controls. |
+| `idleRefreshInterval` / `idleThreshold` | `10m` / `2m` | Idle scheduling behavior. |
+| `requestTimeout` | `30s` | LAPI request timeout. |
+| `bouncerPropagationDelay` | `15s` | Delay between decision expiry and owning-alert deletion. |
+| `metricsRequestTimeout` | `5s` | Default metrics request timeout. |
+| `heartbeatInterval` | `30s` | CrowdSec machine heartbeat cadence; `0` disables it. |
+| `alertSyncChunk` / `alertSyncMinChunk` | `12h` / `15m` | Historical import window and minimum retry window. |
+| `reconcileWindow` | `1h` | Fixed reconciliation window size. |
+| `reconcileRecentAge` | `24h` | Boundary between recent and old windows. |
+| `reconcileRecentInterval` / `reconcileActiveInterval` / `reconcileOldInterval` | `15m` / `5m` / `3h` | Reconciliation cadence by window priority. |
+| `reconcileWindowsPerRefresh` | `2` | Maximum reconciliation windows per refresh. |
+| `bootstrapRetryDelay` / `bootstrapRetryEnabled` | `30s` / `true` | Initial synchronization retry behavior. |
+
+Each `instances` entry supports:
+
+| Field | Purpose |
+| --- | --- |
+| `id`, `name`, `icon` | Stable identity, display name, and optional short icon. |
+| `lapi.url` | Absolute HTTP(S) LAPI base URL. |
+| `lapi.auth` | `type: password` with a username and password source, `type: mtls` with certificate/key files, or `type: none`. |
+| `lapi.tls.caFile` | Optional CA used to verify the LAPI server. |
+| `metrics[]` | Metrics endpoint `id`, `name`, `url`, optional `requestTimeout`, `auth`, and `tls`. Auth types are `none`, `basic`, or `bearer`. |
+| `sync` | Optional per-instance overrides for the global synchronization values. |
+
+Durations use `ms`, `s`, `m`, `h`, or `d` suffixes, such as `500ms`, `30s`, `5m`, or `7d`. `server.basePath` is empty or starts with `/` without a trailing slash. Instance and endpoint IDs use lowercase letters, digits, `_`, and `-` and should remain stable after data has been imported.
+
+Per-instance `sync` may override `lookback`, `refreshInterval`, `idleRefreshInterval`, `idleThreshold`, `requestTimeout`, `heartbeatInterval`, `alertSyncChunk`, `alertSyncMinChunk`, `reconcileWindow`, `reconcileRecentAge`, `reconcileRecentInterval`, `reconcileActiveInterval`, `reconcileOldInterval`, `reconcileWindowsPerRefresh`, `bootstrapRetryDelay`, `bootstrapRetryEnabled`, and `bouncerPropagationDelay`. Metrics request timeouts are configured on each metrics endpoint.
 
 ## Run with Docker (Recommended)
 
-The examples below use only the required variables. Optional knobs are listed in [Environment Variables](#environment-variables).
+The examples below use YAML configuration. The complete commented reference is [`config.example.yaml`](config.example.yaml).
 
 1. **Build the image**:
 
@@ -134,21 +244,24 @@ The examples below use only the required variables. Optional knobs are listed in
 > [!NOTE]
 > Current Docker images are based on Node.js rather than Bun, so the previous Bun/AVX-specific x64 runtime limitation no longer applies.
 
-2. **Run the container** with the CrowdSec LAPI URL and one supported auth mode:
+2. **Create the configuration and run the container**:
+
+   Copy the example into the persistent data directory, edit it, and create `./secrets/crowdsec_password.txt` containing the generated watcher password.
 
    ```bash
+   mkdir -p data secrets
+   cp config.example.yaml data/config.yaml
+   # Edit data/config.yaml, including the CrowdSec URL and username.
    docker run -d \
      --name crowdsec_web_ui \
      -p 3000:3000 \
-     -e CROWDSEC_URL=http://<crowdsec-host>:8080 \
-     -e CROWDSEC_USER=crowdsec-web-ui \
-     -e CROWDSEC_PASSWORD=<your-secure-password> \
      -v $(pwd)/data:/app/data \
+     -v $(pwd)/secrets/crowdsec_password.txt:/run/secrets/crowdsec_password:ro \
      --network your_crowdsec_network \
      crowdsec-web-ui
    ```
 
-Ensure the container is on a Docker network that can reach `CROWDSEC_URL`.
+Ensure the container is on a Docker network that can reach the LAPI URL in `data/config.yaml`.
 
 ### Docker Compose Example
 
@@ -159,42 +272,6 @@ services:
     container_name: crowdsec_web_ui
     ports:
       - "3000:3000"
-    environment:
-      - CROWDSEC_URL=http://crowdsec:8080
-      - CROWDSEC_USER=crowdsec-web-ui
-      - CROWDSEC_PASSWORD=<generated_password>
-      # Optional CrowdSec Prometheus metrics endpoint
-      # - CROWDSEC_PROMETHEUS_URL=http://crowdsec:6060/metrics
-      # Authentication is enabled by default for new installs.
-      # Existing data directories migrated from older versions keep auth disabled
-      # until you explicitly set AUTH_ENABLED=true.
-      # - AUTH_ENABLED=true
-      # Optional deployment-wide date/time display settings
-      # - TZ=Europe/Berlin
-      # - TIME_FORMAT=24h
-    volumes:
-      - ./data:/app/data
-    restart: unless-stopped
-```
-
-The repository also ships a minimal [`docker-compose.yml`](docker-compose.yml) that builds the image locally and reads the same runtime inputs from `.env`.
-
-### Docker Compose Example (Docker Secrets)
-
-Use `CROWDSEC_PASSWORD_FILE` instead of `CROWDSEC_PASSWORD` to read the CrowdSec watcher password from a Docker secret:
-
-```yaml
-services:
-  crowdsec-web-ui:
-    image: ghcr.io/theduffman85/crowdsec-web-ui:latest
-    container_name: crowdsec_web_ui
-    ports:
-      - "3000:3000"
-    environment:
-      - CROWDSEC_URL=http://crowdsec:8080
-      - CROWDSEC_USER=crowdsec-web-ui
-      - CROWDSEC_PASSWORD_FILE=/run/secrets/crowdsec_password
-      # - CROWDSEC_PROMETHEUS_URL=http://crowdsec:6060/metrics
     secrets:
       - crowdsec_password
     volumes:
@@ -206,7 +283,7 @@ secrets:
     file: ./secrets/crowdsec_password.txt
 ```
 
-Create `./secrets/crowdsec_password.txt` before starting the container. Do not set both `CROWDSEC_PASSWORD` and `CROWDSEC_PASSWORD_FILE`.
+The repository ships the same layout in [`docker-compose.yml`](docker-compose.yml). Copy `config.example.yaml` to `data/config.yaml`, create `./secrets/crowdsec_password.txt`, and run `docker compose up -d`.
 
 ### Docker Compose Example (mTLS Authentication)
 
@@ -217,13 +294,6 @@ services:
     container_name: crowdsec_web_ui
     ports:
       - "3000:3000"
-    environment:
-      - CROWDSEC_URL=https://crowdsec:8080
-      - CROWDSEC_TLS_CERT_PATH=/certs/agent.pem
-      - CROWDSEC_TLS_KEY_PATH=/certs/agent-key.pem
-      # - CROWDSEC_PROMETHEUS_URL=http://crowdsec:6060/metrics
-      # Optional when CrowdSec LAPI uses a private or self-signed CA
-      # - CROWDSEC_TLS_CA_CERT_PATH=/certs/ca.pem
     volumes:
       - ./data:/app/data
       - /path/on/host/agent.pem:/certs/agent.pem:ro
@@ -232,9 +302,11 @@ services:
     restart: unless-stopped
 ```
 
+Configure the matching instance with `lapi.url: https://crowdsec:8080`, `lapi.auth.type: mtls`, `certFile`, `keyFile`, and optional `lapi.tls.caFile`; the complete shape is commented in [`config.example.yaml`](config.example.yaml).
+
 ## Multiple CrowdSec instances
 
-Set `CROWDSEC_INSTANCES_CONFIG_FILE` to a YAML file that is readable when the process starts. The file defines stable instance IDs, display names, one LAPI connection per instance, and zero or more metrics endpoints. In Docker, mount this file plus the referenced secret and certificate files read-only. The same configuration works for a direct Node.js deployment.
+Add entries to the top-level `instances` array in the application YAML. Each entry defines a stable instance ID, display name, one LAPI connection, and zero or more metrics endpoints. Mount referenced secret and certificate files read-only.
 
 ```yaml
 instances:
@@ -246,7 +318,8 @@ instances:
       auth:
         type: password
         username: crowdsec-web-ui
-        passwordFile: /run/secrets/eu-lapi-password
+        password:
+          file: /run/secrets/eu-lapi-password
       tls:
         caFile: /etc/crowdsec-web-ui/certs/eu-ca.pem
 
@@ -256,7 +329,8 @@ instances:
         url: https://crowdsec-eu:6060/metrics
         auth:
           type: bearer
-          tokenEnv: EU_METRICS_TOKEN
+          token:
+            file: /run/secrets/eu-metrics-token
         tls:
           caFile: /etc/crowdsec-web-ui/certs/eu-ca.pem
 
@@ -283,117 +357,38 @@ instances:
 
 Instance and endpoint IDs must be unique URL-safe identifiers and should be treated as immutable database identities. Display names are also unique, but may be changed. The optional `icon` is a short text or emoji glyph shown in the instance selector; the all-instance scope uses a grid icon. Do not reuse an existing ID for an unrelated LAPI. Configuration and referenced secrets are loaded once; restart the process or container after changing or rotating them.
 
-LAPI password authentication accepts exactly one `passwordEnv` or `passwordFile`. LAPI mTLS uses `certFile` and `keyFile`. The separate `tls.caFile` controls server trust for either authentication mode. Prometheus supports omitted/`none`, `basic`, and `bearer` authentication. Basic auth uses `username` with exactly one `passwordEnv` or `passwordFile`; bearer auth uses exactly one `tokenEnv` or `tokenFile`. Prometheus `tls` accepts `caFile` and an optional complete `certFile`/`keyFile` client pair.
+LAPI password authentication uses `password` as a direct string or an object containing exactly one of `env` or `file`. LAPI mTLS uses `certFile` and `keyFile`. The separate `tls.caFile` controls server trust for either authentication mode. Prometheus supports omitted/`none`, `basic`, and `bearer` authentication. Basic auth uses the same `password` shape; bearer auth uses the equivalent `token` shape. Prometheus `tls` accepts `caFile` and an optional complete `certFile`/`keyFile` client pair.
 
-Plaintext YAML secrets, credentials embedded in URLs, partial certificate pairs, unreadable files, and TLS verification bypasses are rejected at startup. Do not combine this file with legacy `CROWDSEC_URL`, LAPI credential/TLS variables, or `CROWDSEC_PROMETHEUS_URL`. If `CROWDSEC_INSTANCES_CONFIG_FILE` is unset, the application keeps the existing behavior by creating one `default` instance from those legacy variables.
+Credentials embedded in URLs, ambiguous secret sources, partial certificate pairs, unreadable files, and TLS verification bypasses are rejected at startup. Direct YAML secrets are accepted, although file references are recommended.
 
 Dashboard, Alerts, and Decisions support a Combined scope. Metrics always uses one selected instance and one of that instance's endpoints because CrowdSec exposes process-local counters whose sums would be misleading. Adding a decision or cleaning up an IP in Combined scope runs independently against every configured LAPI and reports partial failures. Row deletion and bulk row deletion always use each row's owning instance; upstream numeric IDs are never broadcast.
 
-## Environment Variables
+## Authentication
 
-### CrowdSec Connection and Authentication
+Authentication covers the browser UI and protected application API routes. The health endpoint remains public for container and reverse-proxy health checks. New installs start with authentication enabled and show an initial setup page where you create the first local administrator account. `enabled: auto` preserves the database-aware migration behavior: new databases enable authentication, while databases migrated from releases without authentication stay disabled. To opt in explicitly, set:
 
-Choose exactly one auth mode: password auth or mTLS auth.
-
-| Variable | Default | Required | Description |
-| --- | --- | --- | --- |
-| `CROWDSEC_INSTANCES_CONFIG_FILE` | none | No | Startup-loaded multi-instance YAML file. When set, do not set legacy LAPI connection/auth/TLS variables or `CROWDSEC_PROMETHEUS_URL`. |
-| `CROWDSEC_URL` | `http://crowdsec:8080` | Usually | CrowdSec LAPI base URL. Use `https://...` when TLS is enabled. |
-| `CROWDSEC_USER` | none | Password auth only | CrowdSec machine/user name for watcher-password login. Must be set together with `CROWDSEC_PASSWORD` or `CROWDSEC_PASSWORD_FILE`. |
-| `CROWDSEC_PASSWORD` | none | Password auth only | CrowdSec watcher password. Must be set together with `CROWDSEC_USER`. |
-| `CROWDSEC_PASSWORD_FILE` | none | No | Optional Docker Secrets alternative: read `CROWDSEC_PASSWORD` from a file. Do not set both variables. |
-| `CROWDSEC_TLS_CERT_PATH` | none | mTLS only | Path inside the container or host process to the client certificate used for CrowdSec mTLS auth. |
-| `CROWDSEC_TLS_KEY_PATH` | none | mTLS only | Path to the client private key used for CrowdSec mTLS auth. |
-| `CROWDSEC_TLS_CA_CERT_PATH` | none | No | Optional CA bundle used to verify the CrowdSec LAPI server certificate during mTLS connections. |
-
-### Runtime Settings
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `PORT` | `3000` | HTTP listen port. If you change this in Docker, also update port mappings and the container health check to match. |
-| `BASE_PATH` | empty | Serve the UI under a path prefix such as `/crowdsec`. Start with `/` and omit the trailing slash. |
-| `DB_DIR` | `/app/data` | Directory that stores the SQLite database and other persisted app data. If you change it, update your volume mounts too. |
-| `GEONAMES_DUMP_DIR` | `<working directory>/geonames` | Directory containing an immutable local GeoNames `cities5000` and admin-1 snapshot used for attack-marker and table location labels. Official Docker images include this data and never refresh it at runtime. |
-| `TZ` | browser local | Optional deployment-wide IANA timezone, such as `Europe/Berlin` or `UTC`. When set, the UI, dashboard grouping, filters, and server-generated timestamps all use it. |
-| `TIME_FORMAT` | browser locale | Optional deployment-wide clock format. Accepts `12h` or `24h`. When omitted, each browser's locale determines whether the UI uses a 12- or 24-hour clock. |
-| `PERMISSION_READ_ONLY` | `false` | Set to `true` to hide management actions in the UI and reject API requests that add/delete decisions, delete alerts, clean up by IP, clear the cache, change refresh settings, manage notification destinations/rules, send notification tests, or delete notifications. Language and marking notifications as read remain writable. |
-| `AUTH_ENABLED` | new installs: `true`; migrated existing installs: `false` | Enables authentication for the UI and API. Set to `false` to run without login. Existing databases from older releases are marked disabled during migration so upgrades do not lock out current deployments. |
-| `AUTH_SECRET` | auto-generated and persisted | Optional fixed secret used to sign session cookies and encrypt saved auth settings. It is also the fallback TOTP encryption key when `AUTH_TOTP_SECRET` is unset. If unset, the app generates one and stores it in app metadata. |
-| `AUTH_SECRET_FILE` | auto-generated and persisted | Optional Docker Secrets alternative: read `AUTH_SECRET` from a file. Do not set both variables. |
-| `AUTH_TOTP_SECRET` | `AUTH_SECRET` | Optional fixed encryption key for stored per-account TOTP seeds. Keep it stable after users enable TOTP. |
-| `AUTH_TOTP_SECRET_FILE` | `AUTH_SECRET` | Optional Docker Secrets alternative: read `AUTH_TOTP_SECRET` from a file. Do not set both variables. |
-| `AUTH_TOTP_SEED` | none | Optional fallback base32 TOTP seed of at least 26 characters (128 bits) for the local password user. A seed enrolled through Settings takes precedence. When no database seed exists, the environment seed is immediately enforced and cannot be disabled from Settings. Whitespace and trailing base32 padding are normalized. |
-| `AUTH_TOTP_SEED_FILE` | none | Optional Docker Secrets alternative: read `AUTH_TOTP_SEED` from a file. Do not set both variables. |
-| `AUTH_OIDC_ISSUER_URL` | none | Optional OIDC issuer URL. When set with `AUTH_OIDC_CLIENT_ID`, the login page shows SSO. Can also be configured from Settings. |
-| `AUTH_OIDC_CLIENT_ID` | none | Optional OIDC client ID. Can also be configured from Settings. |
-| `AUTH_OIDC_CLIENT_SECRET` | none | Optional OIDC client secret. Can also be configured from Settings. |
-| `AUTH_OIDC_CLIENT_SECRET_FILE` | none | Optional Docker Secrets alternative: read `AUTH_OIDC_CLIENT_SECRET` from a file. Do not set both variables. |
-| `AUTH_OIDC_SCOPE` | `openid profile email` | Optional OIDC authorization scope string. Must include `openid`. Can also be configured from Settings. |
-| `AUTH_OIDC_GROUPS_CLAIM` | `groups` | Optional OIDC claim used for group mapping. The claim may be an array or a comma-separated string. Can also be configured from Settings. |
-| `AUTH_OIDC_ADMIN_GROUPS` | empty | Optional comma-separated OIDC groups that receive admin permissions. Can also be configured from Settings. |
-| `AUTH_OIDC_READ_ONLY_GROUPS` | empty | Optional comma-separated OIDC groups that receive read-only permissions. Can also be configured from Settings. |
-| `AUTH_OIDC_UNMATCHED_ROLE` | `deny` | Controls OIDC users who match no configured admin or read-only group. Accepts `deny`, `admin`, or `read-only`. Can also be configured from Settings. |
-| `CROWDSEC_LOOKBACK_PERIOD` | `168h` | Alert/history retention window used for sync and cleanup. Accepts values like `12h`, `7d`, or `30m`. |
-| `CROWDSEC_REFRESH_INTERVAL` | `1m` | Normal cadence for importing changes from CrowdSec LAPI. Connected browsers receive a WebSocket event and update immediately after each successful import; this value is not a page-polling delay. Accepts `0`, `manual`, `5s`, `30s`, `1m`, `5m`, or other `s`/`m`/`h`/`d` values. |
-| `CROWDSEC_MANUAL_REFRESH_ENABLED` | `false` | Set to `true` to enable manual cache refreshes and show the manual refresh controls in the sidebar. The value is used as the default until it is overridden in General settings; saved settings take precedence on later restarts. |
-| `CROWDSEC_IDLE_REFRESH_INTERVAL` | `10m` | Refresh interval used when the app considers itself idle. |
-| `CROWDSEC_IDLE_THRESHOLD` | `2m` | Inactivity period before the app switches to idle refresh behavior. |
-| `CROWDSEC_LAPI_REQUEST_TIMEOUT` | `30s` | Timeout for individual CrowdSec LAPI requests. Increase this for high-latency or very large CrowdSec datasets. |
-| `CROWDSEC_BOUNCER_PROPAGATION_DELAY` | `15s` | Backend grace period between expiring decisions and deleting their owning alerts, allowing bouncers to consume the deletion stream. Alert deletion requests return immediately; the durable job continues in the background and survives restarts. Accepts `ms`/`s`/`m`/`h`/`d` values. Set this at least as high as the slowest bouncer polling interval; `0` disables the delay. |
-| `CROWDSEC_PROMETHEUS_URL` | none | Optional CrowdSec Prometheus metrics endpoint. When unset, the Metrics page shows setup instructions; when set, it reads bouncer, machine, AppSec, parser, LAPI latency, and whitelist runtime metrics from this URL. |
-| `CROWDSEC_PROMETHEUS_REQUEST_TIMEOUT` | `5s` | Timeout for individual Prometheus metrics requests. Accepts the same interval syntax as refresh settings. |
-| `CROWDSEC_HEARTBEAT_INTERVAL` | `30s` | Interval for updating the Web UI machine heartbeat in CrowdSec. Use `0` or `manual` to disable heartbeat updates. |
-| `CROWDSEC_ALERT_SYNC_CHUNK` | `12h` | Window size used when syncing historical alerts from LAPI. Smaller chunks reduce per-request payload size. |
-| `CROWDSEC_ALERT_SYNC_MIN_CHUNK` | `15m` | Smallest window size used when retrying timed-out alert sync windows. |
-| `CROWDSEC_RECONCILE_WINDOW` | `1h` | Size of the fixed alert-history windows checked for additions and deletions after bootstrap. |
-| `CROWDSEC_RECONCILE_RECENT_AGE` | `24h` | Age boundary between recent and older reconciliation windows. |
-| `CROWDSEC_RECONCILE_RECENT_INTERVAL` | `15m` | Target cadence for windows within `CROWDSEC_RECONCILE_RECENT_AGE`. |
-| `CROWDSEC_RECONCILE_ACTIVE_INTERVAL` | `5m` | Target cadence for windows containing locally cached active decisions. These windows are prioritized, but every alert and decision in the window is queried. |
-| `CROWDSEC_RECONCILE_OLD_INTERVAL` | `3h` | Target cadence for older reconciliation windows. |
-| `CROWDSEC_RECONCILE_WINDOWS_PER_REFRESH` | `2` | Maximum number of due reconciliation windows processed by one refresh. Must be a positive integer. When the budget is greater than one, one slot is reserved for the least recently checked due window to prevent starvation. |
-| `CROWDSEC_BOOTSTRAP_RETRY_DELAY` | `30s` | Delay between background retries when initial CrowdSec bootstrap fails. |
-| `CROWDSEC_BOOTSTRAP_RETRY_ENABLED` | `true` | Enables background bootstrap retry after startup or login failures. |
-| `CROWDSEC_SIMULATIONS_ENABLED` | `false` | Include simulation-mode alerts and decisions from CrowdSec and expose the related UI indicators. |
-| `CROWDSEC_ALERT_INCLUDE_ORIGINS` | empty | Comma-separated list of exact origins to include when syncing alerts. |
-| `CROWDSEC_ALERT_EXCLUDE_ORIGINS` | empty | Comma-separated list of exact origins to drop after alert results are merged. |
-| `CROWDSEC_ALERT_INCLUDE_CAPI` | `false` | Add the Central API / community-blocklist alert feed. |
-| `CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY` | `false` | Keep alerts whose effective origin is empty when using explicit include filters. |
-| `CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY` | `false` | Drop alerts whose effective origin is empty. |
-| `NOTIFICATION_SECRET_KEY` | auto-generated and persisted | Optional fixed encryption key for saved notification secrets. If unset, the app generates one and stores it in app metadata. |
-| `NOTIFICATION_SECRET_KEY_FILE` | auto-generated and persisted | Optional Docker Secrets alternative: read `NOTIFICATION_SECRET_KEY` from a file. Do not set both variables. |
-| `NOTIFICATION_ALLOW_PRIVATE_ADDRESSES` | `true` | Allow notification destinations on private, loopback, and link-local addresses. Set to `false` to block them. |
-| `NOTIFICATION_DEBUG_PAYLOADS` | `false` | When enabled, failed notification deliveries log a truncated rendered request body for troubleshooting. Use carefully because payloads may contain sensitive data. |
-| `NODE_EXTRA_CA_CERTS` | none | Optional Node.js trust bundle for HTTPS connections, useful when using password auth against a private or self-signed CrowdSec CA. |
-
-### File-Backed Secrets
-
-`CROWDSEC_PASSWORD_FILE`, `NOTIFICATION_SECRET_KEY_FILE`, `AUTH_SECRET_FILE`, `AUTH_TOTP_SECRET_FILE`, `AUTH_TOTP_SEED_FILE`, and `AUTH_OIDC_CLIENT_SECRET_FILE` read their values from UTF-8 files, including Docker Secrets mounts under `/run/secrets`. For each setting, configure the direct variable or its `_FILE` alternative, not both. The app fails fast when both are set or when a configured file cannot be read. File-backed secrets are loaded during startup, so restart the app after rotating a mounted secret.
-
-> [!IMPORTANT]
-> The auto-generated `AUTH_SECRET` and `NOTIFICATION_SECRET_KEY` are stored in the same SQLite database as the values they protect, and TOTP encryption falls back to `AUTH_SECRET` when `AUTH_TOTP_SECRET` is unset. This is convenient and preserves existing installations, but it does not protect secrets or session signing from someone who obtains a complete database or backup. Deployments whose threat model includes database-copy disclosure should provide all three keys through their `_FILE` variables, restrict access to the mounted secret files and backups, and rotate the keys after suspected exposure.
-
-### Authentication
-
-Authentication covers the browser UI and protected application API routes. The health endpoint remains public for container and reverse-proxy health checks. New installs start with authentication enabled and show an initial setup page where you create the first local administrator account. Upgraded installs with an existing SQLite database are migrated with authentication disabled by default, so existing deployments keep working until you opt in with:
-
-```env
-AUTH_ENABLED=true
+```yaml
+auth:
+  enabled: true
 ```
 
-Set `AUTH_ENABLED=false` to disable authentication. This setting is intentionally environment-controlled, not configurable from the UI.
+Set `auth.enabled: false` to disable authentication. This deployment setting is not configurable from the UI.
 
-Local password login is available after onboarding. Authenticated users can change their own password, add optional TOTP verification for password sign-in, and register or remove their own passkeys from Settings. TOTP setup shows a QR code, an authenticator-app setup link for mobile devices, and the manual setup key; once enabled, password login requires the current authenticator code after the password is accepted. Alternatively, `AUTH_TOTP_SEED` can provide a fallback base32 seed through deployment configuration. A seed enrolled through Settings takes precedence; the environment seed is used only when the password user has no enabled database seed. Administrators can also disable password login and configure OIDC SSO from Settings. OIDC can also be preconfigured with environment variables:
+Local password login is available after onboarding. Authenticated users can change their own password, add optional TOTP verification for password sign-in, and register or remove their own passkeys from Settings. TOTP setup shows a QR code, an authenticator-app setup link for mobile devices, and the manual setup key; once enabled, password login requires the current authenticator code after the password is accepted. Alternatively, `auth.totpSeed` can reference a fallback base32 seed. A seed enrolled through Settings takes precedence. Administrators can also disable password login and configure OIDC SSO from Settings. OIDC can also be preconfigured in YAML:
 
-```env
-AUTH_ENABLED=true
-AUTH_OIDC_ISSUER_URL=https://idp.example.com/application/o/crowdsec-web-ui/
-AUTH_OIDC_CLIENT_ID=crowdsec-web-ui
-AUTH_OIDC_CLIENT_SECRET=change-me
-AUTH_OIDC_SCOPE="openid profile email"
-AUTH_OIDC_GROUPS_CLAIM=groups
-AUTH_OIDC_ADMIN_GROUPS=crowdsec-admins,secops
-AUTH_OIDC_READ_ONLY_GROUPS=crowdsec-viewers
-AUTH_OIDC_UNMATCHED_ROLE=deny
+```yaml
+auth:
+  enabled: true
+  oidc:
+    issuerUrl: https://idp.example.com/application/o/crowdsec-web-ui/
+    clientId: crowdsec-web-ui
+    clientSecret:
+      file: /run/secrets/oidc_client_secret
+    scope: openid profile email
+    groupsClaim: groups
+    adminGroups: [crowdsec-admins, secops]
+    readOnlyGroups: [crowdsec-viewers]
+    unmatchedRole: deny
 ```
 
 Register the following redirect (callback) URI for the CrowdSec Web UI client in your identity provider:
@@ -402,15 +397,15 @@ Register the following redirect (callback) URI for the CrowdSec Web UI client in
 https://<crowdsec-web-ui-host>/api/auth/oidc/callback
 ```
 
-The URI must exactly match the public URL used to access the Web UI, including the scheme, host, and any non-default port. When `BASE_PATH` is configured, include it before `/api`; for example, `BASE_PATH=/crowdsec` uses `https://<crowdsec-web-ui-host>/crowdsec/api/auth/oidc/callback`. Behind a reverse proxy, forward the public host through `Host` or `X-Forwarded-Host` and set `X-Forwarded-Proto` so the application sends the same URI to the identity provider.
+The URI must exactly match the public URL used to access the Web UI, including the scheme, host, and any non-default port. When `server.basePath` is configured, include it before `/api`; for example, `basePath: /crowdsec` uses `https://<crowdsec-web-ui-host>/crowdsec/api/auth/oidc/callback`. Behind a reverse proxy, forward the public host through `Host` or `X-Forwarded-Host` and set `X-Forwarded-Proto` so the application sends the same URI to the identity provider.
 
-OIDC Settings accepts the issuer URL, client ID, client secret, authorization scopes, groups claim, admin groups, read-only groups, and the unmatched-user policy. Saved Settings values override OIDC environment defaults. Authorization scopes must include `openid`; add provider-specific scopes such as `groups` only when your IdP requires them for the configured groups claim. By default, OIDC users who match no configured group are denied. Set the unmatched-user policy to `admin` or `read-only` only when every user who can complete OIDC sign-in should receive that fallback role.
+OIDC Settings accepts the issuer URL, client ID, client secret, authorization scopes, groups claim, admin groups, read-only groups, and the unmatched-user policy. Saved Settings values override YAML defaults. Authorization scopes must include `openid`; add provider-specific scopes such as `groups` only when your IdP requires them for the configured groups claim. By default, OIDC users who match no configured group are denied. Set the unmatched-user policy to `admin` or `read-only` only when every user who can complete OIDC sign-in should receive that fallback role.
 
-OIDC group mapping is lightweight RBAC. `PERMISSION_READ_ONLY=true` is still instance-wide and overrides user roles. For OIDC, admin group matches get full access, read-only group matches can view data and keep allowed preferences, and users with no matching group follow `AUTH_OIDC_UNMATCHED_ROLE`.
+OIDC group mapping is lightweight RBAC. `ui.readOnly: true` is still instance-wide and overrides user roles. For OIDC, admin group matches get full access, read-only group matches can view data and keep allowed preferences, and users with no matching group follow `auth.oidc.unmatchedRole`.
 
 OIDC identities are bound to the provider's stable issuer and subject claims. Existing OIDC rows are migrated in place on their next successful SSO login; if an OIDC username conflicts with a local account, the accounts remain separate. OIDC sessions have a 24-hour absolute lifetime and are not silently extended from stale role claims. OIDC-only accounts cannot register or use local passkeys, so removing access at the IdP cannot be bypassed by creating a permanent local credential. Password-backed local accounts keep their existing passkey support.
 
-### Build and Image Metadata
+## Build and Image Metadata
 
 These values are mainly relevant when building your own image or local production bundle.
 
@@ -423,7 +418,7 @@ These values are mainly relevant when building your own image or local productio
 | `VITE_BUILD_DATE` | auto-generated at build time | Build timestamp shown in the UI. |
 | `VITE_REPO_URL` | `https://github.com/TheDuffman85/crowdsec-web-ui` | Repository URL used for release and commit links in the UI. |
 
-### Development and Test Only
+## Development and Test Environment
 
 | Variable | Default | Description |
 | --- | --- | --- |
@@ -478,21 +473,24 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - CROWDSEC_URL=https://crowdsec:8080
-      - CROWDSEC_USER=crowdsec-web-ui
-      - CROWDSEC_PASSWORD=<generated_password>
-      - NODE_EXTRA_CA_CERTS=/certs/root_ca.crt
+      NODE_EXTRA_CA_CERTS: /certs/root_ca.crt
+    secrets:
+      - crowdsec_password
     volumes:
       - ./data:/app/data
       - /path/on/host/root_ca.crt:/certs/root_ca.crt:ro
     restart: unless-stopped
+
+secrets:
+  crowdsec_password:
+    file: ./secrets/crowdsec_password.txt
 ```
 
-Replace `/path/on/host/root_ca.crt` with your CA file path and keep the mount read-only. This avoids rebuilding the image. For mTLS auth, prefer `CROWDSEC_TLS_CA_CERT_PATH` as the explicit CrowdSec LAPI trust input.
+Replace `/path/on/host/root_ca.crt` with your CA file path and keep the mount read-only. This avoids rebuilding the image. Prefer the per-instance `lapi.tls.caFile` setting when only CrowdSec LAPI needs this CA.
 
 ### Reverse Proxy with Base Path
 
-Use `BASE_PATH` to serve the Web UI under a non-root path such as `https://example.com/crowdsec/`:
+Use `server.basePath` to serve the Web UI under a non-root path such as `https://example.com/crowdsec/`:
 
 ```yaml
 services:
@@ -501,14 +499,15 @@ services:
     container_name: crowdsec_web_ui
     ports:
       - "3000:3000"
-    environment:
-      - CROWDSEC_URL=http://crowdsec:8080
-      - CROWDSEC_USER=crowdsec-web-ui
-      - CROWDSEC_PASSWORD=<generated_password>
-      - BASE_PATH=/crowdsec
+    secrets:
+      - crowdsec_password
     volumes:
       - ./data:/app/data
     restart: unless-stopped
+
+secrets:
+  crowdsec_password:
+    file: ./secrets/crowdsec_password.txt
 ```
 
 Nginx example:
@@ -525,7 +524,7 @@ location /crowdsec/ {
 }
 ```
 
-`BASE_PATH` must start with `/` and must not include a trailing slash. When set, `/` redirects to the base path and all API calls, assets, and navigation use it automatically.
+Set `server.basePath: /crowdsec` in `config.yaml`. It must start with `/` and must not include a trailing slash. When set, `/` redirects to the base path and all API calls, assets, and navigation use it automatically.
 
 The backend applies a Content Security Policy, rejects browser mutation requests whose `Origin` does not match the public request origin, limits API request bodies to 1 MiB, and marks API responses as `private, no-store`. Command-line and service clients that omit browser `Origin` and `Sec-Fetch-Site` headers remain compatible. Configure HSTS at the TLS-terminating reverse proxy if desired; the application does not emit HSTS itself.
 
@@ -546,13 +545,13 @@ The built-in check runs every 30 seconds with a 10-second start period. Check Do
 docker inspect --format='{{.State.Health.Status}}' crowdsec_web_ui
 ```
 
-If you use `BASE_PATH`, the health check still targets `localhost:3000/api/health` directly inside the container, so no additional configuration is needed. If you change `PORT`, update the health check command in your deployment to match.
+If you use `server.basePath`, the health check still targets `localhost:3000/api/health` directly inside the container, so no additional configuration is needed. If you change `server.port`, update the health check command and port mapping in your deployment to match.
 
 ## Runtime Behavior
 
 ### Prometheus Metrics Page
 
-The Metrics page shows setup guidance until `CROWDSEC_PROMETHEUS_URL` is set. Once configured, it reads CrowdSec's Prometheus endpoint for runtime observability: bouncer and machine LAPI activity, AppSec requests/blocks, parser and datasource activity, LAPI request latency, parsing timing, and whitelist hits.
+The Metrics page shows setup guidance until an instance has a `metrics` endpoint. Once configured, it reads CrowdSec's Prometheus endpoint for runtime observability: bouncer and machine LAPI activity, AppSec requests/blocks, parser and datasource activity, LAPI request latency, parsing timing, and whitelist hits.
 
 The page intentionally avoids duplicating alert and decision analytics that are already covered by the main app dashboard and tables. Values come from the current raw Prometheus scrape, so the UI avoids CrowdSec metrics that only become useful with Grafana-style time-window `rate()` or `increase()` queries.
 
@@ -576,11 +575,18 @@ prometheus:
   listen_port: 6060
 ```
 
-Then point the Web UI at that endpoint:
+Then add the endpoint to the matching Web UI instance:
 
 ```yaml
-environment:
-  - CROWDSEC_PROMETHEUS_URL=http://crowdsec:6060/metrics
+instances:
+  - id: default
+    # ...lapi settings...
+    metrics:
+      - id: lapi
+        name: CrowdSec
+        url: http://crowdsec:6060/metrics
+        auth:
+          type: none
 ```
 
 `level: aggregated` works with less detail because it omits per-machine/per-bouncer LAPI metrics and per-node parser metrics. AppSec and LAPI latency sections also depend on whether the corresponding CrowdSec Prometheus metrics are emitted by your deployment. `level: none` disables metrics registration.
@@ -589,7 +595,7 @@ Reference: [CrowdSec Prometheus documentation](https://docs.crowdsec.net/docs/ne
 
 ### Simulation Mode Visibility
 
-CrowdSec simulation mode generates alerts and decisions without live remediation. `CROWDSEC_SIMULATIONS_ENABLED=false` by default. Set it to `true` to fetch simulated data and show simulation badges, filters, and dashboard counts; leave it unset or `false` to hide simulated alerts/decisions and avoid requesting them from LAPI.
+CrowdSec simulation mode generates alerts and decisions without live remediation. `crowdsec.simulationsEnabled` is `false` by default. Set it to `true` to fetch simulated data and show simulation badges, filters, and dashboard counts.
 
 ### Table Column Visibility
 
@@ -625,22 +631,17 @@ Use alert source filters when CrowdSec ingests large volumes from automation, im
 
 Configuration:
 
-- `CROWDSEC_ALERT_INCLUDE_ORIGINS`: comma-separated list of exact origins to include when syncing alerts
-- `CROWDSEC_ALERT_EXCLUDE_ORIGINS`: comma-separated list of exact origins that cause a synced alert to be dropped
-- `CROWDSEC_ALERT_INCLUDE_CAPI`: set to `true` to include Central API / community blocklist alerts
-- `CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY`: set to `true` to also include alerts whose effective origin is empty when using explicit include filters
-- `CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY`: set to `true` to drop alerts whose effective origin is empty
-
 ```yaml
-environment:
-  - CROWDSEC_ALERT_INCLUDE_ORIGINS=crowdsec,cscli-import
-  - CROWDSEC_ALERT_EXCLUDE_ORIGINS=cscli
-  - CROWDSEC_ALERT_INCLUDE_CAPI=true
-  - CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY=true
-  - CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY=false
+crowdsec:
+  alertFilters:
+    includeOrigins: [crowdsec, cscli-import]
+    excludeOrigins: [cscli]
+    includeCapi: true
+    includeOriginEmpty: true
+    excludeOriginEmpty: false
 ```
 
-Behavior: without source vars, the Web UI fetches the normal non-CAPI/non-lists alert feed. Include origins are pushed upstream where possible. `CROWDSEC_ALERT_INCLUDE_CAPI=true` adds the dedicated CAPI/community-blocklist query unless explicit include filters are also set. Empty-origin include/exclude handling and generic excludes are local because CrowdSec LAPI does not expose those filters. If an alert contains any excluded origin, the whole alert is dropped. Origin checks prefer associated decision origins and fall back to CrowdSec blocklist/list source scopes for alerts without decisions.
+Behavior: without explicit filters, the Web UI fetches the normal non-CAPI/non-lists alert feed. Include origins are pushed upstream where possible. `includeCapi: true` adds the dedicated CAPI/community-blocklist query unless explicit include filters are also set. Empty-origin handling and generic excludes are local because CrowdSec LAPI does not expose those filters. If an alert contains any excluded origin, the whole alert is dropped. Origin checks prefer associated decision origins and fall back to CrowdSec blocklist/list source scopes for alerts without decisions.
 
 Common origins:
 
@@ -652,13 +653,12 @@ Common origins:
 
 Examples:
 
-- `CROWDSEC_ALERT_INCLUDE_ORIGINS=crowdsec` keeps only security-engine alerts
-- `CROWDSEC_ALERT_INCLUDE_ORIGINS=lists` fetches only list-based alerts
-- `CROWDSEC_ALERT_INCLUDE_CAPI=true` keeps the default non-CAPI feed and adds CAPI/community-blocklist alerts; `CROWDSEC_ALERT_INCLUDE_ORIGINS=CAPI` fetches only CAPI/community-blocklist alerts
-- `CROWDSEC_ALERT_INCLUDE_ORIGINS=crowdsec` with `CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY=true` keeps `crowdsec` alerts and alerts without an origin
-- `CROWDSEC_ALERT_INCLUDE_ORIGINS=cscli` with `CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY=true` keeps `cscli` alerts and alerts without an origin
-- `CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY=true` removes alerts without an effective origin from the synced cache
-- `CROWDSEC_ALERT_EXCLUDE_ORIGINS=cscli,lists` removes manual `cscli` alerts and imported list alerts from the local synced cache view
+- `includeOrigins: [crowdsec]` keeps only security-engine alerts
+- `includeOrigins: [lists]` fetches only list-based alerts
+- `includeCapi: true` keeps the default non-CAPI feed and adds CAPI/community-blocklist alerts; `includeOrigins: [CAPI]` fetches only CAPI/community-blocklist alerts
+- `includeOrigins: [crowdsec]` with `includeOriginEmpty: true` keeps `crowdsec` alerts and alerts without an origin
+- `excludeOriginEmpty: true` removes alerts without an effective origin from the synced cache
+- `excludeOrigins: [cscli, lists]` removes manual `cscli` alerts and imported list alerts from the local synced cache view
 
 Because the local decisions view is built from synced alerts, these settings also affect which imported decisions appear in the UI.
 
@@ -685,7 +685,7 @@ Every rule has a name, severity (`info`, `warning`, `critical`), incident-based 
 
 ### Destinations
 
-You can enable/disable destinations independently and attach the same rule to several destinations. Saved secrets are masked in the UI and encrypted at rest with `NOTIFICATION_SECRET_KEY`, or with an auto-generated key persisted in app metadata. **Send Test** validates a saved destination immediately. Delivery results are stored as `delivered` or `failed`. Private, loopback, and link-local destinations are allowed by default and can be blocked with `NOTIFICATION_ALLOW_PRIVATE_ADDRESSES=false`.
+You can enable/disable destinations independently and attach the same rule to several destinations. Saved secrets are masked in the UI and encrypted at rest with `notifications.secretKey`, or with an auto-generated key persisted in app metadata. **Send Test** validates a saved destination immediately. Delivery results are stored as `delivered` or `failed`. Private, loopback, and link-local destinations are allowed by default and can be blocked with `notifications.allowPrivateAddresses: false`.
 
 | Destination | Settings |
 | --- | --- |
@@ -697,13 +697,13 @@ You can enable/disable destinations independently and attach the same rule to se
 
 MQTT publishes JSON with `title`, `message`, `severity`, `metadata`, `sent_at`, `channel_id`, `channel_name`, `channel_type`, `rule_id`, `rule_name`, and `rule_type`. Test sends use `rule_id=test`, `rule_name=Test notification`, and `rule_type=test`.
 
-Webhook templates support dotted `event.*` variables in bodies and templated fields. Available fields include `title`, `message`, `severity`, `metadata`, `sent_at`, `channel_name`, `rule_id`, `rule_name`, and `rule_type`, each with a `*Json` variant for unquoted JSON insertion. Nullable rule fields also provide `OrUnknown` and `OrUnknownJson` aliases. Failed webhook deliveries record the HTTP status and a truncated response body; `NOTIFICATION_DEBUG_PAYLOADS=true` also logs a truncated rendered request body, with sensitive form fields redacted.
+Webhook templates support dotted `event.*` variables in bodies and templated fields. Available fields include `title`, `message`, `severity`, `metadata`, `sent_at`, `channel_name`, `rule_id`, `rule_name`, and `rule_type`, each with a `*Json` variant for unquoted JSON insertion. Nullable rule fields also provide `OrUnknown` and `OrUnknownJson` aliases. Failed webhook deliveries record the HTTP status and a truncated response body; `notifications.debugPayloads: true` also logs a truncated rendered request body, with sensitive form fields redacted.
 
 Notification titles and bodies are localized when the global language selector is set to a specific language. With **Browser default**, outbound notification content is generated in English because server jobs do not have access to the browser locale.
 
 ### Notification Security Controls
 
-`NOTIFICATION_SECRET_KEY` can override the destination-secret encryption key; otherwise the backend generates one on first start and persists it in app metadata. `NOTIFICATION_SECRET_KEY_FILE` reads that key from a mounted file. `NOTIFICATION_ALLOW_PRIVATE_ADDRESSES=true` allows private, loopback, and link-local destinations; set it to `false` to block them. `NOTIFICATION_DEBUG_PAYLOADS=false` should only be set to `true` temporarily while troubleshooting failed deliveries.
+`notifications.secretKey` can reference an external destination-secret encryption key; otherwise the backend generates one on first start and persists it in app metadata. `allowPrivateAddresses` controls private, loopback, and link-local destinations. `debugPayloads` should only be enabled temporarily while troubleshooting failed deliveries.
 
 ### Current Scope
 
@@ -731,7 +731,7 @@ The Web UI maintains local alert and decision history. Data from CrowdSec LAPI i
 
 Only changed alerts and added or deleted decisions are written during reconciliation. Unchanged alerts are compared without constructing decision-row mutations, which keeps large blocklist alerts cheap to check. A missing cached alert or decision is deleted only after every required LAPI query for that window succeeds. Relative LAPI time ranges are padded and then filtered back to exact local boundaries, so transport delay, timestamp rounding, or a partial scope response cannot cause destructive reconciliation. The moving current window shares the normal delta request when it is due, avoiding duplicate LAPI calls. Target cadences are triggered by the normal or idle refresh interval, and fair budget allocation prevents old due windows from being starved by active-window backlog.
 
-Alerts and decisions are stored as normalized SQLite columns. The `decisions.alert_id` relationship is authoritative, so alert rows do not duplicate embedded decision objects or ID arrays. Only unknown CrowdSec extension fields and open-ended event metadata remain as compact JSON; legacy full-payload columns are cleared during migration. Active duplicate winners are refreshed in batches after sync and stored as indexed flags, so decision paging does not recalculate duplicate groups for every row. Alerts are indexed by CrowdSec `start_at` when present, falling back to `created_at`, so replayed alerts are shown at the original alert/event time rather than the replay import time. Alerts are kept for `CROWDSEC_LOOKBACK_PERIOD` (default: 7 days), then cleaned up automatically. Historical and reconciliation requests that time out are retried in smaller windows down to `CROWDSEC_ALERT_SYNC_MIN_CHUNK`. If LAPI is unavailable during startup, bootstrap retries continue in the background using `CROWDSEC_BOOTSTRAP_RETRY_DELAY`; if only some bootstrap windows fail, the UI serves the imported cache and marks sync partial while retries continue. To force a full cache reset, use `POST /api/cache/clear`.
+Alerts and decisions are stored as normalized SQLite columns. The `decisions.alert_id` relationship is authoritative, so alert rows do not duplicate embedded decision objects or ID arrays. Only unknown CrowdSec extension fields and open-ended event metadata remain as compact JSON; legacy full-payload columns are cleared during migration. Active duplicate winners are refreshed in batches after sync and stored as indexed flags, so decision paging does not recalculate duplicate groups for every row. Alerts are indexed by CrowdSec `start_at` when present, falling back to `created_at`, so replayed alerts are shown at the original alert/event time rather than the replay import time. Alerts are kept for `crowdsec.sync.lookback` (default: 7 days), then cleaned up automatically. Historical and reconciliation requests that time out are retried in smaller windows down to `crowdsec.sync.alertSyncMinChunk`. If LAPI is unavailable during startup, bootstrap retries continue in the background using `crowdsec.sync.bootstrapRetryDelay`; if only some bootstrap windows fail, the UI serves the imported cache and marks sync partial while retries continue. To force a full cache reset, use `POST /api/cache/clear`.
 
 ## Local Development
 
@@ -745,35 +745,18 @@ Alerts and decisions are stored as normalized SQLite columns. The `decisions.ale
 
    The second command downloads the GeoNames `cities5000` and admin-1 extracts used for local attack-marker and table location labels, then saves them as an immutable snapshot. Re-run it after deleting the `geonames` directory when you want to refresh local development data. Official Docker images contain a snapshot from image build time and never download GeoNames data at runtime. GeoNames data is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
-2. **Configure `.env`**
+2. **Configure YAML and its secret file**
 
-   Create a `.env` file in the root directory with your CrowdSec credentials:
+   Copy the example to the default local path, change `storage.dataDir` to `./data`, change the LAPI URL to `http://localhost:8080`, and adjust any other settings:
+
    ```bash
-   CROWDSEC_URL=http://localhost:8080
-   CROWDSEC_USER=crowdsec-web-ui
-   CROWDSEC_PASSWORD=<your-secure-password>
-   CROWDSEC_PROMETHEUS_URL=http://localhost:6060/metrics
-   CROWDSEC_SIMULATIONS_ENABLED=true
-   CROWDSEC_REFRESH_INTERVAL=1m
-   CROWDSEC_LAPI_REQUEST_TIMEOUT=30s
-   CROWDSEC_ALERT_SYNC_CHUNK=12h
-   CROWDSEC_ALERT_SYNC_MIN_CHUNK=15m
-   CROWDSEC_BOOTSTRAP_RETRY_DELAY=30s
-   CROWDSEC_BOOTSTRAP_RETRY_ENABLED=true
-   # BASE_PATH=/crowdsec
+   mkdir -p data secrets
+   cp config.example.yaml data/config.yaml
    ```
 
-   Or use mTLS instead of `CROWDSEC_USER`/`CROWDSEC_PASSWORD`:
-   ```bash
-   CROWDSEC_URL=https://localhost:8080
-   CROWDSEC_TLS_CERT_PATH=/path/to/agent.pem
-   CROWDSEC_TLS_KEY_PATH=/path/to/agent-key.pem
-   CROWDSEC_PROMETHEUS_URL=http://localhost:6060/metrics
-   # Optional when using a private CA or self-signed CrowdSec LAPI certificate
-   CROWDSEC_TLS_CA_CERT_PATH=/path/to/ca.pem
-   CROWDSEC_SIMULATIONS_ENABLED=true
-   CROWDSEC_REFRESH_INTERVAL=1m
-   ```
+   Change `password.file` to `./secrets/crowdsec_password.txt` and create that file with the generated watcher password. No `CONFIG_FILE` setting is needed; use it only when you intentionally want a different YAML path.
+
+   For mTLS, replace the instance's password auth in YAML with `type: mtls`, `certFile`, and `keyFile`; no LAPI password environment variable is then needed.
 
 3. **Start or build**
 

@@ -4,8 +4,8 @@ services:
     container_name: crowdsec_web_ui
     ports:
       - "3000:3000"
-    env_file:
-      - .env
+    secrets:
+      - crowdsec_password
     volumes:
       - ./data:/app/data
     healthcheck:
@@ -15,3 +15,7 @@ services:
       retries: 3
       start_period: 10s
     restart: unless-stopped
+
+secrets:
+  crowdsec_password:
+    file: ./secrets/crowdsec_password.txt

@@ -137,6 +137,12 @@ Stop-ServiceOnPort -Port $BackendPort -Name 'backend'
 Stop-ServiceOnPort -Port $FrontendPort -Name 'frontend'
 
 Import-DotEnv -Path $EnvFile
+
+if (-not $Env:CONFIG_FILE -and -not $Env:DB_DIR) {
+    $Env:DB_DIR = Join-Path $ProjectRoot 'data'
+    Write-Log "Using default configuration path $($Env:DB_DIR)/config.yaml."
+}
+
 Assert-ToolingInstalled
 
 Set-Location $ProjectRoot

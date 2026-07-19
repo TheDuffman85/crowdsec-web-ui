@@ -74,7 +74,7 @@ const config = createRuntimeConfig({
   VITE_VERSION: process.env.VITE_VERSION || 'loadtest',
   VITE_BRANCH: process.env.VITE_BRANCH || 'loadtest',
   VITE_COMMIT_HASH: process.env.VITE_COMMIT_HASH || 'loadtest',
-});
+}, { defaultConfigFile: path.join(dbDir, 'config.yaml') });
 const multiInstanceProfile = process.env.LOADTEST_MULTI_INSTANCE === 'true';
 if (multiInstanceProfile) {
   const common = config.instances[0];

@@ -28,9 +28,15 @@ function createTestDatabase(): CrowdsecDatabase {
   return new CrowdsecDatabase({ dbPath: path.join(dir, 'test.db') });
 }
 
+function createTestRuntimeConfig(env: NodeJS.ProcessEnv) {
+  const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-load-test-config-'));
+  tempDirs.push(dir);
+  return createRuntimeConfig(env, { defaultConfigFile: path.join(dir, 'config.yaml') });
+}
+
 describe('load-test authentication', () => {
   test('defaults authentication to enabled and preserves OIDC environment settings', () => {
-    const config = createRuntimeConfig(createLoadTestRuntimeEnv({
+    const config = createTestRuntimeConfig(createLoadTestRuntimeEnv({
       AUTH_OIDC_ISSUER_URL: 'https://idp.example.com/application/o/crowdsec/',
       AUTH_OIDC_CLIENT_ID: 'load-test-client',
       AUTH_OIDC_CLIENT_SECRET: 'load-test-secret',
@@ -55,7 +61,7 @@ describe('load-test authentication', () => {
   });
 
   test('respects AUTH_ENABLED=false', () => {
-    const config = createRuntimeConfig(createLoadTestRuntimeEnv({ AUTH_ENABLED: 'false' }));
+    const config = createTestRuntimeConfig(createLoadTestRuntimeEnv({ AUTH_ENABLED: 'false' }));
     expect(config.dashboardAuth.enabled).toBe(false);
   });
 

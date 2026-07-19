@@ -1,8 +1,9 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { createRuntimeConfig, getIntervalName, parseBooleanEnv, parseCsvEnv, parseLookbackToMs, parseOidcScope, parseOidcUnmatchedRole, parseOptionalBooleanEnv, parseRefreshInterval, parseTimeFormat, parseTimeZone } from './config';
+import { parse as parseYaml } from 'yaml';
+import { createRuntimeConfig as createRuntimeConfigImpl, getIntervalName, parseBooleanEnv, parseCsvEnv, parseLookbackToMs, parseOidcScope, parseOidcUnmatchedRole, parseOptionalBooleanEnv, parseRefreshInterval, parseTimeFormat, parseTimeZone } from './config';
 
 const tempDirs: string[] = [];
 
@@ -22,6 +23,16 @@ function createTempConfig(contents: string): string {
   return filePath;
 }
 
+function createMissingConfigPath(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'crowdsec-web-ui-full-config-test-'));
+  tempDirs.push(dir);
+  return join(dir, 'config.yaml');
+}
+
+function createRuntimeConfig(env: NodeJS.ProcessEnv) {
+  return createRuntimeConfigImpl(env, { defaultConfigFile: createMissingConfigPath() });
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -33,6 +44,7 @@ describe('config helpers', () => {
     expect(parseRefreshInterval('manual')).toBe(0);
     expect(parseRefreshInterval('0')).toBe(0);
     expect(parseRefreshInterval('5s')).toBe(5_000);
+    expect(parseRefreshInterval('250ms')).toBe(250);
     expect(parseRefreshInterval('30s')).toBe(30_000);
     expect(parseRefreshInterval('1m')).toBe(60_000);
     expect(parseRefreshInterval('5m')).toBe(300_000);
@@ -290,6 +302,312 @@ describe('config helpers', () => {
     })).toThrow(/AUTH_OIDC_SCOPE/);
   });
 
+  test('loads all application settings from CONFIG_FILE and ignores deprecated setting environment variables', () => {
+    const configFile = createTempConfig(`
+server:
+  port: 4321
+  basePath: /security
+storage:
+  dataDir: /tmp/yaml-data
+  geonamesDir: /tmp/yaml-geonames
+ui:
+  timeZone: UTC
+  timeFormat: 12h
+  readOnly: true
+auth:
+  enabled: false
+  sessionSecret:
+    env: YAML_AUTH_SECRET
+  oidc:
+    issuerUrl: https://idp.example.com/
+    clientId: yaml-client
+    clientSecret:
+      env: YAML_OIDC_SECRET
+    scope: openid email
+    groupsClaim: roles
+    adminGroups: [admins]
+    readOnlyGroups: [viewers]
+    unmatchedRole: read-only
+notifications:
+  secretKey:
+    env: YAML_NOTIFICATION_KEY
+  allowPrivateAddresses: false
+  debugPayloads: true
+updates:
+  enabled: false
+crowdsec:
+  simulationsEnabled: true
+  alertFilters:
+    includeOrigins: [crowdsec]
+    excludeOrigins: [lists]
+    includeCapi: true
+    includeOriginEmpty: true
+    excludeOriginEmpty: false
+  sync:
+    lookback: 2d
+    refreshInterval: 30s
+    manualRefreshEnabled: true
+    idleRefreshInterval: 5m
+    idleThreshold: 1m
+    requestTimeout: 45s
+    bouncerPropagationDelay: 5s
+    metricsRequestTimeout: 8s
+    heartbeatInterval: 1m
+    alertSyncChunk: 4h
+    alertSyncMinChunk: 10m
+    reconcileWindow: 2h
+    reconcileRecentAge: 12h
+    reconcileRecentInterval: 5m
+    reconcileActiveInterval: 1m
+    reconcileOldInterval: 4h
+    reconcileWindowsPerRefresh: 3
+    bootstrapRetryDelay: 20s
+    bootstrapRetryEnabled: false
+instances:
+  - id: main
+    name: Main
+    lapi:
+      url: https://crowdsec.example.com:8080
+      auth:
+        type: password
+        username: watcher
+        password:
+          env: YAML_LAPI_PASSWORD
+    metrics: []
+`);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfig({
+        CONFIG_FILE: configFile,
+        PORT: 'not-a-number',
+        TZ: 'not/a-time-zone',
+        CROWDSEC_URL: 'http://ignored:8080',
+        YAML_AUTH_SECRET: 'auth-secret',
+        YAML_OIDC_SECRET: 'oidc-secret',
+        YAML_NOTIFICATION_KEY: 'notification-secret',
+        YAML_LAPI_PASSWORD: 'lapi-secret',
+      });
+
+      expect(config).toMatchObject({
+        port: 4321,
+        basePath: '/security',
+        dbDir: '/tmp/yaml-data',
+        geonamesDumpDir: '/tmp/yaml-geonames',
+        timeZone: 'UTC',
+        timeFormat: '12h',
+        readOnly: true,
+        simulationsEnabled: true,
+        lookbackMs: 172_800_000,
+        refreshIntervalMs: 30_000,
+        manualRefreshEnabled: true,
+        notificationSecretKey: 'notification-secret',
+        notificationAllowPrivateAddresses: false,
+        notificationDebugPayloads: true,
+        updateCheckEnabled: false,
+      });
+      expect(config.dashboardAuth.sessionSecret).toBe('auth-secret');
+      expect(config.dashboardAuth.oidcClientSecret).toBe('oidc-secret');
+      expect(config.instances[0].lapiAuth).toEqual({ mode: 'password', user: 'watcher', password: 'lapi-secret' });
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/PORT.*CROWDSEC_URL.*application YAML.*takes precedence.*variables do not affect/i));
+      expect(log).toHaveBeenCalledWith(`Loaded application configuration from ${configFile}.`);
+    } finally {
+      warn.mockRestore();
+      log.mockRestore();
+    }
+  });
+
+  test('accepts direct application, LAPI, and metrics secrets in YAML', () => {
+    const configFile = createTempConfig(`
+auth:
+  sessionSecret: direct-session-secret
+  totpSecret: direct-totp-secret
+  totpSeed: JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP
+  oidc:
+    clientSecret: direct-oidc-secret
+notifications:
+  secretKey: direct-notification-secret
+instances:
+  - id: direct
+    name: Direct secrets
+    lapi:
+      url: https://crowdsec.example.com:8080
+      auth:
+        type: password
+        username: watcher
+        password: direct-lapi-password
+    metrics:
+      - id: lapi
+        name: LAPI metrics
+        url: https://crowdsec.example.com:6060/metrics
+        auth:
+          type: bearer
+          token: direct-metrics-token
+`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfig({ CONFIG_FILE: configFile });
+      expect(config.dashboardAuth).toMatchObject({
+        sessionSecret: 'direct-session-secret',
+        totpSecret: 'direct-totp-secret',
+        totpSeed: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP',
+        oidcClientSecret: 'direct-oidc-secret',
+      });
+      expect(config.notificationSecretKey).toBe('direct-notification-secret');
+      expect(config.instances[0].lapiAuth).toEqual({
+        mode: 'password', user: 'watcher', password: 'direct-lapi-password',
+      });
+      expect(config.instances[0].prometheus[0].auth).toEqual({
+        type: 'bearer', token: 'direct-metrics-token',
+      });
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test('maps legacy environment through generated configuration when CONFIG_FILE is unset', () => {
+    const generatedConfigFile = createMissingConfigPath();
+    const env = {
+      PORT: '4100',
+      CROWDSEC_URL: 'http://crowdsec:8080',
+      CROWDSEC_USER: 'watcher',
+      CROWDSEC_PASSWORD: 'do-not-write-this-password',
+      AUTH_SECRET: 'do-not-write-this-auth-secret',
+      CROWDSEC_REFRESH_INTERVAL: '5m',
+    };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const generatedConfig = createRuntimeConfigImpl(env, { defaultConfigFile: generatedConfigFile });
+      expect(generatedConfig.port).toBe(4100);
+      expect(generatedConfig.refreshIntervalMs).toBe(300_000);
+      expect(generatedConfig.instances[0].lapiAuth).toEqual({
+        mode: 'password', user: 'watcher', password: 'do-not-write-this-password',
+      });
+      expect(generatedConfig.dashboardAuth.sessionSecret).toBe('do-not-write-this-auth-secret');
+      const saved = readFileSync(generatedConfigFile, 'utf8');
+      expect(saved).not.toContain('do-not-write-this-password');
+      expect(saved).not.toContain('do-not-write-this-auth-secret');
+      const document = parseYaml(saved);
+      expect(document.auth.sessionSecret).toEqual({ env: 'AUTH_SECRET' });
+      expect(document.instances[0].lapi.auth.password).toEqual({ env: 'CROWDSEC_PASSWORD' });
+      expect(document.server.port).toBe(4100);
+      expect(statSync(generatedConfigFile).mode & 0o777).toBe(0o600);
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/migrated into the generated YAML.*config\.yaml.*now authoritative.*variables no longer affect/i));
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/Saved generated legacy configuration.*config\.yaml/i));
+      expect(log).toHaveBeenCalledWith(`Loaded application configuration from ${generatedConfigFile}.`);
+    } finally {
+      warn.mockRestore();
+      log.mockRestore();
+    }
+  });
+
+  test('saves generated legacy configuration at the selected default path', () => {
+    const generatedConfigFile = createMissingConfigPath();
+    const dataDir = dirname(generatedConfigFile);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfigImpl(
+        { DB_DIR: dataDir, PORT: '4100' },
+        { defaultConfigFile: generatedConfigFile },
+      );
+      expect(config.dbDir).toBe(dataDir);
+      expect(parseYaml(readFileSync(generatedConfigFile, 'utf8')).server.port).toBe(4100);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test('loads an existing default configuration without overwriting it or applying legacy settings', () => {
+    const generatedConfigFile = createMissingConfigPath();
+    createRuntimeConfigImpl({ PORT: '4100' }, { defaultConfigFile: generatedConfigFile });
+    const userEdited = readFileSync(generatedConfigFile, 'utf8').replace('port: 4100', 'port: 4200');
+    writeFileSync(generatedConfigFile, userEdited, 'utf8');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfigImpl({ PORT: '4300' }, { defaultConfigFile: generatedConfigFile });
+      expect(config.port).toBe(4200);
+      expect(readFileSync(generatedConfigFile, 'utf8')).toBe(userEdited);
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/YAML.*takes precedence.*variables do not affect/i));
+      expect(log).toHaveBeenCalledWith(`Loaded application configuration from ${generatedConfigFile}.`);
+    } finally {
+      warn.mockRestore();
+      log.mockRestore();
+    }
+  });
+
+  test('rejects a configured CONFIG_FILE that does not exist', () => {
+    const configFile = createMissingConfigPath();
+    expect(() => createRuntimeConfig({ CONFIG_FILE: configFile, PORT: '4100' }))
+      .toThrow(/failed to read CONFIG_FILE.*ENOENT/i);
+  });
+
+  test('keeps the shipped example configuration executable', () => {
+    const passwordSecretFile = createTempSecret('example-secret');
+    const example = readFileSync(join(process.cwd(), 'config.example.yaml'), 'utf8')
+      .replace('/run/secrets/crowdsec_password', passwordSecretFile);
+    const configFile = createTempConfig(example);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfig({
+        CONFIG_FILE: configFile,
+      });
+      expect(config.port).toBe(3000);
+      expect(config.instances[0]).toMatchObject({
+        id: 'default',
+        lapiUrl: 'http://crowdsec:8080',
+        lapiAuth: { mode: 'password', user: 'crowdsec-web-ui', password: 'example-secret' },
+      });
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test('uses an unversioned application configuration schema', () => {
+    const configFile = createTempConfig(`
+version: 1
+instances:
+  - id: default
+    name: CrowdSec
+    lapi:
+      url: http://crowdsec:8080
+      auth: { type: none }
+`);
+    expect(() => createRuntimeConfig({ CONFIG_FILE: configFile })).toThrow(/unknown root setting.*version/i);
+  });
+
+  test('incorporates an existing instances YAML into generated legacy configuration', () => {
+    const legacyInstancesFile = createTempConfig(`
+instances:
+  - id: existing
+    name: Existing instance
+    lapi:
+      url: https://existing.example.com:8080
+      auth:
+        type: password
+        username: watcher
+        password:
+          env: EXISTING_LAPI_PASSWORD
+`);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfig({
+        CROWDSEC_INSTANCES_CONFIG_FILE: legacyInstancesFile,
+        EXISTING_LAPI_PASSWORD: 'existing-secret',
+      });
+      expect(config.instances[0]).toMatchObject({
+        id: 'existing',
+        lapiUrl: 'https://existing.example.com:8080',
+        lapiAuth: { mode: 'password', user: 'watcher', password: 'existing-secret' },
+      });
+    } finally {
+      warn.mockRestore();
+      log.mockRestore();
+    }
+  });
+
   test('createRuntimeConfig enables read-only mode from environment', () => {
     const config = createRuntimeConfig({ PERMISSION_READ_ONLY: 'true' });
     expect(config.readOnly).toBe(true);
@@ -404,23 +722,26 @@ describe('config helpers', () => {
   });
 
   test('createRuntimeConfig supports mTLS authentication', () => {
+    const certPath = createTempSecret('certificate');
+    const keyPath = createTempSecret('private key');
+    const caCertPath = createTempSecret('ca certificate');
     const config = createRuntimeConfig({
       CROWDSEC_URL: 'https://localhost:8080',
-      CROWDSEC_TLS_CERT_PATH: '/certs/agent.pem',
-      CROWDSEC_TLS_KEY_PATH: '/certs/agent-key.pem',
-      CROWDSEC_TLS_CA_CERT_PATH: '/certs/ca.pem',
+      CROWDSEC_TLS_CERT_PATH: certPath,
+      CROWDSEC_TLS_KEY_PATH: keyPath,
+      CROWDSEC_TLS_CA_CERT_PATH: caCertPath,
     });
 
     expect(config.crowdsecAuthMode).toBe('mtls');
     expect(config.crowdsecAuth).toEqual({
       mode: 'mtls',
-      certPath: '/certs/agent.pem',
-      keyPath: '/certs/agent-key.pem',
-      caCertPath: '/certs/ca.pem',
+      certPath,
+      keyPath,
+      caCertPath,
     });
-    expect(config.crowdsecTlsCertPath).toBe('/certs/agent.pem');
-    expect(config.crowdsecTlsKeyPath).toBe('/certs/agent-key.pem');
-    expect(config.crowdsecTlsCaCertPath).toBe('/certs/ca.pem');
+    expect(config.crowdsecTlsCertPath).toBe(certPath);
+    expect(config.crowdsecTlsKeyPath).toBe(keyPath);
+    expect(config.crowdsecTlsCaCertPath).toBe(caCertPath);
   });
 
   test('createRuntimeConfig reads CrowdSec password authentication from CROWDSEC_PASSWORD_FILE', () => {
@@ -479,7 +800,7 @@ describe('config helpers', () => {
   });
 
   test('createRuntimeConfig loads named LAPI and metrics endpoints from YAML', () => {
-    const passwordFile = createTempSecret('lapi-secret\n');
+    const passwordSecretFile = createTempSecret('lapi-secret\n');
     const caFile = createTempSecret('test-ca');
     const configFile = createTempConfig(`
 instances:
@@ -491,7 +812,8 @@ instances:
       auth:
         type: password
         username: watcher
-        passwordFile: ${passwordFile}
+        password:
+          file: ${passwordSecretFile}
       tls:
         caFile: ${caFile}
     metrics:
@@ -500,9 +822,18 @@ instances:
         url: https://crowdsec-eu:6060/metrics
         auth:
           type: bearer
-          tokenEnv: EU_METRICS_TOKEN
+          token:
+            env: EU_METRICS_TOKEN
         tls:
           caFile: ${caFile}
+      - id: engine
+        name: EU Engine
+        url: https://crowdsec-eu:6060/metrics/engine
+        auth:
+          type: basic
+          username: metrics
+          password:
+            env: EU_METRICS_PASSWORD
     sync:
       requestTimeout: 45s
       alertSyncChunk: 6h
@@ -511,6 +842,7 @@ instances:
     const config = createRuntimeConfig({
       CROWDSEC_INSTANCES_CONFIG_FILE: configFile,
       EU_METRICS_TOKEN: 'metrics-secret',
+      EU_METRICS_PASSWORD: 'basic-metrics-secret',
       CROWDSEC_LOOKBACK_PERIOD: '24h',
     });
 
@@ -530,6 +862,27 @@ instances:
       auth: { type: 'bearer', token: 'metrics-secret' },
       tls: { caFile },
     });
+    expect(config.instances[0].prometheus[1].auth).toEqual({
+      type: 'basic', username: 'metrics', password: 'basic-metrics-secret',
+    });
+  });
+
+  test('rejects suffix-style instance secret settings', () => {
+    const configFile = createTempConfig(`
+instances:
+  - id: first
+    name: First
+    lapi:
+      url: https://first.example:8080
+      auth:
+        type: password
+        username: watcher
+        passwordEnv: FIRST_PASSWORD
+`);
+    expect(() => createRuntimeConfig({
+      CROWDSEC_INSTANCES_CONFIG_FILE: configFile,
+      FIRST_PASSWORD: 'secret',
+    })).toThrow(/unknown.*passwordEnv/i);
   });
 
   test('multi-instance YAML rejects the former prometheus key', () => {
@@ -542,7 +895,8 @@ instances:
       auth:
         type: password
         username: watcher
-        passwordEnv: FIRST_PASSWORD
+        password:
+          env: FIRST_PASSWORD
     prometheus: []
 `);
 
@@ -552,8 +906,8 @@ instances:
     })).toThrow(/prometheus has been renamed to instances\[0\]\.metrics/i);
   });
 
-  test('multi-instance YAML rejects unsafe secrets, duplicate names, and legacy connection variables', () => {
-    const unsafeFile = createTempConfig(`
+  test('multi-instance YAML accepts direct secrets and rejects duplicate names and legacy connection variables', () => {
+    const directSecretFile = createTempConfig(`
 instances:
   - id: first
     name: Production
@@ -561,21 +915,23 @@ instances:
       url: https://first.example:8080
       auth: { type: password, username: watcher, password: plaintext }
 `);
-    expect(() => createRuntimeConfig({ CROWDSEC_INSTANCES_CONFIG_FILE: unsafeFile })).toThrow(/plaintext.*password.*passwordEnv or passwordFile/i);
+    expect(createRuntimeConfig({ CROWDSEC_INSTANCES_CONFIG_FILE: directSecretFile }).instances[0].lapiAuth).toEqual({
+      mode: 'password', user: 'watcher', password: 'plaintext',
+    });
 
-    const passwordFile = createTempSecret('secret');
+    const passwordSecretFile = createTempSecret('secret');
     const duplicateFile = createTempConfig(`
 instances:
   - id: first
     name: Production
     lapi:
       url: https://first.example:8080
-      auth: { type: password, username: watcher, passwordFile: ${passwordFile} }
+      auth: { type: password, username: watcher, password: { file: ${passwordSecretFile} } }
   - id: second
     name: production
     lapi:
       url: https://second.example:8080
-      auth: { type: password, username: watcher, passwordFile: ${passwordFile} }
+      auth: { type: password, username: watcher, password: { file: ${passwordSecretFile} } }
 `);
     expect(() => createRuntimeConfig({ CROWDSEC_INSTANCES_CONFIG_FILE: duplicateFile })).toThrow(/duplicate instance name/i);
     expect(() => createRuntimeConfig({
@@ -585,7 +941,7 @@ instances:
   });
 
   test('multi-instance YAML rejects icons that contain control characters or are too long', () => {
-    const passwordFile = createTempSecret('secret');
+    const passwordSecretFile = createTempSecret('secret');
     const configFile = createTempConfig(`
 instances:
   - id: first
@@ -593,7 +949,7 @@ instances:
     icon: this-icon-is-too-long
     lapi:
       url: https://first.example:8080
-      auth: { type: password, username: watcher, passwordFile: ${passwordFile} }
+      auth: { type: password, username: watcher, password: { file: ${passwordSecretFile} } }
 `);
     expect(() => createRuntimeConfig({ CROWDSEC_INSTANCES_CONFIG_FILE: configFile })).toThrow(/short text or emoji icon/i);
   });

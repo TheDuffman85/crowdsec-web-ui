@@ -427,7 +427,7 @@ function createController(options: {
     AUTH_ENABLED: 'false',
     ...authEnv,
     ...options.env,
-  });
+  }, { defaultConfigFile: path.join(tempDir, 'config.yaml') });
 
   const database = options.database || new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
   const fetchCalls: Array<{ url: string; method: string; body?: unknown; headers?: RequestInit['headers']; dispatcher?: unknown }> = [];

@@ -6,7 +6,11 @@ client/dist
 .DS_Store
 *.log
 .env
+/config.yaml
+/config.dev.yaml
 /certs
+/data
+/secrets
 agent/certs
 crowdsec.db
 crowdsec.db-shm

@@ -86,7 +86,6 @@ ENV VITE_REPO_URL=$VITE_REPO_URL
 ENV VITE_BRANCH=$VITE_BRANCH
 ENV VITE_VERSION=$VITE_VERSION
 ENV DOCKER_IMAGE_REF=$DOCKER_IMAGE_REF
-ENV DB_DIR="/app/data"
 ENV NODE_ENV=production
 
 # Install gosu (for entrypoint) and apply security updates
