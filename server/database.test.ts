@@ -100,6 +100,90 @@ describe('CrowdsecDatabase', () => {
     db.close();
   });
 
+  test('replaces legacy global UUID constraints with per-instance constraints', () => {
+    const dbPath = createTestDatabasePath();
+    const legacy = createLegacyDatabase(dbPath);
+    legacy.exec(`
+      CREATE TABLE alerts (
+        id INTEGER PRIMARY KEY,
+        uuid TEXT UNIQUE,
+        created_at TEXT NOT NULL,
+        scenario TEXT,
+        source_ip TEXT,
+        message TEXT,
+        raw_data TEXT
+      );
+      CREATE TABLE decisions (
+        id TEXT PRIMARY KEY,
+        uuid TEXT UNIQUE,
+        alert_id INTEGER,
+        created_at TEXT NOT NULL,
+        stop_at TEXT NOT NULL,
+        value TEXT,
+        type TEXT,
+        origin TEXT,
+        scenario TEXT,
+        raw_data TEXT
+      );
+      INSERT INTO alerts (id, uuid, created_at, scenario, source_ip, message, raw_data)
+      VALUES (
+        1,
+        'same-alert-uuid',
+        '2026-07-19T10:00:00.000Z',
+        'crowdsecurity/ssh-bf',
+        '1.1.1.1',
+        'default',
+        '{"id":1,"uuid":"same-alert-uuid"}'
+      );
+      INSERT INTO decisions (id, uuid, alert_id, created_at, stop_at, value, type, origin, scenario, raw_data)
+      VALUES (
+        '1',
+        'same-decision-uuid',
+        1,
+        '2026-07-19T10:00:00.000Z',
+        '2026-07-20T10:00:00.000Z',
+        '3.3.3.3',
+        'ban',
+        'crowdsec',
+        'crowdsecurity/ssh-bf',
+        '{"id":1,"uuid":"same-decision-uuid","alert_id":1}'
+      );
+    `);
+    legacy.close();
+
+    const db = new CrowdsecDatabase({ dbPath });
+
+    expect(db.insertAlert({
+      $id: 1,
+      $instance_id: 'secondary',
+      $uuid: 'same-alert-uuid',
+      $created_at: '2026-07-19T10:00:00.000Z',
+      $scenario: 'crowdsecurity/ssh-bf',
+      $source_ip: '2.2.2.2',
+      $message: 'secondary',
+      $raw_data: JSON.stringify({ id: 1, uuid: 'same-alert-uuid' }),
+    })).toBe(true);
+    expect(db.insertDecision({
+      $id: '1',
+      $instance_id: 'secondary',
+      $uuid: 'same-decision-uuid',
+      $alert_id: 1,
+      $created_at: '2026-07-19T10:00:00.000Z',
+      $stop_at: '2026-07-20T10:00:00.000Z',
+      $value: '3.3.3.3',
+      $type: 'ban',
+      $origin: 'crowdsec',
+      $scenario: 'crowdsecurity/ssh-bf',
+      $raw_data: JSON.stringify({ id: 1, uuid: 'same-decision-uuid', alert_id: 1 }),
+    })).toBe(true);
+
+    expect(db.countAlerts()).toBe(2);
+    expect(db.countDecisions()).toBe(2);
+    expect(db.getAlertInternalId('default', 1)).not.toBe(db.getAlertInternalId('secondary', 1));
+    expect(db.getDecisionInternalId('default', 1)).not.toBe(db.getDecisionInternalId('secondary', 1));
+    db.close();
+  });
+
   test('persists alert deletion tombstones and blocks sync from restoring queued records', () => {
     const dbPath = createTestDatabasePath();
     const original = new CrowdsecDatabase({ dbPath });

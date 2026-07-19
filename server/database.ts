@@ -2551,11 +2551,13 @@ function migrateInstanceIdentityColumns(db: Database): void {
     db.exec('ALTER TABLE decisions ADD COLUMN alert_upstream_id TEXT');
     db.exec('UPDATE decisions SET alert_upstream_id = CAST(alert_id AS TEXT) WHERE alert_upstream_id IS NULL');
   }
-  if (migratedAlerts) db.exec(`
+  const rebuiltAlerts = rebuildTableWithoutGlobalUuidConstraint(db, 'alerts');
+  const rebuiltDecisions = rebuildTableWithoutGlobalUuidConstraint(db, 'decisions');
+  if (migratedAlerts && !rebuiltAlerts) db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_instance_upstream ON alerts(instance_id, upstream_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_instance_uuid ON alerts(instance_id, uuid) WHERE uuid IS NOT NULL;
   `);
-  if (migratedDecisions) db.exec(`
+  if (migratedDecisions && !rebuiltDecisions) db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_decisions_instance_upstream ON decisions(instance_id, upstream_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_decisions_instance_uuid ON decisions(instance_id, uuid) WHERE uuid IS NOT NULL;
   `);
@@ -2563,6 +2565,65 @@ function migrateInstanceIdentityColumns(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_alerts_instance_created ON alerts(instance_id, created_at DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_decisions_instance_created ON decisions(instance_id, created_at DESC, id DESC);
   `);
+}
+
+type InstanceIdentityTable = 'alerts' | 'decisions';
+
+interface SqliteTableColumn {
+  name: string;
+  type: string;
+  notnull: number;
+  dflt_value: string | null;
+  pk: number;
+}
+
+function quoteIdentifier(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+function sqliteString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function hasGlobalUuidConstraint(db: Database, table: InstanceIdentityTable): boolean {
+  const indexes = db.query(`PRAGMA index_list(${sqliteString(table)})`).all() as Array<{ name: string; unique: number }>;
+  return indexes.some((index) => {
+    if (!index.unique) return false;
+    const columns = db.query(`PRAGMA index_info(${sqliteString(index.name)})`).all() as Array<{ name: string }>;
+    return columns.length === 1 && columns[0].name === 'uuid';
+  });
+}
+
+function rebuildTableWithoutGlobalUuidConstraint(db: Database, table: InstanceIdentityTable): boolean {
+  if (!hasGlobalUuidConstraint(db, table)) return false;
+
+  const columns = db.query(`PRAGMA table_info(${sqliteString(table)})`).all() as SqliteTableColumn[];
+  const tempTable = `${table}_instance_identity_migration`;
+  const columnDefinitions = columns.map((column) => {
+    const parts = [quoteIdentifier(column.name), column.type];
+    if (column.pk) parts.push('PRIMARY KEY');
+    if (column.notnull && !column.pk) parts.push('NOT NULL');
+    if (column.dflt_value !== null) parts.push(`DEFAULT ${column.dflt_value}`);
+    return parts.filter(Boolean).join(' ');
+  });
+  const columnNames = columns.map((column) => quoteIdentifier(column.name)).join(', ');
+
+  const migrate = db.transaction(() => {
+    db.exec(`
+      DROP TABLE IF EXISTS ${quoteIdentifier(tempTable)};
+      CREATE TABLE ${quoteIdentifier(tempTable)} (
+        ${columnDefinitions.join(',\n        ')},
+        UNIQUE(instance_id, upstream_id),
+        UNIQUE(instance_id, uuid)
+      );
+      INSERT INTO ${quoteIdentifier(tempTable)} (${columnNames})
+      SELECT ${columnNames} FROM ${quoteIdentifier(table)};
+      DROP TABLE ${quoteIdentifier(table)};
+      ALTER TABLE ${quoteIdentifier(tempTable)} RENAME TO ${quoteIdentifier(table)};
+    `);
+  });
+  migrate();
+  return true;
 }
 
 
