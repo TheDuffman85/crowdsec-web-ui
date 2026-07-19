@@ -8,8 +8,12 @@ import type {
   CrowdsecMetricsTiming,
   CrowdsecMetricsWhitelist,
 } from '../shared/contracts';
+import fs from 'node:fs';
+import { Agent, fetch as undiciFetch, type Dispatcher } from 'undici';
+import type { EndpointTlsConfig, PrometheusAuthConfig } from './instances-config';
 
-type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+type MetricsRequestInit = RequestInit & { dispatcher?: Dispatcher };
+type FetchLike = (input: string | URL | Request, init?: MetricsRequestInit) => Promise<Response>;
 
 export interface PrometheusSample {
   name: string;
@@ -17,10 +21,12 @@ export interface PrometheusSample {
   value: number;
 }
 
-interface FetchCrowdsecMetricsOptions {
+export interface FetchCrowdsecMetricsOptions {
   url: string;
   timeoutMs: number;
   fetchImpl?: FetchLike;
+  auth?: PrometheusAuthConfig;
+  tls?: EndpointTlsConfig;
 }
 
 interface ApiEntityAccumulator {
@@ -530,14 +536,34 @@ export function summarizeCrowdsecMetrics(samples: PrometheusSample[]): CrowdsecM
 }
 
 export async function fetchCrowdsecMetrics(options: FetchCrowdsecMetricsOptions): Promise<CrowdsecMetricsResponse> {
-  const fetchImpl = options.fetchImpl || fetch;
+  const fetchImpl = options.fetchImpl || ((input, init) => undiciFetch(
+    input as Parameters<typeof undiciFetch>[0],
+    init as Parameters<typeof undiciFetch>[1],
+  ) as unknown as Promise<Response>);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
+  const headers: Record<string, string> = { Accept: 'text/plain' };
+  if (options.auth?.type === 'basic') {
+    headers.Authorization = `Basic ${Buffer.from(`${options.auth.username}:${options.auth.password}`).toString('base64')}`;
+  } else if (options.auth?.type === 'bearer') {
+    headers.Authorization = `Bearer ${options.auth.token}`;
+  }
+  const tls = options.tls;
+  const dispatcher = tls && (tls.caFile || tls.certFile || tls.keyFile)
+    ? new Agent({
+        connect: {
+          ...(tls.caFile ? { ca: fs.readFileSync(tls.caFile) } : {}),
+          ...(tls.certFile ? { cert: fs.readFileSync(tls.certFile) } : {}),
+          ...(tls.keyFile ? { key: fs.readFileSync(tls.keyFile) } : {}),
+        },
+      })
+    : undefined;
 
   try {
     const response = await fetchImpl(options.url, {
-      headers: { Accept: 'text/plain' },
+      headers,
       signal: controller.signal,
+      ...(dispatcher ? { dispatcher } : {}),
     });
     if (!response.ok) {
       throw new Error(`Prometheus endpoint returned HTTP ${response.status}`);
@@ -552,5 +578,6 @@ export async function fetchCrowdsecMetrics(options: FetchCrowdsecMetricsOptions)
     throw error;
   } finally {
     clearTimeout(timeout);
+    await dispatcher?.close();
   }
 }

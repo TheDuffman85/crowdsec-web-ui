@@ -9,6 +9,8 @@ import type {
   CrowdsecMetricsResponse,
   DashboardStatsResponse,
   DecisionListItem,
+  InstanceEntityRef,
+  MultiInstanceOperationResponse,
   NotificationChannel,
   NotificationListResponse,
   NotificationRule,
@@ -106,8 +108,11 @@ export async function fetchAlertsPaginated(
     return fetchJson<PaginatedResponse<SlimAlert>>(`/api/alerts?${params.toString()}`, undefined, 'Failed to fetch alerts');
 }
 
-export async function fetchAlert(id: string | number): Promise<AlertRecord> {
-    const payload = await fetchJson<AlertRecord | AlertRecord[]>(`/api/alerts/${id}?include_decisions=false`, undefined, 'Failed to fetch alert');
+export async function fetchAlert(id: string | number, instanceId?: string): Promise<AlertRecord> {
+    const path = instanceId
+        ? `/api/instances/${encodeURIComponent(instanceId)}/alerts/${encodeURIComponent(String(id))}`
+        : `/api/alerts/${encodeURIComponent(String(id))}?include_decisions=false`;
+    const payload = await fetchJson<AlertRecord | AlertRecord[]>(path, undefined, 'Failed to fetch alert');
     if (Array.isArray(payload)) {
         const alert = payload[0];
         if (!alert) {
@@ -161,8 +166,11 @@ async function handleApiError(res: Response, defaultMsg: string, operationName =
     }
 }
 
-export async function deleteAlert(id: string | number): Promise<BulkDeleteResult | null> {
-  const res = await fetch(apiUrl(`/api/alerts/${id}`), { method: 'DELETE' });
+export async function deleteAlert(id: string | number, instanceId?: string): Promise<BulkDeleteResult | null> {
+  const path = instanceId
+    ? `/api/instances/${encodeURIComponent(instanceId)}/alerts/${encodeURIComponent(String(id))}`
+    : `/api/alerts/${encodeURIComponent(String(id))}`;
+  const res = await fetch(apiUrl(path), { method: 'DELETE' });
   await handleApiError(res, 'Failed to delete alert');
   clearGetCaches();
   if (res.status === 204) return null;
@@ -181,10 +189,11 @@ async function postDestructiveJson<TResponse, TBody>(input: string, body: TBody,
   return payload;
 }
 
-export async function bulkDeleteAlerts(ids: BulkDeleteRequest['ids']): Promise<BulkDeleteResult> {
+export async function bulkDeleteAlerts(refsOrIds: InstanceEntityRef[] | Array<string | number>): Promise<BulkDeleteResult> {
+  const usesRefs = typeof refsOrIds[0] === 'object';
   return postDestructiveJson<BulkDeleteResult, BulkDeleteRequest>(
     '/api/alerts/bulk-delete',
-    { ids },
+    usesRefs ? { refs: refsOrIds as InstanceEntityRef[] } : { ids: refsOrIds as Array<string | number> },
     'Failed to delete selected alerts',
   );
 }
@@ -213,28 +222,60 @@ export async function fetchDashboardStats(
   );
 }
 
-export async function deleteDecision(id: string | number): Promise<unknown> {
-  const res = await fetch(apiUrl(`/api/decisions/${id}`), { method: 'DELETE' });
+export async function deleteDecision(id: string | number, instanceId?: string): Promise<unknown> {
+  const path = instanceId
+    ? `/api/instances/${encodeURIComponent(instanceId)}/decisions/${encodeURIComponent(String(id))}`
+    : `/api/decisions/${encodeURIComponent(String(id))}`;
+  const res = await fetch(apiUrl(path), { method: 'DELETE' });
   await handleApiError(res, 'Failed to delete decision');
   clearGetCaches();
   if (res.status === 204) return null;
   return res.json();
 }
 
-export async function bulkDeleteDecisions(ids: BulkDeleteRequest['ids']): Promise<BulkDeleteResult> {
+export async function bulkDeleteDecisions(refsOrIds: InstanceEntityRef[] | Array<string | number>): Promise<BulkDeleteResult> {
+  const usesRefs = typeof refsOrIds[0] === 'object';
   return postDestructiveJson<BulkDeleteResult, BulkDeleteRequest>(
     '/api/decisions/bulk-delete',
-    { ids },
+    usesRefs ? { refs: refsOrIds as InstanceEntityRef[] } : { ids: refsOrIds as Array<string | number> },
     'Failed to delete selected decisions',
   );
 }
 
-export async function cleanupByIp(ip: CleanupByIpRequest['ip']): Promise<BulkDeleteResult> {
-  return postDestructiveJson<BulkDeleteResult, CleanupByIpRequest>(
+export async function cleanupByIp(request: CleanupByIpRequest | string): Promise<BulkDeleteResult> {
+  const data: CleanupByIpRequest = typeof request === 'string' ? { ip: request } : request;
+  const payload = await postDestructiveJson<BulkDeleteResult | MultiInstanceOperationResponse, CleanupByIpRequest>(
     '/api/cleanup/by-ip',
-    { ip },
+    data,
     'Failed to delete entries for this IP',
   );
+  if (!('results' in payload)) return payload;
+  const combined: BulkDeleteResult = {
+    requested_alerts: 0,
+    requested_decisions: 0,
+    deleted_alerts: 0,
+    deleted_decisions: 0,
+    failed: [],
+    ip: data.ip,
+    instance_results: payload.results,
+  };
+  for (const operation of payload.results) {
+    if (!operation.success) {
+      combined.failed.push({ kind: 'alert', id: data.ip, error: `${operation.instance_name}: ${operation.error || 'Failed'}` });
+      continue;
+    }
+    const result = operation.result as BulkDeleteResult | undefined;
+    if (!result) continue;
+    combined.requested_alerts += result.requested_alerts;
+    combined.requested_decisions += result.requested_decisions;
+    combined.deleted_alerts += result.deleted_alerts;
+    combined.deleted_decisions += result.deleted_decisions;
+    combined.failed.push(...result.failed.map((failure) => ({
+      ...failure,
+      error: `${operation.instance_name}: ${failure.error}`,
+    })));
+  }
+  return combined;
 }
 
 export async function addDecision(data: AddDecisionRequest): Promise<unknown> {
@@ -243,8 +284,10 @@ export async function addDecision(data: AddDecisionRequest): Promise<unknown> {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
     });
-    await handleApiError(res, 'Failed to add decision', 'Write Operations');
-    const payload = await res.json();
+    const payload = await res.clone().json().catch(() => null) as MultiInstanceOperationResponse | unknown;
+    if (!res.ok && (!payload || typeof payload !== 'object' || !('results' in payload))) {
+        await handleApiError(res, 'Failed to add decision', 'Write Operations');
+    }
     clearGetCaches();
     return payload;
 }
@@ -253,8 +296,11 @@ export async function fetchConfig(): Promise<ConfigResponse> {
     return fetchJson<ConfigResponse>('/api/config', undefined, 'Failed to fetch config');
 }
 
-export async function fetchCrowdsecMetrics(): Promise<CrowdsecMetricsResponse> {
-    return fetchJson<CrowdsecMetricsResponse>('/api/metrics/crowdsec', undefined, 'Failed to fetch CrowdSec metrics');
+export async function fetchCrowdsecMetrics(instanceId?: string, endpointId?: string): Promise<CrowdsecMetricsResponse> {
+    const path = instanceId && endpointId
+        ? `/api/instances/${encodeURIComponent(instanceId)}/metrics/${encodeURIComponent(endpointId)}`
+        : '/api/metrics/crowdsec';
+    return fetchJson<CrowdsecMetricsResponse>(path, undefined, 'Failed to fetch CrowdSec metrics');
 }
 
 export async function updateMetricsSidebarPreference(data: UpdateMetricsSidebarPreferenceRequest): Promise<{

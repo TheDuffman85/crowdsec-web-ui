@@ -93,6 +93,64 @@ describe('presentational components', () => {
     expect(screen.getByText('Synchronizing...')).toBeInTheDocument();
   });
 
+  test('shows historical sync progress for every configured instance', () => {
+    render(
+      <SyncOverlay
+        syncStatus={{
+          isSyncing: true,
+          progress: 52,
+          message: '',
+          startedAt: '2026-07-19T12:00:00.000Z',
+          completedAt: null,
+          state: 'syncing',
+          instances: [
+            {
+              instance_id: 'primary',
+              instance_name: 'Primary',
+              icon: '🟦',
+              isSyncing: false,
+              progress: 100,
+              message: 'Primary sync complete',
+              startedAt: '2026-07-19T12:00:00.000Z',
+              completedAt: '2026-07-19T12:01:00.000Z',
+              state: 'complete',
+            },
+            {
+              instance_id: 'secondary',
+              instance_name: 'Secondary',
+              icon: '🟩',
+              isSyncing: true,
+              progress: 5,
+              message: 'Syncing Secondary',
+              startedAt: '2026-07-19T12:01:00.000Z',
+              completedAt: null,
+              state: 'syncing',
+            },
+            {
+              instance_id: 'edge',
+              instance_name: 'Edge',
+              icon: '🟧',
+              isSyncing: false,
+              progress: 0,
+              message: '',
+              startedAt: null,
+              completedAt: null,
+              state: 'idle',
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText('1 of 3 instances finished')).toBeInTheDocument();
+    expect(screen.getByText('Primary')).toBeInTheDocument();
+    expect(screen.getByText('Secondary')).toBeInTheDocument();
+    expect(screen.getByText('Edge')).toBeInTheDocument();
+    expect(screen.getByText('Complete')).toBeInTheDocument();
+    expect(screen.getByText('Waiting for sync...')).toBeInTheDocument();
+    expect(screen.getByText('52%')).toBeInTheDocument();
+  });
+
   test('translates known server sync status messages', () => {
     const i18nValue: I18nContextValue = {
       language: 'de',

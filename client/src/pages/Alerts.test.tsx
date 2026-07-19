@@ -464,7 +464,7 @@ describe('Alerts page', () => {
 
     await waitFor(() => expect(getVisibleColumnHeaderNames()).toEqual(['Time', 'Scenario', 'Country', 'AS', 'IP / Range', 'Decisions', 'Actions']));
     expect(JSON.parse(window.localStorage.getItem('crowdsec-web-ui:alerts:table-column-order') || '[]'))
-      .toEqual(['id', 'time', 'scenario', 'country', 'region', 'city', 'as', 'source', 'machine', 'origin', 'decisions']);
+      .toEqual(['id', 'instance', 'time', 'scenario', 'country', 'region', 'city', 'as', 'source', 'machine', 'origin', 'decisions']);
   });
 
   test('keeps saved order for hidden alert columns when they are enabled later', async () => {

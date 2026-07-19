@@ -25,6 +25,7 @@ import type {
   DashboardWorldMapDatum,
   CrowdsecMetricsResponse,
   DecisionListItem,
+  InstanceEntityRef,
   LapiStatus,
   PaginatedResponse,
   SlimAlert,
@@ -40,7 +41,7 @@ import type {
 import { resolveMachineName } from '../shared/machine';
 import { collectDistinctOrigins, normalizeOrigin } from '../shared/origin';
 import { compileAlertSearch, compileDecisionSearch, matchesIpSearchValue, type SearchNode, type SearchParseError } from '../shared/search';
-import { createRuntimeConfig, getIntervalName, parseRefreshInterval, type RuntimeConfig } from './config';
+import { createRuntimeConfig, getIntervalName, parseLookbackToMs, parseRefreshInterval, type RuntimeConfig } from './config';
 import { getDateTimeKey, getTimeZoneOffsetMs, getZonedHourlyBucketKeys } from './utils/date-time';
 import { CrowdsecDatabase, type AlertInsertParams, type DecisionInsertParams } from './database';
 import {
@@ -87,6 +88,7 @@ export interface CreateAppOptions {
   config?: RuntimeConfig;
   database?: CrowdsecDatabase;
   lapiClient?: LapiClient;
+  lapiClients?: Map<string, LapiClient>;
   distRoot?: string;
   startBackgroundTasks?: boolean;
   updateChecker?: UpdateChecker;
@@ -119,12 +121,13 @@ export interface AppController {
   config: RuntimeConfig;
   database: CrowdsecDatabase;
   lapiClient: LapiClient;
+  lapiClients: Map<string, LapiClient>;
   startBackgroundTasks: () => void;
   stopBackgroundTasks: () => void;
   getSyncStatus: () => SyncStatus;
   getLapiStatus: () => LapiStatus;
   getCacheLastUpdate: () => string | null;
-  subscribeCacheUpdates: (listener: (updatedAt: string) => void) => () => void;
+  subscribeCacheUpdates: (listener: (updatedAt: string, instanceIds: string[]) => void) => () => void;
 }
 
 interface PersistedConfig {
@@ -174,6 +177,17 @@ interface WindowSyncSummary {
   lastError?: Error;
 }
 
+interface InstanceSyncRuntime {
+  instanceId: string;
+  instanceName: string;
+  client: LapiClient;
+  status: SyncStatus;
+  lookbackMs: number;
+  chunkSizeMs: number;
+  minChunkSizeMs: number;
+  requestTimeoutMs: number;
+}
+
 interface ReconcileWindowState {
   version: 1;
   configFingerprint: string;
@@ -213,6 +227,7 @@ interface PageRequest {
 }
 
 interface AlertListFilters {
+  instanceId: string;
   q: string;
   ip: string;
   country: string;
@@ -228,6 +243,7 @@ interface AlertListFilters {
 }
 
 interface DecisionListFilters {
+  instanceId: string;
   q: string;
   alertId: string;
   country: string;
@@ -244,6 +260,7 @@ interface DecisionListFilters {
 }
 
 interface DashboardStatsFilters {
+  instanceId: string;
   country: string;
   scenario: string;
   as: string;
@@ -259,12 +276,14 @@ interface DashboardStatsFilters {
 
 interface DashboardStatsCache {
   key: string;
+  scope: string;
   alerts: DashboardAlertStatsRecord[];
   decisions: DashboardDecisionStatsRecord[];
   totals: DashboardStatsTotals;
 }
 
 interface DashboardAlertStatsRecord {
+  instanceId: string;
   createdAt: string;
   timestamp: number;
   country?: string;
@@ -278,6 +297,7 @@ interface DashboardAlertStatsRecord {
 }
 
 interface DashboardDecisionStatsRecord {
+  instanceId: string;
   createdAt: string;
   stopAt?: string;
   timestamp: number;
@@ -398,9 +418,44 @@ function readSingleQueryValue(value: string | string[] | undefined): string | un
 export function createApp(options: CreateAppOptions = {}): AppController {
   const config = options.config || createRuntimeConfig();
   const database = options.database || new CrowdsecDatabase({ dbDir: config.dbDir });
-  const lapiClient = options.lapiClient || new LapiClient({
-    crowdsecUrl: config.crowdsecUrl,
-    auth: config.crowdsecAuth,
+  if (config.instances.length > 1 && database.getMeta('multi_instance_cache_schema_ready')?.value !== 'true') {
+    const pendingDeletions = database.getPendingAlertDeletions();
+    if (pendingDeletions.length > 0) {
+      throw new Error(`Cannot enable multi-instance mode while ${pendingDeletions.length} durable alert deletion job(s) remain unresolved.`);
+    }
+    database.clearSyncData();
+    database.setMeta(RECONCILE_WINDOW_STATE_META_KEY, '[]');
+    database.setMeta('multi_instance_cache_schema_ready', 'true');
+  }
+  const primaryInstance = config.instances[0];
+  database.setMeta('multi_instance_primary_id', primaryInstance.id);
+  for (const instance of config.instances) {
+    const key = `crowdsec_instance_url:${instance.id}`;
+    const previousUrl = database.getMeta(key)?.value;
+    if (previousUrl && previousUrl !== instance.lapiUrl) {
+      console.warn(`CrowdSec instance "${instance.id}" changed URL from ${previousUrl} to ${instance.lapiUrl}. Verify that the immutable ID still represents the same LAPI.`);
+    }
+    database.setMeta(key, instance.lapiUrl);
+  }
+  const configuredLapiClients = options.lapiClients || new Map<string, LapiClient>();
+  if (options.lapiClient) configuredLapiClients.set(primaryInstance.id, options.lapiClient);
+  for (const instance of config.instances) {
+    if (configuredLapiClients.has(instance.id)) continue;
+    configuredLapiClients.set(instance.id, new LapiClient({
+      crowdsecUrl: instance.lapiUrl,
+      auth: instance.lapiAuth,
+      tls: instance.lapiTls,
+      simulationsEnabled: config.simulationsEnabled,
+      lookbackPeriod: instance.sync.lookbackPeriod || config.lookbackPeriod,
+      requestTimeoutMs: instance.sync.requestTimeoutMs || config.lapiRequestTimeoutMs,
+      version: config.version,
+    }));
+  }
+  const lapiClients = configuredLapiClients;
+  const lapiClient = lapiClients.get(primaryInstance.id) || new LapiClient({
+    crowdsecUrl: primaryInstance.lapiUrl,
+    auth: primaryInstance.lapiAuth,
+    tls: primaryInstance.lapiTls,
     simulationsEnabled: config.simulationsEnabled,
     lookbackPeriod: config.lookbackPeriod,
     requestTimeoutMs: config.lapiRequestTimeoutMs,
@@ -431,11 +486,19 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     mqttPublishImpl: options.mqttPublishImpl,
     updateChecker: checkForUpdates,
     getLapiStatus: () => lapiClient.getStatus(),
+    ...(config.instances.length > 1 ? {
+      getLapiStatuses: () => config.instances.map((instance) => ({
+        instanceId: instance.id,
+        instanceName: instance.name,
+        status: lapiClients.get(instance.id)!.getStatus(),
+      })),
+    } : {}),
     outboundGuard: notificationOutboundGuard,
     secretStore: notificationSecretStore,
     debugPayloads: config.notificationDebugPayloads,
     timeZone: config.timeZone,
     timeFormat: config.timeFormat,
+    instanceAware: config.instances.length > 1,
   });
   const dashboardAuth = createDashboardAuth({
     config: config.dashboardAuth,
@@ -468,31 +531,57 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     state: 'idle',
     errors: [],
   };
+  const instanceSyncStatuses = new Map(config.instances.map((instance) => [instance.id, instance.id === primaryInstance.id
+    ? syncStatus
+    : ({ isSyncing: false, progress: 0, message: '', startedAt: null, completedAt: null, state: 'idle', errors: [] } satisfies SyncStatus)]));
+
+  function aggregateLapiStatus(): 'healthy' | 'partial' | 'offline' {
+    const connected = config.instances.filter((instance) => lapiClients.get(instance.id)?.getStatus().isConnected).length;
+    if (connected === config.instances.length) return 'healthy';
+    return connected > 0 ? 'partial' : 'offline';
+  }
+
+  function instanceName(instanceId: string): string {
+    return config.instances.find((instance) => instance.id === instanceId)?.name || instanceId;
+  }
+
+  function withInstanceName<T extends { instance_id?: string; instance_name?: string }>(record: T): T {
+    const instanceId = record.instance_id || primaryInstance.id;
+    return { ...record, instance_id: instanceId, instance_name: instanceName(instanceId) };
+  }
 
   const cache: CacheState = {
     isInitialized: options.initialCacheState?.isInitialized ?? false,
     isComplete: options.initialCacheState?.isComplete ?? false,
     lastUpdate: options.initialCacheState?.lastUpdate ?? null,
   };
+  const instanceLastUpdates = new Map(config.instances.map((instance) => [
+    instance.id,
+    instance.id === primaryInstance.id ? cache.lastUpdate : null,
+  ]));
   // Keep the LAPI cursor separate from the timestamp exposed to clients. The
   // cursor marks the authoritative end of the fetched window, while this value
   // only advances after all post-import maintenance is complete and the new
   // data is safe for every API consumer to read.
   let cacheRefreshCompletedAt = options.initialCacheState?.lastUpdate ?? null;
-  const cacheUpdateListeners = new Set<(updatedAt: string) => void>();
+  const cacheUpdateListeners = new Set<(updatedAt: string, instanceIds: string[]) => void>();
 
-  function publishCacheUpdate(updatedAt: string): void {
+  function publishCacheUpdate(updatedAt: string, instanceIds = [primaryInstance.id]): void {
     for (const listener of cacheUpdateListeners) {
       try {
-        listener(updatedAt);
+        listener(updatedAt, instanceIds);
       } catch (error) {
         console.error('Cache update listener failed:', error);
       }
     }
   }
-  let dashboardStatsCache: DashboardStatsCache | null = null;
+  const dashboardStatsCaches = new Map<string, DashboardStatsCache>();
   let dashboardStatsCacheVersion = 0;
-  let dashboardStatsReadyPublishedVersion = -1;
+  const dashboardStatsScopeVersions = new Map<string, number>([
+    ['all', 0],
+    ...config.instances.map((instance) => [instance.id, 0] as const),
+  ]);
+  const dashboardStatsReadyPublishedKeys = new Set<string>();
   const dashboardStatsResponseCache = new Map<string, DashboardStatsResponse>();
   const staleDashboardStatsResponseCache = new Map<string, DashboardStatsResponse>();
   const dashboardStatsIndexPromises = new Map<string, Promise<DashboardStatsCache>>();
@@ -517,8 +606,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   })).digest('hex');
   let reconcileWindowState = loadReconcileWindowState();
   let initializationPromise: Promise<SyncHistorySummary | null> | null = null;
-  let isFirstSync = true;
-  let isFreshBulkImport = false;
+  const initialHistorySyncs = new Set(config.instances.map((instance) => instance.id));
   let lastRequestTime = Date.now();
   let schedulerTimeout: ReturnType<typeof setTimeout> | null = null;
   let nextRefreshAt: string | null = null;
@@ -536,6 +624,101 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   let pendingAlertDeletionPromise: Promise<void> | null = null;
   let pendingAlertDeletionRerunRequested = false;
   let pendingAlertDeletionStopped = false;
+  const instanceRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const instanceRefreshPromises = new Map<string, Promise<void>>();
+  const historicalInstanceSyncPending = new Set<string>();
+  const instanceNetworkWaiters: Array<() => void> = [];
+  let activeInstanceNetworkSyncs = 0;
+  const maxConcurrentInstanceNetworkSyncs = 2;
+
+  function aggregateHistoricalSyncStatus(): SyncStatus {
+    if (config.instances.length === 1) return { ...syncStatus };
+
+    const instances = config.instances.map((instance) => {
+      const status = instanceSyncStatuses.get(instance.id) || syncStatus;
+      const waiting = historicalInstanceSyncPending.has(instance.id) && !status.isSyncing;
+      const primaryCacheReady = instance.id === primaryInstance.id
+        && !historicalInstanceSyncPending.has(instance.id)
+        && !status.isSyncing
+        && cache.isInitialized
+        && status.state === 'idle';
+      return {
+        instance_id: instance.id,
+        instance_name: instance.name,
+        icon: instance.icon,
+        isSyncing: status.isSyncing,
+        progress: waiting ? 0 : primaryCacheReady ? 100 : status.progress,
+        message: waiting ? '' : status.message,
+        startedAt: waiting ? null : status.startedAt,
+        completedAt: waiting ? null : primaryCacheReady ? cache.lastUpdate : status.completedAt,
+        state: waiting ? 'idle' as const : primaryCacheReady ? 'complete' as const : status.state,
+        errors: [...(status.errors || [])],
+      };
+    });
+    const isSyncing = syncStatus.isSyncing || historicalInstanceSyncPending.size > 0;
+    const errors = instances.flatMap((instance) => (instance.errors || []).map(
+      (error) => `${instance.instance_name}: ${error}`,
+    ));
+    const settledStates = instances.map((instance) => instance.state);
+    const completedAtValues = instances
+      .map((instance) => instance.completedAt)
+      .filter((value): value is string => Boolean(value));
+    const startedAtValues = instances
+      .map((instance) => instance.startedAt)
+      .filter((value): value is string => Boolean(value));
+    const state = isSyncing
+      ? 'syncing'
+      : settledStates.every((candidate) => candidate === 'complete')
+        ? 'complete'
+        : settledStates.every((candidate) => candidate === 'failed')
+          ? 'failed'
+          : settledStates.some((candidate) => candidate === 'failed' || candidate === 'partial')
+            ? 'partial'
+            : syncStatus.state;
+
+    return {
+      isSyncing,
+      progress: Math.round(instances.reduce((total, instance) => total + instance.progress, 0) / instances.length),
+      message: isSyncing ? '' : syncStatus.message,
+      startedAt: startedAtValues.sort()[0] || null,
+      completedAt: isSyncing ? null : completedAtValues.sort().at(-1) || null,
+      state,
+      errors,
+      instances,
+    };
+  }
+
+  async function withInstanceNetworkSlot<T>(operation: () => Promise<T>): Promise<T> {
+    if (activeInstanceNetworkSyncs >= maxConcurrentInstanceNetworkSyncs) {
+      await new Promise<void>((resolve) => instanceNetworkWaiters.push(resolve));
+    }
+    activeInstanceNetworkSyncs += 1;
+    try {
+      return await operation();
+    } finally {
+      activeInstanceNetworkSyncs -= 1;
+      instanceNetworkWaiters.shift()?.();
+    }
+  }
+
+  function getInstanceSyncRuntime(instanceId: string): InstanceSyncRuntime {
+    const instance = config.instances.find((candidate) => candidate.id === instanceId);
+    const client = lapiClients.get(instanceId);
+    const status = instanceSyncStatuses.get(instanceId);
+    if (!instance || !client || !status) throw new Error(`Unknown CrowdSec instance ${instanceId}`);
+    return {
+      instanceId,
+      instanceName: instance.name,
+      client,
+      status,
+      lookbackMs: instance.sync.lookbackPeriod
+        ? parseLookbackToMs(instance.sync.lookbackPeriod)
+        : config.lookbackMs,
+      chunkSizeMs: instance.sync.alertSyncChunkMs ?? config.alertSyncChunkMs,
+      minChunkSizeMs: instance.sync.alertSyncMinChunkMs ?? config.alertSyncMinChunkMs,
+      requestTimeoutMs: instance.sync.requestTimeoutMs ?? config.lapiRequestTimeoutMs,
+    };
+  }
 
   function emptyReconcileWindowState(): ReconcileWindowState {
     return {
@@ -718,8 +901,31 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
     const doRequest = async () => {
       const body = await context.req.json<BulkDeleteRequest>();
+      if (Array.isArray(body.refs) && body.refs.length > 0) {
+        const validated = validateInstanceEntityRefs(body.refs);
+        if ('error' in validated) return context.json({ error: validated.error }, 400);
+        const result = createDeleteResult({ requested_alerts: validated.length });
+        const groups = groupInstanceEntityRefs(validated);
+        await Promise.all(Array.from(groups, async ([instanceId, ids]) => {
+          const client = lapiClients.get(instanceId)!;
+          for (const id of ids) {
+            try {
+              await client.deleteAlert(id);
+              await syncWorker.runExclusive(() => database.deleteAlertByInstanceId(instanceId, id));
+              result.deleted_alerts += 1;
+            } catch (error) {
+              result.failed.push(toFailure('alert', `${instanceId}:${id}`, error as AnyError));
+            }
+          }
+        }));
+        invalidateDashboardStatsCache();
+        return context.json(result);
+      }
       if (!Array.isArray(body.ids) || body.ids.length === 0) {
         return context.json({ error: 'At least one alert ID is required' }, 400);
+      }
+      if (config.instances.length > 1) {
+        return context.json({ error: 'Structured instance refs are required when multiple CrowdSec instances are configured' }, 400);
       }
       const ids = normalizeDeleteIds(body.ids);
       if (ids.length !== body.ids.length) {
@@ -741,6 +947,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   });
 
   app.get(`${config.basePath}/api/alerts/:id`, ensureAuth, async (context) => {
+    if (config.instances.length > 1) return context.json({ error: 'instance_id is required when multiple CrowdSec instances are configured' }, 400);
     const alertId = String(context.req.param('id'));
     if (!/^\d+$/.test(alertId)) {
       return context.json({ error: 'Invalid alert ID' }, 400);
@@ -781,6 +988,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   });
 
   app.delete(`${config.basePath}/api/alerts/:id`, ensureAuth, async (context) => {
+    if (config.instances.length > 1) return context.json({ error: 'instance_id is required when multiple CrowdSec instances are configured' }, 400);
     const readOnlyResponse = ensureCanManageEnforcement(context);
     if (readOnlyResponse) return readOnlyResponse;
 
@@ -856,6 +1064,56 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
   });
 
+  app.get(`${config.basePath}/api/instances/:instanceId/alerts/:id`, ensureAuth, async (context) => {
+    const instanceId = String(context.req.param('instanceId'));
+    const instance = config.instances.find((candidate) => candidate.id === instanceId);
+    if (!instance) return context.json({ error: 'Unknown CrowdSec instance' }, 404);
+    try {
+      const alert = normalizeAlertDetail(await lapiClients.get(instanceId)!.getAlertById(context.req.param('id')), context.req.param('id'));
+      return alert ? context.json(withInstanceName({ ...alert, instance_id: instanceId })) : context.json({ error: 'Alert not found' }, 404);
+    } catch (error: any) {
+      return context.json({ error: error?.message || 'Failed to retrieve alert' }, error?.status === 404 ? 404 : 502);
+    }
+  });
+
+  app.delete(`${config.basePath}/api/instances/:instanceId/alerts/:id`, ensureAuth, async (context) => {
+    const readOnlyResponse = ensureCanManageEnforcement(context);
+    if (readOnlyResponse) return readOnlyResponse;
+    const instanceId = String(context.req.param('instanceId'));
+    const instance = config.instances.find((candidate) => candidate.id === instanceId);
+    if (!instance) return context.json({ error: 'Unknown CrowdSec instance' }, 404);
+    try {
+      await lapiClients.get(instanceId)!.deleteAlert(context.req.param('id'));
+      await syncWorker.runExclusive(() => database.deleteAlertByInstanceId(instanceId, context.req.param('id')));
+      invalidateDashboardStatsCache();
+      return context.json({
+        requested_alerts: 1,
+        requested_decisions: 0,
+        deleted_alerts: 1,
+        deleted_decisions: 0,
+        failed: [],
+      } satisfies BulkDeleteResult);
+    } catch (error: any) {
+      return context.json({ error: error?.message || 'Failed to delete alert' }, 502);
+    }
+  });
+
+  app.delete(`${config.basePath}/api/instances/:instanceId/decisions/:id`, ensureAuth, async (context) => {
+    const readOnlyResponse = ensureCanManageEnforcement(context);
+    if (readOnlyResponse) return readOnlyResponse;
+    const instanceId = String(context.req.param('instanceId'));
+    const instance = config.instances.find((candidate) => candidate.id === instanceId);
+    if (!instance) return context.json({ error: 'Unknown CrowdSec instance' }, 404);
+    try {
+      await lapiClients.get(instanceId)!.deleteDecision(context.req.param('id'));
+      await syncWorker.runExclusive(() => database.deleteDecisionByInstanceId(instanceId, context.req.param('id')));
+      invalidateDashboardStatsCache();
+      return context.json({ message: 'Deleted' });
+    } catch (error: any) {
+      return context.json({ error: error?.message || 'Failed to delete decision' }, 502);
+    }
+  });
+
   app.get(`${config.basePath}/api/config`, ensureAuth, (context) => {
     const hours = lookbackHours(config.lookbackPeriod);
     const payload: ConfigResponse = {
@@ -866,7 +1124,17 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       manual_refresh_enabled: manualRefreshEnabled,
       current_interval_name: getIntervalName(refreshIntervalMs),
       lapi_status: lapiClient.getStatus(),
-      sync_status: syncStatus,
+      instances: config.instances.map((instance) => ({
+        id: instance.id,
+        name: instance.name,
+        icon: instance.icon,
+        lapi_status: lapiClients.get(instance.id)!.getStatus(),
+        sync_status: { ...(instanceSyncStatuses.get(instance.id) || syncStatus) },
+        prometheus: instance.prometheus.map((endpoint) => ({ id: endpoint.id, name: endpoint.name })),
+        sync_overrides: { ...instance.sync },
+      })),
+      aggregate_lapi_status: aggregateLapiStatus(),
+      sync_status: aggregateHistoricalSyncStatus(),
       cache_last_update: cacheRefreshCompletedAt,
       next_refresh_at: nextRefreshAt,
       simulations_enabled: config.simulationsEnabled,
@@ -874,7 +1142,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       origin_features_enabled: true,
       time_zone: config.timeZone,
       time_format: config.timeFormat,
-      metrics_enabled: Boolean(config.prometheusUrl),
+      metrics_enabled: config.instances.some((instance) => instance.prometheus.length > 0),
       metrics_sidebar_visible: loadMetricsSidebarVisible(database),
       ...(config.deploymentMode === 'load-test' ? { deployment_mode: config.deploymentMode } : {}),
       ...(config.loadTestProfile ? { load_test_profile: config.loadTestProfile } : {}),
@@ -884,15 +1152,31 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     return context.json(payload);
   });
 
+  app.get(`${config.basePath}/api/instances`, ensureAuth, (context) => context.json({
+    data: config.instances.map((instance) => ({
+      id: instance.id,
+      name: instance.name,
+      icon: instance.icon,
+      lapi_status: lapiClients.get(instance.id)!.getStatus(),
+      sync_status: { ...(instanceSyncStatuses.get(instance.id) || syncStatus) },
+      prometheus: instance.prometheus.map((endpoint) => ({ id: endpoint.id, name: endpoint.name })),
+      sync_overrides: { ...instance.sync },
+    })),
+    aggregate_status: aggregateLapiStatus(),
+  }));
+
   app.get(`${config.basePath}/api/metrics/crowdsec`, ensureAuth, async (context) => {
-    if (!config.prometheusUrl) {
+    const endpoint = primaryInstance.prometheus[0];
+    if (!endpoint) {
       return context.json({ error: 'CrowdSec Prometheus metrics are not enabled' }, 404);
     }
 
     try {
       const payload: CrowdsecMetricsResponse = await fetchCrowdsecMetrics({
-        url: config.prometheusUrl,
-        timeoutMs: config.prometheusRequestTimeoutMs,
+        url: endpoint.url,
+        timeoutMs: endpoint.requestTimeoutMs || config.prometheusRequestTimeoutMs,
+        auth: endpoint.auth,
+        tls: endpoint.tls,
         fetchImpl: options.metricsFetchImpl,
       });
 
@@ -901,6 +1185,23 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       const message = error?.message || 'Failed to read CrowdSec Prometheus metrics';
       console.error('Error fetching CrowdSec Prometheus metrics:', message);
       return context.json({ error: message }, 502);
+    }
+  });
+
+  app.get(`${config.basePath}/api/instances/:instanceId/metrics/:endpointId`, ensureAuth, async (context) => {
+    const instance = config.instances.find((candidate) => candidate.id === context.req.param('instanceId'));
+    const endpoint = instance?.prometheus.find((candidate) => candidate.id === context.req.param('endpointId'));
+    if (!instance || !endpoint) return context.json({ error: 'Unknown CrowdSec instance or Prometheus endpoint' }, 404);
+    try {
+      return context.json(await fetchCrowdsecMetrics({
+        url: endpoint.url,
+        timeoutMs: endpoint.requestTimeoutMs || config.prometheusRequestTimeoutMs,
+        auth: endpoint.auth,
+        tls: endpoint.tls,
+        fetchImpl: options.metricsFetchImpl,
+      }));
+    } catch (error: any) {
+      return context.json({ error: error?.message || 'Failed to read CrowdSec Prometheus metrics' }, 502);
     }
   });
 
@@ -1061,11 +1362,31 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         return context.json({ error: 'Invalid IP address format' }, 400);
       }
 
-      const result = await deleteEntriesByIp(ip);
-      if (result.deleted_decisions > 0) {
-        void runNotificationEvaluation('cleanup by ip');
+      const targets = resolveOperationInstances(body.scope, body.instance_id);
+      if ('error' in targets) return context.json({ error: targets.error }, 400);
+      const results = await Promise.all(targets.map(async (instance) => {
+        try {
+          const result = instance.id === primaryInstance.id && body.scope === undefined
+            ? await deleteEntriesByIp(ip)
+            : await deleteEntriesByIpOnInstance(instance.id, ip);
+          return {
+            instance_id: instance.id,
+            instance_name: instance.name,
+            success: result.failed.length === 0,
+            ...(result.failed.length > 0 ? { error: `${result.failed.length} item(s) failed` } : {}),
+            result,
+          };
+        } catch (error: any) {
+          return { instance_id: instance.id, instance_name: instance.name, success: false, error: error?.message || String(error) };
+        }
+      }));
+      const succeeded = results.filter((result) => result.success).length;
+      const payload = { results, succeeded, failed: results.length - succeeded };
+      if (succeeded > 0) void runNotificationEvaluation('cleanup by ip');
+      if (results.length === 1 && body.scope === undefined && results[0].success && 'result' in results[0]) {
+        return context.json(results[0].result);
       }
-      return context.json(result);
+      return context.json(payload, succeeded === results.length ? 200 : succeeded > 0 ? 207 : 502);
     };
 
     try {
@@ -1221,11 +1542,15 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       await syncWorker.clearSyncData();
       resetReconcileWindowState();
       cache.isInitialized = false;
+      cache.isComplete = false;
       cache.lastUpdate = null;
+      for (const instance of config.instances) {
+        initialHistorySyncs.add(instance.id);
+        instanceLastUpdates.set(instance.id, null);
+      }
       cacheRefreshCompletedAt = null;
       staleDashboardStatsResponseCache.clear();
       invalidateDashboardStatsCache();
-      isFirstSync = true;
       await ensureBootstrapReady('manual cache clear');
 
       return context.json({
@@ -1349,6 +1674,12 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       await prepareReadCache('dashboard stats request');
       const filters = getDashboardStatsFilters(context, config.timeZone);
       lastDashboardStatsFilters = { ...filters };
+      const initialScopePending = filters.instanceId === 'all'
+        ? historicalInstanceSyncPending.size > 0
+        : historicalInstanceSyncPending.has(filters.instanceId);
+      if (initialScopePending) {
+        return context.json(createEmptyDashboardStatsResponse({ pending: true }));
+      }
       if (isDashboardStatsBuildInProgress(filters)) {
         warmDashboardStatsCache(filters);
         const staleResponse = staleDashboardStatsResponseCache.get(getStaleDashboardStatsResponseCacheKey(filters));
@@ -1401,12 +1732,29 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         return context.json({ error: 'Invalid duration format. Use e.g. "4h", "30m", "1d"' }, 400);
       }
 
-      const result = await lapiClient.addDecision(ip, type, duration, reason.slice(0, 256));
-      console.log(`[decisions] Added ${type} decision for ${ip} (${duration}).`);
-      console.log('Refreshing cache after adding decision...');
-      await updateCacheDelta();
-      void runNotificationEvaluation('manual decision add');
-      return context.json({ message: 'Decision added (via Alert)', result });
+      const targets = resolveOperationInstances(body.scope, body.instance_id);
+      if ('error' in targets) return context.json({ error: targets.error }, 400);
+      const results = await Promise.all(targets.map(async (instance) => {
+        const client = lapiClients.get(instance.id)!;
+        try {
+          const result = await client.addDecision(ip, type, duration, reason.slice(0, 256));
+          if (instance.id === primaryInstance.id) await updateCacheDelta();
+          else await syncInstanceDelta(instance.id);
+          return { instance_id: instance.id, instance_name: instance.name, success: true, result };
+        } catch (error: any) {
+          return { instance_id: instance.id, instance_name: instance.name, success: false, error: error?.message || String(error) };
+        }
+      }));
+      const succeeded = results.filter((result) => result.success).length;
+      const payload = { results, succeeded, failed: results.length - succeeded };
+      for (const result of results) {
+        if (result.success) console.log(`[decisions] Added ${type} decision for ${ip} (${duration}). Instance: ${result.instance_name}.`);
+      }
+      if (succeeded > 0) void runNotificationEvaluation('manual decision add');
+      if (results.length === 1 && body.scope === undefined && results[0].success) {
+        return context.json({ message: 'Decision added (via Alert)', result: results[0].result });
+      }
+      return context.json(payload, succeeded === results.length ? 200 : succeeded > 0 ? 207 : 502);
     };
 
     try {
@@ -1422,8 +1770,33 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
     const doRequest = async () => {
       const body = await context.req.json<BulkDeleteRequest>();
+      if (Array.isArray(body.refs) && body.refs.length > 0) {
+        const validated = validateInstanceEntityRefs(body.refs);
+        if ('error' in validated) return context.json({ error: validated.error }, 400);
+        const result = createDeleteResult({ requested_decisions: validated.length });
+        const groups = groupInstanceEntityRefs(validated);
+        await Promise.all(Array.from(groups, async ([instanceId, ids]) => {
+          const client = lapiClients.get(instanceId)!;
+          for (const id of ids) {
+            try {
+              await client.deleteDecision(id);
+              await syncWorker.runExclusive(() => database.deleteDecisionByInstanceId(instanceId, id));
+              result.deleted_decisions += 1;
+            } catch (error) {
+              result.failed.push(toFailure('decision', `${instanceId}:${id}`, error as AnyError));
+            }
+          }
+        }));
+        await syncWorker.runExclusive(() => database.refreshDecisionDuplicateFlags(new Date().toISOString()));
+        invalidateDashboardStatsCache();
+        if (result.deleted_decisions > 0) void runNotificationEvaluation('bulk decision delete');
+        return context.json(result);
+      }
       if (!Array.isArray(body.ids) || body.ids.length === 0) {
         return context.json({ error: 'At least one decision ID is required' }, 400);
+      }
+      if (config.instances.length > 1) {
+        return context.json({ error: 'Structured instance refs are required when multiple CrowdSec instances are configured' }, 400);
       }
       const ids = normalizeDeleteIds(body.ids);
       if (ids.length !== body.ids.length) {
@@ -1445,6 +1818,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   });
 
   app.delete(`${config.basePath}/api/decisions/:id`, ensureAuth, async (context) => {
+    if (config.instances.length > 1) return context.json({ error: 'instance_id is required when multiple CrowdSec instances are configured' }, 400);
     const readOnlyResponse = ensureCanManageEnforcement(context);
     if (readOnlyResponse) return readOnlyResponse;
 
@@ -1786,9 +2160,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     return origin !== CAPI_ALERT_ORIGIN;
   }
 
-  async function pruneCachedEntriesForCurrentAlertFilters(): Promise<{ alerts: number; decisions: number }> {
+  async function pruneCachedEntriesForCurrentAlertFilters(instanceId = primaryInstance.id): Promise<{ alerts: number; decisions: number }> {
     const cachedAlerts = await queryWorker.all<NormalizedAlertRow & { origins?: string | null }>(
-      `SELECT ${ALERT_RECORD_COLUMNS}, origins FROM alerts`,
+      `SELECT ${ALERT_RECORD_COLUMNS}, origins FROM alerts WHERE instance_id = ?`,
+      [instanceId],
     );
     const allAlertIds = new Set<string>();
     const staleAlertIds: string[] = [];
@@ -1806,7 +2181,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         }
 
         const alertId = String(alert.id);
-        allAlertIds.add(alertId);
+        const internalAlertId = String(row.internal_id ?? alert.id);
+        allAlertIds.add(internalAlertId);
         const storedOrigins = String(row.origins || '')
           .split('\n')
           .map((origin) => origin.trim())
@@ -1818,8 +2194,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
             }
           : alert;
         if (!isCachedAlertAllowedByCurrentFilter(alertForFilter)) {
-          staleAlertIds.push(alertId);
-          staleAlertIdSet.add(alertId);
+          staleAlertIds.push(internalAlertId);
+          staleAlertIdSet.add(internalAlertId);
         }
       } catch {
         // Keep malformed cache rows; normal sync reconciliation can replace them.
@@ -1833,7 +2209,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       id: string | number;
       alert_id?: string | number | null;
       origin?: string | null;
-    }>('SELECT id, alert_id, origin FROM decisions');
+    }>('SELECT id, alert_id, origin FROM decisions WHERE instance_id = ?', [instanceId]);
 
     for (let index = 0; index < cachedDecisions.length; index += 1) {
       if (index > 0 && index % SYNC_WRITE_BATCH_SIZE === 0) {
@@ -1866,6 +2242,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     startMs: number,
     endMs: number,
     options: { requireComplete?: boolean } = {},
+    runtime = getInstanceSyncRuntime(primaryInstance.id),
   ): Promise<AlertRecord[]> {
     const configuredQueries = getAlertSyncQueries();
     if (configuredQueries.length === 0 && config.alertFilterMode === 'new' && hasExplicitNewAlertIncludes()) {
@@ -1879,10 +2256,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       // run sequentially, so reusing the first query's durations could move a
       // later response outside the authoritative local window.
       const requestNow = Date.now();
-      const paddingMs = config.lapiRequestTimeoutMs;
+      const paddingMs = runtime.requestTimeoutMs;
       const since = formatQueryDuration(requestNow - startMs + paddingMs, 'up');
       const until = formatQueryDuration(requestNow - endMs - paddingMs, 'down');
-      const resultSet = await lapiClient.fetchAlerts(since, until, {
+      const resultSet = await runtime.client.fetchAlerts(since, until, {
         ...query,
         requireAllScopes: options.requireComplete,
         relativeWindow: { startMs, endMs, paddingMs },
@@ -1905,6 +2282,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     decisionIdsToPersist: Set<string> | null = null,
     updateAlertRawDataOnly = false,
     observedAt = new Date().toISOString(),
+    instanceId = primaryInstance.id,
   ): SyncAlertMutation | null {
     if (!alert || !alert.id) return null;
     const decisions = alert.decisions || [];
@@ -1921,6 +2299,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     const alertHistoryAt = resolveAlertHistoryAt(alert);
     const alertData: AlertInsertParams = {
       $id: alert.id,
+      $instance_id: instanceId,
       $uuid: alert.uuid || String(alert.id),
       $created_at: alertHistoryAt,
       $scenario: alert.scenario,
@@ -1962,6 +2341,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
       decisionData.push({
         $id: decisionId,
+        $instance_id: instanceId,
         $uuid: decisionId,
         $alert_id: alert.id,
         $created_at: createdAt,
@@ -1975,6 +2355,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
 
     return {
+      instanceId,
       alert: alertData,
       decisions: decisionData,
       keepDecisionIds: reconcileDecisions ? currentDecisionIds : [],
@@ -1994,6 +2375,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       const isFirst = offset === 0;
       const isFinal = end === mutation.decisions.length;
       yield {
+        instanceId: mutation.instanceId,
         ...(isFirst ? { alert: mutation.alert } : { alertId: mutation.alert.$id }),
         ...(isFirst && mutation.updateAlertRawDataOnly ? { updateAlertRawDataOnly: true } : {}),
         decisions: mutation.decisions.slice(offset, end),
@@ -2009,6 +2391,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     rawDataOnlyAlertIds: Set<string> | null = null,
     skipDecisionReconciliationAlertIds: Set<string> | null = null,
     observedAt = new Date().toISOString(),
+    instanceId = primaryInstance.id,
+    freshBulkImport = false,
   ): Generator<SyncAlertMutation[]> {
     // LAPI serializes duration-only decisions as time remaining at response
     // time. Use one observation point for the whole response so processing
@@ -2027,10 +2411,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     for (const alert of alerts) {
       const mutation = buildAlertMutation(
         alert,
-        !isFreshBulkImport && !skipDecisionReconciliationAlertIds?.has(String(alert.id)),
+        !freshBulkImport && !skipDecisionReconciliationAlertIds?.has(String(alert.id)),
         decisionIdsToPersistByAlertId?.get(String(alert.id)) || null,
         rawDataOnlyAlertIds?.has(String(alert.id)) === true,
         observedAt,
+        instanceId,
       );
       if (!mutation) continue;
 
@@ -2081,24 +2466,30 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     alerts: AlertRecord[],
     start: string,
     end: string,
+    runtime = getInstanceSyncRuntime(primaryInstance.id),
+    freshBulkImport = false,
   ): Promise<{ alerts: number; decisions: number; changed: boolean }> {
     const keepIds = alerts.map((alert) => alert.id);
-    let changed = await persistChangedAlerts(alerts);
-    if (isFreshBulkImport) {
+    let changed = await persistChangedAlerts(alerts, runtime.instanceId, freshBulkImport);
+    if (freshBulkImport) {
       return { alerts: 0, decisions: 0, changed };
     }
-    const pruned = await syncWorker.deleteAlertsMissingBetween(start, end, keepIds);
+    const pruned = await syncWorker.deleteAlertsMissingBetween(start, end, keepIds, runtime.instanceId);
     return {
       ...pruned,
       changed: changed || pruned.alerts > 0 || pruned.decisions > 0,
     };
   }
 
-  async function persistChangedAlerts(alerts: AlertRecord[]): Promise<boolean> {
+  async function persistChangedAlerts(
+    alerts: AlertRecord[],
+    instanceId = primaryInstance.id,
+    freshBulkImport = false,
+  ): Promise<boolean> {
     alerts = await enrichAlertRecordLocations(alerts);
-    if (isFreshBulkImport) {
+    if (freshBulkImport) {
       let changed = false;
-      for (const mutations of createSyncWriteBatches(alerts)) {
+      for (const mutations of createSyncWriteBatches(alerts, null, null, null, new Date().toISOString(), instanceId, true)) {
         const result = await syncWorker.persistAlerts(mutations);
         changed = result.changed || changed;
       }
@@ -2116,7 +2507,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     for (const alert of alerts) {
       const decisions = Array.isArray(alert.decisions) ? alert.decisions : [];
       const alertId = String(alert.id);
-      const delta = getAlertSyncDelta(alert, decisions, observedAt);
+      const delta = getAlertSyncDelta(alert, decisions, observedAt, instanceId);
       if (delta) {
         alertsToPersist.push(alert);
         if (delta.decisionIdsToPersist) {
@@ -2153,6 +2544,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         rawDataOnlyAlertIds,
         skipDecisionReconciliationAlertIds,
         observedAt,
+        instanceId,
       )) {
         const result = await syncWorker.persistAlerts(mutations);
         changed = result.changed || changed;
@@ -2173,7 +2565,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
   }
 
-  function getAlertSyncDelta(alert: AlertRecord, decisions: AlertDecision[], observedAt: string): {
+  function getAlertSyncDelta(alert: AlertRecord, decisions: AlertDecision[], observedAt: string, instanceId = primaryInstance.id): {
     decisionIdsToPersist: Set<string> | null;
     removedIds: Set<string>;
     reconcileDecisions: boolean;
@@ -2190,7 +2582,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       allDecisionIds.add(id);
       if (isIncomingDecisionInactive(decision)) inactiveDecisionIds.push(id);
     }
-    const snapshot = database.getAlertDecisionSnapshot(alert.id);
+    const snapshot = database.getAlertDecisionSnapshot(alert.id, instanceId);
     if (!snapshot) {
       return { decisionIdsToPersist: null, removedIds: new Set(), reconcileDecisions: true, updateAlertRawDataOnly: false };
     }
@@ -2207,7 +2599,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       return { decisionIdsToPersist: null, removedIds: new Set(), reconcileDecisions: true, updateAlertRawDataOnly: false };
     }
 
-    const cachedIds = new Set(database.getDecisionIdsByAlertId(alert.id));
+    const cachedIds = new Set(database.getDecisionIdsByAlertId(alert.id, instanceId));
     if (snapshot.decision_count !== cachedIds.size) {
       return { decisionIdsToPersist: null, removedIds: new Set(), reconcileDecisions: true, updateAlertRawDataOnly: false };
     }
@@ -2218,7 +2610,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
     if (inactiveDecisionIds.length > 0) {
       const observedAtMs = Date.parse(observedAt);
-      const cachedStopAtById = database.getDecisionStopAtBatch(inactiveDecisionIds);
+      const cachedStopAtById = database.getDecisionStopAtBatch(inactiveDecisionIds, instanceId);
       for (const id of inactiveDecisionIds) {
         const cachedStopAt = cachedStopAtById.get(id);
         if (cachedStopAt && Date.parse(cachedStopAt) > observedAtMs) addedIds.add(id);
@@ -2275,8 +2667,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     return Number.isFinite(historyAt) && historyAt >= startMs && historyAt < endMs;
   }
 
-  function canSplitWindow(startMs: number, endMs: number): boolean {
-    return endMs - startMs > config.alertSyncMinChunkMs;
+  function canSplitWindow(startMs: number, endMs: number, runtime: InstanceSyncRuntime): boolean {
+    return endMs - startMs > runtime.minChunkSizeMs;
   }
 
   function splitWindow(startMs: number, endMs: number): [number, number, number] {
@@ -2289,6 +2681,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     endMs: number,
     nowMs: number,
     onFetched?: (windowLabel: string, alerts: number, decisions: number) => void,
+    runtime = getInstanceSyncRuntime(primaryInstance.id),
+    freshBulkImport = false,
   ): Promise<WindowSyncSummary> {
     const windowLabel = formatSyncWindow(startMs, endMs, nowMs);
 
@@ -2296,7 +2690,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       // LAPI accepts relative, whole-second boundaries. Pad both sides by the
       // request timeout so transport delay and duration rounding can only make
       // the response a superset, then constrain it to the exact SQLite window.
-      const fetchedAlerts = await fetchAlertsForSync(startMs, endMs, { requireComplete: true });
+      const fetchedAlerts = await fetchAlertsForSync(startMs, endMs, { requireComplete: true }, runtime);
       const alerts = fetchedAlerts.filter((alert) => isAlertInsideWindow(alert, startMs, endMs));
       const decisionCount = countAlertDecisions(alerts);
       onFetched?.(windowLabel, alerts.length, decisionCount);
@@ -2304,6 +2698,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         alerts,
         new Date(startMs).toISOString(),
         new Date(endMs).toISOString(),
+        runtime,
+        freshBulkImport,
       );
       if (alerts.length > 0) {
         console.log(`  -> Fetched ${alerts.length} alerts and ${decisionCount} decisions.`);
@@ -2320,11 +2716,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         changed: pruned.changed,
       };
     } catch (error: any) {
-      if (isTimeoutError(error) && canSplitWindow(startMs, endMs)) {
+      if (isTimeoutError(error) && canSplitWindow(startMs, endMs, runtime)) {
         const [, midpoint] = splitWindow(startMs, endMs);
         console.warn(`Alert sync window timed out (${windowLabel}); splitting into smaller windows.`);
-        const first = await syncAlertWindow(startMs, midpoint, nowMs, onFetched);
-        const second = await syncAlertWindow(midpoint, endMs, nowMs, onFetched);
+        const first = await syncAlertWindow(startMs, midpoint, nowMs, onFetched, runtime, freshBulkImport);
+        const second = await syncAlertWindow(midpoint, endMs, nowMs, onFetched, runtime, freshBulkImport);
         return combineWindowSummaries(first, second);
       }
 
@@ -2510,13 +2906,16 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     return summary;
   }
 
-  async function syncHistory(forceOverlay = false): Promise<SyncHistorySummary> {
-    const showOverlay = forceOverlay || isFirstSync;
-    isFirstSync = false;
+  async function syncHistory(
+    forceOverlay = false,
+    runtime = getInstanceSyncRuntime(primaryInstance.id),
+    freshBulkImport = false,
+  ): Promise<SyncHistorySummary> {
+    const showOverlay = forceOverlay || initialHistorySyncs.delete(runtime.instanceId);
     const t = getServerTranslator(database);
-    console.log('Starting historical data sync...');
+    console.log(`[${runtime.instanceName}] Starting historical data sync...`);
 
-    updateSyncStatus({
+    Object.assign(runtime.status, {
       isSyncing: showOverlay,
       progress: 0,
       message: t('components.syncOverlay.statusStarting'),
@@ -2527,8 +2926,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     });
 
     const now = Date.now();
-    const lookbackStart = now - config.lookbackMs;
-    const chunkSizeMs = config.alertSyncChunkMs;
+    const lookbackStart = now - runtime.lookbackMs;
+    const chunkSizeMs = runtime.chunkSizeMs;
     const totalDuration = now - lookbackStart;
     let currentStart = lookbackStart;
     let totalAlerts = 0;
@@ -2537,10 +2936,14 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     const historicalErrors: string[] = [];
     let changed = false;
 
-    const filterPruned = await pruneCachedEntriesForCurrentAlertFilters();
+    if (!runtime.client.hasToken() && !await runtime.client.login(`historical sync: ${runtime.instanceName}`)) {
+      throw new Error(runtime.client.getStatus().lastError || `Authentication failed for ${runtime.instanceName}`);
+    }
+
+    const filterPruned = await pruneCachedEntriesForCurrentAlertFilters(runtime.instanceId);
     changed = filterPruned.alerts > 0 || filterPruned.decisions > 0;
     if (filterPruned.alerts > 0 || filterPruned.decisions > 0) {
-      updateSyncStatus({
+      Object.assign(runtime.status, {
         message: t('components.syncOverlay.statusRemovedStale', {
           alerts: filterPruned.alerts,
           decisions: filterPruned.decisions,
@@ -2559,14 +2962,14 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       });
       const progressLogMessage = `Syncing: ${windowLabel} (${totalAlerts} alerts, ${totalDecisions} decisions)`;
 
-      updateSyncStatus({
+      Object.assign(runtime.status, {
         progress: Math.min(progress, 90),
         message: progressMessage,
       });
-      console.log(progressLogMessage);
+      console.log(`[${runtime.instanceName}] ${progressLogMessage}`);
 
       const result = await syncAlertWindow(currentStart, currentEnd, now, (processedWindow, alerts, decisions) => {
-        updateSyncStatus({
+        Object.assign(runtime.status, {
           progress: Math.min(progress, 90),
           message: t('components.syncOverlay.statusProcessingWindow', {
             window: processedWindow,
@@ -2574,7 +2977,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
             decisions,
           }),
         });
-      });
+      }, runtime, freshBulkImport);
       totalAlerts += result.alerts;
       totalDecisions += result.decisions;
       successfulWindows += result.successfulWindows;
@@ -2585,8 +2988,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       await delay(100);
     }
 
-    const cachedAlerts = database.countAlerts();
-    const cachedDecisions = database.countDecisions();
+    const cachedAlerts = database.countAlerts(runtime.instanceId);
+    const cachedDecisions = database.countDecisions(runtime.instanceId);
     const errors = [...historicalErrors];
     const state = errors.length === 0
       ? 'complete'
@@ -2603,9 +3006,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       : state === 'partial'
         ? `Sync partially complete. ${cachedAlerts} alerts and ${cachedDecisions} decisions cached; ${errors.length} window${errors.length === 1 ? '' : 's'} failed.`
         : `Sync failed: ${errors[0] || 'no alert windows could be synced'}`;
-    console.log(logMessage);
+    console.log(`[${runtime.instanceName}] ${logMessage}`);
 
-    updateSyncStatus({
+    Object.assign(runtime.status, {
       // Keep the initial overlay open until initializeCache has finalized all
       // read-visible indexes and dashboard cache state.
       isSyncing: showOverlay,
@@ -2629,7 +3032,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     };
   }
 
-  async function initializeCache(options: { showOverlay?: boolean } = {}): Promise<SyncHistorySummary | null> {
+  async function initializeSingleInstanceCache(options: { showOverlay?: boolean } = {}): Promise<SyncHistorySummary | null> {
     if (initializationPromise) {
       console.log('Cache initialization already in progress, waiting...');
       return initializationPromise;
@@ -2642,7 +3045,6 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         && database.countAlerts() === 0
         && database.countDecisions() === 0;
       let deferredIndexesRebuilt = false;
-      isFreshBulkImport = freshBulkImport;
       if (deferIndexUpdates) {
         // A populated startup cache still benefits substantially from deferring
         // FTS writes, but it must retain the alert_id indexes used to reconcile
@@ -2651,7 +3053,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       }
       try {
         console.log('Initializing cache with chunked data load...');
-        const syncSummary = await syncHistory(options.showOverlay);
+        const syncSummary = await syncHistory(
+          options.showOverlay,
+          getInstanceSyncRuntime(primaryInstance.id),
+          freshBulkImport,
+        );
         if (syncStatus.isSyncing && syncSummary.state !== 'failed') {
           updateSyncStatus({
             progress: 96,
@@ -2687,6 +3093,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
           invalidateDashboardStatsCache();
         }
         cache.lastUpdate = syncSummary.syncedThrough;
+        instanceLastUpdates.set(primaryInstance.id, syncSummary.syncedThrough);
         cache.isInitialized = syncSummary.state !== 'failed';
         cache.isComplete = syncSummary.state === 'complete';
         if (syncSummary.state === 'complete') {
@@ -2699,7 +3106,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
             message: t('components.syncOverlay.statusPreparingDashboard'),
           });
           try {
-            await getDashboardStatsIndex();
+            await getDashboardStatsIndex(config.instances.length > 1 ? primaryInstance.id : 'all');
           } catch (error: any) {
             console.error('Failed to prepare dashboard data before completing initial sync:', error.message);
           }
@@ -2762,12 +3169,187 @@ ${errorSummary}  Status: ${syncSummary.state}
             console.error('Failed to rebuild deferred indexes:', error.message);
           }
         }
-        isFreshBulkImport = false;
         initializationPromise = null;
       }
     })();
 
     return initializationPromise;
+  }
+
+  async function initializeMultiInstanceCache(options: { showOverlay?: boolean } = {}): Promise<SyncHistorySummary | null> {
+    if (initializationPromise) {
+      console.log('Multi-instance cache initialization already in progress, waiting...');
+      return initializationPromise;
+    }
+
+    initializationPromise = (async () => {
+      const startedAt = Date.now();
+      const t = getServerTranslator(database);
+      const freshBulkImport = database.countAlerts() === 0 && database.countDecisions() === 0;
+      let deferredIndexes = false;
+      let indexesRebuilt = false;
+      const runtimes = config.instances.map((instance) => getInstanceSyncRuntime(instance.id));
+      for (const runtime of runtimes) historicalInstanceSyncPending.add(runtime.instanceId);
+
+      try {
+        // Keep the read/paging indexes available, but avoid row-by-row FTS
+        // maintenance while multiple chunked imports share the writer.
+        await syncWorker.beginDeferredSearchIndexUpdates(false, false);
+        deferredIndexes = true;
+
+        const summaries = await Promise.all(runtimes.map((runtime) => withInstanceNetworkSlot(async () => {
+          try {
+            return await syncHistory(options.showOverlay ?? true, runtime, freshBulkImport);
+          } catch (error) {
+            const failure = error instanceof Error ? error : new Error(String(error));
+            runtime.client.updateStatus(false, failure);
+            Object.assign(runtime.status, {
+              isSyncing: true,
+              progress: 0,
+              message: `${runtime.instanceName} sync failed: ${failure.message}`,
+              completedAt: null,
+              state: 'failed',
+              errors: [failure.message],
+            });
+            console.error(`[${runtime.instanceName}] Historical sync failed: ${failure.message}`);
+            return {
+              historicalAlerts: 0,
+              historicalDecisions: 0,
+              historicalErrors: [failure.message],
+              errors: [failure.message],
+              state: 'failed' as const,
+              cachedAlerts: database.countAlerts(runtime.instanceId),
+              cachedDecisions: database.countDecisions(runtime.instanceId),
+              changed: false,
+              syncedThrough: new Date().toISOString(),
+            };
+          }
+        })));
+
+        for (const runtime of runtimes) {
+          if (runtime.status.state === 'failed') continue;
+          runtime.status.progress = 96;
+          runtime.status.message = t('components.syncOverlay.statusFinalizingDecisions');
+        }
+        await syncWorker.rebuildSearchIndexes();
+        indexesRebuilt = true;
+        await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
+
+        invalidateDashboardStatsCache();
+        const anyUsable = summaries.some((summary) => summary.state !== 'failed');
+        cache.isInitialized = anyUsable;
+        cache.isComplete = summaries.every((summary) => summary.state === 'complete');
+        const successfulThrough = summaries
+          .filter((summary) => summary.state !== 'failed')
+          .map((summary) => summary.syncedThrough)
+          .sort();
+        cache.lastUpdate = successfulThrough[0] || null;
+        for (let index = 0; index < runtimes.length; index += 1) {
+          const runtime = runtimes[index];
+          const summary = summaries[index];
+          if (summary.state !== 'failed') instanceLastUpdates.set(runtime.instanceId, summary.syncedThrough);
+          runtime.client.updateStatus(summary.state === 'complete', summary.errors[0] ? { message: summary.errors[0] } : null);
+          if (summary.state !== 'failed') {
+            runtime.status.progress = 99;
+            runtime.status.message = t('components.syncOverlay.statusPreparingDashboard');
+          }
+        }
+        if (cache.isInitialized) {
+          try {
+            await getDashboardStatsIndex('all');
+          } catch (error: any) {
+            console.error('Failed to prepare Combined dashboard data before completing initial sync:', error.message);
+          }
+        }
+
+        const completedAt = new Date().toISOString();
+        const allErrors: string[] = [];
+        for (let index = 0; index < runtimes.length; index += 1) {
+          const runtime = runtimes[index];
+          const summary = summaries[index];
+          const errors = summary.errors.map((error) => `${runtime.instanceName}: ${error}`);
+          allErrors.push(...errors);
+          Object.assign(runtime.status, {
+            isSyncing: false,
+            progress: summary.state === 'failed' ? 0 : 100,
+            message: summary.state === 'complete'
+              ? t('server.sync.complete', { alerts: summary.cachedAlerts, decisions: summary.cachedDecisions })
+              : summary.state === 'partial'
+                ? t('server.sync.partial', {
+                    alerts: summary.cachedAlerts,
+                    decisions: summary.cachedDecisions,
+                    failures: summary.errors.length,
+                  })
+                : t('server.sync.failed', { reason: summary.errors[0] || t('server.sync.failedNoWindows') }),
+            completedAt,
+            state: summary.state,
+            errors: summary.errors,
+          });
+          historicalInstanceSyncPending.delete(runtime.instanceId);
+        }
+        if (summaries[0]?.state === 'complete') {
+          seedReconcileWindowState(Date.parse(summaries[0].syncedThrough));
+        }
+        await runNotificationEvaluation('multi-instance cache initialization');
+        cacheRefreshCompletedAt = completedAt;
+        publishCacheUpdate(completedAt, runtimes.map((runtime) => runtime.instanceId));
+
+        const state = summaries.every((summary) => summary.state === 'complete')
+          ? 'complete'
+          : summaries.every((summary) => summary.state === 'failed')
+            ? 'failed'
+            : 'partial';
+        const result: SyncHistorySummary = {
+          historicalAlerts: summaries.reduce((total, summary) => total + summary.historicalAlerts, 0),
+          historicalDecisions: summaries.reduce((total, summary) => total + summary.historicalDecisions, 0),
+          historicalErrors: allErrors,
+          errors: allErrors,
+          state,
+          cachedAlerts: database.countAlerts(),
+          cachedDecisions: database.countDecisions(),
+          changed: summaries.some((summary) => summary.changed),
+          syncedThrough: cache.lastUpdate || completedAt,
+        };
+        console.log(`All instance histories finalized in ${formatElapsedTime(Date.now() - startedAt)}.`);
+        return result;
+      } catch (error: any) {
+        cache.isInitialized = false;
+        cache.isComplete = false;
+        const completedAt = new Date().toISOString();
+        for (const runtime of runtimes) {
+          const historyFailed = runtime.status.state === 'failed';
+          Object.assign(runtime.status, {
+            isSyncing: false,
+            progress: historyFailed ? 0 : 100,
+            completedAt,
+            state: historyFailed ? 'failed' : 'partial',
+            errors: [...(runtime.status.errors || []), error.message],
+            message: `${runtime.instanceName} sync finalization failed: ${error.message}`,
+          });
+          runtime.client.updateStatus(false, error);
+          historicalInstanceSyncPending.delete(runtime.instanceId);
+        }
+        console.error('Failed to initialize multi-instance cache:', error.message);
+        return null;
+      } finally {
+        if (deferredIndexes && !indexesRebuilt) {
+          try {
+            await syncWorker.rebuildSearchIndexes();
+          } catch (error: any) {
+            console.error('Failed to restore search indexes after multi-instance initialization:', error.message);
+          }
+        }
+        initializationPromise = null;
+      }
+    })();
+
+    return initializationPromise;
+  }
+
+  function initializeCache(options: { showOverlay?: boolean } = {}): Promise<SyncHistorySummary | null> {
+    return config.instances.length > 1
+      ? initializeMultiInstanceCache(options)
+      : initializeSingleInstanceCache(options);
   }
 
   async function updateCacheDelta(options: { throwOnError?: boolean; reconcile?: boolean } = {}): Promise<void> {
@@ -2822,6 +3404,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       // Advance only through the exact authoritative delta end. Work performed
       // after this timestamp is intentionally picked up by the next overlap.
       cache.lastUpdate = new Date(deltaStartedAt).toISOString();
+      instanceLastUpdates.set(primaryInstance.id, cache.lastUpdate);
       const reconcileError = reconcileSummary.lastError || (reconcileSummary.errors[0] ? new Error(reconcileSummary.errors[0]) : null);
       lapiClient.updateStatus(reconcileSummary.errors.length === 0, reconcileError);
       const completedReconcileWindows = reconcileSummary.successfulWindows + (headWindow ? 1 : 0);
@@ -2864,6 +3447,7 @@ ${errorSummary}  Status: ${syncSummary.state}
         console.error('Failed to prepare dashboard statistics after latest-window refresh:', error.message);
       }
       cache.lastUpdate = new Date(now).toISOString();
+      instanceLastUpdates.set(primaryInstance.id, cache.lastUpdate);
       lapiClient.updateStatus(true, null);
       await cleanupOldData();
       await runNotificationEvaluation('manual latest-window refresh');
@@ -3037,6 +3621,11 @@ ${errorSummary}  Status: ${syncSummary.state}
         if (!bootstrapWaitLogged) {
           bootstrapWaitLogged = true;
           console.log('Background refresh paused until bootstrap recovery completes.');
+        }
+      } else if (historicalInstanceSyncPending.size > 0) {
+        if (!bootstrapWaitLogged) {
+          bootstrapWaitLogged = true;
+          console.log('Background refresh paused until all instance history is synchronized.');
         }
       } else if (!cache.isInitialized) {
         if (!bootstrapWaitLogged) {
@@ -3235,6 +3824,32 @@ ${errorSummary}  Status: ${syncSummary.state}
           .filter((id) => /^\d+$/.test(id)),
       ),
     );
+  }
+
+  function validateInstanceEntityRefs(refs: InstanceEntityRef[]): InstanceEntityRef[] | { error: string } {
+    const unique = new Map<string, InstanceEntityRef>();
+    for (const candidate of refs) {
+      const instanceId = String(candidate?.instance_id || '').trim();
+      const id = String(candidate?.id || '').trim();
+      if (!config.instances.some((instance) => instance.id === instanceId)) {
+        return { error: `Unknown CrowdSec instance: ${instanceId || '(missing)'}` };
+      }
+      if (!/^\d+$/.test(id)) {
+        return { error: 'Entity IDs must be numeric' };
+      }
+      unique.set(`${instanceId}\u0000${id}`, { instance_id: instanceId, id });
+    }
+    return Array.from(unique.values());
+  }
+
+  function groupInstanceEntityRefs(refs: InstanceEntityRef[]): Map<string, string[]> {
+    const groups = new Map<string, string[]>();
+    for (const ref of refs) {
+      const ids = groups.get(ref.instance_id) || [];
+      ids.push(String(ref.id));
+      groups.set(ref.instance_id, ids);
+    }
+    return groups;
   }
 
   function normalizeNotificationIds(ids: Array<string | number> | undefined): string[] {
@@ -3804,6 +4419,11 @@ ${errorSummary}  Status: ${syncSummary.state}
     const since = new Date(Date.now() - config.lookbackMs).toISOString();
     const baseWhere = createSqlWhere();
     baseWhere.add('created_at >= ?', since);
+    if (filters.instanceId !== 'all') {
+      baseWhere.add('instance_id = ?', filters.instanceId);
+    } else {
+      baseWhere.add(`instance_id IN (${config.instances.map(() => '?').join(',')})`, ...config.instances.map((instance) => instance.id));
+    }
     if (!config.simulationsEnabled) {
       baseWhere.add('simulated = 0');
     }
@@ -3842,25 +4462,52 @@ ${errorSummary}  Status: ${syncSummary.state}
         unfiltered_total: unfilteredTotal,
       },
       selectable_ids: data.map((alert) => alert.id),
+      ...(config.instances.length > 1 ? {
+        selectable_refs: data.map((alert) => ({ instance_id: alert.instance_id || primaryInstance.id, id: alert.id })),
+      } : {}),
     };
   }
 
   async function buildFullSlimAlertList(rows: NormalizedAlertRow[]): Promise<SlimAlert[]> {
-    return enrichAlertLocations(hydrateAlertRecordsBatch(rows.map(alertFromRow))
+    const internalIds = rows.map((row) => row.internal_id).filter((id): id is string | number => id !== undefined);
+    const decisionsByInternalId = new Map<string, NormalizedDecisionRow[]>();
+    for (let offset = 0; offset < internalIds.length; offset += 900) {
+      const chunk = internalIds.slice(offset, offset + 900);
+      const placeholders = chunk.map(() => '?').join(',');
+      const decisionRows = await queryWorker.all<NormalizedDecisionRow & { internal_alert_id: string | number }>(`
+        SELECT ${DECISION_RECORD_COLUMNS}, alert_id AS internal_alert_id
+        FROM decisions
+        WHERE alert_id IN (${placeholders})
+        ORDER BY created_at DESC, id DESC
+      `, chunk);
+      for (const decision of decisionRows) {
+        const key = String(decision.internal_alert_id);
+        const list = decisionsByInternalId.get(key) || [];
+        list.push(decision);
+        decisionsByInternalId.set(key, list);
+      }
+    }
+    return enrichAlertLocations(rows.map((row) => hydrateAlertWithDecisionsBatch(
+      alertFromRow(row),
+      decisionsByInternalId.get(String(row.internal_id)) || [],
+    ))
+      .map(withInstanceName)
       .map((alert) => applySimulationModeToAlert(alert, config.simulationsEnabled))
       .filter((alert): alert is AlertRecord => alert !== null)
       .map(toSlimAlert));
   }
 
   async function buildSlimAlertList(rows: NormalizedAlertRow[]): Promise<SlimAlert[]> {
-    const decisionSummaries = await queryAlertDecisionSummaries(rows.map((row) => row.id));
+    const internalIds = rows.map((row) => row.internal_id).filter((id): id is string | number => id !== undefined);
+    const decisionSummaries = await queryAlertDecisionSummaries(internalIds);
     return enrichAlertLocations(rows.map(alertFromRow)
+      .map(withInstanceName)
       .map((alert) => applySimulationModeToAlert(alert, config.simulationsEnabled))
       .filter((alert): alert is AlertRecord => alert !== null)
-      .map((alert) => ({
+      .map((alert, index) => ({
         ...toSlimAlert(alert),
         decisions: [],
-        decision_summary: decisionSummaries.get(String(alert.id)) || emptyAlertDecisionSummary(),
+        decision_summary: decisionSummaries.get(String(rows[index]?.internal_id)) || emptyAlertDecisionSummary(),
       })));
   }
 
@@ -3928,6 +4575,11 @@ ${errorSummary}  Status: ${syncSummary.state}
     const now = new Date().toISOString();
     const duplicateSql = '(decisions.is_duplicate = 1)';
     const baseWhere = createSqlWhere();
+    if (filters.instanceId !== 'all') {
+      baseWhere.add('instance_id = ?', filters.instanceId);
+    } else {
+      baseWhere.add(`instance_id IN (${config.instances.map(() => '?').join(',')})`, ...config.instances.map((instance) => instance.id));
+    }
     if (includeExpired) {
       baseWhere.add('(created_at >= ? OR stop_at > ?)', since, now);
     } else {
@@ -3967,6 +4619,7 @@ ${errorSummary}  Status: ${syncSummary.state}
     const alertCoordinates = new Map<string, { latitude: number; longitude: number }>();
     const decisions = rows.map((row) => {
       const decision = decisionFromRow(row);
+      decision.instance_name = instanceName(String(decision.instance_id || primaryInstance.id));
       const latitude = normalizeDashboardCoordinate(row.latitude, -90, 90);
       const longitude = normalizeDashboardCoordinate(row.longitude, -180, 180);
       if (row.alert_id !== undefined && row.alert_id !== null && latitude !== undefined && longitude !== undefined) {
@@ -3989,6 +4642,11 @@ ${errorSummary}  Status: ${syncSummary.state}
       selectable_ids: data
         .filter((decision) => !isDecisionListItemExpired(decision))
         .map((decision) => decision.id),
+      ...(config.instances.length > 1 ? {
+        selectable_refs: data
+          .filter((decision) => !isDecisionListItemExpired(decision))
+          .map((decision) => ({ instance_id: decision.instance_id || primaryInstance.id, id: decision.id })),
+      } : {}),
     };
   }
 
@@ -4192,10 +4850,13 @@ ${errorSummary}  Status: ${syncSummary.state}
     });
   }
 
-  async function getDashboardStatsIndex(): Promise<DashboardStatsCache> {
-    const cacheKey = getDashboardStatsCacheKey();
-    if (dashboardStatsCache?.key === cacheKey) {
-      return dashboardStatsCache;
+  async function getDashboardStatsIndex(instanceId: string): Promise<DashboardStatsCache> {
+    const cacheKey = getDashboardStatsCacheKey(instanceId);
+    const cached = dashboardStatsCaches.get(cacheKey);
+    if (cached) {
+      dashboardStatsCaches.delete(cacheKey);
+      dashboardStatsCaches.set(cacheKey, cached);
+      return cached;
     }
 
     const pending = dashboardStatsIndexPromises.get(cacheKey);
@@ -4203,31 +4864,37 @@ ${errorSummary}  Status: ${syncSummary.state}
       return pending;
     }
 
-    const promise = buildDashboardStatsIndex(cacheKey).finally(() => {
+    const promise = buildDashboardStatsIndex(cacheKey, instanceId).finally(() => {
       dashboardStatsIndexPromises.delete(cacheKey);
     });
     dashboardStatsIndexPromises.set(cacheKey, promise);
     return promise;
   }
 
-  async function buildDashboardStatsIndex(cacheKey: string): Promise<DashboardStatsCache> {
+  async function buildDashboardStatsIndex(cacheKey: string, instanceId: string): Promise<DashboardStatsCache> {
     const since = new Date(Date.now() - config.lookbackMs).toISOString();
     const nowIso = new Date().toISOString();
     const nowTimestamp = Date.now();
 
     const alertWhere = createSqlWhere();
     alertWhere.add('created_at >= ?', since);
+    if (instanceId === 'all') {
+      alertWhere.add(`instance_id IN (${config.instances.map(() => '?').join(',')})`, ...config.instances.map((instance) => instance.id));
+    } else {
+      alertWhere.add('instance_id = ?', instanceId);
+    }
     if (!config.simulationsEnabled) {
       alertWhere.add('simulated = 0');
     }
     const alerts: DashboardAlertStatsRecord[] = [];
     let simulatedAlerts = 0;
-    let lastAlertId = 0;
+    let lastAlertId = Number.MIN_SAFE_INTEGER;
     while (true) {
       const batchWhere = alertWhere.clone();
       batchWhere.add('id > ?', lastAlertId);
       const alertRows = await queryWorker.all<{
       id: number;
+      instance_id: string;
       created_at: string;
       country?: string | null;
       scenario?: string | null;
@@ -4238,7 +4905,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       target?: string | null;
       simulated?: number | null;
     }>(`
-      SELECT id, created_at, country, scenario, as_name, source_ip, latitude, longitude, target, simulated
+      SELECT id, instance_id, created_at, country, scenario, as_name, source_ip, latitude, longitude, target, simulated
       FROM alerts
       ${batchWhere.toSql()}
       ORDER BY id ASC
@@ -4262,6 +4929,7 @@ ${errorSummary}  Status: ${syncSummary.state}
         }
 
         alerts.push({
+          instanceId: row.instance_id,
           createdAt,
           timestamp,
           country: row.country || undefined,
@@ -4281,6 +4949,11 @@ ${errorSummary}  Status: ${syncSummary.state}
 
     const decisionWhere = createSqlWhere();
     decisionWhere.add('(created_at >= ? OR stop_at > ?)', since, nowIso);
+    if (instanceId === 'all') {
+      decisionWhere.add(`instance_id IN (${config.instances.map(() => '?').join(',')})`, ...config.instances.map((instance) => instance.id));
+    } else {
+      decisionWhere.add('instance_id = ?', instanceId);
+    }
     if (!config.simulationsEnabled) {
       decisionWhere.add('simulated = 0');
     }
@@ -4293,13 +4966,14 @@ ${errorSummary}  Status: ${syncSummary.state}
       batchWhere.add('rowid > ?', lastDecisionRowId);
       const decisionRows = await queryWorker.all<{
       rowid: number;
+      instance_id: string;
       created_at: string;
       stop_at?: string | null;
       value?: string | null;
       country?: string | null;
       simulated?: number | null;
     }>(`
-      SELECT rowid, created_at, stop_at, value, country, simulated
+      SELECT rowid, instance_id, created_at, stop_at, value, country, simulated
       FROM decisions
       ${batchWhere.toSql()}
       ORDER BY rowid ASC
@@ -4330,6 +5004,7 @@ ${errorSummary}  Status: ${syncSummary.state}
         }
 
         decisions.push({
+          instanceId: row.instance_id,
           createdAt,
           stopAt,
           timestamp,
@@ -4351,31 +5026,48 @@ ${errorSummary}  Status: ${syncSummary.state}
       simulatedDecisions: activeSimulatedDecisions,
     };
 
-    const statsCache = { key: cacheKey, alerts, decisions, totals };
-    if (cacheKey === getDashboardStatsCacheKey()) {
-      dashboardStatsCache = statsCache;
+    const statsCache = { key: cacheKey, scope: instanceId, alerts, decisions, totals };
+    if (cacheKey === getDashboardStatsCacheKey(instanceId)) {
+      dashboardStatsCaches.set(cacheKey, statsCache);
+      while (dashboardStatsCaches.size > Math.max(4, config.instances.length + 1)) {
+        const oldest = dashboardStatsCaches.keys().next().value;
+        if (oldest) dashboardStatsCaches.delete(oldest);
+        else break;
+      }
     }
     return statsCache;
   }
 
   async function buildDashboardStats(filters: DashboardStatsFilters): Promise<DashboardStatsResponse> {
-    const statsIndex = await getDashboardStatsIndex();
-    const responseCacheKey = getDashboardStatsResponseCacheKey(statsIndex.key, filters);
-    const cachedResponse = dashboardStatsResponseCache.get(responseCacheKey);
-    if (cachedResponse) {
-      return cachedResponse;
-    }
+    // A secondary sync can finish while a large Combined index or response is
+    // being assembled. Scope generations make that work obsolete. Retry here
+    // so a response that completes after the commit can never expose the old
+    // generation or put it back into a current cache entry.
+    while (true) {
+      const statsIndex = await getDashboardStatsIndex(filters.instanceId);
+      if (statsIndex.key !== getDashboardStatsCacheKey(filters.instanceId)) continue;
 
-    const pending = dashboardStatsResponsePromises.get(responseCacheKey);
-    if (pending) {
-      return pending;
-    }
+      const responseCacheKey = getDashboardStatsResponseCacheKey(statsIndex.key, filters);
+      const cachedResponse = dashboardStatsResponseCache.get(responseCacheKey);
+      if (cachedResponse) {
+        if (statsIndex.key === getDashboardStatsCacheKey(filters.instanceId)) return cachedResponse;
+        continue;
+      }
 
-    const promise = buildDashboardStatsResponse(statsIndex, filters, responseCacheKey).finally(() => {
-      dashboardStatsResponsePromises.delete(responseCacheKey);
-    });
-    dashboardStatsResponsePromises.set(responseCacheKey, promise);
-    return promise;
+      const pending = dashboardStatsResponsePromises.get(responseCacheKey);
+      if (pending) {
+        const response = await pending;
+        if (statsIndex.key === getDashboardStatsCacheKey(filters.instanceId)) return response;
+        continue;
+      }
+
+      const promise = buildDashboardStatsResponse(statsIndex, filters, responseCacheKey).finally(() => {
+        dashboardStatsResponsePromises.delete(responseCacheKey);
+      });
+      dashboardStatsResponsePromises.set(responseCacheKey, promise);
+      const response = await promise;
+      if (statsIndex.key === getDashboardStatsCacheKey(filters.instanceId)) return response;
+    }
   }
 
   function createEmptyDashboardStatsResponse(options: { pending?: boolean } = {}): DashboardStatsResponse {
@@ -4414,8 +5106,8 @@ ${errorSummary}  Status: ${syncSummary.state}
   }
 
   function isDashboardStatsBuildInProgress(filters: DashboardStatsFilters): boolean {
-    const indexKey = getDashboardStatsCacheKey();
-    if (dashboardStatsCache?.key !== indexKey) {
+    const indexKey = getDashboardStatsCacheKey(filters.instanceId);
+    if (!dashboardStatsCaches.has(indexKey)) {
       return dashboardStatsIndexPromises.has(indexKey);
     }
 
@@ -4423,11 +5115,11 @@ ${errorSummary}  Status: ${syncSummary.state}
   }
 
   function warmDashboardStatsCache(filters: DashboardStatsFilters): void {
-    const warmingVersion = dashboardStatsCacheVersion;
+    const warmingKey = getDashboardStatsCacheKey(filters.instanceId);
     void buildDashboardStats(filters).then(() => {
       if (
-        warmingVersion !== dashboardStatsCacheVersion ||
-        dashboardStatsReadyPublishedVersion === warmingVersion ||
+        warmingKey !== getDashboardStatsCacheKey(filters.instanceId) ||
+        dashboardStatsReadyPublishedKeys.has(warmingKey) ||
         !cacheRefreshCompletedAt
       ) {
         return;
@@ -4436,7 +5128,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       // A cold dashboard request initially receives the previous response with
       // pending=true. Notify clients again when the new index and response are
       // read-visible so a superseded retry cannot leave the page stale.
-      dashboardStatsReadyPublishedVersion = warmingVersion;
+      dashboardStatsReadyPublishedKeys.add(warmingKey);
       publishCacheUpdate(cacheRefreshCompletedAt);
     }).catch((error: any) => {
       console.error('Failed to warm dashboard statistics cache:', error.message);
@@ -4469,6 +5161,7 @@ ${errorSummary}  Status: ${syncSummary.state}
         await delay(0);
       }
       const alert = statsIndex.alerts[index];
+      if (filters.instanceId !== 'all' && alert.instanceId !== filters.instanceId) continue;
       if (alert.ip && alert.country && alert.country !== 'Unknown') {
         alertCountryByIp.set(alert.ip, alert.country);
       }
@@ -4504,6 +5197,7 @@ ${errorSummary}  Status: ${syncSummary.state}
         await delay(0);
       }
       const decision = statsIndex.decisions[index];
+      if (filters.instanceId !== 'all' && decision.instanceId !== filters.instanceId) continue;
       if (!matchesDashboardSimulationFilter(decision.simulated, filters.simulation)) {
         continue;
       }
@@ -4531,7 +5225,10 @@ ${errorSummary}  Status: ${syncSummary.state}
       if (index > 0 && index % DASHBOARD_LOOP_YIELD_INTERVAL === 0) {
         await delay(0);
       }
-      if (matchesDashboardSimulationFilter(statsIndex.alerts[index].simulated, filters.simulation)) {
+      if (
+        (filters.instanceId === 'all' || statsIndex.alerts[index].instanceId === filters.instanceId)
+        && matchesDashboardSimulationFilter(statsIndex.alerts[index].simulated, filters.simulation)
+      ) {
         globalTotal += 1;
       }
     }
@@ -4569,32 +5266,58 @@ ${errorSummary}  Status: ${syncSummary.state}
       },
     };
 
-    dashboardStatsResponseCache.set(responseCacheKey, response);
-    const staleCacheKey = getStaleDashboardStatsResponseCacheKey(filters);
-    staleDashboardStatsResponseCache.set(staleCacheKey, response);
-    if (dashboardStatsResponseCache.size > 50) {
-      const firstKey = dashboardStatsResponseCache.keys().next().value;
-      if (firstKey) {
-        dashboardStatsResponseCache.delete(firstKey);
+    if (statsIndex.key === getDashboardStatsCacheKey(filters.instanceId)) {
+      dashboardStatsResponseCache.set(responseCacheKey, response);
+      const staleCacheKey = getStaleDashboardStatsResponseCacheKey(filters);
+      staleDashboardStatsResponseCache.set(staleCacheKey, response);
+      if (dashboardStatsResponseCache.size > 50) {
+        const firstKey = dashboardStatsResponseCache.keys().next().value;
+        if (firstKey) {
+          dashboardStatsResponseCache.delete(firstKey);
+        }
       }
-    }
-    if (staleDashboardStatsResponseCache.size > 50) {
-      const firstKey = staleDashboardStatsResponseCache.keys().next().value;
-      if (firstKey) {
-        staleDashboardStatsResponseCache.delete(firstKey);
+      if (staleDashboardStatsResponseCache.size > 50) {
+        const firstKey = staleDashboardStatsResponseCache.keys().next().value;
+        if (firstKey) {
+          staleDashboardStatsResponseCache.delete(firstKey);
+        }
       }
     }
 
     return response;
   }
 
-  function getDashboardStatsCacheKey(): string {
-    return `${dashboardStatsCacheVersion}:${config.lookbackMs}:${config.simulationsEnabled ? 'sim' : 'live'}`;
+  function getDashboardStatsCacheKey(instanceId = 'all'): string {
+    const scopeVersion = dashboardStatsScopeVersions.get(instanceId) || 0;
+    return `${dashboardStatsCacheVersion}:${scopeVersion}:${config.lookbackMs}:${config.simulationsEnabled ? 'sim' : 'live'}:${instanceId}`;
   }
 
-  function invalidateDashboardStatsCache(): void {
-    dashboardStatsCache = null;
+  function invalidateDashboardStatsCache(instanceId?: string): void {
+    if (instanceId) {
+      const affectedScopes = new Set([instanceId, 'all']);
+      for (const scope of affectedScopes) {
+        dashboardStatsScopeVersions.set(scope, (dashboardStatsScopeVersions.get(scope) || 0) + 1);
+      }
+      dashboardStatsReadyPublishedKeys.clear();
+      for (const [key, cached] of dashboardStatsCaches) {
+        if (affectedScopes.has(cached.scope)) dashboardStatsCaches.delete(key);
+      }
+      for (const key of dashboardStatsResponseCache.keys()) {
+        if (key.includes(`\"instanceId\":\"${instanceId}\"`) || key.includes(`\"instanceId\":\"all\"`)) {
+          dashboardStatsResponseCache.delete(key);
+        }
+      }
+      for (const key of staleDashboardStatsResponseCache.keys()) {
+        if (key.includes(`\"instanceId\":\"${instanceId}\"`) || key.includes(`\"instanceId\":\"all\"`)) {
+          staleDashboardStatsResponseCache.delete(key);
+        }
+      }
+      return;
+    }
+    dashboardStatsCaches.clear();
     dashboardStatsResponseCache.clear();
+    staleDashboardStatsResponseCache.clear();
+    dashboardStatsReadyPublishedKeys.clear();
     dashboardStatsCacheVersion += 1;
   }
 
@@ -4620,6 +5343,129 @@ ${errorSummary}  Status: ${syncSummary.state}
     return null;
   }
 
+  async function syncInstanceDelta(instanceId: string): Promise<void> {
+    if (instanceRefreshPromises.has(instanceId)) return instanceRefreshPromises.get(instanceId)!;
+    const instance = config.instances.find((candidate) => candidate.id === instanceId);
+    if (!instance) return;
+    const runtime = getInstanceSyncRuntime(instanceId);
+    const promise = withInstanceNetworkSlot(async () => {
+      const { client, status } = runtime;
+      status.isSyncing = true;
+      status.state = 'syncing';
+      status.progress = 5;
+      status.startedAt = new Date().toISOString();
+      status.completedAt = null;
+      status.errors = [];
+      status.message = `Syncing ${instance.name}`;
+      try {
+        const refreshMs = instance.sync.refreshIntervalMs ?? refreshIntervalMs;
+        if (!client.hasToken() && !await client.login(`instance ${instance.name}`)) {
+          throw new Error(client.getStatus().lastError || 'Authentication failed');
+        }
+        const now = Date.now();
+        const previousUpdate = instanceLastUpdates.get(instanceId);
+        const previousUpdateMs = previousUpdate ? Date.parse(previousUpdate) : Number.NaN;
+        const overlapMs = Math.max(refreshMs, 60_000) + 60_000;
+        const start = Number.isFinite(previousUpdateMs)
+          ? Math.max(now - runtime.lookbackMs, previousUpdateMs - 10_000)
+          : Math.max(now - runtime.lookbackMs, now - overlapMs);
+        const summary = await syncAlertWindow(start, now, now, (window, alerts, decisions) => {
+          status.progress = 60;
+          status.message = getServerTranslator(database)('components.syncOverlay.statusProcessingWindow', {
+            window,
+            alerts,
+            decisions,
+          });
+        }, runtime);
+        if (summary.errors.length > 0) {
+          throw summary.lastError || new Error(summary.errors.join('; '));
+        }
+        await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
+        client.updateStatus(true);
+        status.state = 'complete';
+        status.progress = 100;
+        status.message = `${instance.name} sync complete`;
+        status.errors = [];
+        instanceLastUpdates.set(instanceId, new Date(now).toISOString());
+        if (summary.changed) {
+          invalidateDashboardStatsCache(instanceId);
+          const revision = new Date().toISOString();
+          cacheRefreshCompletedAt = revision;
+          publishCacheUpdate(revision, [instanceId]);
+        }
+        console.log(`[${instance.name}] Delta update complete: ${summary.alerts} alerts and ${summary.decisions} decisions synced.`);
+      } catch (error: any) {
+        client.updateStatus(false, error);
+        status.state = 'failed';
+        status.progress = 0;
+        status.message = `${instance.name} sync failed`;
+        status.errors = [error?.message || String(error)];
+      } finally {
+        status.isSyncing = false;
+        status.completedAt = new Date().toISOString();
+      }
+    }).finally(() => instanceRefreshPromises.delete(instanceId));
+    instanceRefreshPromises.set(instanceId, promise);
+    return promise;
+  }
+
+  function resolveOperationInstances(scope: 'all' | 'instance' | undefined, instanceId: string | undefined) {
+    if (!scope) return [primaryInstance];
+    if (scope === 'all') return config.instances;
+    const instance = config.instances.find((candidate) => candidate.id === instanceId);
+    return instance ? [instance] : { error: 'A valid instance_id is required when scope is instance' };
+  }
+
+  async function deleteEntriesByIpOnInstance(instanceId: string, ip: string): Promise<BulkDeleteResult> {
+    const instance = config.instances.find((candidate) => candidate.id === instanceId);
+    const client = lapiClients.get(instanceId);
+    if (!instance || !client) throw new Error(`Unknown CrowdSec instance ${instanceId}`);
+    if (!client.hasToken() && !await client.login(`cleanup ${instance.name}`)) {
+      throw new Error(client.getStatus().lastError || 'Authentication failed');
+    }
+    const alerts = (await client.fetchAlerts(instance.sync.lookbackPeriod || config.lookbackPeriod)) as AlertRecord[];
+    const matching = alerts.filter((alert) => getAlertSourceValue(alert.source) === ip);
+    const result: BulkDeleteResult = {
+      requested_alerts: matching.length,
+      requested_decisions: matching.reduce((count, alert) => count + (alert.decisions?.length || 0), 0),
+      deleted_alerts: 0,
+      deleted_decisions: 0,
+      failed: [],
+      ip,
+    };
+    for (const alert of matching) {
+      for (const decision of alert.decisions || []) {
+        try {
+          await client.deleteDecision(String(decision.id));
+          result.deleted_decisions += 1;
+        } catch (error: any) {
+          result.failed.push({ kind: 'decision', id: String(decision.id), error: error?.message || String(error) });
+        }
+      }
+      try {
+        await client.deleteAlert(String(alert.id));
+        result.deleted_alerts += 1;
+      } catch (error: any) {
+        result.failed.push({ kind: 'alert', id: String(alert.id), error: error?.message || String(error) });
+      }
+    }
+    await syncInstanceDelta(instanceId);
+    return result;
+  }
+
+  function scheduleInstanceRefresh(instanceId: string): void {
+    const instance = config.instances.find((candidate) => candidate.id === instanceId);
+    if (!instance) return;
+    const interval = instance.sync.refreshIntervalMs ?? refreshIntervalMs;
+    if (interval <= 0) return;
+    const delayMs = interval;
+    const timer = setTimeout(() => {
+      void syncInstanceDelta(instanceId).finally(() => scheduleInstanceRefresh(instanceId));
+    }, delayMs);
+    timer.unref();
+    instanceRefreshTimers.set(instanceId, timer);
+  }
+
   if (options.startBackgroundTasks) {
     startBackgroundTasks();
   }
@@ -4630,17 +5476,21 @@ ${errorSummary}  Status: ${syncSummary.state}
     config,
     database,
     lapiClient,
+    lapiClients,
     startBackgroundTasks,
     stopBackgroundTasks: () => {
       pendingAlertDeletionStopped = true;
       stopRefreshScheduler();
       stopHeartbeatScheduler();
       clearPendingAlertDeletionTimeout();
+      for (const timer of instanceRefreshTimers.values()) clearTimeout(timer);
+      instanceRefreshTimers.clear();
+      historicalInstanceSyncPending.clear();
       queryWorker.close();
       syncWorker.close();
       cacheUpdateListeners.clear();
     },
-    getSyncStatus: () => ({ ...syncStatus }),
+    getSyncStatus: () => aggregateHistoricalSyncStatus(),
     getLapiStatus: () => lapiClient.getStatus(),
     getCacheLastUpdate: () => cacheRefreshCompletedAt,
     subscribeCacheUpdates: (listener) => {
@@ -4656,7 +5506,12 @@ ${errorSummary}  Status: ${syncSummary.state}
     }
     startHeartbeatScheduler();
     startRefreshScheduler();
-    void ensureBootstrapReady('startup');
+    if (config.instances.length > 1 && !cache.isInitialized) {
+      for (const instance of config.instances) historicalInstanceSyncPending.add(instance.id);
+    }
+    void ensureBootstrapReady('startup').then(() => {
+      for (const instance of config.instances.slice(1)) scheduleInstanceRefresh(instance.id);
+    });
   }
 
 }
@@ -4694,13 +5549,25 @@ function createSqlWhere(): SqlWhere {
 }
 
 const DECISION_COVERED_SEARCH_FIELDS = new Set([
-  'id', 'alert', 'scenario', 'ip', 'country', 'region', 'city', 'as', 'target',
+  'id', 'instance', 'alert', 'scenario', 'ip', 'country', 'region', 'city', 'as', 'target',
   'date', 'action', 'type', 'status', 'duplicate', 'sim', 'machine', 'origin',
 ]);
 
 function getDecisionPageIndexHint(filters: DecisionListFilters, searchAst: SearchNode | null): string {
   if (filters.showDuplicates || filters.alertId || searchAstContainsField(searchAst, 'id', 'alert')) {
     return '';
+  }
+
+  if (
+    filters.instanceId !== 'all'
+    && !searchAst
+    && !filters.country
+    && !filters.scenario
+    && !filters.as
+    && !filters.ip
+    && !filters.target
+  ) {
+    return 'INDEXED BY idx_decisions_instance_duplicate_paging';
   }
 
   const simpleIp = getSimpleSearchFieldValue(searchAst, 'ip');
@@ -4812,7 +5679,9 @@ function alertFieldCondition(field: string, value: string): SqlCondition {
 
   switch (field) {
     case 'id':
-      return { sql: 'CAST(id AS TEXT) = ?', params: [value] };
+      return { sql: 'CAST(upstream_id AS TEXT) = ?', params: [value] };
+    case 'instance':
+      return textCondition('LOWER(instance_id)', value);
     case 'scenario':
       return textCondition('LOWER(scenario)', value);
     case 'message':
@@ -4849,9 +5718,11 @@ function decisionFieldCondition(field: string, value: string, now: string): SqlC
 
   switch (field) {
     case 'id':
-      return { sql: 'CAST(id AS TEXT) = ?', params: [value] };
+      return { sql: 'CAST(upstream_id AS TEXT) = ?', params: [value] };
+    case 'instance':
+      return textCondition('LOWER(instance_id)', value);
     case 'alert':
-      return { sql: 'alert_id = ?', params: [value] };
+      return { sql: 'alert_upstream_id = ?', params: [value] };
     case 'scenario':
       return textCondition('LOWER(scenario)', value);
     case 'ip':
@@ -5339,7 +6210,7 @@ function applySimulationModeToAlert(alert: AlertRecord, simulationsEnabled: bool
   return alertWithSimulation;
 }
 
-function toDecisionListItem(
+  function toDecisionListItem(
   decision: AlertDecision & Record<string, unknown>,
   includeExpired: boolean,
 ): DecisionListItem {
@@ -5349,6 +6220,8 @@ function toDecisionListItem(
 
   return {
     id: decision.id,
+    instance_id: typeof decision.instance_id === 'string' ? decision.instance_id : undefined,
+    instance_name: typeof decision.instance_name === 'string' ? decision.instance_name : undefined,
     created_at: String(decision.created_at || ''),
     machine: typeof decision.machine === 'string' ? decision.machine : undefined,
     scenario: typeof decision.scenario === 'string' ? decision.scenario : undefined,
@@ -5380,7 +6253,7 @@ function markDuplicateDecisions(decisions: DecisionListItem[]): DecisionListItem
 
   for (const decision of decisions) {
     if (decision.expired) continue;
-    const key = `${decision.value ?? ''}|${decision.simulated === true ? 'simulated' : 'live'}`;
+    const key = `${decision.instance_id || 'default'}|${decision.value ?? ''}|${decision.simulated === true ? 'simulated' : 'live'}`;
     const expirationMs = getDecisionExpirationMs(decision);
     const numericId = getNumericDecisionId(decision.id);
     const current = primaryMap.get(key);
@@ -5395,7 +6268,7 @@ function markDuplicateDecisions(decisions: DecisionListItem[]): DecisionListItem
 
   return decisions.map((decision) => {
     if (decision.expired) return { ...decision, is_duplicate: false };
-    const primaryId = primaryMap.get(`${decision.value ?? ''}|${decision.simulated === true ? 'simulated' : 'live'}`);
+    const primaryId = primaryMap.get(`${decision.instance_id || 'default'}|${decision.value ?? ''}|${decision.simulated === true ? 'simulated' : 'live'}`);
     return { ...decision, is_duplicate: String(decision.id) !== String(primaryId?.id) };
   });
 }
@@ -5458,6 +6331,7 @@ function getAlertListFilters(context: HonoContext, timeZone: string | null): Ale
 
 function getAlertListFiltersFromValues(readValue: (key: string) => string | undefined, timeZone: string | null): AlertListFilters {
   return {
+    instanceId: readValue('instance') || 'all',
     q: readValue('q') || '',
     ip: lowerValue(readValue('ip')),
     country: lowerValue(readValue('country')),
@@ -5480,6 +6354,7 @@ function getDecisionListFilters(context: HonoContext, timeZone: string | null): 
 function getDecisionListFiltersFromValues(readValue: (key: string) => string | undefined, timeZone: string | null): DecisionListFilters {
   const alertId = readValue('alert_id') || '';
   return {
+    instanceId: readValue('instance') || 'all',
     q: readValue('q') || '',
     alertId,
     country: readValue('country') || '',
@@ -5498,6 +6373,7 @@ function getDecisionListFiltersFromValues(readValue: (key: string) => string | u
 
 function getDashboardStatsFilters(context: HonoContext, timeZone: string | null): DashboardStatsFilters {
   return {
+    instanceId: context.req.query('instance') || 'all',
     country: context.req.query('country') || '',
     scenario: context.req.query('scenario') || '',
     as: context.req.query('as') || '',

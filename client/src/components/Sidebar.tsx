@@ -1,4 +1,4 @@
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { LayoutDashboard, ShieldAlert, Gavel, Bell, X, Sun, Moon, ArrowUpCircle, BarChart3, Menu, PanelLeftClose, Settings as SettingsIcon, LogOut, RefreshCw, ChevronDown } from "lucide-react";
 import { Badge } from "./ui/Badge";
 import { useAuth } from "../contexts/AuthContext";
@@ -7,7 +7,7 @@ import { useRefresh } from "../contexts/useRefresh";
 import { useState, useEffect, useRef } from "react";
 import { apiUrl, assetUrl } from "../lib/basePath";
 import { fetchConfig } from "../lib/api";
-import type { UpdateCheckResponse } from '../types';
+import type { InstanceSummary, UpdateCheckResponse } from '../types';
 import { useI18n } from "../lib/i18n";
 import { useDateTime } from "../lib/dateTime";
 import { useOptionalToast } from "../contexts/useToast";
@@ -79,6 +79,33 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
     const [confirmFullRefresh, setConfirmFullRefresh] = useState(false);
     const refreshMenuRef = useRef<HTMLDivElement>(null);
     const toast = useOptionalToast();
+    const location = useLocation();
+    const navigate = useNavigate();
+    const [instances, setInstances] = useState<InstanceSummary[]>([]);
+    const requestedInstance = new URLSearchParams(location.search).get('instance');
+    const currentInstance = requestedInstance
+        || (instances.length > 1 ? 'all' : instances[0]?.id || 'all');
+
+    const scopedLink = (path: string) => {
+        if (!['/', '/alerts', '/decisions', '/metrics'].includes(path) || instances.length <= 1) return path;
+        return `${path}?instance=${encodeURIComponent(currentInstance)}`;
+    };
+
+    const changeInstance = (instanceId: string) => {
+        window.localStorage.setItem('crowdsec-web-ui:instance-scope', instanceId);
+        const params = new URLSearchParams(location.search);
+        params.set('instance', instanceId);
+        navigate(`${location.pathname}?${params.toString()}`);
+    };
+
+    useEffect(() => {
+        if (instances.length <= 1 || requestedInstance) return;
+        const stored = window.localStorage.getItem('crowdsec-web-ui:instance-scope');
+        const restored = stored && (stored === 'all' || instances.some((instance) => instance.id === stored)) ? stored : 'all';
+        const params = new URLSearchParams(location.search);
+        params.set('instance', restored);
+        navigate(`${location.pathname}?${params.toString()}`, { replace: true });
+    }, [instances, location.pathname, location.search, navigate, requestedInstance]);
 
     const links = [
         { to: "/", label: "components.sidebar.nav.dashboard", icon: LayoutDashboard },
@@ -137,6 +164,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                     setLoadTestProfile(config.deployment_mode === 'load-test'
                         ? config.load_test_profile || 'default'
                         : null);
+                    setInstances(config.instances || []);
                 }
             } catch (error) {
                 if (!cancelled) {
@@ -274,11 +302,31 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                     <PanelLeftClose size={20} />
                 </button>
             </div>
+            {instances.length > 1 && (
+                <div className="px-4 pb-3">
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500" htmlFor="crowdsec-instance-selector">
+                        Instance
+                    </label>
+                    <select
+                        id="crowdsec-instance-selector"
+                        value={currentInstance}
+                        onChange={(event) => changeInstance(event.target.value)}
+                        className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+                    >
+                        <option value="all">▦ All instances</option>
+                        {instances.map((instance) => (
+                            <option key={instance.id} value={instance.id}>
+                                {instance.icon ? `${instance.icon} ` : ''}{instance.name}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+            )}
             <nav className="flex-1 px-4 space-y-2">
                 {links.map((link) => (
                     <NavLink
                         key={link.to}
-                        to={link.to}
+                        to={scopedLink(link.to)}
                         onClick={() => {
                             if (window.innerWidth < 1024) {
                                 if (onClose) {
@@ -527,7 +575,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                 {links.map((link) => (
                     <NavLink
                         key={link.to}
-                        to={link.to}
+                        to={scopedLink(link.to)}
                         className={({ isActive }) =>
                             `relative flex items-center justify-center p-3 rounded-lg transition-all duration-200 group ${isActive
                                 ? "bg-primary-50 dark:bg-primary-900/20 text-primary-600 dark:text-primary-400"

@@ -232,6 +232,63 @@ services:
     restart: unless-stopped
 ```
 
+## Multiple CrowdSec instances
+
+Set `CROWDSEC_INSTANCES_CONFIG_FILE` to a YAML file that is readable when the process starts. The file defines stable instance IDs, display names, one LAPI connection per instance, and zero or more metrics endpoints. In Docker, mount this file plus the referenced secret and certificate files read-only. The same configuration works for a direct Node.js deployment.
+
+```yaml
+instances:
+  - id: eu-prod
+    name: EU Production
+    icon: 🇪🇺
+    lapi:
+      url: https://crowdsec-eu:8080
+      auth:
+        type: password
+        username: crowdsec-web-ui
+        passwordFile: /run/secrets/eu-lapi-password
+      tls:
+        caFile: /etc/crowdsec-web-ui/certs/eu-ca.pem
+
+    metrics:
+      - id: lapi
+        name: EU LAPI
+        url: https://crowdsec-eu:6060/metrics
+        auth:
+          type: bearer
+          tokenEnv: EU_METRICS_TOKEN
+        tls:
+          caFile: /etc/crowdsec-web-ui/certs/eu-ca.pem
+
+      - id: edge-engine
+        name: EU Edge Engine
+        url: http://crowdsec-edge:6060/metrics
+
+    sync:
+      requestTimeout: 45s
+      alertSyncChunk: 6h
+
+  - id: us-prod
+    name: US Production
+    icon: 🇺🇸
+    lapi:
+      url: https://crowdsec-us:8080
+      auth:
+        type: mtls
+        certFile: /run/secrets/us-client-cert
+        keyFile: /run/secrets/us-client-key
+      tls:
+        caFile: /run/secrets/us-ca
+```
+
+Instance and endpoint IDs must be unique URL-safe identifiers and should be treated as immutable database identities. Display names are also unique, but may be changed. The optional `icon` is a short text or emoji glyph shown in the instance selector; the all-instance scope uses a grid icon. Do not reuse an existing ID for an unrelated LAPI. Configuration and referenced secrets are loaded once; restart the process or container after changing or rotating them.
+
+LAPI password authentication accepts exactly one `passwordEnv` or `passwordFile`. LAPI mTLS uses `certFile` and `keyFile`. The separate `tls.caFile` controls server trust for either authentication mode. Prometheus supports omitted/`none`, `basic`, and `bearer` authentication. Basic auth uses `username` with exactly one `passwordEnv` or `passwordFile`; bearer auth uses exactly one `tokenEnv` or `tokenFile`. Prometheus `tls` accepts `caFile` and an optional complete `certFile`/`keyFile` client pair.
+
+Plaintext YAML secrets, credentials embedded in URLs, partial certificate pairs, unreadable files, and TLS verification bypasses are rejected at startup. Do not combine this file with legacy `CROWDSEC_URL`, LAPI credential/TLS variables, or `CROWDSEC_PROMETHEUS_URL`. If `CROWDSEC_INSTANCES_CONFIG_FILE` is unset, the application keeps the existing behavior by creating one `default` instance from those legacy variables.
+
+Dashboard, Alerts, and Decisions support a Combined scope. Metrics always uses one selected instance and one of that instance's endpoints because CrowdSec exposes process-local counters whose sums would be misleading. Adding a decision or cleaning up an IP in Combined scope runs independently against every configured LAPI and reports partial failures. Row deletion and bulk row deletion always use each row's owning instance; upstream numeric IDs are never broadcast.
+
 ## Environment Variables
 
 ### CrowdSec Connection and Authentication
@@ -240,6 +297,7 @@ Choose exactly one auth mode: password auth or mTLS auth.
 
 | Variable | Default | Required | Description |
 | --- | --- | --- | --- |
+| `CROWDSEC_INSTANCES_CONFIG_FILE` | none | No | Startup-loaded multi-instance YAML file. When set, do not set legacy LAPI connection/auth/TLS variables or `CROWDSEC_PROMETHEUS_URL`. |
 | `CROWDSEC_URL` | `http://crowdsec:8080` | Usually | CrowdSec LAPI base URL. Use `https://...` when TLS is enabled. |
 | `CROWDSEC_USER` | none | Password auth only | CrowdSec machine/user name for watcher-password login. Must be set together with `CROWDSEC_PASSWORD` or `CROWDSEC_PASSWORD_FILE`. |
 | `CROWDSEC_PASSWORD` | none | Password auth only | CrowdSec watcher password. Must be set together with `CROWDSEC_USER`. |
@@ -747,6 +805,8 @@ Alerts and decisions are stored as normalized SQLite columns. The `decisions.ale
    ./run.sh loadtest default
    ./run.sh loadtest blocklist
    ./run.sh loadtest blocklists-mixed
+   ./run.sh loadtest multi-instance
+   ./run.sh loadtest multi-instance-medium
    ```
 
    The `default` profile is a broad baseline for bootstrap, dashboard, filtering, paging, and refresh testing. It creates 300,000 alerts and 300,000 decisions over a 30-day lookback. One recent LISTS blocklist owns 100,000 decisions, while the remaining decisions are distributed across regular alerts. Decisions include active, expired, simulated, and duplicate-value cases. Every minute the fake LAPI adds 100 alerts and 100 decisions with a deterministic mix of regular origins.
@@ -754,6 +814,12 @@ Alerts and decisions are stored as normalized SQLite columns. The `decisions.ale
    The `blocklist` profile mirrors a large CAPI/LISTS workload: 7,582 alerts, 410,463 decisions, and refresh batches containing 53,500 decisions split across LISTS and CAPI alerts.
 
    The `blocklists-mixed` profile exercises a more varied newest-window workload: 10,000 alerts and 500,000 decisions, with three recent blocklists containing 125,000, 100,000, and 60,000 decisions. The remaining 215,000 decisions are spread evenly across regular alerts. It also includes 1,000 alerts without decisions, 500 alerts whose decisions are already expired, and 8,000 decisions that expire 5–15 minutes after seeding so startup and early refreshes cross expiration boundaries. Each synthetic delta adds three blocklist alerts with a deterministic 1,000–25,000 decisions per alert, alternating their decision origins between LISTS and CAPI.
+
+   The `multi-instance` profile is intended for quick local testing. It seeds three independent LAPI sources whose alert and decision IDs all start at 1: Primary has 25,000 alerts and decisions, Secondary 15,000 of each, and Edge 10,000 of each. Their blocklists contain 5,000, 3,000, and 2,000 decisions respectively.
+
+   Use `./run.sh loadtest multi-instance-medium` for three equally sized medium instances. Each has 100,000 alerts, 100,000 decisions, and a 25,000-decision blocklist. Both profiles expose two synthetic Prometheus endpoints on Primary, one on Secondary, and none on Edge. Set `LOADTEST_FAILING_LAPI=true` to make Edge fail for partial-availability and partial-write testing. Benchmark single-instance and Combined requests separately.
+
+   After the multi-instance server finishes bootstrapping, run `pnpm run loadtest:benchmark:multi`. It warms Alerts, Decisions, search, and Dashboard, then reports primary-only and Combined p50/p95 latency separately over three runs. Set `LOADTEST_BASE_URL` when the backend is not on `http://127.0.0.1:3133` and `LOADTEST_BENCHMARK_SAMPLES` to change the samples per run. Compare primary-only results, bootstrap logs, and process RSS with the existing 300k baseline; this script deliberately does not combine those measurements into a misleading single score.
 
    Profile defaults live in `scripts/load-test-profiles/`, with one file per profile. Environment variables still take precedence over profile values.
 
@@ -818,7 +884,7 @@ Alerts and decisions are stored as normalized SQLite columns. The `decisions.ale
          LOADTEST_PROFILE: blocklists-mixed
    ```
 
-   Set `LOADTEST_PROFILE` to `default`, `blocklist`, or `blocklists-mixed`; it defaults to `default`. Individual `LOADTEST_*` environment variables can still override values from the selected profile. The load-test image always ignores the regular `DB_DIR` setting. Its synthetic database defaults to `/tmp/crowdsec-web-ui-load-test` inside the container, so seeding cannot overwrite the database mounted at `/app/data`. The synthetic database is recreated whenever the container starts. `LOADTEST_DB_DIR` can override the container-local location when needed.
+   Set `LOADTEST_PROFILE` to `default`, `blocklist`, `blocklists-mixed`, `multi-instance`, or `multi-instance-medium`; it defaults to `default`. Individual `LOADTEST_*` environment variables can still override values from the selected profile. The load-test image always ignores the regular `DB_DIR` setting. Its synthetic database defaults to `/tmp/crowdsec-web-ui-load-test` inside the container, so seeding cannot overwrite the database mounted at `/app/data`. The synthetic database is recreated whenever the container starts. `LOADTEST_DB_DIR` can override the container-local location when needed.
 
 5. **CrowdSec mTLS smoke test**
 

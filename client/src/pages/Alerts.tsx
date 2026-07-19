@@ -20,16 +20,24 @@ import { resolveMachineName } from "../../../shared/machine";
 import { collectDistinctOrigins, getOriginDisplayValue, getOriginTitle } from "../../../shared/origin";
 import { compileAlertSearch, getSearchHelpDefinition, type SearchParseError } from "../../../shared/search";
 import { Info, ExternalLink, Shield, ShieldBan, Trash2, X, AlertCircle, Columns3, Loader2 } from "lucide-react";
-import type { AlertRecord, AlertSource, ApiPermissionError, BulkDeleteResult, DecisionListItem, SimulationFilter, SlimAlert, TableColumnId, TableColumnPreferences } from '../types';
+import type { AlertRecord, AlertSource, ApiPermissionError, BulkDeleteResult, DecisionListItem, InstanceEntityRef, InstanceOperationResult, SimulationFilter, SlimAlert, TableColumnId, TableColumnPreferences } from '../types';
 import { useI18n, type I18nContextValue } from "../lib/i18n";
 import { getBrowserTimeZone, useDateTime } from "../lib/dateTime";
 
 type AlertListItem = SlimAlert;
 type AlertSelection = AlertListItem | AlertRecord;
 type AlertDeleteAction =
-    | { kind: "single"; alertId: string | number }
-    | { kind: "selected"; ids: string[] }
+    | { kind: "single"; ref: InstanceEntityRef }
+    | { kind: "selected"; refs: InstanceEntityRef[] }
     | { kind: "ip"; ip: string };
+
+function alertKey(alert: Pick<AlertListItem, 'id' | 'instance_id'>): string {
+    return `${alert.instance_id || 'default'}\u0000${String(alert.id)}`;
+}
+
+function alertRef(alert: Pick<AlertListItem, 'id' | 'instance_id'>): InstanceEntityRef {
+    return { instance_id: alert.instance_id || 'default', id: String(alert.id) };
+}
 
 interface ErrorInfo {
     message: string;
@@ -145,9 +153,11 @@ function getAlertDecisionCounts(
 
 function buildDecisionListHref(
     alertId: string | number,
-    options: { includeExpired?: boolean; simulation?: SimulationFilter } = {},
+    options: { includeExpired?: boolean; simulation?: SimulationFilter; instanceId?: string } = {},
 ) {
     const params = new URLSearchParams({ alert_id: String(alertId) });
+
+    if (options.instanceId) params.set('instance', options.instanceId);
 
     if (options.includeExpired) {
         params.set("include_expired", "true");
@@ -177,6 +187,18 @@ function summarizeDeleteResult(result: BulkDeleteResult, t: I18nContextValue['t'
     return `${deletedText}${t('pages.alerts.itemsFailedToDelete', { count: result.failed.length })}`;
 }
 
+function combineDeleteResults(results: BulkDeleteResult[]): BulkDeleteResult {
+    return results.reduce<BulkDeleteResult>((combined, result) => ({
+        requested_alerts: combined.requested_alerts + result.requested_alerts,
+        requested_decisions: combined.requested_decisions + result.requested_decisions,
+        deleted_alerts: combined.deleted_alerts + result.deleted_alerts,
+        deleted_decisions: combined.deleted_decisions + result.deleted_decisions,
+        failed: [...combined.failed, ...result.failed],
+        instance_results: [...(combined.instance_results || []), ...(result.instance_results || [])],
+        ip: combined.ip || result.ip,
+    }), { requested_alerts: 0, requested_decisions: 0, deleted_alerts: 0, deleted_decisions: 0, failed: [] });
+}
+
 export function Alerts() {
     const { language, t } = useI18n();
     const { formatDateTime, timeZone } = useDateTime();
@@ -186,6 +208,7 @@ export function Alerts() {
     const [alerts, setAlerts] = useState<AlertListItem[]>([]);
     const [simulationsEnabled, setSimulationsEnabled] = useState(false);
     const [canManageEnforcement, setCanManageEnforcement] = useState(false);
+    const [multipleInstances, setMultipleInstances] = useState(false);
     const [tableColumnPreferences, setTableColumnPreferences] = useState<TableColumnPreferences>(() => loadStoredTableColumnPreferences());
     const [showColumnsModal, setShowColumnsModal] = useState(false);
     const [searchDraft, setSearchDraft] = useState(initialQueryParam);
@@ -214,6 +237,7 @@ export function Alerts() {
     const [deleteInProgress, setDeleteInProgress] = useState(false);
     const [errorInfo, setErrorInfo] = useState<ErrorInfo | null>(null);
     const [pendingDeleteErrorInfo, setPendingDeleteErrorInfo] = useState<ErrorInfo | null>(null);
+    const [retryCleanupInstances, setRetryCleanupInstances] = useState<InstanceOperationResult[]>([]);
     const [showAllEvents, setShowAllEvents] = useState(false);
     const currentSimulationFilter = simulationsEnabled ? parseSimulationFilter(searchParams.get("simulation")) : 'all';
     const alertIdParam = searchParams.get("id");
@@ -224,6 +248,7 @@ export function Alerts() {
 
     // Ref to track selected alert ID for auto-refresh (avoids stale closure issues)
     const selectedAlertIdRef = useRef<string | number | null>(null);
+    const selectedAlertInstanceIdRef = useRef<string | undefined>(undefined);
 
     const PAGE_SIZE = 50;
     const MAX_MODAL_DECISION_REFRESH_SIZE = 200;
@@ -250,6 +275,7 @@ export function Alerts() {
     const configRef = useRef<{
         simulationsEnabled: boolean;
         canManageEnforcement: boolean;
+        multipleInstances: boolean;
     } | null>(null);
     const hasLoadedAlertsRef = useRef(false);
     const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -272,7 +298,13 @@ export function Alerts() {
         () => getSearchHelpDefinition('alerts', searchValidationFeatures, { alerts }),
         [alerts, searchValidationFeatures],
     );
-    const visibleAlertColumns = tableColumnPreferences.alerts;
+    const combinedScope = (searchParams.get('instance') || 'all') === 'all' && multipleInstances;
+    const visibleAlertColumns = useMemo(() => {
+        const configured = tableColumnPreferences.alerts;
+        return combinedScope && !configured.includes('instance')
+            ? ['instance' as TableColumnId, ...configured]
+            : configured;
+    }, [combinedScope, tableColumnPreferences.alerts]);
     const alertColumnDefinitionById = useMemo(
         () => new Map<TableColumnId, (typeof TABLE_COLUMN_DEFINITIONS.alerts)[number]>(
             TABLE_COLUMN_DEFINITIONS.alerts.map((column) => [column.id, column]),
@@ -297,6 +329,7 @@ export function Alerts() {
         };
         const browserTimeZone = getBrowserTimeZone();
         if (browserTimeZone) filters.browser_tz = browserTimeZone;
+        filters.instance = searchParams.get('instance') || 'all';
         if (appliedQuery) filters.q = appliedQuery;
         if (dateStartParam) filters.dateStart = dateStartParam;
         if (dateEndParam) filters.dateEnd = dateEndParam;
@@ -304,7 +337,7 @@ export function Alerts() {
             filters.simulation = simulationFilter;
         }
         return filters;
-    }, [appliedQuery, currentSimulationFilter, dateEndParam, dateStartParam]);
+    }, [appliedQuery, currentSimulationFilter, dateEndParam, dateStartParam, searchParams]);
 
     const loadConfig = useCallback(async (refresh = false) => {
         if (!refresh && configRef.current) {
@@ -315,11 +348,13 @@ export function Alerts() {
         const nextConfig = {
             simulationsEnabled: configData.simulations_enabled === true,
             canManageEnforcement: configData.permissions?.can_manage_enforcement !== false,
+            multipleInstances: (configData.instances?.length || 0) > 1,
         };
 
         configRef.current = nextConfig;
         setSimulationsEnabled(nextConfig.simulationsEnabled);
         setCanManageEnforcement(nextConfig.canManageEnforcement);
+        setMultipleInstances(nextConfig.multipleInstances);
 
         return nextConfig;
     }, []);
@@ -407,7 +442,7 @@ export function Alerts() {
             setTotalPages(alertsResult.pagination.total_pages);
             setTotalAlerts(alertsResult.pagination.total);
             setTotalUnfilteredAlerts(alertsResult.pagination.unfiltered_total);
-            const nextSelectableIds = alertsData.map((alert) => String(alert.id));
+            const nextSelectableIds = alertsData.map(alertKey);
             setSelectableAlertIds((current) => append
                 ? Array.from(new Set([...current, ...nextSelectableIds]))
                 : nextSelectableIds);
@@ -421,13 +456,15 @@ export function Alerts() {
             if (alertIdParam) {
                 // Always fetch full alert data since list now returns slim payloads
                 try {
-                    const alertData = await fetchAlert(alertIdParam);
+                    const alertData = await fetchAlert(alertIdParam, searchParams.get('instance') === 'all' ? undefined : searchParams.get('instance') || undefined);
                     setSelectedAlert(alertData);
                     setModalDecisionsRefreshToken((current) => current + 1);
                 } catch (err) {
                     console.error("Alert not found", err);
                     // Fallback to slim data from list if fetch fails
-                    const existingAlert = alertsData.find((alert) => String(alert.id) === alertIdParam);
+                    const requestedInstance = searchParams.get('instance');
+                    const existingAlert = alertsData.find((alert) => String(alert.id) === alertIdParam
+                        && (!requestedInstance || requestedInstance === 'all' || alert.instance_id === requestedInstance));
                     if (existingAlert) {
                         setSelectedAlert(existingAlert);
                     }
@@ -437,7 +474,7 @@ export function Alerts() {
                 // Use the ref to get current selected alert ID (avoids stale closure)
                 if (selectedAlertIdRef.current) {
                     try {
-                        const fullAlert = await fetchAlert(selectedAlertIdRef.current);
+                        const fullAlert = await fetchAlert(selectedAlertIdRef.current, selectedAlertInstanceIdRef.current);
                         setSelectedAlert(fullAlert);
                         setModalDecisionsRefreshToken((current) => current + 1);
                     } catch (err) {
@@ -610,6 +647,7 @@ export function Alerts() {
     useEffect(() => {
         const nextSelectedAlertId = selectedAlert ? String(selectedAlert.id) : null;
         selectedAlertIdRef.current = selectedAlert?.id || null;
+        selectedAlertInstanceIdRef.current = selectedAlert?.instance_id;
         if (previousSelectedAlertIdRef.current !== nextSelectedAlertId) {
             setShowAllEvents(false);
         }
@@ -651,6 +689,7 @@ export function Alerts() {
                 : PAGE_SIZE;
             const result = await fetchDecisionsPaginated(page, requestedPageSize, {
                 alert_id: alertId,
+                instance: selectedAlertInstanceIdRef.current || searchParams.get('instance') || 'all',
                 include_expired: "true",
                 tz_offset: String(new Date().getTimezoneOffset()),
             });
@@ -700,7 +739,7 @@ export function Alerts() {
                 setModalDecisionsLoading(false);
             }
         }
-    }, []);
+    }, [searchParams]);
 
     useEffect(() => {
         const timeoutId = window.setTimeout(() => {
@@ -756,9 +795,10 @@ export function Alerts() {
         // Show slim data immediately while loading
         setSelectedAlert(alert);
         selectedAlertIdRef.current = alert.id;
+        selectedAlertInstanceIdRef.current = alert.instance_id;
 
         try {
-            const fullAlert = await fetchAlert(alert.id);
+            const fullAlert = await fetchAlert(alert.id, alert.instance_id);
             setSelectedAlert(fullAlert);
         } catch (err) {
             console.error("Failed to fetch full alert details", err);
@@ -798,14 +838,15 @@ export function Alerts() {
         pendingSearchFocusRef.current = null;
         searchSelectionRef.current = { start: 0, end: 0 };
         skipSearchParamSyncRef.current = "";
-        setSearchParams({});
-    }, [cancelSearchDebounce, setSearchParams]);
+        const instance = searchParams.get('instance');
+        setSearchParams(instance ? { instance } : {});
+    }, [cancelSearchDebounce, searchParams, setSearchParams]);
 
     // Delete handlers
-    const requestDelete = (id: string | number, event: ReactMouseEvent<HTMLButtonElement>) => {
+    const requestDelete = (alert: AlertListItem, event: ReactMouseEvent<HTMLButtonElement>) => {
         event.stopPropagation();
         setPendingDeleteErrorInfo(null);
-        setPendingDeleteAction({ kind: "single", alertId: id });
+        setPendingDeleteAction({ kind: "single", ref: alertRef(alert) });
     };
 
     const confirmDelete = async () => {
@@ -817,21 +858,40 @@ export function Alerts() {
             let resultMessage: string | null = null;
 
             if (pendingDeleteAction.kind === "single") {
-                const result = await deleteAlert(pendingDeleteAction.alertId);
+                const instanceScope = searchParams.get('instance');
+                const result = await deleteAlert(
+                    pendingDeleteAction.ref.id,
+                    multipleInstances || (instanceScope && instanceScope !== 'all')
+                        ? pendingDeleteAction.ref.instance_id
+                        : undefined,
+                );
                 resultMessage = result ? summarizeDeleteResult(result, t) : null;
-                if (selectedAlert && selectedAlert.id === pendingDeleteAction.alertId) {
+                if (selectedAlert && alertKey(selectedAlert) === `${pendingDeleteAction.ref.instance_id}\u0000${pendingDeleteAction.ref.id}`) {
                     setSelectedAlert(null);
                 }
-                setSelectedAlertIds((prev) => prev.filter((id) => id !== String(pendingDeleteAction.alertId)));
+                setSelectedAlertIds((prev) => prev.filter((id) => id !== `${pendingDeleteAction.ref.instance_id}\u0000${pendingDeleteAction.ref.id}`));
             } else if (pendingDeleteAction.kind === "selected") {
-                const result = await bulkDeleteAlerts(pendingDeleteAction.ids);
+                const result = await bulkDeleteAlerts(multipleInstances
+                    ? pendingDeleteAction.refs
+                    : pendingDeleteAction.refs.map((ref) => ref.id));
                 resultMessage = summarizeDeleteResult(result, t);
-                if (selectedAlert && pendingDeleteAction.ids.includes(String(selectedAlert.id))) {
+                if (selectedAlert && pendingDeleteAction.refs.some((ref) => `${ref.instance_id}\u0000${ref.id}` === alertKey(selectedAlert))) {
                     setSelectedAlert(null);
                 }
                 setSelectedAlertIds([]);
             } else {
-                const result = await cleanupByIp(pendingDeleteAction.ip);
+                const instanceScope = searchParams.get('instance');
+                const result = retryCleanupInstances.length > 0
+                    ? combineDeleteResults(await Promise.all(retryCleanupInstances.map((instance) => cleanupByIp({
+                        ip: pendingDeleteAction.ip,
+                        scope: 'instance',
+                        instance_id: instance.instance_id,
+                    }))))
+                    : await cleanupByIp(!instanceScope && !multipleInstances
+                        ? pendingDeleteAction.ip
+                        : instanceScope === 'all' || !instanceScope
+                        ? { ip: pendingDeleteAction.ip, scope: 'all' }
+                        : { ip: pendingDeleteAction.ip, scope: 'instance', instance_id: instanceScope });
                 resultMessage = summarizeDeleteResult(result, t);
                 if (selectedAlert && getAlertSourceValue(selectedAlert.source) === pendingDeleteAction.ip) {
                     setSelectedAlert(null);
@@ -840,6 +900,17 @@ export function Alerts() {
                 if (result.deleted_alerts === 0 && result.deleted_decisions === 0 && result.failed.length === 0) {
                     resultMessage = t('pages.alerts.noAlertsOrDecisionsForIp', { ip: pendingDeleteAction.ip });
                 }
+                const failedInstances = result.instance_results?.filter((instance) => !instance.success) || [];
+                if (failedInstances.length > 0) {
+                    const succeededNames = result.instance_results?.filter((instance) => instance.success).map((instance) => instance.instance_name) || [];
+                    setRetryCleanupInstances(failedInstances);
+                    setPendingDeleteErrorInfo({
+                        message: `${succeededNames.length > 0 ? `Succeeded: ${succeededNames.join(', ')}. ` : ''}Failed: ${failedInstances.map((instance) => instance.instance_name).join(', ')}.`,
+                    });
+                    await loadAlerts({ page: 1, refreshConfig: true });
+                    return;
+                }
+                setRetryCleanupInstances([]);
             }
 
             setPendingDeleteAction(null);
@@ -864,6 +935,7 @@ export function Alerts() {
     const cancelPendingDelete = () => {
         setPendingDeleteAction(null);
         setPendingDeleteErrorInfo(null);
+        setRetryCleanupInstances([]);
     };
 
     const toggleAlertSelection = (alertId: string) => {
@@ -876,6 +948,9 @@ export function Alerts() {
 
     const filteredAlerts = alerts;
     const selectedFilteredAlertIds = selectableAlertIds.filter((id) => selectedAlertIds.includes(id));
+    const selectedFilteredAlertRefs = filteredAlerts
+        .filter((alert) => selectedFilteredAlertIds.includes(alertKey(alert)))
+        .map(alertRef);
     const allFilteredAlertsSelected = selectableAlertIds.length > 0 && selectedFilteredAlertIds.length === selectableAlertIds.length;
     const someFilteredAlertsSelected = selectedFilteredAlertIds.length > 0 && !allFilteredAlertsSelected;
 
@@ -907,7 +982,7 @@ export function Alerts() {
                 ? t('pages.alerts.deleteAllIpTitle')
                 : t('common.delete');
     const selectedAlertCount = selectedFilteredAlertIds.length;
-    const pendingSingleAlertId = pendingDeleteAction?.kind === "single" ? pendingDeleteAction.alertId : null;
+    const pendingSingleAlertId = pendingDeleteAction?.kind === "single" ? pendingDeleteAction.ref.id : null;
     const pendingIp = pendingDeleteAction?.kind === "ip" ? pendingDeleteAction.ip : null;
     const summaryText = initialLoading && !hasLoadedAlerts
         ? t('pages.alerts.loading')
@@ -937,7 +1012,7 @@ export function Alerts() {
                     <button
                         onClick={() => {
                             setPendingDeleteErrorInfo(null);
-                            setPendingDeleteAction({ kind: "selected", ids: selectedFilteredAlertIds });
+                            setPendingDeleteAction({ kind: "selected", refs: selectedFilteredAlertRefs });
                         }}
                         disabled={selectedAlertCount === 0}
                         className="rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
@@ -1097,10 +1172,11 @@ export function Alerts() {
                                     const alertOrigins = getAlertOrigins(alert);
                                     const alertOriginDisplay = getOriginDisplayValue(alertOrigins);
                                     const alertOriginTitle = getOriginTitle(alertOrigins);
-                                    const isSelected = selectedAlertIds.includes(String(alert.id));
+                                    const rowKey = alertKey(alert);
+                                    const isSelected = selectedAlertIds.includes(rowKey);
                                     return (
                                         <tr
-                                            key={alert.id}
+                                            key={rowKey}
                                             ref={isLastElement ? lastAlertElementRef : null}
                                             onClick={() => handleAlertClick(alert)}
                                             className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors cursor-pointer"
@@ -1111,13 +1187,19 @@ export function Alerts() {
                                                         type="checkbox"
                                                         aria-label={t('pages.alerts.selectAlert', { id: alert.id })}
                                                         checked={isSelected}
-                                                        onChange={() => toggleAlertSelection(String(alert.id))}
+                                                        onChange={() => toggleAlertSelection(rowKey)}
                                                         className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                                                     />
                                                 </td>
                                             )}
                                             {visibleAlertColumns.map((columnId) => {
                                                 switch (columnId) {
+                                                    case 'instance':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                                                                <Badge variant="secondary">{alert.instance_name || alert.instance_id || 'default'}</Badge>
+                                                            </td>
+                                                        );
                                                     case 'id':
                                                         return (
                                                             <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-900 dark:text-gray-100">
@@ -1210,7 +1292,7 @@ export function Alerts() {
                                                                             <div className="flex flex-wrap gap-2">
                                                                                 {activeDecisionCount > 0 && (
                                                                                     <Link
-                                                                                        to={buildDecisionListHref(alert.id, { simulation: decisionFilter })}
+                                                                                        to={buildDecisionListHref(alert.id, { simulation: decisionFilter, instanceId: alert.instance_id })}
                                                                                         className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors border border-primary-200 dark:border-primary-800"
                                                                                         title={t('pages.alerts.viewActiveDecisions', { count: activeDecisionCount })}
                                                                                     >
@@ -1221,7 +1303,7 @@ export function Alerts() {
                                                                                 )}
                                                                                 {expiredDecisionCount > 0 && (
                                                                                     <Link
-                                                                                        to={buildDecisionListHref(alert.id, { includeExpired: true, simulation: decisionFilter })}
+                                                                                        to={buildDecisionListHref(alert.id, { includeExpired: true, simulation: decisionFilter, instanceId: alert.instance_id })}
                                                                                         className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
                                                                                         title={t('pages.alerts.viewExpiredDecisions', { count: expiredDecisionCount })}
                                                                                     >
@@ -1259,7 +1341,7 @@ export function Alerts() {
                                                             </button>
                                                         )}
                                                         <button
-                                                            onClick={(e) => requestDelete(alert.id, e)}
+                                                            onClick={(e) => requestDelete(alert, e)}
                                                             className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
                                                             title={t('pages.alerts.deleteAlert')}
                                                             aria-label={t('pages.alerts.deleteAlert')}
@@ -1437,7 +1519,7 @@ export function Alerts() {
                                                 const isActive = !expirationState.isExpired;
                                                 return (
                                                     <tr
-                                                        key={`${decision.id}-${decision.detail.duration ?? idx}`}
+                                                        key={`${decision.instance_id || selectedAlert.instance_id || 'default'}-${decision.id}-${decision.detail.duration ?? idx}`}
                                                         ref={idx === modalDecisions.length - 1 ? lastModalDecisionElementRef : null}
                                                     >
                                                         <td className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400">#{decision.id}</td>
@@ -1452,6 +1534,7 @@ export function Alerts() {
                                                             {isActive ? (
                                                                 <Link
                                                                     to={buildDecisionListHref(selectedAlert.id, {
+                                                                        instanceId: selectedAlert.instance_id,
                                                                         simulation: simulationsEnabled
                                                                             ? (isSimulatedDecision(decision) ? 'simulated' : 'live')
                                                                             : undefined,
@@ -1466,6 +1549,7 @@ export function Alerts() {
                                                             ) : (
                                                                 <Link
                                                                     to={buildDecisionListHref(selectedAlert.id, {
+                                                                        instanceId: selectedAlert.instance_id,
                                                                         includeExpired: true,
                                                                         simulation: simulationsEnabled
                                                                             ? (isSimulatedDecision(decision) ? 'simulated' : 'live')
@@ -1565,7 +1649,11 @@ export function Alerts() {
                         disabled={deleteInProgress}
                         className="px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                        {deleteInProgress ? t('common.deleting') : t('common.delete')}
+                        {deleteInProgress
+                            ? t('common.deleting')
+                            : retryCleanupInstances.length > 0
+                                ? 'Retry failed instances'
+                                : t('common.delete')}
                     </button>
                 </div>
             </Modal>

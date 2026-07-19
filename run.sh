@@ -97,6 +97,14 @@ LOADTEST_ENV_NAMES=(
     LOADTEST_REFRESH_DECISIONS_MIN_PER_ALERT
     LOADTEST_REFRESH_DECISIONS_MAX_PER_ALERT
     LOADTEST_REFRESH_DECISION_ORIGINS
+    LOADTEST_MULTI_INSTANCE
+    LOADTEST_FAILING_LAPI
+    LOADTEST_SECONDARY_ALERTS
+    LOADTEST_SECONDARY_DECISIONS
+    LOADTEST_SECONDARY_BLOCKLIST_DECISIONS
+    LOADTEST_EDGE_ALERTS
+    LOADTEST_EDGE_DECISIONS
+    LOADTEST_EDGE_BLOCKLIST_DECISIONS
     TIME_FORMAT
     AUTH_ENABLED
     AUTH_SECRET
@@ -166,9 +174,15 @@ configure_loadtest_profile() {
         blocklists-mixed)
             profile_file="$LOADTEST_PROFILE_DIR/blocklists-mixed.sh"
             ;;
+        multi-instance)
+            profile_file="$LOADTEST_PROFILE_DIR/multi-instance.sh"
+            ;;
+        multi-instance-medium)
+            profile_file="$LOADTEST_PROFILE_DIR/multi-instance-medium.sh"
+            ;;
         *)
             log "Error: unknown load-test profile '$LOADTEST_PROFILE'."
-            log "Available profiles: default, blocklist, blocklists-mixed"
+            log "Available profiles: default, blocklist, blocklists-mixed, multi-instance, multi-instance-medium"
             exit 1
             ;;
     esac
@@ -225,6 +239,14 @@ export_loadtest_config() {
     export LOADTEST_REFRESH_DECISIONS_MIN_PER_ALERT
     export LOADTEST_REFRESH_DECISIONS_MAX_PER_ALERT
     export LOADTEST_REFRESH_DECISION_ORIGINS
+    export LOADTEST_MULTI_INSTANCE
+    export LOADTEST_FAILING_LAPI
+    export LOADTEST_SECONDARY_ALERTS
+    export LOADTEST_SECONDARY_DECISIONS
+    export LOADTEST_SECONDARY_BLOCKLIST_DECISIONS
+    export LOADTEST_EDGE_ALERTS
+    export LOADTEST_EDGE_DECISIONS
+    export LOADTEST_EDGE_BLOCKLIST_DECISIONS
     export CROWDSEC_REFRESH_INTERVAL
     export CROWDSEC_IDLE_REFRESH_INTERVAL
     export CROWDSEC_IDLE_THRESHOLD

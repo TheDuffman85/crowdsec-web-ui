@@ -32,6 +32,11 @@ export interface LapiClientOptions {
   version: string;
   machineInfo?: MachineInfo;
   fetchImpl?: FetchLike;
+  tls?: {
+    caFile?: string;
+    certFile?: string;
+    keyFile?: string;
+  };
 }
 
 export interface FetchAlertsFilters {
@@ -151,12 +156,16 @@ export class LapiClient {
         input as Parameters<typeof undiciFetch>[0],
         init as Parameters<typeof undiciFetch>[1],
       ) as unknown as Promise<Response>);
-    this.dispatcher = this.auth.mode === 'mtls'
+    const tls = options.tls;
+    const certFile = tls?.certFile || (this.auth.mode === 'mtls' ? this.auth.certPath : undefined);
+    const keyFile = tls?.keyFile || (this.auth.mode === 'mtls' ? this.auth.keyPath : undefined);
+    const caFile = tls?.caFile || (this.auth.mode === 'mtls' ? this.auth.caCertPath : undefined);
+    this.dispatcher = certFile || keyFile || caFile
       ? new Agent({
           connect: {
-            key: fs.readFileSync(this.auth.keyPath),
-            cert: fs.readFileSync(this.auth.certPath),
-            ...(this.auth.caCertPath ? { ca: fs.readFileSync(this.auth.caCertPath) } : {}),
+            ...(keyFile ? { key: fs.readFileSync(keyFile) } : {}),
+            ...(certFile ? { cert: fs.readFileSync(certFile) } : {}),
+            ...(caFile ? { ca: fs.readFileSync(caFile) } : {}),
           },
         })
       : undefined;

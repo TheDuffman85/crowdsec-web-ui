@@ -84,6 +84,48 @@ beforeEach(() => {
 });
 
 describe('Metrics page', () => {
+  test('hides selectors when only one instance and one endpoint are configured', async () => {
+    fetchConfigMock.mockResolvedValue({
+      metrics_enabled: true,
+      instances: [{ id: 'primary', name: 'Primary', prometheus: [{ id: 'lapi', name: 'LAPI' }] }],
+    });
+    fetchCrowdsecMetricsMock.mockResolvedValue(buildMetricsResponse());
+
+    render(<Metrics />);
+
+    await waitFor(() => expect(fetchCrowdsecMetricsMock).toHaveBeenCalledWith('primary', 'lapi'));
+    expect(screen.queryByLabelText('Instance')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Metrics endpoint')).not.toBeInTheDocument();
+  });
+
+  test('shows only selectors that have multiple choices', async () => {
+    fetchConfigMock.mockResolvedValue({
+      metrics_enabled: true,
+      instances: [{
+        id: 'primary',
+        name: 'Primary',
+        prometheus: [{ id: 'lapi', name: 'LAPI' }, { id: 'engine', name: 'Engine' }],
+      }],
+    });
+    fetchCrowdsecMetricsMock.mockResolvedValue(buildMetricsResponse());
+
+    const { unmount } = render(<Metrics />);
+    await waitFor(() => expect(screen.getByLabelText('Metrics endpoint')).toBeInTheDocument());
+    expect(screen.queryByLabelText('Instance')).not.toBeInTheDocument();
+    unmount();
+
+    fetchConfigMock.mockResolvedValue({
+      metrics_enabled: true,
+      instances: [
+        { id: 'primary', name: 'Primary', prometheus: [{ id: 'lapi', name: 'LAPI' }] },
+        { id: 'secondary', name: 'Secondary', prometheus: [{ id: 'lapi', name: 'LAPI' }] },
+      ],
+    });
+    render(<Metrics />);
+    await waitFor(() => expect(screen.getByLabelText('Instance')).toBeInTheDocument());
+    expect(screen.queryByLabelText('Metrics endpoint')).not.toBeInTheDocument();
+  });
+
   test('renders Grafana-inspired runtime sections', async () => {
     fetchCrowdsecMetricsMock.mockResolvedValue(buildMetricsResponse());
 

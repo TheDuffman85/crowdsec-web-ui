@@ -647,6 +647,30 @@ export function Settings() {
                         </div>
                     )}
 
+                    {config?.instances?.some((instance) => Object.keys(instance.sync_overrides || {}).length > 0) && (
+                        <div className="mt-6 rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-900/40">
+                            <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Per-instance configuration overrides</h3>
+                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                These values come from the startup YAML file, take precedence over global settings, and are read-only until the process restarts.
+                            </p>
+                            <div className="mt-4 grid gap-3 md:grid-cols-2">
+                                {config.instances.filter((instance) => Object.keys(instance.sync_overrides || {}).length > 0).map((instance) => (
+                                    <div key={instance.id} className="rounded-md border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+                                        <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{instance.name}</p>
+                                        <dl className="mt-2 space-y-1 text-xs text-gray-600 dark:text-gray-300">
+                                            {Object.entries(instance.sync_overrides || {}).map(([key, value]) => (
+                                                <div key={key} className="flex justify-between gap-4">
+                                                    <dt className="font-mono">{key}</dt>
+                                                    <dd className="font-mono text-right">{String(value)}</dd>
+                                                </div>
+                                            ))}
+                                        </dl>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
                     <div className="mt-6 flex justify-start">
                         <button
                             type="button"

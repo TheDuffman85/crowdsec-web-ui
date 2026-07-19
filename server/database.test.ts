@@ -54,6 +54,52 @@ function createLegacyDatabase(dbPath: string): { exec: (sql: string) => unknown;
 }
 
 describe('CrowdsecDatabase', () => {
+  test('isolates colliding upstream alert, decision, and UUID identities by instance', () => {
+    const db = createTestDatabase();
+    db.setMeta('multi_instance_primary_id', 'primary');
+    for (const instanceId of ['primary', 'secondary']) {
+      expect(db.insertAlert({
+        $id: 1,
+        $instance_id: instanceId,
+        $uuid: 'same-alert-uuid',
+        $created_at: '2026-07-19T10:00:00.000Z',
+        $scenario: 'crowdsecurity/ssh-bf',
+        $source_ip: instanceId === 'primary' ? '1.1.1.1' : '2.2.2.2',
+        $message: instanceId,
+        $raw_data: JSON.stringify({ id: 1, uuid: 'same-alert-uuid' }),
+      })).toBe(true);
+      expect(db.insertDecision({
+        $id: '1',
+        $instance_id: instanceId,
+        $uuid: 'same-decision-uuid',
+        $alert_id: 1,
+        $created_at: '2026-07-19T10:00:00.000Z',
+        $stop_at: '2026-07-20T10:00:00.000Z',
+        $value: '3.3.3.3',
+        $type: 'ban',
+        $origin: 'crowdsec',
+        $scenario: 'crowdsecurity/ssh-bf',
+        $raw_data: JSON.stringify({ id: 1, alert_id: 1 }),
+      })).toBe(true);
+    }
+
+    expect(db.countAlerts()).toBe(2);
+    expect(db.countDecisions()).toBe(2);
+    expect(db.getAlertInternalId('primary', 1)).not.toBe(db.getAlertInternalId('secondary', 1));
+    expect(db.getDecisionInternalId('primary', 1)).not.toBe(db.getDecisionInternalId('secondary', 1));
+    db.refreshDecisionDuplicateFlags('2026-07-19T11:00:00.000Z', true);
+    const duplicateFlags = db.db.prepare('SELECT instance_id, is_duplicate FROM decisions ORDER BY instance_id').all() as Array<{ instance_id: string; is_duplicate: number }>;
+    expect(duplicateFlags).toEqual([
+      { instance_id: 'primary', is_duplicate: 0 },
+      { instance_id: 'secondary', is_duplicate: 0 },
+    ]);
+    db.deleteDecisionByInstanceId('secondary', 1);
+    db.deleteAlertByInstanceId('secondary', 1);
+    expect(db.countAlerts()).toBe(1);
+    expect(db.countDecisions()).toBe(1);
+    db.close();
+  });
+
   test('persists alert deletion tombstones and blocks sync from restoring queued records', () => {
     const dbPath = createTestDatabasePath();
     const original = new CrowdsecDatabase({ dbPath });
@@ -723,6 +769,38 @@ describe('CrowdsecDatabase', () => {
 
     db.rebuildSearchIndexes();
     expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts').get() as { count: number }).count).toBe(2);
+
+    db.close();
+  });
+
+  test('rebuilds alert search rows for colliding IDs from every instance', () => {
+    const db = createTestDatabase();
+    const insertAlert = (instanceId: string, message: string) => db.insertAlert({
+      $id: 1,
+      $instance_id: instanceId,
+      $uuid: 'shared-upstream-uuid',
+      $created_at: '2026-01-01T00:00:00.000Z',
+      $message: message,
+      $record: {
+        id: 1,
+        uuid: 'shared-upstream-uuid',
+        created_at: '2026-01-01T00:00:00.000Z',
+        message,
+      },
+    });
+
+    db.beginDeferredSearchIndexUpdates();
+    insertAlert('default', 'primary searchable alert');
+    insertAlert('secondary', 'secondary searchable alert');
+    db.rebuildSearchIndexes();
+
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts').get() as { count: number }).count).toBe(2);
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts WHERE alerts_fts MATCH ?').get('primary') as { count: number }).count).toBe(1);
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts WHERE alerts_fts MATCH ?').get('secondary') as { count: number }).count).toBe(1);
+    expect((db.db.prepare('SELECT rowid FROM alerts_fts ORDER BY rowid').all() as Array<{ rowid: number }>)).toEqual([
+      { rowid: -1 },
+      { rowid: 1 },
+    ]);
 
     db.close();
   });

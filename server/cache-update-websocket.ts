@@ -37,8 +37,8 @@ export function attachCacheUpdateWebSocket(
     }));
   });
 
-  const unsubscribe = controller.subscribeCacheUpdates((updatedAt) => {
-    const payload = JSON.stringify({ type: 'cache-updated', updated_at: updatedAt });
+  const unsubscribe = controller.subscribeCacheUpdates((updatedAt, instanceIds) => {
+    const payload = JSON.stringify({ type: 'cache-updated', updated_at: updatedAt, instance_ids: instanceIds });
     for (const socket of webSocketServer.clients) {
       if (socket.readyState === WebSocket.OPEN) socket.send(payload);
     }

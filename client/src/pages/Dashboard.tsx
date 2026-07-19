@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState, useMemo, useCallback, useRef } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { fetchDashboardStats, fetchConfig } from "../lib/api";
 import { useRefresh } from "../contexts/useRefresh";
@@ -211,6 +211,7 @@ function scopeStaleStatItemsToSelected<TItem extends DashboardStatListItem>(
 }
 
 export function Dashboard() {
+    const [searchParams] = useSearchParams();
     const { language, t } = useI18n();
     const { formatDate, formatTime } = useDateTime();
     const navigate = useNavigate();
@@ -228,7 +229,7 @@ export function Dashboard() {
     // Percentage Basis: 'filtered' or 'global'
     const [percentageBasis, setPercentageBasis] = useState<PercentageBasis>(() => parseStoredPercentageBasis(localStorage.getItem('dashboard_percentage_basis')));
 
-    const [isOnline, setIsOnline] = useState(true);
+    const [configRequestFailed, setConfigRequestFailed] = useState(false);
     const [dashboardStats, setDashboardStats] = useState<DashboardStatsResponse | null>(null);
     const [dashboardStatsLoadKey, setDashboardStatsLoadKey] = useState<string | null>(null);
     const dashboardStatsRef = useRef<DashboardStatsResponse | null>(null);
@@ -300,6 +301,7 @@ export function Dashboard() {
         const requestFilters: Record<string, string> = {
             granularity,
             tz_offset: String(new Date().getTimezoneOffset()),
+            instance: searchParams.get('instance') || 'all',
         };
 
         if (filters.country) requestFilters.country = filters.country;
@@ -316,7 +318,7 @@ export function Dashboard() {
         }
 
         return requestFilters;
-    }, [filters, granularity]);
+    }, [filters, granularity, searchParams]);
 
     const loadData = useCallback(async (isBackground = false, signal?: AbortSignal, force = false) => {
         const requestFilters = buildDashboardStatsFilters();
@@ -346,6 +348,7 @@ export function Dashboard() {
         }
 
         let completedLoadWasPending = false;
+        let completedLoadHadCurrentStats = false;
         try {
             const [configData, dashboardStatsData] = await Promise.all([
                 fetchConfig(),
@@ -356,11 +359,13 @@ export function Dashboard() {
             }
 
             setConfig(configData);
+            setConfigRequestFailed(false);
             if (pendingStatsRetryTimeoutRef.current !== null) {
                 window.clearTimeout(pendingStatsRetryTimeoutRef.current);
                 pendingStatsRetryTimeoutRef.current = null;
             }
-            const hasCurrentStats = dashboardStatsRef.current !== null;
+            const hasCurrentStats = dashboardStatsRef.current !== null && dashboardStatsRef.current.pending !== true;
+            completedLoadHadCurrentStats = hasCurrentStats;
             completedLoadWasPending = dashboardStatsData.pending === true;
             if (!dashboardStatsData.pending || !hasCurrentStats) {
                 dashboardStatsRef.current = dashboardStatsData;
@@ -374,20 +379,12 @@ export function Dashboard() {
                 }, dashboardStatsData.retryAfterMs ?? 1500);
             }
 
-            // Check LAPI status from config
-            if (configData.lapi_status) {
-                setIsOnline(configData.lapi_status.isConnected);
-            } else {
-                // Fallback for older backend versions
-                setIsOnline(true);
-            }
-
         } catch (error) {
             if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
                 return;
             }
             console.error("Failed to load dashboard data", error);
-            setIsOnline(false);
+            setConfigRequestFailed(true);
         } finally {
             if (inFlightLoadKeysRef.current.get(loadKey)?.requestId === requestId) {
                 inFlightLoadKeysRef.current.delete(loadKey);
@@ -396,7 +393,7 @@ export function Dashboard() {
                 lastCompletedLoadRef.current = { key: loadKey, completedAt: Date.now() };
             }
             if (!signal?.aborted) {
-                setInitialLoading(false);
+                setInitialLoading(completedLoadWasPending && !completedLoadHadCurrentStats);
                 setBackgroundRefreshing(false);
             }
             if (
@@ -443,6 +440,45 @@ export function Dashboard() {
 
     const dashboardData = dashboardStats ?? EMPTY_DASHBOARD_STATS;
     const stats = dashboardData.totals;
+    const requestedInstanceId = searchParams.get('instance') || 'all';
+    const configuredInstances = config?.instances || [];
+    const isAllInstancesScope = requestedInstanceId === 'all' && configuredInstances.length > 1;
+    const selectedInstance = requestedInstanceId === 'all'
+        ? configuredInstances[0]
+        : configuredInstances.find((instance) => instance.id === requestedInstanceId);
+    const onlineInstanceCount = isAllInstancesScope
+        ? configuredInstances.filter((instance) => instance.lapi_status.isConnected).length
+        : Number(selectedInstance?.lapi_status.isConnected ?? config?.lapi_status.isConnected ?? false);
+    const totalInstanceCount = isAllInstancesScope ? configuredInstances.length : 1;
+    const lapiAvailability = configRequestFailed || onlineInstanceCount === 0
+        ? 'offline'
+        : onlineInstanceCount === totalInstanceCount
+            ? 'online'
+            : 'partial';
+    const lapiStatusLabel = isAllInstancesScope && lapiAvailability === 'online'
+        ? t('pages.dashboard.allLapisOnline')
+        : lapiAvailability === 'partial'
+            ? t('pages.dashboard.lapisPartiallyOnline')
+            : lapiAvailability === 'online'
+                ? t('common.online')
+                : t('common.offline');
+    const lapiStatusTone = lapiAvailability === 'online'
+        ? {
+            background: 'bg-green-100 dark:bg-green-900/20',
+            icon: 'text-green-600 dark:text-green-400',
+            text: 'text-gray-900 dark:text-white',
+        }
+        : lapiAvailability === 'partial'
+            ? {
+                background: 'bg-amber-100 dark:bg-amber-900/20',
+                icon: 'text-amber-600 dark:text-amber-400',
+                text: 'text-amber-600 dark:text-amber-400',
+            }
+            : {
+                background: 'bg-red-100 dark:bg-red-900/20',
+                icon: 'text-red-600 dark:text-red-400',
+                text: 'text-red-600 dark:text-red-400',
+            };
     const currentDashboardStatsLoadKey = useMemo(() => JSON.stringify(buildDashboardStatsFilters()), [buildDashboardStatsFilters]);
     const isDashboardStatsStaleForFilters = dashboardStatsLoadKey !== null && dashboardStatsLoadKey !== currentDashboardStatsLoadKey;
 
@@ -684,21 +720,22 @@ export function Dashboard() {
 
                 <Card>
                     <CardContent className="flex flex-col items-center gap-2 p-3 text-center sm:flex-row sm:items-center sm:gap-3 sm:p-4 sm:text-left lg:gap-4 lg:p-6">
-                        <div className={`rounded-full p-2 sm:p-3 lg:p-4 ${isOnline
-                            ? 'bg-green-100 dark:bg-green-900/20'
-                            : 'bg-red-100 dark:bg-red-900/20'
-                            }`}>
-                            <Activity className={`h-5 w-5 sm:h-6 sm:w-6 lg:h-8 lg:w-8 ${isOnline
-                                ? 'text-green-600 dark:text-green-400'
-                                : 'text-red-600 dark:text-red-400'
-                                }`} />
+                        <div className={`rounded-full p-2 sm:p-3 lg:p-4 ${lapiStatusTone.background}`}>
+                            <Activity className={`h-5 w-5 sm:h-6 sm:w-6 lg:h-8 lg:w-8 ${lapiStatusTone.icon}`} />
                         </div>
                         <div className="min-w-0">
-                            <p className="text-[11px] font-medium leading-tight text-gray-500 dark:text-gray-400 sm:text-sm">{t('pages.dashboard.crowdsecLapi')}</p>
-                            <h3 className={`text-lg font-bold sm:text-2xl ${isOnline
-                                ? 'text-gray-900 dark:text-white'
-                                : 'text-red-600 dark:text-red-400'
-                                }`}>{isOnline ? t('common.online') : t('common.offline')}</h3>
+                            <p className="text-[11px] font-medium leading-tight text-gray-500 dark:text-gray-400 sm:text-sm">
+                                {t(isAllInstancesScope ? 'pages.dashboard.crowdsecLapis' : 'pages.dashboard.crowdsecLapi')}
+                            </p>
+                            <h3 className={`text-lg font-bold sm:text-2xl ${lapiStatusTone.text}`}>{lapiStatusLabel}</h3>
+                            {isAllInstancesScope && (
+                                <p className="text-[10px] text-gray-500 dark:text-gray-400 sm:text-xs">
+                                    {t('pages.dashboard.lapisOnlineCount', {
+                                        online: configRequestFailed ? 0 : onlineInstanceCount,
+                                        total: totalInstanceCount,
+                                    })}
+                                </p>
+                            )}
                         </div>
                     </CardContent>
                 </Card>

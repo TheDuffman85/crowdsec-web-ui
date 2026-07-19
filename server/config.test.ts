@@ -14,6 +14,14 @@ function createTempSecret(contents: string): string {
   return filePath;
 }
 
+function createTempConfig(contents: string): string {
+  const dir = mkdtempSync(join(tmpdir(), 'crowdsec-web-ui-instances-test-'));
+  tempDirs.push(dir);
+  const filePath = join(dir, 'instances.yaml');
+  writeFileSync(filePath, contents, 'utf8');
+  return filePath;
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -468,6 +476,126 @@ describe('config helpers', () => {
     expect(() => createRuntimeConfig({
       CROWDSEC_TLS_CA_CERT_PATH: '/certs/ca.pem',
     })).toThrow(/CrowdSec mTLS authentication requires both CROWDSEC_TLS_CERT_PATH and CROWDSEC_TLS_KEY_PATH/i);
+  });
+
+  test('createRuntimeConfig loads named LAPI and metrics endpoints from YAML', () => {
+    const passwordFile = createTempSecret('lapi-secret\n');
+    const caFile = createTempSecret('test-ca');
+    const configFile = createTempConfig(`
+instances:
+  - id: eu-prod
+    name: EU Production
+    icon: 🇪🇺
+    lapi:
+      url: https://crowdsec-eu:8080
+      auth:
+        type: password
+        username: watcher
+        passwordFile: ${passwordFile}
+      tls:
+        caFile: ${caFile}
+    metrics:
+      - id: lapi
+        name: EU LAPI
+        url: https://crowdsec-eu:6060/metrics
+        auth:
+          type: bearer
+          tokenEnv: EU_METRICS_TOKEN
+        tls:
+          caFile: ${caFile}
+    sync:
+      requestTimeout: 45s
+      alertSyncChunk: 6h
+`);
+
+    const config = createRuntimeConfig({
+      CROWDSEC_INSTANCES_CONFIG_FILE: configFile,
+      EU_METRICS_TOKEN: 'metrics-secret',
+      CROWDSEC_LOOKBACK_PERIOD: '24h',
+    });
+
+    expect(config.instances).toHaveLength(1);
+    expect(config.instances[0]).toMatchObject({
+      id: 'eu-prod',
+      name: 'EU Production',
+      icon: '🇪🇺',
+      lapiUrl: 'https://crowdsec-eu:8080',
+      lapiAuth: { mode: 'password', user: 'watcher', password: 'lapi-secret' },
+      lapiTls: { caFile },
+      sync: { requestTimeoutMs: 45_000, alertSyncChunkMs: 21_600_000 },
+    });
+    expect(config.instances[0].prometheus[0]).toMatchObject({
+      id: 'lapi',
+      name: 'EU LAPI',
+      auth: { type: 'bearer', token: 'metrics-secret' },
+      tls: { caFile },
+    });
+  });
+
+  test('multi-instance YAML rejects the former prometheus key', () => {
+    const configFile = createTempConfig(`
+instances:
+  - id: first
+    name: First
+    lapi:
+      url: https://first.example:8080
+      auth:
+        type: password
+        username: watcher
+        passwordEnv: FIRST_PASSWORD
+    prometheus: []
+`);
+
+    expect(() => createRuntimeConfig({
+      CROWDSEC_INSTANCES_CONFIG_FILE: configFile,
+      FIRST_PASSWORD: 'secret',
+    })).toThrow(/prometheus has been renamed to instances\[0\]\.metrics/i);
+  });
+
+  test('multi-instance YAML rejects unsafe secrets, duplicate names, and legacy connection variables', () => {
+    const unsafeFile = createTempConfig(`
+instances:
+  - id: first
+    name: Production
+    lapi:
+      url: https://first.example:8080
+      auth: { type: password, username: watcher, password: plaintext }
+`);
+    expect(() => createRuntimeConfig({ CROWDSEC_INSTANCES_CONFIG_FILE: unsafeFile })).toThrow(/plaintext.*password.*passwordEnv or passwordFile/i);
+
+    const passwordFile = createTempSecret('secret');
+    const duplicateFile = createTempConfig(`
+instances:
+  - id: first
+    name: Production
+    lapi:
+      url: https://first.example:8080
+      auth: { type: password, username: watcher, passwordFile: ${passwordFile} }
+  - id: second
+    name: production
+    lapi:
+      url: https://second.example:8080
+      auth: { type: password, username: watcher, passwordFile: ${passwordFile} }
+`);
+    expect(() => createRuntimeConfig({ CROWDSEC_INSTANCES_CONFIG_FILE: duplicateFile })).toThrow(/duplicate instance name/i);
+    expect(() => createRuntimeConfig({
+      CROWDSEC_INSTANCES_CONFIG_FILE: duplicateFile,
+      CROWDSEC_URL: 'http://legacy:8080',
+    })).toThrow(/cannot be combined with legacy connection variables/i);
+  });
+
+  test('multi-instance YAML rejects icons that contain control characters or are too long', () => {
+    const passwordFile = createTempSecret('secret');
+    const configFile = createTempConfig(`
+instances:
+  - id: first
+    name: Production
+    icon: this-icon-is-too-long
+    lapi:
+      url: https://first.example:8080
+      auth: { type: password, username: watcher, passwordFile: ${passwordFile} }
+`);
+    expect(() => createRuntimeConfig({ CROWDSEC_INSTANCES_CONFIG_FILE: configFile })).toThrow(/short text or emoji icon/i);
   });
 
   test('createRuntimeConfig translates deprecated alert origin settings', () => {

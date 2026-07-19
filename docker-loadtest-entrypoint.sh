@@ -9,12 +9,12 @@ LOADTEST_PROFILE_DIR="${LOADTEST_PROFILE_DIR:-/app/scripts/load-test-profiles}"
 LOADTEST_DB_DIR="${LOADTEST_DB_DIR:-/tmp/crowdsec-web-ui-load-test}"
 
 case "$LOADTEST_PROFILE" in
-    default|blocklist|blocklists-mixed)
+    default|blocklist|blocklists-mixed|multi-instance|multi-instance-medium)
         profile_file="$LOADTEST_PROFILE_DIR/$LOADTEST_PROFILE.sh"
         ;;
     *)
         echo "Error: unknown load-test profile '$LOADTEST_PROFILE'." >&2
-        echo "Available profiles: default, blocklist, blocklists-mixed" >&2
+        echo "Available profiles: default, blocklist, blocklists-mixed, multi-instance, multi-instance-medium" >&2
         exit 1
         ;;
 esac

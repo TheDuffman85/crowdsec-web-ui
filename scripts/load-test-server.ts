@@ -75,6 +75,41 @@ const config = createRuntimeConfig({
   VITE_BRANCH: process.env.VITE_BRANCH || 'loadtest',
   VITE_COMMIT_HASH: process.env.VITE_COMMIT_HASH || 'loadtest',
 });
+const multiInstanceProfile = process.env.LOADTEST_MULTI_INSTANCE === 'true';
+if (multiInstanceProfile) {
+  const common = config.instances[0];
+  config.instances = [
+    {
+      ...common,
+      id: 'primary',
+      name: 'Primary',
+      icon: '🟦',
+      lapiUrl: 'http://loadtest-primary.invalid:8080',
+      prometheus: [
+        { id: 'lapi', name: 'Primary LAPI', url: 'http://loadtest-primary.invalid:6060/metrics', auth: { type: 'none' }, tls: {} },
+        { id: 'engine', name: 'Primary Engine', url: 'http://loadtest-primary.invalid:6061/metrics', auth: { type: 'none' }, tls: {} },
+      ],
+    },
+    {
+      ...common,
+      id: 'secondary',
+      name: 'Secondary',
+      icon: '🟩',
+      lapiUrl: 'http://loadtest-secondary.invalid:8080',
+      prometheus: [
+        { id: 'lapi', name: 'Secondary LAPI', url: 'http://loadtest-secondary.invalid:6060/metrics', auth: { type: 'none' }, tls: {} },
+      ],
+    },
+    {
+      ...common,
+      id: 'edge',
+      name: 'Edge',
+      icon: '🟧',
+      lapiUrl: 'http://loadtest-edge.invalid:8080',
+      prometheus: [],
+    },
+  ];
+}
 const authEnabled = config.dashboardAuth.enabled ?? !database.isAuthMigrationDefaultDisabled();
 await ensureLoadTestUser(database, authEnabled);
 
@@ -85,6 +120,29 @@ const loadTestStartedAt = Date.now();
 let generatedBatches = 0;
 let nextGeneratedAlertId = initialAlertCount + 1;
 let nextGeneratedDecisionId = initialDecisionCount + 1;
+type NamedDynamicState = {
+  alerts: Map<string, AlertRecord>;
+  generatedBatches: number;
+  initialAlerts: number;
+  nextAlertId: number;
+  nextDecisionId: number;
+};
+const namedDynamicStates = new Map<string, NamedDynamicState>([
+  ['secondary', {
+    alerts: new Map(),
+    generatedBatches: 0,
+    initialAlerts: parseIntegerEnv('LOADTEST_SECONDARY_ALERTS', 100_000),
+    nextAlertId: parseIntegerEnv('LOADTEST_SECONDARY_ALERTS', 100_000) + 1,
+    nextDecisionId: parseIntegerEnv('LOADTEST_SECONDARY_DECISIONS', 100_000) + 1,
+  }],
+  ['edge', {
+    alerts: new Map(),
+    generatedBatches: 0,
+    initialAlerts: parseIntegerEnv('LOADTEST_EDGE_ALERTS', 25_000),
+    nextAlertId: parseIntegerEnv('LOADTEST_EDGE_ALERTS', 25_000) + 1,
+    nextDecisionId: parseIntegerEnv('LOADTEST_EDGE_DECISIONS', 50_000) + 1,
+  }],
+]);
 const getSourceAlertStatement = database.db.prepare(`SELECT raw_data FROM ${LOADTEST_SOURCE_TABLE} WHERE id = ?`);
 const updateSourceAlertStatement = database.db.prepare(`
   UPDATE ${LOADTEST_SOURCE_TABLE}
@@ -307,11 +365,16 @@ function buildGeneratedAlert(alertId: number, createdAt: string, decisions: Aler
   };
 }
 
-function buildGeneratedDecision(decisionId: number, alert: AlertRecord, createdAt: string): AlertDecision & { duration: string } {
+function buildGeneratedDecision(
+  decisionId: number,
+  alert: AlertRecord,
+  createdAt: string,
+  initialAlertBase = initialAlertCount,
+): AlertDecision & { duration: string } {
   const active = fraction(decisionId, loadTestSeed, 59) < activeDecisionRatio;
   const hours = 1 + Math.floor(fraction(decisionId, loadTestSeed, 71) * 168);
   const stopAt = new Date(Date.now() + (active ? hours : -hours) * 3_600_000).toISOString();
-  const generatedAlertOffset = Math.max(0, Number(alert.id) - initialAlertCount - 1);
+  const generatedAlertOffset = Math.max(0, Number(alert.id) - initialAlertBase - 1);
   const origin = refreshDecisionOrigins.length > 0
     ? refreshDecisionOrigins[generatedAlertOffset % refreshDecisionOrigins.length]
     : pick(refreshOrigins, decisionId, loadTestSeed, 37);
@@ -357,7 +420,13 @@ type LoadTestFetchFilters = {
   };
 };
 
-function generateLoadTestBatch(createdAtEndMs: number): void {
+function multiInstanceBatchBase(createdAtEndMs: number, batchIndex: number): number {
+  const safeRequestBase = getLoadTestBatchCreatedAtEnd(createdAtEndMs, Date.now());
+  if (!multiInstanceProfile || config.refreshIntervalMs <= 0) return safeRequestBase;
+  return Math.min(safeRequestBase, loadTestStartedAt + ((batchIndex + 1) * config.refreshIntervalMs) - 1_000);
+}
+
+function generateLoadTestBatch(createdAtEndMs: number, batchIndex = generatedBatches): void {
   const alertSlots = useVariableRefreshDecisions
     ? refreshAlertCount
     : Math.max(refreshAlertCount, refreshDecisionCount > 0 && refreshAlertCount === 0 ? refreshDecisionCount : 0);
@@ -367,11 +436,12 @@ function generateLoadTestBatch(createdAtEndMs: number): void {
   // authoritative window. Anchor generated records immediately before that
   // window's end so time spent planning the delta cannot make them too new for
   // the refresh that caused the fake LAPI to expose them.
-  const createdAtBase = getLoadTestBatchCreatedAtEnd(createdAtEndMs, Date.now());
+  const createdAtBase = multiInstanceBatchBase(createdAtEndMs, batchIndex);
+  const instanceStride = multiInstanceProfile ? config.instances.length : 1;
   const generated: AlertRecord[] = [];
   for (let index = 0; index < alertSlots; index += 1) {
     const alertId = nextGeneratedAlertId++;
-    const createdAt = new Date(createdAtBase - index).toISOString();
+    const createdAt = new Date(createdAtBase - (index * instanceStride)).toISOString();
     const alert = buildGeneratedAlert(alertId, createdAt);
     if (useVariableRefreshDecisions) {
       alert.scenario = 'crowdsecurity/blocklist-import';
@@ -431,8 +501,74 @@ function generateDueLoadTestData(createdAtEndMs: number, forceBatch = false): vo
 
   const dueBatches = Math.floor((Date.now() - loadTestStartedAt) / config.refreshIntervalMs);
   while (generatedBatches < dueBatches) {
-    generateLoadTestBatch(createdAtEndMs);
+    generateLoadTestBatch(createdAtEndMs, generatedBatches);
     generatedBatches += 1;
+  }
+}
+
+function generateNamedLoadTestBatch(instanceId: string, createdAtEndMs: number, batchIndex: number): void {
+  const state = namedDynamicStates.get(instanceId);
+  if (!state) return;
+  const alertSlots = useVariableRefreshDecisions
+    ? refreshAlertCount
+    : Math.max(refreshAlertCount, refreshDecisionCount > 0 && refreshAlertCount === 0 ? refreshDecisionCount : 0);
+  if (alertSlots === 0 && refreshDecisionCount === 0) return;
+
+  const instanceRank = Math.max(1, config.instances.findIndex((instance) => instance.id === instanceId));
+  const createdAtBase = multiInstanceBatchBase(createdAtEndMs, batchIndex);
+  const generated: AlertRecord[] = [];
+  for (let index = 0; index < alertSlots; index += 1) {
+    const alertId = state.nextAlertId++;
+    const createdAt = new Date(createdAtBase - (index * config.instances.length) - instanceRank).toISOString();
+    const alert = buildGeneratedAlert(alertId, createdAt);
+    if (useVariableRefreshDecisions) {
+      alert.scenario = 'crowdsecurity/blocklist-import';
+      alert.reason = 'Synthetic delta blocklist import';
+      alert.target = 'blocklist';
+      alert.source = { scope: `lists:load-test-delta-blocklist-${alertId}` };
+    }
+    generated.push(alert);
+  }
+
+  if (useVariableRefreshDecisions) {
+    for (const alert of generated) {
+      const decisionsForAlert = getLoadTestRefreshDecisionCount(
+        Number(alert.id),
+        loadTestSeed,
+        refreshDecisionMinPerAlert,
+        refreshDecisionMaxPerAlert,
+      );
+      for (let index = 0; index < decisionsForAlert; index += 1) {
+        const decision = buildGeneratedDecision(state.nextDecisionId++, alert, alert.created_at, state.initialAlerts);
+        (alert.decisions ||= []).push(decisionSummary(decision));
+        alert.simulated = alert.simulated === true || decision.simulated === true;
+      }
+      alert.events_count = decisionsForAlert;
+    }
+  } else {
+    for (let index = 0; index < refreshDecisionCount; index += 1) {
+      if (generated.length === 0) break;
+      const alert = generated[index % generated.length];
+      const decision = buildGeneratedDecision(state.nextDecisionId++, alert, alert.created_at, state.initialAlerts);
+      (alert.decisions ||= []).push(decisionSummary(decision));
+      alert.simulated = alert.simulated === true || decision.simulated === true;
+    }
+  }
+
+  for (const alert of generated) {
+    removeListOriginAddressFromAlert(alert);
+    state.alerts.set(String(alert.id), alert);
+  }
+  console.log(`[loadtest sync:${instanceId}] added ${generated.length} alerts to fake LAPI`);
+}
+
+function generateDueNamedLoadTestData(instanceId: string, createdAtEndMs: number): void {
+  const state = namedDynamicStates.get(instanceId);
+  if (!state || config.refreshIntervalMs <= 0) return;
+  const dueBatches = Math.floor((Date.now() - loadTestStartedAt) / config.refreshIntervalMs);
+  while (state.generatedBatches < dueBatches) {
+    generateNamedLoadTestBatch(instanceId, createdAtEndMs, state.generatedBatches);
+    state.generatedBatches += 1;
   }
 }
 
@@ -590,6 +726,106 @@ function loadAlertsFromSourceWithFilters(
   });
 }
 
+function loadAlertsFromNamedSource(
+  tableName: string,
+  since: string | null,
+  until: string | null,
+  filters: LoadTestFetchFilters,
+): AlertRecord[] {
+  const window = getSyncWindow(since, until);
+  const conditions = ['created_at >= ?', 'created_at < ?'];
+  const params: unknown[] = [window.start, window.end];
+  if (filters.scenario) {
+    conditions.push('scenario = ?');
+    params.push(filters.scenario);
+  }
+  if (filters.origin) {
+    conditions.push("origins LIKE ? ESCAPE '\\'");
+    params.push(`%\n${escapeLike(filters.origin)}\n%`);
+  } else if (filters.includeCapi === false) {
+    conditions.push("origins NOT LIKE '%\nCAPI\n%'");
+  }
+  const rows = database.db.prepare(`
+    SELECT raw_data FROM ${tableName}
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY created_at DESC
+  `).all(...params) as Array<{ raw_data: string }>;
+  return rows.flatMap((row) => {
+    const alert = parseSourceAlertRow(row);
+    return alert ? [alert] : [];
+  });
+}
+
+function loadNamedSyntheticAlerts(
+  instanceId: string,
+  tableName: string,
+  since: string | null,
+  until: string | null,
+  filters: LoadTestFetchFilters,
+): AlertRecord[] {
+  const window = getSyncWindow(since, until);
+  const headSyncEnd = getLoadTestHeadSyncEnd(
+    filters.relativeWindow?.endMs,
+    Date.now(),
+    config.lapiRequestTimeoutMs,
+  );
+  generateDueNamedLoadTestData(instanceId, headSyncEnd ?? Date.now());
+
+  const merged = new Map<string, AlertRecord>();
+  for (const alert of loadAlertsFromNamedSource(tableName, window.start, window.end, filters)) {
+    merged.set(String(alert.id), alert);
+  }
+  for (const alert of namedDynamicStates.get(instanceId)?.alerts.values() || []) {
+    if (alert.created_at >= window.start && alert.created_at < window.end && matchesLoadTestFilters(alert, filters)) {
+      merged.set(String(alert.id), alert);
+    }
+  }
+  return Array.from(merged.values()).sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
+}
+
+function createNamedFakeLapiClient(instanceId: string, tableName: string) {
+  const status = { ...lapiStatus };
+  const shouldFail = instanceId === 'edge' && process.env.LOADTEST_FAILING_LAPI === 'true';
+  return {
+    hasAuthConfig: () => true,
+    hasToken: () => true,
+    login: async () => !shouldFail,
+    updateStatus: (isConnected = true, error: { message?: string } | null = null) => {
+      status.isConnected = isConnected;
+      status.lastCheck = new Date().toISOString();
+      status.lastError = error?.message || null;
+      status.offline_since = isConnected ? null : (status.offline_since || status.lastCheck);
+    },
+    getStatus: () => ({ ...status }),
+    heartbeat: async () => {},
+    sendUsageMetrics: async () => {},
+    fetchAlerts: async (since: string | null = null, until: string | null = null, filters: LoadTestFetchFilters = {}) => {
+      if (shouldFail) throw new Error('Synthetic failing LAPI');
+      return loadNamedSyntheticAlerts(instanceId, tableName, since, until, filters);
+    },
+    getAlertById: async (alertId: string | number) => {
+      const dynamicAlert = namedDynamicStates.get(instanceId)?.alerts.get(String(alertId));
+      if (dynamicAlert) return dynamicAlert;
+      const row = database.db.prepare(`SELECT raw_data FROM ${tableName} WHERE id = ?`).get(String(alertId)) as { raw_data: string } | undefined;
+      return row ? JSON.parse(row.raw_data) : null;
+    },
+    addDecision: async () => {
+      if (shouldFail) throw new Error('Synthetic failing LAPI');
+      return { message: `Decision added on ${instanceId}` };
+    },
+    deleteDecision: async () => {
+      if (shouldFail) throw new Error('Synthetic failing LAPI');
+      return { message: `Decision deleted on ${instanceId}` };
+    },
+    deleteAlert: async (alertId: string | number) => {
+      if (shouldFail) throw new Error('Synthetic failing LAPI');
+      namedDynamicStates.get(instanceId)?.alerts.delete(String(alertId));
+      database.db.prepare(`DELETE FROM ${tableName} WHERE id = ?`).run(String(alertId));
+      return { message: `Alert deleted on ${instanceId}` };
+    },
+  };
+}
+
 function loadSyntheticAlerts(since: string | null, until: string | null, filters: LoadTestFetchFilters): AlertRecord[] {
   const window = getSyncWindow(since, until);
   const headSyncEnd = getLoadTestHeadSyncEnd(
@@ -692,10 +928,18 @@ const updateChecker = async () => ({
   checked_at: new Date().toISOString(),
 });
 
+const loadTestLapiClients = multiInstanceProfile
+  ? new Map([
+      ['primary', fakeLapiClient as never],
+      ['secondary', createNamedFakeLapiClient('secondary', `${LOADTEST_SOURCE_TABLE}_secondary`) as never],
+      ['edge', createNamedFakeLapiClient('edge', `${LOADTEST_SOURCE_TABLE}_edge`) as never],
+    ])
+  : undefined;
+
 const controller = createApp({
   config,
   database,
-  lapiClient: fakeLapiClient as never,
+  ...(loadTestLapiClients ? { lapiClients: loadTestLapiClients } : { lapiClient: fakeLapiClient as never }),
   startBackgroundTasks: true,
   updateChecker,
   initialCacheState: {
@@ -704,6 +948,7 @@ const controller = createApp({
     lastUpdate: null,
   },
   notificationFetchImpl: async () => new Response('ok', { status: 200 }),
+  metricsFetchImpl: async () => new Response('cs_lapi_requests_total{route="/v1/alerts",method="GET"} 100\n', { status: 200 }),
   mqttPublishImpl: async () => {},
 });
 

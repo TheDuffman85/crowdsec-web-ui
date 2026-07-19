@@ -3,6 +3,8 @@ import type { AlertDecision, AlertRecord, AlertSource } from '../shared/contract
 
 export type NormalizedAlertRow = {
   id: string | number;
+  internal_id?: string | number;
+  instance_id?: string;
   uuid?: string | null;
   created_at: string;
   start_at?: string | null;
@@ -45,7 +47,7 @@ const NORMALIZED_SOURCE_KEYS = new Set([
 ]);
 
 export const ALERT_RECORD_COLUMNS = [
-  'id', 'uuid', 'created_at', 'start_at', 'stop_at', 'scenario', 'record_scenario', 'reason',
+  'COALESCE(upstream_id, CAST(id AS TEXT)) AS id', 'id AS internal_id', 'instance_id', 'uuid', 'created_at', 'start_at', 'stop_at', 'scenario', 'record_scenario', 'reason',
   'source_ip', 'source_value', 'source_scope', 'source_range', 'source_as_number',
   'source_extra_data', 'message', 'machine_id', 'machine_alias', 'events_count',
   'latitude', 'longitude', 'country', 'region', 'city', 'as_name', 'target',
@@ -54,6 +56,8 @@ export const ALERT_RECORD_COLUMNS = [
 
 export type NormalizedDecisionRow = {
   id: string | number;
+  internal_id?: string | number;
+  instance_id?: string;
   uuid?: string | null;
   alert_id?: string | number | null;
   created_at: string;
@@ -101,9 +105,11 @@ const NORMALIZED_DECISION_KEYS = new Set([
 ]);
 
 export const DECISION_RECORD_COLUMNS = [
-  'id',
+  'COALESCE(upstream_id, CAST(id AS TEXT)) AS id',
+  'id AS internal_id',
+  'instance_id',
   'uuid',
-  'alert_id',
+  'alert_upstream_id AS alert_id',
   'created_at',
   'stop_at',
   'value',
@@ -161,6 +167,7 @@ export function alertFromRow(row: NormalizedAlertRow): AlertRecord {
   const alert = {
     ...parseExtras(row.extra_data),
     id: normalizeRecordId(row.id),
+    instance_id: row.instance_id || 'default',
     created_at: row.created_at,
     simulated: row.simulated === true || row.simulated === 1,
   } as AlertRecord;
@@ -216,13 +223,14 @@ export function decisionFromRow(row: NormalizedDecisionRow): AlertDecision & Rec
   const decision: AlertDecision & Record<string, unknown> = {
     ...extras,
     id: normalizeRecordId(row.id),
+    instance_id: row.instance_id || 'default',
     created_at: row.created_at,
     stop_at: row.stop_at,
     simulated: row.simulated === true || row.simulated === 1,
   };
 
   assignDefined(decision, 'uuid', row.uuid);
-  assignDefined(decision, 'alert_id', row.alert_id);
+  assignDefined(decision, 'alert_id', row.alert_id === undefined || row.alert_id === null ? row.alert_id : normalizeRecordId(row.alert_id));
   assignDefined(decision, 'value', row.value);
   assignDefined(decision, 'type', row.type);
   assignDefined(decision, 'origin', row.origin);

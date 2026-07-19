@@ -407,17 +407,17 @@ function formatElapsed(ms: number): string {
   return `${(ms / 1_000).toFixed(2)}s`;
 }
 
-function ensureLoadTestSourceTable(database: CrowdsecDatabase): void {
+function ensureLoadTestSourceTable(database: CrowdsecDatabase, tableName = LOADTEST_SOURCE_TABLE): void {
   database.db.exec(`
-    CREATE TABLE IF NOT EXISTS ${LOADTEST_SOURCE_TABLE} (
+    CREATE TABLE IF NOT EXISTS ${tableName} (
       id TEXT PRIMARY KEY,
       created_at TEXT NOT NULL,
       scenario TEXT,
       origins TEXT,
       raw_data TEXT NOT NULL
     );
-    CREATE INDEX IF NOT EXISTS idx_${LOADTEST_SOURCE_TABLE}_created_at
-      ON ${LOADTEST_SOURCE_TABLE}(created_at);
+    CREATE INDEX IF NOT EXISTS idx_${tableName}_created_at
+      ON ${tableName}(created_at);
   `);
 }
 
@@ -450,39 +450,63 @@ if (config.alerts === 0 && config.decisions > 0) {
 removeExistingDatabase(config.dbDir);
 
 const database = new CrowdsecDatabase({ dbDir: config.dbDir });
-ensureLoadTestSourceTable(database);
-const insertSourceAlert = database.db.prepare(`
-  INSERT INTO ${LOADTEST_SOURCE_TABLE} (id, created_at, scenario, origins, raw_data)
-  VALUES (?, ?, ?, ?, ?)
-`);
+const multiInstance = process.env.LOADTEST_MULTI_INSTANCE === 'true';
+const instanceSeeds: Array<{ table: string; name: string; config: LoadTestConfig }> = multiInstance
+  ? [
+      { table: LOADTEST_SOURCE_TABLE, name: 'Primary', config },
+      { table: `${LOADTEST_SOURCE_TABLE}_secondary`, name: 'Secondary', config: {
+        ...config,
+        alerts: parseIntegerEnv('LOADTEST_SECONDARY_ALERTS', 100_000),
+        decisions: parseIntegerEnv('LOADTEST_SECONDARY_DECISIONS', 100_000),
+        seed: config.seed + 1,
+        blocklistDecisionCounts: [parseIntegerEnv('LOADTEST_SECONDARY_BLOCKLIST_DECISIONS', 25_000)],
+        blocklistDecisionTotal: parseIntegerEnv('LOADTEST_SECONDARY_BLOCKLIST_DECISIONS', 25_000),
+        emptyAlerts: 0,
+        expiredAlerts: 0,
+        expiringSoonDecisions: 0,
+      } },
+      { table: `${LOADTEST_SOURCE_TABLE}_edge`, name: 'Edge', config: {
+        ...config,
+        alerts: parseIntegerEnv('LOADTEST_EDGE_ALERTS', 25_000),
+        decisions: parseIntegerEnv('LOADTEST_EDGE_DECISIONS', 50_000),
+        seed: config.seed + 2,
+        blocklistDecisionCounts: [parseIntegerEnv('LOADTEST_EDGE_BLOCKLIST_DECISIONS', 10_000)],
+        blocklistDecisionTotal: parseIntegerEnv('LOADTEST_EDGE_BLOCKLIST_DECISIONS', 10_000),
+        emptyAlerts: 0,
+        expiredAlerts: 0,
+        expiringSoonDecisions: 0,
+      } },
+    ]
+  : [{ table: LOADTEST_SOURCE_TABLE, name: 'Default', config }];
 
-const insertSourceAlertsBatch = database.db.transaction((start: number, end: number) => {
-  let embeddedDecisions = 0;
-  for (let id = start; id <= end; id += 1) {
-    const alert = buildAlertTemplate(id, config, nowMs);
-    const record = buildAlertRecord(alert, config, nowMs);
-    embeddedDecisions += record.decisions.length;
-    insertSourceAlert.run(
-      String(alert.id),
-      alert.createdAt,
-      record.scenario || null,
-      sourceOrigins(record),
-      JSON.stringify(record),
-    );
+for (const instanceSeed of instanceSeeds) {
+  const seedConfig = instanceSeed.config;
+  ensureLoadTestSourceTable(database, instanceSeed.table);
+  const insertSourceAlert = database.db.prepare(`
+    INSERT INTO ${instanceSeed.table} (id, created_at, scenario, origins, raw_data)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+  const insertSourceAlertsBatch = database.db.transaction((start: number, end: number) => {
+    let embeddedDecisions = 0;
+    for (let id = start; id <= end; id += 1) {
+      const alert = buildAlertTemplate(id, seedConfig, nowMs);
+      const record = buildAlertRecord(alert, seedConfig, nowMs);
+      embeddedDecisions += record.decisions.length;
+      insertSourceAlert.run(String(alert.id), alert.createdAt, record.scenario || null, sourceOrigins(record), JSON.stringify(record));
+    }
+    return embeddedDecisions;
+  });
+
+  const alertSeedStartedAt = Date.now();
+  let embeddedDecisionCount = 0;
+  for (let start = 1; start <= seedConfig.alerts; start += 25_000) {
+    const end = Math.min(seedConfig.alerts, start + 25_000 - 1);
+    embeddedDecisionCount += insertSourceAlertsBatch(start, end) as number;
+    logProgress(`${instanceSeed.name} source alerts`, end, seedConfig.alerts);
   }
-  return embeddedDecisions;
-});
-
-const batchSize = 25_000;
-const alertSeedStartedAt = Date.now();
-let embeddedDecisionCount = 0;
-for (let start = 1; start <= config.alerts; start += batchSize) {
-  const end = Math.min(config.alerts, start + batchSize - 1);
-  embeddedDecisionCount += insertSourceAlertsBatch(start, end) as number;
-  logProgress('Source alerts', end, config.alerts);
+  console.log(`${instanceSeed.name} source seeding completed in ${formatElapsed(Date.now() - alertSeedStartedAt)}.`);
+  console.log(`${instanceSeed.name} embedded decisions: ${embeddedDecisionCount.toLocaleString('en-US')}/${seedConfig.decisions.toLocaleString('en-US')}`);
 }
-console.log(`Source alert seeding completed in ${formatElapsed(Date.now() - alertSeedStartedAt)}.`);
-console.log(`Embedded source decisions: ${embeddedDecisionCount.toLocaleString('en-US')}/${config.decisions.toLocaleString('en-US')}`);
 database.close();
 
 console.log(`Seeded load-test database at ${dbPath}`);

@@ -4,6 +4,7 @@ import type { AlertInsertParams, DecisionInsertParams, SearchIndexRebuildScope }
 export type DatabaseWrite = <T>(operation: () => T | Promise<T>) => Promise<T>;
 
 interface SyncAlertMutationBase {
+  instanceId?: string;
   decisions: DecisionInsertParams[];
   keepDecisionIds: string[];
   reconcileDecisions?: boolean;
@@ -17,7 +18,7 @@ export type SyncAlertMutation = SyncAlertMutationBase & (
 
 type SyncWorkerRequest =
   | { type: 'persist-alerts'; mutations: SyncAlertMutation[] }
-  | { type: 'delete-alerts-missing-between'; start: string; end: string; keepIds: Array<string | number> }
+  | { type: 'delete-alerts-missing-between'; start: string; end: string; keepIds: Array<string | number>; instanceId?: string }
   | { type: 'delete-cached-alerts'; ids: Array<string | number> }
   | { type: 'delete-cached-decisions'; ids: Array<string | number> }
   | { type: 'begin-deferred-search-indexes'; dropSecondaryIndexes: boolean; clearSearchIndexes: boolean }
@@ -61,8 +62,9 @@ export class DatabaseSyncWorker {
     start: string,
     end: string,
     keepIds: Array<string | number>,
+    instanceId?: string,
   ): Promise<{ alerts: number; decisions: number }> {
-    return this.execute({ type: 'delete-alerts-missing-between', start, end, keepIds });
+    return this.execute({ type: 'delete-alerts-missing-between', start, end, keepIds, instanceId });
   }
 
   deleteCachedAlerts(ids: Array<string | number>): Promise<{ alerts: number; decisions: number }> {

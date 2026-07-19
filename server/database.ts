@@ -52,6 +52,7 @@ const SYNC_SECONDARY_INDEX_NAMES = [
   'idx_alerts_simulated_created_at',
   'idx_alerts_country_created_at',
   'idx_alerts_scenario_created_at',
+  'idx_alerts_instance_created',
   'idx_decisions_stop_at',
   'idx_decisions_alert_summary',
   'idx_decisions_value',
@@ -72,6 +73,8 @@ const SYNC_SECONDARY_INDEX_NAMES = [
   'idx_decisions_duplicate_filters',
   'idx_decisions_duplicate_value_paging',
   'idx_decisions_duplicate_primary',
+  'idx_decisions_instance_created',
+  'idx_decisions_instance_duplicate_paging',
 ] as const;
 
 const CREATE_SYNC_SECONDARY_INDEXES_SQL = `
@@ -87,6 +90,7 @@ const CREATE_SYNC_SECONDARY_INDEXES_SQL = `
   CREATE INDEX IF NOT EXISTS idx_alerts_simulated_created_at ON alerts(simulated, created_at DESC, id DESC);
   CREATE INDEX IF NOT EXISTS idx_alerts_country_created_at ON alerts(country, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_alerts_scenario_created_at ON alerts(scenario, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_alerts_instance_created ON alerts(instance_id, created_at DESC, id DESC);
   CREATE INDEX IF NOT EXISTS idx_decisions_stop_at ON decisions(stop_at);
   CREATE INDEX IF NOT EXISTS idx_decisions_alert_summary ON decisions(alert_id, origin, simulated, stop_at);
   CREATE INDEX IF NOT EXISTS idx_decisions_value ON decisions(value);
@@ -112,10 +116,15 @@ const CREATE_SYNC_SECONDARY_INDEXES_SQL = `
     value, is_duplicate, created_at DESC, id DESC, stop_at
   );
   CREATE INDEX IF NOT EXISTS idx_decisions_duplicate_primary ON decisions(value, simulated, stop_at DESC, id);
+  CREATE INDEX IF NOT EXISTS idx_decisions_instance_created ON decisions(instance_id, created_at DESC, id DESC);
+  CREATE INDEX IF NOT EXISTS idx_decisions_instance_duplicate_paging ON decisions(
+    instance_id, is_duplicate, created_at DESC, id DESC, stop_at
+  );
 `;
 
 export interface AlertInsertParams {
   $id: string | number;
+  $instance_id?: string;
   $uuid: string;
   $created_at: string;
   $scenario?: string;
@@ -127,6 +136,7 @@ export interface AlertInsertParams {
 
 export interface DecisionInsertParams {
   $id: string;
+  $instance_id?: string;
   $uuid: string;
   $alert_id: string | number;
   $created_at: string;
@@ -334,18 +344,18 @@ export class CrowdsecDatabase {
 
     this.insertAlertStatement = this.db.query(`
       INSERT INTO alerts (
-        id, uuid, created_at, start_at, stop_at, scenario, record_scenario, reason,
+        id, instance_id, upstream_id, uuid, created_at, start_at, stop_at, scenario, record_scenario, reason,
         source_ip, source_value, source_scope, source_range, source_as_number, source_extra_data,
         message, machine_id, machine_alias, events_count, extra_data, metadata_hash, raw_data,
         latitude, longitude, country, country_name, region, city, as_name, target, machine, meta_search, origins, simulated, search_text
       )
       VALUES (
-        $id, $uuid, $created_at, $start_at, $stop_at, $scenario, $record_scenario, $reason,
+        $internal_id, $instance_id, $id, $uuid, $created_at, $start_at, $stop_at, $scenario, $record_scenario, $reason,
         $source_ip, $source_value, $source_scope, $source_range, $source_as_number, $source_extra_data,
         $message, $machine_id, $machine_alias, $events_count, $extra_data, $metadata_hash, NULL,
         $latitude, $longitude, $country, $country_name, $region, $city, $as_name, $target, $machine, $meta_search, $origins, $simulated, $search_text
       )
-      ON CONFLICT(id) DO UPDATE SET
+      ON CONFLICT(instance_id, upstream_id) DO UPDATE SET
         uuid = excluded.uuid,
         created_at = excluded.created_at,
         start_at = excluded.start_at,
@@ -456,14 +466,14 @@ export class CrowdsecDatabase {
 
     this.insertDecisionStatement = this.db.query(`
       INSERT INTO decisions (
-        id, uuid, alert_id, created_at, stop_at, value, type, origin, scenario, duration, scope, extra_data, raw_data,
+        id, instance_id, upstream_id, uuid, alert_id, alert_upstream_id, created_at, stop_at, value, type, origin, scenario, duration, scope, extra_data, raw_data,
         country, country_name, region, city, as_name, target, machine, simulated, search_text, is_duplicate
       )
       VALUES (
-        $id, $uuid, $alert_id, $created_at, $stop_at, $value, $type, $origin, $scenario, $duration, $scope, $extra_data, NULL,
+        $internal_id, $instance_id, $id, $uuid, $internal_alert_id, $alert_id, $created_at, $stop_at, $value, $type, $origin, $scenario, $duration, $scope, $extra_data, NULL,
         $country, $country_name, $region, $city, $as_name, $target, $machine, $simulated, $search_text, 0
       )
-      ON CONFLICT(id) DO UPDATE SET
+      ON CONFLICT(instance_id, upstream_id) DO UPDATE SET
         uuid = excluded.uuid,
         alert_id = excluded.alert_id,
         created_at = excluded.created_at,
@@ -833,7 +843,7 @@ export class CrowdsecDatabase {
         `).all(...chunk) as Array<{ id: string | number; search_text: string }>;
         for (const row of rows) {
           const numericId = Number(row.id);
-          if (!Number.isSafeInteger(numericId) || numericId < 1) continue;
+          if (!Number.isSafeInteger(numericId) || numericId === 0) continue;
           this.insertAlertSearchIndexStatement?.run(numericId, String(row.id), row.search_text);
         }
       }
@@ -870,7 +880,9 @@ export class CrowdsecDatabase {
   }
 
   insertAlert(params: AlertInsertParams): boolean {
-    if (this.alertDeletionTombstones.has(String(params.$id))) return false;
+    const instanceId = params.$instance_id || 'default';
+    const tombstoneId = `${instanceId}\u0000${params.$id}`;
+    if (this.alertDeletionTombstones.has(tombstoneId) || (instanceId === 'default' && this.alertDeletionTombstones.has(String(params.$id)))) return false;
     const rawData = params.$raw_data || '{}';
     const alert = params.$record || parseAlertPayload(rawData);
     const source = alert?.source || null;
@@ -886,6 +898,9 @@ export class CrowdsecDatabase {
     const { $record, $raw_data: _rawData, ...dbParams } = params;
     const result = this.insertAlertStatement.run({
       ...dbParams,
+      $id: String(params.$id),
+      $instance_id: instanceId,
+      $internal_id: this.resolveAlertInternalId(instanceId, params.$id),
       $created_at: index.historyAt,
       $start_at: normalizeOptionalTimestamp(alert?.start_at),
       $stop_at: normalizeOptionalTimestamp(alert?.stop_at),
@@ -918,7 +933,8 @@ export class CrowdsecDatabase {
       $search_text: index.searchText,
     });
     if (result.changes > 0) {
-      this.upsertAlertSearchIndex(params.$id, index.searchText);
+      const internalId = this.resolveAlertInternalId(instanceId, params.$id);
+      this.upsertAlertSearchIndex(internalId, index.searchText);
       return true;
     }
     return false;
@@ -936,8 +952,10 @@ export class CrowdsecDatabase {
     return alertRowsToLegacyPayloads(this.getAlertsBetweenStatement.all({ $start: start, $end: end }) as AlertDataRow[]);
   }
 
-  getAlertDecisionSnapshot(id: string | number): AlertDecisionSnapshotRow | null {
-    const row = this.getAlertDecisionSnapshotStatement.get({ $id: id }) as (AlertDataRow & Omit<AlertDecisionSnapshotRow, 'raw_data'>) | null;
+  getAlertDecisionSnapshot(id: string | number, instanceId?: string): AlertDecisionSnapshotRow | null {
+    const internalId = instanceId ? this.getAlertInternalId(instanceId, id) : id;
+    if (internalId === null) return null;
+    const row = this.getAlertDecisionSnapshotStatement.get({ $id: internalId }) as (AlertDataRow & Omit<AlertDecisionSnapshotRow, 'raw_data'>) | null;
     return row ? {
       raw_data: JSON.stringify(alertFromRow(row)),
       metadata_hash: row.metadata_hash,
@@ -947,19 +965,33 @@ export class CrowdsecDatabase {
     } : null;
   }
 
-  updateAlertRawData(id: string | number, _rawData?: string): boolean {
-    if (this.alertDeletionTombstones.has(String(id))) return false;
+  updateAlertRawData(id: string | number, _rawData?: string, instanceId?: string): boolean {
+    const tombstoneId = instanceId ? `${instanceId}\u0000${id}` : String(id);
+    if (this.alertDeletionTombstones.has(tombstoneId)) return false;
+    const internalId = instanceId ? this.getAlertInternalId(instanceId, id) : id;
+    if (internalId === null) return false;
     return this.updateAlertRawDataStatement.run({
-      $id: id,
+      $id: internalId,
     }).changes > 0;
   }
 
-  deleteAlertsMissingBetween(start: string, end: string, keepIds: Array<string | number>): { alerts: number; decisions: number } {
+  deleteAlertsMissingBetween(
+    start: string,
+    end: string,
+    keepIds: Array<string | number>,
+    instanceId?: string,
+  ): { alerts: number; decisions: number } {
     const keepSet = new Set(keepIds.map(String));
-    const rows = this.getAlertIdsBetweenStatement.all({ $start: start, $end: end }) as IdRow[];
+    const rows = instanceId
+      ? this.db.prepare(`
+          SELECT id, COALESCE(upstream_id, CAST(id AS TEXT)) AS upstream_id
+          FROM alerts
+          WHERE instance_id = ? AND created_at >= ? AND created_at < ?
+        `).all(instanceId, start, end) as Array<IdRow & { upstream_id: string }>
+      : this.getAlertIdsBetweenStatement.all({ $start: start, $end: end }) as Array<IdRow & { upstream_id?: string }>;
     const staleIds = rows
-      .map((row) => String(row.id))
-      .filter((id) => !keepSet.has(id));
+      .filter((row) => !keepSet.has(String(row.upstream_id ?? row.id)))
+      .map((row) => String(row.id));
 
     this.deleteDecisionSearchIndexesByAlertIds(staleIds);
     this.markDecisionDuplicateKeysByAlertIds(staleIds);
@@ -969,11 +1001,17 @@ export class CrowdsecDatabase {
     return { alerts, decisions };
   }
 
-  countAlerts(): number {
+  countAlerts(instanceId?: string): number {
+    if (instanceId) {
+      return (this.db.prepare('SELECT COUNT(*) as count FROM alerts WHERE instance_id = ?').get(instanceId) as CountRow).count;
+    }
     return (this.countAlertsStatement.get() as CountRow).count;
   }
 
-  countDecisions(): number {
+  countDecisions(instanceId?: string): number {
+    if (instanceId) {
+      return (this.db.prepare('SELECT COUNT(*) as count FROM decisions WHERE instance_id = ?').get(instanceId) as CountRow).count;
+    }
     return (this.countDecisionsStatement.get() as CountRow).count;
   }
 
@@ -990,6 +1028,9 @@ export class CrowdsecDatabase {
   }
 
   insertDecision(params: DecisionInsertParams): boolean {
+    const instanceId = params.$instance_id || 'default';
+    const tombstoneId = `${instanceId}\u0000${params.$alert_id}`;
+    if (this.alertDeletionTombstones.has(tombstoneId) || (instanceId === 'default' && this.alertDeletionTombstones.has(String(params.$alert_id)))) return false;
     if (this.alertDeletionTombstones.has(String(params.$alert_id))) return false;
     const rawData = params.$raw_data || '{}';
     const decision = params.$record || parseDecisionPayload(rawData);
@@ -1005,6 +1046,11 @@ export class CrowdsecDatabase {
     const { $record, $raw_data: _rawData, ...dbParams } = params;
     const result = this.insertDecisionStatement.run({
       ...dbParams,
+      $id: String(params.$id),
+      $alert_id: String(params.$alert_id),
+      $instance_id: instanceId,
+      $internal_id: this.resolveDecisionInternalId(instanceId, params.$id),
+      $internal_alert_id: this.resolveAlertInternalId(instanceId, params.$alert_id),
       $created_at: normalizeIsoTimestamp(params.$created_at),
       $stop_at: normalizeIsoTimestamp(params.$stop_at),
       $value: params.$value ?? readOptionalString(decision?.value),
@@ -1026,10 +1072,34 @@ export class CrowdsecDatabase {
     });
     if (result.changes > 0) {
       this.markDecisionDuplicateKey(params.$value ?? readOptionalString(decision?.value), index.simulated);
-      this.upsertDecisionSearchIndex(params.$id, index.searchText);
+      this.upsertDecisionSearchIndex(this.resolveDecisionInternalId(instanceId, params.$id), index.searchText);
       return true;
     }
     return false;
+  }
+
+  private resolveAlertInternalId(instanceId: string, upstreamId: string | number): number {
+    const existing = this.db.prepare('SELECT id FROM alerts WHERE instance_id = ? AND upstream_id = ?')
+      .get(instanceId, String(upstreamId)) as { id: number } | undefined;
+    if (existing) return Number(existing.id);
+    const numeric = Number(upstreamId);
+    const primaryId = this.getMeta('multi_instance_primary_id')?.value || 'default';
+    const numericOwner = Number.isSafeInteger(numeric) && numeric > 0
+      ? this.db.prepare('SELECT instance_id FROM alerts WHERE id = ?').get(numeric) as { instance_id: string } | undefined
+      : undefined;
+    if (instanceId === primaryId && Number.isSafeInteger(numeric) && numeric > 0 && !numericOwner) return numeric;
+    const row = this.db.prepare('SELECT MIN(id) AS minimum FROM alerts').get() as { minimum: number | null };
+    return row.minimum === null || row.minimum >= 0 ? -1 : row.minimum - 1;
+  }
+
+  private resolveDecisionInternalId(instanceId: string, upstreamId: string | number): string {
+    const existing = this.db.prepare('SELECT id FROM decisions WHERE instance_id = ? AND upstream_id = ?')
+      .get(instanceId, String(upstreamId)) as { id: string } | undefined;
+    if (existing) return String(existing.id);
+    const rawId = String(upstreamId);
+    const primaryId = this.getMeta('multi_instance_primary_id')?.value || 'default';
+    const owner = this.db.prepare('SELECT instance_id FROM decisions WHERE id = ?').get(rawId) as { instance_id: string } | undefined;
+    return instanceId === primaryId && !owner ? rawId : `${instanceId}\u001f${rawId}`;
   }
 
   updateDecision(params: DecisionUpdateParams): void {
@@ -1151,8 +1221,39 @@ export class CrowdsecDatabase {
     return (this.getDecisionByIdStatement.get({ $id: String(id) }) as DecisionDataRow | null) || null;
   }
 
-  getDecisionIdsByAlertId(alertId: string | number): string[] {
-    return (this.getDecisionIdsByAlertIdStatement.all({ $alert_id: alertId }) as Array<{ id: string | number }>)
+  getAlertInternalId(instanceId: string, upstreamId: string | number): number | null {
+    const row = this.db.prepare('SELECT id FROM alerts WHERE instance_id = ? AND upstream_id = ?')
+      .get(instanceId, String(upstreamId)) as { id: number } | undefined;
+    return row ? Number(row.id) : null;
+  }
+
+  getDecisionInternalId(instanceId: string, upstreamId: string | number): string | null {
+    const row = this.db.prepare('SELECT id FROM decisions WHERE instance_id = ? AND upstream_id = ?')
+      .get(instanceId, String(upstreamId)) as { id: string } | undefined;
+    return row ? String(row.id) : null;
+  }
+
+  deleteAlertByInstanceId(instanceId: string, upstreamId: string | number): void {
+    const internalId = this.getAlertInternalId(instanceId, upstreamId);
+    if (internalId !== null) this.deleteCachedAlerts([internalId]);
+  }
+
+  deleteDecisionByInstanceId(instanceId: string, upstreamId: string | number): void {
+    const internalId = this.getDecisionInternalId(instanceId, upstreamId);
+    if (internalId !== null) this.deleteDecision(internalId);
+  }
+
+  getDecisionIdsByAlertId(alertId: string | number, instanceId?: string): string[] {
+    const internalAlertId = instanceId ? this.getAlertInternalId(instanceId, alertId) : alertId;
+    if (internalAlertId === null) return [];
+    if (instanceId) {
+      return (this.db.prepare(`
+        SELECT COALESCE(upstream_id, CAST(id AS TEXT)) AS id
+        FROM decisions
+        WHERE instance_id = ? AND alert_id = ?
+      `).all(instanceId, internalAlertId) as Array<{ id: string | number }>).map((row) => String(row.id));
+    }
+    return (this.getDecisionIdsByAlertIdStatement.all({ $alert_id: internalAlertId }) as Array<{ id: string | number }>)
       .map((row) => String(row.id));
   }
 
@@ -1178,12 +1279,20 @@ export class CrowdsecDatabase {
     return result;
   }
 
-  deleteDecisionsByAlertIdExcept(alertId: string | number, keepIds: string[]): number {
+  deleteDecisionsByAlertIdExcept(alertId: string | number, keepIds: string[], instanceId?: string): number {
     const keepSet = new Set(keepIds.map(String));
-    const rows = this.getDecisionIdsByAlertIdStatement.all({ $alert_id: alertId }) as Array<{ id: string | number }>;
+    const internalAlertId = instanceId ? this.getAlertInternalId(instanceId, alertId) : alertId;
+    if (internalAlertId === null) return 0;
+    const rows = instanceId
+      ? this.db.prepare(`
+          SELECT id, COALESCE(upstream_id, CAST(id AS TEXT)) AS upstream_id
+          FROM decisions
+          WHERE instance_id = ? AND alert_id = ?
+        `).all(instanceId, internalAlertId) as Array<{ id: string | number; upstream_id: string }>
+      : this.getDecisionIdsByAlertIdStatement.all({ $alert_id: internalAlertId }) as Array<{ id: string | number; upstream_id?: string }>;
     const staleIds = rows
-      .map((row) => String(row.id))
-      .filter((id) => !keepSet.has(id));
+      .filter((row) => !keepSet.has(String(row.upstream_id ?? row.id)))
+      .map((row) => String(row.id));
 
     if (staleIds.length === 0) {
       return 0;
@@ -1203,7 +1312,7 @@ export class CrowdsecDatabase {
     return changes;
   }
 
-  getDecisionStopAtBatch(ids: string[]): Map<string, string> {
+  getDecisionStopAtBatch(ids: string[], instanceId?: string): Map<string, string> {
     const result = new Map<string, string>();
     if (ids.length === 0) return result;
 
@@ -1211,8 +1320,14 @@ export class CrowdsecDatabase {
     for (let offset = 0; offset < ids.length; offset += chunkSize) {
       const chunk = ids.slice(offset, offset + chunkSize);
       const placeholders = chunk.map(() => '?').join(',');
-      const statement = this.db.prepare(`SELECT id, stop_at FROM decisions WHERE id IN (${placeholders})`);
-      const rows = statement.all(...chunk) as Array<{ id: string; stop_at: string }>;
+      const statement = instanceId
+        ? this.db.prepare(`
+            SELECT COALESCE(upstream_id, CAST(id AS TEXT)) AS id, stop_at
+            FROM decisions
+            WHERE instance_id = ? AND upstream_id IN (${placeholders})
+          `)
+        : this.db.prepare(`SELECT id, stop_at FROM decisions WHERE id IN (${placeholders})`);
+      const rows = statement.all(...(instanceId ? [instanceId, ...chunk] : chunk)) as Array<{ id: string; stop_at: string }>;
       for (const row of rows) {
         result.set(String(row.id), row.stop_at);
       }
@@ -1406,7 +1521,7 @@ export class CrowdsecDatabase {
         SELECT
           id,
           ROW_NUMBER() OVER (
-            PARTITION BY value, simulated
+            PARTITION BY instance_id, value, simulated
             ORDER BY
               stop_at DESC,
               CASE WHEN id GLOB '[0-9]*' THEN CAST(id AS INTEGER) ELSE -1 END DESC,
@@ -1489,7 +1604,7 @@ export class CrowdsecDatabase {
         SELECT
           decisions.id,
           ROW_NUMBER() OVER (
-            PARTITION BY decisions.value, decisions.simulated
+            PARTITION BY decisions.instance_id, decisions.value, decisions.simulated
             ORDER BY
               decisions.stop_at DESC,
               CASE WHEN decisions.id GLOB '[0-9]*' THEN CAST(decisions.id AS INTEGER) ELSE -1 END DESC,
@@ -1934,7 +2049,7 @@ export class CrowdsecDatabase {
     if (this.searchIndexUpdatesDeferred) return;
     if (!this.searchIndexAvailable || !this.deleteAlertSearchIndexStatement || !this.insertAlertSearchIndexStatement) return;
     const numericId = Number(id);
-    if (!Number.isSafeInteger(numericId) || numericId < 1) return;
+    if (!Number.isSafeInteger(numericId) || numericId === 0) return;
     try {
       this.deleteAlertSearchIndexStatement.run(String(id));
       this.insertAlertSearchIndexStatement.run(numericId, String(id), searchText);
@@ -2140,7 +2255,9 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
   const createAlertsTable = `
     CREATE TABLE IF NOT EXISTS alerts (
       id INTEGER PRIMARY KEY,
-      uuid TEXT UNIQUE,
+      instance_id TEXT NOT NULL DEFAULT 'default',
+      upstream_id TEXT,
+      uuid TEXT,
       created_at TEXT NOT NULL,
       start_at TEXT,
       stop_at TEXT,
@@ -2173,14 +2290,19 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
       origins TEXT,
       simulated INTEGER NOT NULL DEFAULT 0,
       search_text TEXT
+      , UNIQUE(instance_id, upstream_id)
+      , UNIQUE(instance_id, uuid)
     );
   `;
 
   const createDecisionsTable = `
     CREATE TABLE IF NOT EXISTS decisions (
       id TEXT PRIMARY KEY,
-      uuid TEXT UNIQUE,
+      instance_id TEXT NOT NULL DEFAULT 'default',
+      upstream_id TEXT,
+      uuid TEXT,
       alert_id INTEGER,
+      alert_upstream_id TEXT,
       created_at TEXT NOT NULL,
       stop_at TEXT NOT NULL,
       value TEXT,
@@ -2201,6 +2323,8 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
       simulated INTEGER NOT NULL DEFAULT 0,
       search_text TEXT,
       is_duplicate INTEGER NOT NULL DEFAULT 0
+      , UNIQUE(instance_id, upstream_id)
+      , UNIQUE(instance_id, uuid)
     );
   `;
 
@@ -2356,8 +2480,8 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
 
     if (existingDecisions.length > 0) {
       const insertStatement = db.query(`
-        INSERT OR REPLACE INTO decisions (id, uuid, alert_id, created_at, stop_at, value, type, origin, scenario, raw_data)
-        VALUES ($id, $uuid, $alert_id, $created_at, $stop_at, $value, $type, $origin, $scenario, $raw_data)
+        INSERT OR REPLACE INTO decisions (id, instance_id, upstream_id, uuid, alert_id, alert_upstream_id, created_at, stop_at, value, type, origin, scenario, raw_data)
+        VALUES ($id, 'default', $id, $uuid, $alert_id, $alert_id, $created_at, $stop_at, $value, $type, $origin, $scenario, $raw_data)
       `);
 
       const restore = db.transaction((decisions: Array<Record<string, unknown>>) => {
@@ -2391,6 +2515,7 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
   `);
 
   migrateTimestamps(db);
+  migrateInstanceIdentityColumns(db);
   migrateRecordIndexColumns(db);
   migrateNormalizedDecisionPayloads(db);
   migrateNormalizedAlertPayloads(db);
@@ -2406,6 +2531,40 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
   }
   return searchIndexAvailable;
 }
+
+function migrateInstanceIdentityColumns(db: Database): void {
+  const alertColumns = new Set((db.query('PRAGMA table_info(alerts)').all() as Array<{ name: string }>).map((column) => column.name));
+  const migratedAlerts = !alertColumns.has('instance_id') || !alertColumns.has('upstream_id');
+  if (!alertColumns.has('instance_id')) db.exec("ALTER TABLE alerts ADD COLUMN instance_id TEXT NOT NULL DEFAULT 'default'");
+  if (!alertColumns.has('upstream_id')) {
+    db.exec('ALTER TABLE alerts ADD COLUMN upstream_id TEXT');
+    db.exec('UPDATE alerts SET upstream_id = CAST(id AS TEXT) WHERE upstream_id IS NULL');
+  }
+  const decisionColumns = new Set((db.query('PRAGMA table_info(decisions)').all() as Array<{ name: string }>).map((column) => column.name));
+  const migratedDecisions = !decisionColumns.has('instance_id') || !decisionColumns.has('upstream_id');
+  if (!decisionColumns.has('instance_id')) db.exec("ALTER TABLE decisions ADD COLUMN instance_id TEXT NOT NULL DEFAULT 'default'");
+  if (!decisionColumns.has('upstream_id')) {
+    db.exec('ALTER TABLE decisions ADD COLUMN upstream_id TEXT');
+    db.exec('UPDATE decisions SET upstream_id = CAST(id AS TEXT) WHERE upstream_id IS NULL');
+  }
+  if (!decisionColumns.has('alert_upstream_id')) {
+    db.exec('ALTER TABLE decisions ADD COLUMN alert_upstream_id TEXT');
+    db.exec('UPDATE decisions SET alert_upstream_id = CAST(alert_id AS TEXT) WHERE alert_upstream_id IS NULL');
+  }
+  if (migratedAlerts) db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_instance_upstream ON alerts(instance_id, upstream_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_instance_uuid ON alerts(instance_id, uuid) WHERE uuid IS NOT NULL;
+  `);
+  if (migratedDecisions) db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_decisions_instance_upstream ON decisions(instance_id, upstream_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_decisions_instance_uuid ON decisions(instance_id, uuid) WHERE uuid IS NOT NULL;
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_alerts_instance_created ON alerts(instance_id, created_at DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_decisions_instance_created ON decisions(instance_id, created_at DESC, id DESC);
+  `);
+}
+
 
 function initDecisionDuplicateDirtyTracking(db: Database): void {
   db.exec(`
@@ -2872,9 +3031,7 @@ function backfillSearchIndexes(db: Database): void {
       INSERT INTO alerts_fts(rowid, alert_id, search_text)
       SELECT CAST(id AS INTEGER), CAST(id AS TEXT), search_text
       FROM alerts
-      WHERE CAST(id AS TEXT) GLOB '[0-9]*'
-        AND CAST(id AS TEXT) NOT GLOB '*[^0-9]*'
-        AND CAST(id AS INTEGER) > 0
+      WHERE id <> 0
         AND search_text IS NOT NULL
         AND search_text <> ''
     `);

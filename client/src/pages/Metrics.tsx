@@ -31,6 +31,7 @@ import type {
   CrowdsecMetricsResponse,
   CrowdsecMetricsTiming,
   CrowdsecMetricsWhitelist,
+  InstanceSummary,
 } from '../types';
 
 type MetricsState =
@@ -685,8 +686,24 @@ function AppsecEngineList({ items }: { items?: CrowdsecMetricsAppsecEngine[] }) 
 export function Metrics() {
   const { t } = useI18n();
   const { refreshSignal } = useRefresh();
+  const [, setSearchRevision] = useState(0);
+  const currentSearch = typeof window === 'undefined' ? '' : window.location.search;
+  const searchParams = useMemo(() => new URLSearchParams(currentSearch), [currentSearch]);
+  const setSearchParams = useCallback((next: URLSearchParams, options?: { replace?: boolean }) => {
+    const nextSearch = next.toString();
+    const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`;
+    if (options?.replace) {
+      window.history.replaceState(window.history.state, '', nextUrl);
+    } else {
+      window.history.pushState(window.history.state, '', nextUrl);
+    }
+    setSearchRevision((revision) => revision + 1);
+  }, []);
   const [state, setState] = useState<MetricsState>({ status: 'loading' });
+  const [instances, setInstances] = useState<InstanceSummary[]>([]);
   const [showChildParserNodes, setShowChildParserNodes] = useState(readStoredShowChildParserNodes);
+  const requestedInstanceId = searchParams.get('instance');
+  const requestedEndpointId = searchParams.get('endpoint');
 
   const handleShowChildParserNodesChange = useCallback((next: boolean) => {
     setShowChildParserNodes(next);
@@ -698,17 +715,38 @@ export function Metrics() {
 
     try {
       const config = await fetchConfig();
-      if (!config.metrics_enabled) {
+      const configuredInstances = config.instances || [];
+      setInstances(configuredInstances);
+      if (configuredInstances.length === 0) {
+        if (config.metrics_enabled === false) {
+          setState({ status: 'disabled' });
+          return;
+        }
+        const data = await fetchCrowdsecMetrics();
+        setState({ status: 'ready', data });
+        return;
+      }
+      const selectedInstance = configuredInstances.find((instance) => instance.id === requestedInstanceId && instance.prometheus.length > 0)
+        || configuredInstances.find((instance) => instance.prometheus.length > 0);
+      if (!selectedInstance) {
         setState({ status: 'disabled' });
         return;
       }
 
-      const data = await fetchCrowdsecMetrics();
+      const selectedEndpoint = selectedInstance.prometheus.find((endpoint) => endpoint.id === requestedEndpointId)
+        || selectedInstance.prometheus[0];
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.set('instance', selectedInstance.id);
+      nextParams.set('endpoint', selectedEndpoint.id);
+      if (nextParams.toString() !== searchParams.toString()) {
+        setSearchParams(nextParams, { replace: true });
+      }
+      const data = await fetchCrowdsecMetrics(selectedInstance.id, selectedEndpoint.id);
       setState({ status: 'ready', data });
     } catch (error: unknown) {
       setState({ status: 'error', message: getErrorMessage(error, t('pages.metrics.fetchFailed')) });
     }
-  }, [t]);
+  }, [requestedEndpointId, requestedInstanceId, searchParams, setSearchParams, t]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -807,5 +845,57 @@ export function Metrics() {
     );
   }, [handleShowChildParserNodesChange, load, showChildParserNodes, state, t]);
 
-  return content;
+  const selectedInstance = instances.find((instance) => instance.id === requestedInstanceId)
+    || instances.find((instance) => instance.prometheus.length > 0);
+  const showInstanceSelector = instances.length > 1;
+  const showEndpointSelector = Boolean(selectedInstance && selectedInstance.prometheus.length > 1);
+
+  return (
+    <div className="space-y-6">
+      {(showInstanceSelector || showEndpointSelector) && (
+        <div className="flex flex-wrap gap-3 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+          {showInstanceSelector && (
+            <label className="flex min-w-52 flex-col gap-1 text-sm font-medium text-gray-700 dark:text-gray-200">
+              Instance
+              <select
+                value={selectedInstance?.id || ''}
+                onChange={(event) => {
+                  const next = new URLSearchParams(searchParams);
+                  next.set('instance', event.target.value);
+                  next.delete('endpoint');
+                  setSearchParams(next);
+                }}
+                className="rounded-md border border-gray-300 bg-white px-3 py-2 dark:border-gray-600 dark:bg-gray-900"
+              >
+                {instances.map((instance) => (
+                  <option key={instance.id} value={instance.id} disabled={instance.prometheus.length === 0}>
+                    {instance.icon ? `${instance.icon} ` : ''}{instance.name}{instance.prometheus.length === 0 ? ' (no endpoints)' : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {showEndpointSelector && selectedInstance && (
+            <label className="flex min-w-52 flex-col gap-1 text-sm font-medium text-gray-700 dark:text-gray-200">
+              Metrics endpoint
+              <select
+                value={requestedEndpointId || selectedInstance.prometheus[0].id}
+                onChange={(event) => {
+                  const next = new URLSearchParams(searchParams);
+                  next.set('endpoint', event.target.value);
+                  setSearchParams(next);
+                }}
+                className="rounded-md border border-gray-300 bg-white px-3 py-2 dark:border-gray-600 dark:bg-gray-900"
+              >
+                {selectedInstance.prometheus.map((endpoint) => (
+                  <option key={endpoint.id} value={endpoint.id}>{endpoint.name}</option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
+      )}
+      {content}
+    </div>
+  );
 }

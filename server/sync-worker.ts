@@ -37,7 +37,7 @@ function execute(request: WorkerRequest['request']): unknown {
         }
         if (mutation.alert) {
           changed = mutation.updateAlertRawDataOnly
-            ? database.updateAlertRawData(mutation.alert.$id, mutation.alert.$raw_data) || changed
+            ? database.updateAlertRawData(mutation.alert.$id, mutation.alert.$raw_data, mutation.instanceId) || changed
             : database.insertAlert(mutation.alert) || changed;
         }
         for (const decision of mutation.decisions) {
@@ -47,6 +47,7 @@ function execute(request: WorkerRequest['request']): unknown {
           changed = database.deleteDecisionsByAlertIdExcept(
             alertId,
             mutation.keepDecisionIds,
+            mutation.instanceId,
           ) > 0 || changed;
         }
       }
@@ -60,6 +61,7 @@ function execute(request: WorkerRequest['request']): unknown {
       String(request.start),
       String(request.end),
       request.keepIds as Array<string | number>,
+      request.instanceId ? String(request.instanceId) : undefined,
     );
   }
   if (request.type === 'delete-cached-alerts') {

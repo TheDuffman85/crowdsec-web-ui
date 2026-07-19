@@ -109,6 +109,9 @@ function ManualRefreshConsumer({ onError }: { onError?: (error: unknown) => void
   return (
     <div>
       <span data-testid="manual-sync">{syncStatus?.message}</span>
+      <span data-testid="manual-instances">
+        {syncStatus?.instances?.map((instance) => `${instance.instance_id}:${instance.state}:${instance.progress}`).join('|')}
+      </span>
       <button type="button" onClick={() => void refreshNow?.('full').catch(reportError)}>full-refresh</button>
       <button type="button" onClick={() => void refreshNow?.('delta').catch(reportError)}>delta-refresh</button>
     </div>
@@ -146,6 +149,38 @@ describe('RefreshContext', () => {
       releaseRefresh = resolve;
     }));
     vi.stubGlobal('fetch', fetchSpy);
+    vi.mocked(fetchConfig).mockResolvedValue(makeConfig({
+      sync_status: {
+        isSyncing: false,
+        progress: 100,
+        message: 'done',
+        startedAt: null,
+        completedAt: '2026-07-19T12:00:00.000Z',
+        state: 'complete',
+        instances: [
+          {
+            instance_id: 'primary',
+            instance_name: 'Primary',
+            isSyncing: false,
+            progress: 100,
+            message: 'done',
+            startedAt: null,
+            completedAt: '2026-07-19T12:00:00.000Z',
+            state: 'complete',
+          },
+          {
+            instance_id: 'secondary',
+            instance_name: 'Secondary',
+            isSyncing: false,
+            progress: 100,
+            message: 'done',
+            startedAt: null,
+            completedAt: '2026-07-19T12:00:00.000Z',
+            state: 'complete',
+          },
+        ],
+      },
+    }));
 
     render(
       <RefreshProvider>
@@ -156,6 +191,7 @@ describe('RefreshContext', () => {
     await waitFor(() => expect(screen.getByTestId('manual-sync')).toHaveTextContent('done'));
     await userEvent.click(screen.getByRole('button', { name: 'full-refresh' }));
     expect(screen.getByTestId('manual-sync')).toHaveTextContent('Starting historical data sync...');
+    expect(screen.getByTestId('manual-instances')).toHaveTextContent('primary:syncing:0|secondary:idle:0');
     expect(fetchSpy).toHaveBeenCalledWith('/api/cache/refresh', expect.objectContaining({
       method: 'POST',
       body: JSON.stringify({ mode: 'full' }),

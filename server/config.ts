@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { createCrowdsecAuthConfig, type CrowdsecAuthConfig } from './auth';
 import { resolveSecretEnv } from './env-secrets';
+import { hasLegacyConnectionEnvironment, loadInstancesConfig, type CrowdsecInstanceConfig } from './instances-config';
 
 export type AlertFilterMode = 'default' | 'new' | 'legacy';
 export type TimeFormat = 'browser' | '12h' | '24h';
@@ -77,6 +78,7 @@ export interface RuntimeConfig {
   timeFormat: TimeFormat;
   readOnly: boolean;
   dashboardAuth: DashboardAuthConfig;
+  instances: CrowdsecInstanceConfig[];
 }
 
 export function parseTimeZone(value: string | undefined): string | null {
@@ -368,7 +370,7 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
   const alertFilterConfig = parseAlertFilterConfig(env);
   warnRemovedColumnVisibilityEnv(env);
 
-  return {
+  const runtimeConfig: RuntimeConfig = {
     port: Number(env.PORT || 3000),
     basePath: (env.BASE_PATH || '').replace(/\/$/, ''),
     crowdsecUrl: env.CROWDSEC_URL || 'http://crowdsec:8080',
@@ -418,5 +420,39 @@ export function createRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runti
     timeFormat: parseTimeFormat(resolveRenamedEnv(env, 'TIME_FORMAT', 'CROWDSEC_TIME_FORMAT')),
     readOnly: parseBooleanEnv(env.PERMISSION_READ_ONLY, false),
     dashboardAuth: parseDashboardAuthConfig(env),
+    instances: [],
   };
+
+  const instancesFile = env.CROWDSEC_INSTANCES_CONFIG_FILE?.trim();
+  if (instancesFile) {
+    const legacyVariables = hasLegacyConnectionEnvironment(env);
+    if (legacyVariables.length > 0) {
+      throw new Error(`Configuration error: CROWDSEC_INSTANCES_CONFIG_FILE cannot be combined with legacy connection variables: ${legacyVariables.join(', ')}.`);
+    }
+    runtimeConfig.instances = loadInstancesConfig(instancesFile, env);
+  } else {
+    runtimeConfig.instances = [{
+      id: 'default',
+      name: env.CROWDSEC_INSTANCE_NAME?.trim() || 'CrowdSec',
+      icon: env.CROWDSEC_INSTANCE_ICON?.trim() || undefined,
+      lapiUrl: runtimeConfig.crowdsecUrl,
+      lapiAuth: runtimeConfig.crowdsecAuth,
+      lapiTls: {
+        caFile: runtimeConfig.crowdsecTlsCaCertPath,
+        certFile: runtimeConfig.crowdsecTlsCertPath,
+        keyFile: runtimeConfig.crowdsecTlsKeyPath,
+      },
+      prometheus: runtimeConfig.prometheusUrl ? [{
+        id: 'default',
+        name: 'CrowdSec',
+        url: runtimeConfig.prometheusUrl,
+        auth: { type: 'none' },
+        tls: {},
+        requestTimeoutMs: runtimeConfig.prometheusRequestTimeoutMs,
+      }] : [],
+      sync: {},
+    }];
+  }
+
+  return runtimeConfig;
 }

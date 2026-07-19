@@ -157,6 +157,75 @@ function createDeferred<T>() {
 }
 
 describe('Dashboard page', () => {
+  test.each([
+    { connected: [true, true], status: 'All online', count: '2 of 2 online' },
+    { connected: [true, false], status: 'Partial', count: '1 of 2 online' },
+    { connected: [false, false], status: 'Offline', count: '0 of 2 online' },
+  ])('shows aggregate LAPI status $status in All instances scope', async ({ connected, status, count }) => {
+    const syncStatus = { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null };
+    const lapiStatus = (isConnected: boolean) => ({ isConnected, lastCheck: null, lastError: null, offline_since: null });
+    fetchConfigMock.mockResolvedValue({
+      lookback_period: '7d',
+      lookback_hours: 168,
+      lookback_days: 7,
+      refresh_interval: 30000,
+      current_interval_name: '30s',
+      lapi_status: lapiStatus(connected[0]),
+      instances: [
+        { id: 'primary', name: 'Primary', lapi_status: lapiStatus(connected[0]), sync_status: syncStatus, prometheus: [] },
+        { id: 'secondary', name: 'Secondary', lapi_status: lapiStatus(connected[1]), sync_status: syncStatus, prometheus: [] },
+      ],
+      aggregate_lapi_status: connected.every(Boolean) ? 'healthy' : connected.some(Boolean) ? 'partial' : 'offline',
+      sync_status: syncStatus,
+      simulations_enabled: true,
+      machine_features_enabled: false,
+      origin_features_enabled: false,
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/?instance=all']}>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText(status)).toBeInTheDocument());
+    expect(screen.getByText('CrowdSec LAPIs')).toBeInTheDocument();
+    expect(screen.getByText(count)).toBeInTheDocument();
+  });
+
+  test('shows only the selected instance LAPI status in instance scope', async () => {
+    const syncStatus = { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null };
+    const onlineStatus = { isConnected: true, lastCheck: null, lastError: null, offline_since: null };
+    const offlineStatus = { isConnected: false, lastCheck: null, lastError: 'unavailable', offline_since: '2026-07-19T12:00:00.000Z' };
+    fetchConfigMock.mockResolvedValue({
+      lookback_period: '7d',
+      lookback_hours: 168,
+      lookback_days: 7,
+      refresh_interval: 30000,
+      current_interval_name: '30s',
+      lapi_status: onlineStatus,
+      instances: [
+        { id: 'primary', name: 'Primary', lapi_status: onlineStatus, sync_status: syncStatus, prometheus: [] },
+        { id: 'secondary', name: 'Secondary', lapi_status: offlineStatus, sync_status: syncStatus, prometheus: [] },
+      ],
+      aggregate_lapi_status: 'partial',
+      sync_status: syncStatus,
+      simulations_enabled: true,
+      machine_features_enabled: false,
+      origin_features_enabled: false,
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/?instance=secondary']}>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Offline')).toBeInTheDocument());
+    expect(screen.getByText('CrowdSec LAPI')).toBeInTheDocument();
+    expect(screen.queryByText(/of 2 online/)).not.toBeInTheDocument();
+  });
+
   test('shows simulation counts separately and passes simulation series to chart and map when enabled', async () => {
     render(
       <MemoryRouter>
@@ -638,6 +707,7 @@ describe('Dashboard page', () => {
   });
 
   test('retries pending dashboard statistics without remounting the page', async () => {
+    const readyStats = createDeferred<ReturnType<typeof buildDashboardStatsResponse>>();
     fetchDashboardStatsMock
       .mockResolvedValueOnce({
         ...buildDashboardStatsResponse(),
@@ -660,7 +730,7 @@ describe('Dashboard page', () => {
         topAS: [],
         topTargets: [],
       })
-      .mockResolvedValueOnce(buildDashboardStatsResponse());
+      .mockReturnValueOnce(readyStats.promise);
 
     render(
       <MemoryRouter>
@@ -669,6 +739,9 @@ describe('Dashboard page', () => {
     );
 
     await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('Loading dashboard...')).toBeInTheDocument();
+    expect(screen.queryByText('Total Alerts')).not.toBeInTheDocument();
+    readyStats.resolve(buildDashboardStatsResponse());
     const alertsCard = await screen.findByText('Total Alerts');
     expect(within(alertsCard.closest('a') as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('2');
     expect(setLastUpdatedMock).not.toHaveBeenCalled();

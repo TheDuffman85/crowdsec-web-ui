@@ -98,6 +98,8 @@ export function resolveAlertHistoryAt(alert: Pick<AlertRecord, 'created_at' | 's
 export function toSlimAlert(alert: AlertRecord): SlimAlert {
   return {
     id: alert.id,
+    instance_id: alert.instance_id,
+    instance_name: alert.instance_name,
     created_at: resolveAlertHistoryAt(alert),
     scenario: resolveAlertScenario(alert),
     reason: resolveAlertReason(alert),

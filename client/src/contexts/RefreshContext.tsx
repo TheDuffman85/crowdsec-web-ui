@@ -111,15 +111,26 @@ export function RefreshProvider({ children }: WithChildren) {
 
     const refreshNow = async (mode: ManualRefreshMode): Promise<void> => {
         if (mode === 'full') {
-            setSyncStatus({
+            const startedAt = new Date().toISOString();
+            setSyncStatus((current) => ({
                 isSyncing: true,
                 progress: 0,
                 message: 'Starting historical data sync...',
-                startedAt: new Date().toISOString(),
+                startedAt,
                 completedAt: null,
                 state: 'syncing',
                 errors: [],
-            });
+                instances: current?.instances?.map((instance, index) => ({
+                    ...instance,
+                    isSyncing: index === 0,
+                    progress: 0,
+                    message: index === 0 ? 'Starting historical data sync...' : '',
+                    startedAt: index === 0 ? startedAt : null,
+                    completedAt: null,
+                    state: index === 0 ? 'syncing' : 'idle',
+                    errors: [],
+                })),
+            }));
         }
 
         try {
@@ -217,8 +228,18 @@ export function RefreshProvider({ children }: WithChildren) {
             socket.onmessage = (event) => {
                 resetIdleTimeout();
                 try {
-                    const message = JSON.parse(String(event.data)) as { type?: string; updated_at?: string | null };
+                    const message = JSON.parse(String(event.data)) as { type?: string; updated_at?: string | null; instance_ids?: string[] };
                     if (message.type !== 'ready' && message.type !== 'cache-updated') return;
+                    const selectedInstance = new URLSearchParams(window.location.search).get('instance');
+                    if (
+                        message.type === 'cache-updated' &&
+                        selectedInstance &&
+                        selectedInstance !== 'all' &&
+                        Array.isArray(message.instance_ids) &&
+                        !message.instance_ids.includes(selectedInstance)
+                    ) {
+                        return;
+                    }
                     const revision = message.updated_at || null;
                     const previousRevision = lastPushRevisionRef.current;
                     lastPushRevisionRef.current = revision;

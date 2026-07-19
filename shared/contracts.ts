@@ -14,11 +14,32 @@ export interface PaginatedResponse<T> {
   data: T[];
   pagination: PaginationMeta;
   selectable_ids: Array<string | number>;
+  selectable_refs?: InstanceEntityRef[];
+}
+
+export interface InstanceEntityRef {
+  instance_id: string;
+  id: string | number;
+}
+
+export interface PrometheusEndpointSummary {
+  id: string;
+  name: string;
+}
+
+export interface InstanceSummary {
+  id: string;
+  name: string;
+  icon?: string;
+  lapi_status: LapiStatus;
+  sync_status: SyncStatus;
+  prometheus: PrometheusEndpointSummary[];
+  sync_overrides?: Record<string, string | number | boolean>;
 }
 
 export type TableColumnPreferenceTable = 'alerts' | 'decisions';
-export type AlertTableColumnId = 'id' | 'time' | 'scenario' | 'country' | 'region' | 'city' | 'as' | 'source' | 'machine' | 'origin' | 'decisions';
-export type DecisionTableColumnId = 'id' | 'time' | 'scenario' | 'country' | 'region' | 'city' | 'as' | 'source' | 'action' | 'expiration' | 'machine' | 'origin' | 'alert';
+export type AlertTableColumnId = 'id' | 'instance' | 'time' | 'scenario' | 'country' | 'region' | 'city' | 'as' | 'source' | 'machine' | 'origin' | 'decisions';
+export type DecisionTableColumnId = 'id' | 'instance' | 'time' | 'scenario' | 'country' | 'region' | 'city' | 'as' | 'source' | 'action' | 'expiration' | 'machine' | 'origin' | 'alert';
 export type TableColumnId = AlertTableColumnId | DecisionTableColumnId;
 
 export interface TableColumnDefinition {
@@ -32,6 +53,7 @@ export type TableColumnPreferences = Record<TableColumnPreferenceTable, TableCol
 export const TABLE_COLUMN_DEFINITIONS: Record<TableColumnPreferenceTable, TableColumnDefinition[]> = {
   alerts: [
     { id: 'id', label: 'ID', defaultVisible: false },
+    { id: 'instance', label: 'Instance', defaultVisible: false },
     { id: 'time', label: 'Time', defaultVisible: true },
     { id: 'scenario', label: 'Scenario', defaultVisible: true },
     { id: 'country', label: 'Country', defaultVisible: true },
@@ -45,6 +67,7 @@ export const TABLE_COLUMN_DEFINITIONS: Record<TableColumnPreferenceTable, TableC
   ],
   decisions: [
     { id: 'id', label: 'ID', defaultVisible: false },
+    { id: 'instance', label: 'Instance', defaultVisible: false },
     { id: 'time', label: 'Time', defaultVisible: true },
     { id: 'scenario', label: 'Scenario', defaultVisible: true },
     { id: 'country', label: 'Country', defaultVisible: true },
@@ -87,14 +110,30 @@ export interface LapiStatus {
   offline_since: string | null;
 }
 
+export type SyncState = 'idle' | 'syncing' | 'complete' | 'partial' | 'failed';
+
+export interface InstanceSyncStatus {
+  instance_id: string;
+  instance_name: string;
+  icon?: string;
+  isSyncing: boolean;
+  progress: number;
+  message: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  state?: SyncState;
+  errors?: string[];
+}
+
 export interface SyncStatus {
   isSyncing: boolean;
   progress: number;
   message: string;
   startedAt: string | null;
   completedAt: string | null;
-  state?: 'idle' | 'syncing' | 'complete' | 'partial' | 'failed';
+  state?: SyncState;
   errors?: string[];
+  instances?: InstanceSyncStatus[];
 }
 
 export interface AlertMeta {
@@ -139,6 +178,8 @@ export interface AlertDecision {
 
 export interface AlertRecord {
   id: string | number;
+  instance_id?: string;
+  instance_name?: string;
   uuid?: string;
   created_at: string;
   start_at?: string;
@@ -179,6 +220,8 @@ export interface AlertDecisionSummary {
 
 export interface SlimAlert {
   id: string | number;
+  instance_id?: string;
+  instance_name?: string;
   created_at: string;
   scenario?: string;
   reason?: string;
@@ -213,6 +256,8 @@ export interface DecisionListDetail {
 
 export interface DecisionListItem {
   id: string | number;
+  instance_id?: string;
+  instance_name?: string;
   created_at: string;
   machine?: string;
   scenario?: string;
@@ -464,6 +509,8 @@ export interface ConfigResponse {
   manual_refresh_enabled?: boolean;
   current_interval_name: string;
   lapi_status: LapiStatus;
+  instances?: InstanceSummary[];
+  aggregate_lapi_status?: 'healthy' | 'partial' | 'offline';
   sync_status: SyncStatus;
   cache_last_update?: string | null;
   next_refresh_at?: string | null;
@@ -585,6 +632,8 @@ export interface AddDecisionRequest {
   duration?: string;
   reason?: string;
   type?: 'ban' | 'captcha';
+  scope?: 'all' | 'instance';
+  instance_id?: string;
 }
 
 export interface RefreshIntervalRequest {
@@ -592,11 +641,28 @@ export interface RefreshIntervalRequest {
 }
 
 export interface BulkDeleteRequest {
-  ids: Array<string | number>;
+  ids?: Array<string | number>;
+  refs?: InstanceEntityRef[];
 }
 
 export interface CleanupByIpRequest {
   ip: string;
+  scope?: 'all' | 'instance';
+  instance_id?: string;
+}
+
+export interface InstanceOperationResult {
+  instance_id: string;
+  instance_name: string;
+  success: boolean;
+  error?: string;
+  result?: unknown;
+}
+
+export interface MultiInstanceOperationResponse {
+  results: InstanceOperationResult[];
+  succeeded: number;
+  failed: number;
 }
 
 export type DeleteResourceKind = 'alert' | 'decision';
@@ -614,6 +680,7 @@ export interface BulkDeleteResult {
   deleted_decisions: number;
   failed: BulkDeleteFailure[];
   ip?: string;
+  instance_results?: InstanceOperationResult[];
 }
 
 export interface DeleteResult {

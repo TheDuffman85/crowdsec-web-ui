@@ -140,6 +140,7 @@ const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
 
 const alertFieldDefinitions: SearchFieldDefinition[] = [
   { name: 'id', aliases: [], description: 'Exact alert ID', descriptionKey: 'components.searchSyntax.fields.alerts.id' },
+  { name: 'instance', aliases: [], description: 'CrowdSec instance name or ID' },
   { name: 'scenario', aliases: [], description: 'Scenario name', descriptionKey: 'components.searchSyntax.fields.alerts.scenario' },
   { name: 'message', aliases: [], description: 'Alert message text', descriptionKey: 'components.searchSyntax.fields.alerts.message' },
   { name: 'ip', aliases: ['source'], description: 'Source IP, value, or range', descriptionKey: 'components.searchSyntax.fields.alerts.ip' },
@@ -156,6 +157,7 @@ const alertFieldDefinitions: SearchFieldDefinition[] = [
 
 const decisionFieldDefinitions: SearchFieldDefinition[] = [
   { name: 'id', aliases: [], description: 'Exact decision ID', descriptionKey: 'components.searchSyntax.fields.decisions.id' },
+  { name: 'instance', aliases: [], description: 'CrowdSec instance name or ID' },
   { name: 'alert', aliases: ['alert_id'], description: 'Linked alert ID', descriptionKey: 'components.searchSyntax.fields.decisions.alert' },
   { name: 'scenario', aliases: ['reason'], description: 'Decision scenario / reason', descriptionKey: 'components.searchSyntax.fields.decisions.scenario' },
   { name: 'ip', aliases: ['value'], description: 'Decision IP or range', descriptionKey: 'components.searchSyntax.fields.decisions.ip' },
@@ -525,6 +527,7 @@ function getNextUtcDateString(day: string): string | null {
 
 const alertFieldMatchers: AlertFieldMatcherMap = {
   id: (alert, value) => normalizeValue(alert.id) === normalizeValue(value),
+  instance: (alert, value) => includesNormalized(`${alert.instance_id || ''} ${alert.instance_name || ''}`, value),
   scenario: (alert, value) => includesNormalized(alert.scenario, value),
   message: (alert, value) => includesNormalized(alert.message, value),
   ip: (alert, value) => getAlertSourceValues(alert).some((candidate) => matchesIpSearchValue(candidate, value)),
@@ -541,6 +544,7 @@ const alertFieldMatchers: AlertFieldMatcherMap = {
 
 const decisionFieldMatchers: DecisionFieldMatcherMap = {
   id: (decision, value) => normalizeValue(decision.id) === normalizeValue(value),
+  instance: (decision, value) => includesNormalized(`${decision.instance_id || ''} ${decision.instance_name || ''}`, value),
   alert: (decision, value) => normalizeValue(decision.detail.alert_id) === normalizeValue(value),
   scenario: (decision, value) => includesNormalized(decision.detail.reason || decision.scenario, value),
   ip: (decision, value) => matchesIpSearchValue(decision.value, value),
@@ -561,6 +565,7 @@ const decisionFieldMatchers: DecisionFieldMatcherMap = {
 
 const alertFieldEmptyMatchers: AlertFieldEmptyMatcherMap = {
   id: () => false,
+  instance: (alert) => isEmptyValue(alert.instance_id),
   scenario: (alert) => isEmptyValue(alert.scenario),
   message: (alert) => isEmptyValue(alert.message),
   ip: (alert) => [alert.source?.ip, alert.source?.value, alert.source?.range].every(isEmptyValue),
@@ -577,6 +582,7 @@ const alertFieldEmptyMatchers: AlertFieldEmptyMatcherMap = {
 
 const decisionFieldEmptyMatchers: DecisionFieldEmptyMatcherMap = {
   id: () => false,
+  instance: (decision) => isEmptyValue(decision.instance_id),
   alert: (decision) => isEmptyValue(decision.detail.alert_id),
   scenario: (decision) => isEmptyValue(decision.detail.reason || decision.scenario),
   ip: (decision) => isEmptyValue(decision.value),

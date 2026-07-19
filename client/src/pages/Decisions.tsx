@@ -17,14 +17,22 @@ import { TABLE_COLUMN_DEFINITIONS } from "../../../shared/contracts";
 import { loadStoredTableColumnPreferences, saveStoredTableColumnPreferences } from "../lib/tableColumns";
 import { compileDecisionSearch, getSearchHelpDefinition, type SearchParseError } from "../../../shared/search";
 import { Trash2, Gavel, X, ExternalLink, Shield, ShieldBan, AlertCircle, Info, Columns3, Loader2 } from "lucide-react";
-import type { AddDecisionRequest, ApiPermissionError, BulkDeleteResult, DecisionListItem, TableColumnId, TableColumnPreferences } from '../types';
+import type { AddDecisionRequest, ApiPermissionError, BulkDeleteResult, DecisionListItem, InstanceEntityRef, InstanceOperationResult, MultiInstanceOperationResponse, TableColumnId, TableColumnPreferences } from '../types';
 import { useI18n, type I18nContextValue } from "../lib/i18n";
 import { getBrowserTimeZone, useDateTime } from "../lib/dateTime";
 
 type DecisionDeleteAction =
-    | { kind: "single"; decisionId: string | number }
-    | { kind: "selected"; ids: string[] }
+    | { kind: "single"; ref: InstanceEntityRef }
+    | { kind: "selected"; refs: InstanceEntityRef[] }
     | { kind: "ip"; ip: string };
+
+function decisionKey(decision: Pick<DecisionListItem, 'id' | 'instance_id'>): string {
+    return `${decision.instance_id || 'default'}\u0000${String(decision.id)}`;
+}
+
+function decisionRef(decision: Pick<DecisionListItem, 'id' | 'instance_id'>): InstanceEntityRef {
+    return { instance_id: decision.instance_id || 'default', id: String(decision.id) };
+}
 
 interface ErrorInfo {
     message: string;
@@ -113,6 +121,18 @@ function summarizeDeleteResult(result: BulkDeleteResult, t: I18nContextValue['t'
     return `${deletedText}${t('pages.alerts.itemsFailedToDelete', { count: result.failed.length })}`;
 }
 
+function combineDeleteResults(results: BulkDeleteResult[]): BulkDeleteResult {
+    return results.reduce<BulkDeleteResult>((combined, result) => ({
+        requested_alerts: combined.requested_alerts + result.requested_alerts,
+        requested_decisions: combined.requested_decisions + result.requested_decisions,
+        deleted_alerts: combined.deleted_alerts + result.deleted_alerts,
+        deleted_decisions: combined.deleted_decisions + result.deleted_decisions,
+        failed: [...combined.failed, ...result.failed],
+        instance_results: [...(combined.instance_results || []), ...(result.instance_results || [])],
+        ip: combined.ip || result.ip,
+    }), { requested_alerts: 0, requested_decisions: 0, deleted_alerts: 0, deleted_decisions: 0, failed: [] });
+}
+
 export function Decisions() {
     const { language, t } = useI18n();
     const { timeZone } = useDateTime();
@@ -122,6 +142,7 @@ export function Decisions() {
     const [decisions, setDecisions] = useState<DecisionListItem[]>([]);
     const [simulationsEnabled, setSimulationsEnabled] = useState(false);
     const [canManageEnforcement, setCanManageEnforcement] = useState(false);
+    const [multipleInstances, setMultipleInstances] = useState(false);
     const [tableColumnPreferences, setTableColumnPreferences] = useState<TableColumnPreferences>(() => loadStoredTableColumnPreferences());
     const [showColumnsModal, setShowColumnsModal] = useState(false);
     const [searchDraft, setSearchDraft] = useState(initialQueryParam);
@@ -144,8 +165,10 @@ export function Decisions() {
     const [newDecision, setNewDecision] = useState<AddDecisionRequest>({ ip: "", duration: "4h", reason: "manual" });
     const [errorInfo, setErrorInfo] = useState<ErrorInfo | null>(null);
     const [pendingDeleteErrorInfo, setPendingDeleteErrorInfo] = useState<ErrorInfo | null>(null);
+    const [retryCleanupInstances, setRetryCleanupInstances] = useState<InstanceOperationResult[]>([]);
     const [addDecisionErrorInfo, setAddDecisionErrorInfo] = useState<ErrorInfo | null>(null);
     const [addDecisionInProgress, setAddDecisionInProgress] = useState(false);
+    const [retryDecisionInstances, setRetryDecisionInstances] = useState<InstanceOperationResult[]>([]);
     const alertIdFilter = searchParams.get("alert_id");
     const queryParam = searchParams.get("q");
     const appliedQuery = queryParam?.trim() ?? "";
@@ -175,6 +198,7 @@ export function Decisions() {
     const configRef = useRef<{
         simulationsEnabled: boolean;
         canManageEnforcement: boolean;
+        multipleInstances: boolean;
     } | null>(null);
     const hasLoadedDecisionsRef = useRef(false);
     const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -197,7 +221,13 @@ export function Decisions() {
         () => getSearchHelpDefinition('decisions', searchValidationFeatures, { decisions }),
         [decisions, searchValidationFeatures],
     );
-    const visibleDecisionColumns = tableColumnPreferences.decisions;
+    const combinedScope = (searchParams.get('instance') || 'all') === 'all' && multipleInstances;
+    const visibleDecisionColumns = useMemo(() => {
+        const configured = tableColumnPreferences.decisions;
+        return combinedScope && !configured.includes('instance')
+            ? ['instance' as TableColumnId, ...configured]
+            : configured;
+    }, [combinedScope, tableColumnPreferences.decisions]);
     const decisionColumnDefinitionById = useMemo(
         () => new Map<TableColumnId, (typeof TABLE_COLUMN_DEFINITIONS.decisions)[number]>(
             TABLE_COLUMN_DEFINITIONS.decisions.map((column) => [column.id, column]),
@@ -219,6 +249,7 @@ export function Decisions() {
         };
         const browserTimeZone = getBrowserTimeZone();
         if (browserTimeZone) filters.browser_tz = browserTimeZone;
+        filters.instance = searchParams.get('instance') || 'all';
         if (appliedQuery) filters.q = appliedQuery;
         if (dateStartParam) filters.dateStart = dateStartParam;
         if (dateEndParam) filters.dateEnd = dateEndParam;
@@ -227,7 +258,7 @@ export function Decisions() {
         if (requestedSimulationFilter !== 'all') filters.simulation = requestedSimulationFilter;
         if (showDuplicates) filters.hide_duplicates = 'false';
         return filters;
-    }, [alertIdFilter, appliedQuery, dateEndParam, dateStartParam, includeExpiredParam, showDuplicates, simulationFilter]);
+    }, [alertIdFilter, appliedQuery, dateEndParam, dateStartParam, includeExpiredParam, searchParams, showDuplicates, simulationFilter]);
 
     const loadConfig = useCallback(async (refresh = false) => {
         if (!refresh && configRef.current) {
@@ -238,11 +269,13 @@ export function Decisions() {
         const nextConfig = {
             simulationsEnabled: configData.simulations_enabled === true,
             canManageEnforcement: configData.permissions?.can_manage_enforcement !== false,
+            multipleInstances: (configData.instances?.length || 0) > 1,
         };
 
         configRef.current = nextConfig;
         setSimulationsEnabled(nextConfig.simulationsEnabled);
         setCanManageEnforcement(nextConfig.canManageEnforcement);
+        setMultipleInstances(nextConfig.multipleInstances);
 
         return nextConfig;
     }, []);
@@ -331,7 +364,7 @@ export function Decisions() {
             setTotalUnfilteredDecisions(decisionsResult.pagination.unfiltered_total);
             const nextSelectableIds = decisionsData
                 .filter((decision) => !isDecisionExpired(decision, Date.now()))
-                .map((decision) => String(decision.id));
+                .map(decisionKey);
             setSelectableDecisionIds((current) => append
                 ? Array.from(new Set([...current, ...nextSelectableIds]))
                 : nextSelectableIds);
@@ -504,12 +537,52 @@ export function Decisions() {
 
     const handleAddDecision = async (e: FormEvent<HTMLFormElement>) => {
         e.preventDefault();
-        const decisionData = { ...newDecision };
+        const instanceScope = searchParams.get('instance');
+        const decisionData: AddDecisionRequest = !instanceScope && !multipleInstances
+            ? { ...newDecision }
+            : instanceScope === 'all' || !instanceScope
+            ? { ...newDecision, scope: 'all' }
+            : { ...newDecision, scope: 'instance', instance_id: instanceScope };
         setAddDecisionInProgress(true);
         setErrorInfo(null);
         setAddDecisionErrorInfo(null);
         try {
-            await addDecision(decisionData);
+            const response = retryDecisionInstances.length > 0
+                ? {
+                    results: await Promise.all(retryDecisionInstances.map(async (failedInstance): Promise<InstanceOperationResult> => {
+                        try {
+                            const retryResponse = await addDecision({
+                                ...newDecision,
+                                scope: 'instance',
+                                instance_id: failedInstance.instance_id,
+                            }) as MultiInstanceOperationResponse;
+                            return retryResponse?.results?.[0] || { ...failedInstance, success: true, error: undefined };
+                        } catch (error) {
+                            return {
+                                ...failedInstance,
+                                success: false,
+                                error: error instanceof Error ? error.message : String(error),
+                            };
+                        }
+                    })),
+                    succeeded: 0,
+                    failed: 0,
+                }
+                : await addDecision(decisionData) as MultiInstanceOperationResponse | undefined;
+            if (response && Array.isArray(response.results)) {
+                const failedInstances = response.results.filter((result) => !result.success);
+                if (failedInstances.length > 0) {
+                    const succeededNames = response.results.filter((result) => result.success).map((result) => result.instance_name);
+                    const failedNames = failedInstances.map((result) => result.instance_name);
+                    setRetryDecisionInstances(failedInstances);
+                    setAddDecisionErrorInfo({
+                        message: `${succeededNames.length > 0 ? `Succeeded: ${succeededNames.join(', ')}. ` : ''}Failed: ${failedNames.join(', ')}.`,
+                    });
+                    await loadDecisions({ page: 1, refreshConfig: true });
+                    return;
+                }
+            }
+            setRetryDecisionInstances([]);
             setShowAddModal(false);
             setNewDecision({ ip: "", duration: "4h", reason: "manual" });
             await loadDecisions({ page: 1, refreshConfig: true });
@@ -523,6 +596,7 @@ export function Decisions() {
 
     const openAddDecision = () => {
         setAddDecisionErrorInfo(null);
+        setRetryDecisionInstances([]);
         setShowAddModal(true);
     };
 
@@ -532,14 +606,15 @@ export function Decisions() {
         }
 
         setAddDecisionErrorInfo(null);
+        setRetryDecisionInstances([]);
         setShowAddModal(false);
     };
 
 
     // Trigger modal instead of window.confirm
-    const requestDelete = (id: string | number) => {
+    const requestDelete = (decision: DecisionListItem) => {
         setPendingDeleteErrorInfo(null);
-        setPendingDeleteAction({ kind: "single", decisionId: id });
+        setPendingDeleteAction({ kind: "single", ref: decisionRef(decision) });
     };
 
     const confirmDelete = async () => {
@@ -551,19 +626,49 @@ export function Decisions() {
             let resultMessage: string | null = null;
 
             if (pendingDeleteAction.kind === "single") {
-                await deleteDecision(pendingDeleteAction.decisionId);
-                setSelectedDecisionIds((prev) => prev.filter((id) => id !== String(pendingDeleteAction.decisionId)));
+                const instanceScope = searchParams.get('instance');
+                await deleteDecision(
+                    pendingDeleteAction.ref.id,
+                    multipleInstances || (instanceScope && instanceScope !== 'all')
+                        ? pendingDeleteAction.ref.instance_id
+                        : undefined,
+                );
+                setSelectedDecisionIds((prev) => prev.filter((id) => id !== `${pendingDeleteAction.ref.instance_id}\u0000${pendingDeleteAction.ref.id}`));
             } else if (pendingDeleteAction.kind === "selected") {
-                const result = await bulkDeleteDecisions(pendingDeleteAction.ids);
+                const result = await bulkDeleteDecisions(multipleInstances
+                    ? pendingDeleteAction.refs
+                    : pendingDeleteAction.refs.map((ref) => ref.id));
                 resultMessage = summarizeDeleteResult(result, t);
                 setSelectedDecisionIds([]);
             } else {
-                const result = await cleanupByIp(pendingDeleteAction.ip);
+                const instanceScope = searchParams.get('instance');
+                const result = retryCleanupInstances.length > 0
+                    ? combineDeleteResults(await Promise.all(retryCleanupInstances.map((instance) => cleanupByIp({
+                        ip: pendingDeleteAction.ip,
+                        scope: 'instance',
+                        instance_id: instance.instance_id,
+                    }))))
+                    : await cleanupByIp(!instanceScope && !multipleInstances
+                        ? pendingDeleteAction.ip
+                        : instanceScope === 'all' || !instanceScope
+                        ? { ip: pendingDeleteAction.ip, scope: 'all' }
+                        : { ip: pendingDeleteAction.ip, scope: 'instance', instance_id: instanceScope });
                 resultMessage = summarizeDeleteResult(result, t);
                 setSelectedDecisionIds([]);
                 if (result.deleted_alerts === 0 && result.deleted_decisions === 0 && result.failed.length === 0) {
                     resultMessage = t('pages.alerts.noAlertsOrDecisionsForIp', { ip: pendingDeleteAction.ip });
                 }
+                const failedInstances = result.instance_results?.filter((instance) => !instance.success) || [];
+                if (failedInstances.length > 0) {
+                    const succeededNames = result.instance_results?.filter((instance) => instance.success).map((instance) => instance.instance_name) || [];
+                    setRetryCleanupInstances(failedInstances);
+                    setPendingDeleteErrorInfo({
+                        message: `${succeededNames.length > 0 ? `Succeeded: ${succeededNames.join(', ')}. ` : ''}Failed: ${failedInstances.map((instance) => instance.instance_name).join(', ')}.`,
+                    });
+                    await loadDecisions({ page: 1, refreshConfig: true });
+                    return;
+                }
+                setRetryCleanupInstances([]);
             }
 
             setPendingDeleteAction(null);
@@ -588,6 +693,7 @@ export function Decisions() {
     const cancelPendingDelete = () => {
         setPendingDeleteAction(null);
         setPendingDeleteErrorInfo(null);
+        setRetryCleanupInstances([]);
     };
 
     const toggleDecisionSelection = (decisionId: string) => {
@@ -630,8 +736,9 @@ export function Decisions() {
         pendingSearchFocusRef.current = null;
         searchSelectionRef.current = { start: 0, end: 0 };
         skipSearchParamSyncRef.current = "";
-        setSearchParams({});
-    }, [cancelSearchDebounce, setSearchParams]);
+        const instance = searchParams.get('instance');
+        setSearchParams(instance ? { instance } : {});
+    }, [cancelSearchDebounce, searchParams, setSearchParams]);
 
     const removeParam = (key: string) => {
         const newParams = new URLSearchParams(searchParams);
@@ -656,10 +763,13 @@ export function Decisions() {
     const visibleExpiredDecisionIds = new Set(
         filteredDecisions
             .filter((decision) => isDecisionExpired(decision, nowMs))
-            .map((decision) => String(decision.id)),
+            .map(decisionKey),
     );
     const activeSelectableDecisionIds = selectableDecisionIds.filter((id) => !visibleExpiredDecisionIds.has(id));
     const selectedFilteredDecisionIds = activeSelectableDecisionIds.filter((id) => selectedDecisionIds.includes(id));
+    const selectedFilteredDecisionRefs = filteredDecisions
+        .filter((decision) => selectedFilteredDecisionIds.includes(decisionKey(decision)))
+        .map(decisionRef);
     const allFilteredDecisionsSelected = activeSelectableDecisionIds.length > 0 && selectedFilteredDecisionIds.length === activeSelectableDecisionIds.length;
     const someFilteredDecisionsSelected = selectedFilteredDecisionIds.length > 0 && !allFilteredDecisionsSelected;
 
@@ -688,7 +798,7 @@ export function Decisions() {
             : pendingDeleteAction?.kind === "ip"
                 ? t('pages.alerts.deleteAllIpTitle')
                 : t('common.delete');
-    const pendingDecisionId = pendingDeleteAction?.kind === "single" ? pendingDeleteAction.decisionId : null;
+    const pendingDecisionId = pendingDeleteAction?.kind === "single" ? pendingDeleteAction.ref.id : null;
     const pendingIp = pendingDeleteAction?.kind === "ip" ? pendingDeleteAction.ip : null;
     const summaryText = initialLoading && !hasLoadedDecisions
         ? t('pages.decisions.loading')
@@ -725,7 +835,7 @@ export function Decisions() {
                     <button
                         onClick={() => {
                             setPendingDeleteErrorInfo(null);
-                            setPendingDeleteAction({ kind: "selected", ids: selectedFilteredDecisionIds });
+                            setPendingDeleteAction({ kind: "selected", refs: selectedFilteredDecisionRefs });
                         }}
                         disabled={selectedDecisionCount === 0}
                         className="rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
@@ -925,11 +1035,12 @@ export function Decisions() {
                                         : "hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors";
 
                                     const isLastElement = index === visibleDecisions.length - 1;
-                                    const isSelected = selectedDecisionIds.includes(String(decision.id));
+                                    const rowKey = decisionKey(decision);
+                                    const isSelected = selectedDecisionIds.includes(rowKey);
 
                                     return (
                                         <tr
-                                            key={`${decision.id}-${decision.detail.duration}`}
+                                            key={`${rowKey}-${decision.detail.duration}`}
                                             className={rowClasses}
                                             ref={isLastElement ? lastDecisionElementRef : null}
                                         >
@@ -940,13 +1051,19 @@ export function Decisions() {
                                                         aria-label={t('pages.decisions.selectDecision', { id: decision.id })}
                                                         checked={isSelected}
                                                         disabled={isExpired}
-                                                        onChange={() => toggleDecisionSelection(String(decision.id))}
+                                                        onChange={() => toggleDecisionSelection(rowKey)}
                                                         className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
                                                     />
                                                 </td>
                                             )}
                                             {visibleDecisionColumns.map((columnId) => {
                                                 switch (columnId) {
+                                                    case 'instance':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                                                                <Badge variant="secondary">{decision.instance_name || decision.instance_id || 'default'}</Badge>
+                                                            </td>
+                                                        );
                                                     case 'id':
                                                         return (
                                                             <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-900 dark:text-gray-100">
@@ -1036,7 +1153,10 @@ export function Decisions() {
                                                             <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm">
                                                                 {decision.detail.alert_id ? (
                                                                     <Link
-                                                                        to={`/alerts?id=${decision.detail.alert_id}`}
+                                                                        to={`/alerts?${new URLSearchParams({
+                                                                            id: String(decision.detail.alert_id),
+                                                                            instance: decision.instance_id || 'default',
+                                                                        }).toString()}`}
                                                                         className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors border border-primary-200 dark:border-primary-800"
                                                                         title={t('pages.decisions.viewAlert', { id: decision.detail.alert_id })}
                                                                     >
@@ -1072,7 +1192,7 @@ export function Decisions() {
                                                         <button
                                                             onClick={(e) => {
                                                                 e.stopPropagation();
-                                                                requestDelete(decision.id);
+                                                                requestDelete(decision);
                                                             }}
                                                             disabled={isExpired}
                                                             className={`transition-colors p-2 rounded-full relative z-10 cursor-pointer ${isExpired ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed bg-gray-100 dark:bg-gray-800' : 'text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20'}`}
@@ -1139,7 +1259,11 @@ export function Decisions() {
                         disabled={deleteInProgress}
                         className="px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                        {deleteInProgress ? t('common.deleting') : t('common.delete')}
+                        {deleteInProgress
+                            ? t('common.deleting')
+                            : retryCleanupInstances.length > 0
+                                ? 'Retry failed instances'
+                                : t('common.delete')}
                     </button>
                 </div>
             </Modal>
@@ -1204,7 +1328,11 @@ export function Decisions() {
                             disabled={addDecisionInProgress}
                             className="px-4 py-2 text-sm font-medium text-white bg-primary-600 border border-transparent rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                            {addDecisionInProgress ? t('pages.decisions.adding') : t('pages.decisions.addDecision')}
+                            {addDecisionInProgress
+                                ? t('pages.decisions.adding')
+                                : retryDecisionInstances.length > 0
+                                    ? 'Retry failed instances'
+                                    : t('pages.decisions.addDecision')}
                         </button>
                     </div>
                 </form>
