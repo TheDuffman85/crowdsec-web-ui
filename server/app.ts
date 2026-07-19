@@ -499,6 +499,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     timeZone: config.timeZone,
     timeFormat: config.timeFormat,
     instanceAware: config.instances.length > 1,
+    instances: config.instances.map((instance) => ({ id: instance.id, name: instance.name })),
   });
   const dashboardAuth = createDashboardAuth({
     config: config.dashboardAuth,

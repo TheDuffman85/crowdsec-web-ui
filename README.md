@@ -670,6 +670,8 @@ The **Notifications** page defines rules over locally cached CrowdSec data. Matc
 
 Every rule has a name, severity (`info`, `warning`, `critical`), incident-based deduplication, and one or more destination channels. Alert-based rules can filter scenario text, target text, and simulated alerts. `IP Ban` and `New Alert/Decision` rules also support exact IP and CIDR filters.
 
+In multi-instance mode, rules are evaluated against the shared cache for all configured instances. `Alert Spike`, `Alert Threshold`, and `Recent CVE` aggregate matching alerts across instances; `New Alert/Decision` and `IP Ban` evaluate each matching record; and `LAPI Availability` evaluates each instance separately. Instance-backed notification titles include the contributing instance name or names, and the same instance context is included in notification metadata. `Application Update` remains application-wide.
+
 | Rule type | Behavior |
 | --- | --- |
 | `Alert Spike` | Compares the current window with the previous window and triggers when percentage increase and minimum alert count are exceeded. |

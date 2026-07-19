@@ -46,6 +46,7 @@ function createAlert(id: number, createdAt: string, overrides: Partial<AlertReco
 function insertAlert(database: CrowdsecDatabase, alert: AlertRecord): void {
   database.insertAlert({
     $id: alert.id,
+    $instance_id: alert.instance_id,
     $uuid: alert.uuid || `alert-${alert.id}`,
     $created_at: alert.created_at,
     $scenario: alert.scenario,
@@ -74,6 +75,7 @@ function createDecision(id: string, createdAt: string, overrides: Partial<AlertD
 function insertDecision(database: CrowdsecDatabase, decision: AlertDecision & Record<string, unknown>): void {
   database.insertDecision({
     $id: String(decision.id),
+    $instance_id: typeof decision.instance_id === 'string' ? decision.instance_id : undefined,
     $uuid: String(decision.id),
     $alert_id: typeof decision.alert_id === 'string' || typeof decision.alert_id === 'number' ? decision.alert_id : 1,
     $created_at: String(decision.created_at || ''),
@@ -90,7 +92,10 @@ function createService(options: {
   fetchImpl?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
   updateChecker?: () => Promise<UpdateCheckResponse>;
   getLapiStatus?: () => LapiStatus;
+  getLapiStatuses?: () => Array<{ instanceId: string; instanceName: string; status: LapiStatus }>;
   debugPayloads?: boolean;
+  instanceAware?: boolean;
+  instances?: Array<{ id: string; name: string }>;
 } = {}) {
   const database = createTestDatabase();
   const service = createNotificationService({
@@ -98,12 +103,15 @@ function createService(options: {
     fetchImpl: options.fetchImpl,
     updateChecker: options.updateChecker,
     getLapiStatus: options.getLapiStatus,
+    getLapiStatuses: options.getLapiStatuses,
     outboundGuard: {
       assertHostAllowed: async () => {},
       assertUrlAllowed: async () => {},
     },
     secretStore: createNotificationSecretStore(),
     debugPayloads: options.debugPayloads,
+    instanceAware: options.instanceAware,
+    instances: options.instances,
   });
 
   return { database, service };
@@ -292,6 +300,44 @@ describe('notification incident deduplication', () => {
       first_seen_at: '2026-03-28T14:06:00.000Z',
       resolved_at: null,
     }));
+
+    database.close();
+  });
+
+  test('multi-instance threshold rules aggregate all instances and identify contributing instances', async () => {
+    const instances = [
+      { id: 'primary', name: 'Primary' },
+      { id: 'edge', name: 'Edge' },
+    ];
+    const { database, service } = createService({ instanceAware: true, instances });
+    await service.createRule({
+      name: 'Combined threshold',
+      type: 'alert-threshold',
+      enabled: true,
+      severity: 'warning',
+      channel_ids: [],
+      config: {
+        window_minutes: 60,
+        alert_threshold: 2,
+        filters: {},
+      },
+    });
+
+    insertAlert(database, createAlert(1, '2026-03-28T11:55:00.000Z', { instance_id: 'primary' }));
+    insertAlert(database, createAlert(2, '2026-03-28T11:56:00.000Z', { instance_id: 'edge' }));
+    await service.evaluateRules(new Date('2026-03-28T12:00:00.000Z'));
+
+    expect(service.listNotifications().data).toEqual([
+      expect.objectContaining({
+        title: '[Primary, Edge] Combined threshold: threshold exceeded',
+        message: '2 alerts matched in the last 60 minutes, crossing the threshold of 2.',
+        metadata: expect.objectContaining({
+          matched_alerts: 2,
+          instance_ids: ['primary', 'edge'],
+          instance_names: ['Primary', 'Edge'],
+        }),
+      }),
+    ]);
 
     database.close();
   });
@@ -696,6 +742,50 @@ describe('notification incident deduplication', () => {
     database.close();
   });
 
+  test('multi-instance per-record notifications identify the source instance by name', async () => {
+    const instances = [
+      { id: 'primary', name: 'Primary' },
+      { id: 'edge', name: 'Edge' },
+    ];
+    const { database, service } = createService({ instanceAware: true, instances });
+    await service.createRule({
+      name: 'New alerts',
+      type: 'new-alert-decision',
+      enabled: true,
+      severity: 'info',
+      channel_ids: [],
+      config: {
+        window_minutes: 5,
+        event_type: 'alert',
+        filters: {},
+      },
+    });
+
+    insertAlert(database, createAlert(7, '2026-03-28T11:58:00.000Z', {
+      instance_id: 'primary',
+      uuid: 'primary-alert-7',
+    }));
+    insertAlert(database, createAlert(7, '2026-03-28T11:59:00.000Z', {
+      instance_id: 'edge',
+      uuid: 'edge-alert-7',
+    }));
+    await service.evaluateRules(new Date('2026-03-28T12:00:00.000Z'));
+
+    expect(service.listNotifications().data).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        title: '[Primary] New alerts: new alert',
+        metadata: expect.objectContaining({ instance_id: 'primary', instance_name: 'Primary', alert_id: '7' }),
+      }),
+      expect.objectContaining({
+        title: '[Edge] New alerts: new alert',
+        metadata: expect.objectContaining({ instance_id: 'edge', instance_name: 'Edge', alert_id: '7' }),
+      }),
+    ]));
+    expect(service.listNotifications().data).toHaveLength(2);
+
+    database.close();
+  });
+
   test('IP ban rules reject invalid IP and range filter values', async () => {
     const { database, service } = createService();
 
@@ -843,6 +933,55 @@ describe('notification incident deduplication', () => {
         outage_duration_seconds: 70,
       }),
     }));
+
+    database.close();
+  });
+
+  test('multi-instance LAPI notifications identify each unavailable instance', async () => {
+    const instances = [
+      { id: 'primary', name: 'Primary' },
+      { id: 'edge', name: 'Edge' },
+    ];
+    const offlineStatus: LapiStatus = {
+      isConnected: false,
+      lastCheck: '2026-03-28T12:00:00.000Z',
+      lastError: 'Connection refused',
+      offline_since: '2026-03-28T11:59:00.000Z',
+    };
+    const { database, service } = createService({
+      instanceAware: true,
+      instances,
+      getLapiStatuses: () => instances.map((instance) => ({
+        instanceId: instance.id,
+        instanceName: instance.name,
+        status: offlineStatus,
+      })),
+    });
+    await service.createRule({
+      name: 'LAPI health',
+      type: 'lapi-availability',
+      enabled: true,
+      severity: 'critical',
+      channel_ids: [],
+      config: {
+        outage_threshold_seconds: 60,
+        notify_on_recovery: false,
+      },
+    });
+
+    await service.evaluateRules(new Date('2026-03-28T12:00:00.000Z'));
+
+    expect(service.listNotifications().data).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        title: '[Primary] LAPI health: LAPI unavailable',
+        metadata: expect.objectContaining({ instance_id: 'primary', instance_name: 'Primary' }),
+      }),
+      expect.objectContaining({
+        title: '[Edge] LAPI health: LAPI unavailable',
+        metadata: expect.objectContaining({ instance_id: 'edge', instance_name: 'Edge' }),
+      }),
+    ]));
+    expect(service.listNotifications().data).toHaveLength(2);
 
     database.close();
   });
