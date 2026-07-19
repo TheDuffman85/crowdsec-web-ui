@@ -120,6 +120,100 @@ You need a running CrowdSec instance and exactly one CrowdSec LAPI authenticatio
 >
 > Plaintext secrets are supported, but mounted secret files are recommended so credentials do not end up in source control, backups, or configuration-management logs.
 
+## Run with Docker (Recommended)
+
+The examples below use YAML configuration. The complete commented reference is [`config.example.yaml`](config.example.yaml).
+
+1. **Build the image**:
+
+   ```bash
+   docker build -t crowdsec-web-ui .
+   ```
+
+   For forks or private registries, set the image reference used by update checks:
+   ```bash
+   docker build --build-arg DOCKER_IMAGE_REF=my-registry/my-image -t crowdsec-web-ui .
+   ```
+
+> [!NOTE]
+> Current Docker images are based on Node.js rather than Bun, so the previous Bun/AVX-specific x64 runtime limitation no longer applies.
+
+2. **Create the configuration and run the container**:
+
+   Copy the example into the persistent data directory, edit it, and create `./secrets/crowdsec_password.txt` containing the generated watcher password.
+
+   ```bash
+   mkdir -p data secrets
+   cp config.example.yaml data/config.yaml
+   # Edit data/config.yaml, including the CrowdSec URL and username.
+   docker run -d \
+     --name crowdsec_web_ui \
+     -p 3000:3000 \
+     -v $(pwd)/data:/app/data \
+     -v $(pwd)/secrets/crowdsec_password.txt:/run/secrets/crowdsec_password:ro \
+     --network your_crowdsec_network \
+     crowdsec-web-ui
+   ```
+
+Ensure the container is on a Docker network that can reach the LAPI URL in `data/config.yaml`.
+
+A minimal `data/config.yaml` for watcher password authentication looks like this:
+
+```yaml
+instances:
+  - id: default
+    name: CrowdSec
+    lapi:
+      url: http://crowdsec:8080
+      auth:
+        type: password
+        username: crowdsec-web-ui
+        # password: your-crowdsec-password
+        password:
+          file: /run/secrets/crowdsec_password
+```
+
+### Docker Compose Example
+
+```yaml
+services:
+  crowdsec-web-ui:
+    image: ghcr.io/theduffman85/crowdsec-web-ui:latest
+    container_name: crowdsec_web_ui
+    ports:
+      - "3000:3000"
+    secrets:
+      - crowdsec_password
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
+secrets:
+  crowdsec_password:
+    file: ./secrets/crowdsec_password.txt
+```
+
+The repository ships the same layout in [`docker-compose.yml`](docker-compose.yml). Copy `config.example.yaml` to `data/config.yaml`, create `./secrets/crowdsec_password.txt`, and run `docker compose up -d`.
+
+### Docker Compose Example (mTLS Authentication)
+
+```yaml
+services:
+  crowdsec-web-ui:
+    image: ghcr.io/theduffman85/crowdsec-web-ui:latest
+    container_name: crowdsec_web_ui
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+      - /path/on/host/agent.pem:/certs/agent.pem:ro
+      - /path/on/host/agent-key.pem:/certs/agent-key.pem:ro
+      # - /path/on/host/ca.pem:/certs/ca.pem:ro
+    restart: unless-stopped
+```
+
+Configure the matching instance with `lapi.url: https://crowdsec:8080`, `lapi.auth.type: mtls`, `certFile`, `keyFile`, and optional `lapi.tls.caFile`; the complete shape is commented in [`config.example.yaml`](config.example.yaml).
+
 ## Configuration
 
 The application always uses YAML configuration. In Docker it loads `/app/data/config.yaml` by default; `CONFIG_FILE` is only needed to select a different path. Copy [`config.example.yaml`](config.example.yaml) to `data/config.yaml` for a complete, commented starting point. Configuration is loaded once during startup, so restart the process after changing the file or rotating a referenced secret.
@@ -229,84 +323,6 @@ Each `instances` entry supports:
 Durations use `ms`, `s`, `m`, `h`, or `d` suffixes, such as `500ms`, `30s`, `5m`, or `7d`. `server.basePath` is empty or starts with `/` without a trailing slash. Instance and endpoint IDs use lowercase letters, digits, `_`, and `-` and should remain stable after data has been imported.
 
 Per-instance `sync` may override `lookback`, `refreshInterval`, `idleRefreshInterval`, `idleThreshold`, `requestTimeout`, `heartbeatInterval`, `alertSyncChunk`, `alertSyncMinChunk`, `reconcileWindow`, `reconcileRecentAge`, `reconcileRecentInterval`, `reconcileActiveInterval`, `reconcileOldInterval`, `reconcileWindowsPerRefresh`, `bootstrapRetryDelay`, `bootstrapRetryEnabled`, and `bouncerPropagationDelay`. Metrics request timeouts are configured on each metrics endpoint.
-
-## Run with Docker (Recommended)
-
-The examples below use YAML configuration. The complete commented reference is [`config.example.yaml`](config.example.yaml).
-
-1. **Build the image**:
-
-   ```bash
-   docker build -t crowdsec-web-ui .
-   ```
-
-   For forks or private registries, set the image reference used by update checks:
-   ```bash
-   docker build --build-arg DOCKER_IMAGE_REF=my-registry/my-image -t crowdsec-web-ui .
-   ```
-
-> [!NOTE]
-> Current Docker images are based on Node.js rather than Bun, so the previous Bun/AVX-specific x64 runtime limitation no longer applies.
-
-2. **Create the configuration and run the container**:
-
-   Copy the example into the persistent data directory, edit it, and create `./secrets/crowdsec_password.txt` containing the generated watcher password.
-
-   ```bash
-   mkdir -p data secrets
-   cp config.example.yaml data/config.yaml
-   # Edit data/config.yaml, including the CrowdSec URL and username.
-   docker run -d \
-     --name crowdsec_web_ui \
-     -p 3000:3000 \
-     -v $(pwd)/data:/app/data \
-     -v $(pwd)/secrets/crowdsec_password.txt:/run/secrets/crowdsec_password:ro \
-     --network your_crowdsec_network \
-     crowdsec-web-ui
-   ```
-
-Ensure the container is on a Docker network that can reach the LAPI URL in `data/config.yaml`.
-
-### Docker Compose Example
-
-```yaml
-services:
-  crowdsec-web-ui:
-    image: ghcr.io/theduffman85/crowdsec-web-ui:latest
-    container_name: crowdsec_web_ui
-    ports:
-      - "3000:3000"
-    secrets:
-      - crowdsec_password
-    volumes:
-      - ./data:/app/data
-    restart: unless-stopped
-
-secrets:
-  crowdsec_password:
-    file: ./secrets/crowdsec_password.txt
-```
-
-The repository ships the same layout in [`docker-compose.yml`](docker-compose.yml). Copy `config.example.yaml` to `data/config.yaml`, create `./secrets/crowdsec_password.txt`, and run `docker compose up -d`.
-
-### Docker Compose Example (mTLS Authentication)
-
-```yaml
-services:
-  crowdsec-web-ui:
-    image: ghcr.io/theduffman85/crowdsec-web-ui:latest
-    container_name: crowdsec_web_ui
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./data:/app/data
-      - /path/on/host/agent.pem:/certs/agent.pem:ro
-      - /path/on/host/agent-key.pem:/certs/agent-key.pem:ro
-      # - /path/on/host/ca.pem:/certs/ca.pem:ro
-    restart: unless-stopped
-```
-
-Configure the matching instance with `lapi.url: https://crowdsec:8080`, `lapi.auth.type: mtls`, `certFile`, `keyFile`, and optional `lapi.tls.caFile`; the complete shape is commented in [`config.example.yaml`](config.example.yaml).
 
 ## Multiple CrowdSec instances
 
