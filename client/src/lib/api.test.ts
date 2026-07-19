@@ -18,6 +18,7 @@ import {
   fetchAlertsPaginated,
   fetchAlertsForStats,
   fetchConfig,
+  fetchCrowdsecMetrics,
   fetchDashboardStats,
   fetchDecisions,
   fetchDecisionsPaginated,
@@ -92,6 +93,81 @@ describe('api helpers', () => {
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/api/decisions?page=3&page_size=10&ip=1.2.3.4');
     expect(String(fetchMock.mock.calls[1]?.[0])).not.toContain('target=');
     expect(String(fetchMock.mock.calls[2]?.[0])).toContain('/api/notifications?page=4&page_size=20');
+  });
+
+  test('uses instance-aware resource paths and bulk reference payloads', async () => {
+    const fetchMock = vi.fn(async (
+      _input: Parameters<typeof fetch>[0],
+      _init?: Parameters<typeof fetch>[1],
+    ) => Response.json({ ok: true }));
+    mockFetch(fetchMock);
+
+    await expect(fetchAlert('alert/id', 'eu west')).resolves.toEqual({ ok: true });
+    await expect(deleteAlert('alert/id', 'eu west')).resolves.toEqual({ ok: true });
+    await expect(deleteDecision('decision/id', 'eu west')).resolves.toEqual({ ok: true });
+    await expect(fetchCrowdsecMetrics('eu west', 'lapi/main')).resolves.toEqual({ ok: true });
+    await expect(fetchCrowdsecMetrics()).resolves.toEqual({ ok: true });
+    await expect(bulkDeleteAlerts([{ instance_id: 'eu-west', id: 'alert-1' }])).resolves.toEqual({ ok: true });
+    await expect(bulkDeleteDecisions([{ instance_id: 'eu-west', id: 'decision-1' }])).resolves.toEqual({ ok: true });
+
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual(expect.arrayContaining([
+      '/api/instances/eu%20west/alerts/alert%2Fid',
+      '/api/instances/eu%20west/decisions/decision%2Fid',
+      '/api/instances/eu%20west/metrics/lapi%2Fmain',
+      '/api/metrics/crowdsec',
+    ]));
+    expect(fetchMock.mock.calls.map(([, init]) => init?.body)).toEqual(expect.arrayContaining([
+      JSON.stringify({ refs: [{ instance_id: 'eu-west', id: 'alert-1' }] }),
+      JSON.stringify({ refs: [{ instance_id: 'eu-west', id: 'decision-1' }] }),
+    ]));
+  });
+
+  test('combines cleanup results returned by multiple instances', async () => {
+    mockFetch(vi.fn(async () => Response.json({
+      results: [
+        {
+          instance_id: 'primary',
+          instance_name: 'Primary',
+          success: true,
+          result: {
+            requested_alerts: 2,
+            requested_decisions: 3,
+            deleted_alerts: 1,
+            deleted_decisions: 2,
+            failed: [{ kind: 'decision', id: 'decision-1', error: 'still active' }],
+          },
+        },
+        { instance_id: 'empty', instance_name: 'Empty', success: true },
+        { instance_id: 'offline', instance_name: 'Offline', success: false, error: 'unreachable' },
+        { instance_id: 'unknown', instance_name: 'Unknown', success: false },
+      ],
+      succeeded: 2,
+      failed: 2,
+    })));
+
+    await expect(cleanupByIp({ ip: '1.2.3.4', scope: 'all' })).resolves.toMatchObject({
+      requested_alerts: 2,
+      requested_decisions: 3,
+      deleted_alerts: 1,
+      deleted_decisions: 2,
+      ip: '1.2.3.4',
+      failed: [
+        { kind: 'decision', id: 'decision-1', error: 'Primary: still active' },
+        { kind: 'alert', id: '1.2.3.4', error: 'Offline: unreachable' },
+        { kind: 'alert', id: '1.2.3.4', error: 'Unknown: Failed' },
+      ],
+    });
+  });
+
+  test('accepts multi-instance add-decision error payloads', async () => {
+    const payload = {
+      results: [{ instance_id: 'offline', instance_name: 'Offline', success: false, error: 'unreachable' }],
+      succeeded: 0,
+      failed: 1,
+    };
+    mockFetch(vi.fn(async () => Response.json(payload, { status: 502 })));
+
+    await expect(addDecision({ ip: '1.2.3.4' })).resolves.toEqual(payload);
   });
 
   test('fetchDashboardStats handles empty filters and explicit request init', async () => {

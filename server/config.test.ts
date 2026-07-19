@@ -518,6 +518,23 @@ instances:
     }
   });
 
+  test('uses the working-directory data folder as the default configuration path', () => {
+    const workingDirectory = mkdtempSync(join(tmpdir(), 'crowdsec-web-ui-default-config-test-'));
+    tempDirs.push(workingDirectory);
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(workingDirectory);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfigImpl({ PORT: '4100' });
+      const generatedConfigFile = join(workingDirectory, 'data', 'config.yaml');
+      expect(config.port).toBe(4100);
+      expect(parseYaml(readFileSync(generatedConfigFile, 'utf8')).server.port).toBe(4100);
+      expect(log).toHaveBeenCalledWith(`Loaded application configuration from ${generatedConfigFile}.`);
+    } finally {
+      cwd.mockRestore();
+      log.mockRestore();
+    }
+  });
+
   test('loads an existing default configuration without overwriting it or applying legacy settings', () => {
     const generatedConfigFile = createMissingConfigPath();
     createRuntimeConfigImpl({ PORT: '4100' }, { defaultConfigFile: generatedConfigFile });
