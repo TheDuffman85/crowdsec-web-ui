@@ -62,25 +62,9 @@ path:focus {
   }
 }
 
-@keyframes world-map-attack-pulse {
-  0% {
-    opacity: 0.65;
-    transform: scale(1);
-  }
-
-  70%,
-  100% {
-    opacity: 0;
-    transform: scale(2.5);
-  }
-}
-
 .world-map-attack-pulse {
-  animation: world-map-attack-pulse 2.2s ease-out infinite;
   r: var(--world-map-attack-pulse-radius, 3px);
   stroke-width: var(--world-map-attack-pulse-stroke, 1px);
-  transform-box: fill-box;
-  transform-origin: center;
 }
 
 .world-map-attack-pulse-outline {
@@ -90,14 +74,4 @@ path:focus {
 .world-map-attack-dot {
   r: var(--world-map-attack-dot-radius, 2.5px);
   stroke-width: var(--world-map-attack-dot-stroke, 0.75px);
-}
-
-.world-map-attack-markers-paused .world-map-attack-pulse {
-  animation-play-state: paused;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .world-map-attack-pulse {
-    display: none;
-  }
 }

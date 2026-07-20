@@ -22,6 +22,15 @@ import { CountryFlag } from './CountryFlag';
 const geoUrl = assetUrl("/world-50m.json");
 const MAP_ANIMATION_STORAGE_KEY = 'crowdsec-web-ui:dashboard:map-animation-enabled';
 
+function getInitialAttackMarkerAnimationEnabled(): boolean {
+    const storedPreference = window.localStorage.getItem(MAP_ANIMATION_STORAGE_KEY);
+    if (storedPreference !== null) {
+        return storedPreference !== 'false';
+    }
+
+    return !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+}
+
 function setAttackMarkerVisualScale(element: SVGSVGElement | null, scale: number): void {
     if (!element || scale <= 0 || !Number.isFinite(scale)) return;
 
@@ -163,9 +172,7 @@ export function WorldMapCard({
     const [initialScale, setInitialScale] = useState(() => window.innerWidth < 800 ? 0.7 : 1.0);
     const mapTransformScaleRef = useRef(initialScale);
     const [tooltipEnabled, setTooltipEnabled] = useState(true);
-    const [animationEnabled, setAnimationEnabled] = useState(
-        () => window.localStorage.getItem(MAP_ANIMATION_STORAGE_KEY) !== 'false',
-    );
+    const [animationEnabled, setAnimationEnabled] = useState(getInitialAttackMarkerAnimationEnabled);
     const previousSelectedCountryRef = useRef<string | null>(selectedCountry);
     const touchTooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const tooltipRef = useRef<HTMLDivElement | null>(null);
@@ -515,6 +522,19 @@ export function WorldMapCard({
         return markers;
     }, [animationEnabled, attackLocations, geoFeatures.length, mapHeight, mapWidth, projectionScale]);
 
+    useEffect(() => {
+        const overlay = attackMarkerOverlayRef.current;
+        if (!overlay || typeof overlay.pauseAnimations !== 'function' || typeof overlay.unpauseAnimations !== 'function') {
+            return;
+        }
+
+        if (documentVisible) {
+            overlay.unpauseAnimations();
+        } else {
+            overlay.pauseAnimations();
+        }
+    }, [animationEnabled, attackMarkers.length, documentVisible]);
+
     const updateHoveredAttackMarker = useCallback((clientX: number, clientY: number) => {
         const overlay = attackMarkerOverlayRef.current;
         if (!overlay || attackMarkers.length === 0) {
@@ -803,22 +823,70 @@ export function WorldMapCard({
                                                         >
                                                             <circle
                                                                 className="world-map-attack-pulse world-map-attack-pulse-outline"
+                                                                cx="0"
+                                                                cy="0"
                                                                 r="3"
                                                                 fill="none"
                                                                 stroke="#7f1d1d"
                                                                 strokeWidth="2.5"
-                                                                style={{ animationDelay: `${-(index % 11) * 0.17}s` }}
-                                                            />
+                                                            >
+                                                                <animateTransform
+                                                                    attributeName="transform"
+                                                                    type="scale"
+                                                                    values="1;2.5;2.5"
+                                                                    keyTimes="0;0.7;1"
+                                                                    calcMode="spline"
+                                                                    keySplines="0 0 0.2 1;0 0 1 1"
+                                                                    dur="2.2s"
+                                                                    begin={`${-(index % 11) * 0.17}s`}
+                                                                    repeatCount="indefinite"
+                                                                />
+                                                                <animate
+                                                                    attributeName="opacity"
+                                                                    values="0.65;0;0"
+                                                                    keyTimes="0;0.7;1"
+                                                                    calcMode="spline"
+                                                                    keySplines="0 0 0.2 1;0 0 1 1"
+                                                                    dur="2.2s"
+                                                                    begin={`${-(index % 11) * 0.17}s`}
+                                                                    repeatCount="indefinite"
+                                                                />
+                                                            </circle>
                                                             <circle
                                                                 className="world-map-attack-pulse"
+                                                                cx="0"
+                                                                cy="0"
                                                                 r="3"
                                                                 fill="none"
                                                                 stroke="#ffffff"
                                                                 strokeWidth="1"
-                                                                style={{ animationDelay: `${-(index % 11) * 0.17}s` }}
-                                                            />
+                                                            >
+                                                                <animateTransform
+                                                                    attributeName="transform"
+                                                                    type="scale"
+                                                                    values="1;2.5;2.5"
+                                                                    keyTimes="0;0.7;1"
+                                                                    calcMode="spline"
+                                                                    keySplines="0 0 0.2 1;0 0 1 1"
+                                                                    dur="2.2s"
+                                                                    begin={`${-(index % 11) * 0.17}s`}
+                                                                    repeatCount="indefinite"
+                                                                />
+                                                                <animate
+                                                                    attributeName="opacity"
+                                                                    values="0.65;0;0"
+                                                                    keyTimes="0;0.7;1"
+                                                                    calcMode="spline"
+                                                                    keySplines="0 0 0.2 1;0 0 1 1"
+                                                                    dur="2.2s"
+                                                                    begin={`${-(index % 11) * 0.17}s`}
+                                                                    repeatCount="indefinite"
+                                                                />
+                                                            </circle>
                                                             <circle
                                                                 className="world-map-attack-dot"
+                                                                cx="0"
+                                                                cy="0"
                                                                 r="2.5"
                                                                 fill="#dc2626"
                                                                 stroke="#ffffff"

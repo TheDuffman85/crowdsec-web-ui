@@ -175,6 +175,9 @@ describe('WorldMapCard', () => {
     expect(berlinMarker).not.toBeNull();
     expect(overlay.querySelectorAll('[data-latitude]')).toHaveLength(1);
     expect(berlinMarker?.querySelectorAll('.world-map-attack-pulse')).toHaveLength(2);
+    expect(berlinMarker?.querySelectorAll('.world-map-attack-pulse[cx="0"][cy="0"]')).toHaveLength(2);
+    expect(berlinMarker?.querySelectorAll('animateTransform[attributeName="transform"][type="scale"]')).toHaveLength(2);
+    expect(berlinMarker?.querySelectorAll('animate[attributeName="opacity"]')).toHaveLength(2);
     expect(berlinMarker?.querySelector('.world-map-attack-pulse-outline')).toHaveAttribute('stroke', '#7f1d1d');
     expect(berlinMarker?.querySelector('.world-map-attack-pulse:not(.world-map-attack-pulse-outline)')).toHaveAttribute('stroke', '#ffffff');
     expect(berlinMarker?.querySelector('.world-map-attack-dot')).toHaveAttribute('fill', '#dc2626');
@@ -337,6 +340,49 @@ describe('WorldMapCard', () => {
     unmount();
     render(<WorldMapCard data={[]} onCountrySelect={vi.fn()} selectedCountry={null} />);
     expect(screen.getByRole('switch', { name: 'Attack markers' })).toHaveAttribute('aria-checked', 'false');
+  });
+
+  test('defaults attack markers off for reduced motion but honors an explicit opt-in', async () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({
+      matches: true,
+      media: '(prefers-reduced-motion: reduce)',
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+
+    const { unmount } = render(
+      <WorldMapCard
+        data={[{ label: 'Germany', countryCode: 'DE', count: 2 }]}
+        attackLocations={[{ latitude: 52.52, longitude: 13.405, count: 2, liveCount: 2, simulatedCount: 0 }]}
+        onCountrySelect={vi.fn()}
+        selectedCountry={null}
+      />,
+    );
+
+    const toggle = screen.getByRole('switch', { name: 'Attack markers' });
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+    expect(screen.queryByTestId('world-map-attack-markers')).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    const overlay = await screen.findByTestId('world-map-attack-markers');
+    expect(overlay.querySelectorAll('.world-map-attack-pulse')).toHaveLength(2);
+    await waitFor(() => expect(window.localStorage.getItem('crowdsec-web-ui:dashboard:map-animation-enabled')).toBe('true'));
+
+    unmount();
+    render(
+      <WorldMapCard
+        data={[{ label: 'Germany', countryCode: 'DE', count: 2 }]}
+        attackLocations={[{ latitude: 52.52, longitude: 13.405, count: 2, liveCount: 2, simulatedCount: 0 }]}
+        onCountrySelect={vi.fn()}
+        selectedCountry={null}
+      />,
+    );
+    expect(await screen.findByTestId('world-map-attack-markers')).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Attack markers' })).toHaveAttribute('aria-checked', 'true');
   });
 
   test('does not remount the choropleth when selectedCountry changes', async () => {
