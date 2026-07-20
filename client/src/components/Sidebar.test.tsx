@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { Sidebar } from './Sidebar';
 import { useNotificationUnreadCount } from '../contexts/useNotificationUnreadCount';
+import { I18nContext } from '../lib/i18n';
 
 const { refreshNowMock } = vi.hoisted(() => ({ refreshNowMock: vi.fn() }));
 
@@ -23,8 +24,8 @@ vi.mock('../contexts/useNotificationUnreadCount', () => ({
   useNotificationUnreadCount: vi.fn(),
 }));
 
-function renderSidebar() {
-  return render(
+function renderSidebar(translations?: Record<string, string>) {
+  const sidebar = (
     <MemoryRouter>
       <Sidebar
         isOpen
@@ -33,7 +34,21 @@ function renderSidebar() {
         theme="dark"
         toggleTheme={vi.fn()}
       />
-    </MemoryRouter>,
+    </MemoryRouter>
+  );
+
+  return render(
+    translations ? (
+      <I18nContext.Provider value={{
+        language: 'de',
+        preference: 'de',
+        browserLanguage: 'en',
+        setLanguagePreference: vi.fn(),
+        t: (key) => translations[key] ?? key,
+      }}>
+        {sidebar}
+      </I18nContext.Provider>
+    ) : sidebar,
   );
 }
 
@@ -154,6 +169,36 @@ describe('Sidebar', () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/config'), undefined));
     expect(screen.queryByRole('link', { name: 'Metrics' })).not.toBeInTheDocument();
+  });
+
+  test('translates the multi-instance selector label and all-instances option', async () => {
+    vi.mocked(useNotificationUnreadCount).mockReturnValue({
+      unreadCount: 0,
+      setUnreadCount: vi.fn(),
+      refreshUnreadCount: vi.fn(),
+    });
+    fetchMock.mockImplementation(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/config')) {
+        return Response.json({
+          metrics_enabled: false,
+          metrics_sidebar_visible: true,
+          instances: [
+            { id: 'primary', name: 'Primary' },
+            { id: 'secondary', name: 'Secondary' },
+          ],
+        });
+      }
+      return Response.json({ update_available: false });
+    });
+
+    renderSidebar({
+      'components.sidebar.instance': 'Instanz',
+      'components.sidebar.allInstances': 'Alle Instanzen',
+    });
+
+    const selector = await screen.findByRole('combobox', { name: 'Instanz' });
+    expect(selector).toHaveDisplayValue('▦ Alle Instanzen');
   });
 
   test('identifies load-test mode instead of showing regular build metadata', async () => {

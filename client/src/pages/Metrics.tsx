@@ -856,7 +856,7 @@ export function Metrics() {
         <div className="flex flex-wrap gap-3 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
           {showInstanceSelector && (
             <label className="flex min-w-52 flex-col gap-1 text-sm font-medium text-gray-700 dark:text-gray-200">
-              Instance
+              {t('pages.metrics.instance')}
               <select
                 value={selectedInstance?.id || ''}
                 onChange={(event) => {
@@ -877,7 +877,7 @@ export function Metrics() {
           )}
           {showEndpointSelector && selectedInstance && (
             <label className="flex min-w-52 flex-col gap-1 text-sm font-medium text-gray-700 dark:text-gray-200">
-              Metrics endpoint
+              {t('pages.metrics.metricsEndpoint')}
               <select
                 value={requestedEndpointId || selectedInstance.prometheus[0].id}
                 onChange={(event) => {

@@ -305,7 +305,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
             {instances.length > 1 && (
                 <div className="px-4 pb-3">
                     <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500" htmlFor="crowdsec-instance-selector">
-                        Instance
+                        {t('components.sidebar.instance')}
                     </label>
                     <select
                         id="crowdsec-instance-selector"
@@ -313,7 +313,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                         onChange={(event) => changeInstance(event.target.value)}
                         className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
                     >
-                        <option value="all">▦ All instances</option>
+                        <option value="all">▦ {t('components.sidebar.allInstances')}</option>
                         {instances.map((instance) => (
                             <option key={instance.id} value={instance.id}>
                                 {instance.icon ? `${instance.icon} ` : ''}{instance.name}

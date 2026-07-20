@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { Metrics } from './Metrics';
 import type { CrowdsecMetricsResponse } from '../types';
+import { I18nContext } from '../lib/i18n';
 
 const {
   fetchConfigMock,
@@ -138,6 +139,43 @@ describe('Metrics page', () => {
     render(<Metrics />);
     await waitFor(() => expect(screen.getByLabelText('Instance')).toBeInTheDocument());
     expect(screen.queryByLabelText('Metrics endpoint')).not.toBeInTheDocument();
+  });
+
+  test('translates the instance and endpoint selector labels', async () => {
+    fetchConfigMock.mockResolvedValue({
+      metrics_enabled: true,
+      instances: [
+        {
+          id: 'primary',
+          name: 'Primary',
+          prometheus: [{ id: 'lapi', name: 'LAPI' }, { id: 'engine', name: 'Engine' }],
+        },
+        {
+          id: 'secondary',
+          name: 'Secondary',
+          prometheus: [{ id: 'lapi', name: 'LAPI' }],
+        },
+      ],
+    });
+    fetchCrowdsecMetricsMock.mockResolvedValue(buildMetricsResponse());
+
+    render(
+      <I18nContext.Provider value={{
+        language: 'de',
+        preference: 'de',
+        browserLanguage: 'en',
+        setLanguagePreference: vi.fn(),
+        t: (key) => ({
+          'pages.metrics.instance': 'Instanz',
+          'pages.metrics.metricsEndpoint': 'Metrik-Endpunkt',
+        })[key] ?? key,
+      }}>
+        <Metrics />
+      </I18nContext.Provider>,
+    );
+
+    expect(await screen.findByLabelText('Instanz')).toBeInTheDocument();
+    expect(screen.getByLabelText('Metrik-Endpunkt')).toBeInTheDocument();
   });
 
   test('renders Grafana-inspired runtime sections', async () => {
