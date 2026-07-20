@@ -783,7 +783,7 @@ export function Metrics() {
             {t('pages.metrics.disabledTitle')}{' '}
             {t('pages.metrics.disabledPrefix')}{' '}
             <code className="rounded bg-amber-100 px-1 py-0.5 font-mono text-xs dark:bg-amber-900/50">
-              CROWDSEC_PROMETHEUS_URL
+              CONFIG_INSTANCE_METRICS_URL
             </code>{' '}
             {t('pages.metrics.disabledMiddle')}{' '}
             <code className="rounded bg-amber-100 px-1 py-0.5 font-mono text-xs dark:bg-amber-900/50">full</code>{' '}

@@ -1104,7 +1104,7 @@ export function createDashboardAuth(options: {
       const user = database.getAuthUserById(session.userId);
       if (!user?.password_hash) return context.json({ error: 'No password set for this account' }, 400);
       if (config.totpSeed) {
-        return context.json({ error: 'TOTP is configured by AUTH_TOTP_SEED and cannot be disabled from Settings' }, 400);
+        return context.json({ error: 'TOTP is managed by the application configuration and cannot be disabled from Settings' }, 400);
       }
       if (!user.totp_enabled || !user.totp_secret) return context.json({ error: 'TOTP is not enabled for this account' }, 400);
       if (!await verifyPassword(currentPassword, user.password_hash)) {

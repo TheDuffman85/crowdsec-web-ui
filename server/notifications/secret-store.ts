@@ -27,7 +27,7 @@ export function createNotificationSecretStore(secretKey?: string): NotificationS
         return payload;
       }
       if (!encryptionKey) {
-        throw new Error('NOTIFICATION_SECRET_KEY is required to save notification destinations with secrets');
+        throw new Error('A notification secret key is required to save notification destinations with secrets');
       }
 
       const iv = crypto.randomBytes(12);
@@ -49,7 +49,7 @@ export function createNotificationSecretStore(secretKey?: string): NotificationS
       }
 
       if (!encryptionKey) {
-        throw new Error('NOTIFICATION_SECRET_KEY is required to load encrypted notification destinations');
+        throw new Error('A notification secret key is required to load encrypted notification destinations');
       }
 
       try {

@@ -438,7 +438,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
     const config = provider.normalizeConfig(parsedConfig.config as Record<string, AlertMetaValue>);
     const configuredSecrets = provider.getConfiguredSecrets(config);
     if (configuredSecrets.length > 0 && !parsedConfig.isEncrypted && !secretStore.hasKey()) {
-      throw new Error('NOTIFICATION_SECRET_KEY is required to load notification destinations with saved secrets');
+      throw new Error('A notification secret key is required to load notification destinations with saved secrets');
     }
     return {
       id: String(row.id),

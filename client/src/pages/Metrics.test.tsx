@@ -84,6 +84,20 @@ beforeEach(() => {
 });
 
 describe('Metrics page', () => {
+  test('shows the current per-instance metrics configuration when no endpoint is configured', async () => {
+    fetchConfigMock.mockResolvedValue({
+      metrics_enabled: false,
+      instances: [{ id: 'primary', name: 'Primary', prometheus: [] }],
+    });
+
+    render(<Metrics />);
+
+    expect(await screen.findByText('CONFIG_INSTANCE_METRICS_URL')).toBeInTheDocument();
+    expect(screen.getByText(/no metrics endpoint is configured/i)).toBeInTheDocument();
+    expect(screen.queryByText('CROWDSEC_PROMETHEUS_URL')).not.toBeInTheDocument();
+    expect(fetchCrowdsecMetricsMock).not.toHaveBeenCalled();
+  });
+
   test('hides selectors when only one instance and one endpoint are configured', async () => {
     fetchConfigMock.mockResolvedValue({
       metrics_enabled: true,

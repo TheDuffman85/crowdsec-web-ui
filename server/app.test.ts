@@ -1098,7 +1098,7 @@ test('dashboard auth enforces an environment-configured TOTP seed for the passwo
   }));
   expect(disableTotp.status).toBe(400);
   expect(await disableTotp.json()).toMatchObject({
-    error: 'TOTP is configured by AUTH_TOTP_SEED and cannot be disabled from Settings',
+    error: 'TOTP is managed by the application configuration and cannot be disabled from Settings',
   });
 });
 
