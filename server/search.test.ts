@@ -125,6 +125,18 @@ describe('shared search compiler', () => {
     expect(compiled.predicate({ ...baseAlert, simulated: true })).toBe(false);
   });
 
+  test('distinguishes broad and exact text field matches', () => {
+    const broad = compileAlertSearch('scenario:crowdsecurity/ssh');
+    const exact = compileAlertSearch('scenario=crowdsecurity/ssh');
+    const exactFull = compileAlertSearch('scenario=crowdsecurity/ssh-bf');
+    const notExact = compileAlertSearch('scenario<>crowdsecurity/ssh');
+
+    expect(broad.ok && broad.predicate(baseAlert)).toBe(true);
+    expect(exact.ok && exact.predicate(baseAlert)).toBe(false);
+    expect(exactFull.ok && exactFull.predicate(baseAlert)).toBe(true);
+    expect(notExact.ok && notExact.predicate(baseAlert)).toBe(true);
+  });
+
   test('matches empty alert fields with quoted empty values', () => {
     const emptyOrigin = compileAlertSearch('origin:""', { originEnabled: true });
     const nonEmptyOrigin = compileAlertSearch('origin<>""', { originEnabled: true });

@@ -563,6 +563,44 @@ const decisionFieldMatchers: DecisionFieldMatcherMap = {
   origin: (decision, value) => includesNormalized(decision.detail.origin, value),
 };
 
+const alertExactFieldMatchers: AlertFieldMatcherMap = {
+  id: (alert, value) => equalsNormalized(alert.id, value),
+  instance: (alert, value) => [alert.instance_id, alert.instance_name].some((candidate) => equalsNormalized(candidate, value)),
+  scenario: (alert, value) => equalsNormalized(alert.scenario, value),
+  message: (alert, value) => equalsNormalized(alert.message, value),
+  ip: (alert, value) => getAlertSourceValues(alert).some((candidate) => equalsNormalized(candidate, value)),
+  country: (alert, value) => matchesCountryFieldExact(alert.source?.cn || '', value),
+  region: (alert, value) => equalsNormalized(alert.source?.region, value),
+  city: (alert, value) => equalsNormalized(alert.source?.city, value),
+  as: (alert, value) => equalsNormalized(alert.source?.as_name, value),
+  target: (alert, value) => equalsNormalized(alert.target, value),
+  date: (alert, value) => equalsNormalized(alert.created_at, value),
+  sim: alertFieldMatchers.sim,
+  machine: (alert, value) => equalsNormalized(resolveMachineName(alert), value),
+  origin: (alert, value) => collectDistinctOrigins(alert.decisions).some((origin) => equalsNormalized(origin, value)),
+};
+
+const decisionExactFieldMatchers: DecisionFieldMatcherMap = {
+  id: (decision, value) => equalsNormalized(decision.id, value),
+  instance: (decision, value) => [decision.instance_id, decision.instance_name].some((candidate) => equalsNormalized(candidate, value)),
+  alert: (decision, value) => equalsNormalized(decision.detail.alert_id, value),
+  scenario: (decision, value) => equalsNormalized(decision.detail.reason || decision.scenario, value),
+  ip: (decision, value) => equalsNormalized(decision.value, value),
+  country: (decision, value) => matchesCountryFieldExact(decision.detail.country || '', value),
+  region: (decision, value) => equalsNormalized(decision.detail.region, value),
+  city: (decision, value) => equalsNormalized(decision.detail.city, value),
+  as: (decision, value) => equalsNormalized(decision.detail.as, value),
+  target: (decision, value) => equalsNormalized(decision.detail.target, value),
+  date: (decision, value) => equalsNormalized(decision.created_at, value),
+  action: (decision, value) => equalsNormalized(decision.detail.action, value),
+  type: (decision, value) => equalsNormalized(decision.detail.type, value),
+  status: decisionFieldMatchers.status,
+  duplicate: decisionFieldMatchers.duplicate,
+  sim: decisionFieldMatchers.sim,
+  machine: (decision, value) => equalsNormalized(decision.machine, value),
+  origin: (decision, value) => equalsNormalized(decision.detail.origin, value),
+};
+
 const alertFieldEmptyMatchers: AlertFieldEmptyMatcherMap = {
   id: () => false,
   instance: (alert) => isEmptyValue(alert.instance_id),
@@ -656,6 +694,7 @@ export function compileAlertSearch(
       parsed.ast,
       alert,
       alertFieldMatchers,
+      alertExactFieldMatchers,
       alertFieldEmptyMatchers,
       matchAlertFreeText,
       undefined,
@@ -684,6 +723,7 @@ export function compileDecisionSearch(
       parsed.ast,
       decision,
       decisionFieldMatchers,
+      decisionExactFieldMatchers,
       decisionFieldEmptyMatchers,
       matchDecisionFreeText,
       undefined,
@@ -1289,6 +1329,7 @@ function evaluateNode<T>(
   node: SearchNode,
   item: T,
   fieldMatchers: Record<string, (item: T, value: string) => boolean>,
+  exactFieldMatchers: Record<string, (item: T, value: string) => boolean>,
   fieldEmptyMatchers: Record<string, (item: T) => boolean>,
   freeTextMatcher: (item: T, value: string) => boolean,
   scopedField?: string,
@@ -1304,18 +1345,18 @@ function evaluateNode<T>(
       }
       return freeTextMatcher(item, node.value);
     case 'comparison':
-      return compareFieldValue(item, node.field, node.operator, node.value, fieldMatchers, fieldEmptyMatchers, dateOptions);
+      return compareFieldValue(item, node.field, node.operator, node.value, exactFieldMatchers, fieldEmptyMatchers, dateOptions);
     case 'field':
-      return evaluateNode(node.expression, item, fieldMatchers, fieldEmptyMatchers, freeTextMatcher, node.field, dateOptions);
+      return evaluateNode(node.expression, item, fieldMatchers, exactFieldMatchers, fieldEmptyMatchers, freeTextMatcher, node.field, dateOptions);
     case 'not':
-      return !evaluateNode(node.expression, item, fieldMatchers, fieldEmptyMatchers, freeTextMatcher, scopedField, dateOptions);
+      return !evaluateNode(node.expression, item, fieldMatchers, exactFieldMatchers, fieldEmptyMatchers, freeTextMatcher, scopedField, dateOptions);
     case 'binary':
       if (node.operator === 'AND') {
-        return evaluateNode(node.left, item, fieldMatchers, fieldEmptyMatchers, freeTextMatcher, scopedField, dateOptions) &&
-          evaluateNode(node.right, item, fieldMatchers, fieldEmptyMatchers, freeTextMatcher, scopedField, dateOptions);
+        return evaluateNode(node.left, item, fieldMatchers, exactFieldMatchers, fieldEmptyMatchers, freeTextMatcher, scopedField, dateOptions) &&
+          evaluateNode(node.right, item, fieldMatchers, exactFieldMatchers, fieldEmptyMatchers, freeTextMatcher, scopedField, dateOptions);
       }
-      return evaluateNode(node.left, item, fieldMatchers, fieldEmptyMatchers, freeTextMatcher, scopedField, dateOptions) ||
-        evaluateNode(node.right, item, fieldMatchers, fieldEmptyMatchers, freeTextMatcher, scopedField, dateOptions);
+      return evaluateNode(node.left, item, fieldMatchers, exactFieldMatchers, fieldEmptyMatchers, freeTextMatcher, scopedField, dateOptions) ||
+        evaluateNode(node.right, item, fieldMatchers, exactFieldMatchers, fieldEmptyMatchers, freeTextMatcher, scopedField, dateOptions);
     default:
       return false;
   }
@@ -1454,6 +1495,10 @@ function includesNormalized(candidate: string | number | null | undefined, value
   return normalizeValue(candidate).includes(normalizeValue(value));
 }
 
+function equalsNormalized(candidate: string | number | null | undefined, value: string): boolean {
+  return normalizeValue(candidate) === normalizeValue(value);
+}
+
 function normalizeValue(value: string | number | null | undefined): string {
   if (value === undefined || value === null) {
     return '';
@@ -1481,6 +1526,14 @@ function matchesCountryField(countryCode: string, value: string): boolean {
   }
 
   return normalizedName.includes(normalizedValue) || normalizedCode === normalizedValue;
+}
+
+function matchesCountryFieldExact(countryCode: string, value: string): boolean {
+  const normalizedValue = normalizeValue(value);
+  if (!normalizedValue) {
+    return false;
+  }
+  return normalizeValue(countryCode) === normalizedValue || normalizeValue(getCountryName(countryCode)) === normalizedValue;
 }
 
 function getCountryName(code?: string | null): string {

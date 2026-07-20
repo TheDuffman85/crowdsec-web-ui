@@ -265,6 +265,7 @@ describe('CrowdsecDatabase', () => {
     expect(db.countAlerts()).toBe(1);
     expect(db.searchIndexAvailable).toBe(true);
     expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts WHERE alerts_fts MATCH ?').get('alert') as { count: number }).count).toBe(1);
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts WHERE alerts_fts MATCH ?').get('ler') as { count: number }).count).toBe(1);
     expect(db.getAlertsSince('2024-12-31T00:00:00.000Z')).toHaveLength(1);
     expect(db.getActiveDecisions('2025-01-01T00:00:00.000Z')).toHaveLength(1);
     expect(db.getDecisionById('10')?.stop_at).toBe('2030-01-01T00:00:00.000Z');
@@ -291,6 +292,28 @@ describe('CrowdsecDatabase', () => {
     expect(db.getActiveDecisions('2025-01-01T00:00:00.000Z')).toHaveLength(0);
     expect(db.countAlerts()).toBe(0);
 
+    db.close();
+  });
+
+  test('only excludes the literal dup_ prefix when selecting an active decision', () => {
+    const db = createTestDatabase();
+    const insert = (id: string, stopAt: string) => db.insertDecision({
+      $id: id,
+      $uuid: id,
+      $alert_id: 1,
+      $created_at: '2026-01-01T00:00:00.000Z',
+      $stop_at: stopAt,
+      $value: '198.51.100.42',
+      $type: 'ban',
+      $origin: 'crowdsec',
+      $scenario: 'crowdsecurity/test',
+      $raw_data: JSON.stringify({ id, value: '198.51.100.42', stop_at: stopAt }),
+    });
+    insert('real', '2027-01-02T00:00:00.000Z');
+    insert('dup_1', '2027-01-04T00:00:00.000Z');
+    insert('dupX1', '2027-01-03T00:00:00.000Z');
+
+    expect(db.getActiveDecisionByValue('198.51.100.42', '2026-01-01T00:00:00.000Z')?.id).toBe('dupX1');
     db.close();
   });
 
@@ -972,6 +995,38 @@ describe('CrowdsecDatabase', () => {
       FROM decision_fts_rows AS search_rows
       JOIN decisions_fts ON decisions_fts.rowid = search_rows.fts_rowid
     `).all()).toEqual([{ decision_id: 'legacy-search-row' }]);
+    db.close();
+  });
+
+  test('migrates legacy search indexes to trigram substring indexes', () => {
+    const dbPath = createTestDatabasePath();
+    let db = new CrowdsecDatabase({ dbPath });
+    db.insertAlert({
+      $id: 1,
+      $uuid: 'legacy-search-alert',
+      $created_at: '2026-01-01T00:00:00.000Z',
+      $scenario: 'crowdsecurity/netgear_rce',
+      $source_ip: '198.51.100.42',
+      $message: 'legacy search alert',
+      $raw_data: JSON.stringify({ id: 1, scenario: 'crowdsecurity/netgear_rce' }),
+    });
+    db.close();
+
+    const legacy = new Database(dbPath);
+    legacy.exec(`
+      DROP TABLE alerts_fts;
+      DROP TABLE decisions_fts;
+      DROP TABLE decision_fts_rows;
+      CREATE VIRTUAL TABLE alerts_fts USING fts5(alert_id UNINDEXED, search_text, tokenize = 'unicode61');
+      CREATE VIRTUAL TABLE decisions_fts USING fts5(decision_id UNINDEXED, search_text, tokenize = 'unicode61');
+      CREATE TABLE decision_fts_rows(decision_id TEXT PRIMARY KEY, fts_rowid INTEGER NOT NULL UNIQUE);
+    `);
+    legacy.close();
+
+    db = new CrowdsecDatabase({ dbPath });
+    const definition = db.db.prepare("SELECT sql FROM sqlite_master WHERE name = 'alerts_fts'").get() as { sql: string };
+    expect(definition.sql).toMatch(/tokenize\s*=\s*'trigram'/i);
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts WHERE alerts_fts MATCH ?').get('gear_r') as { count: number }).count).toBe(1);
     db.close();
   });
 

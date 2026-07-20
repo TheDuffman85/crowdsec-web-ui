@@ -4774,13 +4774,13 @@ ${errorSummary}  Status: ${syncSummary.state}
       if (/^[a-z]{2}$/i.test(country)) {
         where.add('country = ?', country.toUpperCase());
       } else {
-        where.add('(LOWER(country) LIKE ? OR LOWER(country_name) LIKE ?)', likeParam(country), likeParam(country));
+        where.add("(LOWER(country) LIKE ? ESCAPE '\\' OR LOWER(country_name) LIKE ? ESCAPE '\\')", likeParam(country), likeParam(country));
       }
     }
     if (filters.scenario) addLike(where, 'LOWER(scenario)', filters.scenario);
     if (filters.as) addLike(where, 'LOWER(as_name)', filters.as);
     if (filters.target) addLike(where, 'LOWER(target)', filters.target);
-    if (filters.date) where.add('created_at LIKE ?', `${escapeLike(filters.date)}%`);
+    if (filters.date) where.add("created_at LIKE ? ESCAPE '\\'", `${escapeLike(filters.date)}%`);
     addDateRangeFilter(where, 'created_at', filters.dateStart, filters.dateEnd, filters.timezoneOffsetMinutes, filters.timeZone);
     addSimulationFilter(where, filters.simulation);
   }
@@ -4800,7 +4800,7 @@ ${errorSummary}  Status: ${syncSummary.state}
     if (filters.as) where.add('as_name = ?', filters.as);
     if (filters.ip) addIpCondition(where, 'value', filters.ip);
     if (filters.target) {
-      where.add('(LOWER(value) LIKE ? OR LOWER(target) LIKE ?)', likeParam(filters.target), likeParam(filters.target));
+      where.add("(LOWER(value) LIKE ? ESCAPE '\\' OR LOWER(target) LIKE ? ESCAPE '\\')", likeParam(filters.target), likeParam(filters.target));
     }
     addDateRangeFilter(where, 'created_at', filters.dateStart, filters.dateEnd, filters.timezoneOffsetMinutes, filters.timeZone);
   }
@@ -4832,7 +4832,7 @@ ${errorSummary}  Status: ${syncSummary.state}
     return compileSearchNodeSql(ast, {
       page: 'alerts',
       dateOptions: filters,
-      fieldCondition: (field, value) => alertFieldCondition(field, value, config.instances),
+      fieldCondition: (field, value, exact) => alertFieldCondition(field, value, config.instances, exact),
       freeTextCondition: (value) => freeTextSearchCondition('alerts', value, database.searchIndexAvailable),
     });
   }
@@ -4845,7 +4845,7 @@ ${errorSummary}  Status: ${syncSummary.state}
     return compileSearchNodeSql(ast, {
       page: 'decisions',
       dateOptions: filters,
-      fieldCondition: (field, value) => decisionFieldCondition(field, value, now, config.instances),
+      fieldCondition: (field, value, exact) => decisionFieldCondition(field, value, now, config.instances, exact),
       // The default decision view contains only one row per duplicate group.
       // Scanning that small indexed set is substantially cheaper than asking
       // FTS to materialize every matching duplicate ID from large blocklists.
@@ -5628,7 +5628,7 @@ function isDecisionSearchCoveredByFilterIndex(node: SearchNode, fieldContext = f
 }
 
 function addLike(where: SqlWhere, columnSql: string, value: string): void {
-  where.add(`${columnSql} LIKE ?`, likeParam(value));
+  where.add(`${columnSql} LIKE ? ESCAPE '\\'`, likeParam(value));
 }
 
 function addIpCondition(where: SqlWhere, column: string, value: string): void {
@@ -5637,20 +5637,33 @@ function addIpCondition(where: SqlWhere, column: string, value: string): void {
     where.add(`${column} = ?`, normalized);
     return;
   }
-  where.add(`(matches_ip_search_value(${column}, ?) = 1 OR LOWER(${column}) LIKE ?)`, value, likeParam(value));
+  where.add(`(matches_ip_search_value(${column}, ?) = 1 OR LOWER(${column}) LIKE ? ESCAPE '\\')`, value, likeParam(value));
 }
 
-function textCondition(columnSql: string, value: string): SqlCondition {
-  return { sql: `${columnSql} LIKE ?`, params: [likeParam(value)] };
+function textCondition(columnSql: string, value: string, exact = false): SqlCondition {
+  const normalizedColumn = `COALESCE(${columnSql}, '')`;
+  return exact
+    ? { sql: `${normalizedColumn} = ?`, params: [value.trim().toLowerCase()] }
+    : { sql: `${normalizedColumn} LIKE ? ESCAPE '\\'`, params: [likeParam(value)] };
 }
 
-function ipCondition(column: string, value: string): SqlCondition {
+function spaceSeparatedTextCondition(column: string, value: string): SqlCondition {
+  return {
+    sql: `(' ' || COALESCE(LOWER(${column}), '') || ' ') LIKE ? ESCAPE '\\'`,
+    params: [`% ${escapeLike(value.trim().toLowerCase())} %`],
+  };
+}
+
+function ipCondition(column: string, value: string, exact = false): SqlCondition {
   const normalized = value.trim().toLowerCase();
+  if (exact) {
+    return { sql: `COALESCE(LOWER(${column}), '') = ?`, params: [normalized] };
+  }
   if (isIP(normalized) !== 0) {
     return { sql: `${column} = ?`, params: [normalized] };
   }
   return {
-    sql: `(matches_ip_search_value(${column}, ?) = 1 OR LOWER(${column}) LIKE ?)`,
+    sql: `(matches_ip_search_value(${column}, ?) = 1 OR COALESCE(LOWER(${column}), '') LIKE ? ESCAPE '\\')`,
     params: [value, likeParam(value)],
   };
 }
@@ -5683,6 +5696,7 @@ function alertFieldCondition(
   field: string,
   value: string,
   instances: ReadonlyArray<{ id: string; name: string }>,
+  exact = false,
 ): SqlCondition {
   if (value.trim() === '') {
     return alertEmptyFieldCondition(field);
@@ -5692,31 +5706,31 @@ function alertFieldCondition(
     case 'id':
       return { sql: 'CAST(upstream_id AS TEXT) = ?', params: [value] };
     case 'instance':
-      return instanceFieldCondition(value, instances);
+      return instanceFieldCondition(value, instances, exact);
     case 'scenario':
-      return textCondition('LOWER(scenario)', value);
+      return textCondition('LOWER(scenario)', value, exact);
     case 'message':
-      return textCondition('LOWER(message)', value);
+      return textCondition('LOWER(message)', value, exact);
     case 'ip':
-      return ipCondition('source_ip', value);
+      return ipCondition('source_ip', value, exact);
     case 'country':
-      return countryCondition(value);
+      return countryCondition(value, exact);
     case 'region':
-      return textCondition('LOWER(region)', value);
+      return textCondition('LOWER(region)', value, exact);
     case 'city':
-      return textCondition('LOWER(city)', value);
+      return textCondition('LOWER(city)', value, exact);
     case 'as':
-      return textCondition('LOWER(as_name)', value);
+      return textCondition('LOWER(as_name)', value, exact);
     case 'target':
-      return textCondition('LOWER(target)', value);
+      return textCondition('LOWER(target)', value, exact);
     case 'date':
-      return textCondition('LOWER(created_at)', value);
+      return textCondition('LOWER(created_at)', value, exact);
     case 'sim':
       return simulationTermCondition(value);
     case 'machine':
-      return textCondition('LOWER(machine)', value);
+      return textCondition('LOWER(machine)', value, exact);
     case 'origin':
-      return textCondition('LOWER(origins)', value);
+      return exact ? spaceSeparatedTextCondition('origins', value) : textCondition('LOWER(origins)', value);
     default:
       return { sql: '0 = 1', params: [] };
   }
@@ -5727,6 +5741,7 @@ function decisionFieldCondition(
   value: string,
   now: string,
   instances: ReadonlyArray<{ id: string; name: string }>,
+  exact = false,
 ): SqlCondition {
   if (value.trim() === '') {
     return decisionEmptyFieldCondition(field);
@@ -5736,28 +5751,28 @@ function decisionFieldCondition(
     case 'id':
       return { sql: 'CAST(upstream_id AS TEXT) = ?', params: [value] };
     case 'instance':
-      return instanceFieldCondition(value, instances);
+      return instanceFieldCondition(value, instances, exact);
     case 'alert':
       return { sql: 'alert_upstream_id = ?', params: [value] };
     case 'scenario':
-      return textCondition('LOWER(scenario)', value);
+      return textCondition('LOWER(scenario)', value, exact);
     case 'ip':
-      return ipCondition('value', value);
+      return ipCondition('value', value, exact);
     case 'country':
-      return countryCondition(value);
+      return countryCondition(value, exact);
     case 'region':
-      return textCondition('LOWER(region)', value);
+      return textCondition('LOWER(region)', value, exact);
     case 'city':
-      return textCondition('LOWER(city)', value);
+      return textCondition('LOWER(city)', value, exact);
     case 'as':
-      return textCondition('LOWER(as_name)', value);
+      return textCondition('LOWER(as_name)', value, exact);
     case 'target':
-      return textCondition('LOWER(target)', value);
+      return textCondition('LOWER(target)', value, exact);
     case 'date':
-      return textCondition('LOWER(created_at)', value);
+      return textCondition('LOWER(created_at)', value, exact);
     case 'action':
     case 'type':
-      return textCondition('LOWER(type)', value);
+      return textCondition('LOWER(type)', value, exact);
     case 'status':
       return decisionStatusCondition(value, now);
     case 'duplicate':
@@ -5765,9 +5780,9 @@ function decisionFieldCondition(
     case 'sim':
       return simulationTermCondition(value);
     case 'machine':
-      return textCondition('LOWER(machine)', value);
+      return textCondition('LOWER(machine)', value, exact);
     case 'origin':
-      return textCondition('LOWER(origin)', value);
+      return textCondition('LOWER(origin)', value, exact);
     default:
       return { sql: '0 = 1', params: [] };
   }
@@ -5776,12 +5791,15 @@ function decisionFieldCondition(
 function instanceFieldCondition(
   value: string,
   instances: ReadonlyArray<{ id: string; name: string }>,
+  exact = false,
 ): SqlCondition {
   const normalized = value.trim().toLowerCase();
   if (!normalized) return { sql: '0 = 1', params: [] };
 
   const matchingIds = instances
-    .filter((instance) => `${instance.id} ${instance.name}`.trim().toLowerCase().includes(normalized))
+    .filter((instance) => exact
+      ? [instance.id, instance.name].some((candidate) => candidate.trim().toLowerCase() === normalized)
+      : `${instance.id} ${instance.name}`.trim().toLowerCase().includes(normalized))
     .map((instance) => instance.id);
   if (matchingIds.length === 0) return { sql: '0 = 1', params: [] };
 
@@ -5857,13 +5875,19 @@ function emptyTextCondition(columnSql: string): SqlCondition {
   return { sql: `COALESCE(TRIM(${columnSql}), '') = ''`, params: [] };
 }
 
-function countryCondition(value: string): SqlCondition {
+function countryCondition(value: string, exact = false): SqlCondition {
   const normalized = value.trim().toLowerCase();
+  if (exact) {
+    return {
+      sql: "(COALESCE(LOWER(country_name), '') = ? OR COALESCE(LOWER(country), '') = ?)",
+      params: [normalized, normalized],
+    };
+  }
   if (/^[a-z]{2}$/.test(normalized)) {
     return { sql: 'country = ?', params: [normalized.toUpperCase()] };
   }
   return {
-    sql: '(LOWER(country_name) LIKE ? OR LOWER(country) = ?)',
+    sql: "(COALESCE(LOWER(country_name), '') LIKE ? ESCAPE '\\' OR COALESCE(LOWER(country), '') = ?)",
     params: [likeParam(value), normalized],
   };
 }
@@ -5942,7 +5966,7 @@ function compileSearchNodeSql(
   context: {
     page: SearchPageForSql;
     dateOptions: { timezoneOffsetMinutes: number; timeZone: string | null };
-    fieldCondition: (field: string, value: string) => SqlCondition;
+    fieldCondition: (field: string, value: string, exact?: boolean) => SqlCondition;
     freeTextCondition: (value: string) => SqlCondition;
   },
   scopedField?: string,
@@ -5960,7 +5984,7 @@ function compileSearchNodeSql(
     if (node.field === 'sim') {
       return simulationComparisonCondition(node.operator, node.value);
     }
-    const condition = context.fieldCondition(node.field, node.value);
+    const condition = context.fieldCondition(node.field, node.value, true);
     if (node.operator === '<>') {
       return { sql: `NOT (${condition.sql})`, params: condition.params };
     }
@@ -6064,15 +6088,9 @@ function escapeLike(value: string): string {
 }
 
 function toFtsQuery(value: string): string | null {
-  const terms = value
-    .trim()
-    .toLowerCase()
-    .split(/[^a-z0-9_./:-]+/i)
-    .map((term) => term.trim())
-    .filter(Boolean)
-    .slice(0, 8);
-  if (terms.length === 0) return null;
-  return terms.map((term) => `"${term.replace(/"/g, '""')}"`).join(' AND ');
+  const normalized = value.trim().toLowerCase();
+  if (Array.from(normalized).length < 3) return null;
+  return `"${normalized.replace(/"/g, '""')}"`;
 }
 
 function loadMetricsSidebarVisible(database: CrowdsecDatabase): boolean {
