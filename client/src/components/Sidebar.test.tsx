@@ -198,7 +198,12 @@ describe('Sidebar', () => {
     });
 
     const selector = await screen.findByRole('combobox', { name: 'Instanz' });
-    expect(selector).toHaveDisplayValue('▦ Alle Instanzen');
+    expect(selector).toHaveTextContent('Alle Instanzen');
+    expect(selector.querySelector('.lucide-boxes')).toBeInTheDocument();
+
+    await userEvent.click(selector);
+    const allInstances = screen.getByRole('option', { name: 'Alle Instanzen' });
+    expect(allInstances.querySelector('.lucide-boxes')).toBeInTheDocument();
   });
 
   test('identifies load-test mode instead of showing regular build metadata', async () => {

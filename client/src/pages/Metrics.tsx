@@ -22,6 +22,7 @@ import { fetchConfig, fetchCrowdsecMetrics } from '../lib/api';
 import { useRefresh } from '../contexts/useRefresh';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
 import { Switch } from '../components/ui/Switch';
+import { DropdownSelect } from '../components/ui/DropdownSelect';
 import { useI18n } from '../lib/i18n';
 import type {
   CrowdsecMetricsApiEntity,
@@ -875,13 +876,17 @@ export function Metrics() {
     <div className="space-y-6">
       {showEndpointSelector && selectedChoice && (
         <div className="flex flex-wrap gap-3 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-          <label className="flex min-w-52 flex-col gap-1 text-sm font-medium text-gray-700 dark:text-gray-200">
-            {t('pages.metrics.metricsEndpoint')}
-            <select
+          <div className="w-64 max-w-full">
+            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500" htmlFor="metrics-endpoint-selector">
+              {t('pages.metrics.metricsEndpoint')}
+            </label>
+            <DropdownSelect
+              id="metrics-endpoint-selector"
+              label={t('pages.metrics.metricsEndpoint')}
               value={`${selectedChoice.instance.id}:${selectedChoice.endpoint.id}`}
-              onChange={(event) => {
+              onChange={(value) => {
                 const choice = endpointChoices.find(({ instance, endpoint }) =>
-                  `${instance.id}:${endpoint.id}` === event.target.value,
+                  `${instance.id}:${endpoint.id}` === value,
                 );
                 if (!choice) return;
                 const next = new URLSearchParams(searchParams);
@@ -893,17 +898,15 @@ export function Metrics() {
                 }
                 setSearchParams(next);
               }}
-              className="rounded-md border border-gray-300 bg-white px-3 py-2 dark:border-gray-600 dark:bg-gray-900"
-            >
-              {endpointChoices.map(({ instance, endpoint }) => (
-                <option key={`${instance.id}:${endpoint.id}`} value={`${instance.id}:${endpoint.id}`}>
-                  {instanceScope === 'all'
-                    ? `${instance.icon ? `${instance.icon} ` : ''}${instance.name} — ${endpoint.name}`
-                    : endpoint.name}
-                </option>
-              ))}
-            </select>
-          </label>
+              options={endpointChoices.map(({ instance, endpoint }) => ({
+                value: `${instance.id}:${endpoint.id}`,
+                label: instanceScope === 'all' ? `${instance.name} — ${endpoint.name}` : endpoint.name,
+                icon: instanceScope === 'all' && instance.icon
+                  ? <span aria-hidden="true">{instance.icon}</span>
+                  : undefined,
+              }))}
+            />
+          </div>
         </div>
       )}
       {content}

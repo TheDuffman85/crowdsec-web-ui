@@ -1,5 +1,5 @@
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { LayoutDashboard, ShieldAlert, Gavel, Bell, X, Sun, Moon, ArrowUpCircle, BarChart3, Menu, PanelLeftClose, Settings as SettingsIcon, LogOut, RefreshCw, ChevronDown } from "lucide-react";
+import { LayoutDashboard, ShieldAlert, Gavel, Bell, X, Sun, Moon, ArrowUpCircle, BarChart3, Menu, PanelLeftClose, Settings as SettingsIcon, LogOut, RefreshCw, ChevronDown, Boxes } from "lucide-react";
 import { Badge } from "./ui/Badge";
 import { useAuth } from "../contexts/AuthContext";
 import { useNotificationUnreadCount } from "../contexts/useNotificationUnreadCount";
@@ -12,6 +12,7 @@ import { useI18n } from "../lib/i18n";
 import { useDateTime } from "../lib/dateTime";
 import { useOptionalToast } from "../contexts/useToast";
 import { Modal } from "./ui/Modal";
+import { DropdownSelect } from "./ui/DropdownSelect";
 import type { ManualRefreshMode } from "../types";
 
 type ThemeMode = 'light' | 'dark';
@@ -307,19 +308,24 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                     <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500" htmlFor="crowdsec-instance-selector">
                         {t('components.sidebar.instance')}
                     </label>
-                    <select
+                    <DropdownSelect
                         id="crowdsec-instance-selector"
+                        label={t('components.sidebar.instance')}
                         value={currentInstance}
-                        onChange={(event) => changeInstance(event.target.value)}
-                        className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
-                    >
-                        <option value="all">▦ {t('components.sidebar.allInstances')}</option>
-                        {instances.map((instance) => (
-                            <option key={instance.id} value={instance.id}>
-                                {instance.icon ? `${instance.icon} ` : ''}{instance.name}
-                            </option>
-                        ))}
-                    </select>
+                        onChange={changeInstance}
+                        options={[
+                            {
+                                value: 'all',
+                                label: t('components.sidebar.allInstances'),
+                                icon: <Boxes className="h-4 w-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />,
+                            },
+                            ...instances.map((instance) => ({
+                                value: instance.id,
+                                label: instance.name,
+                                icon: instance.icon ? <span aria-hidden="true">{instance.icon}</span> : undefined,
+                            })),
+                        ]}
+                    />
                 </div>
             )}
             <nav className="flex-1 px-4 space-y-2">

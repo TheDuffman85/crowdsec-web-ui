@@ -150,8 +150,8 @@ describe('Metrics page', () => {
     fetchConfigMock.mockResolvedValue({
       metrics_enabled: true,
       instances: [
-        { id: 'primary', name: 'Primary', prometheus: [{ id: 'lapi', name: 'Primary LAPI' }] },
-        { id: 'secondary', name: 'Secondary', prometheus: [{ id: 'lapi', name: 'Secondary LAPI' }] },
+        { id: 'primary', name: 'Primary', icon: '🟦', prometheus: [{ id: 'lapi', name: 'Primary LAPI' }] },
+        { id: 'secondary', name: 'Secondary', icon: '🟩', prometheus: [{ id: 'lapi', name: 'Secondary LAPI' }] },
       ],
     });
     fetchCrowdsecMetricsMock.mockResolvedValue(buildMetricsResponse());
@@ -161,10 +161,12 @@ describe('Metrics page', () => {
 
     const endpointSelector = await screen.findByLabelText('Metrics endpoint');
     expect(screen.queryByLabelText('Instance')).not.toBeInTheDocument();
+    await userEvent.click(endpointSelector);
     expect(screen.getByRole('option', { name: 'Primary — Primary LAPI' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Secondary — Secondary LAPI' })).toBeInTheDocument();
+    const secondaryOption = screen.getByRole('option', { name: 'Secondary — Secondary LAPI' });
+    expect(secondaryOption).toHaveTextContent('🟩');
 
-    await userEvent.selectOptions(endpointSelector, 'secondary:lapi');
+    await userEvent.click(secondaryOption);
     await waitFor(() => expect(fetchCrowdsecMetricsMock).toHaveBeenLastCalledWith('secondary', 'lapi'));
     expect(new URLSearchParams(window.location.search).get('instance')).toBe('all');
   });
