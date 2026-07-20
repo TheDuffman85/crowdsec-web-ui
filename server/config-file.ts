@@ -281,6 +281,89 @@ function has(env: NodeJS.ProcessEnv, name: string): boolean {
   return Object.prototype.hasOwnProperty.call(env, name);
 }
 
+const INITIAL_CONFIG_HEADER = [
+  'This file was created automatically because no application config existed.',
+  'Commented settings show the defaults that applied when the file was created.',
+  'While a setting remains commented out, the application uses its current default,',
+  'so defaults may change when the application is updated. Uncomment a setting to',
+  'manage and pin its value. After creation, this file is the user\'s responsibility;',
+  'the application does not update these comments or defaults automatically.',
+] as const;
+
+const LEGACY_GENERATED_CONFIG_PATHS = [
+  ['PORT', ['server', 'port']],
+  ['BASE_PATH', ['server', 'basePath']],
+  ['DB_DIR', ['storage', 'dataDir']],
+  ['GEONAMES_DUMP_DIR', ['storage', 'geonamesDir']],
+  ['TZ', ['ui', 'timeZone']],
+  ['TIME_FORMAT', ['ui', 'timeFormat']],
+  ['CROWDSEC_TIME_FORMAT', ['ui', 'timeFormat']],
+  ['PERMISSION_READ_ONLY', ['ui', 'readOnly']],
+  ['AUTH_ENABLED', ['auth', 'enabled']],
+  ['CROWDSEC_AUTH_ENABLED', ['auth', 'enabled']],
+  ['AUTH_SECRET', ['auth', 'sessionSecret']],
+  ['AUTH_SECRET_FILE', ['auth', 'sessionSecret']],
+  ['CROWDSEC_AUTH_SECRET', ['auth', 'sessionSecret']],
+  ['CROWDSEC_AUTH_SECRET_FILE', ['auth', 'sessionSecret']],
+  ['AUTH_TOTP_SECRET', ['auth', 'totpSecret']],
+  ['AUTH_TOTP_SECRET_FILE', ['auth', 'totpSecret']],
+  ['CROWDSEC_AUTH_TOTP_SECRET', ['auth', 'totpSecret']],
+  ['CROWDSEC_AUTH_TOTP_SECRET_FILE', ['auth', 'totpSecret']],
+  ['AUTH_TOTP_SEED', ['auth', 'totpSeed']],
+  ['AUTH_TOTP_SEED_FILE', ['auth', 'totpSeed']],
+  ['CROWDSEC_AUTH_TOTP_SEED', ['auth', 'totpSeed']],
+  ['CROWDSEC_AUTH_TOTP_SEED_FILE', ['auth', 'totpSeed']],
+  ['AUTH_OIDC_ISSUER_URL', ['auth', 'oidc', 'issuerUrl']],
+  ['CROWDSEC_AUTH_OIDC_ISSUER_URL', ['auth', 'oidc', 'issuerUrl']],
+  ['AUTH_OIDC_CLIENT_ID', ['auth', 'oidc', 'clientId']],
+  ['CROWDSEC_AUTH_OIDC_CLIENT_ID', ['auth', 'oidc', 'clientId']],
+  ['AUTH_OIDC_CLIENT_SECRET', ['auth', 'oidc', 'clientSecret']],
+  ['AUTH_OIDC_CLIENT_SECRET_FILE', ['auth', 'oidc', 'clientSecret']],
+  ['CROWDSEC_AUTH_OIDC_CLIENT_SECRET', ['auth', 'oidc', 'clientSecret']],
+  ['CROWDSEC_AUTH_OIDC_CLIENT_SECRET_FILE', ['auth', 'oidc', 'clientSecret']],
+  ['AUTH_OIDC_SCOPE', ['auth', 'oidc', 'scope']],
+  ['CROWDSEC_AUTH_OIDC_SCOPE', ['auth', 'oidc', 'scope']],
+  ['AUTH_OIDC_GROUPS_CLAIM', ['auth', 'oidc', 'groupsClaim']],
+  ['CROWDSEC_AUTH_OIDC_GROUPS_CLAIM', ['auth', 'oidc', 'groupsClaim']],
+  ['AUTH_OIDC_ADMIN_GROUPS', ['auth', 'oidc', 'adminGroups']],
+  ['CROWDSEC_AUTH_OIDC_ADMIN_GROUPS', ['auth', 'oidc', 'adminGroups']],
+  ['AUTH_OIDC_READ_ONLY_GROUPS', ['auth', 'oidc', 'readOnlyGroups']],
+  ['CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS', ['auth', 'oidc', 'readOnlyGroups']],
+  ['AUTH_OIDC_UNMATCHED_ROLE', ['auth', 'oidc', 'unmatchedRole']],
+  ['CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE', ['auth', 'oidc', 'unmatchedRole']],
+  ['NOTIFICATION_SECRET_KEY', ['notifications', 'secretKey']],
+  ['NOTIFICATION_SECRET_KEY_FILE', ['notifications', 'secretKey']],
+  ['NOTIFICATION_ALLOW_PRIVATE_ADDRESSES', ['notifications', 'allowPrivateAddresses']],
+  ['NOTIFICATION_DEBUG_PAYLOADS', ['notifications', 'debugPayloads']],
+  ['CROWDSEC_SIMULATIONS_ENABLED', ['crowdsec', 'simulationsEnabled']],
+  ['CROWDSEC_ALERT_INCLUDE_ORIGINS', ['crowdsec', 'alertFilters', 'includeOrigins']],
+  ['CROWDSEC_ALERT_EXCLUDE_ORIGINS', ['crowdsec', 'alertFilters', 'excludeOrigins']],
+  ['CROWDSEC_ALERT_INCLUDE_CAPI', ['crowdsec', 'alertFilters', 'includeCapi']],
+  ['CROWDSEC_ALERT_INCLUDE_ORIGIN_EMPTY', ['crowdsec', 'alertFilters', 'includeOriginEmpty']],
+  ['CROWDSEC_ALERT_EXCLUDE_ORIGIN_EMPTY', ['crowdsec', 'alertFilters', 'excludeOriginEmpty']],
+  ['CROWDSEC_ALERT_ORIGINS', ['crowdsec', 'alertFilters', 'legacy', 'origins']],
+  ['CROWDSEC_ALERT_EXTRA_SCENARIOS', ['crowdsec', 'alertFilters', 'legacy', 'extraScenarios']],
+  ['CROWDSEC_LOOKBACK_PERIOD', ['crowdsec', 'sync', 'lookback']],
+  ['CROWDSEC_REFRESH_INTERVAL', ['crowdsec', 'sync', 'refreshInterval']],
+  ['CROWDSEC_MANUAL_REFRESH_ENABLED', ['crowdsec', 'sync', 'manualRefreshEnabled']],
+  ['CROWDSEC_IDLE_REFRESH_INTERVAL', ['crowdsec', 'sync', 'idleRefreshInterval']],
+  ['CROWDSEC_IDLE_THRESHOLD', ['crowdsec', 'sync', 'idleThreshold']],
+  ['CROWDSEC_LAPI_REQUEST_TIMEOUT', ['crowdsec', 'sync', 'requestTimeout']],
+  ['CROWDSEC_BOUNCER_PROPAGATION_DELAY', ['crowdsec', 'sync', 'bouncerPropagationDelay']],
+  ['CROWDSEC_PROMETHEUS_REQUEST_TIMEOUT', ['crowdsec', 'sync', 'metricsRequestTimeout']],
+  ['CROWDSEC_HEARTBEAT_INTERVAL', ['crowdsec', 'sync', 'heartbeatInterval']],
+  ['CROWDSEC_ALERT_SYNC_CHUNK', ['crowdsec', 'sync', 'alertSyncChunk']],
+  ['CROWDSEC_ALERT_SYNC_MIN_CHUNK', ['crowdsec', 'sync', 'alertSyncMinChunk']],
+  ['CROWDSEC_RECONCILE_WINDOW', ['crowdsec', 'sync', 'reconcileWindow']],
+  ['CROWDSEC_RECONCILE_RECENT_AGE', ['crowdsec', 'sync', 'reconcileRecentAge']],
+  ['CROWDSEC_RECONCILE_RECENT_INTERVAL', ['crowdsec', 'sync', 'reconcileRecentInterval']],
+  ['CROWDSEC_RECONCILE_ACTIVE_INTERVAL', ['crowdsec', 'sync', 'reconcileActiveInterval']],
+  ['CROWDSEC_RECONCILE_OLD_INTERVAL', ['crowdsec', 'sync', 'reconcileOldInterval']],
+  ['CROWDSEC_RECONCILE_WINDOWS_PER_REFRESH', ['crowdsec', 'sync', 'reconcileWindowsPerRefresh']],
+  ['CROWDSEC_BOOTSTRAP_RETRY_DELAY', ['crowdsec', 'sync', 'bootstrapRetryDelay']],
+  ['CROWDSEC_BOOTSTRAP_RETRY_ENABLED', ['crowdsec', 'sync', 'bootstrapRetryEnabled']],
+] as const satisfies readonly (readonly [string, ConfigPath])[];
+
 function secretReference(env: NodeJS.ProcessEnv, canonical: string, legacy?: string): UnknownRecord | undefined {
   for (const name of [canonical, legacy].filter((value): value is string => Boolean(value))) {
     if (has(env, name)) return { env: name };
@@ -840,10 +923,103 @@ export function mergeApplicationConfigEnvironment(file: string, env: NodeJS.Proc
   };
 }
 
-export function saveApplicationConfig(file: string, document: UnknownRecord): boolean {
+function sameConfigPath(left: ConfigPath, right: ConfigPath): boolean {
+  return left.length === right.length && left.every((part, index) => part === right[index]);
+}
+
+function configPathStartsWith(path: ConfigPath, prefix: ConfigPath): boolean {
+  return prefix.length <= path.length && prefix.every((part, index) => part === path[index]);
+}
+
+function initialExplicitConfigPaths(env: NodeJS.ProcessEnv): ConfigPath[] {
+  // Unlike the optional application sections, at least one complete instance
+  // definition is required for the generated file to remain loadable.
+  const paths: ConfigPath[] = [['instances']];
+  for (const [name, path] of LEGACY_GENERATED_CONFIG_PATHS) {
+    if (has(env, name)) paths.push(path);
+  }
+  for (const [name, path] of [...CONFIG_SECTION_ENV, ...CONFIG_VALUE_ENV]) {
+    if (has(env, name)) paths.push(path);
+  }
+  for (const [name, path] of CONFIG_SECRET_ENV) {
+    if (has(env, name) || has(env, `${name}_FILE`)) paths.push(path);
+  }
+  for (const override of indexedConfigOverrides(env)) {
+    const arrayPath = CONFIG_ARRAY_ENV.find(([, candidate]) => (
+      configPathStartsWith(override.path, candidate)
+      && typeof override.path[candidate.length] === 'number'
+    ))?.[1];
+    paths.push(arrayPath || override.path);
+  }
+  return paths.filter((path, index) => paths.findIndex((candidate) => sameConfigPath(candidate, path)) === index);
+}
+
+function indentYaml(yaml: string, indentation: number): string[] {
+  const prefix = ' '.repeat(indentation);
+  return yaml.trimEnd().split('\n').map((line) => `${prefix}${line}`);
+}
+
+function commentYaml(yaml: string, indentation: number): string[] {
+  const prefix = ' '.repeat(indentation);
+  return yaml.trimEnd().split('\n').map((line) => `${prefix}#${line ? ` ${line}` : ''}`);
+}
+
+function stringifyConfigEntry(key: string, value: unknown): string {
+  return stringifyYaml({ [key]: value }, { lineWidth: 0 });
+}
+
+function renderInitialConfigMap(
+  value: UnknownRecord,
+  path: ConfigPath,
+  indentation: number,
+  explicitPaths: readonly ConfigPath[],
+): { lines: string[]; active: boolean } {
+  const lines: string[] = [];
+  let active = false;
+  for (const [key, child] of Object.entries(value)) {
+    const childPath: ConfigPath = [...path, key];
+    const explicitlyActive = explicitPaths.some((explicitPath) => configPathStartsWith(childPath, explicitPath));
+    const hasExplicitDescendant = explicitPaths.some((explicitPath) => configPathStartsWith(explicitPath, childPath));
+
+    if (explicitlyActive) {
+      lines.push(...indentYaml(stringifyConfigEntry(key, child), indentation));
+      active = true;
+      continue;
+    }
+
+    if (hasExplicitDescendant && child && typeof child === 'object' && !Array.isArray(child)) {
+      const rendered = renderInitialConfigMap(child as UnknownRecord, childPath, indentation + 2, explicitPaths);
+      if (rendered.active) {
+        lines.push(`${' '.repeat(indentation)}${key}:`, ...rendered.lines);
+        active = true;
+        continue;
+      }
+    }
+
+    lines.push(...commentYaml(stringifyConfigEntry(key, child), indentation));
+  }
+  return { lines, active };
+}
+
+function stringifyInitialApplicationConfig(document: UnknownRecord, env: NodeJS.ProcessEnv): string {
+  const explicitPaths = initialExplicitConfigPaths(env);
+  const rendered = renderInitialConfigMap(document, [], 0, explicitPaths);
+  const header = INITIAL_CONFIG_HEADER.map((line) => `# ${line}`).join('\n');
+  const body = rendered.active ? rendered.lines.join('\n') : '{}';
+  return `${header}\n\n${body}\n`;
+}
+
+export function saveApplicationConfig(
+  file: string,
+  document: UnknownRecord,
+  initialEnvironment?: NodeJS.ProcessEnv,
+): boolean {
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, stringifyYaml(document, { lineWidth: 0 }), {
+    const yaml = initialEnvironment
+      ? stringifyInitialApplicationConfig(document, initialEnvironment)
+      : stringifyYaml(document, { lineWidth: 0 });
+    fs.writeFileSync(file, yaml, {
       encoding: 'utf8',
       flag: 'wx',
       mode: 0o600,

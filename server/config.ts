@@ -524,7 +524,7 @@ export function createRuntimeConfig(
     const legacyConfig = createRuntimeConfigFromEnvironment(env);
     const generatedConfig = applyConfigSetupEnvironment(generateApplicationConfig(env, legacyConfig), env);
     parseApplicationConfig(generatedConfig, env);
-    migrated = saveApplicationConfig(configFile, generatedConfig);
+    migrated = saveApplicationConfig(configFile, generatedConfig, env);
     if (migrated) console.log(`Saved generated configuration to ${configFile}.`);
   }
 

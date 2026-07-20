@@ -489,10 +489,18 @@ instances:
       const saved = readFileSync(generatedConfigFile, 'utf8');
       expect(saved).not.toContain('do-not-write-this-password');
       expect(saved).not.toContain('do-not-write-this-auth-secret');
+      expect(saved).toContain('# This file was created automatically because no application config existed.');
+      expect(saved).toContain('server:\n  port: 4100\n  # basePath: ""');
+      expect(saved).toContain('# storage:\n#   dataDir: /app/data');
+      expect(saved).toContain('    refreshInterval: 5m');
+      expect(saved).toContain('    # lookback: 168h');
       const document = parseYaml(saved);
       expect(document.auth.sessionSecret).toEqual({ env: 'AUTH_SECRET' });
       expect(document.instances[0].lapi.auth.password).toEqual({ env: 'CROWDSEC_PASSWORD' });
       expect(document.server.port).toBe(4100);
+      expect(document.server.basePath).toBeUndefined();
+      expect(document.storage).toBeUndefined();
+      expect(document.crowdsec.sync.lookback).toBeUndefined();
       expect(statSync(generatedConfigFile).mode & 0o777).toBe(0o600);
       expect(warn).toHaveBeenCalledWith(expect.stringMatching(/migrated into the generated YAML.*config\.yaml.*now authoritative.*variables no longer affect/i));
       expect(log).toHaveBeenCalledWith(expect.stringMatching(/Saved generated configuration.*config\.yaml/i));
@@ -570,6 +578,11 @@ instances:
       expect(saved).not.toContain('do-not-write-this-password');
       expect(saved).not.toContain('do-not-write-this-auth-secret');
       expect(saved).not.toContain('do-not-write-this-token');
+      expect(saved).toContain('# This file was created automatically because no application config existed.');
+      expect(saved).toContain('  basePath: /security');
+      expect(saved).toContain('  # enabled: auto');
+      expect(saved).toContain('  walEnabled: false');
+      expect(saved).toContain('  # geonamesDir:');
       const document = parseYaml(saved);
       expect(document.server).toEqual({ port: 4200, basePath: '/security' });
       expect(document.storage.walEnabled).toBe(false);
@@ -590,6 +603,22 @@ instances:
       expect(log).toHaveBeenCalledWith(`Saved generated configuration to ${generatedConfigFile}.`);
     } finally {
       warn.mockRestore();
+      log.mockRestore();
+    }
+  });
+
+  test('keeps explicitly supplied values active even when they equal the current default', () => {
+    const generatedConfigFile = createMissingConfigPath();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfigImpl({
+        CONFIG_SERVER_PORT: '3000',
+      }, { defaultConfigFile: generatedConfigFile });
+      const saved = readFileSync(generatedConfigFile, 'utf8');
+      expect(config.port).toBe(3000);
+      expect(saved).toContain('server:\n  port: 3000\n  # basePath: ""');
+      expect(parseYaml(saved).server).toEqual({ port: 3000 });
+    } finally {
       log.mockRestore();
     }
   });
@@ -693,6 +722,7 @@ instances:
       expect(persisted.instances[0].metrics[0]).toMatchObject({ id: '0', name: 'Metrics 0' });
       expect(persisted.instances[0].metrics[0].auth.type).toBe('none');
       expect(readFileSync(configFile, 'utf8')).toContain('# This comment should survive environment merges.');
+      expect(readFileSync(configFile, 'utf8')).not.toContain('This file was created automatically');
 
       const withoutAuth = createRuntimeConfigImpl({
         CONFIG_FILE: configFile,
