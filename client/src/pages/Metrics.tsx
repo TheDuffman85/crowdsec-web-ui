@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Activity,
   AlertCircle,
@@ -686,24 +687,23 @@ function AppsecEngineList({ items }: { items?: CrowdsecMetricsAppsecEngine[] }) 
 export function Metrics() {
   const { t } = useI18n();
   const { refreshSignal } = useRefresh();
-  const [, setSearchRevision] = useState(0);
-  const currentSearch = typeof window === 'undefined' ? '' : window.location.search;
-  const searchParams = useMemo(() => new URLSearchParams(currentSearch), [currentSearch]);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const setSearchParams = useCallback((next: URLSearchParams, options?: { replace?: boolean }) => {
     const nextSearch = next.toString();
-    const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`;
-    if (options?.replace) {
-      window.history.replaceState(window.history.state, '', nextUrl);
-    } else {
-      window.history.pushState(window.history.state, '', nextUrl);
-    }
-    setSearchRevision((revision) => revision + 1);
-  }, []);
+    void navigate({
+      pathname: location.pathname,
+      search: nextSearch ? `?${nextSearch}` : '',
+      hash: location.hash,
+    }, { replace: options?.replace });
+  }, [location.hash, location.pathname, navigate]);
   const [state, setState] = useState<MetricsState>({ status: 'loading' });
   const [instances, setInstances] = useState<InstanceSummary[]>([]);
   const [showChildParserNodes, setShowChildParserNodes] = useState(readStoredShowChildParserNodes);
   const requestedInstanceId = searchParams.get('instance');
   const requestedEndpointId = searchParams.get('endpoint');
+  const requestedMetricsInstanceId = searchParams.get('metrics_instance');
 
   const handleShowChildParserNodesChange = useCallback((next: boolean) => {
     setShowChildParserNodes(next);
@@ -726,27 +726,39 @@ export function Metrics() {
         setState({ status: 'ready', data });
         return;
       }
-      const selectedInstance = configuredInstances.find((instance) => instance.id === requestedInstanceId && instance.prometheus.length > 0)
-        || configuredInstances.find((instance) => instance.prometheus.length > 0);
-      if (!selectedInstance) {
+      const instanceScope = requestedInstanceId || (configuredInstances.length > 1 ? 'all' : configuredInstances[0].id);
+      const scopedInstances = instanceScope === 'all'
+        ? configuredInstances
+        : [configuredInstances.find((instance) => instance.id === instanceScope) || configuredInstances[0]];
+      const endpointChoices = scopedInstances.flatMap((instance) =>
+        instance.prometheus.map((endpoint) => ({ instance, endpoint })),
+      );
+      if (endpointChoices.length === 0) {
         setState({ status: 'disabled' });
         return;
       }
 
-      const selectedEndpoint = selectedInstance.prometheus.find((endpoint) => endpoint.id === requestedEndpointId)
-        || selectedInstance.prometheus[0];
+      const selectedChoice = endpointChoices.find(({ instance, endpoint }) =>
+        endpoint.id === requestedEndpointId
+        && (instanceScope !== 'all' || instance.id === requestedMetricsInstanceId),
+      ) || endpointChoices.find(({ endpoint }) => endpoint.id === requestedEndpointId)
+        || endpointChoices[0];
       const nextParams = new URLSearchParams(searchParams);
-      nextParams.set('instance', selectedInstance.id);
-      nextParams.set('endpoint', selectedEndpoint.id);
+      nextParams.set('endpoint', selectedChoice.endpoint.id);
+      if (instanceScope === 'all') {
+        nextParams.set('metrics_instance', selectedChoice.instance.id);
+      } else {
+        nextParams.delete('metrics_instance');
+      }
       if (nextParams.toString() !== searchParams.toString()) {
         setSearchParams(nextParams, { replace: true });
       }
-      const data = await fetchCrowdsecMetrics(selectedInstance.id, selectedEndpoint.id);
+      const data = await fetchCrowdsecMetrics(selectedChoice.instance.id, selectedChoice.endpoint.id);
       setState({ status: 'ready', data });
     } catch (error: unknown) {
       setState({ status: 'error', message: getErrorMessage(error, t('pages.metrics.fetchFailed')) });
     }
-  }, [requestedEndpointId, requestedInstanceId, searchParams, setSearchParams, t]);
+  }, [requestedEndpointId, requestedInstanceId, requestedMetricsInstanceId, searchParams, setSearchParams, t]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -845,54 +857,53 @@ export function Metrics() {
     );
   }, [handleShowChildParserNodesChange, load, showChildParserNodes, state, t]);
 
-  const selectedInstance = instances.find((instance) => instance.id === requestedInstanceId)
-    || instances.find((instance) => instance.prometheus.length > 0);
-  const showInstanceSelector = instances.length > 1;
-  const showEndpointSelector = Boolean(selectedInstance && selectedInstance.prometheus.length > 1);
+  const instanceScope = requestedInstanceId || (instances.length > 1 ? 'all' : instances[0]?.id);
+  const scopedInstances = instanceScope === 'all'
+    ? instances
+    : [instances.find((instance) => instance.id === instanceScope) || instances[0]].filter(Boolean) as InstanceSummary[];
+  const endpointChoices = scopedInstances.flatMap((instance) =>
+    instance.prometheus.map((endpoint) => ({ instance, endpoint })),
+  );
+  const selectedChoice = endpointChoices.find(({ instance, endpoint }) =>
+    endpoint.id === requestedEndpointId
+    && (instanceScope !== 'all' || instance.id === requestedMetricsInstanceId),
+  ) || endpointChoices.find(({ endpoint }) => endpoint.id === requestedEndpointId)
+    || endpointChoices[0];
+  const showEndpointSelector = endpointChoices.length > 1;
 
   return (
     <div className="space-y-6">
-      {(showInstanceSelector || showEndpointSelector) && (
+      {showEndpointSelector && selectedChoice && (
         <div className="flex flex-wrap gap-3 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-          {showInstanceSelector && (
-            <label className="flex min-w-52 flex-col gap-1 text-sm font-medium text-gray-700 dark:text-gray-200">
-              {t('pages.metrics.instance')}
-              <select
-                value={selectedInstance?.id || ''}
-                onChange={(event) => {
-                  const next = new URLSearchParams(searchParams);
-                  next.set('instance', event.target.value);
-                  next.delete('endpoint');
-                  setSearchParams(next);
-                }}
-                className="rounded-md border border-gray-300 bg-white px-3 py-2 dark:border-gray-600 dark:bg-gray-900"
-              >
-                {instances.map((instance) => (
-                  <option key={instance.id} value={instance.id} disabled={instance.prometheus.length === 0}>
-                    {instance.icon ? `${instance.icon} ` : ''}{instance.name}{instance.prometheus.length === 0 ? ' (no endpoints)' : ''}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          {showEndpointSelector && selectedInstance && (
-            <label className="flex min-w-52 flex-col gap-1 text-sm font-medium text-gray-700 dark:text-gray-200">
-              {t('pages.metrics.metricsEndpoint')}
-              <select
-                value={requestedEndpointId || selectedInstance.prometheus[0].id}
-                onChange={(event) => {
-                  const next = new URLSearchParams(searchParams);
-                  next.set('endpoint', event.target.value);
-                  setSearchParams(next);
-                }}
-                className="rounded-md border border-gray-300 bg-white px-3 py-2 dark:border-gray-600 dark:bg-gray-900"
-              >
-                {selectedInstance.prometheus.map((endpoint) => (
-                  <option key={endpoint.id} value={endpoint.id}>{endpoint.name}</option>
-                ))}
-              </select>
-            </label>
-          )}
+          <label className="flex min-w-52 flex-col gap-1 text-sm font-medium text-gray-700 dark:text-gray-200">
+            {t('pages.metrics.metricsEndpoint')}
+            <select
+              value={`${selectedChoice.instance.id}:${selectedChoice.endpoint.id}`}
+              onChange={(event) => {
+                const choice = endpointChoices.find(({ instance, endpoint }) =>
+                  `${instance.id}:${endpoint.id}` === event.target.value,
+                );
+                if (!choice) return;
+                const next = new URLSearchParams(searchParams);
+                next.set('endpoint', choice.endpoint.id);
+                if (instanceScope === 'all') {
+                  next.set('metrics_instance', choice.instance.id);
+                } else {
+                  next.delete('metrics_instance');
+                }
+                setSearchParams(next);
+              }}
+              className="rounded-md border border-gray-300 bg-white px-3 py-2 dark:border-gray-600 dark:bg-gray-900"
+            >
+              {endpointChoices.map(({ instance, endpoint }) => (
+                <option key={`${instance.id}:${endpoint.id}`} value={`${instance.id}:${endpoint.id}`}>
+                  {instanceScope === 'all'
+                    ? `${instance.icon ? `${instance.icon} ` : ''}${instance.name} — ${endpoint.name}`
+                    : endpoint.name}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
       )}
       {content}

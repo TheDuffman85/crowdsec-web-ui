@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { BrowserRouter, useNavigate } from 'react-router-dom';
 import { Metrics } from './Metrics';
 import type { CrowdsecMetricsResponse } from '../types';
 import { I18nContext } from '../lib/i18n';
@@ -76,11 +77,26 @@ function buildMetricsResponse(): CrowdsecMetricsResponse {
   };
 }
 
+function renderMetrics(content = <Metrics />) {
+  return render(<BrowserRouter>{content}</BrowserRouter>);
+}
+
+function InstanceSwitcher() {
+  const navigate = useNavigate();
+
+  return (
+    <button type="button" onClick={() => void navigate('/metrics?instance=secondary')}>
+      Select secondary
+    </button>
+  );
+}
+
 beforeEach(() => {
   fetchConfigMock.mockReset();
   fetchCrowdsecMetricsMock.mockReset();
   setLastUpdatedMock.mockReset();
   window.localStorage.clear();
+  window.history.replaceState({}, '', '/metrics');
   fetchConfigMock.mockResolvedValue({ metrics_enabled: true });
 });
 
@@ -91,7 +107,7 @@ describe('Metrics page', () => {
       instances: [{ id: 'primary', name: 'Primary', prometheus: [] }],
     });
 
-    render(<Metrics />);
+    renderMetrics();
 
     expect(await screen.findByText('CONFIG_INSTANCE_METRICS_URL')).toBeInTheDocument();
     expect(screen.getByText(/no metrics endpoint is configured/i)).toBeInTheDocument();
@@ -106,14 +122,14 @@ describe('Metrics page', () => {
     });
     fetchCrowdsecMetricsMock.mockResolvedValue(buildMetricsResponse());
 
-    render(<Metrics />);
+    renderMetrics();
 
     await waitFor(() => expect(fetchCrowdsecMetricsMock).toHaveBeenCalledWith('primary', 'lapi'));
     expect(screen.queryByLabelText('Instance')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Metrics endpoint')).not.toBeInTheDocument();
   });
 
-  test('shows only selectors that have multiple choices', async () => {
+  test('shows an endpoint selector when the selected instance has multiple endpoints', async () => {
     fetchConfigMock.mockResolvedValue({
       metrics_enabled: true,
       instances: [{
@@ -124,24 +140,77 @@ describe('Metrics page', () => {
     });
     fetchCrowdsecMetricsMock.mockResolvedValue(buildMetricsResponse());
 
-    const { unmount } = render(<Metrics />);
+    const { unmount } = renderMetrics();
     await waitFor(() => expect(screen.getByLabelText('Metrics endpoint')).toBeInTheDocument());
     expect(screen.queryByLabelText('Instance')).not.toBeInTheDocument();
     unmount();
+  });
 
+  test('uses the sidebar instance scope and lists endpoints from every instance for all instances', async () => {
+    fetchConfigMock.mockResolvedValue({
+      metrics_enabled: true,
+      instances: [
+        { id: 'primary', name: 'Primary', prometheus: [{ id: 'lapi', name: 'Primary LAPI' }] },
+        { id: 'secondary', name: 'Secondary', prometheus: [{ id: 'lapi', name: 'Secondary LAPI' }] },
+      ],
+    });
+    fetchCrowdsecMetricsMock.mockResolvedValue(buildMetricsResponse());
+    window.history.replaceState({}, '', '/metrics?instance=all');
+
+    renderMetrics();
+
+    const endpointSelector = await screen.findByLabelText('Metrics endpoint');
+    expect(screen.queryByLabelText('Instance')).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Primary — Primary LAPI' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Secondary — Secondary LAPI' })).toBeInTheDocument();
+
+    await userEvent.selectOptions(endpointSelector, 'secondary:lapi');
+    await waitFor(() => expect(fetchCrowdsecMetricsMock).toHaveBeenLastCalledWith('secondary', 'lapi'));
+    expect(new URLSearchParams(window.location.search).get('instance')).toBe('all');
+  });
+
+  test('shows the setup hint when the sidebar-selected instance has no metrics', async () => {
     fetchConfigMock.mockResolvedValue({
       metrics_enabled: true,
       instances: [
         { id: 'primary', name: 'Primary', prometheus: [{ id: 'lapi', name: 'LAPI' }] },
-        { id: 'secondary', name: 'Secondary', prometheus: [{ id: 'lapi', name: 'LAPI' }] },
+        { id: 'secondary', name: 'Secondary', prometheus: [] },
       ],
     });
-    render(<Metrics />);
-    await waitFor(() => expect(screen.getByLabelText('Instance')).toBeInTheDocument());
-    expect(screen.queryByLabelText('Metrics endpoint')).not.toBeInTheDocument();
+    window.history.replaceState({}, '', '/metrics?instance=secondary');
+
+    renderMetrics();
+
+    expect(await screen.findByText('CONFIG_INSTANCE_METRICS_URL')).toBeInTheDocument();
+    expect(fetchCrowdsecMetricsMock).not.toHaveBeenCalled();
+    expect(new URLSearchParams(window.location.search).get('instance')).toBe('secondary');
   });
 
-  test('translates the instance and endpoint selector labels', async () => {
+  test('reloads metrics when the sidebar changes the instance scope', async () => {
+    fetchConfigMock.mockResolvedValue({
+      metrics_enabled: true,
+      instances: [
+        { id: 'primary', name: 'Primary', prometheus: [{ id: 'lapi', name: 'LAPI' }] },
+        { id: 'secondary', name: 'Secondary', prometheus: [{ id: 'engine', name: 'Engine' }] },
+      ],
+    });
+    fetchCrowdsecMetricsMock.mockResolvedValue(buildMetricsResponse());
+    window.history.replaceState({}, '', '/metrics?instance=primary');
+
+    renderMetrics(
+      <>
+        <InstanceSwitcher />
+        <Metrics />
+      </>,
+    );
+
+    await waitFor(() => expect(fetchCrowdsecMetricsMock).toHaveBeenCalledWith('primary', 'lapi'));
+    await userEvent.click(screen.getByRole('button', { name: 'Select secondary' }));
+
+    await waitFor(() => expect(fetchCrowdsecMetricsMock).toHaveBeenLastCalledWith('secondary', 'engine'));
+  });
+
+  test('translates the endpoint selector label', async () => {
     fetchConfigMock.mockResolvedValue({
       metrics_enabled: true,
       instances: [
@@ -159,7 +228,7 @@ describe('Metrics page', () => {
     });
     fetchCrowdsecMetricsMock.mockResolvedValue(buildMetricsResponse());
 
-    render(
+    renderMetrics(
       <I18nContext.Provider value={{
         language: 'de',
         preference: 'de',
@@ -174,14 +243,14 @@ describe('Metrics page', () => {
       </I18nContext.Provider>,
     );
 
-    expect(await screen.findByLabelText('Instanz')).toBeInTheDocument();
-    expect(screen.getByLabelText('Metrik-Endpunkt')).toBeInTheDocument();
+    expect(await screen.findByLabelText('Metrik-Endpunkt')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Instanz')).not.toBeInTheDocument();
   });
 
   test('renders Grafana-inspired runtime sections', async () => {
     fetchCrowdsecMetricsMock.mockResolvedValue(buildMetricsResponse());
 
-    render(<Metrics />);
+    renderMetrics();
 
     await waitFor(() => expect(screen.getByText('LAPI latency')).toBeInTheDocument());
     expect(screen.getByText('LAPI latency')).toBeInTheDocument();
@@ -205,7 +274,7 @@ describe('Metrics page', () => {
     delete response.appsecEngines;
     fetchCrowdsecMetricsMock.mockResolvedValue(response);
 
-    render(<Metrics />);
+    renderMetrics();
 
     await waitFor(() => expect(screen.getByText('No LAPI duration histogram data was exposed by CrowdSec.')).toBeInTheDocument());
     expect(screen.getByText('No AppSec engine metrics were exposed by CrowdSec.')).toBeInTheDocument();
@@ -241,7 +310,7 @@ describe('Metrics page', () => {
     ];
     fetchCrowdsecMetricsMock.mockResolvedValue(response);
 
-    render(<Metrics />);
+    renderMetrics();
 
     await waitFor(() => expect(screen.getByText('crowdsecurity/sshd-logs')).toBeInTheDocument());
     expect(screen.queryByText('child-crowdsecurity/sshd-logs')).not.toBeInTheDocument();
@@ -266,7 +335,7 @@ describe('Metrics page', () => {
     ];
     fetchCrowdsecMetricsMock.mockResolvedValue(response);
 
-    render(<Metrics />);
+    renderMetrics();
 
     await waitFor(() => expect(screen.getByText('Child parser nodes are hidden. Turn on the toggle to include them.')).toBeInTheDocument());
 
