@@ -4,8 +4,10 @@ services:
     container_name: crowdsec_web_ui
     ports:
       - "3000:3000"
-    secrets:
-      - crowdsec_password
+    environment:
+      CONFIG_INSTANCE_LAPI_URL: http://crowdsec:8080
+      CONFIG_INSTANCE_LAPI_AUTH_USERNAME: crowdsec-web-ui
+      CONFIG_INSTANCE_LAPI_AUTH_PASSWORD: your-crowdsec-password
     volumes:
       - ./data:/app/data
     healthcheck:
@@ -15,7 +17,3 @@ services:
       retries: 3
       start_period: 10s
     restart: unless-stopped
-
-secrets:
-  crowdsec_password:
-    file: ./secrets/crowdsec_password.txt

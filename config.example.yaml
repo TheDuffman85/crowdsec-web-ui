@@ -1,6 +1,11 @@
 # CrowdSec Web UI application configuration.
 # For Docker, copy this file to data/config.yaml and adjust it. The application
 # automatically loads /app/data/config.yaml.
+# CONFIG_ variables can create or override this file and persist the merged
+# result. Their names mirror YAML paths (for example CONFIG_SERVER_PORT), while
+# arrays use zero-based indexes (for example CONFIG_INSTANCES_0_LAPI_URL).
+# The zero index may be omitted: CONFIG_INSTANCE_LAPI_URL addresses instance 0,
+# and CONFIG_INSTANCE_METRICS_URL addresses metrics endpoint 0 on instance 0.
 
 server:
   port: 3000
@@ -77,12 +82,17 @@ crowdsec:
     bootstrapRetryEnabled: true
 
 instances:
+  # id is optional and defaults to the zero-based array index. Keep an explicit,
+  # stable id when instances may be reordered after data has been imported.
   - id: default
+    # name is optional and defaults to Instance <INDEX>.
     name: CrowdSec
     # icon: 🛡️
     lapi:
       url: http://crowdsec:8080
       auth:
+        # type is optional: username/password infers password; certFile/keyFile
+        # infers mtls; no credentials infers none.
         type: password
         username: crowdsec-web-ui
         password:
@@ -96,9 +106,13 @@ instances:
       #   caFile: /certs/ca.pem
     metrics: []
     # metrics:
+    #   # id and name are optional and default to the zero-based metrics index
+    #   # and Metrics <METRIC_INDEX>, respectively.
     #   - id: lapi
     #     name: CrowdSec
     #     url: http://crowdsec:6060/metrics
     #     auth:
+    #       # type is optional: username/password infers basic; token infers
+    #       # bearer; no credentials infers none.
     #       type: none
     #     requestTimeout: 5s

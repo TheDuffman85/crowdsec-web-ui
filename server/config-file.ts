@@ -1,10 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { isSeq, parse as parseYaml, parseDocument as parseYamlDocument, stringify as stringifyYaml } from 'yaml';
 import type { RuntimeConfig } from './config';
 import { parseInstancesConfig, type CrowdsecInstanceConfig } from './instances-config';
 
 type UnknownRecord = Record<string, unknown>;
+type ConfigPath = readonly (string | number)[];
 
 export interface ParsedConfigFile {
   environment: NodeJS.ProcessEnv;
@@ -87,10 +88,11 @@ function positiveInteger(value: unknown, label: string): number {
 }
 
 function stringArray(value: unknown, label: string): string[] {
-  if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string' || !entry.trim())) {
+  const entries = Array.isArray(value) ? Array.from(value) : null;
+  if (!entries || entries.some((entry) => typeof entry !== 'string' || !entry.trim())) {
     throw new Error(`Configuration error: ${label} must be an array of non-empty strings.`);
   }
-  return [...new Set(value.map((entry) => String(entry).trim()))];
+  return [...new Set(entries.map((entry) => String(entry).trim()))];
 }
 
 function setString(env: NodeJS.ProcessEnv, input: UnknownRecord, key: string, envName: string, label: string, allowEmpty = false): void {
@@ -248,15 +250,17 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
   };
 }
 
-export function loadApplicationConfig(file: string, sourceEnv: NodeJS.ProcessEnv): ParsedConfigFile {
-  let parsed: unknown;
+export function readApplicationConfig(file: string): unknown {
   try {
-    parsed = parseYaml(fs.readFileSync(file, 'utf8'));
+    return parseYaml(fs.readFileSync(file, 'utf8'));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Configuration error: failed to read CONFIG_FILE at "${file}": ${message}`);
   }
-  return parseApplicationConfig(parsed, sourceEnv);
+}
+
+export function loadApplicationConfig(file: string, sourceEnv: NodeJS.ProcessEnv): ParsedConfigFile {
+  return parseApplicationConfig(readApplicationConfig(file), sourceEnv);
 }
 
 function duration(milliseconds: number): string {
@@ -392,6 +396,440 @@ export function generateApplicationConfig(env: NodeJS.ProcessEnv, config: Runtim
   return document;
 }
 
+const CONFIG_SECTION_ENV = [
+  ['CONFIG_SERVER', ['server']],
+  ['CONFIG_STORAGE', ['storage']],
+  ['CONFIG_UI', ['ui']],
+  ['CONFIG_AUTH', ['auth']],
+  ['CONFIG_NOTIFICATIONS', ['notifications']],
+  ['CONFIG_UPDATES', ['updates']],
+  ['CONFIG_CROWDSEC', ['crowdsec']],
+  ['CONFIG_INSTANCES', ['instances']],
+] as const;
+
+const CONFIG_VALUE_ENV = [
+  ['CONFIG_SERVER_PORT', ['server', 'port']],
+  ['CONFIG_SERVER_BASE_PATH', ['server', 'basePath']],
+  ['CONFIG_STORAGE_DATA_DIR', ['storage', 'dataDir']],
+  ['CONFIG_STORAGE_GEONAMES_DIR', ['storage', 'geonamesDir']],
+  ['CONFIG_UI_TIME_ZONE', ['ui', 'timeZone']],
+  ['CONFIG_UI_TIME_FORMAT', ['ui', 'timeFormat']],
+  ['CONFIG_UI_READ_ONLY', ['ui', 'readOnly']],
+  ['CONFIG_AUTH_ENABLED', ['auth', 'enabled']],
+  ['CONFIG_AUTH_OIDC_ISSUER_URL', ['auth', 'oidc', 'issuerUrl']],
+  ['CONFIG_AUTH_OIDC_CLIENT_ID', ['auth', 'oidc', 'clientId']],
+  ['CONFIG_AUTH_OIDC_SCOPE', ['auth', 'oidc', 'scope']],
+  ['CONFIG_AUTH_OIDC_GROUPS_CLAIM', ['auth', 'oidc', 'groupsClaim']],
+  ['CONFIG_AUTH_OIDC_ADMIN_GROUPS', ['auth', 'oidc', 'adminGroups']],
+  ['CONFIG_AUTH_OIDC_READ_ONLY_GROUPS', ['auth', 'oidc', 'readOnlyGroups']],
+  ['CONFIG_AUTH_OIDC_UNMATCHED_ROLE', ['auth', 'oidc', 'unmatchedRole']],
+  ['CONFIG_NOTIFICATIONS_ALLOW_PRIVATE_ADDRESSES', ['notifications', 'allowPrivateAddresses']],
+  ['CONFIG_NOTIFICATIONS_DEBUG_PAYLOADS', ['notifications', 'debugPayloads']],
+  ['CONFIG_UPDATES_ENABLED', ['updates', 'enabled']],
+  ['CONFIG_CROWDSEC_SIMULATIONS_ENABLED', ['crowdsec', 'simulationsEnabled']],
+  ['CONFIG_CROWDSEC_ALERT_FILTERS_INCLUDE_ORIGINS', ['crowdsec', 'alertFilters', 'includeOrigins']],
+  ['CONFIG_CROWDSEC_ALERT_FILTERS_EXCLUDE_ORIGINS', ['crowdsec', 'alertFilters', 'excludeOrigins']],
+  ['CONFIG_CROWDSEC_ALERT_FILTERS_INCLUDE_CAPI', ['crowdsec', 'alertFilters', 'includeCapi']],
+  ['CONFIG_CROWDSEC_ALERT_FILTERS_INCLUDE_ORIGIN_EMPTY', ['crowdsec', 'alertFilters', 'includeOriginEmpty']],
+  ['CONFIG_CROWDSEC_ALERT_FILTERS_EXCLUDE_ORIGIN_EMPTY', ['crowdsec', 'alertFilters', 'excludeOriginEmpty']],
+  ['CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_ORIGINS', ['crowdsec', 'alertFilters', 'legacy', 'origins']],
+  ['CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_EXTRA_SCENARIOS', ['crowdsec', 'alertFilters', 'legacy', 'extraScenarios']],
+  ['CONFIG_CROWDSEC_SYNC_LOOKBACK', ['crowdsec', 'sync', 'lookback']],
+  ['CONFIG_CROWDSEC_SYNC_REFRESH_INTERVAL', ['crowdsec', 'sync', 'refreshInterval']],
+  ['CONFIG_CROWDSEC_SYNC_MANUAL_REFRESH_ENABLED', ['crowdsec', 'sync', 'manualRefreshEnabled']],
+  ['CONFIG_CROWDSEC_SYNC_IDLE_REFRESH_INTERVAL', ['crowdsec', 'sync', 'idleRefreshInterval']],
+  ['CONFIG_CROWDSEC_SYNC_IDLE_THRESHOLD', ['crowdsec', 'sync', 'idleThreshold']],
+  ['CONFIG_CROWDSEC_SYNC_REQUEST_TIMEOUT', ['crowdsec', 'sync', 'requestTimeout']],
+  ['CONFIG_CROWDSEC_SYNC_BOUNCER_PROPAGATION_DELAY', ['crowdsec', 'sync', 'bouncerPropagationDelay']],
+  ['CONFIG_CROWDSEC_SYNC_METRICS_REQUEST_TIMEOUT', ['crowdsec', 'sync', 'metricsRequestTimeout']],
+  ['CONFIG_CROWDSEC_SYNC_HEARTBEAT_INTERVAL', ['crowdsec', 'sync', 'heartbeatInterval']],
+  ['CONFIG_CROWDSEC_SYNC_ALERT_SYNC_CHUNK', ['crowdsec', 'sync', 'alertSyncChunk']],
+  ['CONFIG_CROWDSEC_SYNC_ALERT_SYNC_MIN_CHUNK', ['crowdsec', 'sync', 'alertSyncMinChunk']],
+  ['CONFIG_CROWDSEC_SYNC_RECONCILE_WINDOW', ['crowdsec', 'sync', 'reconcileWindow']],
+  ['CONFIG_CROWDSEC_SYNC_RECONCILE_RECENT_AGE', ['crowdsec', 'sync', 'reconcileRecentAge']],
+  ['CONFIG_CROWDSEC_SYNC_RECONCILE_RECENT_INTERVAL', ['crowdsec', 'sync', 'reconcileRecentInterval']],
+  ['CONFIG_CROWDSEC_SYNC_RECONCILE_ACTIVE_INTERVAL', ['crowdsec', 'sync', 'reconcileActiveInterval']],
+  ['CONFIG_CROWDSEC_SYNC_RECONCILE_OLD_INTERVAL', ['crowdsec', 'sync', 'reconcileOldInterval']],
+  ['CONFIG_CROWDSEC_SYNC_RECONCILE_WINDOWS_PER_REFRESH', ['crowdsec', 'sync', 'reconcileWindowsPerRefresh']],
+  ['CONFIG_CROWDSEC_SYNC_BOOTSTRAP_RETRY_DELAY', ['crowdsec', 'sync', 'bootstrapRetryDelay']],
+  ['CONFIG_CROWDSEC_SYNC_BOOTSTRAP_RETRY_ENABLED', ['crowdsec', 'sync', 'bootstrapRetryEnabled']],
+] as const;
+
+const CONFIG_SECRET_ENV = [
+  ['CONFIG_AUTH_SESSION_SECRET', ['auth', 'sessionSecret']],
+  ['CONFIG_AUTH_TOTP_SECRET', ['auth', 'totpSecret']],
+  ['CONFIG_AUTH_TOTP_SEED', ['auth', 'totpSeed']],
+  ['CONFIG_AUTH_OIDC_CLIENT_SECRET', ['auth', 'oidc', 'clientSecret']],
+  ['CONFIG_NOTIFICATIONS_SECRET_KEY', ['notifications', 'secretKey']],
+] as const;
+
+const CONFIG_ARRAY_ENV = [
+  ['CONFIG_AUTH_OIDC_ADMIN_GROUPS', ['auth', 'oidc', 'adminGroups']],
+  ['CONFIG_AUTH_OIDC_READ_ONLY_GROUPS', ['auth', 'oidc', 'readOnlyGroups']],
+  ['CONFIG_CROWDSEC_ALERT_FILTERS_INCLUDE_ORIGINS', ['crowdsec', 'alertFilters', 'includeOrigins']],
+  ['CONFIG_CROWDSEC_ALERT_FILTERS_EXCLUDE_ORIGINS', ['crowdsec', 'alertFilters', 'excludeOrigins']],
+  ['CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_ORIGINS', ['crowdsec', 'alertFilters', 'legacy', 'origins']],
+  ['CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_EXTRA_SCENARIOS', ['crowdsec', 'alertFilters', 'legacy', 'extraScenarios']],
+] as const;
+
+const CONFIG_INSTANCE_VALUE_SUFFIX = new Map<string, readonly string[]>([
+  ['ID', ['id']],
+  ['NAME', ['name']],
+  ['ICON', ['icon']],
+  ['LAPI', ['lapi']],
+  ['LAPI_URL', ['lapi', 'url']],
+  ['LAPI_AUTH', ['lapi', 'auth']],
+  ['LAPI_AUTH_TYPE', ['lapi', 'auth', 'type']],
+  ['LAPI_AUTH_USERNAME', ['lapi', 'auth', 'username']],
+  ['LAPI_AUTH_CERT_FILE', ['lapi', 'auth', 'certFile']],
+  ['LAPI_AUTH_KEY_FILE', ['lapi', 'auth', 'keyFile']],
+  ['LAPI_TLS', ['lapi', 'tls']],
+  ['LAPI_TLS_CA_FILE', ['lapi', 'tls', 'caFile']],
+  ['METRICS', ['metrics']],
+  ['SYNC', ['sync']],
+  ['SYNC_LOOKBACK', ['sync', 'lookback']],
+  ['SYNC_REFRESH_INTERVAL', ['sync', 'refreshInterval']],
+  ['SYNC_IDLE_REFRESH_INTERVAL', ['sync', 'idleRefreshInterval']],
+  ['SYNC_IDLE_THRESHOLD', ['sync', 'idleThreshold']],
+  ['SYNC_REQUEST_TIMEOUT', ['sync', 'requestTimeout']],
+  ['SYNC_HEARTBEAT_INTERVAL', ['sync', 'heartbeatInterval']],
+  ['SYNC_ALERT_SYNC_CHUNK', ['sync', 'alertSyncChunk']],
+  ['SYNC_ALERT_SYNC_MIN_CHUNK', ['sync', 'alertSyncMinChunk']],
+  ['SYNC_RECONCILE_WINDOW', ['sync', 'reconcileWindow']],
+  ['SYNC_RECONCILE_RECENT_AGE', ['sync', 'reconcileRecentAge']],
+  ['SYNC_RECONCILE_RECENT_INTERVAL', ['sync', 'reconcileRecentInterval']],
+  ['SYNC_RECONCILE_ACTIVE_INTERVAL', ['sync', 'reconcileActiveInterval']],
+  ['SYNC_RECONCILE_OLD_INTERVAL', ['sync', 'reconcileOldInterval']],
+  ['SYNC_RECONCILE_WINDOWS_PER_REFRESH', ['sync', 'reconcileWindowsPerRefresh']],
+  ['SYNC_BOOTSTRAP_RETRY_DELAY', ['sync', 'bootstrapRetryDelay']],
+  ['SYNC_BOOTSTRAP_RETRY_ENABLED', ['sync', 'bootstrapRetryEnabled']],
+  ['SYNC_BOUNCER_PROPAGATION_DELAY', ['sync', 'bouncerPropagationDelay']],
+]);
+
+const CONFIG_METRICS_VALUE_SUFFIX = new Map<string, readonly string[]>([
+  ['ID', ['id']],
+  ['NAME', ['name']],
+  ['URL', ['url']],
+  ['REQUEST_TIMEOUT', ['requestTimeout']],
+  ['AUTH', ['auth']],
+  ['AUTH_TYPE', ['auth', 'type']],
+  ['AUTH_USERNAME', ['auth', 'username']],
+  ['TLS', ['tls']],
+  ['TLS_CA_FILE', ['tls', 'caFile']],
+  ['TLS_CERT_FILE', ['tls', 'certFile']],
+  ['TLS_KEY_FILE', ['tls', 'keyFile']],
+]);
+
+type IndexedConfigOverride = {
+  name: string;
+  path: ConfigPath;
+  secret: 'direct' | 'file' | null;
+};
+
+function indexedConfigOverrides(env: NodeJS.ProcessEnv): IndexedConfigOverride[] {
+  const overrides: IndexedConfigOverride[] = [];
+  for (const name of Object.keys(env)) {
+    for (const [prefix, path] of CONFIG_ARRAY_ENV) {
+      const match = name.match(new RegExp(`^${prefix}_(\\d+)$`));
+      if (match) {
+        overrides.push({ name, path: [...path, Number(match[1])], secret: null });
+        break;
+      }
+      if (name.startsWith(`${prefix}_`)) {
+        throw new Error(`Configuration error: unknown indexed CONFIG_ variable ${name}.`);
+      }
+    }
+
+    const indexedInstanceMatch = name.match(/^CONFIG_INSTANCES_(\d+)_(.+)$/);
+    const defaultInstanceMatch = name.match(/^CONFIG_INSTANCE_(.+)$/);
+    if (!indexedInstanceMatch && name.match(/^CONFIG_INSTANCES_(.+)$/)) {
+      throw new Error(`Configuration error: unknown indexed CONFIG_ variable ${name}. Use CONFIG_INSTANCE_* for the default instance or CONFIG_INSTANCES_<INDEX>_* for an indexed instance.`);
+    }
+    if (!indexedInstanceMatch && !defaultInstanceMatch) continue;
+    const instanceIndex = indexedInstanceMatch ? Number(indexedInstanceMatch[1]) : 0;
+    const suffix = indexedInstanceMatch ? indexedInstanceMatch[2] : defaultInstanceMatch![1];
+    const instancePath: ConfigPath = ['instances', instanceIndex];
+
+    if (suffix === 'LAPI_AUTH_PASSWORD' || suffix === 'LAPI_AUTH_PASSWORD_FILE') {
+      overrides.push({
+        name,
+        path: [...instancePath, 'lapi', 'auth', 'password'],
+        secret: suffix.endsWith('_FILE') ? 'file' : 'direct',
+      });
+      continue;
+    }
+
+    const indexedMetricsMatch = suffix.match(/^METRICS_(\d+)_(.+)$/);
+    const defaultMetricsMatch = suffix.match(/^METRICS_(.+)$/);
+    const metricsMatch = indexedMetricsMatch || defaultMetricsMatch;
+    if (metricsMatch) {
+      const metricsIndex = indexedMetricsMatch ? Number(indexedMetricsMatch[1]) : 0;
+      const metricsSuffix = indexedMetricsMatch ? indexedMetricsMatch[2] : defaultMetricsMatch![1];
+      const metricsPath: ConfigPath = [...instancePath, 'metrics', metricsIndex];
+      if (['AUTH_PASSWORD', 'AUTH_PASSWORD_FILE', 'AUTH_TOKEN', 'AUTH_TOKEN_FILE'].includes(metricsSuffix)) {
+        overrides.push({
+          name,
+          path: [...metricsPath, 'auth', metricsSuffix.startsWith('AUTH_TOKEN') ? 'token' : 'password'],
+          secret: metricsSuffix.endsWith('_FILE') ? 'file' : 'direct',
+        });
+        continue;
+      }
+      const relativePath = CONFIG_METRICS_VALUE_SUFFIX.get(metricsSuffix);
+      if (!relativePath) throw new Error(`Configuration error: unknown indexed CONFIG_ variable ${name}.`);
+      overrides.push({ name, path: [...metricsPath, ...relativePath], secret: null });
+      continue;
+    }
+
+    const relativePath = CONFIG_INSTANCE_VALUE_SUFFIX.get(suffix);
+    if (!relativePath) throw new Error(`Configuration error: unknown indexed CONFIG_ variable ${name}.`);
+    overrides.push({ name, path: [...instancePath, ...relativePath], secret: null });
+  }
+  const paths = new Map<string, string>();
+  for (const override of overrides) {
+    const pathKey = JSON.stringify(override.path);
+    const existing = paths.get(pathKey);
+    if (existing) {
+      throw new Error(`Configuration error: both ${existing} and ${override.name} target the same setting. Set only one.`);
+    }
+    paths.set(pathKey, override.name);
+  }
+  return overrides.sort((left, right) => {
+    if (left.path.length !== right.path.length) return left.path.length - right.path.length;
+    const leftIsAuthType = left.name.endsWith('_AUTH_TYPE');
+    const rightIsAuthType = right.name.endsWith('_AUTH_TYPE');
+    return Number(rightIsAuthType) - Number(leftIsAuthType);
+  });
+}
+
+export function hasConfigEnvironmentOverrides(env: NodeJS.ProcessEnv): boolean {
+  for (const [name] of [...CONFIG_SECTION_ENV, ...CONFIG_VALUE_ENV]) if (has(env, name)) return true;
+  for (const [name] of CONFIG_SECRET_ENV) if (has(env, name) || has(env, `${name}_FILE`)) return true;
+  return indexedConfigOverrides(env).length > 0;
+}
+
+function parseConfigEnvironmentValue(name: string, value: string | undefined): unknown {
+  if (!value) return '';
+  try {
+    return parseYaml(value);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Configuration error: failed to parse ${name} as YAML: ${message}`);
+  }
+}
+
+function setConfigPath(document: UnknownRecord, keys: ConfigPath, value: unknown): void {
+  let current: UnknownRecord | unknown[] = document;
+  for (let index = 0; index < keys.length - 1; index += 1) {
+    const key = keys[index];
+    const nextIsIndex = typeof keys[index + 1] === 'number';
+    const existing = Array.isArray(current) ? current[Number(key)] : current[String(key)];
+    const valid = nextIsIndex
+      ? Array.isArray(existing)
+      : Boolean(existing) && typeof existing === 'object' && !Array.isArray(existing);
+    if (!valid) {
+      const replacement = nextIsIndex ? [] : {};
+      if (Array.isArray(current)) current[Number(key)] = replacement;
+      else current[String(key)] = replacement;
+    }
+    current = (Array.isArray(current) ? current[Number(key)] : current[String(key)]) as UnknownRecord | unknown[];
+  }
+  const lastKey = keys.at(-1)!;
+  if (Array.isArray(current)) current[Number(lastKey)] = value;
+  else current[String(lastKey)] = value;
+}
+
+function getConfigPath(document: UnknownRecord, keys: ConfigPath): unknown {
+  let current: unknown = document;
+  for (const key of keys) {
+    if (!current || typeof current !== 'object') return undefined;
+    current = Array.isArray(current)
+      ? current[Number(key)]
+      : (current as UnknownRecord)[String(key)];
+  }
+  return current;
+}
+
+function applyIndexedCollectionDefaults(
+  overrides: readonly IndexedConfigOverride[],
+  setPath: (keys: ConfigPath, value: unknown) => void,
+  getPath: (keys: ConfigPath) => unknown,
+  forceSetupDefaults: boolean,
+): void {
+  const instanceIndexes = [...new Set(overrides.flatMap((override) => (
+    override.path[0] === 'instances' && typeof override.path[1] === 'number'
+      ? [override.path[1]]
+      : []
+  )))];
+
+  for (const instanceIndex of instanceIndexes) {
+    const instanceOverrides = overrides.filter((override) => override.path[0] === 'instances'
+      && override.path[1] === instanceIndex);
+    const hasPath = (...relativePath: ConfigPath): boolean => instanceOverrides.some((override) => (
+      override.path.length === relativePath.length + 2
+      && relativePath.every((part, index) => override.path[index + 2] === part)
+    ));
+    const idPath: ConfigPath = ['instances', instanceIndex, 'id'];
+    if ((!hasPath('id') && forceSetupDefaults) || getPath(idPath) === undefined) {
+      setPath(idPath, String(instanceIndex));
+    }
+
+    const namePath: ConfigPath = ['instances', instanceIndex, 'name'];
+    if ((!hasPath('name') && forceSetupDefaults) || getPath(namePath) === undefined) {
+      setPath(namePath, `Instance ${instanceIndex}`);
+    }
+
+    const authTypePath: ConfigPath = ['instances', instanceIndex, 'lapi', 'auth', 'type'];
+    const hasAuthContainerOverride = hasPath('lapi') || hasPath('lapi', 'auth');
+    const hasExplicitAuthType = hasPath('lapi', 'auth', 'type')
+      || (hasAuthContainerOverride && getPath(authTypePath) !== undefined);
+    const hasPasswordOverride = hasPath('lapi', 'auth', 'username') || hasPath('lapi', 'auth', 'password');
+    const hasMtlsOverride = hasPath('lapi', 'auth', 'certFile') || hasPath('lapi', 'auth', 'keyFile');
+    if (!hasExplicitAuthType) {
+      if (hasPasswordOverride && hasMtlsOverride) {
+        throw new Error(`Configuration error: instances[${instanceIndex}].lapi.auth.type cannot be inferred from mixed password and mTLS credentials.`);
+      }
+      const hasMtlsCredentials = hasMtlsOverride
+        || getPath(['instances', instanceIndex, 'lapi', 'auth', 'certFile']) !== undefined
+        || getPath(['instances', instanceIndex, 'lapi', 'auth', 'keyFile']) !== undefined;
+      const hasPasswordCredentials = hasPasswordOverride
+        || getPath(['instances', instanceIndex, 'lapi', 'auth', 'username']) !== undefined
+        || getPath(['instances', instanceIndex, 'lapi', 'auth', 'password']) !== undefined;
+      if (hasMtlsOverride || hasPasswordOverride || getPath(authTypePath) === undefined) {
+        setPath(authTypePath, hasMtlsCredentials ? 'mtls' : hasPasswordCredentials ? 'password' : 'none');
+      }
+    }
+  }
+
+  const metricsIndexes = new Map<number, Set<number>>();
+  for (const override of overrides) {
+    if (override.path[0] !== 'instances'
+      || typeof override.path[1] !== 'number'
+      || override.path[2] !== 'metrics'
+      || typeof override.path[3] !== 'number') continue;
+    const endpoints = metricsIndexes.get(override.path[1]) || new Set<number>();
+    endpoints.add(override.path[3]);
+    metricsIndexes.set(override.path[1], endpoints);
+  }
+  for (const [instanceIndex, endpointIndexes] of metricsIndexes) {
+    for (const endpointIndex of endpointIndexes) {
+      const endpointOverrides = overrides.filter((override) => override.path[0] === 'instances'
+        && override.path[1] === instanceIndex
+        && override.path[2] === 'metrics'
+        && override.path[3] === endpointIndex);
+      const hasEndpointPath = (...relativePath: ConfigPath): boolean => endpointOverrides.some((override) => (
+        override.path.length === relativePath.length + 4
+        && relativePath.every((part, index) => override.path[index + 4] === part)
+      ));
+      const idPath: ConfigPath = ['instances', instanceIndex, 'metrics', endpointIndex, 'id'];
+      const hasExplicitId = hasEndpointPath('id');
+      if ((!hasExplicitId && forceSetupDefaults) || getPath(idPath) === undefined) {
+        setPath(idPath, String(endpointIndex));
+      }
+
+      const namePath: ConfigPath = ['instances', instanceIndex, 'metrics', endpointIndex, 'name'];
+      const hasExplicitName = hasEndpointPath('name');
+      if ((!hasExplicitName && forceSetupDefaults) || getPath(namePath) === undefined) {
+        setPath(namePath, `Metrics ${endpointIndex}`);
+      }
+
+      const authTypePath: ConfigPath = ['instances', instanceIndex, 'metrics', endpointIndex, 'auth', 'type'];
+      const hasExplicitAuthType = hasEndpointPath('auth', 'type')
+        || (hasEndpointPath('auth') && getPath(authTypePath) !== undefined);
+      const hasBasicOverride = hasEndpointPath('auth', 'username') || hasEndpointPath('auth', 'password');
+      const hasBearerOverride = hasEndpointPath('auth', 'token');
+      if (!hasExplicitAuthType) {
+        if (hasBasicOverride && hasBearerOverride) {
+          throw new Error(`Configuration error: instances[${instanceIndex}].metrics[${endpointIndex}].auth.type cannot be inferred from mixed basic and bearer credentials.`);
+        }
+        const hasBearerCredentials = hasBearerOverride
+          || getPath(['instances', instanceIndex, 'metrics', endpointIndex, 'auth', 'token']) !== undefined;
+        const hasBasicCredentials = hasBasicOverride
+          || getPath(['instances', instanceIndex, 'metrics', endpointIndex, 'auth', 'username']) !== undefined
+          || getPath(['instances', instanceIndex, 'metrics', endpointIndex, 'auth', 'password']) !== undefined;
+        if (hasBearerOverride || hasBasicOverride || getPath(authTypePath) === undefined) {
+          setPath(authTypePath, hasBearerCredentials ? 'bearer' : hasBasicCredentials ? 'basic' : 'none');
+        }
+      }
+    }
+  }
+}
+
+function applyConfigEnvironment(
+  env: NodeJS.ProcessEnv,
+  setPath: (keys: ConfigPath, value: unknown) => void,
+): IndexedConfigOverride[] {
+  for (const [name, keys] of [...CONFIG_SECTION_ENV, ...CONFIG_VALUE_ENV]) {
+    if (has(env, name)) setPath(keys, parseConfigEnvironmentValue(name, env[name]));
+  }
+  for (const [name, keys] of CONFIG_SECRET_ENV) {
+    const fileName = `${name}_FILE`;
+    if (has(env, name) && has(env, fileName)) {
+      throw new Error(`Configuration error: both ${name} and ${fileName} are set. Set only one.`);
+    }
+    if (has(env, name)) setPath(keys, { env: name });
+    if (has(env, fileName)) setPath(keys, { file: env[fileName] });
+  }
+
+  const indexedOverrides = indexedConfigOverrides(env);
+  const secrets = new Map<string, IndexedConfigOverride>();
+  for (const override of indexedOverrides) {
+    if (override.secret) {
+      const pathKey = JSON.stringify(override.path);
+      const existing = secrets.get(pathKey);
+      if (existing) {
+        throw new Error(`Configuration error: both ${existing.name} and ${override.name} are set. Set only one.`);
+      }
+      secrets.set(pathKey, override);
+      setPath(override.path, override.secret === 'file' ? { file: env[override.name] } : { env: override.name });
+    } else {
+      const value = parseConfigEnvironmentValue(override.name, env[override.name]);
+      if (override.name.endsWith('_AUTH_TYPE')) setPath(override.path.slice(0, -1), { type: value });
+      else setPath(override.path, value);
+    }
+  }
+  return indexedOverrides;
+}
+
+export function applyConfigSetupEnvironment(document: unknown, env: NodeJS.ProcessEnv): UnknownRecord {
+  const root = record(document, 'config');
+  const setPath = (keys: ConfigPath, value: unknown): void => setConfigPath(root, keys, value);
+  const indexedOverrides = applyConfigEnvironment(env, setPath);
+  applyIndexedCollectionDefaults(indexedOverrides, setPath, (keys) => getConfigPath(root, keys), true);
+  return root;
+}
+
+export interface MergedApplicationConfig {
+  document: UnknownRecord;
+  yaml: string;
+}
+
+export function mergeApplicationConfigEnvironment(file: string, env: NodeJS.ProcessEnv): MergedApplicationConfig {
+  let yamlDocument;
+  try {
+    yamlDocument = parseYamlDocument(fs.readFileSync(file, 'utf8'));
+    if (yamlDocument.errors.length > 0) throw yamlDocument.errors[0];
+    record(yamlDocument.toJS(), 'config');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Configuration error: failed to read CONFIG_FILE at "${file}": ${message}`);
+  }
+
+  const setPath = (keys: ConfigPath, value: unknown): void => {
+    for (let index = 0; index < keys.length - 1; index += 1) {
+      if (typeof keys[index + 1] !== 'number') continue;
+      const prefix = keys.slice(0, index + 1);
+      if (!isSeq(yamlDocument.getIn(prefix, true))) yamlDocument.setIn(prefix, yamlDocument.createNode([]));
+    }
+    yamlDocument.setIn(keys, yamlDocument.createNode(value));
+  };
+  const indexedOverrides = applyConfigEnvironment(env, setPath);
+  applyIndexedCollectionDefaults(indexedOverrides, setPath, (keys) => yamlDocument.getIn(keys), false);
+  return {
+    document: record(yamlDocument.toJS(), 'config'),
+    yaml: yamlDocument.toString({ lineWidth: 0 }),
+  };
+}
+
 export function saveApplicationConfig(file: string, document: UnknownRecord): boolean {
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -406,5 +844,14 @@ export function saveApplicationConfig(file: string, document: UnknownRecord): bo
     if (code === 'EEXIST') return false;
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Configuration error: failed to save generated configuration at "${file}": ${message}`);
+  }
+}
+
+export function persistApplicationConfig(file: string, yaml: string): void {
+  try {
+    fs.writeFileSync(file, yaml, { encoding: 'utf8', mode: 0o600 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Configuration error: failed to persist CONFIG_ overrides at "${file}": ${message}`);
   }
 }

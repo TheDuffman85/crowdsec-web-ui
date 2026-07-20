@@ -3,8 +3,13 @@ import path from 'node:path';
 import { createCrowdsecAuthConfig, type CrowdsecAuthConfig } from './auth';
 import {
   DEPRECATED_CONFIG_ENV,
+  applyConfigSetupEnvironment,
   generateApplicationConfig,
+  hasConfigEnvironmentOverrides,
   loadApplicationConfig,
+  mergeApplicationConfigEnvironment,
+  parseApplicationConfig,
+  persistApplicationConfig,
   saveApplicationConfig,
   type ParsedConfigFile,
 } from './config-file';
@@ -514,9 +519,17 @@ export function createRuntimeConfig(
 
   if (!explicitConfigFile && !fs.existsSync(configFile)) {
     const legacyConfig = createRuntimeConfigFromEnvironment(env);
-    const generatedConfig = generateApplicationConfig(env, legacyConfig);
+    const generatedConfig = applyConfigSetupEnvironment(generateApplicationConfig(env, legacyConfig), env);
+    parseApplicationConfig(generatedConfig, env);
     migrated = saveApplicationConfig(configFile, generatedConfig);
-    if (migrated) console.log(`Saved generated legacy configuration to ${configFile}.`);
+    if (migrated) console.log(`Saved generated configuration to ${configFile}.`);
+  }
+
+  if (!migrated && fs.existsSync(configFile) && hasConfigEnvironmentOverrides(env)) {
+    const mergedConfig = mergeApplicationConfigEnvironment(configFile, env);
+    parseApplicationConfig(mergedConfig.document, env);
+    persistApplicationConfig(configFile, mergedConfig.yaml);
+    console.log(`Applied CONFIG_ overrides and saved application configuration to ${configFile}.`);
   }
 
   warnDeprecatedEnvironment(env, { configFile, migrated });

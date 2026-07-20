@@ -4487,7 +4487,7 @@ describe('createApp', () => {
       runExclusive: vi.fn(async (operation) => operation()),
       close: vi.fn(),
     };
-    const { controller, database, lapiClient } = createController({
+    const { controller, database, lapiClient, fetchCalls } = createController({
       env: {
         CROWDSEC_REFRESH_INTERVAL: '30s',
         CROWDSEC_HEARTBEAT_INTERVAL: 'manual',
@@ -4502,11 +4502,12 @@ describe('createApp', () => {
       controller.startBackgroundTasks();
       await vi.advanceTimersByTimeAsync(0);
       await dashboardStarted;
+      const alertRequestsBeforeScheduler = fetchCalls.filter(({ url }) => url.includes('/v1/alerts?')).length;
       await vi.advanceTimersByTimeAsync(30_001);
 
       const logs = logSpy.mock.calls.map((call) => String(call[0]));
       expect(logs).toContain('Background refresh paused until bootstrap recovery completes.');
-      expect(logs).not.toContain('Background refresh triggered (ACTIVE)...');
+      expect(fetchCalls.filter(({ url }) => url.includes('/v1/alerts?'))).toHaveLength(alertRequestsBeforeScheduler);
 
       dashboardReleased = true;
       releaseDashboard();

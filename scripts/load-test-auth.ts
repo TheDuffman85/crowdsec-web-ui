@@ -9,7 +9,7 @@ export const LOAD_TEST_PASSKEY_NAME = 'Load-test dummy passkey';
 export function createLoadTestRuntimeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return {
     ...env,
-    AUTH_ENABLED: env.AUTH_ENABLED ?? 'true',
+    CONFIG_AUTH_ENABLED: env.CONFIG_AUTH_ENABLED ?? 'true',
   };
 }
 

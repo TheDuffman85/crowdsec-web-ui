@@ -1,9 +1,9 @@
 #!/bin/bash
 set -e
 
-# DB_DIR commonly points at the regular image's mounted /app/data directory.
-# Deliberately do not inherit it: load-test seeding removes and recreates its
-# database, so it must use a separate container-local path by default.
+# The regular image may store data in a mounted /app/data directory. Load-test
+# seeding removes and recreates its database, so it always uses a separate
+# container-local LOADTEST_DB_DIR by default.
 LOADTEST_PROFILE="${LOADTEST_PROFILE:-default}"
 LOADTEST_PROFILE_DIR="${LOADTEST_PROFILE_DIR:-/app/scripts/load-test-profiles}"
 LOADTEST_DB_DIR="${LOADTEST_DB_DIR:-/tmp/crowdsec-web-ui-load-test}"
@@ -31,7 +31,6 @@ set +a
 
 export LOADTEST_PROFILE
 export LOADTEST_DB_DIR
-export DB_DIR="$LOADTEST_DB_DIR"
 
 if [ "$UID" == "0" ]; then
     mkdir -p "$LOADTEST_DB_DIR"

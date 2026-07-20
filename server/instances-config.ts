@@ -168,8 +168,15 @@ function parseTls(value: unknown, label: string): EndpointTlsConfig {
 }
 
 function parseLapiAuth(value: unknown, env: NodeJS.ProcessEnv, label: string): { auth: CrowdsecAuthConfig; tlsClient: EndpointTlsConfig } {
-  const input = record(value, label);
-  const type = string(input.type, `${label}.type`);
+  const input = value === undefined ? {} : record(value, label);
+  const hasPasswordCredentials = input.username !== undefined || input.password !== undefined;
+  const hasMtlsCredentials = input.certFile !== undefined || input.keyFile !== undefined;
+  if (input.type === undefined && hasPasswordCredentials && hasMtlsCredentials) {
+    throw new Error(`Configuration error: ${label}.type cannot be inferred from mixed password and mTLS credentials.`);
+  }
+  const type = input.type === undefined
+    ? hasMtlsCredentials ? 'mtls' : hasPasswordCredentials ? 'password' : 'none'
+    : string(input.type, `${label}.type`);
   if (type === 'none') {
     knownKeys(input, ['type'], label);
     return { auth: { mode: 'none' }, tlsClient: {} };
@@ -198,7 +205,14 @@ function parseLapiAuth(value: unknown, env: NodeJS.ProcessEnv, label: string): {
 function parsePrometheusAuth(value: unknown, env: NodeJS.ProcessEnv, label: string): PrometheusAuthConfig {
   if (value === undefined) return { type: 'none' };
   const input = record(value, label);
-  const type = string(input.type, `${label}.type`);
+  const hasBasicCredentials = input.username !== undefined || input.password !== undefined;
+  const hasBearerCredentials = input.token !== undefined;
+  if (input.type === undefined && hasBasicCredentials && hasBearerCredentials) {
+    throw new Error(`Configuration error: ${label}.type cannot be inferred from mixed basic and bearer credentials.`);
+  }
+  const type = input.type === undefined
+    ? hasBearerCredentials ? 'bearer' : hasBasicCredentials ? 'basic' : 'none'
+    : string(input.type, `${label}.type`);
   if (type === 'none') {
     knownKeys(input, ['type'], label);
     return { type: 'none' };
@@ -271,13 +285,14 @@ export function parseInstancesConfig(parsed: unknown, env: NodeJS.ProcessEnv): C
   if (!Array.isArray(root.instances) || root.instances.length === 0) {
     throw new Error('Configuration error: instances must contain at least one entry.');
   }
+  const instanceInputs = Array.from(root.instances);
   const ids = new Set<string>();
   const names = new Set<string>();
-  return root.instances.map((raw, instanceIndex) => {
+  return instanceInputs.map((raw, instanceIndex) => {
     const label = `instances[${instanceIndex}]`;
     const input = record(raw, label);
-    const id = endpointId(input.id, `${label}.id`);
-    const name = string(input.name, `${label}.name`);
+    const id = endpointId(input.id === undefined ? String(instanceIndex) : input.id, `${label}.id`);
+    const name = input.name === undefined ? `Instance ${instanceIndex}` : string(input.name, `${label}.name`);
     if (ids.has(id)) throw new Error(`Configuration error: duplicate instance id "${id}".`);
     if (names.has(name.toLocaleLowerCase())) throw new Error(`Configuration error: duplicate instance name "${name}".`);
     ids.add(id);
@@ -292,18 +307,22 @@ export function parseInstancesConfig(parsed: unknown, env: NodeJS.ProcessEnv): C
     if (input.prometheus !== undefined) {
       throw new Error(`Configuration error: ${label}.prometheus has been renamed to ${label}.metrics.`);
     }
-    const prometheusInput = input.metrics === undefined ? [] : input.metrics;
-    if (!Array.isArray(prometheusInput)) throw new Error(`Configuration error: ${label}.metrics must be an array.`);
+    const rawPrometheusInput = input.metrics === undefined ? [] : input.metrics;
+    if (!Array.isArray(rawPrometheusInput)) throw new Error(`Configuration error: ${label}.metrics must be an array.`);
+    const prometheusInput = Array.from(rawPrometheusInput);
     const prometheusIds = new Set<string>();
     const prometheus = prometheusInput.map((rawEndpoint, endpointIndex): PrometheusEndpointConfig => {
       const endpointLabel = `${label}.metrics[${endpointIndex}]`;
       const endpoint = record(rawEndpoint, endpointLabel);
-      const endpointIdValue = endpointId(endpoint.id, `${endpointLabel}.id`);
+      const endpointIdValue = endpointId(
+        endpoint.id === undefined ? String(endpointIndex) : endpoint.id,
+        `${endpointLabel}.id`,
+      );
       if (prometheusIds.has(endpointIdValue)) throw new Error(`Configuration error: duplicate Prometheus id "${endpointIdValue}" in ${id}.`);
       prometheusIds.add(endpointIdValue);
       return {
         id: endpointIdValue,
-        name: string(endpoint.name, `${endpointLabel}.name`),
+        name: endpoint.name === undefined ? `Metrics ${endpointIndex}` : string(endpoint.name, `${endpointLabel}.name`),
         url: endpointUrl(endpoint.url, `${endpointLabel}.url`, { allowPath: true }),
         auth: parsePrometheusAuth(endpoint.auth, env, `${endpointLabel}.auth`),
         tls: parseTls(endpoint.tls, `${endpointLabel}.tls`),

@@ -113,16 +113,9 @@ You need a running CrowdSec instance and exactly one CrowdSec LAPI authenticatio
 > [!NOTE]
 > The `-f /dev/null` flag is crucial. It tells `cscli` **not** to overwrite the existing credentials file of the CrowdSec container. We only want to register the machine in the database, not change the container's local config.
 
-> [!IMPORTANT]
-> Choose exactly one auth mode:
-> - Password auth: `instances[].lapi.auth.type: password` with `password` set directly or referencing exactly one `env` or `file`
-> - mTLS auth: `instances[].lapi.auth.type: mtls` with `certFile` and `keyFile`
->
-> Plaintext secrets are supported, but mounted secret files are recommended so credentials do not end up in source control, backups, or configuration-management logs.
-
 ## Run with Docker (Recommended)
 
-The examples below use YAML configuration. The complete commented reference is [`config.example.yaml`](config.example.yaml).
+The examples below use `CONFIG_` environment overrides. On first startup, the application creates `/app/data/config.yaml` from these values; on later startups, it merges them over the existing file and persists the result. The complete commented YAML reference is [`config.example.yaml`](config.example.yaml).
 
 1. **Build the image**:
 
@@ -138,40 +131,22 @@ The examples below use YAML configuration. The complete commented reference is [
 > [!NOTE]
 > Current Docker images are based on Node.js rather than Bun, so the previous Bun/AVX-specific x64 runtime limitation no longer applies.
 
-2. **Create the configuration and run the container**:
-
-   Copy the example into the persistent data directory, edit it, and create `./secrets/crowdsec_password.txt` containing the generated watcher password.
+2. **Create the data directory and run the container**:
 
    ```bash
-   mkdir -p data secrets
-   cp config.example.yaml data/config.yaml
-   # Edit data/config.yaml, including the CrowdSec URL and username.
+   mkdir -p data
    docker run -d \
      --name crowdsec_web_ui \
      -p 3000:3000 \
      -v $(pwd)/data:/app/data \
-     -v $(pwd)/secrets/crowdsec_password.txt:/run/secrets/crowdsec_password:ro \
+     -e CONFIG_INSTANCE_LAPI_URL=http://crowdsec:8080 \
+     -e CONFIG_INSTANCE_LAPI_AUTH_USERNAME=crowdsec-web-ui \
+     -e CONFIG_INSTANCE_LAPI_AUTH_PASSWORD=your-crowdsec-password \
      --network your_crowdsec_network \
      crowdsec-web-ui
    ```
 
-Ensure the container is on a Docker network that can reach the LAPI URL in `data/config.yaml`.
-
-A minimal `data/config.yaml` for watcher password authentication looks like this:
-
-```yaml
-instances:
-  - id: default
-    name: CrowdSec
-    lapi:
-      url: http://crowdsec:8080
-      auth:
-        type: password
-        username: crowdsec-web-ui
-        # password: your-crowdsec-password
-        password:
-          file: /run/secrets/crowdsec_password
-```
+Ensure the container is on a Docker network that can reach the configured LAPI URL.
 
 ### Docker Compose Example
 
@@ -182,18 +157,16 @@ services:
     container_name: crowdsec_web_ui
     ports:
       - "3000:3000"
-    secrets:
-      - crowdsec_password
+    environment:
+      CONFIG_INSTANCE_LAPI_URL: http://crowdsec:8080
+      CONFIG_INSTANCE_LAPI_AUTH_USERNAME: crowdsec-web-ui
+      CONFIG_INSTANCE_LAPI_AUTH_PASSWORD: your-crowdsec-password
     volumes:
       - ./data:/app/data
     restart: unless-stopped
-
-secrets:
-  crowdsec_password:
-    file: ./secrets/crowdsec_password.txt
 ```
 
-The repository ships the same layout in [`docker-compose.yml`](docker-compose.yml). Copy `config.example.yaml` to `data/config.yaml`, create `./secrets/crowdsec_password.txt`, and run `docker compose up -d`.
+The repository ships the same layout in [`docker-compose.yml`](docker-compose.yml). Set the generated password and adjust the other `CONFIG_` values if necessary, then run `docker compose up -d`.
 
 ### Docker Compose Example (mTLS Authentication)
 
@@ -204,6 +177,12 @@ services:
     container_name: crowdsec_web_ui
     ports:
       - "3000:3000"
+    environment:
+      CONFIG_INSTANCE_LAPI_URL: https://crowdsec:8080
+      CONFIG_INSTANCE_LAPI_AUTH_TYPE: mtls
+      CONFIG_INSTANCE_LAPI_AUTH_CERT_FILE: /certs/agent.pem
+      CONFIG_INSTANCE_LAPI_AUTH_KEY_FILE: /certs/agent-key.pem
+      # CONFIG_INSTANCE_LAPI_TLS_CA_FILE: /certs/ca.pem
     volumes:
       - ./data:/app/data
       - /path/on/host/agent.pem:/certs/agent.pem:ro
@@ -212,117 +191,169 @@ services:
     restart: unless-stopped
 ```
 
-Configure the matching instance with `lapi.url: https://crowdsec:8080`, `lapi.auth.type: mtls`, `certFile`, `keyFile`, and optional `lapi.tls.caFile`; the complete shape is commented in [`config.example.yaml`](config.example.yaml).
+Adjust the LAPI URL and certificate paths for your deployment. Uncomment `CONFIG_INSTANCE_LAPI_TLS_CA_FILE` and its matching volume when the LAPI server uses a private CA.
 
 ## Configuration
 
-The application always uses YAML configuration. In Docker it loads `/app/data/config.yaml` by default; `CONFIG_FILE` is only needed to select a different path. Copy [`config.example.yaml`](config.example.yaml) to `data/config.yaml` for a complete, commented starting point. Configuration is loaded once during startup, so restart the process after changing the file or rotating a referenced secret.
+The application loads `/app/data/config.yaml` in Docker and `./data/config.yaml` locally. Set `CONFIG_FILE` only to select another existing file. [`config.example.yaml`](config.example.yaml) is the complete commented example.
 
-If the default file does not exist, the application creates it once from deprecated application environment variables and immediately loads it. The saved YAML is authoritative from then on and is never overwritten: later changes to deprecated setting variables have no effect. Secret values are not embedded; generated secret fields retain explicit environment or file references. When `CONFIG_FILE` selects a custom path, that file must already exist and be readable.
+At startup, recognized `CONFIG_` variables are parsed as YAML values, merged over the file, validated, and persisted back to it. Precedence is section variable, field variable, then indexed array variable. Removing an environment variable does not undo its persisted value. Restart after changing configuration or rotating a referenced secret.
 
-```yaml
-server:
-  port: 3000
-  basePath: ""
-storage:
-  dataDir: /app/data
-ui:
-  timeZone: browser
-  timeFormat: browser
-  readOnly: false
-crowdsec:
-  simulationsEnabled: false
-  sync:
-    lookback: 168h
-    refreshInterval: 1m
-instances:
-  - id: default
-    name: CrowdSec
-    lapi:
-      url: http://crowdsec:8080
-      auth:
-        type: password
-        username: crowdsec-web-ui
-        password:
-          file: /run/secrets/crowdsec_password
-    metrics: []
-```
+Array indexes are zero-based and contiguous: `CONFIG_AUTH_OIDC_ADMIN_GROUPS_0`, `CONFIG_INSTANCES_0_ID`, and `CONFIG_INSTANCES_0_METRICS_0_URL`. A whole section or array may instead be supplied as YAML through `CONFIG_SERVER`, `CONFIG_STORAGE`, `CONFIG_UI`, `CONFIG_AUTH`, `CONFIG_NOTIFICATIONS`, `CONFIG_UPDATES`, `CONFIG_CROWDSEC`, or `CONFIG_INSTANCES`.
 
-### Secret values
+Use singular `CONFIG_INSTANCE_*` for instance `0`; for example, `CONFIG_INSTANCE_NAME` is equivalent to `CONFIG_INSTANCES_0_NAME`. The metrics index `0` may also be omitted, so `CONFIG_INSTANCES_0_METRICS_URL` equals `CONFIG_INSTANCES_0_METRICS_0_URL`, while `CONFIG_INSTANCE_METRICS_URL` uses both shorthand forms. Do not set equivalent forms for the same field.
 
-Secrets can be written directly, read from a file, or read from an environment variable. Direct values are convenient for small private deployments, but file references are safer and are used by the examples.
+Secrets accept a direct string or exactly one `{ env: NAME }` / `{ file: PATH }` reference in YAML. Secret environment overrides also accept `_FILE`. Direct secret overrides are persisted as environment references, never as plaintext.
 
-```yaml
-auth:
-  sessionSecret: a-direct-secret
-  totpSecret:
-    file: /run/secrets/totp_secret
-  oidc:
-    clientSecret:
-      env: OIDC_CLIENT_SECRET
+### Server, storage, UI, and updates
 
-instances:
-  - id: default
-    # ...
-    lapi:
-      auth:
-        type: password
-        username: crowdsec-web-ui
-        password:
-          file: /run/secrets/crowdsec_password
-```
+| YAML field | Default | Environment override | Purpose |
+| --- | --- | --- | --- |
+| `server.port` | `3000` | `CONFIG_SERVER_PORT` | HTTP listen port. |
+| `server.basePath` | `""` | `CONFIG_SERVER_BASE_PATH` | Optional URL prefix such as `/crowdsec`; no trailing slash. |
+| `storage.dataDir` | `/app/data` | `CONFIG_STORAGE_DATA_DIR` | SQLite database and persistent application state. |
+| `storage.geonamesDir` | `/app/geonames` in Docker; `./geonames` locally | `CONFIG_STORAGE_GEONAMES_DIR` | Local GeoNames snapshot used for location labels. |
+| `ui.timeZone` | `browser` | `CONFIG_UI_TIME_ZONE` | Browser timezone or an IANA zone such as `Europe/Berlin` or `UTC`. |
+| `ui.timeFormat` | `browser` | `CONFIG_UI_TIME_FORMAT` | Clock format: `browser`, `12h`, or `24h`. |
+| `ui.readOnly` | `false` | `CONFIG_UI_READ_ONLY` | Hides management actions and rejects mutating API operations. |
+| `updates.enabled` | `true` in packaged images | `CONFIG_UPDATES_ENABLED` | Enables the built-in update check. |
 
-All secret fields use the same shape: a direct string or an object containing exactly one of `file` or `env`. This applies to application secrets, LAPI and basic-metrics `password`, and bearer-metrics `token`. Referenced files must be readable at startup. Avoid committing configurations containing direct secrets.
+### Authentication and notifications
 
-### YAML reference
+| YAML field | Default | Environment override | Purpose |
+| --- | --- | --- | --- |
+| `auth.enabled` | `auto` | `CONFIG_AUTH_ENABLED` | Enables authentication; `auto` enables new databases while preserving migrated database state. |
+| `auth.sessionSecret` | Generated and stored | `CONFIG_AUTH_SESSION_SECRET` or `CONFIG_AUTH_SESSION_SECRET_FILE` | Signs sessions and encrypts saved authentication settings. |
+| `auth.totpSecret` | `sessionSecret` | `CONFIG_AUTH_TOTP_SECRET` or `CONFIG_AUTH_TOTP_SECRET_FILE` | Encrypts stored per-account TOTP seeds. |
+| `auth.totpSeed` | Unset | `CONFIG_AUTH_TOTP_SEED` or `CONFIG_AUTH_TOTP_SEED_FILE` | Optional base32 fallback TOTP seed for the password user. |
+| `auth.oidc.issuerUrl` | Unset | `CONFIG_AUTH_OIDC_ISSUER_URL` | OIDC provider issuer URL. |
+| `auth.oidc.clientId` | Unset | `CONFIG_AUTH_OIDC_CLIENT_ID` | OIDC client identifier. |
+| `auth.oidc.clientSecret` | Unset | `CONFIG_AUTH_OIDC_CLIENT_SECRET` or `CONFIG_AUTH_OIDC_CLIENT_SECRET_FILE` | OIDC client secret. |
+| `auth.oidc.scope` | `openid profile email` | `CONFIG_AUTH_OIDC_SCOPE` | Requested OIDC scopes; must include `openid`. |
+| `auth.oidc.groupsClaim` | `groups` | `CONFIG_AUTH_OIDC_GROUPS_CLAIM` | Claim containing role-mapping groups. |
+| `auth.oidc.adminGroups` | `[]` | `CONFIG_AUTH_OIDC_ADMIN_GROUPS` or `CONFIG_AUTH_OIDC_ADMIN_GROUPS_<INDEX>` | Groups granted administrator access. |
+| `auth.oidc.readOnlyGroups` | `[]` | `CONFIG_AUTH_OIDC_READ_ONLY_GROUPS` or `CONFIG_AUTH_OIDC_READ_ONLY_GROUPS_<INDEX>` | Groups granted read-only access. |
+| `auth.oidc.unmatchedRole` | `deny` | `CONFIG_AUTH_OIDC_UNMATCHED_ROLE` | Role for unmatched OIDC users: `deny`, `admin`, or `read-only`. |
+| `notifications.secretKey` | Generated and stored | `CONFIG_NOTIFICATIONS_SECRET_KEY` or `CONFIG_NOTIFICATIONS_SECRET_KEY_FILE` | Encrypts saved notification credentials. |
+| `notifications.allowPrivateAddresses` | `true` | `CONFIG_NOTIFICATIONS_ALLOW_PRIVATE_ADDRESSES` | Allows private, loopback, and link-local notification destinations. |
+| `notifications.debugPayloads` | `false` | `CONFIG_NOTIFICATIONS_DEBUG_PAYLOADS` | Logs truncated rendered payloads after failed notification delivery. |
 
-| Section | Fields |
-| --- | --- |
-| `server` | `port` (default `3000`), `basePath` (default empty). |
-| `storage` | `dataDir` (SQLite and persistent state), `geonamesDir` (local GeoNames snapshot). |
-| `ui` | `timeZone` (`browser` or an IANA zone), `timeFormat` (`browser`, `12h`, or `24h`), `readOnly`. |
-| `auth` | `enabled` (`auto`, `true`, or `false`), `sessionSecret`, `totpSecret`, `totpSeed`, and `oidc`. `auto` enables auth for new databases while preserving the state of migrated databases. |
-| `auth.oidc` | `issuerUrl`, `clientId`, `clientSecret`, `scope`, `groupsClaim`, `adminGroups`, `readOnlyGroups`, `unmatchedRole` (`deny`, `admin`, or `read-only`). |
-| `notifications` | `secretKey`, `allowPrivateAddresses`, `debugPayloads`. |
-| `updates` | `enabled`, controlling the built-in application update check. |
-| `crowdsec` | `simulationsEnabled`, `alertFilters`, and global `sync` defaults. |
-| `instances` | One or more CrowdSec LAPI definitions with optional metrics endpoints and per-instance sync overrides. |
+### Alert handling
 
-An empty or omitted `crowdsec.alertFilters` uses the standard non-CAPI feed. Set any of `includeOrigins`, `excludeOrigins`, `includeCapi`, `includeOriginEmpty`, and `excludeOriginEmpty` to configure explicit filtering.
+Omitting `crowdsec.alertFilters` uses the standard non-CAPI feed. Setting any explicit filter field enables explicit filtering.
 
-Global synchronization settings live under `crowdsec.sync`:
+| YAML field | Default | Environment override | Purpose |
+| --- | --- | --- | --- |
+| `crowdsec.simulationsEnabled` | `false` | `CONFIG_CROWDSEC_SIMULATIONS_ENABLED` | Includes simulation-mode alerts and decisions. |
+| `crowdsec.alertFilters.includeOrigins` | `[]` | `CONFIG_CROWDSEC_ALERT_FILTERS_INCLUDE_ORIGINS` or `CONFIG_CROWDSEC_ALERT_FILTERS_INCLUDE_ORIGINS_<INDEX>` | Keeps alerts matching these exact origins. |
+| `crowdsec.alertFilters.excludeOrigins` | `[]` | `CONFIG_CROWDSEC_ALERT_FILTERS_EXCLUDE_ORIGINS` or `CONFIG_CROWDSEC_ALERT_FILTERS_EXCLUDE_ORIGINS_<INDEX>` | Drops alerts matching these exact origins. |
+| `crowdsec.alertFilters.includeCapi` | `false` | `CONFIG_CROWDSEC_ALERT_FILTERS_INCLUDE_CAPI` | Adds the Central API/community-blocklist feed. |
+| `crowdsec.alertFilters.includeOriginEmpty` | `false` | `CONFIG_CROWDSEC_ALERT_FILTERS_INCLUDE_ORIGIN_EMPTY` | Keeps empty-origin alerts with explicit include filters. |
+| `crowdsec.alertFilters.excludeOriginEmpty` | `false` | `CONFIG_CROWDSEC_ALERT_FILTERS_EXCLUDE_ORIGIN_EMPTY` | Drops alerts whose effective origin is empty. |
+| `crowdsec.alertFilters.legacy.origins` | `[]` | `CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_ORIGINS` or `CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_ORIGINS_<INDEX>` | Compatibility origin allowlist; `CAPI` enables the CAPI feed. |
+| `crowdsec.alertFilters.legacy.extraScenarios` | `[]` | `CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_EXTRA_SCENARIOS` or `CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_EXTRA_SCENARIOS_<INDEX>` | Compatibility list of additional scenarios. |
 
-| Field | Default | Purpose |
-| --- | --- | --- |
-| `lookback` | `168h` | Imported history and retention window. |
-| `refreshInterval` | `1m` | Active refresh cadence; `0` or `manual` disables scheduled refreshes. |
-| `manualRefreshEnabled` | `false` | Enables manual refresh controls. |
-| `idleRefreshInterval` / `idleThreshold` | `10m` / `2m` | Idle scheduling behavior. |
-| `requestTimeout` | `30s` | LAPI request timeout. |
-| `bouncerPropagationDelay` | `15s` | Delay between decision expiry and owning-alert deletion. |
-| `metricsRequestTimeout` | `5s` | Default metrics request timeout. |
-| `heartbeatInterval` | `30s` | CrowdSec machine heartbeat cadence; `0` disables it. |
-| `alertSyncChunk` / `alertSyncMinChunk` | `12h` / `15m` | Historical import window and minimum retry window. |
-| `reconcileWindow` | `1h` | Fixed reconciliation window size. |
-| `reconcileRecentAge` | `24h` | Boundary between recent and old windows. |
-| `reconcileRecentInterval` / `reconcileActiveInterval` / `reconcileOldInterval` | `15m` / `5m` / `3h` | Reconciliation cadence by window priority. |
-| `reconcileWindowsPerRefresh` | `2` | Maximum reconciliation windows per refresh. |
-| `bootstrapRetryDelay` / `bootstrapRetryEnabled` | `30s` / `true` | Initial synchronization retry behavior. |
+### Global synchronization
 
-Each `instances` entry supports:
+Durations accept `ms`, `s`, `m`, `h`, or `d`, for example `500ms`, `30s`, `5m`, or `7d`.
 
-| Field | Purpose |
-| --- | --- |
-| `id`, `name`, `icon` | Stable identity, display name, and optional short icon. |
-| `lapi.url` | Absolute HTTP(S) LAPI base URL. |
-| `lapi.auth` | `type: password` with a username and password source, `type: mtls` with certificate/key files, or `type: none`. |
-| `lapi.tls.caFile` | Optional CA used to verify the LAPI server. |
-| `metrics[]` | Metrics endpoint `id`, `name`, `url`, optional `requestTimeout`, `auth`, and `tls`. Auth types are `none`, `basic`, or `bearer`. |
-| `sync` | Optional per-instance overrides for the global synchronization values. |
+| YAML field | Default | Environment override | Purpose |
+| --- | --- | --- | --- |
+| `crowdsec.sync.lookback` | `168h` | `CONFIG_CROWDSEC_SYNC_LOOKBACK` | Imported history and retention window. |
+| `crowdsec.sync.refreshInterval` | `1m` | `CONFIG_CROWDSEC_SYNC_REFRESH_INTERVAL` | Active refresh cadence; `0` or `manual` disables scheduling. |
+| `crowdsec.sync.manualRefreshEnabled` | `false` | `CONFIG_CROWDSEC_SYNC_MANUAL_REFRESH_ENABLED` | Enables manual refresh controls. |
+| `crowdsec.sync.idleRefreshInterval` | `10m` | `CONFIG_CROWDSEC_SYNC_IDLE_REFRESH_INTERVAL` | Refresh cadence while the application is idle; `0` disables it. |
+| `crowdsec.sync.idleThreshold` | `2m` | `CONFIG_CROWDSEC_SYNC_IDLE_THRESHOLD` | Inactivity before idle refresh behavior begins. |
+| `crowdsec.sync.requestTimeout` | `30s` | `CONFIG_CROWDSEC_SYNC_REQUEST_TIMEOUT` | Timeout for individual LAPI requests. |
+| `crowdsec.sync.bouncerPropagationDelay` | `15s` | `CONFIG_CROWDSEC_SYNC_BOUNCER_PROPAGATION_DELAY` | Grace period before deleting alerts owned by expired decisions. |
+| `crowdsec.sync.metricsRequestTimeout` | `5s` | `CONFIG_CROWDSEC_SYNC_METRICS_REQUEST_TIMEOUT` | Default timeout for metrics endpoints. |
+| `crowdsec.sync.heartbeatInterval` | `30s` | `CONFIG_CROWDSEC_SYNC_HEARTBEAT_INTERVAL` | CrowdSec machine heartbeat cadence; `0` disables it. |
+| `crowdsec.sync.alertSyncChunk` | `12h` | `CONFIG_CROWDSEC_SYNC_ALERT_SYNC_CHUNK` | Historical import window size. |
+| `crowdsec.sync.alertSyncMinChunk` | `15m` | `CONFIG_CROWDSEC_SYNC_ALERT_SYNC_MIN_CHUNK` | Minimum retry window after a timed-out import. |
+| `crowdsec.sync.reconcileWindow` | `1h` | `CONFIG_CROWDSEC_SYNC_RECONCILE_WINDOW` | Fixed alert-history reconciliation window size. |
+| `crowdsec.sync.reconcileRecentAge` | `24h` | `CONFIG_CROWDSEC_SYNC_RECONCILE_RECENT_AGE` | Boundary between recent and older windows. |
+| `crowdsec.sync.reconcileRecentInterval` | `15m` | `CONFIG_CROWDSEC_SYNC_RECONCILE_RECENT_INTERVAL` | Reconciliation cadence for recent windows. |
+| `crowdsec.sync.reconcileActiveInterval` | `5m` | `CONFIG_CROWDSEC_SYNC_RECONCILE_ACTIVE_INTERVAL` | Reconciliation cadence for windows with active decisions. |
+| `crowdsec.sync.reconcileOldInterval` | `3h` | `CONFIG_CROWDSEC_SYNC_RECONCILE_OLD_INTERVAL` | Reconciliation cadence for older windows. |
+| `crowdsec.sync.reconcileWindowsPerRefresh` | `2` | `CONFIG_CROWDSEC_SYNC_RECONCILE_WINDOWS_PER_REFRESH` | Maximum due windows processed per refresh. |
+| `crowdsec.sync.bootstrapRetryDelay` | `30s` | `CONFIG_CROWDSEC_SYNC_BOOTSTRAP_RETRY_DELAY` | Delay between failed initial-sync retries; `0` retries immediately. |
+| `crowdsec.sync.bootstrapRetryEnabled` | `true` | `CONFIG_CROWDSEC_SYNC_BOOTSTRAP_RETRY_ENABLED` | Enables background retry after initial synchronization failure. |
 
-Durations use `ms`, `s`, `m`, `h`, or `d` suffixes, such as `500ms`, `30s`, `5m`, or `7d`. `server.basePath` is empty or starts with `/` without a trailing slash. Instance and endpoint IDs use lowercase letters, digits, `_`, and `-` and should remain stable after data has been imported.
+### Instances and LAPI
 
-Per-instance `sync` may override `lookback`, `refreshInterval`, `idleRefreshInterval`, `idleThreshold`, `requestTimeout`, `heartbeatInterval`, `alertSyncChunk`, `alertSyncMinChunk`, `reconcileWindow`, `reconcileRecentAge`, `reconcileRecentInterval`, `reconcileActiveInterval`, `reconcileOldInterval`, `reconcileWindowsPerRefresh`, `bootstrapRetryDelay`, `bootstrapRetryEnabled`, and `bouncerPropagationDelay`. Metrics request timeouts are configured on each metrics endpoint.
+Use `<INDEX>` for the zero-based instance index. The ID defaults to the index, the name defaults to `Instance <INDEX>`, and the LAPI authentication type is inferred from its credentials. Derived values are persisted to YAML. Explicit IDs must match lowercase letters, digits, `_`, and `-`, and should remain stable after data is imported.
+
+> [!IMPORTANT]
+> Configure exactly one credential shape:
+> - Password auth: set `username` and `password`
+> - mTLS auth: set `certFile` and `keyFile`
+>
+> `type` is optional and inferred from these fields. Set it explicitly to `none`, `password`, or `mtls` when desired. Do not mix password and mTLS credentials.
+>
+> Plaintext secrets are supported, but mounted secret files are recommended so credentials do not end up in source control, backups, or configuration-management logs.
+
+| YAML field | Default | Environment override | Purpose |
+| --- | --- | --- | --- |
+| `instances` | One generated `default` instance | `CONFIG_INSTANCES` or `CONFIG_INSTANCES_<INDEX>_*` | Configures one or more CrowdSec connections. |
+| `instances[].id` | Zero-based instance index | `CONFIG_INSTANCES_<INDEX>_ID` | Stable database identity for the instance. |
+| `instances[].name` | `Instance <INDEX>` | `CONFIG_INSTANCES_<INDEX>_NAME` | Unique display name. |
+| `instances[].icon` | Unset | `CONFIG_INSTANCES_<INDEX>_ICON` | Optional short text or emoji shown in the selector. |
+| `instances[].lapi` | Required | `CONFIG_INSTANCES_<INDEX>_LAPI` | Complete LAPI connection object. |
+| `instances[].lapi.url` | Required (`http://crowdsec:8080` in starter config) | `CONFIG_INSTANCES_<INDEX>_LAPI_URL` | Absolute HTTP(S) LAPI base URL without credentials or a path. |
+| `instances[].lapi.auth` | `{ type: none }` | `CONFIG_INSTANCES_<INDEX>_LAPI_AUTH` | LAPI authentication object. |
+| `instances[].lapi.auth.type` | Inferred from credentials | `CONFIG_INSTANCES_<INDEX>_LAPI_AUTH_TYPE` | Optional authentication mode: `none`, `password`, or `mtls`. |
+| `instances[].lapi.auth.username` | Required for `password` | `CONFIG_INSTANCES_<INDEX>_LAPI_AUTH_USERNAME` | CrowdSec machine username. |
+| `instances[].lapi.auth.password` | Required for `password` | `CONFIG_INSTANCES_<INDEX>_LAPI_AUTH_PASSWORD` or `CONFIG_INSTANCES_<INDEX>_LAPI_AUTH_PASSWORD_FILE` | CrowdSec machine password or secret reference. |
+| `instances[].lapi.auth.certFile` | Required for `mtls` | `CONFIG_INSTANCES_<INDEX>_LAPI_AUTH_CERT_FILE` | Client certificate path. |
+| `instances[].lapi.auth.keyFile` | Required for `mtls` | `CONFIG_INSTANCES_<INDEX>_LAPI_AUTH_KEY_FILE` | Client private-key path. |
+| `instances[].lapi.tls` | `{}` | `CONFIG_INSTANCES_<INDEX>_LAPI_TLS` | LAPI server-trust settings. |
+| `instances[].lapi.tls.caFile` | Unset | `CONFIG_INSTANCES_<INDEX>_LAPI_TLS_CA_FILE` | CA bundle used to verify the LAPI server. |
+| `instances[].metrics` | `[]` | `CONFIG_INSTANCES_<INDEX>_METRICS` or `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_*` | Zero or more metrics endpoints. |
+| `instances[].sync` | Inherits global values | `CONFIG_INSTANCES_<INDEX>_SYNC` or `CONFIG_INSTANCES_<INDEX>_SYNC_*` | Per-instance synchronization overrides. |
+
+### Metrics endpoints
+
+Use `<INDEX>` for the instance index and `<METRIC_INDEX>` for its zero-based metrics endpoint index. The endpoint ID defaults to `<METRIC_INDEX>` and its name defaults to `Metrics <METRIC_INDEX>`. These defaults are persisted to YAML.
+
+| YAML field | Default | Environment override | Purpose |
+| --- | --- | --- | --- |
+| `instances[].metrics[].id` | Zero-based metrics index | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_ID` | Stable identifier unique within the instance. |
+| `instances[].metrics[].name` | `Metrics <METRIC_INDEX>` | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_NAME` | Display name. |
+| `instances[].metrics[].url` | Required | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_URL` | Absolute HTTP(S) Prometheus endpoint URL. |
+| `instances[].metrics[].requestTimeout` | Global `5s` | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_REQUEST_TIMEOUT` | Request timeout for this endpoint. |
+| `instances[].metrics[].auth` | `{ type: none }` | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_AUTH` | Complete metrics authentication object. |
+| `instances[].metrics[].auth.type` | Inferred from credentials | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_AUTH_TYPE` | Optional authentication mode: `none`, `basic`, or `bearer`. |
+| `instances[].metrics[].auth.username` | Required for `basic` | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_AUTH_USERNAME` | Basic-auth username. |
+| `instances[].metrics[].auth.password` | Required for `basic` | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_AUTH_PASSWORD` or `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_AUTH_PASSWORD_FILE` | Basic-auth password or secret reference. |
+| `instances[].metrics[].auth.token` | Required for `bearer` | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_AUTH_TOKEN` or `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_AUTH_TOKEN_FILE` | Bearer token or secret reference. |
+| `instances[].metrics[].tls` | `{}` | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_TLS` | Metrics TLS settings. |
+| `instances[].metrics[].tls.caFile` | Unset | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_TLS_CA_FILE` | CA bundle used to verify the metrics server. |
+| `instances[].metrics[].tls.certFile` | Unset | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_TLS_CERT_FILE` | Optional metrics client certificate; requires `keyFile`. |
+| `instances[].metrics[].tls.keyFile` | Unset | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_TLS_KEY_FILE` | Optional metrics client private key; requires `certFile`. |
+
+### Per-instance synchronization overrides
+
+Every field inherits its corresponding global value when omitted.
+
+| YAML field | Default | Environment override | Purpose |
+| --- | --- | --- | --- |
+| `instances[].sync.lookback` | Global `168h` | `CONFIG_INSTANCES_<INDEX>_SYNC_LOOKBACK` | History and retention window for this instance. |
+| `instances[].sync.refreshInterval` | Global `1m` | `CONFIG_INSTANCES_<INDEX>_SYNC_REFRESH_INTERVAL` | Active refresh cadence. |
+| `instances[].sync.idleRefreshInterval` | Global `10m` | `CONFIG_INSTANCES_<INDEX>_SYNC_IDLE_REFRESH_INTERVAL` | Idle refresh cadence. |
+| `instances[].sync.idleThreshold` | Global `2m` | `CONFIG_INSTANCES_<INDEX>_SYNC_IDLE_THRESHOLD` | Time before this instance is considered idle. |
+| `instances[].sync.requestTimeout` | Global `30s` | `CONFIG_INSTANCES_<INDEX>_SYNC_REQUEST_TIMEOUT` | LAPI request timeout. |
+| `instances[].sync.heartbeatInterval` | Global `30s` | `CONFIG_INSTANCES_<INDEX>_SYNC_HEARTBEAT_INTERVAL` | Machine heartbeat cadence. |
+| `instances[].sync.alertSyncChunk` | Global `12h` | `CONFIG_INSTANCES_<INDEX>_SYNC_ALERT_SYNC_CHUNK` | Historical import window size. |
+| `instances[].sync.alertSyncMinChunk` | Global `15m` | `CONFIG_INSTANCES_<INDEX>_SYNC_ALERT_SYNC_MIN_CHUNK` | Minimum retry window. |
+| `instances[].sync.reconcileWindow` | Global `1h` | `CONFIG_INSTANCES_<INDEX>_SYNC_RECONCILE_WINDOW` | Reconciliation window size. |
+| `instances[].sync.reconcileRecentAge` | Global `24h` | `CONFIG_INSTANCES_<INDEX>_SYNC_RECONCILE_RECENT_AGE` | Recent-window age boundary. |
+| `instances[].sync.reconcileRecentInterval` | Global `15m` | `CONFIG_INSTANCES_<INDEX>_SYNC_RECONCILE_RECENT_INTERVAL` | Recent-window reconciliation cadence. |
+| `instances[].sync.reconcileActiveInterval` | Global `5m` | `CONFIG_INSTANCES_<INDEX>_SYNC_RECONCILE_ACTIVE_INTERVAL` | Active-decision reconciliation cadence. |
+| `instances[].sync.reconcileOldInterval` | Global `3h` | `CONFIG_INSTANCES_<INDEX>_SYNC_RECONCILE_OLD_INTERVAL` | Older-window reconciliation cadence. |
+| `instances[].sync.reconcileWindowsPerRefresh` | Global `2` | `CONFIG_INSTANCES_<INDEX>_SYNC_RECONCILE_WINDOWS_PER_REFRESH` | Due-window budget per refresh. |
+| `instances[].sync.bootstrapRetryDelay` | Global `30s` | `CONFIG_INSTANCES_<INDEX>_SYNC_BOOTSTRAP_RETRY_DELAY` | Initial-sync retry delay. |
+| `instances[].sync.bootstrapRetryEnabled` | Global `true` | `CONFIG_INSTANCES_<INDEX>_SYNC_BOOTSTRAP_RETRY_ENABLED` | Enables background initial-sync retry. |
+| `instances[].sync.bouncerPropagationDelay` | Global `15s` | `CONFIG_INSTANCES_<INDEX>_SYNC_BOUNCER_PROPAGATION_DELAY` | Alert-deletion grace period. |
 
 ## Multiple CrowdSec instances
 
@@ -483,7 +514,7 @@ If CrowdSec LAPI uses HTTPS with a self-signed certificate or internal CA, the W
 Login failed: unable to get local issuer certificate
 ```
 
-Mount the CA certificate and point Node.js at it with `NODE_EXTRA_CA_CERTS`:
+Mount the CA certificate and configure it for the LAPI instance:
 
 ```yaml
 services:
@@ -493,7 +524,10 @@ services:
     ports:
       - "3000:3000"
     environment:
-      NODE_EXTRA_CA_CERTS: /certs/root_ca.crt
+      CONFIG_INSTANCE_LAPI_URL: https://crowdsec:8080
+      CONFIG_INSTANCE_LAPI_AUTH_USERNAME: crowdsec-web-ui
+      CONFIG_INSTANCE_LAPI_AUTH_PASSWORD_FILE: /run/secrets/crowdsec_password
+      CONFIG_INSTANCE_LAPI_TLS_CA_FILE: /certs/root_ca.crt
     secrets:
       - crowdsec_password
     volumes:
@@ -506,7 +540,7 @@ secrets:
     file: ./secrets/crowdsec_password.txt
 ```
 
-Replace `/path/on/host/root_ca.crt` with your CA file path and keep the mount read-only. This avoids rebuilding the image. Prefer the per-instance `lapi.tls.caFile` setting when only CrowdSec LAPI needs this CA.
+Replace `/path/on/host/root_ca.crt` with your CA file path and keep the mount read-only. This avoids rebuilding the image and persists the path as `instances[0].lapi.tls.caFile`.
 
 ### Reverse Proxy with Base Path
 
@@ -519,6 +553,11 @@ services:
     container_name: crowdsec_web_ui
     ports:
       - "3000:3000"
+    environment:
+      CONFIG_SERVER_BASE_PATH: /crowdsec
+      CONFIG_INSTANCE_LAPI_URL: http://crowdsec:8080
+      CONFIG_INSTANCE_LAPI_AUTH_USERNAME: crowdsec-web-ui
+      CONFIG_INSTANCE_LAPI_AUTH_PASSWORD_FILE: /run/secrets/crowdsec_password
     secrets:
       - crowdsec_password
     volumes:
@@ -544,7 +583,7 @@ location /crowdsec/ {
 }
 ```
 
-Set `server.basePath: /crowdsec` in `config.yaml`. It must start with `/` and must not include a trailing slash. When set, `/` redirects to the base path and all API calls, assets, and navigation use it automatically.
+`CONFIG_SERVER_BASE_PATH` must start with `/` and must not include a trailing slash. When set, `/` redirects to the base path and all API calls, assets, and navigation use it automatically.
 
 The backend applies a Content Security Policy, rejects browser mutation requests whose `Origin` does not match the public request origin, limits API request bodies to 1 MiB, and marks API responses as `private, no-store`. Command-line and service clients that omit browser `Origin` and `Sec-Fetch-Site` headers remain compatible. Configure HSTS at the TLS-terminating reverse proxy if desired; the application does not emit HSTS itself.
 
@@ -595,18 +634,11 @@ prometheus:
   listen_port: 6060
 ```
 
-Then add the endpoint to the matching Web UI instance:
+Then add the endpoint to the matching Web UI instance through the container environment:
 
 ```yaml
-instances:
-  - id: default
-    # ...lapi settings...
-    metrics:
-      - id: lapi
-        name: CrowdSec
-        url: http://crowdsec:6060/metrics
-        auth:
-          type: none
+environment:
+  CONFIG_INSTANCE_METRICS_URL: http://crowdsec:6060/metrics
 ```
 
 `level: aggregated` works with less detail because it omits per-machine/per-bouncer LAPI metrics and per-node parser metrics. AppSec and LAPI latency sections also depend on whether the corresponding CrowdSec Prometheus metrics are emitted by your deployment. `level: none` disables metrics registration.
@@ -828,7 +860,7 @@ Alerts and decisions are stored as normalized SQLite columns. The `decisions.ale
 
    Profile defaults live in `scripts/load-test-profiles/`, with one file per profile. Environment variables still take precedence over profile values.
 
-   Load-test mode seeds a repeatable fake-LAPI source dataset in a separate SQLite database, builds the frontend, and starts a local backend. Authentication is enabled by default with the administrator login `load` / `test`; set `AUTH_ENABLED=false` to disable it. The load user also has a dummy passkey so the passkey button and authentication request can be exercised under load; the passkey authentication itself is expected to fail. On startup, the backend imports that source dataset through the normal bootstrap/full-sync path before serving it from the app cache. The UI opens on the default Dashboard at `http://localhost:3000/`. The default source dataset is `300000` alerts and `300000` embedded decisions under `/tmp/crowdsec-web-ui-load-test`. Load-test mode prints source seed timings, sync progress, `/api` requests, and event-loop stalls of at least 100ms to the console while it runs.
+   Load-test mode seeds a repeatable fake-LAPI source dataset in a separate SQLite database, builds the frontend, and starts a local backend. Authentication is enabled by default with the administrator login `load` / `test`; set `CONFIG_AUTH_ENABLED=false` to disable it. The load user also has a dummy passkey so the passkey button and authentication request can be exercised under load; the passkey authentication itself is expected to fail. On startup, the backend imports that source dataset through the normal bootstrap/full-sync path before serving it from the app cache. The UI opens on the default Dashboard at `http://localhost:3000/`. The default source dataset is `300000` alerts and `300000` embedded decisions under `/tmp/crowdsec-web-ui-load-test`. Load-test mode prints source seed timings, sync progress, `/api` requests, and event-loop stalls of at least 100ms to the console while it runs.
 
    Override the dataset with environment variables:
    ```bash
@@ -855,23 +887,17 @@ Alerts and decisions are stored as normalized SQLite columns. The `decisions.ale
    LOADTEST_REFRESH_DECISIONS_MIN_PER_ALERT=0
    LOADTEST_REFRESH_DECISIONS_MAX_PER_ALERT=0
    LOADTEST_REFRESH_DECISION_ORIGINS=
-   AUTH_ENABLED=true
-   CROWDSEC_REFRESH_INTERVAL=1m
-   CROWDSEC_IDLE_REFRESH_INTERVAL=10m
-   CROWDSEC_IDLE_THRESHOLD=2m
-   CROWDSEC_LOOKBACK_PERIOD=30d
-   CROWDSEC_ALERT_SYNC_CHUNK=12h
-   CROWDSEC_ALERT_SYNC_MIN_CHUNK=15m
-   CROWDSEC_RECONCILE_WINDOW=1h
-   CROWDSEC_RECONCILE_RECENT_AGE=24h
-   CROWDSEC_RECONCILE_RECENT_INTERVAL=15m
-   CROWDSEC_RECONCILE_ACTIVE_INTERVAL=5m
-   CROWDSEC_RECONCILE_OLD_INTERVAL=3h
-   CROWDSEC_RECONCILE_WINDOWS_PER_REFRESH=2
-   CROWDSEC_SIMULATIONS_ENABLED=true
+   LOADTEST_MULTI_INSTANCE=false
+   LOADTEST_FAILING_LAPI=false
+   LOADTEST_SECONDARY_ALERTS=100000
+   LOADTEST_SECONDARY_DECISIONS=100000
+   LOADTEST_SECONDARY_BLOCKLIST_DECISIONS=25000
+   LOADTEST_EDGE_ALERTS=25000
+   LOADTEST_EDGE_DECISIONS=50000
+   LOADTEST_EDGE_BLOCKLIST_DECISIONS=10000
    ```
 
-   The regular `AUTH_OIDC_*` environment variables are also supported in load-test mode, including issuer URL, client ID and secret, scope, group claim, role groups, and unmatched-role handling.
+   Application behavior uses the same `CONFIG_` variables documented in the Configuration section. Load-test profiles set defaults such as `CONFIG_AUTH_ENABLED=true`, `CONFIG_CROWDSEC_SYNC_LOOKBACK=30d`, `CONFIG_CROWDSEC_SYNC_REFRESH_INTERVAL=1m`, and `CONFIG_CROWDSEC_SIMULATIONS_ENABLED=true`; any `CONFIG_` variable can override them. OIDC uses the regular `CONFIG_AUTH_OIDC_*` variables, including the indexed group arrays.
 
    Both the initial source dataset and later refresh batches are exposed through the fake LAPI. By default, one synthetic blocklist alert contains `100000` of the requested decisions so load testing covers a very large single-alert payload; `LOADTEST_BLOCKLIST_DECISIONS` changes that concentration without changing `LOADTEST_DECISIONS`. `LOADTEST_BLOCKLIST_SIZES` takes precedence when set and accepts comma-separated sizes such as `125000,100000,60000`; each size creates a separate blocklist alert in the newest sync window, and decisions after those fixed blocks are distributed evenly among the remaining decision-bearing alerts. `LOADTEST_EMPTY_ALERTS` reserves trailing alerts with no decisions, `LOADTEST_EXPIRED_ALERTS` makes the preceding decision-bearing alerts contain only expired decisions, and `LOADTEST_EXPIRING_SOON_DECISIONS` makes that many of the evenly distributed decisions expire 5–15 minutes after the seed timestamp. On each due head refresh batch the fake LAPI exposes `LOADTEST_REFRESH_ALERTS` new synthetic alerts and `LOADTEST_REFRESH_DECISIONS` new synthetic decisions, timestamped inside that refresh's authoritative delta window, then the regular sync code imports them into SQLite. Setting `LOADTEST_REFRESH_DECISIONS_MAX_PER_ALERT` above zero switches delta generation to per-alert blocklists; their sizes are selected deterministically between `LOADTEST_REFRESH_DECISIONS_MIN_PER_ALERT` and the maximum, inclusive, instead of using `LOADTEST_REFRESH_DECISIONS`. Historical reconciliation requests do not generate unrelated refresh batches.
 
@@ -889,7 +915,7 @@ Alerts and decisions are stored as normalized SQLite columns. The `decisions.ale
          LOADTEST_PROFILE: blocklists-mixed
    ```
 
-   Set `LOADTEST_PROFILE` to `default`, `blocklist`, `blocklists-mixed`, `multi-instance`, or `multi-instance-medium`; it defaults to `default`. Individual `LOADTEST_*` environment variables can still override values from the selected profile. The load-test image always ignores the regular `DB_DIR` setting. Its synthetic database defaults to `/tmp/crowdsec-web-ui-load-test` inside the container, so seeding cannot overwrite the database mounted at `/app/data`. The synthetic database is recreated whenever the container starts. `LOADTEST_DB_DIR` can override the container-local location when needed.
+   Set `LOADTEST_PROFILE` to `default`, `blocklist`, `blocklists-mixed`, `multi-instance`, or `multi-instance-medium`; it defaults to `default`. Individual `LOADTEST_*` and `CONFIG_` environment variables can override values from the selected profile. The load-test image ignores `CONFIG_STORAGE_DATA_DIR` and uses `LOADTEST_DB_DIR` for its synthetic database, defaulting to `/tmp/crowdsec-web-ui-load-test` inside the container. This prevents seeding from overwriting the database mounted at `/app/data`. The synthetic database is recreated whenever the container starts.
 
 5. **CrowdSec mTLS smoke test**
 

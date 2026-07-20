@@ -1597,12 +1597,15 @@ describe('CrowdsecDatabase', () => {
   test('load-test Docker image keeps synthetic data away from the regular database', () => {
     const dockerfile = readFileSync(path.resolve(process.cwd(), 'Dockerfile'), 'utf8');
     const entrypoint = readFileSync(path.resolve(process.cwd(), 'docker-loadtest-entrypoint.sh'), 'utf8');
+    const loadTestServer = readFileSync(path.resolve(process.cwd(), 'scripts/load-test-server.ts'), 'utf8');
 
     expect(dockerfile).toContain('FROM runner AS loadtest');
     expect(dockerfile).toContain('ENV LOADTEST_DB_DIR="/tmp/crowdsec-web-ui-load-test"');
-    expect(entrypoint).toContain('export DB_DIR="$LOADTEST_DB_DIR"');
+    expect(entrypoint).toContain('export LOADTEST_DB_DIR');
+    expect(entrypoint).not.toContain('export DB_DIR=');
     expect(entrypoint).not.toContain('${DB_DIR:-');
     expect(entrypoint).not.toContain('chown -R node:node /app/data');
+    expect(loadTestServer).toContain('CONFIG_STORAGE_DATA_DIR: dbDir');
   });
 
   test('load-test Docker entrypoint applies a selected profile and keeps environment overrides', () => {
@@ -1640,11 +1643,13 @@ describe('CrowdsecDatabase', () => {
 
     expect(result.stderr).toBe('');
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('LOADTEST_PROFILE=blocklist\n');
-    expect(result.stdout).toContain('LOADTEST_ALERTS=42\n');
-    expect(result.stdout).toContain('LOADTEST_DECISIONS=410463\n');
-    expect(result.stdout).toContain('LOADTEST_SEED=1337\n');
-    expect(result.stdout).toContain(`DB_DIR=${dbDir}\n`);
+    const environment = new Set(result.stdout.trim().split('\n'));
+    expect(environment).toContain('LOADTEST_PROFILE=blocklist');
+    expect(environment).toContain('LOADTEST_ALERTS=42');
+    expect(environment).toContain('LOADTEST_DECISIONS=410463');
+    expect(environment).toContain('LOADTEST_SEED=1337');
+    expect(environment).toContain(`LOADTEST_DB_DIR=${dbDir}`);
+    expect([...environment].some((entry) => entry.startsWith('DB_DIR='))).toBe(false);
   });
 
   test('migrates legacy notification rules, notifications, and seeds incidents from history', () => {

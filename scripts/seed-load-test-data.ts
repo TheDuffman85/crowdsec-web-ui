@@ -181,7 +181,7 @@ function readConfig(): LoadTestConfig {
     alerts,
     decisions,
     seed: parseIntegerEnv('LOADTEST_SEED', DEFAULT_SEED),
-    dbDir: process.env.LOADTEST_DB_DIR || process.env.DB_DIR || DEFAULT_DB_DIR,
+    dbDir: process.env.LOADTEST_DB_DIR || DEFAULT_DB_DIR,
     activeDecisionRatio: parseRatioEnv('LOADTEST_ACTIVE_DECISION_RATIO', DEFAULT_ACTIVE_DECISION_RATIO),
     simulationRatio: parseRatioEnv('LOADTEST_SIMULATION_RATIO', DEFAULT_SIMULATION_RATIO),
     duplicateValueRatio: parseRatioEnv('LOADTEST_DUPLICATE_VALUE_RATIO', DEFAULT_DUPLICATE_VALUE_RATIO),
@@ -193,7 +193,7 @@ function readConfig(): LoadTestConfig {
       parseIntegerEnv('LOADTEST_EXPIRING_SOON_DECISIONS', 0),
       Math.max(0, decisions - blocklistDecisionTotal),
     ),
-    lookbackMs: parseLookbackToMs(process.env.CROWDSEC_LOOKBACK_PERIOD || '30d'),
+    lookbackMs: parseLookbackToMs(process.env.CONFIG_CROWDSEC_SYNC_LOOKBACK || '30d'),
   };
 }
 

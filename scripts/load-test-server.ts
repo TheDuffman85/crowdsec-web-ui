@@ -27,8 +27,8 @@ import {
 
 const LOADTEST_SOURCE_TABLE = 'loadtest_alert_source';
 installTimestampedConsole();
-const dbDir = process.env.LOADTEST_DB_DIR || process.env.DB_DIR || path.join(process.env.TMPDIR || '/tmp', 'crowdsec-web-ui-load-test');
-const port = Number(process.env.LOADTEST_BACKEND_PORT || process.env.PORT || 3000);
+const dbDir = process.env.LOADTEST_DB_DIR || path.join(process.env.TMPDIR || '/tmp', 'crowdsec-web-ui-load-test');
+const port = Number(process.env.LOADTEST_BACKEND_PORT || 3000);
 const database = new CrowdsecDatabase({ dbDir });
 const eventLoopDelay = monitorEventLoopDelay({ resolution: 10 });
 eventLoopDelay.enable();
@@ -63,13 +63,13 @@ const simulationRatio = parseRatioEnv('LOADTEST_SIMULATION_RATIO', 0.1);
 
 const config = createRuntimeConfig({
   ...createLoadTestRuntimeEnv(process.env),
-  PORT: String(port),
-  DB_DIR: dbDir,
-  CROWDSEC_REFRESH_INTERVAL: process.env.CROWDSEC_REFRESH_INTERVAL || '1m',
-  CROWDSEC_LOOKBACK_PERIOD: process.env.CROWDSEC_LOOKBACK_PERIOD || '30d',
-  CROWDSEC_HEARTBEAT_INTERVAL: '0',
-  CROWDSEC_BOOTSTRAP_RETRY_ENABLED: 'false',
-  CROWDSEC_SIMULATIONS_ENABLED: process.env.CROWDSEC_SIMULATIONS_ENABLED || 'true',
+  CONFIG_SERVER_PORT: String(port),
+  CONFIG_STORAGE_DATA_DIR: dbDir,
+  CONFIG_CROWDSEC_SYNC_REFRESH_INTERVAL: process.env.CONFIG_CROWDSEC_SYNC_REFRESH_INTERVAL || '1m',
+  CONFIG_CROWDSEC_SYNC_LOOKBACK: process.env.CONFIG_CROWDSEC_SYNC_LOOKBACK || '30d',
+  CONFIG_CROWDSEC_SYNC_HEARTBEAT_INTERVAL: '0',
+  CONFIG_CROWDSEC_SYNC_BOOTSTRAP_RETRY_ENABLED: 'false',
+  CONFIG_CROWDSEC_SIMULATIONS_ENABLED: process.env.CONFIG_CROWDSEC_SIMULATIONS_ENABLED || 'true',
   CROWDSEC_WEB_UI_MODE: 'load-test',
   VITE_VERSION: process.env.VITE_VERSION || 'loadtest',
   VITE_BRANCH: process.env.VITE_BRANCH || 'loadtest',

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
@@ -369,7 +369,6 @@ instances:
     lapi:
       url: https://crowdsec.example.com:8080
       auth:
-        type: password
         username: watcher
         password:
           env: YAML_LAPI_PASSWORD
@@ -441,7 +440,6 @@ instances:
         name: LAPI metrics
         url: https://crowdsec.example.com:6060/metrics
         auth:
-          type: bearer
           token: direct-metrics-token
 `);
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -494,12 +492,269 @@ instances:
       expect(document.server.port).toBe(4100);
       expect(statSync(generatedConfigFile).mode & 0o777).toBe(0o600);
       expect(warn).toHaveBeenCalledWith(expect.stringMatching(/migrated into the generated YAML.*config\.yaml.*now authoritative.*variables no longer affect/i));
-      expect(log).toHaveBeenCalledWith(expect.stringMatching(/Saved generated legacy configuration.*config\.yaml/i));
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/Saved generated configuration.*config\.yaml/i));
       expect(log).toHaveBeenCalledWith(`Loaded application configuration from ${generatedConfigFile}.`);
     } finally {
       warn.mockRestore();
       log.mockRestore();
     }
+  });
+
+  test('creates the initial YAML from CONFIG_ setup environment variables', () => {
+    const generatedConfigFile = createMissingConfigPath();
+    const env = {
+      CONFIG_SERVER_PORT: '4200',
+      CONFIG_SERVER_BASE_PATH: '/security',
+      CONFIG_STORAGE_DATA_DIR: '/tmp/config-data',
+      CONFIG_UI: '{ timeZone: UTC, timeFormat: 24h, readOnly: false }',
+      CONFIG_UI_READ_ONLY: 'true',
+      CONFIG_AUTH_SESSION_SECRET: 'do-not-write-this-auth-secret',
+      CONFIG_AUTH_OIDC_ADMIN_GROUPS_0: 'admins',
+      CONFIG_AUTH_OIDC_ADMIN_GROUPS_1: 'secops',
+      CONFIG_UPDATES_ENABLED: 'false',
+      CONFIG_CROWDSEC_SYNC_REFRESH_INTERVAL: '2m',
+      CONFIG_INSTANCE_LAPI_URL: 'https://primary.example.com:8080',
+      CONFIG_INSTANCE_LAPI_AUTH_USERNAME: 'watcher',
+      CONFIG_INSTANCE_LAPI_AUTH_PASSWORD: 'do-not-write-this-password',
+      CONFIG_INSTANCE_METRICS_URL: 'https://primary.example.com:6060/metrics',
+      CONFIG_INSTANCE_METRICS_AUTH_TOKEN: 'do-not-write-this-token',
+      CONFIG_INSTANCE_METRICS_REQUEST_TIMEOUT: '10s',
+      CONFIG_INSTANCE_METRICS_1_URL: 'https://primary.example.com:6061/metrics',
+      CONFIG_INSTANCES_1_ID: 'secondary',
+      CONFIG_INSTANCES_1_NAME: 'Secondary',
+      CONFIG_INSTANCES_1_LAPI_URL: 'http://secondary:8080',
+      CONFIG_INSTANCES_1_LAPI_AUTH_TYPE: 'none',
+      CONFIG_INSTANCES_1_SYNC_REFRESH_INTERVAL: '30s',
+      CONFIG_INSTANCES_1_METRICS_URL: 'http://secondary:6060/metrics',
+    };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfigImpl(env, { defaultConfigFile: generatedConfigFile });
+      expect(config).toMatchObject({
+        port: 4200,
+        basePath: '/security',
+        dbDir: '/tmp/config-data',
+        timeZone: 'UTC',
+        readOnly: true,
+        refreshIntervalMs: 120_000,
+        updateCheckEnabled: false,
+      });
+      expect(config.dashboardAuth.sessionSecret).toBe('do-not-write-this-auth-secret');
+      expect(config.dashboardAuth.oidcAdminGroups).toEqual(['admins', 'secops']);
+      expect(config.instances).toHaveLength(2);
+      expect(config.instances[0]).toMatchObject({
+        id: '0',
+        name: 'Instance 0',
+        lapiUrl: 'https://primary.example.com:8080',
+        lapiAuth: { mode: 'password', user: 'watcher', password: 'do-not-write-this-password' },
+      });
+      expect(config.instances[0].prometheus[0]).toMatchObject({
+        id: '0',
+        name: 'Metrics 0',
+        url: 'https://primary.example.com:6060/metrics',
+        auth: { type: 'bearer', token: 'do-not-write-this-token' },
+        requestTimeoutMs: 10_000,
+      });
+      expect(config.instances[0].prometheus[1]).toMatchObject({ id: '1', name: 'Metrics 1', auth: { type: 'none' } });
+      expect(config.instances[1]).toMatchObject({ id: 'secondary', lapiAuth: { mode: 'none' } });
+      expect(config.instances[1].sync.refreshIntervalMs).toBe(30_000);
+      expect(config.instances[1].prometheus[0]).toMatchObject({ id: '0', name: 'Metrics 0', auth: { type: 'none' } });
+
+      const saved = readFileSync(generatedConfigFile, 'utf8');
+      expect(saved).not.toContain('do-not-write-this-password');
+      expect(saved).not.toContain('do-not-write-this-auth-secret');
+      expect(saved).not.toContain('do-not-write-this-token');
+      const document = parseYaml(saved);
+      expect(document.server).toEqual({ port: 4200, basePath: '/security' });
+      expect(document.auth.sessionSecret).toEqual({ env: 'CONFIG_AUTH_SESSION_SECRET' });
+      expect(document.instances).toHaveLength(2);
+      expect(document.instances[0].id).toBe('0');
+      expect(document.instances[0].name).toBe('Instance 0');
+      expect(document.instances[0].lapi.auth.type).toBe('password');
+      expect(document.instances[0].metrics[0].id).toBe('0');
+      expect(document.instances[0].metrics[0].name).toBe('Metrics 0');
+      expect(document.instances[0].metrics[0].auth.type).toBe('bearer');
+      expect(document.instances[0].metrics[1].id).toBe('1');
+      expect(document.instances[0].metrics[1].name).toBe('Metrics 1');
+      expect(document.instances[0].metrics[1].auth.type).toBe('none');
+      expect(document.instances[0].lapi.auth.password).toEqual({ env: 'CONFIG_INSTANCE_LAPI_AUTH_PASSWORD' });
+      expect(document.instances[0].metrics[0].auth.token).toEqual({ env: 'CONFIG_INSTANCE_METRICS_AUTH_TOKEN' });
+      expect(warn).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledWith(`Saved generated configuration to ${generatedConfigFile}.`);
+    } finally {
+      warn.mockRestore();
+      log.mockRestore();
+    }
+  });
+
+  test('infers mTLS and basic metrics authentication from CONFIG_ credentials', () => {
+    const generatedConfigFile = createMissingConfigPath();
+    const certFile = createTempSecret('certificate');
+    const keyFile = createTempSecret('private-key');
+    const config = createRuntimeConfigImpl({
+      CONFIG_INSTANCE_LAPI_URL: 'https://crowdsec.example.com:8080',
+      CONFIG_INSTANCE_LAPI_AUTH_CERT_FILE: certFile,
+      CONFIG_INSTANCE_LAPI_AUTH_KEY_FILE: keyFile,
+      CONFIG_INSTANCE_METRICS_URL: 'https://crowdsec.example.com:6060/metrics',
+      CONFIG_INSTANCE_METRICS_AUTH_USERNAME: 'metrics-user',
+      CONFIG_INSTANCE_METRICS_AUTH_PASSWORD: 'metrics-password',
+    }, { defaultConfigFile: generatedConfigFile });
+
+    expect(config.instances[0].lapiAuth).toEqual({ mode: 'mtls', certPath: certFile, keyPath: keyFile });
+    expect(config.instances[0].prometheus[0].auth).toEqual({
+      type: 'basic', username: 'metrics-user', password: 'metrics-password',
+    });
+    const persisted = parseYaml(readFileSync(generatedConfigFile, 'utf8'));
+    expect(persisted.instances[0].lapi.auth.type).toBe('mtls');
+    expect(persisted.instances[0].metrics[0].auth.type).toBe('basic');
+  });
+
+  test('prefers CONFIG_ setup values over deprecated values during initial generation', () => {
+    const generatedConfigFile = createMissingConfigPath();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfigImpl({
+        PORT: '4100',
+        CONFIG_SERVER_PORT: '4200',
+      }, { defaultConfigFile: generatedConfigFile });
+      expect(config.port).toBe(4200);
+      expect(parseYaml(readFileSync(generatedConfigFile, 'utf8')).server.port).toBe(4200);
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/PORT.*migrated into the generated YAML/i));
+    } finally {
+      warn.mockRestore();
+      log.mockRestore();
+    }
+  });
+
+  test('applies CONFIG_ values to an existing YAML and persists the merged result', () => {
+    const generatedConfigFile = createMissingConfigPath();
+    createRuntimeConfigImpl({ CONFIG_SERVER_PORT: '4100' }, { defaultConfigFile: generatedConfigFile });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfigImpl({
+        CONFIG_SERVER_PORT: '4200',
+        CONFIG_CROWDSEC_SYNC_REFRESH_INTERVAL: '5m',
+      }, { defaultConfigFile: generatedConfigFile });
+      expect(config.port).toBe(4200);
+      expect(config.refreshIntervalMs).toBe(300_000);
+      const persisted = parseYaml(readFileSync(generatedConfigFile, 'utf8'));
+      expect(persisted.server.port).toBe(4200);
+      expect(persisted.crowdsec.sync.refreshInterval).toBe('5m');
+      expect(log).toHaveBeenCalledWith(`Applied CONFIG_ overrides and saved application configuration to ${generatedConfigFile}.`);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test('merges CONFIG_ values into the file selected by CONFIG_FILE', () => {
+    const configFile = createTempConfig(`
+# This comment should survive environment merges.
+server:
+  port: 3100
+ui:
+  readOnly: false
+instances:
+  - id: default
+    name: CrowdSec
+    lapi:
+      url: http://crowdsec:8080
+      auth: { type: none }
+`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfigImpl({
+        CONFIG_FILE: configFile,
+        CONFIG_SERVER_PORT: '3200',
+        CONFIG_UI_READ_ONLY: 'true',
+        CONFIG_AUTH_OIDC_ADMIN_GROUPS_0: 'admins',
+        CONFIG_AUTH_OIDC_ADMIN_GROUPS_1: 'secops',
+        CONFIG_INSTANCE_LAPI_AUTH_USERNAME: 'watcher',
+        CONFIG_INSTANCE_LAPI_AUTH_PASSWORD: 'persist-by-reference',
+        CONFIG_INSTANCE_METRICS_URL: 'http://crowdsec:6060/metrics',
+      });
+      expect(config.port).toBe(3200);
+      expect(config.readOnly).toBe(true);
+      expect(config.dashboardAuth.oidcAdminGroups).toEqual(['admins', 'secops']);
+      expect(config.instances[0].lapiAuth).toEqual({ mode: 'password', user: 'watcher', password: 'persist-by-reference' });
+      expect(config.instances[0].prometheus[0]).toMatchObject({ id: '0', name: 'Metrics 0', auth: { type: 'none' } });
+      const persisted = parseYaml(readFileSync(configFile, 'utf8'));
+      expect(persisted.server.port).toBe(3200);
+      expect(persisted.ui.readOnly).toBe(true);
+      expect(persisted.auth.oidc.adminGroups).toEqual(['admins', 'secops']);
+      expect(persisted.instances[0].lapi.auth.password).toEqual({ env: 'CONFIG_INSTANCE_LAPI_AUTH_PASSWORD' });
+      expect(persisted.instances[0].metrics[0]).toMatchObject({ id: '0', name: 'Metrics 0' });
+      expect(persisted.instances[0].metrics[0].auth.type).toBe('none');
+      expect(readFileSync(configFile, 'utf8')).toContain('# This comment should survive environment merges.');
+
+      const withoutAuth = createRuntimeConfigImpl({
+        CONFIG_FILE: configFile,
+        CONFIG_INSTANCE_LAPI_AUTH_TYPE: 'none',
+      });
+      expect(withoutAuth.instances[0].lapiAuth).toEqual({ mode: 'none' });
+      expect(parseYaml(readFileSync(configFile, 'utf8')).instances[0].lapi.auth).toEqual({ type: 'none' });
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test('validates CONFIG_ setup values before writing the YAML', () => {
+    const generatedConfigFile = createMissingConfigPath();
+    expect(() => createRuntimeConfigImpl({
+      CONFIG_SERVER_PORT: 'not-a-port',
+    }, { defaultConfigFile: generatedConfigFile })).toThrow(/server\.port must be a positive integer/i);
+    expect(existsSync(generatedConfigFile)).toBe(false);
+  });
+
+  test('does not modify an existing YAML when a CONFIG_ override is invalid', () => {
+    const configFile = createTempConfig(`
+server:
+  port: 3100
+instances:
+  - id: default
+    name: CrowdSec
+    lapi:
+      url: http://crowdsec:8080
+      auth: { type: none }
+`);
+    const original = readFileSync(configFile, 'utf8');
+    expect(() => createRuntimeConfigImpl({
+      CONFIG_FILE: configFile,
+      CONFIG_SERVER_PORT: 'not-a-port',
+    })).toThrow(/server\.port must be a positive integer/i);
+    expect(readFileSync(configFile, 'utf8')).toBe(original);
+  });
+
+  test('rejects unknown indexed CONFIG_ paths', () => {
+    const generatedConfigFile = createMissingConfigPath();
+    expect(() => createRuntimeConfigImpl({
+      CONFIG_INSTANCES_0_LAPI_URl: 'http://typo:8080',
+    }, { defaultConfigFile: generatedConfigFile })).toThrow(/unknown indexed CONFIG_ variable/i);
+    expect(existsSync(generatedConfigFile)).toBe(false);
+  });
+
+  test('rejects duplicate shorthand and indexed CONFIG_ paths', () => {
+    const generatedConfigFile = createMissingConfigPath();
+    expect(() => createRuntimeConfigImpl({
+      CONFIG_INSTANCES_NAME: 'Old shorthand',
+    }, { defaultConfigFile: generatedConfigFile })).toThrow(/Use CONFIG_INSTANCE_\*/i);
+    expect(() => createRuntimeConfigImpl({
+      CONFIG_INSTANCE_NAME: 'Shorthand',
+      CONFIG_INSTANCES_0_NAME: 'Indexed',
+    }, { defaultConfigFile: generatedConfigFile })).toThrow(/both .* target the same setting/i);
+    expect(() => createRuntimeConfigImpl({
+      CONFIG_INSTANCE_METRICS_URL: 'http://crowdsec:6060/metrics',
+      CONFIG_INSTANCES_0_METRICS_0_URL: 'http://crowdsec:6061/metrics',
+    }, { defaultConfigFile: generatedConfigFile })).toThrow(/both .* target the same setting/i);
+  });
+
+  test('rejects gaps in indexed CONFIG_ scalar arrays', () => {
+    const generatedConfigFile = createMissingConfigPath();
+    expect(() => createRuntimeConfigImpl({
+      CONFIG_AUTH_OIDC_ADMIN_GROUPS_1: 'secops',
+    }, { defaultConfigFile: generatedConfigFile })).toThrow(/adminGroups must be an array of non-empty strings/i);
+    expect(existsSync(generatedConfigFile)).toBe(false);
   });
 
   test('saves generated legacy configuration at the selected default path', () => {

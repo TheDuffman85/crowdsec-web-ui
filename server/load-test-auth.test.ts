@@ -37,14 +37,15 @@ function createTestRuntimeConfig(env: NodeJS.ProcessEnv) {
 describe('load-test authentication', () => {
   test('defaults authentication to enabled and preserves OIDC environment settings', () => {
     const config = createTestRuntimeConfig(createLoadTestRuntimeEnv({
-      AUTH_OIDC_ISSUER_URL: 'https://idp.example.com/application/o/crowdsec/',
-      AUTH_OIDC_CLIENT_ID: 'load-test-client',
-      AUTH_OIDC_CLIENT_SECRET: 'load-test-secret',
-      AUTH_OIDC_SCOPE: 'openid profile email roles',
-      AUTH_OIDC_GROUPS_CLAIM: 'roles',
-      AUTH_OIDC_ADMIN_GROUPS: 'admins,secops',
-      AUTH_OIDC_READ_ONLY_GROUPS: 'viewers',
-      AUTH_OIDC_UNMATCHED_ROLE: 'read-only',
+      CONFIG_AUTH_OIDC_ISSUER_URL: 'https://idp.example.com/application/o/crowdsec/',
+      CONFIG_AUTH_OIDC_CLIENT_ID: 'load-test-client',
+      CONFIG_AUTH_OIDC_CLIENT_SECRET: 'load-test-secret',
+      CONFIG_AUTH_OIDC_SCOPE: 'openid profile email roles',
+      CONFIG_AUTH_OIDC_GROUPS_CLAIM: 'roles',
+      CONFIG_AUTH_OIDC_ADMIN_GROUPS_0: 'admins',
+      CONFIG_AUTH_OIDC_ADMIN_GROUPS_1: 'secops',
+      CONFIG_AUTH_OIDC_READ_ONLY_GROUPS_0: 'viewers',
+      CONFIG_AUTH_OIDC_UNMATCHED_ROLE: 'read-only',
     }));
 
     expect(config.dashboardAuth).toMatchObject({
@@ -60,8 +61,8 @@ describe('load-test authentication', () => {
     });
   });
 
-  test('respects AUTH_ENABLED=false', () => {
-    const config = createTestRuntimeConfig(createLoadTestRuntimeEnv({ AUTH_ENABLED: 'false' }));
+  test('respects CONFIG_AUTH_ENABLED=false', () => {
+    const config = createTestRuntimeConfig(createLoadTestRuntimeEnv({ CONFIG_AUTH_ENABLED: 'false' }));
     expect(config.dashboardAuth.enabled).toBe(false);
   });
 
