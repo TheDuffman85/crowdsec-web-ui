@@ -696,6 +696,7 @@ instances:
     lapi:
       url: http://crowdsec:8080
       auth: { type: none }
+    metrics: [ { url: http://old-crowdsec:6060/metrics, id: "0", name: Metrics 0, auth: { type: none } } ]
 `);
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
@@ -721,15 +722,25 @@ instances:
       expect(persisted.instances[0].lapi.auth.password).toEqual({ env: 'CONFIG_INSTANCE_LAPI_AUTH_PASSWORD' });
       expect(persisted.instances[0].metrics[0]).toMatchObject({ id: '0', name: 'Metrics 0' });
       expect(persisted.instances[0].metrics[0].auth.type).toBe('none');
-      expect(readFileSync(configFile, 'utf8')).toContain('# This comment should survive environment merges.');
-      expect(readFileSync(configFile, 'utf8')).not.toContain('This file was created automatically');
+      const persistedYaml = readFileSync(configFile, 'utf8');
+      expect(persistedYaml).toContain('# This comment should survive environment merges.');
+      expect(persistedYaml).not.toContain('This file was created automatically');
+      expect(persistedYaml).toContain(`    metrics:
+      - url: http://crowdsec:6060/metrics
+        id: "0"
+        name: Metrics 0
+        auth:
+          type: none`);
+      expect(persistedYaml).not.toContain('metrics: [');
 
       const withoutAuth = createRuntimeConfigImpl({
         CONFIG_FILE: configFile,
         CONFIG_INSTANCE_LAPI_AUTH_TYPE: 'none',
+        CONFIG_INSTANCE_METRICS_URL: 'http://crowdsec:6060/metrics',
       });
       expect(withoutAuth.instances[0].lapiAuth).toEqual({ mode: 'none' });
       expect(parseYaml(readFileSync(configFile, 'utf8')).instances[0].lapi.auth).toEqual({ type: 'none' });
+      expect(readFileSync(configFile, 'utf8')).not.toContain('metrics: [');
     } finally {
       log.mockRestore();
     }

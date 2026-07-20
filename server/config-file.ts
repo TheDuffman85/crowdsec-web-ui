@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { isSeq, parse as parseYaml, parseDocument as parseYamlDocument, stringify as stringifyYaml } from 'yaml';
+import { isMap, isSeq, parse as parseYaml, parseDocument as parseYamlDocument, stringify as stringifyYaml } from 'yaml';
 import type { RuntimeConfig } from './config';
 import { parseInstancesConfig, type CrowdsecInstanceConfig } from './instances-config';
 
@@ -896,6 +896,16 @@ export interface MergedApplicationConfig {
   yaml: string;
 }
 
+function useBlockCollectionStyle(node: unknown): void {
+  if (isSeq(node)) {
+    node.flow = false;
+    for (const item of node.items) useBlockCollectionStyle(item);
+  } else if (isMap(node)) {
+    node.flow = false;
+    for (const pair of node.items) useBlockCollectionStyle(pair.value);
+  }
+}
+
 export function mergeApplicationConfigEnvironment(file: string, env: NodeJS.ProcessEnv): MergedApplicationConfig {
   let yamlDocument;
   try {
@@ -911,7 +921,14 @@ export function mergeApplicationConfigEnvironment(file: string, env: NodeJS.Proc
     for (let index = 0; index < keys.length - 1; index += 1) {
       if (typeof keys[index + 1] !== 'number') continue;
       const prefix = keys.slice(0, index + 1);
-      if (!isSeq(yamlDocument.getIn(prefix, true))) yamlDocument.setIn(prefix, yamlDocument.createNode([]));
+      const collection = yamlDocument.getIn(prefix, true);
+      if (!isSeq(collection)) {
+        yamlDocument.setIn(prefix, yamlDocument.createNode([]));
+      } else if (collection.flow) {
+        // Inline arrays retain their flow style when setIn updates or adds an
+        // item, which otherwise keeps metrics overrides on one long line.
+        useBlockCollectionStyle(collection);
+      }
     }
     yamlDocument.setIn(keys, yamlDocument.createNode(value));
   };
