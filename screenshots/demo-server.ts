@@ -7,7 +7,6 @@ import { CrowdsecDatabase } from '../server/database';
 const dbDir = process.env.DB_DIR || path.join(process.env.TMPDIR || '/tmp', 'crowdsec-web-ui-screenshots');
 const configFile = path.join(dbDir, 'screenshot-config.yaml');
 const port = Number(process.env.CROWDSEC_SCREENSHOT_BACKEND_PORT || process.env.PORT || 3001);
-const database = new CrowdsecDatabase({ dbDir });
 const demoPrometheusMetrics = `
 # HELP cs_lapi_bouncer_requests_total number of calls
 # TYPE cs_lapi_bouncer_requests_total counter
@@ -63,6 +62,7 @@ const config = createRuntimeConfig({
   VITE_BRANCH: process.env.VITE_BRANCH || 'main',
   VITE_COMMIT_HASH: process.env.VITE_COMMIT_HASH || 'screenshot',
 }, { defaultConfigFile: configFile });
+const database = new CrowdsecDatabase({ dbDir, walEnabled: config.sqliteWalEnabled });
 
 const primaryInstance = config.instances[0];
 config.instances = [

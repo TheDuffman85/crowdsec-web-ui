@@ -163,6 +163,7 @@ export interface SearchIndexRebuildScope {
 export interface DatabaseOptions {
   dbDir?: string;
   dbPath?: string;
+  walEnabled?: boolean;
 }
 
 type RowWithRawData = { raw_data: string; created_at?: string; stop_at?: string; alert_id?: string | number | null };
@@ -336,7 +337,7 @@ export class CrowdsecDatabase {
   constructor(options: DatabaseOptions = {}) {
     const resolvedPath = resolveDatabasePath(options);
     this.dbPath = resolvedPath;
-    this.db = openDatabase(resolvedPath);
+    this.db = openDatabase(resolvedPath, options.walEnabled ?? true);
     const freshDatabase = isDatabaseFresh(this.db);
     this.searchIndexAvailable = initSchema(this.db, freshDatabase);
     this.loadDecisionDuplicateRefreshState();
@@ -2186,24 +2187,27 @@ function ensureDirectory(dirPath: string): void {
   }
 }
 
-function openDatabase(dbPath: string): Database {
+function openDatabase(dbPath: string, walEnabled: boolean): Database {
   try {
-    const database = createDatabase(dbPath);
-    database.exec('PRAGMA journal_mode = WAL');
-    database.exec('PRAGMA foreign_keys = ON');
-    database.exec('PRAGMA synchronous = NORMAL');
-    database.exec('PRAGMA cache_size = -32000');
-    database.exec('PRAGMA temp_store = MEMORY');
-    database.exec('PRAGMA busy_timeout = 5000');
-    database.exec('PRAGMA mmap_size = 268435456');
-    registerDatabaseFunctions(database);
-    return database;
+    return configureDatabase(createDatabase(dbPath), walEnabled);
   } catch (error: any) {
     if (dbPath.startsWith('/app/data') && error?.code === 'EACCES') {
-      return createDatabase('crowdsec.db');
+      return configureDatabase(createDatabase('crowdsec.db'), walEnabled);
     }
     throw error;
   }
+}
+
+function configureDatabase(database: Database, walEnabled: boolean): Database {
+  database.exec(`PRAGMA journal_mode = ${walEnabled ? 'WAL' : 'DELETE'}`);
+  database.exec('PRAGMA foreign_keys = ON');
+  database.exec('PRAGMA synchronous = NORMAL');
+  database.exec('PRAGMA cache_size = -32000');
+  database.exec('PRAGMA temp_store = MEMORY');
+  database.exec('PRAGMA busy_timeout = 5000');
+  database.exec('PRAGMA mmap_size = 268435456');
+  registerDatabaseFunctions(database);
+  return database;
 }
 
 function registerDatabaseFunctions(database: Database): void {

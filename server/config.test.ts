@@ -289,6 +289,7 @@ describe('config helpers', () => {
     expect(config.reconcileActiveIntervalMs).toBe(300_000);
     expect(config.reconcileOldIntervalMs).toBe(10_800_000);
     expect(config.reconcileWindowsPerRefresh).toBe(2);
+    expect(config.sqliteWalEnabled).toBe(true);
     expect(config.readOnly).toBe(false);
     expect(config.dashboardAuth.enabled).toBeNull();
     expect(config.dashboardAuth.oidcScope).toBe('openid profile email');
@@ -310,6 +311,7 @@ server:
 storage:
   dataDir: /tmp/yaml-data
   geonamesDir: /tmp/yaml-geonames
+  walEnabled: false
 ui:
   timeZone: UTC
   timeFormat: 12h
@@ -393,6 +395,7 @@ instances:
         basePath: '/security',
         dbDir: '/tmp/yaml-data',
         geonamesDumpDir: '/tmp/yaml-geonames',
+        sqliteWalEnabled: false,
         timeZone: 'UTC',
         timeFormat: '12h',
         readOnly: true,
@@ -506,6 +509,7 @@ instances:
       CONFIG_SERVER_PORT: '4200',
       CONFIG_SERVER_BASE_PATH: '/security',
       CONFIG_STORAGE_DATA_DIR: '/tmp/config-data',
+      CONFIG_STORAGE_WAL_ENABLED: 'false',
       CONFIG_UI: '{ timeZone: UTC, timeFormat: 24h, readOnly: false }',
       CONFIG_UI_READ_ONLY: 'true',
       CONFIG_AUTH_SESSION_SECRET: 'do-not-write-this-auth-secret',
@@ -535,6 +539,7 @@ instances:
         port: 4200,
         basePath: '/security',
         dbDir: '/tmp/config-data',
+        sqliteWalEnabled: false,
         timeZone: 'UTC',
         readOnly: true,
         refreshIntervalMs: 120_000,
@@ -567,6 +572,7 @@ instances:
       expect(saved).not.toContain('do-not-write-this-token');
       const document = parseYaml(saved);
       expect(document.server).toEqual({ port: 4200, basePath: '/security' });
+      expect(document.storage.walEnabled).toBe(false);
       expect(document.auth.sessionSecret).toEqual({ env: 'CONFIG_AUTH_SESSION_SECRET' });
       expect(document.instances).toHaveLength(2);
       expect(document.instances[0].id).toBe('0');

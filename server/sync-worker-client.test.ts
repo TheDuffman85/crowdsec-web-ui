@@ -14,6 +14,21 @@ afterEach(() => {
 });
 
 describe('DatabaseSyncWorker', () => {
+  test('keeps rollback journal mode when WAL is disabled', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-sync-worker-'));
+    tempDirs.push(dir);
+    const dbPath = path.join(dir, 'test.db');
+    const database = new CrowdsecDatabase({ dbPath, walEnabled: false });
+    const worker = new DatabaseSyncWorker({ dbPath, walEnabled: false });
+    workers.push(worker);
+
+    await worker.clearSyncData();
+
+    expect(database.db.prepare('PRAGMA journal_mode').get()).toEqual({ journal_mode: 'delete' });
+    worker.close();
+    database.close();
+  });
+
   test('serializes authentication, settings, and notification writes with alert sync', async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-sync-worker-'));
     tempDirs.push(dir);

@@ -10,6 +10,7 @@ type ConfigPath = readonly (string | number)[];
 export interface ParsedConfigFile {
   environment: NodeJS.ProcessEnv;
   instances: CrowdsecInstanceConfig[];
+  sqliteWalEnabled: boolean;
   updateCheckEnabled?: boolean;
 }
 
@@ -164,9 +165,12 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
   setString(env, server, 'basePath', 'BASE_PATH', 'server', true);
 
   const storage = section(root, 'storage');
-  knownKeys(storage, ['dataDir', 'geonamesDir'], 'storage');
+  knownKeys(storage, ['dataDir', 'geonamesDir', 'walEnabled'], 'storage');
   setString(env, storage, 'dataDir', 'DB_DIR', 'storage');
   setString(env, storage, 'geonamesDir', 'GEONAMES_DUMP_DIR', 'storage');
+  const sqliteWalEnabled = storage.walEnabled === undefined
+    ? true
+    : boolean(storage.walEnabled, 'storage.walEnabled');
 
   const ui = section(root, 'ui');
   knownKeys(ui, ['timeZone', 'timeFormat', 'readOnly'], 'ui');
@@ -246,6 +250,7 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
   return {
     environment: env,
     instances: parseInstancesConfig({ instances: root.instances }, sourceEnv),
+    sqliteWalEnabled,
     updateCheckEnabled,
   };
 }
@@ -329,7 +334,11 @@ function generatedInstances(env: NodeJS.ProcessEnv, config: RuntimeConfig): unkn
 export function generateApplicationConfig(env: NodeJS.ProcessEnv, config: RuntimeConfig): UnknownRecord {
   const document: UnknownRecord = {
     server: { port: config.port, basePath: config.basePath },
-    storage: { dataDir: config.dbDir, geonamesDir: config.geonamesDumpDir },
+    storage: {
+      dataDir: config.dbDir,
+      geonamesDir: config.geonamesDumpDir,
+      walEnabled: config.sqliteWalEnabled,
+    },
     ui: { timeZone: config.timeZone || 'browser', timeFormat: config.timeFormat, readOnly: config.readOnly },
     auth: {
       enabled: config.dashboardAuth.enabled === null ? 'auto' : config.dashboardAuth.enabled,
@@ -412,6 +421,7 @@ const CONFIG_VALUE_ENV = [
   ['CONFIG_SERVER_BASE_PATH', ['server', 'basePath']],
   ['CONFIG_STORAGE_DATA_DIR', ['storage', 'dataDir']],
   ['CONFIG_STORAGE_GEONAMES_DIR', ['storage', 'geonamesDir']],
+  ['CONFIG_STORAGE_WAL_ENABLED', ['storage', 'walEnabled']],
   ['CONFIG_UI_TIME_ZONE', ['ui', 'timeZone']],
   ['CONFIG_UI_TIME_FORMAT', ['ui', 'timeFormat']],
   ['CONFIG_UI_READ_ONLY', ['ui', 'readOnly']],

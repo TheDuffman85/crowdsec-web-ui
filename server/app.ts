@@ -417,7 +417,10 @@ function readSingleQueryValue(value: string | string[] | undefined): string | un
 
 export function createApp(options: CreateAppOptions = {}): AppController {
   const config = options.config || createRuntimeConfig();
-  const database = options.database || new CrowdsecDatabase({ dbDir: config.dbDir });
+  const database = options.database || new CrowdsecDatabase({
+    dbDir: config.dbDir,
+    walEnabled: config.sqliteWalEnabled,
+  });
   if (config.instances.length > 1 && database.getMeta('multi_instance_cache_schema_ready')?.value !== 'true') {
     const pendingDeletions = database.getPendingAlertDeletions();
     if (pendingDeletions.length > 0) {
@@ -474,7 +477,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     allowPrivateAddresses: config.notificationAllowPrivateAddresses,
   });
   const queryWorker = options.queryWorker || new DatabaseQueryWorker({ dbPath: database.dbPath });
-  const syncWorker = options.syncWorker || new DatabaseSyncWorker({ dbPath: database.dbPath });
+  const syncWorker = options.syncWorker || new DatabaseSyncWorker({
+    dbPath: database.dbPath,
+    walEnabled: config.sqliteWalEnabled,
+  });
   const attackLocationResolver = options.attackLocationResolver || createAttackLocationResolver({
     dumpDirectory: config.geonamesDumpDir,
   });

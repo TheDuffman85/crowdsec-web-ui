@@ -1587,6 +1587,21 @@ describe('CrowdsecDatabase', () => {
     reopened.close();
   });
 
+  test('can disable WAL and persists the rollback journal mode', () => {
+    const dbPath = createTestDatabasePath();
+    const walDatabase = new CrowdsecDatabase({ dbPath });
+    expect(walDatabase.db.prepare('PRAGMA journal_mode').get()).toEqual({ journal_mode: 'wal' });
+    walDatabase.close();
+
+    const rollbackDatabase = new CrowdsecDatabase({ dbPath, walEnabled: false });
+    expect(rollbackDatabase.db.prepare('PRAGMA journal_mode').get()).toEqual({ journal_mode: 'delete' });
+    rollbackDatabase.close();
+
+    const reopened = new Database(dbPath);
+    expect(reopened.prepare('PRAGMA journal_mode').get()).toEqual({ journal_mode: 'delete' });
+    reopened.close();
+  });
+
   test('docker entrypoint preserves SQLite WAL files for restart recovery', () => {
     const entrypoint = readFileSync(path.resolve(process.cwd(), 'docker-entrypoint.sh'), 'utf8');
 

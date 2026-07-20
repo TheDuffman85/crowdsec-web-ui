@@ -43,14 +43,16 @@ type PendingRequest = {
 
 export class DatabaseSyncWorker {
   private readonly dbPath: string;
+  private readonly walEnabled: boolean;
   private readonly timeoutMs: number;
   private worker: Worker | null = null;
   private nextId = 1;
   private readonly pending = new Map<number, PendingRequest>();
   private operationQueue: Promise<void> = Promise.resolve();
 
-  constructor(options: { dbPath: string; timeoutMs?: number }) {
+  constructor(options: { dbPath: string; walEnabled?: boolean; timeoutMs?: number }) {
     this.dbPath = options.dbPath;
+    this.walEnabled = options.walEnabled ?? true;
     this.timeoutMs = options.timeoutMs ?? 10 * 60_000;
   }
 
@@ -138,7 +140,7 @@ export class DatabaseSyncWorker {
     if (this.worker) return this.worker;
     const isTsRuntime = import.meta.url.endsWith('.ts');
     const worker = new Worker(new URL(`./sync-worker.${isTsRuntime ? 'ts' : 'js'}`, import.meta.url), {
-      workerData: { dbPath: this.dbPath },
+      workerData: { dbPath: this.dbPath, walEnabled: this.walEnabled },
       execArgv: isTsRuntime ? ['--import', 'tsx'] : [],
     });
     worker.on('message', (message: SyncWorkerResponse) => this.handleMessage(message));

@@ -213,6 +213,7 @@ Secrets accept a direct string or exactly one `{ env: NAME }` / `{ file: PATH }`
 | `server.basePath` | `""` | `CONFIG_SERVER_BASE_PATH` | Optional URL prefix such as `/crowdsec`; no trailing slash. |
 | `storage.dataDir` | `/app/data` | `CONFIG_STORAGE_DATA_DIR` | SQLite database and persistent application state. |
 | `storage.geonamesDir` | `/app/geonames` in Docker; `./geonames` locally | `CONFIG_STORAGE_GEONAMES_DIR` | Local GeoNames snapshot used for location labels. |
+| `storage.walEnabled` | `true` | `CONFIG_STORAGE_WAL_ENABLED` | Enables SQLite write-ahead logging. Set to `false` for filesystems that do not support WAL. |
 | `ui.timeZone` | `browser` | `CONFIG_UI_TIME_ZONE` | Browser timezone or an IANA zone such as `Europe/Berlin` or `UTC`. |
 | `ui.timeFormat` | `browser` | `CONFIG_UI_TIME_FORMAT` | Clock format: `browser`, `12h`, or `24h`. |
 | `ui.readOnly` | `false` | `CONFIG_UI_READ_ONLY` | Hides management actions and rejects mutating API operations. |
@@ -770,7 +771,7 @@ A Helm chart for deploying `crowdsec-web-ui` on Kubernetes is available (maintai
 
 ## Persistence & Alert History
 
-All data is stored in SQLite under `/app/data`. Mount the directory, not only `crowdsec.db`, because SQLite also uses `crowdsec.db-wal` and `crowdsec.db-shm` sidecar files.
+All data is stored in SQLite under `/app/data`. With the default `storage.walEnabled: true`, mount the directory, not only `crowdsec.db`, because SQLite also uses `crowdsec.db-wal` and `crowdsec.db-shm` sidecar files.
 
 For Docker run, add `-v $(pwd)/data:/app/data`. For Compose:
 

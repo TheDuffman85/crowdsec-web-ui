@@ -12,7 +12,11 @@ type WorkerRequest = {
 };
 
 installTimestampedConsole();
-const database = new CrowdsecDatabase({ dbPath: String((workerData as { dbPath: string }).dbPath) });
+const workerOptions = workerData as { dbPath: string; walEnabled?: boolean };
+const database = new CrowdsecDatabase({
+  dbPath: String(workerOptions.dbPath),
+  walEnabled: workerOptions.walEnabled ?? true,
+});
 
 parentPort?.on('message', (message: WorkerRequest) => {
   const response: { id: number; result?: unknown; error?: string } = { id: message.id };

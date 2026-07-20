@@ -29,7 +29,6 @@ const LOADTEST_SOURCE_TABLE = 'loadtest_alert_source';
 installTimestampedConsole();
 const dbDir = process.env.LOADTEST_DB_DIR || path.join(process.env.TMPDIR || '/tmp', 'crowdsec-web-ui-load-test');
 const port = Number(process.env.LOADTEST_BACKEND_PORT || 3000);
-const database = new CrowdsecDatabase({ dbDir });
 const eventLoopDelay = monitorEventLoopDelay({ resolution: 10 });
 eventLoopDelay.enable();
 const eventLoopDelayReporter = setInterval(() => {
@@ -75,6 +74,7 @@ const config = createRuntimeConfig({
   VITE_BRANCH: process.env.VITE_BRANCH || 'loadtest',
   VITE_COMMIT_HASH: process.env.VITE_COMMIT_HASH || 'loadtest',
 }, { defaultConfigFile: path.join(dbDir, 'config.yaml') });
+const database = new CrowdsecDatabase({ dbDir, walEnabled: config.sqliteWalEnabled });
 const multiInstanceProfile = process.env.LOADTEST_MULTI_INSTANCE === 'true';
 if (multiInstanceProfile) {
   const common = config.instances[0];

@@ -14,6 +14,7 @@ server:
 storage:
   dataDir: /app/data
   geonamesDir: /app/geonames
+  walEnabled: true # Set to false for filesystems that do not support SQLite WAL.
 
 ui:
   timeZone: browser # Or an IANA zone such as Europe/Berlin or UTC.

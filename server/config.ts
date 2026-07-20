@@ -84,6 +84,7 @@ export interface RuntimeConfig {
   loadTestProfile: string | null;
   dbDir: string;
   geonamesDumpDir: string;
+  sqliteWalEnabled: boolean;
   notificationSecretKey?: string;
   notificationAllowPrivateAddresses: boolean;
   notificationDebugPayloads: boolean;
@@ -417,6 +418,7 @@ function createRuntimeConfigFromEnvironment(env: NodeJS.ProcessEnv): RuntimeConf
       : null,
     dbDir: env.DB_DIR || '/app/data',
     geonamesDumpDir: env.GEONAMES_DUMP_DIR || path.resolve(process.cwd(), 'geonames'),
+    sqliteWalEnabled: true,
     notificationSecretKey,
     notificationAllowPrivateAddresses: parseBooleanEnv(env.NOTIFICATION_ALLOW_PRIVATE_ADDRESSES, true),
     notificationDebugPayloads: parseBooleanEnv(env.NOTIFICATION_DEBUG_PAYLOADS, false),
@@ -484,6 +486,7 @@ function warnDeprecatedEnvironment(
 function createRuntimeConfigFromParsedConfig(parsed: ParsedConfigFile): RuntimeConfig {
   const runtimeConfig = createRuntimeConfigFromEnvironment(parsed.environment);
   runtimeConfig.instances = parsed.instances;
+  runtimeConfig.sqliteWalEnabled = parsed.sqliteWalEnabled;
   const primaryInstance = parsed.instances[0];
   runtimeConfig.crowdsecUrl = primaryInstance.lapiUrl;
   runtimeConfig.crowdsecAuth = primaryInstance.lapiAuth.mode === 'mtls'
