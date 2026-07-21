@@ -9,80 +9,82 @@
 # The zero index may be omitted: CONFIG_INSTANCE_LAPI_URL addresses instance 0,
 # and CONFIG_INSTANCE_METRICS_URL addresses metrics endpoint 0 on instance 0.
 
-server:
-  port: 3000
-  basePath: ""
+# Settings that remain commented continue to follow the defaults of the installed
+# version. Uncomment only values that you want to manage and pin.
+# server:
+#   port: 3000
+#   basePath: ""
 
-storage:
-  dataDir: /app/data
-  geonamesDir: /app/geonames
-  walEnabled: true # Set to false for filesystems that do not support SQLite WAL.
+# storage:
+#   dataDir: /app/data
+#   geonamesDir: /app/geonames
+#   walEnabled: true # Set to false for filesystems that do not support SQLite WAL.
 
-ui:
-  timeZone: browser # Or an IANA zone such as Europe/Berlin or UTC.
-  timeFormat: browser # browser, 12h, or 24h.
-  readOnly: false
+# ui:
+#   timeZone: browser # Or an IANA zone such as Europe/Berlin or UTC.
+#   timeFormat: browser # browser, 12h, or 24h.
+#   readOnly: false
 
-updates:
-  enabled: true
+# updates:
+#   enabled: true
 
-auth:
-  enabled: auto # New databases enable auth; migrated databases keep their existing state.
-  # Direct secret strings are supported, but file references are recommended so
-  # secrets do not end up in source control, backups, or configuration tooling.
-  # sessionSecret: change-me
-  # sessionSecret:
-  #   env: AUTH_SECRET
-  # totpSecret:
-  #   file: /run/secrets/auth_totp_secret
-  # totpSeed:
-  #   env: AUTH_TOTP_SEED
-  oidc:
-    # issuerUrl: https://idp.example.com/application/o/crowdsec/
-    # clientId: crowdsec-web-ui
-    # clientSecret:
-    #   file: /run/secrets/oidc_client_secret
-    scope: openid profile email
-    groupsClaim: groups
-    adminGroups: []
-    readOnlyGroups: []
-    unmatchedRole: deny
+# auth:
+#   enabled: auto # New databases enable auth; migrated databases keep their existing state.
+#   Direct secret strings are supported, but file references are recommended so
+#   secrets do not end up in source control, backups, or configuration tooling.
+#   sessionSecret: change-me
+#   sessionSecret:
+#     env: AUTH_SECRET
+#   totpSecret:
+#     file: /run/secrets/auth_totp_secret
+#   totpSeed:
+#     env: AUTH_TOTP_SEED
+#   oidc:
+#     issuerUrl: https://idp.example.com/application/o/crowdsec/
+#     clientId: crowdsec-web-ui
+#     clientSecret:
+#       file: /run/secrets/oidc_client_secret
+#     scope: openid profile email
+#     groupsClaim: groups
+#     adminGroups: []
+#     readOnlyGroups: []
+#     unmatchedRole: deny
 
-notifications:
-  # secretKey:
-  #   file: /run/secrets/notification_secret_key
-  allowPrivateAddresses: true
-  debugPayloads: false
+# notifications:
+#   secretKey:
+#     file: /run/secrets/notification_secret_key
+#   allowPrivateAddresses: true
+#   debugPayloads: false
 
-crowdsec:
-  simulationsEnabled: false
-  # Uncomment to override the default non-CAPI feed:
-  # alertFilters:
-  #   includeOrigins: [crowdsec]
-  #   excludeOrigins: [lists]
-  #   includeCapi: false
-  #   includeOriginEmpty: false
-  #   excludeOriginEmpty: false
-  sync:
-    lookback: 168h
-    refreshInterval: 1m
-    manualRefreshEnabled: false
-    idleRefreshInterval: 10m
-    idleThreshold: 2m
-    requestTimeout: 30s
-    bouncerPropagationDelay: 15s
-    metricsRequestTimeout: 5s
-    heartbeatInterval: 30s
-    alertSyncChunk: 12h
-    alertSyncMinChunk: 15m
-    reconcileWindow: 1h
-    reconcileRecentAge: 24h
-    reconcileRecentInterval: 15m
-    reconcileActiveInterval: 5m
-    reconcileOldInterval: 3h
-    reconcileWindowsPerRefresh: 2
-    bootstrapRetryDelay: 30s
-    bootstrapRetryEnabled: true
+# crowdsec:
+#   simulationsEnabled: false
+#   Uncomment alertFilters to override the default non-CAPI feed.
+#   alertFilters:
+#     includeOrigins: [crowdsec]
+#     excludeOrigins: [lists]
+#     includeCapi: false
+#     includeOriginEmpty: false
+#     excludeOriginEmpty: false
+#   sync:
+#     lookback: 168h
+#     refreshInterval: 1m
+#     manualRefreshEnabled: false
+#     idleRefreshInterval: 10m
+#     idleThreshold: 2m
+#     requestTimeout: 30s
+#     bouncerPropagationDelay: 15s
+#     metricsRequestTimeout: 5s
+#     heartbeatInterval: 30s
+#     alertSyncChunk: 12h
+#     alertSyncMinChunk: 15m
+#     reconcileWindow: 1h
+#     reconcileRecentAge: 24h
+#     reconcileRecentInterval: 15m
+#     reconcileActiveInterval: 5m
+#     reconcileOldInterval: 3h
+#     reconcileWindowsPerRefresh: 2
+#     bootstrapRetryDelay: 30s
+#     bootstrapRetryEnabled: true
 
 instances:
   # id is optional and defaults to the zero-based array index. Keep an explicit,
@@ -96,7 +98,7 @@ instances:
       auth:
         # type is optional: username/password infers password; certFile/keyFile
         # infers mtls; no credentials infers none.
-        type: password
+        # type: password
         username: crowdsec-web-ui
         password:
           file: /run/secrets/crowdsec_password
@@ -107,15 +109,49 @@ instances:
       #   keyFile: /certs/agent-key.pem
       # tls:
       #   caFile: /certs/ca.pem
-    metrics: []
+    # metrics defaults to an empty list. Uncomment the example below to add one.
     # metrics:
     #   # id and name are optional and default to the zero-based metrics index
     #   # and Metrics <METRIC_INDEX>, respectively.
     #   - id: lapi
     #     name: CrowdSec
     #     url: http://crowdsec:6060/metrics
+    #     requestTimeout: 5s
     #     auth:
     #       # type is optional: username/password infers basic; token infers
     #       # bearer; no credentials infers none.
     #       type: none
-    #     requestTimeout: 5s
+    #     # For basic authentication, replace auth above with:
+    #     # auth:
+    #     #   type: basic
+    #     #   username: prometheus
+    #     #   password:
+    #     #     file: /run/secrets/metrics_password
+    #     # For bearer authentication, replace auth above with:
+    #     # auth:
+    #     #   type: bearer
+    #     #   token:
+    #     #     file: /run/secrets/metrics_token
+    #     # tls:
+    #     #   caFile: /certs/metrics-ca.pem
+    #     #   certFile: /certs/metrics-client.pem
+    #     #   keyFile: /certs/metrics-client-key.pem
+    # Per-instance sync values are optional and inherit the global values above.
+    # sync:
+    #   lookback: 168h
+    #   refreshInterval: 1m
+    #   idleRefreshInterval: 10m
+    #   idleThreshold: 2m
+    #   requestTimeout: 30s
+    #   heartbeatInterval: 30s
+    #   alertSyncChunk: 12h
+    #   alertSyncMinChunk: 15m
+    #   reconcileWindow: 1h
+    #   reconcileRecentAge: 24h
+    #   reconcileRecentInterval: 15m
+    #   reconcileActiveInterval: 5m
+    #   reconcileOldInterval: 3h
+    #   reconcileWindowsPerRefresh: 2
+    #   bootstrapRetryDelay: 30s
+    #   bootstrapRetryEnabled: true
+    #   bouncerPropagationDelay: 15s

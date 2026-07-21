@@ -293,17 +293,23 @@ instances:
       expect(document.storage.walEnabled).toBe(false);
       expect(document.auth.sessionSecret).toEqual({ env: 'CONFIG_AUTH_SESSION_SECRET' });
       expect(document.instances).toHaveLength(2);
-      expect(document.instances[0].id).toBe('0');
-      expect(document.instances[0].name).toBe('Instance 0');
-      expect(document.instances[0].lapi.auth.type).toBe('password');
-      expect(document.instances[0].metrics[0].id).toBe('0');
-      expect(document.instances[0].metrics[0].name).toBe('Metrics 0');
-      expect(document.instances[0].metrics[0].auth.type).toBe('bearer');
-      expect(document.instances[0].metrics[1].id).toBe('1');
-      expect(document.instances[0].metrics[1].name).toBe('Metrics 1');
-      expect(document.instances[0].metrics[1].auth.type).toBe('none');
+      expect(document.instances[0].id).toBeUndefined();
+      expect(document.instances[0].name).toBeUndefined();
+      expect(document.instances[0].lapi.auth.type).toBeUndefined();
+      expect(document.instances[0].metrics[0].id).toBeUndefined();
+      expect(document.instances[0].metrics[0].name).toBeUndefined();
+      expect(document.instances[0].metrics[0].auth.type).toBeUndefined();
+      expect(document.instances[0].metrics[1].id).toBeUndefined();
+      expect(document.instances[0].metrics[1].name).toBeUndefined();
+      expect(document.instances[0].metrics[1].auth).toBeUndefined();
+      expect(document.instances[1].id).toBe('secondary');
+      expect(document.instances[1].name).toBe('Secondary');
+      expect(document.instances[1].lapi.auth.type).toBe('none');
       expect(document.instances[0].lapi.auth.password).toEqual({ env: 'CONFIG_INSTANCE_LAPI_AUTH_PASSWORD' });
       expect(document.instances[0].metrics[0].auth.token).toEqual({ env: 'CONFIG_INSTANCE_METRICS_AUTH_TOKEN' });
+      expect(saved).toContain('    # id: "0"');
+      expect(saved).toContain('        # type: password');
+      expect(saved).toContain('        # id: "0"');
       expect(warn).not.toHaveBeenCalled();
       expect(log).toHaveBeenCalledWith(`Saved generated configuration to ${generatedConfigFile}.`);
       expect(log).toHaveBeenCalledWith('Applied CONFIG_ values while generating the application configuration.');
@@ -360,11 +366,11 @@ instances:
         'server', 'storage', 'ui', 'updates', 'auth', 'notifications', 'crowdsec', 'instances',
       ]);
       expect(Object.keys(document.ui)).toEqual(['timeZone', 'timeFormat', 'readOnly']);
-      expect(Object.keys(document.instances[0])).toEqual(['id', 'name', 'lapi', 'metrics', 'sync']);
+      expect(Object.keys(document.instances[0])).toEqual(['lapi', 'metrics', 'sync']);
       expect(Object.keys(document.instances[0].lapi)).toEqual(['url', 'auth']);
-      expect(Object.keys(document.instances[0].lapi.auth)).toEqual(['type', 'username', 'password']);
-      expect(Object.keys(document.instances[0].metrics[0])).toEqual(['id', 'name', 'url', 'requestTimeout', 'auth']);
-      expect(Object.keys(document.instances[0].metrics[0].auth)).toEqual(['type', 'token']);
+      expect(Object.keys(document.instances[0].lapi.auth)).toEqual(['username', 'password']);
+      expect(Object.keys(document.instances[0].metrics[0])).toEqual(['url', 'requestTimeout', 'auth']);
+      expect(Object.keys(document.instances[0].metrics[0].auth)).toEqual(['token']);
     } finally {
       log.mockRestore();
     }
@@ -404,8 +410,8 @@ instances:
       type: 'basic', username: 'metrics-user', password: 'metrics-password',
     });
     const persisted = parseYaml(readFileSync(generatedConfigFile, 'utf8'));
-    expect(persisted.instances[0].lapi.auth.type).toBe('mtls');
-    expect(persisted.instances[0].metrics[0].auth.type).toBe('basic');
+    expect(persisted.instances[0].lapi.auth.type).toBeUndefined();
+    expect(persisted.instances[0].metrics[0].auth.type).toBeUndefined();
   });
 
   test('prefers CONFIG_ setup values over deprecated values during initial generation', () => {

@@ -192,7 +192,7 @@ Adjust the LAPI URL and certificate paths for your deployment. Uncomment `CONFIG
 
 The application loads `/app/data/config.yaml` in Docker and `./data/config.yaml` locally. Set `CONFIG_FILE` only to select another existing file. [`config.example.yaml`](config.example.yaml) is the complete commented example.
 
-When the default file does not exist, it is created once with an explanatory header. Values supplied through setup environment variables are written as active YAML; other application defaults are shown as comments and therefore continue to follow the defaults of the installed version. Generated mappings use block-style rows and follow the configuration order documented below. Once created, the file is user-managed: the application does not refresh its explanatory text or commented defaults.
+When the default file does not exist, it is created once with an explanatory header and a complete non-legacy field reference. Values supplied through setup environment variables are written as active YAML; application defaults and examples for optional fields are shown as comments, so omitted settings continue to follow the defaults of the installed version. Generated mappings use block-style rows and follow the configuration order documented below. Once created, the file is user-managed: the application does not refresh its explanatory text or commented defaults.
 
 At startup, recognized `CONFIG_` variables are parsed as YAML values, merged over the file in memory, and validated. They are written to YAML only when the application creates the initial default configuration; by default, an existing file is never changed by overrides. Precedence is section variable, field variable, then indexed array variable. Removing an environment variable reveals the value from the file again. Restart after changing configuration or rotating a referenced secret.
 
@@ -283,7 +283,7 @@ Durations accept `ms`, `s`, `m`, `h`, or `d`, for example `500ms`, `30s`, `5m`, 
 
 ### Instances and LAPI
 
-Use `<INDEX>` for the zero-based instance index. The ID defaults to the index, the name defaults to `Instance <INDEX>`, and the LAPI authentication type is inferred from its credentials. Derived values are included when the initial YAML is created. Explicit IDs must match lowercase letters, digits, `_`, and `-`, and should remain stable after data is imported.
+Use `<INDEX>` for the zero-based instance index. The ID defaults to the index, the name defaults to `Instance <INDEX>`, and the LAPI authentication type is inferred from its credentials. Inferred values are shown as comments when the initial YAML is created, unless a compatibility identity must remain explicit. Explicit IDs must match lowercase letters, digits, `_`, and `-`, and should remain stable after data is imported.
 
 > [!IMPORTANT]
 > Configure exactly one credential shape:
@@ -315,7 +315,7 @@ Use `<INDEX>` for the zero-based instance index. The ID defaults to the index, t
 
 ### Metrics endpoints
 
-Use `<INDEX>` for the instance index and `<METRIC_INDEX>` for its zero-based metrics endpoint index. The endpoint ID defaults to `<METRIC_INDEX>` and its name defaults to `Metrics <METRIC_INDEX>`. These defaults are included when the initial YAML is created.
+Use `<INDEX>` for the instance index and `<METRIC_INDEX>` for its zero-based metrics endpoint index. The endpoint ID defaults to `<METRIC_INDEX>` and its name defaults to `Metrics <METRIC_INDEX>`. These inferred values are shown as comments when the initial YAML is created.
 
 | YAML field | Default | Purpose | Environment override |
 | --- | --- | --- | --- |

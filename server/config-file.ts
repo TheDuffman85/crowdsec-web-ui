@@ -284,14 +284,14 @@ function has(env: NodeJS.ProcessEnv, name: string): boolean {
 
 const INITIAL_CONFIG_HEADER = [
   'This file was created automatically because no application config existed.',
-  'Commented settings show the defaults that applied when the file was created.',
+  'Commented settings show current defaults and examples for optional fields.',
   'While a setting remains commented out, the application uses its current default,',
   'so defaults may change when the application is updated. Uncomment a setting to',
   'manage and pin its value. After creation, this file is the user\'s responsibility;',
   'the application does not update these comments or defaults automatically.',
 ] as const;
 
-const CONFIG_KEY_ORDER = new Map<string, readonly string[]>([
+export const CONFIG_KEY_ORDER = new Map<string, readonly string[]>([
   ['', ['server', 'storage', 'ui', 'updates', 'auth', 'notifications', 'crowdsec', 'instances']],
   ['server', ['port', 'basePath']],
   ['storage', ['dataDir', 'geonamesDir', 'walEnabled']],
@@ -1137,10 +1137,52 @@ function configPathStartsWith(path: ConfigPath, prefix: ConfigPath): boolean {
   return prefix.length <= path.length && prefix.every((part, index) => part === path[index]);
 }
 
-function initialExplicitConfigPaths(env: NodeJS.ProcessEnv): ConfigPath[] {
-  // Unlike the optional application sections, at least one complete instance
-  // definition is required for the generated file to remain loadable.
-  const paths: ConfigPath[] = [['instances']];
+function initialRequiredInstancePaths(document: UnknownRecord): ConfigPath[] {
+  const paths: ConfigPath[] = [];
+  const instances = Array.isArray(document.instances) ? document.instances : [];
+  for (const [instanceIndex, rawInstance] of instances.entries()) {
+    const instance = record(rawInstance, `instances[${instanceIndex}]`);
+    const instancePath: ConfigPath = ['instances', instanceIndex];
+
+    // Preserve compatibility identities that differ from the YAML parser's
+    // inferred index-based values. Inferred IDs and names remain comments.
+    if (instance.id !== String(instanceIndex)) paths.push([...instancePath, 'id']);
+    if (instance.name !== `Instance ${instanceIndex}`) paths.push([...instancePath, 'name']);
+    if (instance.icon !== undefined) paths.push([...instancePath, 'icon']);
+
+    const lapi = record(instance.lapi, `instances[${instanceIndex}].lapi`);
+    paths.push([...instancePath, 'lapi', 'url']);
+    const lapiAuth = lapi.auth === undefined ? {} : record(lapi.auth, `instances[${instanceIndex}].lapi.auth`);
+    for (const key of ['username', 'password', 'certFile', 'keyFile']) {
+      if (lapiAuth[key] !== undefined) paths.push([...instancePath, 'lapi', 'auth', key]);
+    }
+    if (lapi.tls !== undefined) paths.push([...instancePath, 'lapi', 'tls']);
+
+    const metrics = Array.isArray(instance.metrics) ? instance.metrics : [];
+    for (const [metricsIndex, rawEndpoint] of metrics.entries()) {
+      const endpoint = record(rawEndpoint, `instances[${instanceIndex}].metrics[${metricsIndex}]`);
+      const endpointPath: ConfigPath = [...instancePath, 'metrics', metricsIndex];
+      if (endpoint.id !== String(metricsIndex)) paths.push([...endpointPath, 'id']);
+      if (endpoint.name !== `Metrics ${metricsIndex}`) paths.push([...endpointPath, 'name']);
+      paths.push([...endpointPath, 'url']);
+      const metricsAuth = endpoint.auth === undefined
+        ? {}
+        : record(endpoint.auth, `instances[${instanceIndex}].metrics[${metricsIndex}].auth`);
+      for (const key of ['username', 'password', 'token']) {
+        if (metricsAuth[key] !== undefined) paths.push([...endpointPath, 'auth', key]);
+      }
+      if (endpoint.tls !== undefined) paths.push([...endpointPath, 'tls']);
+    }
+  }
+  return paths;
+}
+
+function initialExplicitConfigPaths(env: NodeJS.ProcessEnv, document: UnknownRecord): ConfigPath[] {
+  // Unlike the optional application sections, each generated instance needs an
+  // active LAPI connection. Optional and inferred instance values stay comments.
+  const paths: ConfigPath[] = has(env, 'CROWDSEC_INSTANCES_CONFIG_FILE')
+    ? [['instances']]
+    : initialRequiredInstancePaths(document);
   for (const [name, path] of LEGACY_GENERATED_CONFIG_PATHS) {
     if (has(env, name)) paths.push(path);
   }
@@ -1160,6 +1202,126 @@ function initialExplicitConfigPaths(env: NodeJS.ProcessEnv): ConfigPath[] {
   return paths.filter((path, index) => paths.findIndex((candidate) => sameConfigPath(candidate, path)) === index);
 }
 
+function initialConfigReference(document: UnknownRecord): UnknownRecord {
+  const auth = record(document.auth, 'auth');
+  const oidc = record(auth.oidc, 'auth.oidc');
+  const notifications = record(document.notifications, 'notifications');
+  const crowdsec = record(document.crowdsec, 'crowdsec');
+  const sync = record(crowdsec.sync, 'crowdsec.sync');
+  const filters = crowdsec.alertFilters === undefined ? {} : record(crowdsec.alertFilters, 'crowdsec.alertFilters');
+  const instances = (document.instances as unknown[]).map((rawInstance, instanceIndex) => {
+    const instance = record(rawInstance, `instances[${instanceIndex}]`);
+    const lapi = record(instance.lapi, `instances[${instanceIndex}].lapi`);
+    const lapiAuth = lapi.auth === undefined ? {} : record(lapi.auth, `instances[${instanceIndex}].lapi.auth`);
+    const lapiTls = lapi.tls === undefined ? {} : record(lapi.tls, `instances[${instanceIndex}].lapi.tls`);
+    const instanceSync = instance.sync === undefined ? {} : record(instance.sync, `instances[${instanceIndex}].sync`);
+    const rawMetrics = Array.isArray(instance.metrics) ? instance.metrics : [];
+    const metrics = (rawMetrics.length > 0 ? rawMetrics : [{}]).map((rawEndpoint, metricsIndex) => {
+      const endpoint = record(rawEndpoint, `instances[${instanceIndex}].metrics[${metricsIndex}]`);
+      const metricsAuth = endpoint.auth === undefined
+        ? {}
+        : record(endpoint.auth, `instances[${instanceIndex}].metrics[${metricsIndex}].auth`);
+      const metricsTls = endpoint.tls === undefined
+        ? {}
+        : record(endpoint.tls, `instances[${instanceIndex}].metrics[${metricsIndex}].tls`);
+      return {
+        id: String(metricsIndex),
+        name: `Metrics ${metricsIndex}`,
+        url: 'http://crowdsec:6060/metrics',
+        requestTimeout: sync.metricsRequestTimeout,
+        ...endpoint,
+        auth: {
+          type: 'none',
+          username: 'prometheus',
+          password: { file: '/run/secrets/metrics_password' },
+          token: { file: '/run/secrets/metrics_token' },
+          ...metricsAuth,
+        },
+        tls: {
+          caFile: '/certs/metrics-ca.pem',
+          certFile: '/certs/metrics-client.pem',
+          keyFile: '/certs/metrics-client-key.pem',
+          ...metricsTls,
+        },
+      };
+    });
+    return {
+      id: String(instanceIndex),
+      name: `Instance ${instanceIndex}`,
+      icon: '🛡️',
+      ...instance,
+      lapi: {
+        url: 'http://crowdsec:8080',
+        ...lapi,
+        auth: {
+          type: 'none',
+          username: 'crowdsec-web-ui',
+          password: { file: '/run/secrets/crowdsec_password' },
+          certFile: '/certs/agent.pem',
+          keyFile: '/certs/agent-key.pem',
+          ...lapiAuth,
+        },
+        tls: { caFile: '/certs/ca.pem', ...lapiTls },
+      },
+      metrics,
+      sync: {
+        lookback: sync.lookback,
+        refreshInterval: sync.refreshInterval,
+        idleRefreshInterval: sync.idleRefreshInterval,
+        idleThreshold: sync.idleThreshold,
+        requestTimeout: sync.requestTimeout,
+        heartbeatInterval: sync.heartbeatInterval,
+        alertSyncChunk: sync.alertSyncChunk,
+        alertSyncMinChunk: sync.alertSyncMinChunk,
+        reconcileWindow: sync.reconcileWindow,
+        reconcileRecentAge: sync.reconcileRecentAge,
+        reconcileRecentInterval: sync.reconcileRecentInterval,
+        reconcileActiveInterval: sync.reconcileActiveInterval,
+        reconcileOldInterval: sync.reconcileOldInterval,
+        reconcileWindowsPerRefresh: sync.reconcileWindowsPerRefresh,
+        bootstrapRetryDelay: sync.bootstrapRetryDelay,
+        bootstrapRetryEnabled: sync.bootstrapRetryEnabled,
+        bouncerPropagationDelay: sync.bouncerPropagationDelay,
+        ...instanceSync,
+      },
+    };
+  });
+
+  return {
+    ...document,
+    auth: {
+      enabled: 'auto',
+      sessionSecret: { env: 'AUTH_SECRET' },
+      totpSecret: { file: '/run/secrets/auth_totp_secret' },
+      totpSeed: { env: 'AUTH_TOTP_SEED' },
+      ...auth,
+      oidc: {
+        issuerUrl: 'https://idp.example.com/application/o/crowdsec/',
+        clientId: 'crowdsec-web-ui',
+        clientSecret: { file: '/run/secrets/oidc_client_secret' },
+        ...oidc,
+      },
+    },
+    notifications: {
+      secretKey: { file: '/run/secrets/notification_secret_key' },
+      ...notifications,
+    },
+    crowdsec: {
+      ...crowdsec,
+      alertFilters: {
+        includeOrigins: [],
+        excludeOrigins: [],
+        includeCapi: false,
+        includeOriginEmpty: false,
+        excludeOriginEmpty: false,
+        ...filters,
+      },
+      sync,
+    },
+    instances,
+  };
+}
+
 function indentYaml(yaml: string, indentation: number): string[] {
   const prefix = ' '.repeat(indentation);
   return yaml.trimEnd().split('\n').map((line) => `${prefix}${line}`);
@@ -1175,26 +1337,65 @@ function stringifyConfigEntry(key: string, value: unknown): string {
 }
 
 function renderInitialConfigMap(
-  value: UnknownRecord,
+  reference: UnknownRecord,
+  actual: UnknownRecord,
   path: ConfigPath,
   indentation: number,
   explicitPaths: readonly ConfigPath[],
+  inheritedExplicit = false,
 ): { lines: string[]; active: boolean } {
   const lines: string[] = [];
   let active = false;
-  for (const [key, child] of Object.entries(value)) {
+  for (const [key, childReference] of Object.entries(reference)) {
     const childPath: ConfigPath = [...path, key];
-    const explicitlyActive = explicitPaths.some((explicitPath) => configPathStartsWith(childPath, explicitPath));
+    const hasActual = Object.prototype.hasOwnProperty.call(actual, key);
+    const childActual = actual[key];
+    const explicitlyActive = hasActual && (inheritedExplicit
+      || explicitPaths.some((explicitPath) => configPathStartsWith(childPath, explicitPath)));
     const hasExplicitDescendant = explicitPaths.some((explicitPath) => configPathStartsWith(explicitPath, childPath));
 
     if (explicitlyActive) {
-      lines.push(...indentYaml(stringifyConfigEntry(key, child), indentation));
+      if (Array.isArray(childActual) && childActual.length > 0) {
+        const rendered = renderInitialConfigArray(
+          childReference as unknown[], childActual, childPath, indentation + 2, explicitPaths, true,
+        );
+        lines.push(`${' '.repeat(indentation)}${key}:`, ...rendered.lines);
+      } else if (childActual && typeof childActual === 'object' && !Array.isArray(childActual)
+        && Object.keys(childActual as UnknownRecord).length > 0) {
+        const rendered = renderInitialConfigMap(
+          childReference as UnknownRecord,
+          childActual as UnknownRecord,
+          childPath,
+          indentation + 2,
+          explicitPaths,
+          true,
+        );
+        lines.push(`${' '.repeat(indentation)}${key}:`, ...rendered.lines);
+      } else {
+        lines.push(...indentYaml(stringifyConfigEntry(key, childActual), indentation));
+      }
       active = true;
       continue;
     }
 
-    if (hasExplicitDescendant && child && typeof child === 'object' && !Array.isArray(child)) {
-      const rendered = renderInitialConfigMap(child as UnknownRecord, childPath, indentation + 2, explicitPaths);
+    if (hasExplicitDescendant && childReference && typeof childReference === 'object') {
+      const rendered = Array.isArray(childReference)
+        ? renderInitialConfigArray(
+          childReference,
+          Array.isArray(childActual) ? childActual : [],
+          childPath,
+          indentation + 2,
+          explicitPaths,
+        )
+        : renderInitialConfigMap(
+          childReference as UnknownRecord,
+          childActual && typeof childActual === 'object' && !Array.isArray(childActual)
+            ? childActual as UnknownRecord
+            : {},
+          childPath,
+          indentation + 2,
+          explicitPaths,
+        );
       if (rendered.active) {
         lines.push(`${' '.repeat(indentation)}${key}:`, ...rendered.lines);
         active = true;
@@ -1202,14 +1403,75 @@ function renderInitialConfigMap(
       }
     }
 
-    lines.push(...commentYaml(stringifyConfigEntry(key, child), indentation));
+    lines.push(...commentYaml(stringifyConfigEntry(key, childReference), indentation));
+  }
+  return { lines, active };
+}
+
+function renderInitialConfigArray(
+  reference: unknown[],
+  actual: unknown[],
+  path: ConfigPath,
+  indentation: number,
+  explicitPaths: readonly ConfigPath[],
+  inheritedExplicit = false,
+): { lines: string[]; active: boolean } {
+  const lines: string[] = [];
+  let active = false;
+  const length = Math.max(reference.length, actual.length);
+  for (let index = 0; index < length; index += 1) {
+    const childReference = reference[index] ?? actual[index];
+    const childActual = actual[index];
+    const childPath: ConfigPath = [...path, index];
+    const explicitlyActive = index < actual.length && (inheritedExplicit
+      || explicitPaths.some((explicitPath) => configPathStartsWith(childPath, explicitPath)));
+    const hasExplicitDescendant = explicitPaths.some((explicitPath) => configPathStartsWith(explicitPath, childPath));
+
+    if (explicitlyActive) {
+      if (childActual && typeof childActual === 'object' && !Array.isArray(childActual)) {
+        const rendered = renderInitialConfigMap(
+          childReference as UnknownRecord,
+          childActual as UnknownRecord,
+          childPath,
+          indentation + 2,
+          explicitPaths,
+          true,
+        );
+        lines.push(`${' '.repeat(indentation)}-`, ...rendered.lines);
+      } else {
+        lines.push(...indentYaml(stringifyYaml([childActual], { lineWidth: 0 }), indentation));
+      }
+      active = true;
+      continue;
+    }
+
+    if (hasExplicitDescendant && childReference && typeof childReference === 'object' && !Array.isArray(childReference)) {
+      const rendered = renderInitialConfigMap(
+        childReference as UnknownRecord,
+        childActual && typeof childActual === 'object' && !Array.isArray(childActual)
+          ? childActual as UnknownRecord
+          : {},
+        childPath,
+        indentation + 2,
+        explicitPaths,
+      );
+      if (rendered.active) {
+        lines.push(`${' '.repeat(indentation)}-`, ...rendered.lines);
+        active = true;
+        continue;
+      }
+    }
+
+    lines.push(...commentYaml(stringifyYaml([childReference], { lineWidth: 0 }), indentation));
   }
   return { lines, active };
 }
 
 function stringifyInitialApplicationConfig(document: UnknownRecord, env: NodeJS.ProcessEnv): string {
-  const explicitPaths = initialExplicitConfigPaths(env);
-  const rendered = renderInitialConfigMap(canonicalizeConfig(document) as UnknownRecord, [], 0, explicitPaths);
+  const explicitPaths = initialExplicitConfigPaths(env, document);
+  const actual = canonicalizeConfig(document) as UnknownRecord;
+  const reference = canonicalizeConfig(initialConfigReference(document)) as UnknownRecord;
+  const rendered = renderInitialConfigMap(reference, actual, [], 0, explicitPaths);
   if (!rendered.active) throw new Error('Configuration error: generated configuration has no active settings.');
   const header = INITIAL_CONFIG_HEADER.map((line) => `# ${line}`).join('\n');
   return `${header}\n\n${rendered.lines.join('\n')}\n`;

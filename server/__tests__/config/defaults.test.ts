@@ -4,8 +4,50 @@ import { dirname, join } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import { createRuntimeConfig as createRuntimeConfigImpl, getIntervalName, parseBooleanEnv, parseCsvEnv, parseLookbackToMs, parseOidcScope, parseOidcUnmatchedRole, parseOptionalBooleanEnv, parseRefreshInterval, parseTimeFormat, parseTimeZone } from '../../config';
+import { CONFIG_KEY_ORDER } from '../../config-file';
 import { ConfigurationLoadError } from '../../config-error';
 import { createMissingConfigPath, createRuntimeConfig, createTempConfig, createTempSecret, tempDirs } from './harness';
+
+function documentedConfigPaths(yaml: string): Set<string> {
+  const paths = new Set<string>();
+  const stack: Array<{ indent: number; path: string }> = [];
+
+  for (const line of yaml.split('\n')) {
+    let candidate = line;
+    let comment: RegExpMatchArray | null;
+    while ((comment = candidate.match(/^(\s*)# ?(.*)$/))) candidate = `${comment[1]}${comment[2]}`;
+    const sequenceItem = candidate.match(/^(\s*)-\s*$/);
+    if (sequenceItem) {
+      const indent = sequenceItem[1].length;
+      while (stack.at(-1) && stack.at(-1)!.indent >= indent) stack.pop();
+      stack.push({ indent, path: `${stack.at(-1)?.path || ''}[]` });
+      continue;
+    }
+    const field = candidate.match(/^(\s*)(- )?([A-Za-z][A-Za-z0-9]*):(?:\s|$)/);
+    if (!field) continue;
+
+    const leadingIndent = field[1].length;
+    while (stack.at(-1) && stack.at(-1)!.indent >= leadingIndent) stack.pop();
+    let parent = stack.at(-1)?.path || '';
+    let indent = leadingIndent;
+    if (field[2]) {
+      parent = `${parent}[]`;
+      stack.push({ indent, path: parent });
+      indent += 2;
+    }
+    const path = `${parent}${parent ? '.' : ''}${field[3]}`;
+    paths.add(path);
+    stack.push({ indent, path });
+  }
+
+  return paths;
+}
+
+function expectedDocumentedConfigPaths(): string[] {
+  return Array.from(CONFIG_KEY_ORDER.entries()).flatMap(([parent, keys]) => (
+    keys.map((key) => `${parent}${parent ? '.' : ''}${key}`)
+  )).filter((path) => path !== 'crowdsec.alertFilters.legacy' && !path.startsWith('crowdsec.alertFilters.legacy.'));
+}
 
 describe('configuration defaults and schema', () => {
   test('saves generated legacy configuration at the selected default path', () => {
@@ -41,6 +83,54 @@ describe('configuration defaults and schema', () => {
     }
   });
 
+  test('keeps implicit defaults commented in the initial configuration', () => {
+    const generatedConfigFile = createMissingConfigPath();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      createRuntimeConfigImpl({}, { defaultConfigFile: generatedConfigFile });
+      const saved = readFileSync(generatedConfigFile, 'utf8');
+      const document = parseYaml(saved);
+      expect(Object.keys(document)).toEqual(['instances']);
+      expect(Object.keys(document.instances[0])).toEqual(['id', 'name', 'lapi']);
+      expect(Object.keys(document.instances[0].lapi)).toEqual(['url']);
+      expect(saved).toContain('# server:');
+      expect(saved).toContain('      # auth:\n      #   type: none');
+      expect(saved).toContain('    # metrics:\n    #   - id: "0"');
+      expect(expectedDocumentedConfigPaths().filter((path) => !documentedConfigPaths(saved).has(path))).toEqual([]);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test('keeps the complete reference when setup variables configure an instance', () => {
+    const generatedConfigFile = createMissingConfigPath();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      createRuntimeConfigImpl({
+        CONFIG_INSTANCE_LAPI_URL: 'http://100.64.0.11:8080',
+        CONFIG_INSTANCE_LAPI_AUTH_USERNAME: 'crowdsec-web-ui',
+        CONFIG_INSTANCE_LAPI_AUTH_PASSWORD: 'secret',
+        CONFIG_INSTANCE_METRICS_URL: 'http://100.64.0.11:6060/metrics',
+      }, { defaultConfigFile: generatedConfigFile });
+      const saved = readFileSync(generatedConfigFile, 'utf8');
+      const document = parseYaml(saved);
+      expect(document.instances[0]).toEqual({
+        lapi: {
+          url: 'http://100.64.0.11:8080',
+          auth: {
+            username: 'crowdsec-web-ui',
+            password: { env: 'CONFIG_INSTANCE_LAPI_AUTH_PASSWORD' },
+          },
+        },
+        metrics: [{ url: 'http://100.64.0.11:6060/metrics' }],
+      });
+      const documented = documentedConfigPaths(saved);
+      expect(expectedDocumentedConfigPaths().filter((path) => !documented.has(path))).toEqual([]);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   test('loads an existing default configuration without overwriting it or applying legacy settings', () => {
     const generatedConfigFile = createMissingConfigPath();
     createRuntimeConfigImpl({ PORT: '4100' }, { defaultConfigFile: generatedConfigFile });
@@ -70,6 +160,11 @@ describe('configuration defaults and schema', () => {
     const passwordSecretFile = createTempSecret('example-secret');
     const example = readFileSync(join(process.cwd(), 'config.example.yaml'), 'utf8')
       .replace('/run/secrets/crowdsec_password', passwordSecretFile);
+    const document = parseYaml(example);
+    expect(Object.keys(document)).toEqual(['instances']);
+    expect(Object.keys(document.instances[0])).toEqual(['id', 'name', 'lapi']);
+    expect(Object.keys(document.instances[0].lapi)).toEqual(['url', 'auth']);
+    expect(Object.keys(document.instances[0].lapi.auth)).toEqual(['username', 'password']);
     const configFile = createTempConfig(example);
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
@@ -85,6 +180,12 @@ describe('configuration defaults and schema', () => {
     } finally {
       log.mockRestore();
     }
+  });
+
+  test('documents every non-legacy application configuration field', () => {
+    const example = readFileSync(join(process.cwd(), 'config.example.yaml'), 'utf8');
+    const documented = documentedConfigPaths(example);
+    expect(expectedDocumentedConfigPaths().filter((path) => !documented.has(path))).toEqual([]);
   });
 
   test('uses an unversioned application configuration schema', () => {
