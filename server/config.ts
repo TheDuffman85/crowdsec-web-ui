@@ -13,6 +13,7 @@ import {
   saveApplicationConfig,
   type ParsedConfigFile,
 } from './config-file';
+import { ConfigurationEnvironmentError, ConfigurationLoadError, isConfigurationError } from './config-error';
 import { resolveSecretEnv } from './env-secrets';
 import { hasLegacyConnectionEnvironment, loadInstancesConfig, type CrowdsecInstanceConfig } from './instances-config';
 
@@ -572,35 +573,48 @@ export function createRuntimeConfig(
   const configFile = explicitConfigFile || defaultConfigFile;
   let migrated = false;
   let parsedConfig: ParsedConfigFile | undefined;
+  let appliedOverrides: AppliedConfigEnvironmentOverride[] = [];
 
-  if (!explicitConfigFile && !fs.existsSync(configFile)) {
-    const legacyConfig = createRuntimeConfigFromEnvironment(env);
-    const appliedOverrides: AppliedConfigEnvironmentOverride[] = [];
-    const generatedConfig = applyConfigSetupEnvironment(
-      generateApplicationConfig(env, legacyConfig),
-      env,
-      appliedOverrides,
-    );
-    parseApplicationConfig(generatedConfig, env);
-    migrated = saveApplicationConfig(configFile, generatedConfig, env);
-    if (migrated) {
-      console.log(`Saved generated configuration to ${configFile}.`);
-      if (appliedOverrides.length > 0) {
-        console.log('Applied CONFIG_ values while generating the application configuration.');
-        logConfigEnvironmentOverrides(appliedOverrides);
+  try {
+    if (!explicitConfigFile && !fs.existsSync(configFile)) {
+      const legacyConfig = createRuntimeConfigFromEnvironment(env);
+      const generatedConfig = applyConfigSetupEnvironment(
+        generateApplicationConfig(env, legacyConfig),
+        env,
+        appliedOverrides,
+      );
+      parseApplicationConfig(generatedConfig, env);
+      migrated = saveApplicationConfig(configFile, generatedConfig, env);
+      if (migrated) {
+        console.log(`Saved generated configuration to ${configFile}.`);
+        if (appliedOverrides.length > 0) {
+          console.log('Applied CONFIG_ values while generating the application configuration.');
+          logConfigEnvironmentOverrides(appliedOverrides);
+        }
       }
     }
-  }
 
-  if (!migrated && fs.existsSync(configFile) && hasConfigEnvironmentOverrides(env)) {
-    const mergedConfig = mergeApplicationConfigEnvironment(configFile, env);
-    parsedConfig = parseApplicationConfig(mergedConfig.document, env);
-    console.log(`Applied CONFIG_ overrides to application configuration from ${configFile}.`);
-    logConfigEnvironmentOverrides(mergedConfig.overrides);
-  }
+    if (!migrated && fs.existsSync(configFile) && hasConfigEnvironmentOverrides(env)) {
+      const mergedConfig = mergeApplicationConfigEnvironment(configFile, env);
+      appliedOverrides = mergedConfig.overrides;
+      parsedConfig = parseApplicationConfig(mergedConfig.document, env);
+      console.log(`Applied CONFIG_ overrides to application configuration from ${configFile}.`);
+      logConfigEnvironmentOverrides(appliedOverrides);
+    }
 
-  warnDeprecatedEnvironment(env, { configFile, migrated });
-  const runtimeConfig = createRuntimeConfigFromParsedConfig(parsedConfig || loadApplicationConfig(configFile, env));
-  console.log(`Loaded application configuration from ${configFile}.`);
-  return runtimeConfig;
+    warnDeprecatedEnvironment(env, { configFile, migrated });
+    const runtimeConfig = createRuntimeConfigFromParsedConfig(parsedConfig || loadApplicationConfig(configFile, env));
+    console.log(`Loaded application configuration from ${configFile}.`);
+    return runtimeConfig;
+  } catch (error) {
+    if (error instanceof ConfigurationLoadError) throw error;
+    if (!isConfigurationError(error)) throw error;
+    const configuredOverrideNames = Object.keys(env).filter((name) => name.startsWith('CONFIG_') && name !== 'CONFIG_FILE');
+    const isEnvironmentError = error instanceof ConfigurationEnvironmentError;
+    throw new ConfigurationLoadError(error, {
+      configFile,
+      overrides: isEnvironmentError ? undefined : appliedOverrides,
+      overrideNames: isEnvironmentError ? error.overrideNames : configuredOverrideNames,
+    });
+  }
 }

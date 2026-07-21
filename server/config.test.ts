@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import { createRuntimeConfig as createRuntimeConfigImpl, getIntervalName, parseBooleanEnv, parseCsvEnv, parseLookbackToMs, parseOidcScope, parseOidcUnmatchedRole, parseOptionalBooleanEnv, parseRefreshInterval, parseTimeFormat, parseTimeZone } from './config';
+import { ConfigurationLoadError } from './config-error';
 
 const tempDirs: string[] = [];
 
@@ -859,6 +860,34 @@ instances:
     expect(readFileSync(configFile, 'utf8')).toBe(original);
   });
 
+  test('reports the config file and overrides when merged configuration is invalid', () => {
+    const configFile = createTempConfig(`
+instances:
+  - id: default
+    name: CrowdSec
+    lapi:
+      url: http://crowdsec:8080
+      auth: { type: none }
+`);
+
+    let failure: unknown;
+    try {
+      createRuntimeConfigImpl({
+        CONFIG_FILE: configFile,
+        CONFIG_INSTANCE_LAPI_URL: '',
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(ConfigurationLoadError);
+    expect(failure).toMatchObject({
+      message: 'instances[0].lapi.url must be a non-empty string.',
+      configFile,
+      overrideNames: ['CONFIG_INSTANCE_LAPI_URL'],
+    });
+  });
+
   test('rejects unknown indexed CONFIG_ paths', () => {
     const generatedConfigFile = createMissingConfigPath();
     expect(() => createRuntimeConfigImpl({
@@ -882,11 +911,65 @@ instances:
     }, { defaultConfigFile: generatedConfigFile })).toThrow(/both .* target the same setting/i);
   });
 
-  test('rejects gaps in indexed CONFIG_ scalar arrays', () => {
+  test('explains skipped instance indexes and reports only the overrides after the gap', () => {
+    const configFile = createTempConfig(`
+instances:
+  - id: default
+    name: CrowdSec
+    lapi:
+      url: http://crowdsec:8080
+      auth: { type: none }
+`);
+
+    let failure: unknown;
+    try {
+      createRuntimeConfigImpl({
+        CONFIG_FILE: configFile,
+        CONFIG_INSTANCE_LAPI_URL: 'http://primary:8080',
+        CONFIG_INSTANCES_2_ICON: 'shield',
+        CONFIG_INSTANCES_2_LAPI_URL: 'http://third:8080',
+        CONFIG_INSTANCES_2_LAPI_AUTH_USERNAME: 'watcher',
+        CONFIG_INSTANCES_2_LAPI_AUTH_PASSWORD: 'secret',
+        CONFIG_INSTANCES_2_METRICS_URL: 'http://third:6060/metrics',
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(ConfigurationLoadError);
+    expect(failure).toMatchObject({
+      message: expect.stringMatching(
+        /instance index 1 is missing before configured index 2.*zero-based and contiguous.*rename CONFIG_INSTANCES_2_\* to CONFIG_INSTANCES_1_\*/i,
+      ),
+      overrideNames: [
+        'CONFIG_INSTANCES_2_ICON',
+        'CONFIG_INSTANCES_2_LAPI_AUTH_PASSWORD',
+        'CONFIG_INSTANCES_2_LAPI_AUTH_USERNAME',
+        'CONFIG_INSTANCES_2_LAPI_URL',
+        'CONFIG_INSTANCES_2_METRICS_URL',
+      ],
+    });
+  });
+
+  test('explains skipped metrics indexes', () => {
+    const generatedConfigFile = createMissingConfigPath();
+    expect(() => createRuntimeConfigImpl({
+      CONFIG_INSTANCE_LAPI_URL: 'http://crowdsec:8080',
+      CONFIG_INSTANCE_METRICS_URL: 'http://crowdsec:6060/metrics',
+      CONFIG_INSTANCE_METRICS_2_URL: 'http://crowdsec:6062/metrics',
+    }, { defaultConfigFile: generatedConfigFile })).toThrow(
+      /metrics index 1 is missing for instance 0 before configured index 2.*zero-based and contiguous.*METRICS_1_\*/i,
+    );
+    expect(existsSync(generatedConfigFile)).toBe(false);
+  });
+
+  test('explains gaps in indexed CONFIG_ scalar arrays', () => {
     const generatedConfigFile = createMissingConfigPath();
     expect(() => createRuntimeConfigImpl({
       CONFIG_AUTH_OIDC_ADMIN_GROUPS_1: 'secops',
-    }, { defaultConfigFile: generatedConfigFile })).toThrow(/adminGroups must be an array of non-empty strings/i);
+    }, { defaultConfigFile: generatedConfigFile })).toThrow(
+      /index 0 is missing for auth\.oidc\.adminGroups.*zero-based and contiguous.*CONFIG_AUTH_OIDC_ADMIN_GROUPS_0/i,
+    );
     expect(existsSync(generatedConfigFile)).toBe(false);
   });
 

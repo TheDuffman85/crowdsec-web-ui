@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { isSeq, parse as parseYaml, parseDocument as parseYamlDocument, stringify as stringifyYaml } from 'yaml';
 import type { RuntimeConfig } from './config';
+import { ConfigurationEnvironmentError } from './config-error';
 import { parseInstancesConfig, type CrowdsecInstanceConfig } from './instances-config';
 
 type UnknownRecord = Record<string, unknown>;
@@ -813,12 +814,104 @@ function getConfigPath(document: UnknownRecord, keys: ConfigPath): unknown {
   return current;
 }
 
+function missingConfigCollectionEntry(value: unknown): boolean {
+  return value === undefined || value === null;
+}
+
+function validateIndexedCollectionContinuity(
+  overrides: readonly IndexedConfigOverride[],
+  getPath: (keys: ConfigPath) => unknown,
+): void {
+  const instanceIndexes = [...new Set(overrides.flatMap((override) => (
+    override.path[0] === 'instances' && typeof override.path[1] === 'number'
+      ? [override.path[1]]
+      : []
+  )))].sort((left, right) => left - right);
+  const highestInstanceIndex = instanceIndexes.at(-1);
+  if (highestInstanceIndex !== undefined) {
+    for (let index = 0; index < highestInstanceIndex; index += 1) {
+      if (!missingConfigCollectionEntry(getPath(['instances', index]))) continue;
+      const configuredIndex = instanceIndexes.find((candidate) => candidate > index)!;
+      const relatedOverrides = overrides.filter((override) => override.path[0] === 'instances'
+        && override.path[1] === configuredIndex);
+      throw new ConfigurationEnvironmentError(
+        `instance index ${index} is missing before configured index ${configuredIndex}. `
+          + 'Instance indexes must be zero-based and contiguous. '
+          + `Rename CONFIG_INSTANCES_${configuredIndex}_* to CONFIG_INSTANCES_${index}_*, `
+          + `or define CONFIG_INSTANCES_${index}_* first.`,
+        relatedOverrides.map((override) => override.name),
+      );
+    }
+  }
+
+  const metricsIndexes = new Map<number, Set<number>>();
+  for (const override of overrides) {
+    if (override.path[0] !== 'instances'
+      || typeof override.path[1] !== 'number'
+      || override.path[2] !== 'metrics'
+      || typeof override.path[3] !== 'number') continue;
+    const indexes = metricsIndexes.get(override.path[1]) || new Set<number>();
+    indexes.add(override.path[3]);
+    metricsIndexes.set(override.path[1], indexes);
+  }
+  for (const [instanceIndex, configuredIndexes] of metricsIndexes) {
+    const sortedIndexes = [...configuredIndexes].sort((left, right) => left - right);
+    const highestMetricsIndex = sortedIndexes.at(-1)!;
+    for (let index = 0; index < highestMetricsIndex; index += 1) {
+      if (!missingConfigCollectionEntry(getPath(['instances', instanceIndex, 'metrics', index]))) continue;
+      const configuredIndex = sortedIndexes.find((candidate) => candidate > index)!;
+      const relatedOverrides = overrides.filter((override) => override.path[0] === 'instances'
+        && override.path[1] === instanceIndex
+        && override.path[2] === 'metrics'
+        && override.path[3] === configuredIndex);
+      const configuredPrefix = relatedOverrides[0]?.name.match(
+        new RegExp(`^(CONFIG_(?:INSTANCE|INSTANCES_\\d+)_METRICS_)${configuredIndex}_`),
+      )?.[1] || `CONFIG_INSTANCES_${instanceIndex}_METRICS_`;
+      throw new ConfigurationEnvironmentError(
+        `metrics index ${index} is missing for instance ${instanceIndex} before configured index ${configuredIndex}. `
+          + 'Metrics indexes must be zero-based and contiguous. '
+          + `Rename ${configuredPrefix}${configuredIndex}_* `
+          + `to ${configuredPrefix}${index}_*, or define that index first.`,
+        relatedOverrides.map((override) => override.name),
+      );
+    }
+  }
+
+  const scalarArrays = new Map<string, { path: ConfigPath; entries: IndexedConfigOverride[] }>();
+  for (const override of overrides) {
+    if (override.path[0] === 'instances' || typeof override.path.at(-1) !== 'number') continue;
+    const collectionPath = override.path.slice(0, -1);
+    const key = JSON.stringify(collectionPath);
+    const collection = scalarArrays.get(key) || { path: collectionPath, entries: [] };
+    collection.entries.push(override);
+    scalarArrays.set(key, collection);
+  }
+  for (const { path: collectionPath, entries } of scalarArrays.values()) {
+    const sortedEntries = entries.sort((left, right) => Number(left.path.at(-1)) - Number(right.path.at(-1)));
+    const highestIndex = Number(sortedEntries.at(-1)!.path.at(-1));
+    for (let index = 0; index < highestIndex; index += 1) {
+      if (!missingConfigCollectionEntry(getPath([...collectionPath, index]))) continue;
+      const configuredEntry = sortedEntries.find((entry) => Number(entry.path.at(-1)) > index)!;
+      const configuredIndex = Number(configuredEntry.path.at(-1));
+      const suggestedName = configuredEntry.name.replace(new RegExp(`_${configuredIndex}$`), `_${index}`);
+      const label = collectionPath.map((part) => String(part)).join('.');
+      throw new ConfigurationEnvironmentError(
+        `index ${index} is missing for ${label} before ${configuredEntry.name}. `
+          + 'Indexed CONFIG_ values must be zero-based and contiguous. '
+          + `Define index ${index} first, or rename ${configuredEntry.name} to ${suggestedName}.`,
+        [configuredEntry.name],
+      );
+    }
+  }
+}
+
 function applyIndexedCollectionDefaults(
   overrides: readonly IndexedConfigOverride[],
   setPath: (keys: ConfigPath, value: unknown) => void,
   getPath: (keys: ConfigPath) => unknown,
   forceSetupDefaults: boolean,
 ): void {
+  validateIndexedCollectionContinuity(overrides, getPath);
   const instanceIndexes = [...new Set(overrides.flatMap((override) => (
     override.path[0] === 'instances' && typeof override.path[1] === 'number'
       ? [override.path[1]]
