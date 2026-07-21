@@ -117,15 +117,10 @@ You need a running CrowdSec instance and exactly one CrowdSec LAPI authenticatio
 
 The examples below use `CONFIG_` environment overrides. On first startup, the application creates `/app/data/config.yaml`: explicitly supplied values are active, while application defaults are included as comments so future default changes can take effect. On later startups, it applies `CONFIG_` overrides without changing the existing file. The complete commented YAML reference is [`config.example.yaml`](config.example.yaml).
 
-1. **Build the image**:
+1. **Pull the prebuilt image**:
 
    ```bash
-   docker build -t crowdsec-web-ui .
-   ```
-
-   For forks or private registries, set the image reference used by update checks:
-   ```bash
-   docker build --build-arg DOCKER_IMAGE_REF=my-registry/my-image -t crowdsec-web-ui .
+   docker pull ghcr.io/theduffman85/crowdsec-web-ui:latest
    ```
 
 > [!NOTE]
@@ -143,7 +138,7 @@ The examples below use `CONFIG_` environment overrides. On first startup, the ap
      -e CONFIG_INSTANCE_LAPI_AUTH_USERNAME=crowdsec-web-ui \
      -e CONFIG_INSTANCE_LAPI_AUTH_PASSWORD=your-crowdsec-password \
      --network your_crowdsec_network \
-     crowdsec-web-ui
+     ghcr.io/theduffman85/crowdsec-web-ui:latest
    ```
 
 Ensure the container is on a Docker network that can reach the configured LAPI URL.
