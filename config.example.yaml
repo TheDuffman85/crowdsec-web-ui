@@ -2,7 +2,8 @@
 # For Docker, copy this file to data/config.yaml and adjust it. The application
 # automatically loads /app/data/config.yaml.
 # CONFIG_ variables are persisted when this file is first created and otherwise
-# override it in memory. Their names mirror YAML paths (for example
+# override it in memory. Set CONFIG_PERSIST_OVERRIDES: "true" to persist them on
+# every startup. Their names mirror YAML paths (for example
 # CONFIG_SERVER_PORT), while arrays use zero-based indexes (for example
 # CONFIG_INSTANCES_0_LAPI_URL).
 # The zero index may be omitted: CONFIG_INSTANCE_LAPI_URL addresses instance 0,

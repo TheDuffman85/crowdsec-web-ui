@@ -743,6 +743,46 @@ instances:
     }
   });
 
+  test('persists CONFIG_ values to an existing YAML when explicitly enabled', () => {
+    const generatedConfigFile = createMissingConfigPath();
+    createRuntimeConfigImpl({ CONFIG_SERVER_PORT: '4100' }, { defaultConfigFile: generatedConfigFile });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfigImpl({
+        CONFIG_PERSIST_OVERRIDES: 'true',
+        CONFIG_SERVER_PORT: '4200',
+        CONFIG_CROWDSEC_SYNC_REFRESH_INTERVAL: '5m',
+      }, { defaultConfigFile: generatedConfigFile });
+      expect(config.port).toBe(4200);
+      expect(config.refreshIntervalMs).toBe(300_000);
+      const persisted = parseYaml(readFileSync(generatedConfigFile, 'utf8'));
+      expect(persisted.server.port).toBe(4200);
+      expect(persisted.crowdsec.sync.refreshInterval).toBe('5m');
+      expect(log).toHaveBeenCalledWith(
+        `Applied CONFIG_ overrides and persisted application configuration to ${generatedConfigFile}.`,
+      );
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test('does not treat the disabled persistence setting as a CONFIG_ override', () => {
+    const generatedConfigFile = createMissingConfigPath();
+    createRuntimeConfigImpl({ CONFIG_SERVER_PORT: '4100' }, { defaultConfigFile: generatedConfigFile });
+    const original = readFileSync(generatedConfigFile, 'utf8');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfigImpl({
+        CONFIG_PERSIST_OVERRIDES: 'false',
+      }, { defaultConfigFile: generatedConfigFile });
+      expect(config.port).toBe(4100);
+      expect(readFileSync(generatedConfigFile, 'utf8')).toBe(original);
+      expect(log).not.toHaveBeenCalledWith(expect.stringContaining('Applied CONFIG_ overrides'));
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   test('logs secret override sources without exposing their values', () => {
     const configFile = createTempConfig(`
 server:
@@ -831,6 +871,66 @@ instances:
     } finally {
       log.mockRestore();
     }
+  });
+
+  test('persists overrides to CONFIG_FILE without writing plaintext secrets', () => {
+    const configFile = createTempConfig(`
+# This comment should survive environment merges.
+server:
+  port: 3100
+instances:
+  - id: default
+    name: CrowdSec
+    lapi:
+      url: http://crowdsec:8080
+      auth: { type: none }
+    metrics: [ { url: http://old-crowdsec:6060/metrics, id: "0", name: Metrics 0, auth: { type: none } } ]
+`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfigImpl({
+        CONFIG_FILE: configFile,
+        CONFIG_PERSIST_OVERRIDES: 'yes',
+        CONFIG_SERVER_PORT: '3200',
+        CONFIG_INSTANCE_LAPI_AUTH_USERNAME: 'watcher',
+        CONFIG_INSTANCE_LAPI_AUTH_PASSWORD: 'do-not-persist-this-secret',
+        CONFIG_INSTANCE_METRICS_URL: 'http://crowdsec:6060/metrics',
+      });
+      expect(config.port).toBe(3200);
+      expect(config.instances[0].lapiAuth).toEqual({
+        mode: 'password', user: 'watcher', password: 'do-not-persist-this-secret',
+      });
+
+      const persistedYaml = readFileSync(configFile, 'utf8');
+      const persisted = parseYaml(persistedYaml);
+      expect(persisted.server.port).toBe(3200);
+      expect(persisted.instances[0].lapi.auth.password).toEqual({
+        env: 'CONFIG_INSTANCE_LAPI_AUTH_PASSWORD',
+      });
+      expect(persistedYaml).toContain('# This comment should survive environment merges.');
+      expect(persistedYaml).not.toContain('do-not-persist-this-secret');
+      expect(persistedYaml).not.toContain('metrics: [');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test('rejects an invalid CONFIG_PERSIST_OVERRIDES value', () => {
+    const configFile = createTempConfig(`
+instances:
+  - id: default
+    name: CrowdSec
+    lapi:
+      url: http://crowdsec:8080
+      auth: { type: none }
+`);
+    const original = readFileSync(configFile, 'utf8');
+    expect(() => createRuntimeConfigImpl({
+      CONFIG_FILE: configFile,
+      CONFIG_PERSIST_OVERRIDES: 'sometimes',
+      CONFIG_SERVER_PORT: '3200',
+    })).toThrow(/CONFIG_PERSIST_OVERRIDES must be a boolean/i);
+    expect(readFileSync(configFile, 'utf8')).toBe(original);
   });
 
   test('validates CONFIG_ setup values before writing the YAML', () => {

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { isSeq, parse as parseYaml, parseDocument as parseYamlDocument, stringify as stringifyYaml } from 'yaml';
+import { isMap, isSeq, parse as parseYaml, parseDocument as parseYamlDocument, stringify as stringifyYaml } from 'yaml';
 import type { RuntimeConfig } from './config';
 import { ConfigurationEnvironmentError } from './config-error';
 import { parseInstancesConfig, type CrowdsecInstanceConfig } from './instances-config';
@@ -1079,6 +1079,17 @@ export function applyConfigSetupEnvironment(
 export interface MergedApplicationConfig {
   document: UnknownRecord;
   overrides: AppliedConfigEnvironmentOverride[];
+  yaml: string;
+}
+
+function useBlockCollectionStyle(node: unknown): void {
+  if (isSeq(node)) {
+    node.flow = false;
+    for (const item of node.items) useBlockCollectionStyle(item);
+  } else if (isMap(node)) {
+    node.flow = false;
+    for (const pair of node.items) useBlockCollectionStyle(pair.value);
+  }
 }
 
 export function mergeApplicationConfigEnvironment(file: string, env: NodeJS.ProcessEnv): MergedApplicationConfig {
@@ -1099,6 +1110,10 @@ export function mergeApplicationConfigEnvironment(file: string, env: NodeJS.Proc
       const collection = yamlDocument.getIn(prefix, true);
       if (!isSeq(collection)) {
         yamlDocument.setIn(prefix, yamlDocument.createNode([]));
+      } else if (collection.flow) {
+        // Persisted array changes remain readable instead of growing an
+        // existing inline collection into one long line.
+        useBlockCollectionStyle(collection);
       }
     }
     yamlDocument.setIn(keys, yamlDocument.createNode(value));
@@ -1110,6 +1125,7 @@ export function mergeApplicationConfigEnvironment(file: string, env: NodeJS.Proc
   return {
     document: record(yamlDocument.toJS(), 'config'),
     overrides: appliedOverrides,
+    yaml: yamlDocument.toString({ lineWidth: 0 }),
   };
 }
 
@@ -1220,5 +1236,14 @@ export function saveApplicationConfig(
     if (code === 'EEXIST') return false;
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Configuration error: failed to save generated configuration at "${file}": ${message}`);
+  }
+}
+
+export function persistApplicationConfig(file: string, yaml: string): void {
+  try {
+    fs.writeFileSync(file, yaml, { encoding: 'utf8', mode: 0o600 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Configuration error: failed to persist CONFIG_ overrides at "${file}": ${message}`);
   }
 }

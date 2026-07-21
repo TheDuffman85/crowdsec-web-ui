@@ -115,7 +115,7 @@ You need a running CrowdSec instance and exactly one CrowdSec LAPI authenticatio
 
 ## Run with Docker (Recommended)
 
-The examples below use `CONFIG_` environment overrides. On first startup, the application creates `/app/data/config.yaml`: explicitly supplied values are active, while application defaults are included as comments so future default changes can take effect. On later startups, it applies `CONFIG_` overrides without changing the existing file. The complete commented YAML reference is [`config.example.yaml`](config.example.yaml).
+The examples below use `CONFIG_` environment overrides. On first startup, the application creates `/app/data/config.yaml`: explicitly supplied values are active, while application defaults are included as comments so future default changes can take effect. On later startups, it applies `CONFIG_` overrides without changing the existing file by default. The complete commented YAML reference is [`config.example.yaml`](config.example.yaml).
 
 1. **Pull the prebuilt image**:
 
@@ -194,7 +194,9 @@ The application loads `/app/data/config.yaml` in Docker and `./data/config.yaml`
 
 When the default file does not exist, it is created once with an explanatory header. Values supplied through setup environment variables are written as active YAML; other application defaults are shown as comments and therefore continue to follow the defaults of the installed version. Generated mappings use block-style rows and follow the configuration order documented below. Once created, the file is user-managed: the application does not refresh its explanatory text or commented defaults.
 
-At startup, recognized `CONFIG_` variables are parsed as YAML values, merged over the file in memory, and validated. They are written to YAML only when the application creates the initial default configuration; an existing file is never changed by overrides. Precedence is section variable, field variable, then indexed array variable. Removing an environment variable reveals the value from the file again. Restart after changing configuration or rotating a referenced secret.
+At startup, recognized `CONFIG_` variables are parsed as YAML values, merged over the file in memory, and validated. They are written to YAML only when the application creates the initial default configuration; by default, an existing file is never changed by overrides. Precedence is section variable, field variable, then indexed array variable. Removing an environment variable reveals the value from the file again. Restart after changing configuration or rotating a referenced secret.
+
+Set `CONFIG_PERSIST_OVERRIDES: "true"` to write the validated merged values back to the selected YAML file on every startup that has `CONFIG_` overrides. This is disabled by default. Comments are preserved where possible, and direct secret overrides are stored as `env` references rather than plaintext. Once persisted, removing a non-secret environment variable leaves its last value active in YAML; persisted secret references still require the referenced environment variable to be present.
 
 Startup logs list every applied `CONFIG_` variable, its configuration path, and the previous and replacement values. Credential values are redacted; for secret references, only the environment-variable name or file path is shown.
 

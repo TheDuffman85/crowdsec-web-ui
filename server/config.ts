@@ -10,6 +10,7 @@ import {
   loadApplicationConfig,
   mergeApplicationConfigEnvironment,
   parseApplicationConfig,
+  persistApplicationConfig,
   saveApplicationConfig,
   type ParsedConfigFile,
 } from './config-file';
@@ -506,6 +507,22 @@ export interface RuntimeConfigOptions {
   defaultConfigFile?: string;
 }
 
+const CONFIG_CONTROL_ENV = new Set(['CONFIG_FILE', 'CONFIG_PERSIST_OVERRIDES']);
+
+function persistConfigEnvironmentOverrides(env: NodeJS.ProcessEnv): boolean {
+  const name = 'CONFIG_PERSIST_OVERRIDES';
+  const value = env[name];
+  if (value === undefined) return false;
+  const enabled = parseOptionalBooleanEnv(value);
+  if (enabled === null) {
+    throw new ConfigurationEnvironmentError(
+      `${name} must be a boolean (true/false, yes/no, on/off, or 1/0).`,
+      [name],
+    );
+  }
+  return enabled;
+}
+
 const SECRET_CONFIG_KEYS = new Set([
   'clientSecret',
   'password',
@@ -576,6 +593,8 @@ export function createRuntimeConfig(
   let appliedOverrides: AppliedConfigEnvironmentOverride[] = [];
 
   try {
+    const persistEnvironmentOverrides = persistConfigEnvironmentOverrides(env);
+
     if (!explicitConfigFile && !fs.existsSync(configFile)) {
       const legacyConfig = createRuntimeConfigFromEnvironment(env);
       const generatedConfig = applyConfigSetupEnvironment(
@@ -598,7 +617,12 @@ export function createRuntimeConfig(
       const mergedConfig = mergeApplicationConfigEnvironment(configFile, env);
       appliedOverrides = mergedConfig.overrides;
       parsedConfig = parseApplicationConfig(mergedConfig.document, env);
-      console.log(`Applied CONFIG_ overrides to application configuration from ${configFile}.`);
+      if (persistEnvironmentOverrides) {
+        persistApplicationConfig(configFile, mergedConfig.yaml);
+        console.log(`Applied CONFIG_ overrides and persisted application configuration to ${configFile}.`);
+      } else {
+        console.log(`Applied CONFIG_ overrides to application configuration from ${configFile}.`);
+      }
       logConfigEnvironmentOverrides(appliedOverrides);
     }
 
@@ -609,7 +633,9 @@ export function createRuntimeConfig(
   } catch (error) {
     if (error instanceof ConfigurationLoadError) throw error;
     if (!isConfigurationError(error)) throw error;
-    const configuredOverrideNames = Object.keys(env).filter((name) => name.startsWith('CONFIG_') && name !== 'CONFIG_FILE');
+    const configuredOverrideNames = Object.keys(env).filter((name) => (
+      name.startsWith('CONFIG_') && !CONFIG_CONTROL_ENV.has(name)
+    ));
     const isEnvironmentError = error instanceof ConfigurationEnvironmentError;
     throw new ConfigurationLoadError(error, {
       configFile,

@@ -13,6 +13,8 @@ services:
       # Values are parsed as YAML and override /app/data/config.yaml in memory.
       # Arrays may use inline YAML or zero-based entries such as
       # CONFIG_AUTH_OIDC_ADMIN_GROUPS_0. See config.example.yaml for details.
+      # Set to true to persist validated overrides back to config.yaml.
+      # CONFIG_PERSIST_OVERRIDES: "false"
 
       # Whole sections can alternatively be supplied as inline YAML. Use these
       # instead of their individual field overrides.
