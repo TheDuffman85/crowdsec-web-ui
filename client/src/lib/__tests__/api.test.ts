@@ -1,0 +1,380 @@
+import { afterEach, describe, expect, test, vi } from 'vitest';
+import {
+  addDecision,
+  bulkDeleteAlerts,
+  bulkDeleteNotifications,
+  bulkDeleteDecisions,
+  cleanupByIp,
+  createNotificationChannel,
+  createNotificationRule,
+  deleteNotification,
+  deleteNotificationChannel,
+  deleteNotificationRule,
+  deleteReadNotifications,
+  deleteAlert,
+  deleteDecision,
+  fetchAlert,
+  fetchAlerts,
+  fetchAlertsPaginated,
+  fetchAlertsForStats,
+  fetchConfig,
+  fetchCrowdsecMetrics,
+  fetchDashboardStats,
+  fetchDecisions,
+  fetchDecisionsPaginated,
+  fetchDecisionsForStats,
+  fetchNotifications,
+  fetchNotificationsPaginated,
+  fetchNotificationSettings,
+  markNotificationRead,
+  markNotificationsRead,
+  testNotificationChannel,
+  updateNotificationChannel,
+  updateLanguagePreference,
+  updateNotificationRule,
+} from '../api';
+
+function mockFetch(handler: typeof fetch): void {
+  Object.defineProperty(globalThis, 'fetch', {
+    configurable: true,
+    writable: true,
+    value: handler,
+  });
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe('api helpers', () => {
+  test('fetch helpers return parsed JSON', async () => {
+    mockFetch(
+      vi.fn(async (input) => {
+        if (String(input).includes('/api/notifications/settings')) {
+          return Response.json([{ id: 1 }]);
+        }
+        if (String(input).includes('/api/notifications')) {
+          return Response.json({ data: [{ id: 1 }], pagination: { page: 1, page_size: 50, total: 1, total_pages: 1, unfiltered_total: 1 }, selectable_ids: ['1'], unread_count: 1 });
+        }
+        if (String(input).includes('/api/alerts/1?')) {
+          return Response.json([{ id: 1 }]);
+        }
+        return Response.json([{ id: 1 }]);
+      }),
+    );
+
+    await expect(fetchAlerts()).resolves.toEqual([{ id: 1 }]);
+    await expect(fetchAlert(1)).resolves.toEqual({ id: 1 });
+    await expect(fetchDecisions()).resolves.toEqual([{ id: 1 }]);
+    await expect(fetchAlertsForStats()).resolves.toEqual([{ id: 1 }]);
+    await expect(fetchDecisionsForStats()).resolves.toEqual([{ id: 1 }]);
+    await expect(fetchDashboardStats({ simulation: 'live' })).resolves.toEqual([{ id: 1 }]);
+    await expect(fetchConfig()).resolves.toEqual([{ id: 1 }]);
+    await expect(fetchNotificationSettings()).resolves.toEqual([{ id: 1 }]);
+    await expect(fetchNotifications()).resolves.toEqual({ data: [{ id: 1 }], pagination: { page: 1, page_size: 50, total: 1, total_pages: 1, unfiltered_total: 1 }, selectable_ids: ['1'], unread_count: 1 });
+    await expect(fetchNotificationsPaginated()).resolves.toEqual({ data: [{ id: 1 }], pagination: { page: 1, page_size: 50, total: 1, total_pages: 1, unfiltered_total: 1 }, selectable_ids: ['1'], unread_count: 1 });
+    expect(String(vi.mocked(fetch).mock.calls.find(([input]) => String(input).includes('/api/alerts/1'))?.[0])).toContain('include_decisions=false');
+  });
+
+  test('paginated helpers include only populated filters', async () => {
+    const fetchMock = vi.fn(async (_input: Parameters<typeof fetch>[0], _init?: Parameters<typeof fetch>[1]) =>
+      Response.json({ items: [], total: 0 }),
+    );
+    mockFetch(fetchMock);
+
+    await expect(fetchAlertsPaginated(2, 25, { scenario: 'ssh', country: '' })).resolves.toEqual({ items: [], total: 0 });
+    await expect(fetchDecisionsPaginated(3, 10, { ip: '1.2.3.4', target: '' })).resolves.toEqual({ items: [], total: 0 });
+    await expect(fetchNotificationsPaginated(4, 20)).resolves.toEqual({ items: [], total: 0 });
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      '/api/alerts?page=2&page_size=25&include_decisions=false&scenario=ssh',
+    );
+    expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain('country=');
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/api/decisions?page=3&page_size=10&ip=1.2.3.4');
+    expect(String(fetchMock.mock.calls[1]?.[0])).not.toContain('target=');
+    expect(String(fetchMock.mock.calls[2]?.[0])).toContain('/api/notifications?page=4&page_size=20');
+  });
+
+  test('uses instance-aware resource paths and bulk reference payloads', async () => {
+    const fetchMock = vi.fn(async (
+      _input: Parameters<typeof fetch>[0],
+      _init?: Parameters<typeof fetch>[1],
+    ) => Response.json({ ok: true }));
+    mockFetch(fetchMock);
+
+    await expect(fetchAlert('alert/id', 'eu west')).resolves.toEqual({ ok: true });
+    await expect(deleteAlert('alert/id', 'eu west')).resolves.toEqual({ ok: true });
+    await expect(deleteDecision('decision/id', 'eu west')).resolves.toEqual({ ok: true });
+    await expect(fetchCrowdsecMetrics('eu west', 'lapi/main')).resolves.toEqual({ ok: true });
+    await expect(fetchCrowdsecMetrics()).resolves.toEqual({ ok: true });
+    await expect(bulkDeleteAlerts([{ instance_id: 'eu-west', id: 'alert-1' }])).resolves.toEqual({ ok: true });
+    await expect(bulkDeleteDecisions([{ instance_id: 'eu-west', id: 'decision-1' }])).resolves.toEqual({ ok: true });
+
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual(expect.arrayContaining([
+      '/api/instances/eu%20west/alerts/alert%2Fid',
+      '/api/instances/eu%20west/decisions/decision%2Fid',
+      '/api/instances/eu%20west/metrics/lapi%2Fmain',
+      '/api/metrics/crowdsec',
+    ]));
+    expect(fetchMock.mock.calls.map(([, init]) => init?.body)).toEqual(expect.arrayContaining([
+      JSON.stringify({ refs: [{ instance_id: 'eu-west', id: 'alert-1' }] }),
+      JSON.stringify({ refs: [{ instance_id: 'eu-west', id: 'decision-1' }] }),
+    ]));
+  });
+
+  test('combines cleanup results returned by multiple instances', async () => {
+    mockFetch(vi.fn(async () => Response.json({
+      results: [
+        {
+          instance_id: 'primary',
+          instance_name: 'Primary',
+          success: true,
+          result: {
+            requested_alerts: 2,
+            requested_decisions: 3,
+            deleted_alerts: 1,
+            deleted_decisions: 2,
+            failed: [{ kind: 'decision', id: 'decision-1', error: 'still active' }],
+          },
+        },
+        { instance_id: 'empty', instance_name: 'Empty', success: true },
+        { instance_id: 'offline', instance_name: 'Offline', success: false, error: 'unreachable' },
+        { instance_id: 'unknown', instance_name: 'Unknown', success: false },
+      ],
+      succeeded: 2,
+      failed: 2,
+    })));
+
+    await expect(cleanupByIp({ ip: '1.2.3.4', scope: 'all' })).resolves.toMatchObject({
+      requested_alerts: 2,
+      requested_decisions: 3,
+      deleted_alerts: 1,
+      deleted_decisions: 2,
+      ip: '1.2.3.4',
+      failed: [
+        { kind: 'decision', id: 'decision-1', error: 'Primary: still active' },
+        { kind: 'alert', id: '1.2.3.4', error: 'Offline: unreachable' },
+        { kind: 'alert', id: '1.2.3.4', error: 'Unknown: Failed' },
+      ],
+    });
+  });
+
+  test('accepts multi-instance add-decision error payloads', async () => {
+    const payload = {
+      results: [{ instance_id: 'offline', instance_name: 'Offline', success: false, error: 'unreachable' }],
+      succeeded: 0,
+      failed: 1,
+    };
+    mockFetch(vi.fn(async () => Response.json(payload, { status: 502 })));
+
+    await expect(addDecision({ ip: '1.2.3.4' })).resolves.toEqual(payload);
+  });
+
+  test('fetchDashboardStats handles empty filters and explicit request init', async () => {
+    const fetchMock = vi.fn(async (_input: Parameters<typeof fetch>[0], _init?: Parameters<typeof fetch>[1]) =>
+      Response.json({ totals: {} }),
+    );
+    mockFetch(fetchMock);
+
+    await expect(fetchDashboardStats()).resolves.toEqual({ totals: {} });
+    await expect(fetchDashboardStats({ simulation: '' }, { signal: AbortSignal.abort() })).resolves.toEqual({ totals: {} });
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/api/dashboard/stats');
+    expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain('?');
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/api/dashboard/stats');
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ signal: expect.any(AbortSignal) });
+  });
+  test('deduplicates simultaneous GET helper requests', async () => {
+    let resolveFetch: (response: Response) => void = () => {};
+    const fetchMock = vi.fn(
+      () => new Promise<Response>((resolve) => {
+        resolveFetch = resolve;
+      }),
+    );
+    mockFetch(fetchMock);
+
+    const firstRequest = fetchConfig();
+    const secondRequest = fetchConfig();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    resolveFetch(Response.json({ ok: true }));
+    await expect(Promise.all([firstRequest, secondRequest])).resolves.toEqual([{ ok: true }, { ok: true }]);
+  });
+
+  test('reuses very recent GET helper responses for effect replays', async () => {
+    const fetchMock = vi.fn(async () => Response.json({ ok: true }));
+    mockFetch(fetchMock);
+
+    await expect(fetchConfig()).resolves.toEqual({ ok: true });
+    await expect(fetchConfig()).resolves.toEqual({ ok: true });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('fetchAlert handles direct payloads and empty array payloads', async () => {
+    mockFetch(
+      vi.fn(async (input) => {
+        if (String(input).includes('/api/alerts/direct?')) {
+          return Response.json({ id: 'direct' });
+        }
+
+        return Response.json([]);
+      }),
+    );
+
+    await expect(fetchAlert('direct')).resolves.toEqual({ id: 'direct' });
+    await expect(fetchAlert('empty')).rejects.toThrow('Failed to fetch alert');
+  });
+
+  test('removes failed GET requests from the in-flight cache', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 500 }))
+      .mockResolvedValueOnce(Response.json({ ok: true }));
+    mockFetch(fetchMock);
+
+    await expect(fetchConfig()).rejects.toThrow('Failed to fetch config');
+    await expect(fetchConfig()).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test('delete and add helpers surface permission metadata on 403', async () => {
+    mockFetch(vi.fn(async () => new Response(null, { status: 403 })));
+
+    await expect(deleteAlert(1)).rejects.toMatchObject({
+      message: 'Permission denied.',
+      helpText: 'Trusted IPs for Delete Operations',
+    });
+
+    await expect(deleteDecision(1)).rejects.toMatchObject({
+      message: 'Permission denied.',
+    });
+
+    await expect(bulkDeleteAlerts([1, 2])).rejects.toMatchObject({
+      message: 'Permission denied.',
+    });
+
+    await expect(bulkDeleteDecisions([1, 2])).rejects.toMatchObject({
+      message: 'Permission denied.',
+    });
+
+    await expect(cleanupByIp('1.2.3.4')).rejects.toMatchObject({
+      message: 'Permission denied.',
+    });
+
+    await expect(addDecision({ ip: '1.2.3.4' })).rejects.toMatchObject({
+      message: 'Permission denied.',
+      helpText: 'Trusted IPs for Write Operations',
+    });
+  });
+
+  test('delete and add helpers surface read-only 403 messages without permission metadata', async () => {
+    mockFetch(vi.fn(async () => Response.json({ error: 'Read-only mode is enabled', code: 'READ_ONLY' }, { status: 403 })));
+
+    await expect(deleteAlert(1)).rejects.toMatchObject({
+      message: 'Read-only mode is enabled',
+    });
+    await expect(deleteDecision(1)).rejects.toMatchObject({
+      message: 'Read-only mode is enabled',
+    });
+    await expect(bulkDeleteAlerts([1, 2])).rejects.toMatchObject({
+      message: 'Read-only mode is enabled',
+    });
+    await expect(bulkDeleteDecisions([1, 2])).rejects.toMatchObject({
+      message: 'Read-only mode is enabled',
+    });
+    await expect(cleanupByIp('1.2.3.4')).rejects.toMatchObject({
+      message: 'Read-only mode is enabled',
+    });
+    await expect(addDecision({ ip: '1.2.3.4' })).rejects.toMatchObject({
+      message: 'Read-only mode is enabled',
+    });
+  });
+
+  test('handles generic fetch failures and 204 deletes', async () => {
+    mockFetch(
+      vi.fn(async (_input, init) => {
+        if (init?.method === 'DELETE') {
+          return new Response(null, { status: 204 });
+        }
+        return new Response(null, { status: 500 });
+      }),
+    );
+
+    await expect(deleteAlert(1)).resolves.toBeNull();
+    await expect(deleteDecision(1)).resolves.toBeNull();
+    await expect(fetchAlerts()).rejects.toThrow('Failed to fetch alerts');
+  });
+
+  test('returns JSON payloads for successful mutations', async () => {
+    mockFetch(
+      vi.fn(async (_input, init) => {
+        if (init?.method === 'DELETE') {
+          return Response.json({ message: 'Deleted' });
+        }
+
+        return Response.json({ message: 'Created' });
+      }),
+    );
+
+    await expect(deleteAlert(1)).resolves.toEqual({ message: 'Deleted' });
+    await expect(deleteDecision(1)).resolves.toEqual({ message: 'Deleted' });
+    await expect(bulkDeleteAlerts([1, 2])).resolves.toEqual({ message: 'Created' });
+    await expect(bulkDeleteDecisions([1, 2])).resolves.toEqual({ message: 'Created' });
+    await expect(cleanupByIp('1.2.3.4')).resolves.toEqual({ message: 'Created' });
+    await expect(addDecision({ ip: '1.2.3.4' })).resolves.toEqual({ message: 'Created' });
+    await expect(createNotificationChannel({ name: 'ntfy', type: 'ntfy', enabled: true, config: {} })).resolves.toEqual({ message: 'Created' });
+    await expect(updateNotificationChannel('1', { name: 'ntfy', type: 'ntfy', enabled: true, config: {} })).resolves.toEqual({ message: 'Created' });
+    await expect(updateLanguagePreference('de')).resolves.toEqual({ message: 'Created' });
+    await expect(createNotificationRule({ name: 'rule', type: 'alert-threshold', enabled: true, severity: 'warning', channel_ids: [], config: { window_minutes: 60, alert_threshold: 10 } })).resolves.toEqual({ message: 'Created' });
+    await expect(updateNotificationRule('1', { name: 'rule', type: 'alert-threshold', enabled: true, severity: 'warning', channel_ids: [], config: { window_minutes: 60, alert_threshold: 10 } })).resolves.toEqual({ message: 'Created' });
+  });
+
+  test('throws the provided message for non-403 mutation failures', async () => {
+    mockFetch(vi.fn(async () => new Response(null, { status: 500 })));
+    await expect(deleteAlert(1)).rejects.toThrow('Failed to delete alert');
+  });
+
+  test('notification mutations handle void responses and API errors', async () => {
+    mockFetch(
+      vi.fn(async (input) => {
+        if (String(input).includes('/api/notification-channels/boom')) {
+          return Response.json({ error: 'boom' }, { status: 400 });
+        }
+        return Response.json({ success: true });
+      }),
+    );
+
+    await expect(testNotificationChannel('1')).resolves.toBeUndefined();
+    await expect(deleteNotificationChannel('1')).resolves.toBeUndefined();
+    await expect(deleteNotificationRule('1')).resolves.toBeUndefined();
+    await expect(deleteNotification('1')).resolves.toBeUndefined();
+    await expect(markNotificationRead('1')).resolves.toBeUndefined();
+    await expect(markNotificationsRead(['1', '2'])).resolves.toBeUndefined();
+    await expect(bulkDeleteNotifications(['1', '2'])).resolves.toBeUndefined();
+    await expect(deleteReadNotifications()).resolves.toBeUndefined();
+    await expect(testNotificationChannel('boom')).rejects.toThrow('boom');
+  });
+
+  test('notification mutations handle 204 responses and default API errors', async () => {
+    mockFetch(
+      vi.fn(async (input) => {
+        if (String(input).includes('/api/notification-rules/invalid-json')) {
+          return new Response('not-json', { status: 400 });
+        }
+        if (String(input).includes('/api/notifications/no-message/read')) {
+          return Response.json({ error: '' }, { status: 400 });
+        }
+        if (String(input).includes('/api/notifications/delete-fails')) {
+          return Response.json({ error: '' }, { status: 400 });
+        }
+        return new Response(null, { status: 204 });
+      }),
+    );
+
+    await expect(deleteNotificationChannel('1')).resolves.toBeUndefined();
+    await expect(deleteNotificationRule('invalid-json')).rejects.toThrow('Failed to delete notification rule');
+    await expect(markNotificationRead('no-message')).rejects.toThrow('Failed to mark notification as read');
+    await expect(deleteNotification('delete-fails')).rejects.toThrow('Failed to delete notification');
+  });
+});

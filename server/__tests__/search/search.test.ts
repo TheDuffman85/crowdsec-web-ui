@@ -1,0 +1,531 @@
+import { describe, expect, test } from 'vitest';
+import type { DecisionListItem, SlimAlert } from '../../../shared/contracts';
+import { analyzeSearchQuery, compileAlertSearch, compileDecisionSearch, getSearchHelpDefinition } from '../../../shared/search';
+
+const baseAlert: SlimAlert = {
+  id: 1,
+  created_at: '2026-03-24T10:00:00.000Z',
+  scenario: 'crowdsecurity/ssh-bf',
+  message: 'SSH brute force detected',
+  machine_id: 'machine-1',
+  machine_alias: 'host-a',
+  source: {
+    ip: '1.2.3.4',
+    value: '1.2.3.4',
+    cn: 'DE',
+    region: 'State of Berlin',
+    city: 'Berlin',
+    as_name: 'Hetzner',
+  },
+  target: 'ssh',
+  meta_search: 'ssh brute force',
+  decisions: [
+    { id: 10, value: '1.2.3.4', type: 'ban', origin: 'manual', simulated: false },
+    { id: 11, value: '1.2.3.4', type: 'ban', origin: 'CAPI', simulated: false },
+  ],
+  simulated: false,
+};
+
+const baseDecision: DecisionListItem = {
+  id: 10,
+  created_at: '2026-03-24T10:00:00.000Z',
+  machine: 'host-a',
+  value: '1.2.3.4',
+  expired: false,
+  is_duplicate: false,
+  simulated: false,
+  detail: {
+    origin: 'manual',
+    type: 'ban',
+    reason: 'crowdsecurity/ssh-bf',
+    action: 'ban',
+    country: 'DE',
+    region: 'State of Berlin',
+    city: 'Berlin',
+    as: 'Hetzner',
+    duration: '4h',
+    alert_id: 123,
+    target: 'ssh',
+  },
+};
+
+const secondAlert: SlimAlert = {
+  ...baseAlert,
+  id: 2,
+  created_at: '2026-03-25T12:00:00.000Z',
+  scenario: 'crowdsecurity/nginx-bf',
+  source: {
+    ip: '5.6.7.8',
+    value: '5.6.7.8',
+    cn: 'US',
+    as_name: 'AWS',
+  },
+  target: 'nginx',
+  meta_search: 'nginx brute force',
+};
+
+const secondDecision: DecisionListItem = {
+  ...baseDecision,
+  id: 20,
+  created_at: '2026-03-25T12:00:00.000Z',
+  value: '5.6.7.8',
+  simulated: true,
+  detail: {
+    ...baseDecision.detail,
+    reason: 'crowdsecurity/nginx-bf',
+    country: 'US',
+    region: 'New York',
+    city: 'New York City',
+    as: 'AWS',
+    alert_id: 456,
+    target: 'nginx',
+  },
+};
+
+const swedenAlert: SlimAlert = {
+  ...baseAlert,
+  id: 3,
+  source: {
+    ...baseAlert.source,
+    cn: 'SE',
+  },
+};
+
+const swedenDecision: DecisionListItem = {
+  ...baseDecision,
+  id: 30,
+  detail: {
+    ...baseDecision.detail,
+    country: 'SE',
+  },
+};
+
+describe('shared search compiler', () => {
+  test('preserves free-text search for alerts', () => {
+    const compiled = compileAlertSearch('ssh hetzner');
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) {
+      return;
+    }
+
+    expect(compiled.predicate(baseAlert)).toBe(true);
+    expect(compiled.predicate({ ...baseAlert, source: { ...baseAlert.source, as_name: 'AWS' } })).toBe(false);
+  });
+
+  test('supports grouped field expressions and negation for alerts', () => {
+    const compiled = compileAlertSearch('origin:(manual OR CAPI) AND -sim:simulated', {
+      originEnabled: true,
+    });
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) {
+      return;
+    }
+
+    expect(compiled.predicate(baseAlert)).toBe(true);
+    expect(compiled.predicate({ ...baseAlert, simulated: true })).toBe(false);
+  });
+
+  test('distinguishes broad and exact text field matches', () => {
+    const broad = compileAlertSearch('scenario:crowdsecurity/ssh');
+    const exact = compileAlertSearch('scenario=crowdsecurity/ssh');
+    const exactFull = compileAlertSearch('scenario=crowdsecurity/ssh-bf');
+    const notExact = compileAlertSearch('scenario<>crowdsecurity/ssh');
+
+    expect(broad.ok && broad.predicate(baseAlert)).toBe(true);
+    expect(exact.ok && exact.predicate(baseAlert)).toBe(false);
+    expect(exactFull.ok && exactFull.predicate(baseAlert)).toBe(true);
+    expect(notExact.ok && notExact.predicate(baseAlert)).toBe(true);
+  });
+
+  test('matches empty alert fields with quoted empty values', () => {
+    const emptyOrigin = compileAlertSearch('origin:""', { originEnabled: true });
+    const nonEmptyOrigin = compileAlertSearch('origin<>""', { originEnabled: true });
+    const emptyTarget = compileAlertSearch('target:""');
+    expect(emptyOrigin.ok).toBe(true);
+    expect(nonEmptyOrigin.ok).toBe(true);
+    expect(emptyTarget.ok).toBe(true);
+    if (!emptyOrigin.ok || !nonEmptyOrigin.ok || !emptyTarget.ok) {
+      return;
+    }
+
+    const alertWithoutOrigin = { ...baseAlert, decisions: [] };
+    const alertWithoutTarget = { ...baseAlert, target: undefined };
+    expect(emptyOrigin.predicate(alertWithoutOrigin)).toBe(true);
+    expect(emptyOrigin.predicate(baseAlert)).toBe(false);
+    expect(nonEmptyOrigin.predicate(baseAlert)).toBe(true);
+    expect(nonEmptyOrigin.predicate(alertWithoutOrigin)).toBe(false);
+    expect(emptyTarget.predicate(alertWithoutTarget)).toBe(true);
+    expect(emptyTarget.predicate(baseAlert)).toBe(false);
+  });
+
+  test('matches empty decision fields with quoted empty values', () => {
+    const emptyOrigin = compileDecisionSearch('origin=""', { originEnabled: true });
+    const nonEmptyOrigin = compileDecisionSearch('-origin:""', { originEnabled: true });
+    expect(emptyOrigin.ok).toBe(true);
+    expect(nonEmptyOrigin.ok).toBe(true);
+    if (!emptyOrigin.ok || !nonEmptyOrigin.ok) {
+      return;
+    }
+
+    const decisionWithoutOrigin = {
+      ...baseDecision,
+      detail: { ...baseDecision.detail, origin: '' },
+    };
+    expect(emptyOrigin.predicate(decisionWithoutOrigin)).toBe(true);
+    expect(emptyOrigin.predicate(baseDecision)).toBe(false);
+    expect(nonEmptyOrigin.predicate(baseDecision)).toBe(true);
+    expect(nonEmptyOrigin.predicate(decisionWithoutOrigin)).toBe(false);
+  });
+
+  test('supports simulation inequality without broadening invalid values', () => {
+    const liveAlerts = compileAlertSearch('sim<>simulated');
+    expect(liveAlerts.ok).toBe(true);
+    if (!liveAlerts.ok) {
+      return;
+    }
+
+    expect(liveAlerts.predicate(baseAlert)).toBe(true);
+    expect(liveAlerts.predicate({ ...baseAlert, simulated: true })).toBe(false);
+
+    const invalidSimulation = compileAlertSearch('sim<>simulatd');
+    expect(invalidSimulation.ok).toBe(true);
+    if (!invalidSimulation.ok) {
+      return;
+    }
+
+    expect(invalidSimulation.predicate(baseAlert)).toBe(false);
+    expect(invalidSimulation.predicate({ ...baseAlert, simulated: true })).toBe(false);
+  });
+
+  test('supports date comparison operators for alerts', () => {
+    const compiled = compileAlertSearch('date>=2026-03-24 AND date<2026-03-25');
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) {
+      return;
+    }
+
+    expect(compiled.predicate(baseAlert)).toBe(true);
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-03-23T23:59:59.000Z' })).toBe(false);
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-03-25T00:00:00.000Z' })).toBe(false);
+  });
+
+  test('evaluates date-only comparisons in the supplied timezone for alerts', () => {
+    const compiled = compileAlertSearch('date<=2026-07-05', {}, { timeZone: 'Europe/Berlin' });
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) {
+      return;
+    }
+
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-07-05T21:59:59.999Z' })).toBe(true);
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-07-05T22:00:00.000Z' })).toBe(false);
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-07-05T23:26:28.000Z' })).toBe(false);
+  });
+
+  test('uses timezone-specific day lengths across DST boundaries', () => {
+    const compiled = compileAlertSearch('date=2026-03-29', {}, { timeZone: 'Europe/Berlin' });
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) {
+      return;
+    }
+
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-03-28T22:59:59.999Z' })).toBe(false);
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-03-28T23:00:00.000Z' })).toBe(true);
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-03-29T21:59:59.999Z' })).toBe(true);
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-03-29T22:00:00.000Z' })).toBe(false);
+  });
+
+  test('supports dashboard hour date comparisons in the supplied timezone', () => {
+    const compiled = compileAlertSearch('date>=2026-07-05T01 AND date<=2026-07-05T03', {}, { timeZone: 'Europe/Berlin' });
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) {
+      return;
+    }
+
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-07-04T22:59:59.999Z' })).toBe(false);
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-07-04T23:00:00.000Z' })).toBe(true);
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-07-05T01:59:59.999Z' })).toBe(true);
+    expect(compiled.predicate({ ...baseAlert, created_at: '2026-07-05T02:00:00.000Z' })).toBe(false);
+  });
+
+  test('treats lowercase boolean keywords as operators when the query is clearly advanced', () => {
+    const compiled = compileAlertSearch('origin:manual or country:us', {
+      originEnabled: true,
+    });
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) {
+      return;
+    }
+
+    expect(compiled.predicate(baseAlert)).toBe(true);
+    expect(compiled.predicate({ ...baseAlert, source: { ...baseAlert.source, cn: 'US' } })).toBe(true);
+  });
+
+  test('matches country codes exactly for alerts while keeping country-name matching broad', () => {
+    const codeSearch = compileAlertSearch('country:DE');
+    expect(codeSearch.ok).toBe(true);
+    if (!codeSearch.ok) {
+      return;
+    }
+
+    expect(codeSearch.predicate(baseAlert)).toBe(true);
+    expect(codeSearch.predicate(swedenAlert)).toBe(false);
+
+    const nameSearch = compileAlertSearch('country:germ');
+    expect(nameSearch.ok).toBe(true);
+    if (!nameSearch.ok) {
+      return;
+    }
+
+    expect(nameSearch.predicate(baseAlert)).toBe(true);
+    expect(nameSearch.predicate(swedenAlert)).toBe(false);
+  });
+
+  test('matches resolved city and region fields for alerts', () => {
+    const compiled = compileAlertSearch('city:berl AND region:"state of berl"');
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) return;
+
+    expect(compiled.predicate(baseAlert)).toBe(true);
+    expect(compiled.predicate(secondAlert)).toBe(false);
+  });
+
+  test('matches alert source IPs and ranges contained in an IPv4 CIDR search', () => {
+    const compiled = compileAlertSearch('ip:10.0.0.0/24');
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) {
+      return;
+    }
+
+    expect(compiled.predicate({
+      ...baseAlert,
+      source: { value: '10.0.0.42' },
+    })).toBe(true);
+    expect(compiled.predicate({
+      ...baseAlert,
+      source: { range: '10.0.0.0/24' },
+    })).toBe(true);
+    expect(compiled.predicate({
+      ...baseAlert,
+      source: { range: '10.0.0.128/25' },
+    })).toBe(true);
+    expect(compiled.predicate({
+      ...baseAlert,
+      source: { value: '10.0.1.42' },
+    })).toBe(false);
+  });
+
+  test('matches bare CIDR terms against alert and decision IP fields', () => {
+    const alertSearch = compileAlertSearch('10.0.0.0/24');
+    expect(alertSearch.ok).toBe(true);
+    if (!alertSearch.ok) {
+      return;
+    }
+
+    expect(alertSearch.predicate({ ...baseAlert, source: { ip: '10.0.0.42' } })).toBe(true);
+    expect(alertSearch.predicate({ ...baseAlert, source: { ip: '10.0.1.42' } })).toBe(false);
+
+    const decisionSearch = compileDecisionSearch('2001:db8::/32');
+    expect(decisionSearch.ok).toBe(true);
+    if (!decisionSearch.ok) {
+      return;
+    }
+
+    expect(decisionSearch.predicate({ ...baseDecision, value: '2001:db8::42' })).toBe(true);
+    expect(decisionSearch.predicate({ ...baseDecision, value: '2001:db9::42' })).toBe(false);
+  });
+
+  test('supports semantic decision fields', () => {
+    const compiled = compileDecisionSearch('status:active AND action:ban AND alert:123 AND duplicate:false');
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) {
+      return;
+    }
+
+    expect(compiled.predicate(baseDecision)).toBe(true);
+    expect(compiled.predicate({ ...baseDecision, expired: true })).toBe(false);
+    expect(compiled.predicate({ ...baseDecision, is_duplicate: true })).toBe(false);
+  });
+
+  test('matches country codes exactly for decisions while keeping country-name matching broad', () => {
+    const codeSearch = compileDecisionSearch('country:DE');
+    expect(codeSearch.ok).toBe(true);
+    if (!codeSearch.ok) {
+      return;
+    }
+
+    expect(codeSearch.predicate(baseDecision)).toBe(true);
+    expect(codeSearch.predicate(swedenDecision)).toBe(false);
+
+    const nameSearch = compileDecisionSearch('country:germ');
+    expect(nameSearch.ok).toBe(true);
+    if (!nameSearch.ok) {
+      return;
+    }
+
+    expect(nameSearch.predicate(baseDecision)).toBe(true);
+    expect(nameSearch.predicate(swedenDecision)).toBe(false);
+  });
+
+  test('matches resolved city and region fields for decisions', () => {
+    const compiled = compileDecisionSearch('city:berl AND region:"state of berl"');
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) return;
+
+    expect(compiled.predicate(baseDecision)).toBe(true);
+    expect(compiled.predicate(secondDecision)).toBe(false);
+  });
+
+  test('matches decision IPs and ranges contained in IPv4 and IPv6 CIDR searches', () => {
+    const ipv4Search = compileDecisionSearch('ip:10.0.0.0/24');
+    expect(ipv4Search.ok).toBe(true);
+    if (!ipv4Search.ok) {
+      return;
+    }
+
+    expect(ipv4Search.predicate({ ...baseDecision, value: '10.0.0.42' })).toBe(true);
+    expect(ipv4Search.predicate({ ...baseDecision, value: '10.0.0.0/24' })).toBe(true);
+    expect(ipv4Search.predicate({ ...baseDecision, value: '10.0.0.128/25' })).toBe(true);
+    expect(ipv4Search.predicate({ ...baseDecision, value: '10.0.1.42' })).toBe(false);
+
+    const ipv6Search = compileDecisionSearch('ip:"2001:db8::/32"');
+    expect(ipv6Search.ok).toBe(true);
+    if (!ipv6Search.ok) {
+      return;
+    }
+
+    expect(ipv6Search.predicate({ ...baseDecision, value: '2001:db8::42' })).toBe(true);
+    expect(ipv6Search.predicate({ ...baseDecision, value: '2001:db8:1::/48' })).toBe(true);
+    expect(ipv6Search.predicate({ ...baseDecision, value: '2001:db9::42' })).toBe(false);
+  });
+
+  test('supports date equality and the => alias for decisions', () => {
+    const compiled = compileDecisionSearch('date=>2026-03-24 AND date=2026-03-24');
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) {
+      return;
+    }
+
+    expect(compiled.predicate(baseDecision)).toBe(true);
+    expect(compiled.predicate({ ...baseDecision, created_at: '2026-03-25T10:00:00.000Z' })).toBe(false);
+  });
+
+  test('returns parse errors for malformed expressions', () => {
+    const compiled = compileDecisionSearch('origin:(manual OR', {
+      originEnabled: true,
+    });
+    expect(compiled.ok).toBe(false);
+    if (compiled.ok) {
+      return;
+    }
+
+    expect(compiled.error.message).toContain('Missing closing parenthesis');
+    expect(compiled.error.position).toBeGreaterThanOrEqual(0);
+  });
+
+  test('analyzes advanced queries into highlightable tokens', () => {
+    const analysis = analyzeSearchQuery('origin:manual or country:"germany"', 'alerts', {
+      originEnabled: true,
+    });
+
+    expect(analysis.error).toBeNull();
+    expect(analysis.tokens.map((token) => `${token.kind}:${token.value}`)).toEqual([
+      'field:origin',
+      'comparator::',
+      'term:manual',
+      'booleanOperator:OR',
+      'field:country',
+      'comparator::',
+      'string:germany',
+    ]);
+  });
+
+  test('keeps tokens when parsing fails and shifts raw-query error positions', () => {
+    const analysis = analyzeSearchQuery('  origin:(manual OR', 'decisions', {
+      originEnabled: true,
+    });
+
+    expect(analysis.tokens.map((token) => `${token.kind}:${token.start}`)).toEqual([
+      'field:2',
+      'comparator:8',
+      'paren:9',
+      'term:10',
+      'booleanOperator:17',
+    ]);
+    expect(analysis.error).not.toBeNull();
+    expect(analysis.error?.message).toContain('Missing closing parenthesis');
+    expect(analysis.error?.position).toBe(9);
+  });
+
+  test('returns parse errors for unknown fields', () => {
+    const compiled = compileAlertSearch('hostname:web-1');
+    expect(compiled.ok).toBe(false);
+    if (compiled.ok) {
+      return;
+    }
+
+    expect(compiled.error.message).toContain('Unknown field');
+  });
+
+  test('rejects ordered comparisons on non-date fields', () => {
+    const compiled = compileAlertSearch('scenario>ssh');
+    expect(compiled.ok).toBe(false);
+    if (compiled.ok) {
+      return;
+    }
+
+    expect(compiled.error.message).toContain('only supported for date fields');
+  });
+
+  test('builds alert help examples from provided alert rows', () => {
+    const help = getSearchHelpDefinition('alerts', { originEnabled: true }, { alerts: [baseAlert, secondAlert] });
+
+    expect(help.examples.map((example) => example.query)).toEqual([
+      'ssh hetzner',
+      '"SSH brute force detected"',
+      'country:Germany ssh',
+      'date>=2026-03-24 AND date<2026-03-25',
+      'country:(Germany OR "United States") AND -sim:simulated',
+      'ip:1.2.3.4 AND target:ssh',
+      'origin:""',
+    ]);
+    expect(help.examples.every((example) => !/\bmachine\b/i.test(example.query))).toBe(true);
+  });
+
+  test('builds decision help examples from provided decision rows', () => {
+    const help = getSearchHelpDefinition('decisions', { originEnabled: true }, { decisions: [baseDecision, secondDecision] });
+
+    expect(help.examples.map((example) => example.query)).toEqual([
+      'ssh bf',
+      'status:active AND action:ban',
+      'date>=2026-03-24 AND action:ban',
+      'alert:123 OR ip:"1.2.3.4"',
+      'country:(Germany OR "United States") AND -duplicate:true',
+      'target:ssh AND sim:live',
+      'origin:""',
+    ]);
+    expect(help.examples.every((example) => !/\bmachine\b/i.test(example.query))).toBe(true);
+  });
+
+  test('falls back to generic help examples when no sample rows are provided', () => {
+    const alertHelp = getSearchHelpDefinition('alerts');
+    const decisionHelp = getSearchHelpDefinition('decisions');
+
+    expect(alertHelp.examples[4]?.query).toBe('country:(germany OR france) AND -sim:simulated');
+    expect(decisionHelp.examples[5]?.query).toBe('target:ssh AND sim:live');
+  });
+
+  test('skips numeric-only chunks when building free-text alert examples', () => {
+    const help = getSearchHelpDefinition('alerts', {}, {
+      alerts: [{
+        ...baseAlert,
+        target: '85.215.176.66',
+        source: { ...baseAlert.source, as_name: undefined },
+        scenario: 'crowdsecurity/vpatch-CVE-2025-55182',
+        meta_search: '85.215.176.66 vpatch CVE-2025-55182',
+      }],
+    });
+
+    expect(help.examples[0]?.query).toBe('vpatch cve');
+    expect(help.examples[2]?.query).toBe('country:Germany vpatch');
+  });
+});
