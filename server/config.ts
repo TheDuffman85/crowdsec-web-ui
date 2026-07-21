@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createCrowdsecAuthConfig, type CrowdsecAuthConfig } from './auth';
 import {
+  type AppliedConfigEnvironmentOverride,
   DEPRECATED_CONFIG_ENV,
   applyConfigSetupEnvironment,
   generateApplicationConfig,
@@ -504,6 +505,58 @@ export interface RuntimeConfigOptions {
   defaultConfigFile?: string;
 }
 
+const SECRET_CONFIG_KEYS = new Set([
+  'clientSecret',
+  'password',
+  'secretKey',
+  'sessionSecret',
+  'token',
+  'totpSecret',
+  'totpSeed',
+]);
+
+function redactConfigLogValue(value: unknown, path: readonly (string | number)[] = []): unknown {
+  const key = path.at(-1);
+  if (typeof key === 'string' && SECRET_CONFIG_KEYS.has(key)) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const reference = value as Record<string, unknown>;
+      if (typeof reference.env === 'string') return `[redacted; env: ${reference.env}]`;
+      if (typeof reference.file === 'string') return `[redacted; file: ${reference.file}]`;
+    }
+    return value === undefined ? undefined : '[redacted]';
+  }
+  if (Array.isArray(value)) {
+    return value.map((item, index) => redactConfigLogValue(item, [...path, index]));
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([entryKey, entryValue]) => (
+      [entryKey, redactConfigLogValue(entryValue, [...path, entryKey])]
+    )));
+  }
+  return value;
+}
+
+function formatConfigPath(path: readonly (string | number)[]): string {
+  return path.map((part, index) => (
+    typeof part === 'number' ? `[${part}]` : `${index === 0 ? '' : '.'}${part}`
+  )).join('');
+}
+
+function formatConfigLogValue(value: unknown, path: readonly (string | number)[]): string {
+  if (value === undefined) return '<unset>';
+  const redacted = redactConfigLogValue(value, path);
+  return JSON.stringify(redacted) ?? String(redacted);
+}
+
+function logConfigEnvironmentOverrides(overrides: readonly AppliedConfigEnvironmentOverride[]): void {
+  for (const override of overrides) {
+    const configPath = formatConfigPath(override.path);
+    const previousValue = formatConfigLogValue(override.previousValue, override.path);
+    const value = formatConfigLogValue(override.value, override.path);
+    console.log(`  ${override.name} -> ${configPath}: ${previousValue} -> ${value}`);
+  }
+}
+
 function defaultApplicationConfigFile(): string {
   const dockerDataDir = '/app/data';
   const dataDir = fs.existsSync(dockerDataDir) ? dockerDataDir : path.resolve(process.cwd(), 'data');
@@ -522,16 +575,28 @@ export function createRuntimeConfig(
 
   if (!explicitConfigFile && !fs.existsSync(configFile)) {
     const legacyConfig = createRuntimeConfigFromEnvironment(env);
-    const generatedConfig = applyConfigSetupEnvironment(generateApplicationConfig(env, legacyConfig), env);
+    const appliedOverrides: AppliedConfigEnvironmentOverride[] = [];
+    const generatedConfig = applyConfigSetupEnvironment(
+      generateApplicationConfig(env, legacyConfig),
+      env,
+      appliedOverrides,
+    );
     parseApplicationConfig(generatedConfig, env);
     migrated = saveApplicationConfig(configFile, generatedConfig, env);
-    if (migrated) console.log(`Saved generated configuration to ${configFile}.`);
+    if (migrated) {
+      console.log(`Saved generated configuration to ${configFile}.`);
+      if (appliedOverrides.length > 0) {
+        console.log('Applied CONFIG_ values while generating the application configuration.');
+        logConfigEnvironmentOverrides(appliedOverrides);
+      }
+    }
   }
 
   if (!migrated && fs.existsSync(configFile) && hasConfigEnvironmentOverrides(env)) {
     const mergedConfig = mergeApplicationConfigEnvironment(configFile, env);
     parsedConfig = parseApplicationConfig(mergedConfig.document, env);
     console.log(`Applied CONFIG_ overrides to application configuration from ${configFile}.`);
+    logConfigEnvironmentOverrides(mergedConfig.overrides);
   }
 
   warnDeprecatedEnvironment(env, { configFile, migrated });

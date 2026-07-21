@@ -683,6 +683,13 @@ type IndexedConfigOverride = {
   secret: 'direct' | 'file' | null;
 };
 
+export interface AppliedConfigEnvironmentOverride {
+  name: string;
+  path: ConfigPath;
+  previousValue: unknown;
+  value: unknown;
+}
+
 function indexedConfigOverrides(env: NodeJS.ProcessEnv): IndexedConfigOverride[] {
   const overrides: IndexedConfigOverride[] = [];
   for (const name of Object.keys(env)) {
@@ -914,17 +921,25 @@ function applyIndexedCollectionDefaults(
 function applyConfigEnvironment(
   env: NodeJS.ProcessEnv,
   setPath: (keys: ConfigPath, value: unknown) => void,
+  getPath?: (keys: ConfigPath) => unknown,
+  appliedOverrides?: AppliedConfigEnvironmentOverride[],
 ): IndexedConfigOverride[] {
+  const applyOverride = (name: string, keys: ConfigPath, value: unknown): void => {
+    const previousValue = structuredClone(getPath?.(keys));
+    setPath(keys, value);
+    appliedOverrides?.push({ name, path: keys, previousValue, value: structuredClone(value) });
+  };
+
   for (const [name, keys] of [...CONFIG_SECTION_ENV, ...CONFIG_VALUE_ENV]) {
-    if (has(env, name)) setPath(keys, parseConfigEnvironmentValue(name, env[name]));
+    if (has(env, name)) applyOverride(name, keys, parseConfigEnvironmentValue(name, env[name]));
   }
   for (const [name, keys] of CONFIG_SECRET_ENV) {
     const fileName = `${name}_FILE`;
     if (has(env, name) && has(env, fileName)) {
       throw new Error(`Configuration error: both ${name} and ${fileName} are set. Set only one.`);
     }
-    if (has(env, name)) setPath(keys, { env: name });
-    if (has(env, fileName)) setPath(keys, { file: env[fileName] });
+    if (has(env, name)) applyOverride(name, keys, { env: name });
+    if (has(env, fileName)) applyOverride(fileName, keys, { file: env[fileName] });
   }
 
   const indexedOverrides = indexedConfigOverrides(env);
@@ -937,26 +952,40 @@ function applyConfigEnvironment(
         throw new Error(`Configuration error: both ${existing.name} and ${override.name} are set. Set only one.`);
       }
       secrets.set(pathKey, override);
-      setPath(override.path, override.secret === 'file' ? { file: env[override.name] } : { env: override.name });
+      applyOverride(
+        override.name,
+        override.path,
+        override.secret === 'file' ? { file: env[override.name] } : { env: override.name },
+      );
     } else {
       const value = parseConfigEnvironmentValue(override.name, env[override.name]);
-      if (override.name.endsWith('_AUTH_TYPE')) setPath(override.path.slice(0, -1), { type: value });
-      else setPath(override.path, value);
+      if (override.name.endsWith('_AUTH_TYPE')) applyOverride(override.name, override.path.slice(0, -1), { type: value });
+      else applyOverride(override.name, override.path, value);
     }
   }
   return indexedOverrides;
 }
 
-export function applyConfigSetupEnvironment(document: unknown, env: NodeJS.ProcessEnv): UnknownRecord {
+export function applyConfigSetupEnvironment(
+  document: unknown,
+  env: NodeJS.ProcessEnv,
+  appliedOverrides?: AppliedConfigEnvironmentOverride[],
+): UnknownRecord {
   const root = record(document, 'config');
   const setPath = (keys: ConfigPath, value: unknown): void => setConfigPath(root, keys, value);
-  const indexedOverrides = applyConfigEnvironment(env, setPath);
+  const indexedOverrides = applyConfigEnvironment(
+    env,
+    setPath,
+    (keys) => getConfigPath(root, keys),
+    appliedOverrides,
+  );
   applyIndexedCollectionDefaults(indexedOverrides, setPath, (keys) => getConfigPath(root, keys), true);
   return root;
 }
 
 export interface MergedApplicationConfig {
   document: UnknownRecord;
+  overrides: AppliedConfigEnvironmentOverride[];
 }
 
 export function mergeApplicationConfigEnvironment(file: string, env: NodeJS.ProcessEnv): MergedApplicationConfig {
@@ -981,10 +1010,13 @@ export function mergeApplicationConfigEnvironment(file: string, env: NodeJS.Proc
     }
     yamlDocument.setIn(keys, yamlDocument.createNode(value));
   };
-  const indexedOverrides = applyConfigEnvironment(env, setPath);
+  const appliedOverrides: AppliedConfigEnvironmentOverride[] = [];
+  const getPath = (keys: ConfigPath): unknown => getConfigPath(record(yamlDocument.toJS(), 'config'), keys);
+  const indexedOverrides = applyConfigEnvironment(env, setPath, getPath, appliedOverrides);
   applyIndexedCollectionDefaults(indexedOverrides, setPath, (keys) => yamlDocument.getIn(keys), false);
   return {
     document: record(yamlDocument.toJS(), 'config'),
+    overrides: appliedOverrides,
   };
 }
 

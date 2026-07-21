@@ -201,6 +201,8 @@ When the default file does not exist, it is created once with an explanatory hea
 
 At startup, recognized `CONFIG_` variables are parsed as YAML values, merged over the file in memory, and validated. They are written to YAML only when the application creates the initial default configuration; an existing file is never changed by overrides. Precedence is section variable, field variable, then indexed array variable. Removing an environment variable reveals the value from the file again. Restart after changing configuration or rotating a referenced secret.
 
+Startup logs list every applied `CONFIG_` variable, its configuration path, and the previous and replacement values. Credential values are redacted; for secret references, only the environment-variable name or file path is shown.
+
 Array indexes are zero-based and contiguous: `CONFIG_AUTH_OIDC_ADMIN_GROUPS_0`, `CONFIG_INSTANCES_0_ID`, and `CONFIG_INSTANCES_0_METRICS_0_URL`. A whole section or array may instead be supplied as YAML through `CONFIG_SERVER`, `CONFIG_STORAGE`, `CONFIG_UI`, `CONFIG_AUTH`, `CONFIG_NOTIFICATIONS`, `CONFIG_UPDATES`, `CONFIG_CROWDSEC`, or `CONFIG_INSTANCES`.
 
 Use singular `CONFIG_INSTANCE_*` for instance `0`; for example, `CONFIG_INSTANCE_NAME` is equivalent to `CONFIG_INSTANCES_0_NAME`. The metrics index `0` may also be omitted, so `CONFIG_INSTANCES_0_METRICS_URL` equals `CONFIG_INSTANCES_0_METRICS_0_URL`, while `CONFIG_INSTANCE_METRICS_URL` uses both shorthand forms. Do not set equivalent forms for the same field.

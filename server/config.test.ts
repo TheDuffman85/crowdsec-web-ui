@@ -601,6 +601,14 @@ instances:
       expect(document.instances[0].metrics[0].auth.token).toEqual({ env: 'CONFIG_INSTANCE_METRICS_AUTH_TOKEN' });
       expect(warn).not.toHaveBeenCalled();
       expect(log).toHaveBeenCalledWith(`Saved generated configuration to ${generatedConfigFile}.`);
+      expect(log).toHaveBeenCalledWith('Applied CONFIG_ values while generating the application configuration.');
+      expect(log).toHaveBeenCalledWith(
+        '  CONFIG_INSTANCE_LAPI_AUTH_PASSWORD -> instances[0].lapi.auth.password: <unset> -> "[redacted; env: CONFIG_INSTANCE_LAPI_AUTH_PASSWORD]"',
+      );
+      const output = log.mock.calls.flat().join('\n');
+      expect(output).not.toContain('do-not-write-this-auth-secret');
+      expect(output).not.toContain('do-not-write-this-password');
+      expect(output).not.toContain('do-not-write-this-token');
     } finally {
       warn.mockRestore();
       log.mockRestore();
@@ -727,6 +735,51 @@ instances:
       expect(config.refreshIntervalMs).toBe(300_000);
       expect(readFileSync(generatedConfigFile, 'utf8')).toBe(original);
       expect(log).toHaveBeenCalledWith(`Applied CONFIG_ overrides to application configuration from ${generatedConfigFile}.`);
+      expect(log).toHaveBeenCalledWith('  CONFIG_SERVER_PORT -> server.port: 4100 -> 4200');
+      expect(log).toHaveBeenCalledWith('  CONFIG_CROWDSEC_SYNC_REFRESH_INTERVAL -> crowdsec.sync.refreshInterval: <unset> -> "5m"');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test('logs secret override sources without exposing their values', () => {
+    const configFile = createTempConfig(`
+server:
+  port: 3100
+auth:
+  sessionSecret: old-secret
+instances:
+  - id: default
+    name: CrowdSec
+    lapi:
+      url: http://crowdsec:8080
+      auth: { type: none }
+`);
+    const notificationSecretFile = createTempSecret('notification-secret-from-file');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      createRuntimeConfigImpl({
+        CONFIG_FILE: configFile,
+        CONFIG_AUTH_SESSION_SECRET: 'new-session-secret',
+        CONFIG_NOTIFICATIONS_SECRET_KEY_FILE: notificationSecretFile,
+        CONFIG_INSTANCE_LAPI_AUTH_USERNAME: 'watcher',
+        CONFIG_INSTANCE_LAPI_AUTH_PASSWORD: 'new-lapi-password',
+      });
+
+      expect(log).toHaveBeenCalledWith(
+        '  CONFIG_AUTH_SESSION_SECRET -> auth.sessionSecret: "[redacted]" -> "[redacted; env: CONFIG_AUTH_SESSION_SECRET]"',
+      );
+      expect(log).toHaveBeenCalledWith(
+        `  CONFIG_NOTIFICATIONS_SECRET_KEY_FILE -> notifications.secretKey: <unset> -> "[redacted; file: ${notificationSecretFile}]"`,
+      );
+      expect(log).toHaveBeenCalledWith(
+        '  CONFIG_INSTANCE_LAPI_AUTH_PASSWORD -> instances[0].lapi.auth.password: <unset> -> "[redacted; env: CONFIG_INSTANCE_LAPI_AUTH_PASSWORD]"',
+      );
+      const output = log.mock.calls.flat().join('\n');
+      expect(output).not.toContain('old-secret');
+      expect(output).not.toContain('new-session-secret');
+      expect(output).not.toContain('notification-secret-from-file');
+      expect(output).not.toContain('new-lapi-password');
     } finally {
       log.mockRestore();
     }
