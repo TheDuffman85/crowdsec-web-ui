@@ -607,6 +607,56 @@ instances:
     }
   });
 
+  test('generates deterministic block-style YAML in documentation order', () => {
+    const entries = [
+      ['CONFIG_INSTANCE_METRICS_AUTH_TOKEN', 'metrics-token'],
+      ['CONFIG_NOTIFICATIONS_DEBUG_PAYLOADS', 'true'],
+      ['CONFIG_INSTANCE_SYNC_BOUNCER_PROPAGATION_DELAY', '20s'],
+      ['CONFIG_AUTH_ENABLED', 'true'],
+      ['CONFIG_INSTANCE_LAPI_AUTH_PASSWORD', 'lapi-password'],
+      ['CONFIG_CROWDSEC_SYNC_REFRESH_INTERVAL', '2m'],
+      ['CONFIG_INSTANCE_METRICS_REQUEST_TIMEOUT', '10s'],
+      ['CONFIG_STORAGE_WAL_ENABLED', 'false'],
+      ['CONFIG_INSTANCE_LAPI_AUTH_USERNAME', 'watcher'],
+      ['CONFIG_UPDATES_ENABLED', 'false'],
+      ['CONFIG_INSTANCE_METRICS_URL', 'https://crowdsec.example.com:6060/metrics'],
+      ['CONFIG_SERVER_PORT', '4200'],
+      ['CONFIG_INSTANCE_LAPI_URL', 'https://crowdsec.example.com:8080'],
+      ['CONFIG_CROWDSEC_SIMULATIONS_ENABLED', 'true'],
+    ] as const;
+    const firstConfigFile = createMissingConfigPath();
+    const secondConfigFile = createMissingConfigPath();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      createRuntimeConfigImpl({
+        ...Object.fromEntries(entries),
+        CONFIG_UI: '{ readOnly: true, timeFormat: 24h, timeZone: UTC }',
+      }, { defaultConfigFile: firstConfigFile });
+      createRuntimeConfigImpl({
+        CONFIG_UI: '{ timeZone: UTC, timeFormat: 24h, readOnly: true }',
+        ...Object.fromEntries([...entries].reverse()),
+      }, { defaultConfigFile: secondConfigFile });
+      const first = readFileSync(firstConfigFile, 'utf8');
+      const second = readFileSync(secondConfigFile, 'utf8');
+      expect(first).toBe(second);
+      expect(first).not.toMatch(/\{[^}\n]*\}/);
+      expect(first).toContain('password:\n          env: CONFIG_INSTANCE_LAPI_AUTH_PASSWORD');
+
+      const document = parseYaml(first);
+      expect(Object.keys(document)).toEqual([
+        'server', 'storage', 'ui', 'updates', 'auth', 'notifications', 'crowdsec', 'instances',
+      ]);
+      expect(Object.keys(document.ui)).toEqual(['timeZone', 'timeFormat', 'readOnly']);
+      expect(Object.keys(document.instances[0])).toEqual(['id', 'name', 'lapi', 'metrics', 'sync']);
+      expect(Object.keys(document.instances[0].lapi)).toEqual(['url', 'auth']);
+      expect(Object.keys(document.instances[0].lapi.auth)).toEqual(['type', 'username', 'password']);
+      expect(Object.keys(document.instances[0].metrics[0])).toEqual(['id', 'name', 'url', 'requestTimeout', 'auth']);
+      expect(Object.keys(document.instances[0].metrics[0].auth)).toEqual(['type', 'token']);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   test('keeps explicitly supplied values active even when they equal the current default', () => {
     const generatedConfigFile = createMissingConfigPath();
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -663,9 +713,10 @@ instances:
     }
   });
 
-  test('applies CONFIG_ values to an existing YAML and persists the merged result', () => {
+  test('applies CONFIG_ values without modifying an existing YAML', () => {
     const generatedConfigFile = createMissingConfigPath();
     createRuntimeConfigImpl({ CONFIG_SERVER_PORT: '4100' }, { defaultConfigFile: generatedConfigFile });
+    const original = readFileSync(generatedConfigFile, 'utf8');
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       const config = createRuntimeConfigImpl({
@@ -674,16 +725,14 @@ instances:
       }, { defaultConfigFile: generatedConfigFile });
       expect(config.port).toBe(4200);
       expect(config.refreshIntervalMs).toBe(300_000);
-      const persisted = parseYaml(readFileSync(generatedConfigFile, 'utf8'));
-      expect(persisted.server.port).toBe(4200);
-      expect(persisted.crowdsec.sync.refreshInterval).toBe('5m');
-      expect(log).toHaveBeenCalledWith(`Applied CONFIG_ overrides and saved application configuration to ${generatedConfigFile}.`);
+      expect(readFileSync(generatedConfigFile, 'utf8')).toBe(original);
+      expect(log).toHaveBeenCalledWith(`Applied CONFIG_ overrides to application configuration from ${generatedConfigFile}.`);
     } finally {
       log.mockRestore();
     }
   });
 
-  test('merges CONFIG_ values into the file selected by CONFIG_FILE', () => {
+  test('applies CONFIG_ values without modifying the file selected by CONFIG_FILE', () => {
     const configFile = createTempConfig(`
 # This comment should survive environment merges.
 server:
@@ -698,6 +747,7 @@ instances:
       auth: { type: none }
     metrics: [ { url: http://old-crowdsec:6060/metrics, id: "0", name: Metrics 0, auth: { type: none } } ]
 `);
+    const original = readFileSync(configFile, 'utf8');
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       const config = createRuntimeConfigImpl({
@@ -715,23 +765,7 @@ instances:
       expect(config.dashboardAuth.oidcAdminGroups).toEqual(['admins', 'secops']);
       expect(config.instances[0].lapiAuth).toEqual({ mode: 'password', user: 'watcher', password: 'persist-by-reference' });
       expect(config.instances[0].prometheus[0]).toMatchObject({ id: '0', name: 'Metrics 0', auth: { type: 'none' } });
-      const persisted = parseYaml(readFileSync(configFile, 'utf8'));
-      expect(persisted.server.port).toBe(3200);
-      expect(persisted.ui.readOnly).toBe(true);
-      expect(persisted.auth.oidc.adminGroups).toEqual(['admins', 'secops']);
-      expect(persisted.instances[0].lapi.auth.password).toEqual({ env: 'CONFIG_INSTANCE_LAPI_AUTH_PASSWORD' });
-      expect(persisted.instances[0].metrics[0]).toMatchObject({ id: '0', name: 'Metrics 0' });
-      expect(persisted.instances[0].metrics[0].auth.type).toBe('none');
-      const persistedYaml = readFileSync(configFile, 'utf8');
-      expect(persistedYaml).toContain('# This comment should survive environment merges.');
-      expect(persistedYaml).not.toContain('This file was created automatically');
-      expect(persistedYaml).toContain(`    metrics:
-      - url: http://crowdsec:6060/metrics
-        id: "0"
-        name: Metrics 0
-        auth:
-          type: none`);
-      expect(persistedYaml).not.toContain('metrics: [');
+      expect(readFileSync(configFile, 'utf8')).toBe(original);
 
       const withoutAuth = createRuntimeConfigImpl({
         CONFIG_FILE: configFile,
@@ -739,8 +773,7 @@ instances:
         CONFIG_INSTANCE_METRICS_URL: 'http://crowdsec:6060/metrics',
       });
       expect(withoutAuth.instances[0].lapiAuth).toEqual({ mode: 'none' });
-      expect(parseYaml(readFileSync(configFile, 'utf8')).instances[0].lapi.auth).toEqual({ type: 'none' });
-      expect(readFileSync(configFile, 'utf8')).not.toContain('metrics: [');
+      expect(readFileSync(configFile, 'utf8')).toBe(original);
     } finally {
       log.mockRestore();
     }

@@ -9,7 +9,6 @@ import {
   loadApplicationConfig,
   mergeApplicationConfigEnvironment,
   parseApplicationConfig,
-  persistApplicationConfig,
   saveApplicationConfig,
   type ParsedConfigFile,
 } from './config-file';
@@ -519,6 +518,7 @@ export function createRuntimeConfig(
   const defaultConfigFile = options.defaultConfigFile || defaultApplicationConfigFile();
   const configFile = explicitConfigFile || defaultConfigFile;
   let migrated = false;
+  let parsedConfig: ParsedConfigFile | undefined;
 
   if (!explicitConfigFile && !fs.existsSync(configFile)) {
     const legacyConfig = createRuntimeConfigFromEnvironment(env);
@@ -530,13 +530,12 @@ export function createRuntimeConfig(
 
   if (!migrated && fs.existsSync(configFile) && hasConfigEnvironmentOverrides(env)) {
     const mergedConfig = mergeApplicationConfigEnvironment(configFile, env);
-    parseApplicationConfig(mergedConfig.document, env);
-    persistApplicationConfig(configFile, mergedConfig.yaml);
-    console.log(`Applied CONFIG_ overrides and saved application configuration to ${configFile}.`);
+    parsedConfig = parseApplicationConfig(mergedConfig.document, env);
+    console.log(`Applied CONFIG_ overrides to application configuration from ${configFile}.`);
   }
 
   warnDeprecatedEnvironment(env, { configFile, migrated });
-  const runtimeConfig = createRuntimeConfigFromParsedConfig(loadApplicationConfig(configFile, env));
+  const runtimeConfig = createRuntimeConfigFromParsedConfig(parsedConfig || loadApplicationConfig(configFile, env));
   console.log(`Loaded application configuration from ${configFile}.`);
   return runtimeConfig;
 }

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { isMap, isSeq, parse as parseYaml, parseDocument as parseYamlDocument, stringify as stringifyYaml } from 'yaml';
+import { isSeq, parse as parseYaml, parseDocument as parseYamlDocument, stringify as stringifyYaml } from 'yaml';
 import type { RuntimeConfig } from './config';
 import { parseInstancesConfig, type CrowdsecInstanceConfig } from './instances-config';
 
@@ -289,6 +289,70 @@ const INITIAL_CONFIG_HEADER = [
   'manage and pin its value. After creation, this file is the user\'s responsibility;',
   'the application does not update these comments or defaults automatically.',
 ] as const;
+
+const CONFIG_KEY_ORDER = new Map<string, readonly string[]>([
+  ['', ['server', 'storage', 'ui', 'updates', 'auth', 'notifications', 'crowdsec', 'instances']],
+  ['server', ['port', 'basePath']],
+  ['storage', ['dataDir', 'geonamesDir', 'walEnabled']],
+  ['ui', ['timeZone', 'timeFormat', 'readOnly']],
+  ['updates', ['enabled']],
+  ['auth', ['enabled', 'sessionSecret', 'totpSecret', 'totpSeed', 'oidc']],
+  ['auth.oidc', ['issuerUrl', 'clientId', 'clientSecret', 'scope', 'groupsClaim', 'adminGroups', 'readOnlyGroups', 'unmatchedRole']],
+  ['notifications', ['secretKey', 'allowPrivateAddresses', 'debugPayloads']],
+  ['crowdsec', ['simulationsEnabled', 'alertFilters', 'sync']],
+  ['crowdsec.alertFilters', ['includeOrigins', 'excludeOrigins', 'includeCapi', 'includeOriginEmpty', 'excludeOriginEmpty', 'legacy']],
+  ['crowdsec.alertFilters.legacy', ['origins', 'extraScenarios']],
+  ['crowdsec.sync', [
+    'lookback', 'refreshInterval', 'manualRefreshEnabled', 'idleRefreshInterval', 'idleThreshold',
+    'requestTimeout', 'bouncerPropagationDelay', 'metricsRequestTimeout', 'heartbeatInterval',
+    'alertSyncChunk', 'alertSyncMinChunk', 'reconcileWindow', 'reconcileRecentAge',
+    'reconcileRecentInterval', 'reconcileActiveInterval', 'reconcileOldInterval',
+    'reconcileWindowsPerRefresh', 'bootstrapRetryDelay', 'bootstrapRetryEnabled',
+  ]],
+  ['instances[]', ['id', 'name', 'icon', 'lapi', 'metrics', 'sync']],
+  ['instances[].lapi', ['url', 'auth', 'tls']],
+  ['instances[].lapi.auth', ['type', 'username', 'password', 'certFile', 'keyFile']],
+  ['instances[].lapi.tls', ['caFile']],
+  ['instances[].metrics[]', ['id', 'name', 'url', 'requestTimeout', 'auth', 'tls']],
+  ['instances[].metrics[].auth', ['type', 'username', 'password', 'token']],
+  ['instances[].metrics[].tls', ['caFile', 'certFile', 'keyFile']],
+  ['instances[].sync', [
+    'lookback', 'refreshInterval', 'idleRefreshInterval', 'idleThreshold', 'requestTimeout',
+    'heartbeatInterval', 'alertSyncChunk', 'alertSyncMinChunk', 'reconcileWindow',
+    'reconcileRecentAge', 'reconcileRecentInterval', 'reconcileActiveInterval',
+    'reconcileOldInterval', 'reconcileWindowsPerRefresh', 'bootstrapRetryDelay',
+    'bootstrapRetryEnabled', 'bouncerPropagationDelay',
+  ]],
+]);
+
+function configOrderPath(path: ConfigPath): string {
+  return path.reduce<string>((result, part) => (
+    typeof part === 'number' ? `${result}[]` : `${result}${result ? '.' : ''}${part}`
+  ), '');
+}
+
+function canonicalizeConfig(value: unknown, path: ConfigPath = []): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item, index) => canonicalizeConfig(item, [...path, index]));
+  }
+  if (!value || typeof value !== 'object') return value;
+
+  const source = value as UnknownRecord;
+  const order = CONFIG_KEY_ORDER.get(configOrderPath(path)) || [];
+  const rank = new Map(order.map((key, index) => [key, index]));
+  const keys = Object.keys(source).sort((left, right) => {
+    const leftRank = rank.get(left) ?? Number.MAX_SAFE_INTEGER;
+    const rightRank = rank.get(right) ?? Number.MAX_SAFE_INTEGER;
+    return leftRank - rightRank || left.localeCompare(right);
+  });
+  const result: UnknownRecord = {};
+  for (const key of keys) {
+    const child = canonicalizeConfig(source[key], [...path, key]);
+    if (child && typeof child === 'object' && !Array.isArray(child) && Object.keys(child).length === 0) continue;
+    result[key] = child;
+  }
+  return result;
+}
 
 const LEGACY_GENERATED_CONFIG_PATHS = [
   ['PORT', ['server', 'port']],
@@ -893,17 +957,6 @@ export function applyConfigSetupEnvironment(document: unknown, env: NodeJS.Proce
 
 export interface MergedApplicationConfig {
   document: UnknownRecord;
-  yaml: string;
-}
-
-function useBlockCollectionStyle(node: unknown): void {
-  if (isSeq(node)) {
-    node.flow = false;
-    for (const item of node.items) useBlockCollectionStyle(item);
-  } else if (isMap(node)) {
-    node.flow = false;
-    for (const pair of node.items) useBlockCollectionStyle(pair.value);
-  }
 }
 
 export function mergeApplicationConfigEnvironment(file: string, env: NodeJS.ProcessEnv): MergedApplicationConfig {
@@ -924,10 +977,6 @@ export function mergeApplicationConfigEnvironment(file: string, env: NodeJS.Proc
       const collection = yamlDocument.getIn(prefix, true);
       if (!isSeq(collection)) {
         yamlDocument.setIn(prefix, yamlDocument.createNode([]));
-      } else if (collection.flow) {
-        // Inline arrays retain their flow style when setIn updates or adds an
-        // item, which otherwise keeps metrics overrides on one long line.
-        useBlockCollectionStyle(collection);
       }
     }
     yamlDocument.setIn(keys, yamlDocument.createNode(value));
@@ -936,7 +985,6 @@ export function mergeApplicationConfigEnvironment(file: string, env: NodeJS.Proc
   applyIndexedCollectionDefaults(indexedOverrides, setPath, (keys) => yamlDocument.getIn(keys), false);
   return {
     document: record(yamlDocument.toJS(), 'config'),
-    yaml: yamlDocument.toString({ lineWidth: 0 }),
   };
 }
 
@@ -1020,10 +1068,10 @@ function renderInitialConfigMap(
 
 function stringifyInitialApplicationConfig(document: UnknownRecord, env: NodeJS.ProcessEnv): string {
   const explicitPaths = initialExplicitConfigPaths(env);
-  const rendered = renderInitialConfigMap(document, [], 0, explicitPaths);
+  const rendered = renderInitialConfigMap(canonicalizeConfig(document) as UnknownRecord, [], 0, explicitPaths);
+  if (!rendered.active) throw new Error('Configuration error: generated configuration has no active settings.');
   const header = INITIAL_CONFIG_HEADER.map((line) => `# ${line}`).join('\n');
-  const body = rendered.active ? rendered.lines.join('\n') : '{}';
-  return `${header}\n\n${body}\n`;
+  return `${header}\n\n${rendered.lines.join('\n')}\n`;
 }
 
 export function saveApplicationConfig(
@@ -1047,14 +1095,5 @@ export function saveApplicationConfig(
     if (code === 'EEXIST') return false;
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Configuration error: failed to save generated configuration at "${file}": ${message}`);
-  }
-}
-
-export function persistApplicationConfig(file: string, yaml: string): void {
-  try {
-    fs.writeFileSync(file, yaml, { encoding: 'utf8', mode: 0o600 });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Configuration error: failed to persist CONFIG_ overrides at "${file}": ${message}`);
   }
 }

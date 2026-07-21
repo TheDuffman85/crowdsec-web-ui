@@ -1,9 +1,10 @@
 # CrowdSec Web UI application configuration.
 # For Docker, copy this file to data/config.yaml and adjust it. The application
 # automatically loads /app/data/config.yaml.
-# CONFIG_ variables can create or override this file and persist the merged
-# result. Their names mirror YAML paths (for example CONFIG_SERVER_PORT), while
-# arrays use zero-based indexes (for example CONFIG_INSTANCES_0_LAPI_URL).
+# CONFIG_ variables are persisted when this file is first created and otherwise
+# override it in memory. Their names mirror YAML paths (for example
+# CONFIG_SERVER_PORT), while arrays use zero-based indexes (for example
+# CONFIG_INSTANCES_0_LAPI_URL).
 # The zero index may be omitted: CONFIG_INSTANCE_LAPI_URL addresses instance 0,
 # and CONFIG_INSTANCE_METRICS_URL addresses metrics endpoint 0 on instance 0.
 
@@ -20,6 +21,9 @@ ui:
   timeZone: browser # Or an IANA zone such as Europe/Berlin or UTC.
   timeFormat: browser # browser, 12h, or 24h.
   readOnly: false
+
+updates:
+  enabled: true
 
 auth:
   enabled: auto # New databases enable auth; migrated databases keep their existing state.
@@ -48,9 +52,6 @@ notifications:
   #   file: /run/secrets/notification_secret_key
   allowPrivateAddresses: true
   debugPayloads: false
-
-updates:
-  enabled: true
 
 crowdsec:
   simulationsEnabled: false

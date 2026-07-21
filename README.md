@@ -115,7 +115,7 @@ You need a running CrowdSec instance and exactly one CrowdSec LAPI authenticatio
 
 ## Run with Docker (Recommended)
 
-The examples below use `CONFIG_` environment overrides. On first startup, the application creates `/app/data/config.yaml`: explicitly supplied values are active, while application defaults are included as comments so future default changes can take effect. On later startups, it merges `CONFIG_` overrides over the existing file and persists the result. The complete commented YAML reference is [`config.example.yaml`](config.example.yaml).
+The examples below use `CONFIG_` environment overrides. On first startup, the application creates `/app/data/config.yaml`: explicitly supplied values are active, while application defaults are included as comments so future default changes can take effect. On later startups, it applies `CONFIG_` overrides without changing the existing file. The complete commented YAML reference is [`config.example.yaml`](config.example.yaml).
 
 1. **Build the image**:
 
@@ -197,94 +197,94 @@ Adjust the LAPI URL and certificate paths for your deployment. Uncomment `CONFIG
 
 The application loads `/app/data/config.yaml` in Docker and `./data/config.yaml` locally. Set `CONFIG_FILE` only to select another existing file. [`config.example.yaml`](config.example.yaml) is the complete commented example.
 
-When the default file does not exist, it is created once with an explanatory header. Values supplied through setup environment variables are written as active YAML; other application defaults are shown as comments and therefore continue to follow the defaults of the installed version. Once created, the file is user-managed: the application does not refresh its explanatory text or commented defaults.
+When the default file does not exist, it is created once with an explanatory header. Values supplied through setup environment variables are written as active YAML; other application defaults are shown as comments and therefore continue to follow the defaults of the installed version. Generated mappings use block-style rows and follow the configuration order documented below. Once created, the file is user-managed: the application does not refresh its explanatory text or commented defaults.
 
-At startup, recognized `CONFIG_` variables are parsed as YAML values, merged over the file, validated, and persisted back to it. Precedence is section variable, field variable, then indexed array variable. Removing an environment variable does not undo its persisted value. Restart after changing configuration or rotating a referenced secret.
+At startup, recognized `CONFIG_` variables are parsed as YAML values, merged over the file in memory, and validated. They are written to YAML only when the application creates the initial default configuration; an existing file is never changed by overrides. Precedence is section variable, field variable, then indexed array variable. Removing an environment variable reveals the value from the file again. Restart after changing configuration or rotating a referenced secret.
 
 Array indexes are zero-based and contiguous: `CONFIG_AUTH_OIDC_ADMIN_GROUPS_0`, `CONFIG_INSTANCES_0_ID`, and `CONFIG_INSTANCES_0_METRICS_0_URL`. A whole section or array may instead be supplied as YAML through `CONFIG_SERVER`, `CONFIG_STORAGE`, `CONFIG_UI`, `CONFIG_AUTH`, `CONFIG_NOTIFICATIONS`, `CONFIG_UPDATES`, `CONFIG_CROWDSEC`, or `CONFIG_INSTANCES`.
 
 Use singular `CONFIG_INSTANCE_*` for instance `0`; for example, `CONFIG_INSTANCE_NAME` is equivalent to `CONFIG_INSTANCES_0_NAME`. The metrics index `0` may also be omitted, so `CONFIG_INSTANCES_0_METRICS_URL` equals `CONFIG_INSTANCES_0_METRICS_0_URL`, while `CONFIG_INSTANCE_METRICS_URL` uses both shorthand forms. Do not set equivalent forms for the same field.
 
-Secrets accept a direct string or exactly one `{ env: NAME }` / `{ file: PATH }` reference in YAML. Secret environment overrides also accept `_FILE`. Direct secret overrides are persisted as environment references, never as plaintext.
+Secrets accept a direct string or exactly one `env: NAME` / `file: PATH` reference in YAML. Secret environment overrides also accept `_FILE`. When the initial YAML is created, direct secret overrides are written as environment references, never as plaintext.
 
 ### Server, storage, UI, and updates
 
-| YAML field | Default | Environment override | Purpose |
+| YAML field | Default | Purpose | Environment override |
 | --- | --- | --- | --- |
-| `server.port` | `3000` | `CONFIG_SERVER_PORT` | HTTP listen port. |
-| `server.basePath` | `""` | `CONFIG_SERVER_BASE_PATH` | Optional URL prefix such as `/crowdsec`; no trailing slash. |
-| `storage.dataDir` | `/app/data` | `CONFIG_STORAGE_DATA_DIR` | SQLite database and persistent application state. |
-| `storage.geonamesDir` | `/app/geonames` in Docker; `./geonames` locally | `CONFIG_STORAGE_GEONAMES_DIR` | Local GeoNames snapshot used for location labels. |
-| `storage.walEnabled` | `true` | `CONFIG_STORAGE_WAL_ENABLED` | Enables SQLite write-ahead logging. Set to `false` for filesystems that do not support WAL. |
-| `ui.timeZone` | `browser` | `CONFIG_UI_TIME_ZONE` | Browser timezone or an IANA zone such as `Europe/Berlin` or `UTC`. |
-| `ui.timeFormat` | `browser` | `CONFIG_UI_TIME_FORMAT` | Clock format: `browser`, `12h`, or `24h`. |
-| `ui.readOnly` | `false` | `CONFIG_UI_READ_ONLY` | Hides management actions and rejects mutating API operations. |
-| `updates.enabled` | `true` in packaged images | `CONFIG_UPDATES_ENABLED` | Enables the built-in update check. |
+| `server.port` | `3000` | HTTP listen port. | `CONFIG_SERVER_PORT` |
+| `server.basePath` | `""` | Optional URL prefix such as `/crowdsec`; no trailing slash. | `CONFIG_SERVER_BASE_PATH` |
+| `storage.dataDir` | `/app/data` | SQLite database and persistent application state. | `CONFIG_STORAGE_DATA_DIR` |
+| `storage.geonamesDir` | `/app/geonames` in Docker; `./geonames` locally | Local GeoNames snapshot used for location labels. | `CONFIG_STORAGE_GEONAMES_DIR` |
+| `storage.walEnabled` | `true` | Enables SQLite write-ahead logging. Set to `false` for filesystems that do not support WAL. | `CONFIG_STORAGE_WAL_ENABLED` |
+| `ui.timeZone` | `browser` | Browser timezone or an IANA zone such as `Europe/Berlin` or `UTC`. | `CONFIG_UI_TIME_ZONE` |
+| `ui.timeFormat` | `browser` | Clock format: `browser`, `12h`, or `24h`. | `CONFIG_UI_TIME_FORMAT` |
+| `ui.readOnly` | `false` | Hides management actions and rejects mutating API operations. | `CONFIG_UI_READ_ONLY` |
+| `updates.enabled` | `true` in packaged images | Enables the built-in update check. | `CONFIG_UPDATES_ENABLED` |
 
 ### Authentication and notifications
 
-| YAML field | Default | Environment override | Purpose |
+| YAML field | Default | Purpose | Environment override |
 | --- | --- | --- | --- |
-| `auth.enabled` | `auto` | `CONFIG_AUTH_ENABLED` | Enables authentication; `auto` enables new databases while preserving migrated database state. |
-| `auth.sessionSecret` | Generated and stored | `CONFIG_AUTH_SESSION_SECRET` or `CONFIG_AUTH_SESSION_SECRET_FILE` | Signs sessions and encrypts saved authentication settings. |
-| `auth.totpSecret` | `sessionSecret` | `CONFIG_AUTH_TOTP_SECRET` or `CONFIG_AUTH_TOTP_SECRET_FILE` | Encrypts stored per-account TOTP seeds. |
-| `auth.totpSeed` | Unset | `CONFIG_AUTH_TOTP_SEED` or `CONFIG_AUTH_TOTP_SEED_FILE` | Optional base32 fallback TOTP seed for the password user. |
-| `auth.oidc.issuerUrl` | Unset | `CONFIG_AUTH_OIDC_ISSUER_URL` | OIDC provider issuer URL. |
-| `auth.oidc.clientId` | Unset | `CONFIG_AUTH_OIDC_CLIENT_ID` | OIDC client identifier. |
-| `auth.oidc.clientSecret` | Unset | `CONFIG_AUTH_OIDC_CLIENT_SECRET` or `CONFIG_AUTH_OIDC_CLIENT_SECRET_FILE` | OIDC client secret. |
-| `auth.oidc.scope` | `openid profile email` | `CONFIG_AUTH_OIDC_SCOPE` | Requested OIDC scopes; must include `openid`. |
-| `auth.oidc.groupsClaim` | `groups` | `CONFIG_AUTH_OIDC_GROUPS_CLAIM` | Claim containing role-mapping groups. |
-| `auth.oidc.adminGroups` | `[]` | `CONFIG_AUTH_OIDC_ADMIN_GROUPS` or `CONFIG_AUTH_OIDC_ADMIN_GROUPS_<INDEX>` | Groups granted administrator access. |
-| `auth.oidc.readOnlyGroups` | `[]` | `CONFIG_AUTH_OIDC_READ_ONLY_GROUPS` or `CONFIG_AUTH_OIDC_READ_ONLY_GROUPS_<INDEX>` | Groups granted read-only access. |
-| `auth.oidc.unmatchedRole` | `deny` | `CONFIG_AUTH_OIDC_UNMATCHED_ROLE` | Role for unmatched OIDC users: `deny`, `admin`, or `read-only`. |
-| `notifications.secretKey` | Generated and stored | `CONFIG_NOTIFICATIONS_SECRET_KEY` or `CONFIG_NOTIFICATIONS_SECRET_KEY_FILE` | Encrypts saved notification credentials. |
-| `notifications.allowPrivateAddresses` | `true` | `CONFIG_NOTIFICATIONS_ALLOW_PRIVATE_ADDRESSES` | Allows private, loopback, and link-local notification destinations. |
-| `notifications.debugPayloads` | `false` | `CONFIG_NOTIFICATIONS_DEBUG_PAYLOADS` | Logs truncated rendered payloads after failed notification delivery. |
+| `auth.enabled` | `auto` | Enables authentication; `auto` enables new databases while preserving migrated database state. | `CONFIG_AUTH_ENABLED` |
+| `auth.sessionSecret` | Generated and stored | Signs sessions and encrypts saved authentication settings. | `CONFIG_AUTH_SESSION_SECRET` or `CONFIG_AUTH_SESSION_SECRET_FILE` |
+| `auth.totpSecret` | `sessionSecret` | Encrypts stored per-account TOTP seeds. | `CONFIG_AUTH_TOTP_SECRET` or `CONFIG_AUTH_TOTP_SECRET_FILE` |
+| `auth.totpSeed` | Unset | Optional base32 fallback TOTP seed for the password user. | `CONFIG_AUTH_TOTP_SEED` or `CONFIG_AUTH_TOTP_SEED_FILE` |
+| `auth.oidc.issuerUrl` | Unset | OIDC provider issuer URL. | `CONFIG_AUTH_OIDC_ISSUER_URL` |
+| `auth.oidc.clientId` | Unset | OIDC client identifier. | `CONFIG_AUTH_OIDC_CLIENT_ID` |
+| `auth.oidc.clientSecret` | Unset | OIDC client secret. | `CONFIG_AUTH_OIDC_CLIENT_SECRET` or `CONFIG_AUTH_OIDC_CLIENT_SECRET_FILE` |
+| `auth.oidc.scope` | `openid profile email` | Requested OIDC scopes; must include `openid`. | `CONFIG_AUTH_OIDC_SCOPE` |
+| `auth.oidc.groupsClaim` | `groups` | Claim containing role-mapping groups. | `CONFIG_AUTH_OIDC_GROUPS_CLAIM` |
+| `auth.oidc.adminGroups` | `[]` | Groups granted administrator access. | `CONFIG_AUTH_OIDC_ADMIN_GROUPS` or `CONFIG_AUTH_OIDC_ADMIN_GROUPS_<INDEX>` |
+| `auth.oidc.readOnlyGroups` | `[]` | Groups granted read-only access. | `CONFIG_AUTH_OIDC_READ_ONLY_GROUPS` or `CONFIG_AUTH_OIDC_READ_ONLY_GROUPS_<INDEX>` |
+| `auth.oidc.unmatchedRole` | `deny` | Role for unmatched OIDC users: `deny`, `admin`, or `read-only`. | `CONFIG_AUTH_OIDC_UNMATCHED_ROLE` |
+| `notifications.secretKey` | Generated and stored | Encrypts saved notification credentials. | `CONFIG_NOTIFICATIONS_SECRET_KEY` or `CONFIG_NOTIFICATIONS_SECRET_KEY_FILE` |
+| `notifications.allowPrivateAddresses` | `true` | Allows private, loopback, and link-local notification destinations. | `CONFIG_NOTIFICATIONS_ALLOW_PRIVATE_ADDRESSES` |
+| `notifications.debugPayloads` | `false` | Logs truncated rendered payloads after failed notification delivery. | `CONFIG_NOTIFICATIONS_DEBUG_PAYLOADS` |
 
 ### Alert handling
 
 Omitting `crowdsec.alertFilters` uses the standard non-CAPI feed. Setting any explicit filter field enables explicit filtering.
 
-| YAML field | Default | Environment override | Purpose |
+| YAML field | Default | Purpose | Environment override |
 | --- | --- | --- | --- |
-| `crowdsec.simulationsEnabled` | `false` | `CONFIG_CROWDSEC_SIMULATIONS_ENABLED` | Includes simulation-mode alerts and decisions. |
-| `crowdsec.alertFilters.includeOrigins` | `[]` | `CONFIG_CROWDSEC_ALERT_FILTERS_INCLUDE_ORIGINS` or `CONFIG_CROWDSEC_ALERT_FILTERS_INCLUDE_ORIGINS_<INDEX>` | Keeps alerts matching these exact origins. |
-| `crowdsec.alertFilters.excludeOrigins` | `[]` | `CONFIG_CROWDSEC_ALERT_FILTERS_EXCLUDE_ORIGINS` or `CONFIG_CROWDSEC_ALERT_FILTERS_EXCLUDE_ORIGINS_<INDEX>` | Drops alerts matching these exact origins. |
-| `crowdsec.alertFilters.includeCapi` | `false` | `CONFIG_CROWDSEC_ALERT_FILTERS_INCLUDE_CAPI` | Adds the Central API/community-blocklist feed. |
-| `crowdsec.alertFilters.includeOriginEmpty` | `false` | `CONFIG_CROWDSEC_ALERT_FILTERS_INCLUDE_ORIGIN_EMPTY` | Keeps empty-origin alerts with explicit include filters. |
-| `crowdsec.alertFilters.excludeOriginEmpty` | `false` | `CONFIG_CROWDSEC_ALERT_FILTERS_EXCLUDE_ORIGIN_EMPTY` | Drops alerts whose effective origin is empty. |
-| `crowdsec.alertFilters.legacy.origins` | `[]` | `CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_ORIGINS` or `CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_ORIGINS_<INDEX>` | Compatibility origin allowlist; `CAPI` enables the CAPI feed. |
-| `crowdsec.alertFilters.legacy.extraScenarios` | `[]` | `CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_EXTRA_SCENARIOS` or `CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_EXTRA_SCENARIOS_<INDEX>` | Compatibility list of additional scenarios. |
+| `crowdsec.simulationsEnabled` | `false` | Includes simulation-mode alerts and decisions. | `CONFIG_CROWDSEC_SIMULATIONS_ENABLED` |
+| `crowdsec.alertFilters.includeOrigins` | `[]` | Keeps alerts matching these exact origins. | `CONFIG_CROWDSEC_ALERT_FILTERS_INCLUDE_ORIGINS` or `CONFIG_CROWDSEC_ALERT_FILTERS_INCLUDE_ORIGINS_<INDEX>` |
+| `crowdsec.alertFilters.excludeOrigins` | `[]` | Drops alerts matching these exact origins. | `CONFIG_CROWDSEC_ALERT_FILTERS_EXCLUDE_ORIGINS` or `CONFIG_CROWDSEC_ALERT_FILTERS_EXCLUDE_ORIGINS_<INDEX>` |
+| `crowdsec.alertFilters.includeCapi` | `false` | Adds the Central API/community-blocklist feed. | `CONFIG_CROWDSEC_ALERT_FILTERS_INCLUDE_CAPI` |
+| `crowdsec.alertFilters.includeOriginEmpty` | `false` | Keeps empty-origin alerts with explicit include filters. | `CONFIG_CROWDSEC_ALERT_FILTERS_INCLUDE_ORIGIN_EMPTY` |
+| `crowdsec.alertFilters.excludeOriginEmpty` | `false` | Drops alerts whose effective origin is empty. | `CONFIG_CROWDSEC_ALERT_FILTERS_EXCLUDE_ORIGIN_EMPTY` |
+| `crowdsec.alertFilters.legacy.origins` | `[]` | Compatibility origin allowlist; `CAPI` enables the CAPI feed. | `CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_ORIGINS` or `CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_ORIGINS_<INDEX>` |
+| `crowdsec.alertFilters.legacy.extraScenarios` | `[]` | Compatibility list of additional scenarios. | `CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_EXTRA_SCENARIOS` or `CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_EXTRA_SCENARIOS_<INDEX>` |
 
 ### Global synchronization
 
 Durations accept `ms`, `s`, `m`, `h`, or `d`, for example `500ms`, `30s`, `5m`, or `7d`.
 
-| YAML field | Default | Environment override | Purpose |
+| YAML field | Default | Purpose | Environment override |
 | --- | --- | --- | --- |
-| `crowdsec.sync.lookback` | `168h` | `CONFIG_CROWDSEC_SYNC_LOOKBACK` | Imported history and retention window. |
-| `crowdsec.sync.refreshInterval` | `1m` | `CONFIG_CROWDSEC_SYNC_REFRESH_INTERVAL` | Active refresh cadence; `0` or `manual` disables scheduling. |
-| `crowdsec.sync.manualRefreshEnabled` | `false` | `CONFIG_CROWDSEC_SYNC_MANUAL_REFRESH_ENABLED` | Enables manual refresh controls. |
-| `crowdsec.sync.idleRefreshInterval` | `10m` | `CONFIG_CROWDSEC_SYNC_IDLE_REFRESH_INTERVAL` | Refresh cadence while the application is idle; `0` disables it. |
-| `crowdsec.sync.idleThreshold` | `2m` | `CONFIG_CROWDSEC_SYNC_IDLE_THRESHOLD` | Inactivity before idle refresh behavior begins. |
-| `crowdsec.sync.requestTimeout` | `30s` | `CONFIG_CROWDSEC_SYNC_REQUEST_TIMEOUT` | Timeout for individual LAPI requests. |
-| `crowdsec.sync.bouncerPropagationDelay` | `15s` | `CONFIG_CROWDSEC_SYNC_BOUNCER_PROPAGATION_DELAY` | Grace period before deleting alerts owned by expired decisions. |
-| `crowdsec.sync.metricsRequestTimeout` | `5s` | `CONFIG_CROWDSEC_SYNC_METRICS_REQUEST_TIMEOUT` | Default timeout for metrics endpoints. |
-| `crowdsec.sync.heartbeatInterval` | `30s` | `CONFIG_CROWDSEC_SYNC_HEARTBEAT_INTERVAL` | CrowdSec machine heartbeat cadence; `0` disables it. |
-| `crowdsec.sync.alertSyncChunk` | `12h` | `CONFIG_CROWDSEC_SYNC_ALERT_SYNC_CHUNK` | Historical import window size. |
-| `crowdsec.sync.alertSyncMinChunk` | `15m` | `CONFIG_CROWDSEC_SYNC_ALERT_SYNC_MIN_CHUNK` | Minimum retry window after a timed-out import. |
-| `crowdsec.sync.reconcileWindow` | `1h` | `CONFIG_CROWDSEC_SYNC_RECONCILE_WINDOW` | Fixed alert-history reconciliation window size. |
-| `crowdsec.sync.reconcileRecentAge` | `24h` | `CONFIG_CROWDSEC_SYNC_RECONCILE_RECENT_AGE` | Boundary between recent and older windows. |
-| `crowdsec.sync.reconcileRecentInterval` | `15m` | `CONFIG_CROWDSEC_SYNC_RECONCILE_RECENT_INTERVAL` | Reconciliation cadence for recent windows. |
-| `crowdsec.sync.reconcileActiveInterval` | `5m` | `CONFIG_CROWDSEC_SYNC_RECONCILE_ACTIVE_INTERVAL` | Reconciliation cadence for windows with active decisions. |
-| `crowdsec.sync.reconcileOldInterval` | `3h` | `CONFIG_CROWDSEC_SYNC_RECONCILE_OLD_INTERVAL` | Reconciliation cadence for older windows. |
-| `crowdsec.sync.reconcileWindowsPerRefresh` | `2` | `CONFIG_CROWDSEC_SYNC_RECONCILE_WINDOWS_PER_REFRESH` | Maximum due windows processed per refresh. |
-| `crowdsec.sync.bootstrapRetryDelay` | `30s` | `CONFIG_CROWDSEC_SYNC_BOOTSTRAP_RETRY_DELAY` | Delay between failed initial-sync retries; `0` retries immediately. |
-| `crowdsec.sync.bootstrapRetryEnabled` | `true` | `CONFIG_CROWDSEC_SYNC_BOOTSTRAP_RETRY_ENABLED` | Enables background retry after initial synchronization failure. |
+| `crowdsec.sync.lookback` | `168h` | Imported history and retention window. | `CONFIG_CROWDSEC_SYNC_LOOKBACK` |
+| `crowdsec.sync.refreshInterval` | `1m` | Active refresh cadence; `0` or `manual` disables scheduling. | `CONFIG_CROWDSEC_SYNC_REFRESH_INTERVAL` |
+| `crowdsec.sync.manualRefreshEnabled` | `false` | Enables manual refresh controls. | `CONFIG_CROWDSEC_SYNC_MANUAL_REFRESH_ENABLED` |
+| `crowdsec.sync.idleRefreshInterval` | `10m` | Refresh cadence while the application is idle; `0` disables it. | `CONFIG_CROWDSEC_SYNC_IDLE_REFRESH_INTERVAL` |
+| `crowdsec.sync.idleThreshold` | `2m` | Inactivity before idle refresh behavior begins. | `CONFIG_CROWDSEC_SYNC_IDLE_THRESHOLD` |
+| `crowdsec.sync.requestTimeout` | `30s` | Timeout for individual LAPI requests. | `CONFIG_CROWDSEC_SYNC_REQUEST_TIMEOUT` |
+| `crowdsec.sync.bouncerPropagationDelay` | `15s` | Grace period before deleting alerts owned by expired decisions. | `CONFIG_CROWDSEC_SYNC_BOUNCER_PROPAGATION_DELAY` |
+| `crowdsec.sync.metricsRequestTimeout` | `5s` | Default timeout for metrics endpoints. | `CONFIG_CROWDSEC_SYNC_METRICS_REQUEST_TIMEOUT` |
+| `crowdsec.sync.heartbeatInterval` | `30s` | CrowdSec machine heartbeat cadence; `0` disables it. | `CONFIG_CROWDSEC_SYNC_HEARTBEAT_INTERVAL` |
+| `crowdsec.sync.alertSyncChunk` | `12h` | Historical import window size. | `CONFIG_CROWDSEC_SYNC_ALERT_SYNC_CHUNK` |
+| `crowdsec.sync.alertSyncMinChunk` | `15m` | Minimum retry window after a timed-out import. | `CONFIG_CROWDSEC_SYNC_ALERT_SYNC_MIN_CHUNK` |
+| `crowdsec.sync.reconcileWindow` | `1h` | Fixed alert-history reconciliation window size. | `CONFIG_CROWDSEC_SYNC_RECONCILE_WINDOW` |
+| `crowdsec.sync.reconcileRecentAge` | `24h` | Boundary between recent and older windows. | `CONFIG_CROWDSEC_SYNC_RECONCILE_RECENT_AGE` |
+| `crowdsec.sync.reconcileRecentInterval` | `15m` | Reconciliation cadence for recent windows. | `CONFIG_CROWDSEC_SYNC_RECONCILE_RECENT_INTERVAL` |
+| `crowdsec.sync.reconcileActiveInterval` | `5m` | Reconciliation cadence for windows with active decisions. | `CONFIG_CROWDSEC_SYNC_RECONCILE_ACTIVE_INTERVAL` |
+| `crowdsec.sync.reconcileOldInterval` | `3h` | Reconciliation cadence for older windows. | `CONFIG_CROWDSEC_SYNC_RECONCILE_OLD_INTERVAL` |
+| `crowdsec.sync.reconcileWindowsPerRefresh` | `2` | Maximum due windows processed per refresh. | `CONFIG_CROWDSEC_SYNC_RECONCILE_WINDOWS_PER_REFRESH` |
+| `crowdsec.sync.bootstrapRetryDelay` | `30s` | Delay between failed initial-sync retries; `0` retries immediately. | `CONFIG_CROWDSEC_SYNC_BOOTSTRAP_RETRY_DELAY` |
+| `crowdsec.sync.bootstrapRetryEnabled` | `true` | Enables background retry after initial synchronization failure. | `CONFIG_CROWDSEC_SYNC_BOOTSTRAP_RETRY_ENABLED` |
 
 ### Instances and LAPI
 
-Use `<INDEX>` for the zero-based instance index. The ID defaults to the index, the name defaults to `Instance <INDEX>`, and the LAPI authentication type is inferred from its credentials. Derived values are persisted to YAML. Explicit IDs must match lowercase letters, digits, `_`, and `-`, and should remain stable after data is imported.
+Use `<INDEX>` for the zero-based instance index. The ID defaults to the index, the name defaults to `Instance <INDEX>`, and the LAPI authentication type is inferred from its credentials. Derived values are included when the initial YAML is created. Explicit IDs must match lowercase letters, digits, `_`, and `-`, and should remain stable after data is imported.
 
 > [!IMPORTANT]
 > Configure exactly one credential shape:
@@ -295,68 +295,68 @@ Use `<INDEX>` for the zero-based instance index. The ID defaults to the index, t
 >
 > Plaintext secrets are supported, but mounted secret files are recommended so credentials do not end up in source control, backups, or configuration-management logs.
 
-| YAML field | Default | Environment override | Purpose |
+| YAML field | Default | Purpose | Environment override |
 | --- | --- | --- | --- |
-| `instances` | One generated `default` instance | `CONFIG_INSTANCES` or `CONFIG_INSTANCES_<INDEX>_*` | Configures one or more CrowdSec connections. |
-| `instances[].id` | Zero-based instance index | `CONFIG_INSTANCES_<INDEX>_ID` | Stable database identity for the instance. |
-| `instances[].name` | `Instance <INDEX>` | `CONFIG_INSTANCES_<INDEX>_NAME` | Unique display name. |
-| `instances[].icon` | Unset | `CONFIG_INSTANCES_<INDEX>_ICON` | Optional short text or emoji shown in the selector. |
-| `instances[].lapi` | Required | `CONFIG_INSTANCES_<INDEX>_LAPI` | Complete LAPI connection object. |
-| `instances[].lapi.url` | Required (`http://crowdsec:8080` in starter config) | `CONFIG_INSTANCES_<INDEX>_LAPI_URL` | Absolute HTTP(S) LAPI base URL without credentials or a path. |
-| `instances[].lapi.auth` | `{ type: none }` | `CONFIG_INSTANCES_<INDEX>_LAPI_AUTH` | LAPI authentication object. |
-| `instances[].lapi.auth.type` | Inferred from credentials | `CONFIG_INSTANCES_<INDEX>_LAPI_AUTH_TYPE` | Optional authentication mode: `none`, `password`, or `mtls`. |
-| `instances[].lapi.auth.username` | Required for `password` | `CONFIG_INSTANCES_<INDEX>_LAPI_AUTH_USERNAME` | CrowdSec machine username. |
-| `instances[].lapi.auth.password` | Required for `password` | `CONFIG_INSTANCES_<INDEX>_LAPI_AUTH_PASSWORD` or `CONFIG_INSTANCES_<INDEX>_LAPI_AUTH_PASSWORD_FILE` | CrowdSec machine password or secret reference. |
-| `instances[].lapi.auth.certFile` | Required for `mtls` | `CONFIG_INSTANCES_<INDEX>_LAPI_AUTH_CERT_FILE` | Client certificate path. |
-| `instances[].lapi.auth.keyFile` | Required for `mtls` | `CONFIG_INSTANCES_<INDEX>_LAPI_AUTH_KEY_FILE` | Client private-key path. |
-| `instances[].lapi.tls` | `{}` | `CONFIG_INSTANCES_<INDEX>_LAPI_TLS` | LAPI server-trust settings. |
-| `instances[].lapi.tls.caFile` | Unset | `CONFIG_INSTANCES_<INDEX>_LAPI_TLS_CA_FILE` | CA bundle used to verify the LAPI server. |
-| `instances[].metrics` | `[]` | `CONFIG_INSTANCES_<INDEX>_METRICS` or `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_*` | Zero or more metrics endpoints. |
-| `instances[].sync` | Inherits global values | `CONFIG_INSTANCES_<INDEX>_SYNC` or `CONFIG_INSTANCES_<INDEX>_SYNC_*` | Per-instance synchronization overrides. |
+| `instances` | One generated `default` instance | Configures one or more CrowdSec connections. | `CONFIG_INSTANCES` or `CONFIG_INSTANCES_<INDEX>_*` |
+| `instances[].id` | Zero-based instance index | Stable database identity for the instance. | `CONFIG_INSTANCES_<INDEX>_ID` |
+| `instances[].name` | `Instance <INDEX>` | Unique display name. | `CONFIG_INSTANCES_<INDEX>_NAME` |
+| `instances[].icon` | Unset | Optional short text or emoji shown in the selector. | `CONFIG_INSTANCES_<INDEX>_ICON` |
+| `instances[].lapi` | Required | Complete LAPI connection object. | `CONFIG_INSTANCES_<INDEX>_LAPI` |
+| `instances[].lapi.url` | Required (`http://crowdsec:8080` in starter config) | Absolute HTTP(S) LAPI base URL without credentials or a path. | `CONFIG_INSTANCES_<INDEX>_LAPI_URL` |
+| `instances[].lapi.auth` | `type: none` | LAPI authentication object. | `CONFIG_INSTANCES_<INDEX>_LAPI_AUTH` |
+| `instances[].lapi.auth.type` | Inferred from credentials | Optional authentication mode: `none`, `password`, or `mtls`. | `CONFIG_INSTANCES_<INDEX>_LAPI_AUTH_TYPE` |
+| `instances[].lapi.auth.username` | Required for `password` | CrowdSec machine username. | `CONFIG_INSTANCES_<INDEX>_LAPI_AUTH_USERNAME` |
+| `instances[].lapi.auth.password` | Required for `password` | CrowdSec machine password or secret reference. | `CONFIG_INSTANCES_<INDEX>_LAPI_AUTH_PASSWORD` or `CONFIG_INSTANCES_<INDEX>_LAPI_AUTH_PASSWORD_FILE` |
+| `instances[].lapi.auth.certFile` | Required for `mtls` | Client certificate path. | `CONFIG_INSTANCES_<INDEX>_LAPI_AUTH_CERT_FILE` |
+| `instances[].lapi.auth.keyFile` | Required for `mtls` | Client private-key path. | `CONFIG_INSTANCES_<INDEX>_LAPI_AUTH_KEY_FILE` |
+| `instances[].lapi.tls` | Empty mapping | LAPI server-trust settings. | `CONFIG_INSTANCES_<INDEX>_LAPI_TLS` |
+| `instances[].lapi.tls.caFile` | Unset | CA bundle used to verify the LAPI server. | `CONFIG_INSTANCES_<INDEX>_LAPI_TLS_CA_FILE` |
+| `instances[].metrics` | `[]` | Zero or more metrics endpoints. | `CONFIG_INSTANCES_<INDEX>_METRICS` or `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_*` |
+| `instances[].sync` | Inherits global values | Per-instance synchronization overrides. | `CONFIG_INSTANCES_<INDEX>_SYNC` or `CONFIG_INSTANCES_<INDEX>_SYNC_*` |
 
 ### Metrics endpoints
 
-Use `<INDEX>` for the instance index and `<METRIC_INDEX>` for its zero-based metrics endpoint index. The endpoint ID defaults to `<METRIC_INDEX>` and its name defaults to `Metrics <METRIC_INDEX>`. These defaults are persisted to YAML.
+Use `<INDEX>` for the instance index and `<METRIC_INDEX>` for its zero-based metrics endpoint index. The endpoint ID defaults to `<METRIC_INDEX>` and its name defaults to `Metrics <METRIC_INDEX>`. These defaults are included when the initial YAML is created.
 
-| YAML field | Default | Environment override | Purpose |
+| YAML field | Default | Purpose | Environment override |
 | --- | --- | --- | --- |
-| `instances[].metrics[].id` | Zero-based metrics index | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_ID` | Stable identifier unique within the instance. |
-| `instances[].metrics[].name` | `Metrics <METRIC_INDEX>` | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_NAME` | Display name. |
-| `instances[].metrics[].url` | Required | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_URL` | Absolute HTTP(S) Prometheus endpoint URL. |
-| `instances[].metrics[].requestTimeout` | Global `5s` | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_REQUEST_TIMEOUT` | Request timeout for this endpoint. |
-| `instances[].metrics[].auth` | `{ type: none }` | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_AUTH` | Complete metrics authentication object. |
-| `instances[].metrics[].auth.type` | Inferred from credentials | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_AUTH_TYPE` | Optional authentication mode: `none`, `basic`, or `bearer`. |
-| `instances[].metrics[].auth.username` | Required for `basic` | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_AUTH_USERNAME` | Basic-auth username. |
-| `instances[].metrics[].auth.password` | Required for `basic` | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_AUTH_PASSWORD` or `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_AUTH_PASSWORD_FILE` | Basic-auth password or secret reference. |
-| `instances[].metrics[].auth.token` | Required for `bearer` | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_AUTH_TOKEN` or `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_AUTH_TOKEN_FILE` | Bearer token or secret reference. |
-| `instances[].metrics[].tls` | `{}` | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_TLS` | Metrics TLS settings. |
-| `instances[].metrics[].tls.caFile` | Unset | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_TLS_CA_FILE` | CA bundle used to verify the metrics server. |
-| `instances[].metrics[].tls.certFile` | Unset | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_TLS_CERT_FILE` | Optional metrics client certificate; requires `keyFile`. |
-| `instances[].metrics[].tls.keyFile` | Unset | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_TLS_KEY_FILE` | Optional metrics client private key; requires `certFile`. |
+| `instances[].metrics[].id` | Zero-based metrics index | Stable identifier unique within the instance. | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_ID` |
+| `instances[].metrics[].name` | `Metrics <METRIC_INDEX>` | Display name. | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_NAME` |
+| `instances[].metrics[].url` | Required | Absolute HTTP(S) Prometheus endpoint URL. | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_URL` |
+| `instances[].metrics[].requestTimeout` | Global `5s` | Request timeout for this endpoint. | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_REQUEST_TIMEOUT` |
+| `instances[].metrics[].auth` | `type: none` | Complete metrics authentication object. | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_AUTH` |
+| `instances[].metrics[].auth.type` | Inferred from credentials | Optional authentication mode: `none`, `basic`, or `bearer`. | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_AUTH_TYPE` |
+| `instances[].metrics[].auth.username` | Required for `basic` | Basic-auth username. | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_AUTH_USERNAME` |
+| `instances[].metrics[].auth.password` | Required for `basic` | Basic-auth password or secret reference. | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_AUTH_PASSWORD` or `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_AUTH_PASSWORD_FILE` |
+| `instances[].metrics[].auth.token` | Required for `bearer` | Bearer token or secret reference. | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_AUTH_TOKEN` or `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_AUTH_TOKEN_FILE` |
+| `instances[].metrics[].tls` | Empty mapping | Metrics TLS settings. | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_TLS` |
+| `instances[].metrics[].tls.caFile` | Unset | CA bundle used to verify the metrics server. | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_TLS_CA_FILE` |
+| `instances[].metrics[].tls.certFile` | Unset | Optional metrics client certificate; requires `keyFile`. | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_TLS_CERT_FILE` |
+| `instances[].metrics[].tls.keyFile` | Unset | Optional metrics client private key; requires `certFile`. | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_TLS_KEY_FILE` |
 
 ### Per-instance synchronization overrides
 
 Every field inherits its corresponding global value when omitted.
 
-| YAML field | Default | Environment override | Purpose |
+| YAML field | Default | Purpose | Environment override |
 | --- | --- | --- | --- |
-| `instances[].sync.lookback` | Global `168h` | `CONFIG_INSTANCES_<INDEX>_SYNC_LOOKBACK` | History and retention window for this instance. |
-| `instances[].sync.refreshInterval` | Global `1m` | `CONFIG_INSTANCES_<INDEX>_SYNC_REFRESH_INTERVAL` | Active refresh cadence. |
-| `instances[].sync.idleRefreshInterval` | Global `10m` | `CONFIG_INSTANCES_<INDEX>_SYNC_IDLE_REFRESH_INTERVAL` | Idle refresh cadence. |
-| `instances[].sync.idleThreshold` | Global `2m` | `CONFIG_INSTANCES_<INDEX>_SYNC_IDLE_THRESHOLD` | Time before this instance is considered idle. |
-| `instances[].sync.requestTimeout` | Global `30s` | `CONFIG_INSTANCES_<INDEX>_SYNC_REQUEST_TIMEOUT` | LAPI request timeout. |
-| `instances[].sync.heartbeatInterval` | Global `30s` | `CONFIG_INSTANCES_<INDEX>_SYNC_HEARTBEAT_INTERVAL` | Machine heartbeat cadence. |
-| `instances[].sync.alertSyncChunk` | Global `12h` | `CONFIG_INSTANCES_<INDEX>_SYNC_ALERT_SYNC_CHUNK` | Historical import window size. |
-| `instances[].sync.alertSyncMinChunk` | Global `15m` | `CONFIG_INSTANCES_<INDEX>_SYNC_ALERT_SYNC_MIN_CHUNK` | Minimum retry window. |
-| `instances[].sync.reconcileWindow` | Global `1h` | `CONFIG_INSTANCES_<INDEX>_SYNC_RECONCILE_WINDOW` | Reconciliation window size. |
-| `instances[].sync.reconcileRecentAge` | Global `24h` | `CONFIG_INSTANCES_<INDEX>_SYNC_RECONCILE_RECENT_AGE` | Recent-window age boundary. |
-| `instances[].sync.reconcileRecentInterval` | Global `15m` | `CONFIG_INSTANCES_<INDEX>_SYNC_RECONCILE_RECENT_INTERVAL` | Recent-window reconciliation cadence. |
-| `instances[].sync.reconcileActiveInterval` | Global `5m` | `CONFIG_INSTANCES_<INDEX>_SYNC_RECONCILE_ACTIVE_INTERVAL` | Active-decision reconciliation cadence. |
-| `instances[].sync.reconcileOldInterval` | Global `3h` | `CONFIG_INSTANCES_<INDEX>_SYNC_RECONCILE_OLD_INTERVAL` | Older-window reconciliation cadence. |
-| `instances[].sync.reconcileWindowsPerRefresh` | Global `2` | `CONFIG_INSTANCES_<INDEX>_SYNC_RECONCILE_WINDOWS_PER_REFRESH` | Due-window budget per refresh. |
-| `instances[].sync.bootstrapRetryDelay` | Global `30s` | `CONFIG_INSTANCES_<INDEX>_SYNC_BOOTSTRAP_RETRY_DELAY` | Initial-sync retry delay. |
-| `instances[].sync.bootstrapRetryEnabled` | Global `true` | `CONFIG_INSTANCES_<INDEX>_SYNC_BOOTSTRAP_RETRY_ENABLED` | Enables background initial-sync retry. |
-| `instances[].sync.bouncerPropagationDelay` | Global `15s` | `CONFIG_INSTANCES_<INDEX>_SYNC_BOUNCER_PROPAGATION_DELAY` | Alert-deletion grace period. |
+| `instances[].sync.lookback` | Global `168h` | History and retention window for this instance. | `CONFIG_INSTANCES_<INDEX>_SYNC_LOOKBACK` |
+| `instances[].sync.refreshInterval` | Global `1m` | Active refresh cadence. | `CONFIG_INSTANCES_<INDEX>_SYNC_REFRESH_INTERVAL` |
+| `instances[].sync.idleRefreshInterval` | Global `10m` | Idle refresh cadence. | `CONFIG_INSTANCES_<INDEX>_SYNC_IDLE_REFRESH_INTERVAL` |
+| `instances[].sync.idleThreshold` | Global `2m` | Time before this instance is considered idle. | `CONFIG_INSTANCES_<INDEX>_SYNC_IDLE_THRESHOLD` |
+| `instances[].sync.requestTimeout` | Global `30s` | LAPI request timeout. | `CONFIG_INSTANCES_<INDEX>_SYNC_REQUEST_TIMEOUT` |
+| `instances[].sync.heartbeatInterval` | Global `30s` | Machine heartbeat cadence. | `CONFIG_INSTANCES_<INDEX>_SYNC_HEARTBEAT_INTERVAL` |
+| `instances[].sync.alertSyncChunk` | Global `12h` | Historical import window size. | `CONFIG_INSTANCES_<INDEX>_SYNC_ALERT_SYNC_CHUNK` |
+| `instances[].sync.alertSyncMinChunk` | Global `15m` | Minimum retry window. | `CONFIG_INSTANCES_<INDEX>_SYNC_ALERT_SYNC_MIN_CHUNK` |
+| `instances[].sync.reconcileWindow` | Global `1h` | Reconciliation window size. | `CONFIG_INSTANCES_<INDEX>_SYNC_RECONCILE_WINDOW` |
+| `instances[].sync.reconcileRecentAge` | Global `24h` | Recent-window age boundary. | `CONFIG_INSTANCES_<INDEX>_SYNC_RECONCILE_RECENT_AGE` |
+| `instances[].sync.reconcileRecentInterval` | Global `15m` | Recent-window reconciliation cadence. | `CONFIG_INSTANCES_<INDEX>_SYNC_RECONCILE_RECENT_INTERVAL` |
+| `instances[].sync.reconcileActiveInterval` | Global `5m` | Active-decision reconciliation cadence. | `CONFIG_INSTANCES_<INDEX>_SYNC_RECONCILE_ACTIVE_INTERVAL` |
+| `instances[].sync.reconcileOldInterval` | Global `3h` | Older-window reconciliation cadence. | `CONFIG_INSTANCES_<INDEX>_SYNC_RECONCILE_OLD_INTERVAL` |
+| `instances[].sync.reconcileWindowsPerRefresh` | Global `2` | Due-window budget per refresh. | `CONFIG_INSTANCES_<INDEX>_SYNC_RECONCILE_WINDOWS_PER_REFRESH` |
+| `instances[].sync.bootstrapRetryDelay` | Global `30s` | Initial-sync retry delay. | `CONFIG_INSTANCES_<INDEX>_SYNC_BOOTSTRAP_RETRY_DELAY` |
+| `instances[].sync.bootstrapRetryEnabled` | Global `true` | Enables background initial-sync retry. | `CONFIG_INSTANCES_<INDEX>_SYNC_BOOTSTRAP_RETRY_ENABLED` |
+| `instances[].sync.bouncerPropagationDelay` | Global `15s` | Alert-deletion grace period. | `CONFIG_INSTANCES_<INDEX>_SYNC_BOUNCER_PROPAGATION_DELAY` |
 
 ## Multiple CrowdSec instances
 
@@ -543,7 +543,7 @@ secrets:
     file: ./secrets/crowdsec_password.txt
 ```
 
-Replace `/path/on/host/root_ca.crt` with your CA file path and keep the mount read-only. This avoids rebuilding the image and persists the path as `instances[0].lapi.tls.caFile`.
+Replace `/path/on/host/root_ca.crt` with your CA file path and keep the mount read-only. This avoids rebuilding the image and applies the path as `instances[0].lapi.tls.caFile`.
 
 ### Reverse Proxy with Base Path
 
