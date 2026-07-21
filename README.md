@@ -411,7 +411,7 @@ instances:
         caFile: /run/secrets/us-ca
 ```
 
-Instance and endpoint IDs must be unique URL-safe identifiers and should be treated as immutable database identities. Display names are also unique, but may be changed. The optional `icon` is a short text or emoji glyph shown in the instance selector; the all-instance scope uses a grid icon. Do not reuse an existing ID for an unrelated LAPI. Configuration and referenced secrets are loaded once; restart the process or container after changing or rotating them.
+Instance and endpoint IDs must be unique URL-safe identifiers and should be treated as immutable database identities. Display names are also unique, but may be changed. The optional `icon` is a short text or emoji glyph shown in the instance selector; instances without one receive a colored-square icon, while the all-instance scope uses a grid icon. Do not reuse an existing ID for an unrelated LAPI. Configuration and referenced secrets are loaded once; restart the process or container after changing or rotating them.
 
 LAPI password authentication uses `password` as a direct string or an object containing exactly one of `env` or `file`. LAPI mTLS uses `certFile` and `keyFile`. The separate `tls.caFile` controls server trust for either authentication mode. Prometheus supports omitted/`none`, `basic`, and `bearer` authentication. Basic auth uses the same `password` shape; bearer auth uses the equivalent `token` shape. Prometheus `tls` accepts `caFile` and an optional complete `certFile`/`keyFile` client pair.
 

@@ -13,6 +13,7 @@ import { useDateTime } from "../lib/dateTime";
 import { useOptionalToast } from "../contexts/useToast";
 import { Modal } from "./ui/Modal";
 import { DropdownSelect } from "./ui/DropdownSelect";
+import { InstanceIcon } from "./InstanceIcon";
 import type { ManualRefreshMode } from "../types";
 
 type ThemeMode = 'light' | 'dark';
@@ -319,10 +320,10 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                                 label: t('components.sidebar.allInstances'),
                                 icon: <Boxes className="h-4 w-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />,
                             },
-                            ...instances.map((instance) => ({
+                            ...instances.map((instance, index) => ({
                                 value: instance.id,
                                 label: instance.name,
-                                icon: instance.icon ? <span aria-hidden="true">{instance.icon}</span> : undefined,
+                                icon: <InstanceIcon icon={instance.icon} colorIndex={index} />,
                             })),
                         ]}
                     />

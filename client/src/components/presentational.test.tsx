@@ -129,7 +129,6 @@ describe('presentational components', () => {
             {
               instance_id: 'edge',
               instance_name: 'Edge',
-              icon: '🟧',
               isSyncing: false,
               progress: 0,
               message: '',
@@ -149,6 +148,7 @@ describe('presentational components', () => {
     expect(screen.getByText('Complete')).toBeInTheDocument();
     expect(screen.getByText('Waiting for sync...')).toBeInTheDocument();
     expect(screen.getByText('52%')).toBeInTheDocument();
+    expect(document.querySelector('.instance-color-icon')).toHaveClass('bg-orange-500');
   });
 
   test('translates known server sync status messages', () => {

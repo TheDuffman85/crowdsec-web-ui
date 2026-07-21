@@ -23,6 +23,7 @@ import { useRefresh } from '../contexts/useRefresh';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
 import { Switch } from '../components/ui/Switch';
 import { DropdownSelect } from '../components/ui/DropdownSelect';
+import { InstanceIcon } from '../components/InstanceIcon';
 import { useI18n } from '../lib/i18n';
 import type {
   CrowdsecMetricsApiEntity,
@@ -901,8 +902,8 @@ export function Metrics() {
               options={endpointChoices.map(({ instance, endpoint }) => ({
                 value: `${instance.id}:${endpoint.id}`,
                 label: instanceScope === 'all' ? `${instance.name} — ${endpoint.name}` : endpoint.name,
-                icon: instanceScope === 'all' && instance.icon
-                  ? <span aria-hidden="true">{instance.icon}</span>
+                icon: instanceScope === 'all'
+                  ? <InstanceIcon icon={instance.icon} colorIndex={instances.findIndex((candidate) => candidate.id === instance.id)} />
                   : undefined,
               }))}
             />

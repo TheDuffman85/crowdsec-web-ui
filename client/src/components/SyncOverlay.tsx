@@ -2,6 +2,7 @@ import { createPortal } from "react-dom";
 import { AlertCircle, CheckCircle2, Database, RefreshCw } from "lucide-react";
 import type { InstanceSyncStatus, SyncStatus } from "../types";
 import { useI18n } from "../lib/i18n";
+import { InstanceIcon } from "./InstanceIcon";
 
 interface SyncOverlayProps {
     syncStatus: SyncStatus | null;
@@ -145,13 +146,13 @@ export function SyncOverlay({ syncStatus }: SyncOverlayProps) {
                             })}
                         </p>
                         <div className="max-h-64 space-y-3 overflow-y-auto pr-1">
-                            {instances.map((instance) => {
+                            {instances.map((instance, index) => {
                                 const failed = instance.state === 'failed';
                                 const complete = instance.state === 'complete' && instance.progress === 100;
                                 return (
                                     <div key={instance.instance_id} className="rounded-lg bg-gray-50 p-3 dark:bg-gray-900/50">
                                         <div className="flex items-center gap-2 text-sm">
-                                            <span aria-hidden="true">{instance.icon || '▪'}</span>
+                                            <InstanceIcon icon={instance.icon} colorIndex={index} />
                                             <span className="min-w-0 flex-1 truncate font-medium text-gray-800 dark:text-gray-100">
                                                 {instance.instance_name}
                                             </span>

@@ -204,6 +204,8 @@ describe('Sidebar', () => {
     await userEvent.click(selector);
     const allInstances = screen.getByRole('option', { name: 'Alle Instanzen' });
     expect(allInstances.querySelector('.lucide-boxes')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Primary' }).querySelector('.instance-color-icon')).toHaveClass('bg-blue-500');
+    expect(screen.getByRole('option', { name: 'Secondary' }).querySelector('.instance-color-icon')).toHaveClass('bg-green-500');
   });
 
   test('identifies load-test mode instead of showing regular build metadata', async () => {
