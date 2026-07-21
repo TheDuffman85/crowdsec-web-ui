@@ -826,6 +826,42 @@ instances:
     }
   });
 
+  test('redacts secrets inside section overrides with nested arrays', () => {
+    const configFile = createTempConfig(`
+server:
+  port: 3100
+auth:
+  enabled: false
+  sessionSecret: old-section-secret
+  oidc:
+    adminGroups: [operators]
+instances:
+  - id: default
+    name: CrowdSec
+    lapi:
+      url: http://crowdsec:8080
+      auth: { type: none }
+`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfigImpl({
+        CONFIG_FILE: configFile,
+        CONFIG_AUTH: '{ enabled: false, sessionSecret: new-section-secret, oidc: { adminGroups: [admins, secops] } }',
+      });
+
+      expect(config.dashboardAuth.oidcAdminGroups).toEqual(['admins', 'secops']);
+      const output = log.mock.calls.flat().join('\n');
+      expect(output).toContain('CONFIG_AUTH -> auth:');
+      expect(output).toContain('[redacted]');
+      expect(output).toContain('admins');
+      expect(output).toContain('secops');
+      expect(output).not.toContain('old-section-secret');
+      expect(output).not.toContain('new-section-secret');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   test('applies CONFIG_ values without modifying the file selected by CONFIG_FILE', () => {
     const configFile = createTempConfig(`
 # This comment should survive environment merges.
