@@ -8,12 +8,139 @@ services:
       CONFIG_INSTANCE_LAPI_URL: http://crowdsec:8080
       CONFIG_INSTANCE_LAPI_AUTH_USERNAME: crowdsec-web-ui
       CONFIG_INSTANCE_LAPI_AUTH_PASSWORD: your-crowdsec-password
+
+      # Optional configuration overrides. Uncomment only the values you need.
+      # Values are parsed as YAML and override /app/data/config.yaml in memory.
+      # Arrays may use inline YAML or zero-based entries such as
+      # CONFIG_AUTH_OIDC_ADMIN_GROUPS_0. See config.example.yaml for details.
+
+      # Whole sections can alternatively be supplied as inline YAML. Use these
+      # instead of their individual field overrides.
+      # CONFIG_SERVER: '{port: 3000, basePath: ""}'
+      # CONFIG_STORAGE: '{dataDir: /app/data, geonamesDir: /app/geonames, walEnabled: true}'
+      # CONFIG_UI: '{timeZone: browser, timeFormat: browser, readOnly: false}'
+      # CONFIG_UPDATES: '{enabled: true}'
+      # CONFIG_AUTH: '{enabled: auto}'
+      # CONFIG_NOTIFICATIONS: '{allowPrivateAddresses: true, debugPayloads: false}'
+      # CONFIG_CROWDSEC: '{simulationsEnabled: false}'
+      # CONFIG_INSTANCES: '[{id: default, name: CrowdSec, lapi: {url: http://crowdsec:8080}}]'
+
+      # Server, storage, UI, and updates
+      # CONFIG_SERVER_PORT: "3000"
+      # CONFIG_SERVER_BASE_PATH: ""
+      # CONFIG_STORAGE_DATA_DIR: /app/data
+      # CONFIG_STORAGE_GEONAMES_DIR: /app/geonames
+      # CONFIG_STORAGE_WAL_ENABLED: "true"
+      # CONFIG_UI_TIME_ZONE: browser
+      # CONFIG_UI_TIME_FORMAT: browser
+      # CONFIG_UI_READ_ONLY: "false"
+      # CONFIG_UPDATES_ENABLED: "true"
+
+      # Authentication and notifications. Prefer *_FILE for secrets.
+      # CONFIG_AUTH_ENABLED: auto
+      # CONFIG_AUTH_SESSION_SECRET: change-me
+      # CONFIG_AUTH_SESSION_SECRET_FILE: /run/secrets/auth_session_secret
+      # CONFIG_AUTH_TOTP_SECRET: change-me
+      # CONFIG_AUTH_TOTP_SECRET_FILE: /run/secrets/auth_totp_secret
+      # CONFIG_AUTH_TOTP_SEED: BASE32SEED
+      # CONFIG_AUTH_TOTP_SEED_FILE: /run/secrets/auth_totp_seed
+      # CONFIG_AUTH_OIDC_ISSUER_URL: https://idp.example.com/application/o/crowdsec/
+      # CONFIG_AUTH_OIDC_CLIENT_ID: crowdsec-web-ui
+      # CONFIG_AUTH_OIDC_CLIENT_SECRET: change-me
+      # CONFIG_AUTH_OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc_client_secret
+      # CONFIG_AUTH_OIDC_SCOPE: openid profile email
+      # CONFIG_AUTH_OIDC_GROUPS_CLAIM: groups
+      # CONFIG_AUTH_OIDC_ADMIN_GROUPS: '[admins]'
+      # CONFIG_AUTH_OIDC_READ_ONLY_GROUPS: '[auditors]'
+      # CONFIG_AUTH_OIDC_UNMATCHED_ROLE: deny
+      # CONFIG_NOTIFICATIONS_SECRET_KEY: change-me
+      # CONFIG_NOTIFICATIONS_SECRET_KEY_FILE: /run/secrets/notification_secret_key
+      # CONFIG_NOTIFICATIONS_ALLOW_PRIVATE_ADDRESSES: "true"
+      # CONFIG_NOTIFICATIONS_DEBUG_PAYLOADS: "false"
+
+      # Alert handling
+      # CONFIG_CROWDSEC_SIMULATIONS_ENABLED: "false"
+      # CONFIG_CROWDSEC_ALERT_FILTERS_INCLUDE_ORIGINS: '[crowdsec]'
+      # CONFIG_CROWDSEC_ALERT_FILTERS_EXCLUDE_ORIGINS: '[lists]'
+      # CONFIG_CROWDSEC_ALERT_FILTERS_INCLUDE_CAPI: "false"
+      # CONFIG_CROWDSEC_ALERT_FILTERS_INCLUDE_ORIGIN_EMPTY: "false"
+      # CONFIG_CROWDSEC_ALERT_FILTERS_EXCLUDE_ORIGIN_EMPTY: "false"
+      # CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_ORIGINS: '[]'
+      # CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_EXTRA_SCENARIOS: '[]'
+
+      # Global synchronization
+      # CONFIG_CROWDSEC_SYNC_LOOKBACK: 168h
+      # CONFIG_CROWDSEC_SYNC_REFRESH_INTERVAL: 1m
+      # CONFIG_CROWDSEC_SYNC_MANUAL_REFRESH_ENABLED: "false"
+      # CONFIG_CROWDSEC_SYNC_IDLE_REFRESH_INTERVAL: 10m
+      # CONFIG_CROWDSEC_SYNC_IDLE_THRESHOLD: 2m
+      # CONFIG_CROWDSEC_SYNC_REQUEST_TIMEOUT: 30s
+      # CONFIG_CROWDSEC_SYNC_BOUNCER_PROPAGATION_DELAY: 15s
+      # CONFIG_CROWDSEC_SYNC_METRICS_REQUEST_TIMEOUT: 5s
+      # CONFIG_CROWDSEC_SYNC_HEARTBEAT_INTERVAL: 30s
+      # CONFIG_CROWDSEC_SYNC_ALERT_SYNC_CHUNK: 12h
+      # CONFIG_CROWDSEC_SYNC_ALERT_SYNC_MIN_CHUNK: 15m
+      # CONFIG_CROWDSEC_SYNC_RECONCILE_WINDOW: 1h
+      # CONFIG_CROWDSEC_SYNC_RECONCILE_RECENT_AGE: 24h
+      # CONFIG_CROWDSEC_SYNC_RECONCILE_RECENT_INTERVAL: 15m
+      # CONFIG_CROWDSEC_SYNC_RECONCILE_ACTIVE_INTERVAL: 5m
+      # CONFIG_CROWDSEC_SYNC_RECONCILE_OLD_INTERVAL: 3h
+      # CONFIG_CROWDSEC_SYNC_RECONCILE_WINDOWS_PER_REFRESH: "2"
+      # CONFIG_CROWDSEC_SYNC_BOOTSTRAP_RETRY_DELAY: 30s
+      # CONFIG_CROWDSEC_SYNC_BOOTSTRAP_RETRY_ENABLED: "true"
+
+      # Default instance (equivalent to CONFIG_INSTANCES_0_*).
+      # Choose password or mTLS credentials; do not enable both.
+      # CONFIG_INSTANCE_ID: default
+      # CONFIG_INSTANCE_NAME: CrowdSec
+      # CONFIG_INSTANCE_ICON: "shield"
+      # CONFIG_INSTANCE_LAPI: '{url: http://crowdsec:8080, auth: {type: none}}'
+      # CONFIG_INSTANCE_LAPI_AUTH: '{type: password, username: crowdsec-web-ui, password: change-me}'
+      # CONFIG_INSTANCE_LAPI_AUTH_TYPE: password
+      # CONFIG_INSTANCE_LAPI_AUTH_PASSWORD_FILE: /run/secrets/crowdsec_password
+      # CONFIG_INSTANCE_LAPI_AUTH_CERT_FILE: /certs/agent.pem
+      # CONFIG_INSTANCE_LAPI_AUTH_KEY_FILE: /certs/agent-key.pem
+      # CONFIG_INSTANCE_LAPI_TLS: '{caFile: /certs/ca.pem}'
+      # CONFIG_INSTANCE_LAPI_TLS_CA_FILE: /certs/ca.pem
+
+      # First metrics endpoint on the default instance (equivalent to
+      # CONFIG_INSTANCES_0_METRICS_0_*). Choose none, basic, or bearer auth.
+      # CONFIG_INSTANCE_METRICS: '[{id: lapi, name: CrowdSec, url: http://crowdsec:6060/metrics}]'
+      # CONFIG_INSTANCE_METRICS_ID: lapi
+      # CONFIG_INSTANCE_METRICS_NAME: CrowdSec
+      # CONFIG_INSTANCE_METRICS_URL: http://crowdsec:6060/metrics
+      # CONFIG_INSTANCE_METRICS_REQUEST_TIMEOUT: 5s
+      # CONFIG_INSTANCE_METRICS_AUTH: '{type: none}'
+      # CONFIG_INSTANCE_METRICS_AUTH_TYPE: none
+      # CONFIG_INSTANCE_METRICS_AUTH_USERNAME: metrics-user
+      # CONFIG_INSTANCE_METRICS_AUTH_PASSWORD: change-me
+      # CONFIG_INSTANCE_METRICS_AUTH_PASSWORD_FILE: /run/secrets/metrics_password
+      # CONFIG_INSTANCE_METRICS_AUTH_TOKEN: change-me
+      # CONFIG_INSTANCE_METRICS_AUTH_TOKEN_FILE: /run/secrets/metrics_token
+      # CONFIG_INSTANCE_METRICS_TLS: '{caFile: /certs/metrics-ca.pem}'
+      # CONFIG_INSTANCE_METRICS_TLS_CA_FILE: /certs/metrics-ca.pem
+      # CONFIG_INSTANCE_METRICS_TLS_CERT_FILE: /certs/metrics-client.pem
+      # CONFIG_INSTANCE_METRICS_TLS_KEY_FILE: /certs/metrics-client-key.pem
+
+      # Per-instance synchronization overrides
+      # CONFIG_INSTANCE_SYNC: '{refreshInterval: 1m, requestTimeout: 30s}'
+      # CONFIG_INSTANCE_SYNC_LOOKBACK: 168h
+      # CONFIG_INSTANCE_SYNC_REFRESH_INTERVAL: 1m
+      # CONFIG_INSTANCE_SYNC_IDLE_REFRESH_INTERVAL: 10m
+      # CONFIG_INSTANCE_SYNC_IDLE_THRESHOLD: 2m
+      # CONFIG_INSTANCE_SYNC_REQUEST_TIMEOUT: 30s
+      # CONFIG_INSTANCE_SYNC_BOUNCER_PROPAGATION_DELAY: 15s
+      # CONFIG_INSTANCE_SYNC_HEARTBEAT_INTERVAL: 30s
+      # CONFIG_INSTANCE_SYNC_ALERT_SYNC_CHUNK: 12h
+      # CONFIG_INSTANCE_SYNC_ALERT_SYNC_MIN_CHUNK: 15m
+      # CONFIG_INSTANCE_SYNC_RECONCILE_WINDOW: 1h
+      # CONFIG_INSTANCE_SYNC_RECONCILE_RECENT_AGE: 24h
+      # CONFIG_INSTANCE_SYNC_RECONCILE_RECENT_INTERVAL: 15m
+      # CONFIG_INSTANCE_SYNC_RECONCILE_ACTIVE_INTERVAL: 5m
+      # CONFIG_INSTANCE_SYNC_RECONCILE_OLD_INTERVAL: 3h
+      # CONFIG_INSTANCE_SYNC_RECONCILE_WINDOWS_PER_REFRESH: "2"
+      # CONFIG_INSTANCE_SYNC_BOOTSTRAP_RETRY_DELAY: 30s
+      # CONFIG_INSTANCE_SYNC_BOOTSTRAP_RETRY_ENABLED: "true"
     volumes:
       - ./data:/app/data
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
     restart: unless-stopped
