@@ -322,7 +322,12 @@ export function createNotificationService(options: NotificationServiceOptions): 
 
       for (const incident of activeIncidents.values()) {
         if (!candidateKeys.has(incident.incidentKey)) {
-          await writeDatabase(() => database.resolveNotificationIncident(rule.id, incident.incidentKey, timestamp));
+          await writeDatabase(() => {
+            database.resolveNotificationIncident(rule.id, incident.incidentKey, timestamp);
+            if (rule.type === 'application-update') {
+              database.deleteNotificationByRuleAndDedupeKey(rule.id, incident.incidentKey);
+            }
+          });
         }
       }
 

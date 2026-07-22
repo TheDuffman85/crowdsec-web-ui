@@ -321,6 +321,7 @@ export class CrowdsecDatabase {
   private readonly resolveNotificationIncidentStatement: any;
   private readonly deleteNotificationIncidentsByRuleStatement: any;
   private readonly deleteNotificationStatement: any;
+  private readonly deleteNotificationByRuleAndDedupeKeyStatement: any;
   private readonly markNotificationReadStatement: any;
   private readonly markAllNotificationsReadStatement: any;
   private readonly deleteReadNotificationsStatement: any;
@@ -721,6 +722,10 @@ export class CrowdsecDatabase {
     `);
     this.deleteNotificationIncidentsByRuleStatement = this.db.query('DELETE FROM notification_incidents WHERE rule_id = $rule_id');
     this.deleteNotificationStatement = this.db.query('DELETE FROM notifications WHERE id = $id');
+    this.deleteNotificationByRuleAndDedupeKeyStatement = this.db.query(`
+      DELETE FROM notifications
+      WHERE rule_id = $rule_id AND dedupe_key = $dedupe_key
+    `);
     this.markNotificationReadStatement = this.db.query('UPDATE notifications SET read_at = $read_at, updated_at = $updated_at WHERE id = $id');
     this.markAllNotificationsReadStatement = this.db.query(`
       UPDATE notifications
@@ -1982,6 +1987,13 @@ export class CrowdsecDatabase {
 
   deleteNotification(id: string): boolean {
     return this.deleteNotificationStatement.run({ $id: id }).changes > 0;
+  }
+
+  deleteNotificationByRuleAndDedupeKey(ruleId: string, dedupeKey: string): boolean {
+    return this.deleteNotificationByRuleAndDedupeKeyStatement.run({
+      $rule_id: ruleId,
+      $dedupe_key: dedupeKey,
+    }).changes > 0;
   }
 
   deleteNotifications(ids: string[]): number {
