@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import tls from 'node:tls';
@@ -252,9 +252,11 @@ async function main() {
   ensureCommand('openssl');
 
   const workDir = mkdtempSync(path.join(os.tmpdir(), 'crowdsec-web-ui-mtls-'));
+  const crowdsecDataDir = path.join(workDir, 'crowdsec-data');
   let containerStarted = false;
 
   try {
+    mkdirSync(crowdsecDataDir);
     generateCertificates(workDir);
     writeCrowdSecTlsOverride(workDir);
 
@@ -275,6 +277,8 @@ async function main() {
       `${workDir}:/mtls:ro`,
       '-v',
       `${path.join(workDir, 'config.yaml.local')}:/etc/crowdsec/config.yaml.local:ro`,
+      '-v',
+      `${crowdsecDataDir}:/var/lib/crowdsec/data`,
       image,
     ]);
     containerStarted = true;
@@ -310,8 +314,11 @@ async function main() {
       runQuiet('docker', ['rm', '-f', containerName]);
     } else if (containerStarted) {
       console.log(`Keeping CrowdSec container for inspection: ${containerName}`);
+      console.log(`Keeping CrowdSec test files for its mounts: ${workDir}`);
     }
-    rmSync(workDir, { recursive: true, force: true });
+    if (!containerStarted || !keepContainer) {
+      rmSync(workDir, { recursive: true, force: true });
+    }
   }
 }
 

@@ -1,6 +1,6 @@
 # CrowdSec Web UI API
 
-All API routes return JSON unless a route explicitly redirects for OIDC login/callback. Routes are served below `/api`, or below the configured `server.basePath` when set. `GET /api/health` is always registered at the root path and below the configured base path.
+All HTTP API routes return JSON unless a route explicitly redirects for OIDC login/callback. Routes are served below `/api`, or below the configured `server.basePath` when set. `GET /api/health` is always registered at the root path and below the configured base path.
 
 API request bodies are limited to 1 MiB. Browser requests using state-changing methods must be same-origin; non-browser clients that do not send `Origin` or `Sec-Fetch-Site` remain supported. API responses are marked `private, no-store`.
 
@@ -20,11 +20,12 @@ Read-only mode still allows user preferences and notification read-state writes.
 
 ### Pagination
 
-List endpoints that support pagination use `page` and `page_size`. Pagination is enabled only when the `page` query parameter is present.
+Alert and decision list pagination uses `page` and `page_size` and is enabled only when `page` is present. Notification lists are always paginated and default to the first page.
 
 - `page` defaults to `1` and is clamped to at least `1`.
 - `page_size` defaults to `50` and is clamped from `10` to `200`.
 - For high-volume alert and decision lists, `selectable_ids` contains IDs for the returned page only. Use additional pages to expand the loaded selection set.
+- With multiple instances, responses also include `selectable_refs` entries containing both `instance_id` and the upstream record `id`.
 - Paginated responses use:
 
 ```json
@@ -37,9 +38,12 @@ List endpoints that support pagination use `page` and `page_size`. Pagination is
     "total_pages": 0,
     "unfiltered_total": 0
   },
-  "selectable_ids": []
+  "selectable_ids": [],
+  "selectable_refs": []
 }
 ```
+
+`selectable_refs` is omitted for single-instance deployments.
 
 ### Search and Filters
 
@@ -51,7 +55,15 @@ Use a quoted empty value to match an empty field, such as `origin:""`. Use `orig
 
 Decision search fields: `id`, `alert`/`alert_id`, `scenario`/`reason`, `ip`/`value`, `country`, `as`, `target`, `date`/`created`/`created_at`/`time`, `action`, `type`, `status`, `duplicate`, `sim`/`simulation`, `machine`, `origin`.
 
-Date range filters use `dateStart` and `dateEnd`. Use `YYYY-MM-DD` for day buckets or values containing `T` for hour-level comparisons. `tz_offset` is an offset in minutes used for local bucket comparisons when the server has no fixed `TZ` configured.
+Date range filters use `dateStart` and `dateEnd`. Use `YYYY-MM-DD` for day buckets or values containing `T` for hour-level comparisons. `tz_offset` is an offset in minutes; `browser_tz` accepts an IANA timezone. They control local bucket comparisons when the server has no fixed timezone configured.
+
+### Multiple Instances
+
+- `instance=<instance-id>` selects one instance for paginated Alerts, Decisions, and Dashboard requests. `instance=all`, the default, selects the Combined scope.
+- Single-record routes without an instance are available only when one instance is configured. Multi-instance deployments use the instance-qualified routes below.
+- Bulk deletion uses `refs: [{ "instance_id": "primary", "id": 42 }]`. Plain `ids` requests are rejected when multiple instances are configured.
+- Decision creation and cleanup accept `scope: "all"` or `scope: "instance"`. The latter also requires `instance_id`; omitting `scope` targets the primary instance.
+- Multi-instance writes return per-instance `results`, `succeeded`, and `failed`. Partial success returns HTTP `207`.
 
 ## Health
 
@@ -91,6 +103,7 @@ These routes are mounted below `/api/auth`. Auth setup/login routes are availabl
 | Method | Endpoint | Description |
 | --- | --- | --- |
 | GET | `/api/config` | Runtime UI config, LAPI status, sync status, simulation setting, time settings, manual refresh availability, metrics availability, metrics sidebar preference, and permissions. |
+| GET | `/api/instances` | Configured instance identities, LAPI and synchronization status, metrics endpoint identities, per-instance overrides, and aggregate availability. |
 | PUT | `/api/config/metrics-sidebar` | Save the metrics sidebar preference. Body: `{ "visible": true }`. |
 | PUT | `/api/config/refresh-interval` | Update the refresh interval. Body: `{ "interval": "manual" \| "0" \| "5s" \| "30s" \| "1m" \| "5m" }`. Blocked in read-only mode. |
 | PUT | `/api/config/manual-refresh` | Enable or disable manual cache refreshes. Body: `{ "enabled": true }`. Blocked in read-only mode. |
@@ -102,33 +115,40 @@ These routes are mounted below `/api/auth`. Auth setup/login routes are availabl
 | --- | --- | --- |
 | GET | `/api/alerts` | List synced alerts. Without `page`, returns an array. With `page`, returns a paginated response. |
 | GET | `/api/alerts/:id` | Fetch alert details from CrowdSec LAPI, hydrate with decisions, and apply simulation visibility. `:id` must be numeric. |
+| GET | `/api/instances/:instanceId/alerts/:id` | Fetch an alert from a specific instance. |
 | POST | `/api/alerts/bulk-delete` | Immediately hide multiple alerts and durably queue deletion of them and their linked decisions. Body: `{ "ids": [1, "2"] }`. Blocked in read-only mode. |
 | DELETE | `/api/alerts/:id` | Immediately hide one alert and durably queue deletion of it and its linked decisions. `:id` must be numeric. Blocked in read-only mode. |
+| DELETE | `/api/instances/:instanceId/alerts/:id` | Delete one alert from a specific instance and its local cache. Blocked in read-only mode. |
 
-Supported paginated alert filters: `q`, `ip`, `country`, `scenario`, `as`, `date`, `dateStart`, `dateEnd`, `target`, `simulation`, `tz_offset`.
+Supported paginated alert parameters: `instance`, `q`, `ip`, `country`, `scenario`, `as`, `date`, `dateStart`, `dateEnd`, `target`, `simulation`, `include_decisions`, `tz_offset`, `browser_tz`.
 
 `simulation` accepts `all`, `live`, or `simulated`; unknown values behave like `all`.
+
+Set `include_decisions=false` to omit decision hydration from paginated lists or single-instance alert details. Bulk deletion accepts `ids` in single-instance deployments or instance-qualified `refs` as described above.
 
 ## Decisions
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
 | GET | `/api/decisions` | List decisions. Without `page`, returns an array. With `page`, returns a paginated response. Active decisions are returned by default. |
-| POST | `/api/decisions` | Add a manual CrowdSec decision through LAPI. Body: `{ "ip": "1.2.3.4", "duration": "4h", "reason": "manual", "type": "ban" }`. `type` defaults to `ban` and accepts `ban` or `captcha`. Blocked in read-only mode. |
+| POST | `/api/decisions` | Add a manual CrowdSec decision through LAPI. Body: `{ "ip": "1.2.3.4", "duration": "4h", "reason": "manual", "type": "ban" }`. `type` defaults to `ban` and accepts `ban` or `captcha`; optional `scope` and `instance_id` select targets. Blocked in read-only mode. |
 | POST | `/api/decisions/bulk-delete` | Delete multiple decisions by numeric ID. Body: `{ "ids": [10, "11"] }`. Blocked in read-only mode. |
 | DELETE | `/api/decisions/:id` | Delete one decision from CrowdSec LAPI and local cache. `:id` must be numeric. Blocked in read-only mode. |
+| DELETE | `/api/instances/:instanceId/decisions/:id` | Delete one decision from a specific instance and its local cache. Blocked in read-only mode. |
 
-Supported decision query parameters: `include_expired`, `page`, `page_size`, `q`, `alert_id`, `country`, `scenario`, `as`, `ip`, `target`, `dateStart`, `dateEnd`, `simulation`, `hide_duplicates`, `tz_offset`.
+Supported decision query parameters: `instance`, `include_expired`, `page`, `page_size`, `q`, `alert_id`, `country`, `scenario`, `as`, `ip`, `target`, `dateStart`, `dateEnd`, `simulation`, `hide_duplicates`, `tz_offset`, `browser_tz`.
 
 - `include_expired=true` includes expired decisions within the configured lookback window.
 - Duplicate decisions are hidden by default in paginated results. Set `hide_duplicates=false` or filter by `alert_id` to show them.
 - `simulation` accepts `all`, `live`, or `simulated`; unknown values behave like `all`.
+- Bulk deletion accepts `ids` in single-instance deployments or instance-qualified `refs` as described above.
 
 ## Cleanup and Cache
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| POST | `/api/cleanup/by-ip` | Delete cached/LAPI alerts and decisions for one IP address or range. Body: `{ "ip": "1.2.3.4" }`. Blocked in read-only mode. |
+| POST | `/api/cleanup/by-ip` | Delete cached/LAPI alerts and decisions for one IP address or range. Body: `{ "ip": "1.2.3.4" }`; optional `scope` and `instance_id` select targets. Blocked in read-only mode. |
+| POST | `/api/cache/refresh` | Run a manual refresh with `{ "mode": "delta" \| "latest" \| "full" }`. Requires manual refresh to be enabled; returns `409` when another refresh is running. |
 | POST | `/api/cache/clear` | Clear synced alert/decision data and run a bootstrap sync. Blocked in read-only mode. |
 
 Alert deletion, bulk deletion, and cleanup responses use:
@@ -154,7 +174,7 @@ Alert deletion requests return after a durable deletion tombstone is stored and 
 | GET | `/api/stats/decisions` | Decision records shaped for chart/stat consumers within the configured lookback window. |
 | GET | `/api/dashboard/stats` | Aggregated dashboard totals, filtered totals, top targets/countries/scenarios/AS, world-map country data, bounded source-location clusters, and history series. |
 
-Supported dashboard filters: `country`, `scenario`, `as`, `ip`, `target`, `dateStart`, `dateEnd`, `simulation`, `granularity`, `tz_offset`.
+Supported dashboard filters: `instance`, `country`, `scenario`, `as`, `ip`, `target`, `dateStart`, `dateEnd`, `simulation`, `granularity`, `tz_offset`, `browser_tz`.
 
 - `simulation` accepts `all`, `live`, or `simulated`.
 - `granularity=hour` returns hourly buckets; any other value uses daily buckets.
@@ -163,13 +183,26 @@ Supported dashboard filters: `country`, `scenario`, `as`, `ip`, `target`, `dateS
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| GET | `/api/metrics/crowdsec` | Fetch and normalize the selected CrowdSec metrics endpoint. Returns `404` when no endpoint is configured and `502` when the metrics fetch fails. |
+| GET | `/api/metrics/crowdsec` | Fetch and normalize the primary instance's first metrics endpoint. Returns `404` when it is not configured and `502` when the metrics fetch fails. |
+| GET | `/api/instances/:instanceId/metrics/:endpointId` | Fetch and normalize a specific instance metrics endpoint. Returns `404` for an unknown instance or endpoint and `502` when the fetch fails. |
 
 The response includes `fetched_at`, `totals`, `bouncers`, `machines`, `parserSources`, `parserNodes`, `whitelists`, and `parserTimings`. It can also include runtime-only observability sections: `lapiRoutes` and `appsecEngines`.
 
 Parser node entries include `isChild`, which is `true` for CrowdSec child parser nodes emitted with the `child-` prefix.
 
 Parser, LAPI latency, AppSec, bouncer, and machine values are derived from the current CrowdSec Prometheus scrape. The endpoint does not query Prometheus history or calculate Grafana-style `rate()`/`increase()` windows, so metrics that require time-window tracking are intentionally omitted.
+
+## Cache Update WebSocket
+
+Connect to `/api/cache-updates`, below `server.basePath` when configured, using `ws://` or `wss://`. The upgrade uses the normal session cookie, enforces same-origin browser requests, and returns `401` when authentication fails.
+
+Server messages are JSON:
+
+| Type | Fields | Purpose |
+| --- | --- | --- |
+| `ready` | `updated_at` | Initial cache timestamp after connection. |
+| `cache-updated` | `updated_at`, `instance_ids` | Signals that one or more instance caches changed. |
+| `heartbeat` | `sent_at` | Sent every 30 seconds alongside the WebSocket ping. |
 
 ## Notifications
 
