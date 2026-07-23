@@ -57,10 +57,16 @@ describe('HighlightedSearchInput', () => {
       />,
     );
 
-    expect(screen.getByPlaceholderText('Filter alerts...')).toHaveClass(
+    const input = screen.getByPlaceholderText('Filter alerts...');
+    expect(input).toHaveClass(
+      'h-11',
+      'py-0',
       'selection:bg-primary-500/20',
       'dark:selection:bg-primary-900/60',
     );
+    expect(input.parentElement).toHaveClass('h-11');
+    const highlightLayer = document.querySelector('[data-search-highlight-layer="true"]');
+    expect(highlightLayer?.parentElement).toHaveClass('flex', 'items-center');
   });
 
   test('marks syntax error ranges inside the mirrored highlight layer', () => {

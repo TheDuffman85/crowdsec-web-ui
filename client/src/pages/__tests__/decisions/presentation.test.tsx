@@ -201,6 +201,7 @@ describe('Decisions page presentation and columns', () => {
     await waitFor(() => expect(screen.getByRole('columnheader', { name: 'Machine' })).toBeInTheDocument());
     await waitFor(() => expect(screen.getByText('host-a')).toBeInTheDocument());
 
+    await userEvent.click(screen.getByRole('button', { name: 'Expand search' }));
     fireEvent.change(screen.getByPlaceholderText('Filter decisions...'), { target: { value: 'host-a' } });
     await flushDecisionSearchDebounce();
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
@@ -234,6 +235,7 @@ describe('Decisions page presentation and columns', () => {
     await waitFor(() => expect(screen.getByText('manual')).toBeInTheDocument());
     await waitFor(() => expect(screen.getByText('CAPI')).toBeInTheDocument());
 
+    await userEvent.click(screen.getByRole('button', { name: 'Expand search' }));
     fireEvent.change(screen.getByPlaceholderText('Filter decisions...'), { target: { value: 'manual' } });
     await flushDecisionSearchDebounce();
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());

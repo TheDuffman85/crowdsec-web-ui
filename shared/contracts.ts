@@ -17,6 +17,34 @@ export interface PaginatedResponse<T> {
   selectable_refs?: InstanceEntityRef[];
 }
 
+export type CommonFacetField =
+  | 'id'
+  | 'instance'
+  | 'scenario'
+  | 'country'
+  | 'region'
+  | 'city'
+  | 'as'
+  | 'ip'
+  | 'target'
+  | 'machine'
+  | 'origin';
+export type AlertFacetField = CommonFacetField | 'decision';
+export type DecisionFacetField = CommonFacetField | 'alert' | 'action' | 'status';
+export type FacetField = AlertFacetField | DecisionFacetField;
+
+export interface FacetValue {
+  value: string;
+  count: number;
+}
+
+export interface FacetResponse {
+  field: FacetField;
+  values: FacetValue[];
+  offset: number;
+  has_more: boolean;
+}
+
 export interface InstanceEntityRef {
   instance_id: string;
   id: string | number;

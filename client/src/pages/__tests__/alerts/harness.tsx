@@ -154,6 +154,14 @@ vi.mock('../../../lib/api', () => {
   });
 
   return {
+    fetchFacet: vi.fn(async (_page: string, field: string) => ({
+      field,
+      values: field === 'country'
+        ? [{ value: 'DE', count: 2 }, { value: 'US', count: 1 }]
+        : [],
+      offset: 0,
+      has_more: false,
+    })),
     fetchAlertsPaginated: vi.fn(async (page: number, pageSize: number, filters?: Record<string, string>) => {
       let alerts = defaultAlerts;
       if (filters?.simulation === 'simulated') {

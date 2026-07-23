@@ -6,8 +6,10 @@ import { useRefresh } from "../contexts/useRefresh";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
 import { HighlightedSearchInput } from "../components/HighlightedSearchInput";
+import { CollapsibleSearchControls } from "../components/CollapsibleSearchControls";
 import { SearchSyntaxModal } from "../components/SearchSyntaxModal";
 import { TableColumnsModal } from "../components/TableColumnsModal";
+import { QuickFilters, type QuickFilterDefinition, type QuickFilterSectionId } from "../components/QuickFilters";
 import { CountryFlag } from "../components/CountryFlag";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
@@ -15,9 +17,19 @@ import { getCountryName } from "../lib/utils";
 import { getDecisionExpirationState } from "../lib/decisionExpiration";
 import { TABLE_COLUMN_DEFINITIONS } from "../../../shared/contracts";
 import { loadStoredTableColumnPreferences, saveStoredTableColumnPreferences } from "../lib/tableColumns";
-import { compileDecisionSearch, getSearchHelpDefinition, type SearchParseError } from "../../../shared/search";
-import { Trash2, Gavel, X, ExternalLink, Shield, ShieldBan, AlertCircle, Info, Columns3, Loader2 } from "lucide-react";
-import type { AddDecisionRequest, ApiPermissionError, BulkDeleteResult, DecisionListItem, InstanceEntityRef, InstanceOperationResult, MultiInstanceOperationResponse, TableColumnId, TableColumnPreferences } from '../types';
+import {
+    compileDecisionSearch,
+    getSearchDateRange,
+    getSearchHelpDefinition,
+    replaceSearchDateRange,
+    replaceSearchFacetSelection,
+    serializeSearchNode,
+    type SearchFacetSelection,
+    type SearchDateRange,
+    type SearchParseError,
+} from "../../../shared/search";
+import { Trash2, Gavel, X, ExternalLink, Shield, ShieldBan, AlertCircle, Columns3, Loader2 } from "lucide-react";
+import type { AddDecisionRequest, ApiPermissionError, BulkDeleteResult, DecisionListItem, FacetField, InstanceEntityRef, InstanceOperationResult, MultiInstanceOperationResponse, TableColumnId, TableColumnPreferences } from '../types';
 import { useI18n, type I18nContextValue } from "../lib/i18n";
 import { getBrowserTimeZone, useDateTime } from "../lib/dateTime";
 
@@ -137,6 +149,7 @@ export function Decisions() {
     const { language, t } = useI18n();
     const { timeZone } = useDateTime();
     const { refreshSignal } = useRefresh();
+    const [facetRefreshKey, setFacetRefreshKey] = useState(refreshSignal);
     const [searchParams, setSearchParams] = useSearchParams();
     const initialQueryParam = searchParams.get("q") ?? "";
     const [decisions, setDecisions] = useState<DecisionListItem[]>([]);
@@ -259,6 +272,152 @@ export function Decisions() {
         if (showDuplicates) filters.hide_duplicates = 'false';
         return filters;
     }, [alertIdFilter, appliedQuery, dateEndParam, dateStartParam, includeExpiredParam, searchParams, showDuplicates, simulationFilter]);
+    const facetFilters = useMemo(
+        () => buildServerFilters(simulationFilter),
+        [buildServerFilters, simulationFilter],
+    );
+    const quickFilterConfig = useMemo<{
+        fields: QuickFilterDefinition[];
+        sectionOrder: QuickFilterSectionId[];
+    }>(() => {
+        const fieldByColumn: Partial<Record<TableColumnId, FacetField>> = {
+            id: 'id',
+            instance: 'instance',
+            scenario: 'scenario',
+            country: 'country',
+            region: 'region',
+            city: 'city',
+            as: 'as',
+            source: 'ip',
+            action: 'action',
+            expiration: 'status',
+            machine: 'machine',
+            origin: 'origin',
+            alert: 'alert',
+        };
+        const fields: QuickFilterDefinition[] = [];
+        const sectionOrder: QuickFilterSectionId[] = [];
+        for (const column of visibleDecisionColumns) {
+            if (column === 'time') {
+                sectionOrder.push('date');
+                continue;
+            }
+            const field = fieldByColumn[column];
+            if (!field) continue;
+            fields.push({
+                field,
+                label: t(`tableColumns.${column}`),
+                ...(field === 'status'
+                    ? { defaultSelection: { included: ['active'], excluded: [] } }
+                    : {}),
+            });
+            sectionOrder.push(field);
+        }
+        fields.push({ field: 'target', label: t('components.eventCard.target') });
+        sectionOrder.push('target');
+        return { fields, sectionOrder };
+    }, [t, visibleDecisionColumns]);
+    const quickFilterDateRange = useMemo(() => {
+        const range = compiledSearch.ok ? getSearchDateRange(compiledSearch.ast) : { start: '', end: '' };
+        return {
+            start: range.start || dateStartParam,
+            end: range.end || dateEndParam,
+        };
+    }, [compiledSearch, dateEndParam, dateStartParam]);
+    const getFacetSelection = useCallback((
+        field: FacetField,
+        selection: SearchFacetSelection,
+    ): SearchFacetSelection => {
+        if (
+            field === 'status'
+            && !includeExpiredParam
+            && selection.included.length === 0
+            && selection.excluded.length === 0
+        ) {
+            return { included: ['active'], excluded: [] };
+        }
+        return selection;
+    }, [includeExpiredParam]);
+    const applyFacetSelection = useCallback((field: FacetField, requestedSelection: SearchFacetSelection) => {
+        const currentQuery = searchParams.get('q') ?? '';
+        const currentSearch = compileDecisionSearch(currentQuery, searchValidationFeatures, searchDateOptions);
+        if (!currentSearch.ok) return;
+
+        const nextParams = new URLSearchParams(searchParams);
+        let selection = requestedSelection;
+        if (field === 'status') {
+            const includesActive = selection.included.includes('active');
+            const includesExpired = selection.included.includes('expired');
+            const excludesActive = selection.excluded.includes('active');
+            const excludesExpired = selection.excluded.includes('expired');
+            if (includesActive && includesExpired) {
+                selection = { included: [], excluded: [] };
+                nextParams.set('include_expired', 'true');
+            } else if (excludesExpired && !excludesActive && selection.included.length === 0) {
+                selection = { included: [], excluded: [] };
+                nextParams.delete('include_expired');
+            } else if (includesExpired || excludesActive) {
+                nextParams.set('include_expired', 'true');
+            } else {
+                nextParams.delete('include_expired');
+            }
+        }
+
+        const nextQuery = serializeSearchNode(replaceSearchFacetSelection(
+            currentSearch.ast,
+            field,
+            selection,
+        ));
+        if (nextQuery) nextParams.set('q', nextQuery);
+        else nextParams.delete('q');
+
+        cancelSearchDebounce();
+        searchDraftRef.current = nextQuery;
+        searchSelectionRef.current = { start: nextQuery.length, end: nextQuery.length };
+        skipSearchParamSyncRef.current = nextQuery;
+        setSearchDraft(nextQuery);
+        setDebouncedSearchDraft(nextQuery);
+        setSearchParams(nextParams);
+    }, [
+        cancelSearchDebounce,
+        searchDateOptions,
+        searchParams,
+        searchValidationFeatures,
+        setSearchParams,
+    ]);
+    const applyDateRange = useCallback((range: SearchDateRange) => {
+        const currentQuery = searchParams.get('q') ?? '';
+        const currentSearch = compileDecisionSearch(currentQuery, searchValidationFeatures, searchDateOptions);
+        if (!currentSearch.ok) return;
+
+        const nextQuery = serializeSearchNode(replaceSearchDateRange(currentSearch.ast, range));
+        const nextParams = new URLSearchParams(searchParams);
+        nextParams.delete('dateStart');
+        nextParams.delete('dateEnd');
+        if (nextQuery) nextParams.set('q', nextQuery);
+        else nextParams.delete('q');
+
+        cancelSearchDebounce();
+        searchDraftRef.current = nextQuery;
+        searchSelectionRef.current = { start: nextQuery.length, end: nextQuery.length };
+        skipSearchParamSyncRef.current = nextQuery;
+        setSearchDraft(nextQuery);
+        setDebouncedSearchDraft(nextQuery);
+        setSearchParams(nextParams);
+    }, [
+        cancelSearchDebounce,
+        searchDateOptions,
+        searchParams,
+        searchValidationFeatures,
+        setSearchParams,
+    ]);
+    const formatFacetValue = useCallback((field: FacetField, value: string) => {
+        if (field === 'country') return getCountryName(value, language) || value;
+        if (field === 'status') {
+            return value === 'active' ? t('common.active') : t('pages.decisions.expired');
+        }
+        return value;
+    }, [language, t]);
 
     const loadConfig = useCallback(async (refresh = false) => {
         if (!refresh && configRef.current) {
@@ -488,7 +647,12 @@ export function Decisions() {
         }
 
         lastRefreshSignalRef.current = refreshSignal;
-        void loadDecisionsRef.current({ isBackground: true, page: 1, preserveLoadedPages: true, refreshConfig: true });
+        void loadDecisionsRef.current({
+            isBackground: true,
+            page: 1,
+            preserveLoadedPages: true,
+            refreshConfig: true,
+        }).finally(() => setFacetRefreshKey(refreshSignal));
     }, [refreshSignal]);
 
     useEffect(() => {
@@ -806,6 +970,20 @@ export function Decisions() {
             ? t('pages.decisions.summaryFiltered', { count: visibleDecisions.length, total: totalDecisions, unfiltered: totalUnfilteredDecisions })
             : t('pages.decisions.summary', { count: visibleDecisions.length, total: totalDecisions });
     const tableBusy = initialLoading || backgroundLoading || loadingMore;
+    const quickFilterProps = {
+        page: 'decisions' as const,
+        fields: quickFilterConfig.fields,
+        sectionOrder: quickFilterConfig.sectionOrder,
+        filters: facetFilters,
+        searchAst: compiledSearch.ok ? compiledSearch.ast : null,
+        onSelectionChange: applyFacetSelection,
+        dateRange: quickFilterDateRange,
+        onDateRangeChange: applyDateRange,
+        getSelection: getFacetSelection,
+        formatValue: formatFacetValue,
+        busy: tableBusy,
+        refreshKey: facetRefreshKey,
+    };
 
     return (
         <div className="space-y-6">
@@ -935,10 +1113,26 @@ export function Decisions() {
 
             <div className="space-y-2">
                 <div className="flex items-stretch gap-2">
-                    <div className="flex-1">
+                    <button
+                        type="button"
+                        onClick={() => setShowColumnsModal(true)}
+                        className="inline-flex items-center justify-center rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-gray-600 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
+                        aria-label={t('components.tableColumns.chooseDecisionColumns')}
+                        title={t('components.tableColumns.chooseColumns')}
+                    >
+                        <Columns3 size={18} />
+                    </button>
+                    <QuickFilters {...quickFilterProps} />
+                    <CollapsibleSearchControls
+                        inputRef={searchInputRef}
+                        onHelp={() => setShowSearchSyntaxModal(true)}
+                    >
                         <HighlightedSearchInput
                             ref={searchInputRef}
                             searchPage="decisions"
+                            showSearchIcon={false}
+                            containerClassName="rounded-l-none"
+                            className="rounded-l-none"
                             searchFeatures={searchValidationFeatures}
                             placeholder={t('pages.decisions.filterPlaceholder')}
                             value={searchDraft}
@@ -954,25 +1148,7 @@ export function Decisions() {
                             aria-invalid={queryError ? 'true' : 'false'}
                             aria-describedby={queryError ? 'decisions-search-error' : undefined}
                         />
-                    </div>
-                    <button
-                        type="button"
-                        onClick={() => setShowSearchSyntaxModal(true)}
-                        className="inline-flex items-center justify-center rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-gray-600 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
-                        aria-label={t('components.searchSyntax.help')}
-                        title={t('components.searchSyntax.help')}
-                    >
-                        <Info size={18} />
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => setShowColumnsModal(true)}
-                        className="inline-flex items-center justify-center rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-gray-600 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
-                        aria-label={t('components.tableColumns.chooseDecisionColumns')}
-                        title={t('components.tableColumns.chooseColumns')}
-                    >
-                        <Columns3 size={18} />
-                    </button>
+                    </CollapsibleSearchControls>
                 </div>
                 {queryError && (
                     <p id="decisions-search-error" className="text-xs text-red-600 dark:text-red-400">

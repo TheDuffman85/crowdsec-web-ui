@@ -25,6 +25,8 @@ import type {
   DashboardWorldMapDatum,
   CrowdsecMetricsResponse,
   DecisionListItem,
+  FacetField,
+  FacetResponse,
   InstanceEntityRef,
   LapiStatus,
   PaginatedResponse,
@@ -40,7 +42,16 @@ import type {
 } from '../shared/contracts';
 import { resolveMachineName } from '../shared/machine';
 import { collectDistinctOrigins, normalizeOrigin } from '../shared/origin';
-import { compileAlertSearch, compileDecisionSearch, matchesIpSearchValue, type SearchNode, type SearchParseError } from '../shared/search';
+import {
+  compileAlertSearch,
+  compileDecisionSearch,
+  getSearchFacetSelection,
+  matchesIpSearchValue,
+  removeSearchField,
+  serializeSearchNode,
+  type SearchNode,
+  type SearchParseError,
+} from '../shared/search';
 import { createRuntimeConfig, getIntervalName, parseLookbackToMs, parseRefreshInterval, type RuntimeConfig } from './config';
 import { getDateTimeKey, getTimeZoneOffsetMs, getZonedHourlyBucketKeys } from './utils/date-time';
 import { CrowdsecDatabase, type AlertInsertParams, type DecisionInsertParams } from './database';
@@ -84,6 +95,26 @@ type AnyError = Error & {
   helpText?: string;
 };
 
+const COMMON_FACET_FIELDS = [
+  'id',
+  'instance',
+  'scenario',
+  'country',
+  'region',
+  'city',
+  'as',
+  'ip',
+  'target',
+  'machine',
+  'origin',
+] as const;
+const ALERT_FACET_FIELDS = [...COMMON_FACET_FIELDS, 'decision'] as const;
+const DECISION_FACET_FIELDS = [...COMMON_FACET_FIELDS, 'alert', 'action', 'status'] as const;
+const FACET_DEFAULT_LIMIT = 10;
+const FACET_MAX_LIMIT = 50;
+const FACET_MAX_OFFSET = 500;
+const FACET_CACHE_MAX_ENTRIES = 256;
+
 export interface CreateAppOptions {
   config?: RuntimeConfig;
   database?: CrowdsecDatabase;
@@ -98,6 +129,7 @@ export interface CreateAppOptions {
   initialCacheState?: Partial<CacheState>;
   rootRedirectPath?: string;
   queryWorker?: DatabaseQueryWorker;
+  facetQueryWorker?: DatabaseQueryWorker;
   syncWorker?: Pick<
     DatabaseSyncWorker,
     | 'persistAlerts'
@@ -224,6 +256,13 @@ interface CachedAlertRecord {
 interface PageRequest {
   page: number;
   pageSize: number;
+}
+
+interface FacetRequest {
+  field: FacetField;
+  search: string;
+  offset: number;
+  limit: number;
 }
 
 interface AlertListFilters {
@@ -477,6 +516,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     allowPrivateAddresses: config.notificationAllowPrivateAddresses,
   });
   const queryWorker = options.queryWorker || new DatabaseQueryWorker({ dbPath: database.dbPath });
+  const facetQueryWorker = options.facetQueryWorker || new DatabaseQueryWorker({
+    dbPath: database.dbPath,
+    timeoutMs: 5_000,
+    maxWorkers: 1,
+  });
   const syncWorker = options.syncWorker || new DatabaseSyncWorker({
     dbPath: database.dbPath,
     walEnabled: config.sqliteWalEnabled,
@@ -572,6 +616,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   // data is safe for every API consumer to read.
   let cacheRefreshCompletedAt = options.initialCacheState?.lastUpdate ?? null;
   const cacheUpdateListeners = new Set<(updatedAt: string, instanceIds: string[]) => void>();
+  const facetResponseCache = new Map<string, FacetResponse>();
+  let facetCacheVersion = 0;
 
   function publishCacheUpdate(updatedAt: string, instanceIds = [primaryInstance.id]): void {
     for (const listener of cacheUpdateListeners) {
@@ -902,6 +948,40 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
   });
 
+  app.get(`${config.basePath}/api/alerts/facets`, ensureAuth, async (context) => {
+    const request = getFacetRequest(context, ALERT_FACET_FIELDS);
+    if ('error' in request) {
+      return context.json({ error: request.error }, 400);
+    }
+
+    try {
+      if (refreshIntervalMs === 0) {
+        await updateCache({ skipIfBusy: true });
+      }
+      await prepareReadCache('alert facets request');
+
+      const filters = getAlertListFilters(context, config.timeZone);
+      const compiledSearch = compileAlertSearch(filters.q, {
+        machineEnabled: true,
+        originEnabled: true,
+      }, {
+        timezoneOffsetMinutes: filters.timezoneOffsetMinutes,
+        timeZone: filters.timeZone,
+      });
+      if (!compiledSearch.ok) {
+        return context.json(toSearchErrorResponse(compiledSearch.error), 400);
+      }
+
+      return context.json(await queryAlertFacet(request, filters, compiledSearch.ast));
+    } catch (error: any) {
+      if (error instanceof QueryWorkerTimeoutError) {
+        return context.json({ error: 'Facet query timed out' }, 504);
+      }
+      console.error('Error serving alert facets from database:', error.message);
+      return context.json({ error: 'Failed to retrieve alert facets' }, 500);
+    }
+  });
+
   app.post(`${config.basePath}/api/alerts/bulk-delete`, ensureAuth, async (context) => {
     const readOnlyResponse = ensureCanManageEnforcement(context);
     if (readOnlyResponse) return readOnlyResponse;
@@ -1068,6 +1148,45 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       }
       console.error('Error serving decisions from database:', error.message);
       return context.json({ error: 'Failed to retrieve decisions' }, 500);
+    }
+  });
+
+  app.get(`${config.basePath}/api/decisions/facets`, ensureAuth, async (context) => {
+    const request = getFacetRequest(context, DECISION_FACET_FIELDS);
+    if ('error' in request) {
+      return context.json({ error: request.error }, 400);
+    }
+
+    try {
+      if (refreshIntervalMs === 0) {
+        await updateCache({ skipIfBusy: true });
+      }
+      await prepareReadCache('decision facets request');
+
+      const filters = getDecisionListFilters(context, config.timeZone);
+      const compiledSearch = compileDecisionSearch(filters.q, {
+        machineEnabled: true,
+        originEnabled: true,
+      }, {
+        timezoneOffsetMinutes: filters.timezoneOffsetMinutes,
+        timeZone: filters.timeZone,
+      });
+      if (!compiledSearch.ok) {
+        return context.json(toSearchErrorResponse(compiledSearch.error), 400);
+      }
+
+      return context.json(await queryDecisionFacet(
+        request,
+        filters,
+        compiledSearch.ast,
+        context.req.query('include_expired') === 'true',
+      ));
+    } catch (error: any) {
+      if (error instanceof QueryWorkerTimeoutError) {
+        return context.json({ error: 'Facet query timed out' }, 504);
+      }
+      console.error('Error serving decision facets from database:', error.message);
+      return context.json({ error: 'Failed to retrieve decision facets' }, 500);
     }
   });
 
@@ -4657,6 +4776,291 @@ ${errorSummary}  Status: ${syncSummary.state}
     };
   }
 
+  async function queryAlertFacet(
+    request: FacetRequest,
+    filters: AlertListFilters,
+    searchAst: SearchNode | null,
+  ): Promise<FacetResponse> {
+    const effectiveFilters = withoutAlertFacetFilter(filters, request.field);
+    const prunedSearchAst = removeSearchField(searchAst, request.field);
+    const cacheKey = facetCacheKey(
+      'alerts',
+      request,
+      effectiveFilters,
+      prunedSearchAst,
+      request.field === 'decision' ? { timeBucket: Math.floor(Date.now() / 60_000) } : {},
+    );
+    const cached = getCachedFacetResponse(cacheKey);
+    if (cached) return cached;
+
+    const since = new Date(Date.now() - config.lookbackMs).toISOString();
+    const baseWhere = createSqlWhere();
+    baseWhere.add('created_at >= ?', since);
+    if (effectiveFilters.instanceId !== 'all') {
+      baseWhere.add('instance_id = ?', effectiveFilters.instanceId);
+    } else {
+      baseWhere.add(`instance_id IN (${config.instances.map(() => '?').join(',')})`, ...config.instances.map((instance) => instance.id));
+    }
+    if (!config.simulationsEnabled) {
+      baseWhere.add('simulated = 0');
+    }
+
+    const filteredWhere = baseWhere.clone();
+    addAlertSqlFilters(filteredWhere, effectiveFilters);
+    const searchWhere = compileAlertSearchSql(prunedSearchAst, effectiveFilters);
+    if (searchWhere) {
+      filteredWhere.add(searchWhere.sql, ...searchWhere.params);
+    }
+
+    const valueSql = ({
+      id: "COALESCE(TRIM(CAST(upstream_id AS TEXT)), '')",
+      instance: "COALESCE(TRIM(instance_id), '')",
+      scenario: "COALESCE(TRIM(scenario), '')",
+      country: "COALESCE(TRIM(country), '')",
+      region: "COALESCE(TRIM(region), '')",
+      city: "COALESCE(TRIM(city), '')",
+      as: "COALESCE(TRIM(as_name), '')",
+      ip: "COALESCE(TRIM(source_ip), '')",
+      target: "COALESCE(TRIM(target), '')",
+      machine: "COALESCE(TRIM(machine), '')",
+      origin: "COALESCE(TRIM(origins), '')",
+    } as Record<string, string>)[request.field];
+    if (request.field === 'decision') {
+      const simulationSql = config.simulationsEnabled ? '' : ' AND facet_decision.simulated = 0';
+      const now = new Date().toISOString();
+      const response = await queryFacetValues(
+        'alerts',
+        "''",
+        [],
+        filteredWhere,
+        request,
+        searchAst,
+        {
+          sql: `
+            WITH filtered_alerts AS (
+              SELECT id
+              FROM alerts
+              ${filteredWhere.toSql()}
+            )
+            SELECT 'active' AS value
+            FROM filtered_alerts
+            WHERE EXISTS (
+                SELECT 1 FROM decisions facet_decision
+                WHERE facet_decision.alert_id = filtered_alerts.id
+                  AND facet_decision.stop_at > ?${simulationSql}
+              )
+            UNION ALL
+            SELECT 'expired' AS value
+            FROM filtered_alerts
+            WHERE EXISTS (
+                SELECT 1 FROM decisions facet_decision
+                WHERE facet_decision.alert_id = filtered_alerts.id
+                  AND facet_decision.stop_at <= ?${simulationSql}
+              )
+            UNION ALL
+            SELECT '' AS value
+            FROM filtered_alerts
+            WHERE NOT EXISTS (
+                SELECT 1 FROM decisions facet_decision
+                WHERE facet_decision.alert_id = filtered_alerts.id${simulationSql}
+              )
+          `,
+          params: [
+            ...filteredWhere.params,
+            now,
+            now,
+          ],
+        },
+      );
+      setCachedFacetResponse(cacheKey, response);
+      return response;
+    }
+    if (!valueSql) throw new Error(`Unsupported alert facet field: ${request.field}`);
+
+    const response = await queryFacetValues(
+      'alerts',
+      valueSql,
+      [],
+      filteredWhere,
+      request,
+      searchAst,
+    );
+    setCachedFacetResponse(cacheKey, response);
+    return response;
+  }
+
+  async function queryDecisionFacet(
+    request: FacetRequest,
+    filters: DecisionListFilters,
+    searchAst: SearchNode | null,
+    includeExpired: boolean,
+  ): Promise<FacetResponse> {
+    const effectiveFilters = withoutDecisionFacetFilter(filters, request.field);
+    const prunedSearchAst = removeSearchField(searchAst, request.field);
+    const effectiveIncludeExpired = includeExpired || request.field === 'status';
+    const cacheKey = facetCacheKey('decisions', request, effectiveFilters, prunedSearchAst, {
+      includeExpired: effectiveIncludeExpired,
+      timeBucket: Math.floor(Date.now() / 60_000),
+    });
+    const cached = getCachedFacetResponse(cacheKey);
+    if (cached) return cached;
+
+    const since = new Date(Date.now() - config.lookbackMs).toISOString();
+    const now = new Date().toISOString();
+    const baseWhere = createSqlWhere();
+    if (effectiveFilters.instanceId !== 'all') {
+      baseWhere.add('instance_id = ?', effectiveFilters.instanceId);
+    } else {
+      baseWhere.add(`instance_id IN (${config.instances.map(() => '?').join(',')})`, ...config.instances.map((instance) => instance.id));
+    }
+    if (effectiveIncludeExpired) {
+      baseWhere.add('(created_at >= ? OR stop_at > ?)', since, now);
+    } else {
+      baseWhere.add('stop_at > ?', now);
+    }
+    if (!config.simulationsEnabled) {
+      baseWhere.add('simulated = 0');
+    }
+
+    const filteredWhere = baseWhere.clone();
+    addDecisionSqlFilters(filteredWhere, effectiveFilters, true);
+    const searchWhere = compileDecisionSearchSql(prunedSearchAst, effectiveFilters, now);
+    if (searchWhere) {
+      filteredWhere.add(searchWhere.sql, ...searchWhere.params);
+    }
+
+    const valueDefinition = request.field === 'status'
+      ? { sql: "CASE WHEN stop_at > ? THEN 'active' ELSE 'expired' END", params: [now] }
+      : {
+        sql: ({
+          id: "COALESCE(TRIM(CAST(upstream_id AS TEXT)), '')",
+          instance: "COALESCE(TRIM(instance_id), '')",
+          alert: "COALESCE(TRIM(CAST(alert_upstream_id AS TEXT)), '')",
+          scenario: "COALESCE(TRIM(scenario), '')",
+          country: "COALESCE(TRIM(country), '')",
+          region: "COALESCE(TRIM(region), '')",
+          city: "COALESCE(TRIM(city), '')",
+          as: "COALESCE(TRIM(as_name), '')",
+          ip: "COALESCE(TRIM(value), '')",
+          target: "COALESCE(TRIM(target), '')",
+          action: "COALESCE(TRIM(type), '')",
+          machine: "COALESCE(TRIM(machine), '')",
+          origin: "COALESCE(TRIM(origin), '')",
+        } as Record<string, string>)[request.field],
+        params: [],
+      };
+    if (!valueDefinition.sql) throw new Error(`Unsupported decision facet field: ${request.field}`);
+
+    const response = await queryFacetValues(
+      'decisions',
+      valueDefinition.sql,
+      valueDefinition.params,
+      filteredWhere,
+      request,
+      searchAst,
+    );
+    setCachedFacetResponse(cacheKey, response);
+    return response;
+  }
+
+  async function queryFacetValues(
+    tableName: 'alerts' | 'decisions',
+    valueSql: string,
+    valueParams: unknown[],
+    where: SqlWhere,
+    request: FacetRequest,
+    originalSearchAst: SearchNode | null,
+    facetRows?: { sql: string; params: unknown[] },
+  ): Promise<FacetResponse> {
+    const selection = getSearchFacetSelection(originalSearchAst, request.field);
+    const selectedValues = [...new Set([...selection.included, ...selection.excluded])]
+      .slice(0, FACET_MAX_LIMIT);
+    const outerClauses: string[] = [];
+    const outerParams: unknown[] = [];
+    const selectedPlaceholders = selectedValues.map(() => '?').join(', ');
+
+    if (request.search) {
+      const searchClause = "LOWER(value) LIKE ? ESCAPE '\\'";
+      if (selectedValues.length > 0) {
+        outerClauses.push(`(${searchClause} OR value IN (${selectedPlaceholders}))`);
+        outerParams.push(likeParam(request.search), ...selectedValues);
+      } else {
+        outerClauses.push(searchClause);
+        outerParams.push(likeParam(request.search));
+      }
+    }
+
+    const selectedOrderSql = selectedValues.length > 0
+      ? `CASE WHEN value IN (${selectedPlaceholders}) THEN 0 ELSE 1 END, `
+      : '';
+    const rows = await facetQueryWorker.all<{ value: string | null; count: number }>(`
+      WITH facet_rows(value) AS (
+        ${facetRows?.sql ?? `
+          SELECT ${valueSql}
+          FROM ${tableName}
+          ${where.toSql()}
+        `}
+      )
+      SELECT value, COUNT(*) AS count
+      FROM facet_rows
+      ${outerClauses.length > 0 ? `WHERE ${outerClauses.join(' AND ')}` : ''}
+      GROUP BY value
+      ORDER BY ${selectedOrderSql}count DESC, value COLLATE NOCASE ASC
+      LIMIT ? OFFSET ?
+    `, [
+      ...(facetRows?.params ?? [...valueParams, ...where.params]),
+      ...outerParams,
+      ...(selectedValues.length > 0 ? selectedValues : []),
+      request.limit + 1,
+      request.offset,
+    ]);
+
+    return {
+      field: request.field,
+      values: rows.slice(0, request.limit).map((row) => ({
+        value: row.value || '',
+        count: Number(row.count) || 0,
+      })),
+      offset: request.offset,
+      has_more: rows.length > request.limit,
+    };
+  }
+
+  function facetCacheKey(
+    page: 'alerts' | 'decisions',
+    request: FacetRequest,
+    filters: AlertListFilters | DecisionListFilters,
+    searchAst: SearchNode | null,
+    extra: Record<string, unknown> = {},
+  ): string {
+    return JSON.stringify({
+      version: facetCacheVersion,
+      page,
+      request,
+      filters,
+      query: serializeSearchNode(searchAst),
+      ...extra,
+    });
+  }
+
+  function getCachedFacetResponse(key: string): FacetResponse | null {
+    const cached = facetResponseCache.get(key);
+    if (!cached) return null;
+    facetResponseCache.delete(key);
+    facetResponseCache.set(key, cached);
+    return cached;
+  }
+
+  function setCachedFacetResponse(key: string, response: FacetResponse): void {
+    facetResponseCache.delete(key);
+    facetResponseCache.set(key, response);
+    while (facetResponseCache.size > FACET_CACHE_MAX_ENTRIES) {
+      const oldestKey = facetResponseCache.keys().next().value;
+      if (oldestKey) facetResponseCache.delete(oldestKey);
+      else break;
+    }
+  }
+
   async function queryCount(tableName: 'alerts' | 'decisions', where: SqlWhere): Promise<number> {
     const row = await queryWorker.get<{ count: number }>(`SELECT COUNT(*) AS count FROM ${tableName} ${where.toSql()}`, where.params);
     return row.count;
@@ -4832,7 +5236,14 @@ ${errorSummary}  Status: ${syncSummary.state}
     return compileSearchNodeSql(ast, {
       page: 'alerts',
       dateOptions: filters,
-      fieldCondition: (field, value, exact) => alertFieldCondition(field, value, config.instances, exact),
+      fieldCondition: (field, value, exact) => alertFieldCondition(
+        field,
+        value,
+        config.instances,
+        exact,
+        new Date().toISOString(),
+        config.simulationsEnabled,
+      ),
       freeTextCondition: (value) => freeTextSearchCondition('alerts', value, database.searchIndexAvailable),
     });
   }
@@ -5300,6 +5711,8 @@ ${errorSummary}  Status: ${syncSummary.state}
   }
 
   function invalidateDashboardStatsCache(instanceId?: string): void {
+    facetResponseCache.clear();
+    facetCacheVersion += 1;
     if (instanceId) {
       const affectedScopes = new Set([instanceId, 'all']);
       for (const scope of affectedScopes) {
@@ -5494,6 +5907,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       instanceRefreshTimers.clear();
       historicalInstanceSyncPending.clear();
       queryWorker.close();
+      facetQueryWorker.close();
       syncWorker.close();
       cacheUpdateListeners.clear();
     },
@@ -5697,9 +6111,11 @@ function alertFieldCondition(
   value: string,
   instances: ReadonlyArray<{ id: string; name: string }>,
   exact = false,
+  now = new Date().toISOString(),
+  simulationsEnabled = true,
 ): SqlCondition {
   if (value.trim() === '') {
-    return alertEmptyFieldCondition(field);
+    return alertEmptyFieldCondition(field, simulationsEnabled);
   }
 
   switch (field) {
@@ -5731,6 +6147,8 @@ function alertFieldCondition(
       return textCondition('LOWER(machine)', value, exact);
     case 'origin':
       return exact ? spaceSeparatedTextCondition('origins', value) : textCondition('LOWER(origins)', value);
+    case 'decision':
+      return alertDecisionCondition(value, now, simulationsEnabled);
     default:
       return { sql: '0 = 1', params: [] };
   }
@@ -5809,7 +6227,7 @@ function instanceFieldCondition(
   };
 }
 
-function alertEmptyFieldCondition(field: string): SqlCondition {
+function alertEmptyFieldCondition(field: string, simulationsEnabled = true): SqlCondition {
   switch (field) {
     case 'scenario':
     case 'message':
@@ -5833,9 +6251,43 @@ function alertEmptyFieldCondition(field: string): SqlCondition {
         machine: 'machine',
         origin: 'origins',
       }[field]);
+    case 'decision':
+      return {
+        sql: `NOT EXISTS (
+          SELECT 1 FROM decisions facet_decision
+          WHERE facet_decision.alert_id = alerts.id${simulationsEnabled ? '' : ' AND facet_decision.simulated = 0'}
+        )`,
+        params: [],
+      };
     default:
       return { sql: '0 = 1', params: [] };
   }
+}
+
+function alertDecisionCondition(value: string, now: string, simulationsEnabled: boolean): SqlCondition {
+  const normalized = value.trim().toLowerCase();
+  const simulationSql = simulationsEnabled ? '' : ' AND facet_decision.simulated = 0';
+  if (normalized === 'active') {
+    return {
+      sql: `EXISTS (
+        SELECT 1 FROM decisions facet_decision
+        WHERE facet_decision.alert_id = alerts.id
+          AND facet_decision.stop_at > ?${simulationSql}
+      )`,
+      params: [now],
+    };
+  }
+  if (normalized === 'expired' || normalized === 'inactive') {
+    return {
+      sql: `EXISTS (
+        SELECT 1 FROM decisions facet_decision
+        WHERE facet_decision.alert_id = alerts.id
+          AND facet_decision.stop_at <= ?${simulationSql}
+      )`,
+      params: [now],
+    };
+  }
+  return { sql: '0 = 1', params: [] };
 }
 
 function decisionEmptyFieldCondition(field: string): SqlCondition {
@@ -6379,6 +6831,57 @@ function toPaginatedResponse<T>(
 
 function getAlertListFilters(context: HonoContext, timeZone: string | null): AlertListFilters {
   return getAlertListFiltersFromValues((key) => context.req.query(key), timeZone);
+}
+
+function getFacetRequest(
+  context: HonoContext,
+  allowedFields: readonly string[],
+): FacetRequest | { error: string } {
+  const field = String(context.req.query('field') || '').trim().toLowerCase();
+  if (!allowedFields.includes(field)) {
+    return { error: `field must be one of: ${allowedFields.join(', ')}` };
+  }
+
+  return {
+    field: field as FacetField,
+    search: String(context.req.query('search') || '').trim().slice(0, 200),
+    offset: clampInteger(context.req.query('offset'), 0, FACET_MAX_OFFSET, 0),
+    limit: clampInteger(context.req.query('limit'), 1, FACET_MAX_LIMIT, FACET_DEFAULT_LIMIT),
+  };
+}
+
+function clampInteger(
+  rawValue: string | undefined,
+  minimum: number,
+  maximum: number,
+  fallback: number,
+): number {
+  const parsed = Number.parseInt(rawValue || '', 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(maximum, Math.max(minimum, parsed));
+}
+
+function withoutAlertFacetFilter(filters: AlertListFilters, field: FacetField): AlertListFilters {
+  const result = { ...filters };
+  if (field === 'instance') result.instanceId = 'all';
+  if (field === 'country') result.country = '';
+  if (field === 'scenario') result.scenario = '';
+  if (field === 'as') result.as = '';
+  if (field === 'ip') result.ip = '';
+  if (field === 'target') result.target = '';
+  return result;
+}
+
+function withoutDecisionFacetFilter(filters: DecisionListFilters, field: FacetField): DecisionListFilters {
+  const result = { ...filters };
+  if (field === 'instance') result.instanceId = 'all';
+  if (field === 'alert') result.alertId = '';
+  if (field === 'country') result.country = '';
+  if (field === 'scenario') result.scenario = '';
+  if (field === 'as') result.as = '';
+  if (field === 'ip') result.ip = '';
+  if (field === 'target') result.target = '';
+  return result;
 }
 
 function getAlertListFiltersFromValues(readValue: (key: string) => string | undefined, timeZone: string | null): AlertListFilters {

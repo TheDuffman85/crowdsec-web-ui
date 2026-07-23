@@ -56,22 +56,33 @@ Load-test mode logs seed timings, synchronization progress, `/api` requests, and
 
 Defaults live in `scripts/load-test-profiles/`. Explicit `LOADTEST_*` and `CONFIG_*` environment variables take precedence.
 
-## Benchmark Multi-Instance Requests
+## Benchmark List, Search, and Facet Requests
 
-After a multi-instance server finishes bootstrapping, run the benchmark.
+For the standard 300k/300k profile, disable authentication for the benchmark client, wait for bootstrap to finish, and run:
 
 ```bash
+CONFIG_AUTH_ENABLED=false ./run.sh loadtest
 pnpm run loadtest:benchmark:multi
 ```
 
-The benchmark warms Alerts, Decisions, search, and Dashboard, then reports Primary-only and Combined p50/p95 latency separately over three runs.
+For a multi-instance profile, target its Primary instance explicitly:
+
+```bash
+CONFIG_AUTH_ENABLED=false ./run.sh loadtest multi-instance
+LOADTEST_BENCHMARK_INSTANCE=primary pnpm run loadtest:benchmark:multi
+```
+
+The benchmark measures cold and warm low-cardinality, alert-decision-state, and IP facets, then reports Alerts, Decisions, search, Dashboard, and facet p50/p95 latency separately over three runs. It also runs list pagination and advanced search concurrently with an uncached IP facet. Facet responses are checked for the 50-value hard bound.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `LOADTEST_BASE_URL` | `http://127.0.0.1:3133` | Backend benchmark target. |
+| `LOADTEST_BENCHMARK_INSTANCE` | `default` | Instance used for scoped measurements; use `primary` with multi-instance profiles. |
 | `LOADTEST_BENCHMARK_SAMPLES` | `5` | Samples collected per run. |
+| `LOADTEST_ALERTS_BASELINE_P95_MS` | unset | Existing no-facet Alerts p95; when set, fail above a 10% regression. |
+| `LOADTEST_SEARCH_BASELINE_P95_MS` | unset | Existing no-facet search p95; when set, fail above a 10% regression. |
 
-Compare Primary-only results, bootstrap logs, and process RSS with the existing 300k baseline. The script deliberately does not combine them into one score.
+Warm facets fail above 500ms, cold facets fail above two seconds, and list/search fail when one concurrent facet raises p95 by more than 25%. Set the two historical baseline variables to enforce the no-facet 10% regression gates. Compare Primary-only results, bootstrap logs, and process RSS with the existing 300k baseline; the script deliberately does not combine them into one score.
 
 ## Dataset Overrides
 

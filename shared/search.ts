@@ -91,6 +91,16 @@ export interface SearchQueryAnalysis {
   error: SearchParseError | null;
 }
 
+export interface SearchFacetSelection {
+  included: string[];
+  excluded: string[];
+}
+
+export interface SearchDateRange {
+  start: string;
+  end: string;
+}
+
 export type SearchNode =
   | { kind: 'term'; value: string; quoted: boolean }
   | { kind: 'not'; expression: SearchNode }
@@ -153,6 +163,7 @@ const alertFieldDefinitions: SearchFieldDefinition[] = [
   { name: 'sim', aliases: ['simulation'], description: 'Simulation state (`live` or `simulated`)', descriptionKey: 'components.searchSyntax.fields.sim' },
   { name: 'machine', aliases: [], description: 'Machine alias or ID', descriptionKey: 'components.searchSyntax.fields.machine', availability: 'machine' },
   { name: 'origin', aliases: [], description: 'Decision origin', descriptionKey: 'components.searchSyntax.fields.origin', availability: 'origin' },
+  { name: 'decision', aliases: ['decisions'], description: 'Related decision state (`active`, `expired`, or empty)', descriptionKey: 'components.searchSyntax.fields.alerts.decision' },
 ];
 
 const decisionFieldDefinitions: SearchFieldDefinition[] = [
@@ -540,6 +551,7 @@ const alertFieldMatchers: AlertFieldMatcherMap = {
   sim: (alert, value) => matchesSimulationTerm(alert.simulated === true, value),
   machine: (alert, value) => includesNormalized(resolveMachineName(alert), value),
   origin: (alert, value) => collectDistinctOrigins(alert.decisions).some((origin) => includesNormalized(origin, value)),
+  decision: (alert, value) => getAlertDecisionStates(alert).some((state) => includesNormalized(state, value)),
 };
 
 const decisionFieldMatchers: DecisionFieldMatcherMap = {
@@ -578,6 +590,7 @@ const alertExactFieldMatchers: AlertFieldMatcherMap = {
   sim: alertFieldMatchers.sim,
   machine: (alert, value) => equalsNormalized(resolveMachineName(alert), value),
   origin: (alert, value) => collectDistinctOrigins(alert.decisions).some((origin) => equalsNormalized(origin, value)),
+  decision: (alert, value) => getAlertDecisionStates(alert).some((state) => equalsNormalized(state, value)),
 };
 
 const decisionExactFieldMatchers: DecisionFieldMatcherMap = {
@@ -616,6 +629,7 @@ const alertFieldEmptyMatchers: AlertFieldEmptyMatcherMap = {
   sim: () => false,
   machine: (alert) => isEmptyValue(resolveMachineName(alert)),
   origin: (alert) => collectDistinctOrigins(alert.decisions).length === 0,
+  decision: (alert) => getAlertDecisionStates(alert).length === 0,
 };
 
 const decisionFieldEmptyMatchers: DecisionFieldEmptyMatcherMap = {
@@ -732,6 +746,244 @@ export function compileDecisionSearch(
   };
 }
 
+export function serializeSearchNode(node: SearchNode | null): string {
+  return node ? serializeNode(node, 0) : '';
+}
+
+export function removeSearchField(node: SearchNode | null, field: string): SearchNode | null {
+  if (!node) return null;
+  const normalizedField = field.toLowerCase();
+
+  if (
+    (node.kind === 'field' || node.kind === 'comparison')
+    && node.field.toLowerCase() === normalizedField
+  ) {
+    return null;
+  }
+
+  if (node.kind === 'not') {
+    const expression = removeSearchField(node.expression, normalizedField);
+    return expression ? { ...node, expression } : null;
+  }
+
+  if (node.kind === 'binary') {
+    const left = removeSearchField(node.left, normalizedField);
+    const right = removeSearchField(node.right, normalizedField);
+    if (!left) return right;
+    if (!right) return left;
+    return { ...node, left, right };
+  }
+
+  return node;
+}
+
+export function getSearchFacetSelection(node: SearchNode | null, field: string): SearchFacetSelection {
+  const included = new Set<string>();
+  const excluded = new Set<string>();
+  collectFacetValues(node, field.toLowerCase(), false, included, excluded);
+  return { included: [...included], excluded: [...excluded] };
+}
+
+export function replaceSearchFacetSelection(
+  node: SearchNode | null,
+  field: string,
+  selection: SearchFacetSelection,
+): SearchNode | null {
+  const base = removeSearchField(node, field);
+  const facet = buildFacetSelectionNode(field, selection);
+  if (!base) return facet;
+  if (!facet) return base;
+  return { kind: 'binary', operator: 'AND', left: base, right: facet };
+}
+
+export function getSearchDateRange(node: SearchNode | null): SearchDateRange {
+  const range: SearchDateRange = { start: '', end: '' };
+  collectSearchDateRange(node, range, false);
+  return range;
+}
+
+export function replaceSearchDateRange(
+  node: SearchNode | null,
+  range: SearchDateRange,
+): SearchNode | null {
+  const base = removeSearchField(node, 'date');
+  let dateRange: SearchNode | null = null;
+
+  if (range.start) {
+    dateRange = {
+      kind: 'comparison',
+      field: 'date',
+      operator: '>=',
+      value: range.start,
+      quoted: false,
+    };
+  }
+  if (range.end) {
+    const end: SearchNode = {
+      kind: 'comparison',
+      field: 'date',
+      operator: '<=',
+      value: range.end,
+      quoted: false,
+    };
+    dateRange = dateRange
+      ? { kind: 'binary', operator: 'AND', left: dateRange, right: end }
+      : end;
+  }
+
+  if (!base) return dateRange;
+  if (!dateRange) return base;
+  return { kind: 'binary', operator: 'AND', left: base, right: dateRange };
+}
+
+function collectSearchDateRange(node: SearchNode | null, range: SearchDateRange, negated: boolean): void {
+  if (!node) return;
+  if (!negated && node.kind === 'comparison' && node.field.toLowerCase() === 'date') {
+    if (node.operator === '>=' || node.operator === '>') {
+      if (!range.start || node.value > range.start) range.start = node.value;
+    }
+    if (node.operator === '<=' || node.operator === '<') {
+      if (!range.end || node.value < range.end) range.end = node.value;
+    }
+    return;
+  }
+  if (node.kind === 'not') {
+    collectSearchDateRange(node.expression, range, !negated);
+    return;
+  }
+  if (node.kind === 'field') {
+    return;
+  }
+  if (node.kind === 'binary') {
+    collectSearchDateRange(node.left, range, negated);
+    collectSearchDateRange(node.right, range, negated);
+  }
+}
+
+function serializeNode(node: SearchNode, parentPrecedence: number): string {
+  const precedence = searchNodePrecedence(node);
+  let serialized: string;
+
+  if (node.kind === 'term') {
+    serialized = formatSearchValue(node.value, node.quoted);
+  } else if (node.kind === 'comparison') {
+    serialized = `${node.field}${node.operator}${formatSearchValue(
+      node.value,
+      node.quoted,
+      node.field.toLowerCase() === 'date',
+    )}`;
+  } else if (node.kind === 'field') {
+    const expression = node.expression.kind === 'binary'
+      ? `(${serializeNode(node.expression, 0)})`
+      : serializeNode(node.expression, precedence);
+    serialized = `${node.field}:${expression}`;
+  } else if (node.kind === 'not') {
+    serialized = `NOT ${serializeNode(node.expression, precedence)}`;
+  } else {
+    serialized = `${serializeNode(node.left, precedence)} ${node.operator} ${serializeNode(node.right, precedence)}`;
+  }
+
+  return precedence < parentPrecedence ? `(${serialized})` : serialized;
+}
+
+function searchNodePrecedence(node: SearchNode): number {
+  if (node.kind === 'binary') return node.operator === 'OR' ? 1 : 2;
+  if (node.kind === 'not') return 3;
+  return 4;
+}
+
+function formatSearchValue(value: string, forceQuote = false, allowColon = false): string {
+  if (
+    forceQuote
+    || value.length === 0
+    || (allowColon ? /[\s"\\()<>=]/ : /[\s"\\():<>=]/).test(value)
+    || /^(?:AND|OR|NOT)$/i.test(value)
+  ) {
+    return `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
+  }
+  return value;
+}
+
+function collectFacetValues(
+  node: SearchNode | null,
+  field: string,
+  negated: boolean,
+  included: Set<string>,
+  excluded: Set<string>,
+  scoped = false,
+): void {
+  if (!node) return;
+
+  if (node.kind === 'term') {
+    if (scoped) {
+      (negated ? excluded : included).add(node.value);
+    }
+    return;
+  }
+
+  if (node.kind === 'comparison') {
+    if (node.field === field && (node.operator === '=' || node.operator === '<>')) {
+      const isExcluded = negated !== (node.operator === '<>');
+      (isExcluded ? excluded : included).add(node.value);
+    }
+    return;
+  }
+
+  if (node.kind === 'not') {
+    collectFacetValues(node.expression, field, !negated, included, excluded, scoped);
+    return;
+  }
+
+  if (node.kind === 'field') {
+    collectFacetValues(
+      node.expression,
+      field,
+      negated,
+      included,
+      excluded,
+      node.field === field,
+    );
+    return;
+  }
+
+  collectFacetValues(node.left, field, negated, included, excluded, scoped);
+  collectFacetValues(node.right, field, negated, included, excluded, scoped);
+}
+
+function buildFacetSelectionNode(field: string, selection: SearchFacetSelection): SearchNode | null {
+  const included = [...new Set(selection.included)];
+  const excluded = [...new Set(selection.excluded)].filter((value) => !included.includes(value));
+  let result: SearchNode | null = null;
+
+  if (included.length > 0) {
+    let expression: SearchNode = { kind: 'term', value: included[0], quoted: false };
+    for (const value of included.slice(1)) {
+      expression = {
+        kind: 'binary',
+        operator: 'OR',
+        left: expression,
+        right: { kind: 'term', value, quoted: false },
+      };
+    }
+    result = { kind: 'field', field, expression };
+  }
+
+  for (const value of excluded) {
+    const exclusion: SearchNode = {
+      kind: 'comparison',
+      field,
+      operator: '<>',
+      value,
+      quoted: false,
+    };
+    result = result
+      ? { kind: 'binary', operator: 'AND', left: result, right: exclusion }
+      : exclusion;
+  }
+
+  return result;
+}
+
 export function analyzeSearchQuery(
   query: string,
   page: SearchPage,
@@ -844,8 +1096,8 @@ function tokenizeQuery(query: string, fieldMap: FieldMap): { ok: true; tokens: S
     }
 
     if (char === '"') {
-      const endIndex = findClosingQuote(query, index + 1);
-      if (endIndex === -1) {
+      const quoted = readQuotedString(query, index + 1);
+      if (!quoted) {
         return {
           ok: false,
           error: createParseError(query, 'Unterminated quoted phrase', index, 1),
@@ -853,11 +1105,11 @@ function tokenizeQuery(query: string, fieldMap: FieldMap): { ok: true; tokens: S
       }
       tokens.push({
         type: 'string',
-        value: query.slice(index + 1, endIndex),
+        value: quoted.value,
         start: index,
-        end: endIndex + 1,
+        end: quoted.end + 1,
       });
-      index = endIndex + 1;
+      index = quoted.end + 1;
       continue;
     }
 
@@ -1076,13 +1328,23 @@ function toOperatorToken(value: string, lowercaseBooleanMode: boolean): 'AND' | 
   return null;
 }
 
-function findClosingQuote(query: string, startIndex: number): number {
+function readQuotedString(query: string, startIndex: number): { value: string; end: number } | null {
+  let value = '';
   for (let index = startIndex; index < query.length; index += 1) {
     if (query[index] === '"') {
-      return index;
+      return { value, end: index };
     }
+    if (query[index] === '\\' && index + 1 < query.length) {
+      const escaped = query[index + 1];
+      if (escaped === '"' || escaped === '\\') {
+        value += escaped;
+        index += 1;
+        continue;
+      }
+    }
+    value += query[index];
   }
-  return -1;
+  return null;
 }
 
 function isUnaryMinusBoundary(query: string, index: number): boolean {
@@ -1571,6 +1833,20 @@ function parseSimulationSearchValue(value: string): boolean | null {
 
 function isDecisionExpired(decision: DecisionListItem): boolean {
   return decision.expired === true;
+}
+
+function getAlertDecisionStates(alert: SlimAlert): string[] {
+  const states: string[] = [];
+  const summary = alert.decision_summary;
+  if (summary) {
+    if (summary.active_count > 0) states.push('active');
+    if (summary.expired_count > 0) states.push('expired');
+    return states;
+  }
+
+  if (alert.decisions.some((decision) => decision.expired !== true)) states.push('active');
+  if (alert.decisions.some((decision) => decision.expired === true)) states.push('expired');
+  return states;
 }
 
 function matchesDecisionStatus(decision: DecisionListItem, value: string): boolean {

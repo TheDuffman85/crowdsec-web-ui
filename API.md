@@ -114,6 +114,7 @@ These routes are mounted below `/api/auth`. Auth setup/login routes are availabl
 | Method | Endpoint | Description |
 | --- | --- | --- |
 | GET | `/api/alerts` | List synced alerts. Without `page`, returns an array. With `page`, returns a paginated response. |
+| GET | `/api/alerts/facets` | Return one bounded quick-filter facet across the complete effective alert result set. |
 | GET | `/api/alerts/:id` | Fetch alert details, including CrowdSec `meta` context entries, from CrowdSec LAPI; hydrate with decisions; and apply simulation visibility. `:id` must be numeric. |
 | GET | `/api/instances/:instanceId/alerts/:id` | Fetch an alert from a specific instance. |
 | POST | `/api/alerts/bulk-delete` | Immediately hide multiple alerts and durably queue deletion of them and their linked decisions. Body: `{ "ids": [1, "2"] }`. Blocked in read-only mode. |
@@ -128,11 +129,14 @@ Free-text `q` searches include CrowdSec alert context values from `meta` in addi
 
 Set `include_decisions=false` to omit decision hydration from paginated lists or single-instance alert details. Bulk deletion accepts `ids` in single-instance deployments or instance-qualified `refs` as described above.
 
+Alert facets require `field=id|instance|scenario|country|region|city|as|ip|target|machine|origin|decision`. The `decision` facet returns `active`, `expired`, and an empty value for alerts without decisions. Facets accept the same filters as the paginated alert endpoint, plus optional case-insensitive `search`, `offset` (clamped to `0–500`), and `limit` (default `10`, maximum `50`). The requested field's own predicates are removed so counts remain disjunctive. Facet requests return `400` for unsupported fields and `504` when their isolated five-second query budget is exhausted.
+
 ## Decisions
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
 | GET | `/api/decisions` | List decisions. Without `page`, returns an array. With `page`, returns a paginated response. Active decisions are returned by default. |
+| GET | `/api/decisions/facets` | Return one bounded quick-filter facet across the complete effective decision result set. |
 | POST | `/api/decisions` | Add a manual CrowdSec decision through LAPI. Body: `{ "ip": "1.2.3.4", "duration": "4h", "reason": "manual", "type": "ban" }`. `type` defaults to `ban` and accepts `ban` or `captcha`; optional `scope` and `instance_id` select targets. Blocked in read-only mode. |
 | POST | `/api/decisions/bulk-delete` | Delete multiple decisions by numeric ID. Body: `{ "ids": [10, "11"] }`. Blocked in read-only mode. |
 | DELETE | `/api/decisions/:id` | Delete one decision from CrowdSec LAPI and local cache. `:id` must be numeric. Blocked in read-only mode. |
@@ -144,6 +148,22 @@ Supported decision query parameters: `instance`, `include_expired`, `page`, `pag
 - Duplicate decisions are hidden by default in paginated results. Set `hide_duplicates=false` or filter by `alert_id` to show them.
 - `simulation` accepts `all`, `live`, or `simulated`; unknown values behave like `all`.
 - Bulk deletion accepts `ids` in single-instance deployments or instance-qualified `refs` as described above.
+
+Decision facets require `field=id|instance|alert|scenario|country|region|city|as|ip|target|action|status|machine|origin` and support the same facet pagination and search parameters as alert facets. Status faceting considers both active and expired values within the configured lookback window even when the list is currently active-only.
+
+Both facet endpoints return at most the requested limit and use an empty string for missing raw values:
+
+```json
+{
+  "field": "country",
+  "values": [
+    { "value": "DE", "count": 1234 },
+    { "value": "", "count": 17 }
+  ],
+  "offset": 0,
+  "has_more": true
+}
+```
 
 ## Cleanup and Cache
 

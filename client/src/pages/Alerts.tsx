@@ -6,8 +6,10 @@ import { useRefresh } from "../contexts/useRefresh";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
 import { HighlightedSearchInput } from "../components/HighlightedSearchInput";
+import { CollapsibleSearchControls } from "../components/CollapsibleSearchControls";
 import { SearchSyntaxModal } from "../components/SearchSyntaxModal";
 import { TableColumnsModal } from "../components/TableColumnsModal";
+import { QuickFilters, type QuickFilterDefinition, type QuickFilterSectionId } from "../components/QuickFilters";
 import { CountryFlag } from "../components/CountryFlag";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
@@ -21,9 +23,19 @@ import { loadStoredTableColumnPreferences, saveStoredTableColumnPreferences } fr
 import { TABLE_COLUMN_DEFINITIONS } from "../../../shared/contracts";
 import { resolveMachineName } from "../../../shared/machine";
 import { collectDistinctOrigins, getOriginDisplayValue, getOriginTitle } from "../../../shared/origin";
-import { compileAlertSearch, getSearchHelpDefinition, type SearchParseError } from "../../../shared/search";
+import {
+    compileAlertSearch,
+    getSearchDateRange,
+    getSearchHelpDefinition,
+    replaceSearchDateRange,
+    replaceSearchFacetSelection,
+    serializeSearchNode,
+    type SearchFacetSelection,
+    type SearchDateRange,
+    type SearchParseError,
+} from "../../../shared/search";
 import { Info, ExternalLink, Shield, ShieldBan, Trash2, X, AlertCircle, Columns3, Loader2 } from "lucide-react";
-import type { AlertRecord, AlertSource, ApiPermissionError, BulkDeleteResult, DecisionListItem, InstanceEntityRef, InstanceOperationResult, SimulationFilter, SlimAlert, TableColumnId, TableColumnPreferences } from '../types';
+import type { AlertRecord, AlertSource, ApiPermissionError, BulkDeleteResult, DecisionListItem, FacetField, InstanceEntityRef, InstanceOperationResult, SimulationFilter, SlimAlert, TableColumnId, TableColumnPreferences } from '../types';
 import { useI18n, type I18nContextValue } from "../lib/i18n";
 import { getBrowserTimeZone, useDateTime } from "../lib/dateTime";
 
@@ -211,6 +223,7 @@ export function Alerts() {
     const { language, t } = useI18n();
     const { formatDateTime, timeZone } = useDateTime();
     const { refreshSignal } = useRefresh();
+    const [facetRefreshKey, setFacetRefreshKey] = useState(refreshSignal);
     const [searchParams, setSearchParams] = useSearchParams();
     const initialQueryParam = searchParams.get("q") ?? "";
     const [alerts, setAlerts] = useState<AlertListItem[]>([]);
@@ -346,6 +359,111 @@ export function Alerts() {
         }
         return filters;
     }, [appliedQuery, currentSimulationFilter, dateEndParam, dateStartParam, searchParams]);
+    const facetFilters = useMemo(
+        () => buildServerFilters(currentSimulationFilter),
+        [buildServerFilters, currentSimulationFilter],
+    );
+    const quickFilterConfig = useMemo<{
+        fields: QuickFilterDefinition[];
+        sectionOrder: QuickFilterSectionId[];
+    }>(() => {
+        const fieldByColumn: Partial<Record<TableColumnId, FacetField>> = {
+            id: 'id',
+            instance: 'instance',
+            scenario: 'scenario',
+            country: 'country',
+            region: 'region',
+            city: 'city',
+            as: 'as',
+            source: 'ip',
+            machine: 'machine',
+            origin: 'origin',
+            decisions: 'decision',
+        };
+        const fields: QuickFilterDefinition[] = [];
+        const sectionOrder: QuickFilterSectionId[] = [];
+        for (const column of visibleAlertColumns) {
+            if (column === 'time') {
+                sectionOrder.push('date');
+                continue;
+            }
+            const field = fieldByColumn[column];
+            if (!field) continue;
+            fields.push({ field, label: t(`tableColumns.${column}`) });
+            sectionOrder.push(field);
+        }
+        fields.push({ field: 'target', label: t('components.eventCard.target') });
+        sectionOrder.push('target');
+        return { fields, sectionOrder };
+    }, [t, visibleAlertColumns]);
+    const quickFilterDateRange = useMemo(() => {
+        const range = compiledSearch.ok ? getSearchDateRange(compiledSearch.ast) : { start: '', end: '' };
+        return {
+            start: range.start || dateStartParam,
+            end: range.end || dateEndParam,
+        };
+    }, [compiledSearch, dateEndParam, dateStartParam]);
+    const applyFacetSelection = useCallback((field: FacetField, selection: SearchFacetSelection) => {
+        const currentQuery = searchParams.get('q') ?? '';
+        const currentSearch = compileAlertSearch(currentQuery, searchValidationFeatures, searchDateOptions);
+        if (!currentSearch.ok) return;
+
+        const nextQuery = serializeSearchNode(replaceSearchFacetSelection(
+            currentSearch.ast,
+            field,
+            selection,
+        ));
+        const nextParams = new URLSearchParams(searchParams);
+        if (nextQuery) nextParams.set('q', nextQuery);
+        else nextParams.delete('q');
+
+        cancelSearchDebounce();
+        searchDraftRef.current = nextQuery;
+        searchSelectionRef.current = { start: nextQuery.length, end: nextQuery.length };
+        skipSearchParamSyncRef.current = nextQuery;
+        setSearchDraft(nextQuery);
+        setDebouncedSearchDraft(nextQuery);
+        setSearchParams(nextParams);
+    }, [
+        cancelSearchDebounce,
+        searchDateOptions,
+        searchParams,
+        searchValidationFeatures,
+        setSearchParams,
+    ]);
+    const applyDateRange = useCallback((range: SearchDateRange) => {
+        const currentQuery = searchParams.get('q') ?? '';
+        const currentSearch = compileAlertSearch(currentQuery, searchValidationFeatures, searchDateOptions);
+        if (!currentSearch.ok) return;
+
+        const nextQuery = serializeSearchNode(replaceSearchDateRange(currentSearch.ast, range));
+        const nextParams = new URLSearchParams(searchParams);
+        nextParams.delete('dateStart');
+        nextParams.delete('dateEnd');
+        if (nextQuery) nextParams.set('q', nextQuery);
+        else nextParams.delete('q');
+
+        cancelSearchDebounce();
+        searchDraftRef.current = nextQuery;
+        searchSelectionRef.current = { start: nextQuery.length, end: nextQuery.length };
+        skipSearchParamSyncRef.current = nextQuery;
+        setSearchDraft(nextQuery);
+        setDebouncedSearchDraft(nextQuery);
+        setSearchParams(nextParams);
+    }, [
+        cancelSearchDebounce,
+        searchDateOptions,
+        searchParams,
+        searchValidationFeatures,
+        setSearchParams,
+    ]);
+    const formatFacetValue = useCallback((field: FacetField, value: string) => {
+        if (field === 'country') return getCountryName(value, language) || value;
+        if (field === 'decision') {
+            return value === 'active' ? t('common.active') : t('common.inactive');
+        }
+        return value;
+    }, [language, t]);
 
     const loadConfig = useCallback(async (refresh = false) => {
         if (!refresh && configRef.current) {
@@ -545,7 +663,12 @@ export function Alerts() {
         }
 
         lastRefreshSignalRef.current = refreshSignal;
-        void loadAlertsRef.current({ isBackground: true, page: 1, preserveLoadedPages: true, refreshConfig: true });
+        void loadAlertsRef.current({
+            isBackground: true,
+            page: 1,
+            preserveLoadedPages: true,
+            refreshConfig: true,
+        }).finally(() => setFacetRefreshKey(refreshSignal));
     }, [refreshSignal]);
 
     useEffect(() => {
@@ -1006,6 +1129,20 @@ export function Alerts() {
             : t('pages.alerts.summary', { count: visibleAlerts.length, total: totalAlerts });
     const tableBusy = initialLoading || backgroundLoading || loadingMore;
 
+    const quickFilterProps = {
+        page: 'alerts' as const,
+        fields: quickFilterConfig.fields,
+        sectionOrder: quickFilterConfig.sectionOrder,
+        filters: facetFilters,
+        searchAst: compiledSearch.ok ? compiledSearch.ast : null,
+        onSelectionChange: applyFacetSelection,
+        dateRange: quickFilterDateRange,
+        onDateRangeChange: applyDateRange,
+        formatValue: formatFacetValue,
+        busy: tableBusy,
+        refreshKey: facetRefreshKey,
+    };
+
     return (
         <div className="space-y-6">
             <div
@@ -1091,10 +1228,26 @@ export function Alerts() {
 
             <div className="space-y-2">
                 <div className="flex items-stretch gap-2">
-                    <div className="flex-1">
+                    <button
+                        type="button"
+                        onClick={() => setShowColumnsModal(true)}
+                        className="inline-flex items-center justify-center rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-gray-600 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
+                        aria-label={t('components.tableColumns.chooseAlertColumns')}
+                        title={t('components.tableColumns.chooseColumns')}
+                    >
+                        <Columns3 size={18} />
+                    </button>
+                    <QuickFilters {...quickFilterProps} />
+                    <CollapsibleSearchControls
+                        inputRef={searchInputRef}
+                        onHelp={() => setShowSearchSyntaxModal(true)}
+                    >
                         <HighlightedSearchInput
                             ref={searchInputRef}
                             searchPage="alerts"
+                            showSearchIcon={false}
+                            containerClassName="rounded-l-none"
+                            className="rounded-l-none"
                             searchFeatures={searchValidationFeatures}
                             placeholder={t('pages.alerts.filterPlaceholder')}
                             value={searchDraft}
@@ -1110,25 +1263,7 @@ export function Alerts() {
                             aria-invalid={queryError ? 'true' : 'false'}
                             aria-describedby={queryError ? 'alerts-search-error' : undefined}
                         />
-                    </div>
-                    <button
-                        type="button"
-                        onClick={() => setShowSearchSyntaxModal(true)}
-                        className="inline-flex items-center justify-center rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-gray-600 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
-                        aria-label={t('components.searchSyntax.help')}
-                        title={t('components.searchSyntax.help')}
-                    >
-                        <Info size={18} />
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => setShowColumnsModal(true)}
-                        className="inline-flex items-center justify-center rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-gray-600 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
-                        aria-label={t('components.tableColumns.chooseAlertColumns')}
-                        title={t('components.tableColumns.chooseColumns')}
-                    >
-                        <Columns3 size={18} />
-                    </button>
+                    </CollapsibleSearchControls>
                 </div>
                 {queryError && (
                     <p id="alerts-search-error" className="text-xs text-red-600 dark:text-red-400">

@@ -418,6 +418,7 @@ describe('Alerts page presentation and columns', () => {
     expect(screen.getByText('crowdsec')).toBeInTheDocument();
     expect(screen.getByText('Active: 2')).toBeInTheDocument();
 
+    await userEvent.click(screen.getByRole('button', { name: 'Expand search' }));
     await userEvent.type(screen.getByPlaceholderText('Filter alerts...'), 'capi');
 
     await waitFor(() => expect(screen.getByText('Mixed')).toBeInTheDocument());

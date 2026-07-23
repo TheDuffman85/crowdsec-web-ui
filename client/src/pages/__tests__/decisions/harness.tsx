@@ -126,6 +126,16 @@ vi.mock('../../../lib/api', () => {
   });
 
   return {
+    fetchFacet: vi.fn(async (_page: string, field: string) => ({
+      field,
+      values: field === 'status'
+        ? [{ value: 'active', count: 1 }, { value: 'expired', count: 1 }]
+        : field === 'country'
+          ? [{ value: 'DE', count: 1 }, { value: 'US', count: 1 }]
+          : [],
+      offset: 0,
+      has_more: false,
+    })),
     fetchDecisionsPaginated: vi.fn(async (page: number, pageSize: number, filters?: Record<string, string>) => {
       let decisions = defaultDecisions;
       if (filters?.simulation === 'simulated') {

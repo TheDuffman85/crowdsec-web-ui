@@ -1,6 +1,17 @@
 import { describe, expect, test } from 'vitest';
 import type { DecisionListItem, SlimAlert } from '../../../shared/contracts';
-import { analyzeSearchQuery, compileAlertSearch, compileDecisionSearch, getSearchHelpDefinition } from '../../../shared/search';
+import {
+  analyzeSearchQuery,
+  compileAlertSearch,
+  compileDecisionSearch,
+  getSearchDateRange,
+  getSearchFacetSelection,
+  getSearchHelpDefinition,
+  removeSearchField,
+  replaceSearchFacetSelection,
+  replaceSearchDateRange,
+  serializeSearchNode,
+} from '../../../shared/search';
 
 const baseAlert: SlimAlert = {
   id: 1,
@@ -156,6 +167,19 @@ describe('shared search compiler', () => {
     expect(nonEmptyOrigin.predicate(alertWithoutOrigin)).toBe(false);
     expect(emptyTarget.predicate(alertWithoutTarget)).toBe(true);
     expect(emptyTarget.predicate(baseAlert)).toBe(false);
+  });
+
+  test('matches related alert decision states and alerts without decisions', () => {
+    const active = compileAlertSearch('decision:active');
+    const empty = compileAlertSearch('decision:""');
+    expect(active.ok).toBe(true);
+    expect(empty.ok).toBe(true);
+    if (!active.ok || !empty.ok) return;
+
+    const alertWithoutDecisions = { ...baseAlert, decisions: [] };
+    expect(active.predicate(baseAlert)).toBe(true);
+    expect(active.predicate(alertWithoutDecisions)).toBe(false);
+    expect(empty.predicate(alertWithoutDecisions)).toBe(true);
   });
 
   test('matches empty decision fields with quoted empty values', () => {
@@ -474,6 +498,67 @@ describe('shared search compiler', () => {
     }
 
     expect(compiled.error.message).toContain('only supported for date fields');
+  });
+
+  test('round-trips escaped quoted values and boolean precedence', () => {
+    const compiled = compileAlertSearch('country:DE OR (scenario:"say \\"hello\\"" AND as:"A\\\\B")');
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) return;
+
+    const serialized = serializeSearchNode(compiled.ast);
+    const roundTrip = compileAlertSearch(serialized);
+    expect(roundTrip.ok).toBe(true);
+    if (!roundTrip.ok) return;
+    expect(roundTrip.ast).toEqual(compiled.ast);
+  });
+
+  test('extracts, removes, and replaces facet predicates without changing unrelated filters', () => {
+    const compiled = compileAlertSearch('scenario:ssh AND (country:DE OR country:FR) AND country<>US');
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) return;
+
+    expect(getSearchFacetSelection(compiled.ast, 'country')).toEqual({
+      included: ['DE', 'FR'],
+      excluded: ['US'],
+    });
+    expect(serializeSearchNode(removeSearchField(compiled.ast, 'country'))).toBe('scenario:ssh');
+
+    const replaced = replaceSearchFacetSelection(compiled.ast, 'country', {
+      included: ['United States', 'A"B'],
+      excluded: [],
+    });
+    const serialized = serializeSearchNode(replaced);
+    expect(serialized).toBe('scenario:ssh AND country:("United States" OR "A\\"B")');
+    expect(compileAlertSearch(serialized).ok).toBe(true);
+  });
+
+  test('serializes exclusions and empty facet values', () => {
+    const updated = replaceSearchFacetSelection(null, 'country', {
+      included: [],
+      excluded: ['', 'DE'],
+    });
+    expect(serializeSearchNode(updated)).toBe('country<>"" AND country<>DE');
+  });
+
+  test('extracts and replaces dashboard-compatible date-time ranges', () => {
+    const compiled = compileAlertSearch(
+      'country:DE AND date>=2026-03-29T01:30 AND date<=2026-03-29T03:45',
+    );
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) return;
+
+    expect(getSearchDateRange(compiled.ast)).toEqual({
+      start: '2026-03-29T01:30',
+      end: '2026-03-29T03:45',
+    });
+    expect(serializeSearchNode(replaceSearchDateRange(compiled.ast, {
+      start: '2026-04-01T08:15',
+      end: '2026-04-01T10:30',
+    }))).toBe('country:DE AND date>=2026-04-01T08:15 AND date<=2026-04-01T10:30');
+    expect(serializeSearchNode(replaceSearchDateRange(compiled.ast, {
+      start: '',
+      end: '',
+    }))).toBe('country:DE');
   });
 
   test('builds alert help examples from provided alert rows', () => {

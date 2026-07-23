@@ -24,6 +24,8 @@ type HighlightedSearchInputProps = Omit<InputHTMLAttributes<HTMLInputElement>, '
   searchPage: SearchPage;
   searchFeatures?: SearchFeatureFlags;
   error?: SearchParseError | null;
+  containerClassName?: string;
+  showSearchIcon?: boolean;
 };
 
 interface SearchQueryHighlightProps {
@@ -90,6 +92,8 @@ export const HighlightedSearchInput = forwardRef<HTMLInputElement, HighlightedSe
       searchPage,
       searchFeatures,
       error,
+      containerClassName = '',
+      showSearchIcon = true,
       value = '',
       className = '',
       onChange,
@@ -147,17 +151,21 @@ export const HighlightedSearchInput = forwardRef<HTMLInputElement, HighlightedSe
 
     return (
       <div
-        className={`relative rounded-md border bg-white dark:bg-gray-800 ${
+        className={`relative h-11 rounded-md border bg-white dark:bg-gray-800 ${
           activeError
             ? 'border-red-300 dark:border-red-700 focus-within:border-red-500 focus-within:ring-1 focus-within:ring-red-500'
             : 'border-gray-300 dark:border-gray-700 focus-within:border-primary-500 focus-within:ring-1 focus-within:ring-primary-500'
-        }`}
+        } ${containerClassName}`}
       >
-        <div className="pointer-events-none absolute inset-y-0 left-0 z-20 flex items-center pl-3">
-          <Search className="h-5 w-5 text-gray-400" />
-        </div>
+        {showSearchIcon && (
+          <div className="pointer-events-none absolute inset-y-0 left-0 z-20 flex items-center pl-3">
+            <Search className="h-5 w-5 text-gray-400" />
+          </div>
+        )}
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden rounded-md">
-          <div className="absolute inset-y-0 left-0 right-0 overflow-hidden px-3 py-2 pl-10 font-mono text-sm leading-5">
+          <div className={`absolute inset-0 flex items-center overflow-hidden px-3 font-mono text-sm leading-5 ${
+            showSearchIcon ? 'pl-10' : 'pl-3'
+          }`}>
             <SearchQueryHighlight
               ref={highlightRef}
               query={query}
@@ -165,7 +173,7 @@ export const HighlightedSearchInput = forwardRef<HTMLInputElement, HighlightedSe
               searchFeatures={searchFeatures}
               error={error}
               highlightErrors
-              className="min-w-full whitespace-pre text-gray-900 dark:text-gray-100"
+              className="min-w-full shrink-0 whitespace-pre text-gray-900 dark:text-gray-100"
             />
           </div>
         </div>
@@ -182,7 +190,9 @@ export const HighlightedSearchInput = forwardRef<HTMLInputElement, HighlightedSe
           onKeyUp={handleKeyUp}
           onSelect={handleSelect}
           onScroll={handleScroll}
-          className={`relative z-10 block w-full rounded-md border-0 bg-transparent py-2 pl-10 pr-3 font-mono text-sm leading-5 text-transparent caret-gray-900 placeholder-gray-500 focus:outline-none focus:ring-0 dark:caret-gray-100 dark:placeholder-gray-400 selection:bg-primary-500/20 dark:selection:bg-primary-900/60 ${className}`}
+          className={`relative z-10 block h-11 w-full rounded-md border-0 bg-transparent py-0 pr-3 font-mono text-sm leading-5 text-transparent caret-gray-900 placeholder-gray-500 focus:outline-none focus:ring-0 dark:caret-gray-100 dark:placeholder-gray-400 selection:bg-primary-500/20 dark:selection:bg-primary-900/60 ${
+            showSearchIcon ? 'pl-10' : 'pl-3'
+          } ${className}`}
           style={{ WebkitTextFillColor: 'transparent' }}
           spellCheck={false}
           autoComplete="off"

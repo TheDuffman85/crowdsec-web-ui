@@ -9,6 +9,8 @@ import type {
   CrowdsecMetricsResponse,
   DashboardStatsResponse,
   DecisionListItem,
+  FacetField,
+  FacetResponse,
   InstanceEntityRef,
   MultiInstanceOperationResponse,
   NotificationChannel,
@@ -137,6 +139,28 @@ export async function fetchDecisionsPaginated(
         if (value) params.set(key, value);
     }
     return fetchJson<PaginatedResponse<DecisionListItem>>(`/api/decisions?${params.toString()}`, undefined, 'Failed to fetch decisions');
+}
+
+export async function fetchFacet(
+    page: 'alerts' | 'decisions',
+    field: FacetField,
+    filters?: Record<string, string>,
+    options: { search?: string; offset?: number; limit?: number; signal?: AbortSignal } = {},
+): Promise<FacetResponse> {
+    const params = new URLSearchParams({
+        field,
+        offset: String(options.offset ?? 0),
+        limit: String(options.limit ?? 10),
+    });
+    if (options.search) params.set('search', options.search);
+    for (const [key, value] of Object.entries(filters ?? {})) {
+        if (value) params.set(key, value);
+    }
+    return fetchJson<FacetResponse>(
+        `/api/${page}/facets?${params.toString()}`,
+        { signal: options.signal },
+        `Failed to fetch ${page} facets`,
+    );
 }
 
 async function parseErrorPayload(res: Response): Promise<{ error?: string; code?: string }> {

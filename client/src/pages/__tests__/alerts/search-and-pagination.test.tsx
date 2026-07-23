@@ -1,6 +1,6 @@
 import { createDeferred, flushAlertSearchDebounce, installControlledIntersectionObserver, setRefreshSignalMock, toPaginatedAlerts } from './harness';
 import { describe, expect, test, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StrictMode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -8,6 +8,21 @@ import * as api from '../../../lib/api';
 import { compileAlertSearch } from '../../../../../shared/search';
 import { Alerts } from '../../Alerts';
 import { type PaginatedResponse, type SlimAlert } from '../../../types';
+
+async function expandAlertSearch() {
+  const toggle = screen.getByRole('button', { name: 'Expand search' });
+  await userEvent.click(toggle);
+  const input = await screen.findByPlaceholderText('Filter alerts...');
+  expect(input).toHaveFocus();
+  expect(screen.getByRole('button', { name: 'Search syntax help' })).toBeInTheDocument();
+  const collapseButton = screen.getByRole('button', { name: 'Collapse search' });
+  expect(collapseButton).toHaveAttribute('aria-expanded', 'true');
+  expect(collapseButton).toHaveClass('border-r-0');
+  expect(collapseButton.nextElementSibling).toContainElement(input);
+  expect(input.parentElement).toHaveClass('rounded-l-none');
+  expect(input.parentElement?.querySelector('.lucide-search')).toBeNull();
+  return input;
+}
 
 describe('Alerts page search and pagination', () => {
   test('supports advanced field search and shows the active search badge', async () => {
@@ -19,7 +34,21 @@ describe('Alerts page search and pagination', () => {
 
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
 
-    const input = screen.getByPlaceholderText('Filter alerts...');
+    const searchButton = screen.getByRole('button', { name: 'Expand search' });
+    const filtersButton = screen.getByRole('button', { name: 'Filters' });
+    const columnsButton = screen.getByRole('button', { name: 'Choose alert table columns' });
+    expect(Array.from(columnsButton.parentElement!.children).slice(0, 3)).toEqual([
+      columnsButton,
+      filtersButton,
+      searchButton.parentElement!.parentElement!,
+    ]);
+    expect(screen.queryByPlaceholderText('Filter alerts...')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Search syntax help' })).not.toBeInTheDocument();
+    await expandAlertSearch();
+    await userEvent.click(screen.getByRole('button', { name: 'Collapse search' }));
+    expect(screen.queryByPlaceholderText('Filter alerts...')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Search syntax help' })).not.toBeInTheDocument();
+    const input = await expandAlertSearch();
     await userEvent.type(input, 'country:germany');
 
     await waitFor(() => expect(screen.getByText('country:germany')).toBeInTheDocument());
@@ -42,6 +71,7 @@ describe('Alerts page search and pagination', () => {
 
     await waitFor(() => expect(fetchAlertsPaginatedMock).toHaveBeenCalled());
     expect(fetchAlertsPaginatedMock.mock.calls[0]?.[2]).toMatchObject({ q: 'country:germany' });
+    await expandAlertSearch();
     await waitFor(() => expect(screen.getByPlaceholderText('Filter alerts...')).toHaveValue('country:germany'));
     await waitFor(() => expect(screen.queryByText('5.6.7.8')).not.toBeInTheDocument());
   });
@@ -55,11 +85,63 @@ describe('Alerts page search and pagination', () => {
 
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
 
-    const input = screen.getByPlaceholderText('Filter alerts...');
+    const input = await expandAlertSearch();
     await userEvent.type(input, 'date>=2026-03-24');
 
     await waitFor(() => expect(screen.getByText('date>=2026-03-24')).toBeInTheDocument());
     expect(screen.queryByText(/Search syntax error/i)).not.toBeInTheDocument();
+  });
+
+  test('uses advanced-search date-time comparisons from quick filters', async () => {
+    const fetchAlertsPaginatedMock = vi.mocked(api.fetchAlertsPaginated);
+    fetchAlertsPaginatedMock.mockClear();
+
+    render(
+      <MemoryRouter initialEntries={['/alerts?q=country:DE']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Filters' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Date and time' }));
+    fireEvent.change(screen.getByLabelText('From'), {
+      target: { value: '2026-03-24T10:30' },
+    });
+    fireEvent.change(screen.getByLabelText('To'), {
+      target: { value: '2026-03-24T12:45' },
+    });
+
+    await waitFor(() => expect(fetchAlertsPaginatedMock.mock.calls.at(-1)?.[2]?.q).toBe(
+      'country:DE AND date>=2026-03-24T10:00 AND date<=2026-03-24T12:00',
+    ));
+    await expandAlertSearch();
+    expect(screen.getByPlaceholderText('Filter alerts...')).toHaveValue(
+      'country:DE AND date>=2026-03-24T10:00 AND date<=2026-03-24T12:00',
+    );
+  });
+
+  test('offers quick filters for every visible filterable alert column', async () => {
+    window.localStorage.setItem('crowdsec-web-ui:table-column-preferences', JSON.stringify({
+      alerts: ['id', 'instance', 'region', 'city', 'machine', 'origin', 'decisions'],
+    }));
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Filters' }));
+    const drawer = screen.getByRole('dialog', { name: 'Quick filters' });
+    const expectedSections = ['ID', 'Instance', 'Region', 'City', 'Machine', 'Origin', 'Decisions', 'Target'];
+    for (const name of expectedSections) {
+      expect(within(drawer).getByRole('button', { name })).toBeInTheDocument();
+    }
+    const sectionNames = within(drawer).getAllByRole('button')
+      .map((button) => button.textContent?.trim())
+      .filter((name): name is string => Boolean(name && expectedSections.includes(name)));
+    expect(sectionNames).toEqual(expectedSections);
+    expect(within(drawer).queryByRole('button', { name: 'Date and time' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Target' })).not.toBeInTheDocument();
   });
 
   test('opens the alert search syntax help modal', async () => {
@@ -70,7 +152,9 @@ describe('Alerts page search and pagination', () => {
     );
 
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
-    await userEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));
+    await expandAlertSearch();
+    const helpButton = screen.getByRole('button', { name: 'Search syntax help' });
+    await userEvent.click(helpButton);
 
     expect(screen.getByRole('dialog', { name: 'Alert Search Syntax' })).toBeInTheDocument();
     expect(screen.getByText('date>=2026-03-23 AND date<2026-03-24')).toBeInTheDocument();
@@ -87,6 +171,7 @@ describe('Alerts page search and pagination', () => {
     );
 
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+    await expandAlertSearch();
     await userEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));
     await userEvent.click(screen.getByRole('button', { name: /country:germany ssh/i }));
 
@@ -101,6 +186,7 @@ describe('Alerts page search and pagination', () => {
     );
 
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+    await expandAlertSearch();
     await userEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));
     await userEvent.click(screen.getByRole('button', { name: 'Insert field date' }));
     await userEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));
@@ -124,6 +210,7 @@ describe('Alerts page search and pagination', () => {
 
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
 
+    await expandAlertSearch();
     fireEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));
     fireEvent.click(screen.getByRole('button', { name: 'Insert field date' }));
 
@@ -150,7 +237,7 @@ describe('Alerts page search and pagination', () => {
 
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
 
-    const input = screen.getByPlaceholderText('Filter alerts...');
+    const input = await expandAlertSearch();
     fireEvent.change(input, { target: { value: 'country:germany AND target:ssh' } });
     await flushAlertSearchDebounce();
 
@@ -203,7 +290,7 @@ describe('Alerts page search and pagination', () => {
     const summary = screen.getByTestId('alerts-summary');
     expect(summary).toHaveTextContent('Showing 2 of 2 alerts');
 
-    const input = screen.getByPlaceholderText('Filter alerts...');
+    const input = await expandAlertSearch();
     await user.clear(input);
     await user.type(input, 'aws');
 
@@ -285,7 +372,7 @@ describe('Alerts page search and pagination', () => {
 
     await waitFor(() => expect(screen.getByText('Showing 1 of 1 alerts (3 total before filters)')).toBeInTheDocument());
     expect(screen.getByRole('columnheader', { name: 'IP / Range' })).toBeInTheDocument();
-    expect(screen.getAllByText('192.168.5.0/24')).toHaveLength(2);
+    expect(screen.getByText('192.168.5.0/24')).toBeInTheDocument();
     expect(screen.queryByText('1.2.3.4')).not.toBeInTheDocument();
   });
 

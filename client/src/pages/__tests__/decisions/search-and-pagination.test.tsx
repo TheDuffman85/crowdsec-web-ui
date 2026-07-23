@@ -1,12 +1,27 @@
 import { createDeferred, flushDecisionSearchDebounce, installControlledIntersectionObserver, setRefreshSignalMock, toPaginatedDecisions } from './harness';
 import { describe, expect, test, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { StrictMode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import * as api from '../../../lib/api';
 import { Decisions } from '../../Decisions';
 import { type DecisionListItem, type PaginatedResponse } from '../../../types';
+
+async function expandDecisionSearch() {
+  const toggle = screen.getByRole('button', { name: 'Expand search' });
+  await userEvent.click(toggle);
+  const input = await screen.findByPlaceholderText('Filter decisions...');
+  expect(input).toHaveFocus();
+  expect(screen.getByRole('button', { name: 'Search syntax help' })).toBeInTheDocument();
+  const collapseButton = screen.getByRole('button', { name: 'Collapse search' });
+  expect(collapseButton).toHaveAttribute('aria-expanded', 'true');
+  expect(collapseButton).toHaveClass('border-r-0');
+  expect(collapseButton.nextElementSibling).toContainElement(input);
+  expect(input.parentElement).toHaveClass('rounded-l-none');
+  expect(input.parentElement?.querySelector('.lucide-search')).toBeNull();
+  return input;
+}
 
 describe('Decisions page search and pagination', () => {
   test('shows inline syntax errors while keeping the previous decision results visible', async () => {
@@ -18,7 +33,17 @@ describe('Decisions page search and pagination', () => {
 
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
 
-    const input = screen.getByPlaceholderText('Filter decisions...');
+    const searchButton = screen.getByRole('button', { name: 'Expand search' });
+    const filtersButton = screen.getByRole('button', { name: 'Filters' });
+    const columnsButton = screen.getByRole('button', { name: 'Choose decision table columns' });
+    expect(Array.from(columnsButton.parentElement!.children).slice(0, 3)).toEqual([
+      columnsButton,
+      filtersButton,
+      searchButton.parentElement!.parentElement!,
+    ]);
+    expect(screen.queryByPlaceholderText('Filter decisions...')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Search syntax help' })).not.toBeInTheDocument();
+    const input = await expandDecisionSearch();
     fireEvent.change(input, { target: { value: 'origin:(manual OR' } });
     await flushDecisionSearchDebounce();
 
@@ -36,7 +61,9 @@ describe('Decisions page search and pagination', () => {
     );
 
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
-    await userEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));
+    await expandDecisionSearch();
+    const helpButton = screen.getByRole('button', { name: 'Search syntax help' });
+    await userEvent.click(helpButton);
 
     expect(screen.getByRole('dialog', { name: 'Decision Search Syntax' })).toBeInTheDocument();
     expect(screen.getByText('status:active AND action:ban')).toBeInTheDocument();
@@ -54,10 +81,100 @@ describe('Decisions page search and pagination', () => {
     );
 
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+    await expandDecisionSearch();
     await userEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));
     await userEvent.click(screen.getByRole('button', { name: /status:active AND action:ban/i }));
 
     await waitFor(() => expect(screen.getByPlaceholderText('Filter decisions...')).toHaveValue('status:active AND action:ban'));
+  });
+
+  test('keeps the status facet synchronized with expired-decision visibility', async () => {
+    const user = userEvent.setup();
+    const fetchDecisionsPaginatedMock = vi.mocked(api.fetchDecisionsPaginated);
+    fetchDecisionsPaginatedMock.mockClear();
+
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+    const filtersButton = screen.getByRole('button', { name: /^Filters/ });
+    expect(within(filtersButton).queryByText('1')).not.toBeInTheDocument();
+    await user.click(filtersButton);
+    const drawer = screen.getByRole('dialog', { name: 'Quick filters' });
+    await user.click(within(drawer).getByRole('button', { name: 'Expiration' }));
+
+    const active = await screen.findByRole('checkbox', { name: 'Toggle Active in Expiration' });
+    const expired = screen.getByRole('checkbox', { name: /Toggle .*Expired.* in Expiration/ });
+    const expirationSection = within(drawer).getByRole('button', { name: 'Expiration' }).closest('section');
+    expect(expirationSection).not.toBeNull();
+    const expirationHeader = expirationSection!.firstElementChild as HTMLElement;
+    expect(active).toBeChecked();
+    expect(expired).not.toBeChecked();
+    expect(within(expirationHeader).queryByText('1')).not.toBeInTheDocument();
+    expect(within(expirationSection!).queryByRole('button', { name: 'Clear Expiration' })).not.toBeInTheDocument();
+
+    await user.click(expired);
+    await waitFor(() => expect(fetchDecisionsPaginatedMock.mock.calls.at(-1)?.[2]).toMatchObject({
+      include_expired: 'true',
+    }));
+    await waitFor(() => expect(
+      screen.getByRole('checkbox', { name: /Toggle .*Expired.* in Expiration/ }),
+    ).toBeChecked());
+    await waitFor(() => expect(within(filtersButton).getByText('1')).toBeInTheDocument());
+    expect(within(expirationHeader).getByText('1')).toBeInTheDocument();
+    expect(within(expirationSection!).getByRole('button', { name: 'Clear Expiration' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('checkbox', { name: /Toggle .*Expired.* in Expiration/ }));
+    await waitFor(() => expect(fetchDecisionsPaginatedMock.mock.calls.at(-1)?.[2]?.include_expired).toBeUndefined());
+    await waitFor(() => expect(within(filtersButton).queryByText('1')).not.toBeInTheDocument());
+    expect(within(expirationHeader).queryByText('1')).not.toBeInTheDocument();
+  });
+
+  test('uses advanced-search date-time comparisons from quick filters', async () => {
+    const fetchDecisionsPaginatedMock = vi.mocked(api.fetchDecisionsPaginated);
+    fetchDecisionsPaginatedMock.mockClear();
+
+    render(
+      <MemoryRouter initialEntries={['/decisions?q=action:ban']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(await screen.findByRole('button', { name: /^Filters/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Date and time' }));
+    fireEvent.change(screen.getByLabelText('From'), {
+      target: { value: '2026-03-24T10:30' },
+    });
+
+    await waitFor(() => expect(fetchDecisionsPaginatedMock.mock.calls.at(-1)?.[2]?.q).toBe(
+      'action:ban AND date>=2026-03-24T10:00',
+    ));
+  });
+
+  test('offers quick filters for every visible decision column', async () => {
+    window.localStorage.setItem('crowdsec-web-ui:table-column-preferences', JSON.stringify({
+      decisions: ['id', 'instance', 'region', 'city', 'machine', 'origin', 'alert'],
+    }));
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(await screen.findByRole('button', { name: /^Filters/ }));
+    const drawer = screen.getByRole('dialog', { name: 'Quick filters' });
+    const expectedSections = ['ID', 'Instance', 'Region', 'City', 'Machine', 'Origin', 'Alert', 'Target'];
+    for (const name of expectedSections) {
+      expect(within(drawer).getByRole('button', { name })).toBeInTheDocument();
+    }
+    const sectionNames = within(drawer).getAllByRole('button')
+      .map((button) => button.textContent?.trim())
+      .filter((name): name is string => Boolean(name && expectedSections.includes(name)));
+    expect(sectionNames).toEqual(expectedSections);
+    expect(screen.queryByRole('columnheader', { name: 'Target' })).not.toBeInTheDocument();
   });
 
   test('applies an initial advanced search URL query on the first decision load', async () => {
@@ -72,6 +189,7 @@ describe('Decisions page search and pagination', () => {
 
     await waitFor(() => expect(fetchDecisionsPaginatedMock).toHaveBeenCalled());
     expect(fetchDecisionsPaginatedMock.mock.calls[0]?.[2]).toMatchObject({ q: 'country:germany' });
+    await expandDecisionSearch();
     await waitFor(() => expect(screen.getByPlaceholderText('Filter decisions...')).toHaveValue('country:germany'));
     await waitFor(() => expect(screen.queryByText('5.6.7.8')).not.toBeInTheDocument());
   });
@@ -84,6 +202,7 @@ describe('Decisions page search and pagination', () => {
     );
 
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
+    await expandDecisionSearch();
     await userEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));
     await userEvent.click(screen.getByRole('button', { name: 'Insert field date' }));
     await userEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));
@@ -109,6 +228,7 @@ describe('Decisions page search and pagination', () => {
 
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
 
+    await expandDecisionSearch();
     fireEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));
     fireEvent.click(screen.getByRole('button', { name: 'Insert field date' }));
 
@@ -133,7 +253,7 @@ describe('Decisions page search and pagination', () => {
 
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
 
-    const input = screen.getByPlaceholderText('Filter decisions...');
+    const input = await expandDecisionSearch();
     fireEvent.change(input, { target: { value: 'country:germany AND action:ban' } });
     await flushDecisionSearchDebounce();
 
@@ -204,7 +324,7 @@ describe('Decisions page search and pagination', () => {
     const summary = screen.getByTestId('decisions-summary');
     expect(summary).toHaveTextContent('Showing 2 of 2 decisions');
 
-    const input = screen.getByPlaceholderText('Filter decisions...');
+    const input = await expandDecisionSearch();
     await user.clear(input);
     await user.type(input, 'aws');
 

@@ -380,6 +380,7 @@ export function createController(options: {
   mqttPublishResolver?: (config: MqttPublishConfig, payload: string) => void | Promise<void>;
   syncWorker?: CreateAppOptions['syncWorker'];
   queryWorker?: CreateAppOptions['queryWorker'];
+  facetQueryWorker?: CreateAppOptions['facetQueryWorker'];
   database?: CrowdsecDatabase;
   initialCacheState?: CreateAppOptions['initialCacheState'];
   attackLocationResolver?: CreateAppOptions['attackLocationResolver'];
@@ -509,6 +510,7 @@ export function createController(options: {
     },
     syncWorker: options.syncWorker,
     queryWorker: options.queryWorker,
+    facetQueryWorker: options.facetQueryWorker,
     initialCacheState: options.initialCacheState,
   });
 
