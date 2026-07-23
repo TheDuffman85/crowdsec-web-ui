@@ -257,6 +257,19 @@ async function clickByText(cdp, text) {
   await waitForAppSettled(cdp);
 }
 
+async function waitForText(cdp, text) {
+  const deadline = Date.now() + 12_000;
+  while (Date.now() < deadline) {
+    const found = await evaluate(
+      cdp,
+      `(() => (document.body.innerText || "").includes(${JSON.stringify(text)}))()`,
+    );
+    if (found) return;
+    await sleep(150);
+  }
+  throw new Error(`Timed out waiting for text: ${text}`);
+}
+
 async function clickFirst(cdp, selector) {
   await evaluate(
     cdp,
@@ -337,10 +350,19 @@ async function main() {
       await navigate(cdp, "/alerts?instance=primary");
       await screenshot(cdp, "alerts.png");
 
+      await clickFirst(cdp, "button[aria-label='Filters']");
+      await clickByText(cdp, "Country");
+      await waitForText(cdp, "Netherlands");
+      await clickByText(cdp, "Netherlands");
+      await waitForText(cdp, "Showing 1 of 1 alerts");
+      await screenshot(cdp, "quick_filters.png");
+      await clickFirst(cdp, "button[aria-label='Close filters']");
+
       await clickFirst(cdp, "tbody tr");
       await screenshot(cdp, "alert_details.png");
 
       await closeModal(cdp);
+      await clickFirst(cdp, "button[aria-label='Expand search']");
       await clickFirst(cdp, "button[aria-label='Search syntax help']");
       await screenshot(cdp, "search_syntax.png");
 

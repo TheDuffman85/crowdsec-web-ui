@@ -4562,9 +4562,10 @@ ${errorSummary}  Status: ${syncSummary.state}
     }
 
     const offset = (pageRequest.page - 1) * pageRequest.pageSize;
+    const filteredCountIndexHint = getAlertCountIndexHint(filters, searchAst);
     const [unfilteredTotal, total, rows] = await Promise.all([
       queryCount('alerts', baseWhere),
-      queryCount('alerts', filteredWhere),
+      queryCount('alerts', filteredWhere, filteredCountIndexHint),
       queryWorker.all<NormalizedAlertRow>(`
         SELECT ${ALERT_RECORD_COLUMNS}
         FROM alerts
@@ -5061,8 +5062,15 @@ ${errorSummary}  Status: ${syncSummary.state}
     }
   }
 
-  async function queryCount(tableName: 'alerts' | 'decisions', where: SqlWhere): Promise<number> {
-    const row = await queryWorker.get<{ count: number }>(`SELECT COUNT(*) AS count FROM ${tableName} ${where.toSql()}`, where.params);
+  async function queryCount(
+    tableName: 'alerts' | 'decisions',
+    where: SqlWhere,
+    indexHint: '' | 'INDEXED BY idx_alerts_filters' = '',
+  ): Promise<number> {
+    const row = await queryWorker.get<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM ${tableName} ${indexHint} ${where.toSql()}`,
+      where.params,
+    );
     return row.count;
   }
 
@@ -5974,6 +5982,35 @@ const DECISION_COVERED_SEARCH_FIELDS = new Set([
   'date', 'action', 'type', 'status', 'duplicate', 'sim', 'machine', 'origin',
 ]);
 
+const ALERT_COVERED_SEARCH_FIELDS = new Set([
+  'id', 'instance', 'scenario', 'message', 'ip', 'country', 'region', 'city', 'as',
+  'target', 'date', 'sim', 'machine', 'origin', 'decision',
+]);
+
+function getAlertCountIndexHint(
+  filters: AlertListFilters,
+  searchAst: SearchNode | null,
+): '' | 'INDEXED BY idx_alerts_filters' {
+  if (searchAst && !isAlertSearchCoveredByFilterIndex(searchAst)) {
+    return '';
+  }
+  if (
+    searchAst
+    || filters.ip
+    || filters.country
+    || filters.scenario
+    || filters.as
+    || filters.target
+    || filters.date
+    || filters.dateStart
+    || filters.dateEnd
+    || filters.simulation !== 'all'
+  ) {
+    return 'INDEXED BY idx_alerts_filters';
+  }
+  return '';
+}
+
 function getDecisionPageIndexHint(filters: DecisionListFilters, searchAst: SearchNode | null): string {
   if (filters.showDuplicates || filters.alertId || searchAstContainsField(searchAst, 'id', 'alert')) {
     return '';
@@ -6003,6 +6040,18 @@ function getDecisionPageIndexHint(filters: DecisionListFilters, searchAst: Searc
     return 'INDEXED BY idx_decisions_duplicate_filters';
   }
   return 'INDEXED BY idx_decisions_duplicate_paging';
+}
+
+function isAlertSearchCoveredByFilterIndex(node: SearchNode, fieldContext = false): boolean {
+  if (node.kind === 'term') return fieldContext;
+  if (node.kind === 'comparison') return ALERT_COVERED_SEARCH_FIELDS.has(node.field);
+  if (node.kind === 'field') {
+    return ALERT_COVERED_SEARCH_FIELDS.has(node.field)
+      && isAlertSearchCoveredByFilterIndex(node.expression, true);
+  }
+  if (node.kind === 'not') return isAlertSearchCoveredByFilterIndex(node.expression, fieldContext);
+  return isAlertSearchCoveredByFilterIndex(node.left, fieldContext)
+    && isAlertSearchCoveredByFilterIndex(node.right, fieldContext);
 }
 
 function searchAstContainsField(node: SearchNode | null, ...fields: string[]): boolean {

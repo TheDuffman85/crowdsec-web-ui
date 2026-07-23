@@ -29,8 +29,8 @@ A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alert
 | Area | Highlights |
 | --- | --- |
 | Dashboard | Alert and active-decision totals, attack map, drilldowns, top lists, filters, and simulation counts |
-| Alerts | Searchable alert history and CrowdSec alert contexts, IP/AS/location details, event metadata, simulation labels, and configurable columns |
-| Decisions | Active and expired decisions, duplicate hiding, manual bans, custom durations, reasons, and cleanup actions |
+| Alerts | Searchable alert history, count-aware quick filters, CrowdSec alert contexts, IP/AS/location details, event metadata, simulation labels, and configurable columns |
+| Decisions | Active and expired decisions, count-aware quick filters, duplicate hiding, manual bans, custom durations, reasons, and cleanup actions |
 | Multi-instance | Several CrowdSec LAPIs, per-instance views, and a Combined scope for Dashboard, Alerts, and Decisions |
 | Metrics | Optional Prometheus views for LAPI activity, bouncers, AppSec, parsers, latency, parsing time, and whitelists |
 | Notifications | Alert, decision, CVE, availability, and update rules delivered through Email, Gotify, MQTT, ntfy, or Webhooks |
@@ -46,21 +46,22 @@ A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alert
 </p>
 <p>
   <a href="screenshots/alerts.png"><img src="screenshots/alerts.png" alt="Alerts" width="48%"></a>
-  <a href="screenshots/alert_details.png"><img src="screenshots/alert_details.png" alt="Alert Details" width="48%"></a>
+  <a href="screenshots/quick_filters.png"><img src="screenshots/quick_filters.png" alt="Quick filters applied to alerts" width="48%"></a>
 </p>
 <p>
+  <a href="screenshots/alert_details.png"><img src="screenshots/alert_details.png" alt="Alert details with CrowdSec context" width="48%"></a>
   <a href="screenshots/search_syntax.png"><img src="screenshots/search_syntax.png" alt="Search Syntax" width="48%"></a>
+</p>
+<p>
   <a href="screenshots/decisions.png"><img src="screenshots/decisions.png" alt="Decisions" width="48%"></a>
-</p>
-<p>
   <a href="screenshots/add_decision.png"><img src="screenshots/add_decision.png" alt="Add Decision" width="48%"></a>
+</p>
+<p>
   <a href="screenshots/notifications.png"><img src="screenshots/notifications.png" alt="Notification Center" width="48%"></a>
-</p>
-<p>
   <a href="screenshots/notification_rule.png"><img src="screenshots/notification_rule.png" alt="Notification Rule" width="48%"></a>
-  <a href="screenshots/metrics.png"><img src="screenshots/metrics.png" alt="Runtime Metrics" width="48%"></a>
 </p>
 <p>
+  <a href="screenshots/metrics.png"><img src="screenshots/metrics.png" alt="Runtime Metrics" width="48%"></a>
   <a href="screenshots/settings.png"><img src="screenshots/settings.png" alt="Settings" width="48%"></a>
 </p>
 

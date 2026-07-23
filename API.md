@@ -49,11 +49,11 @@ Alert and decision list pagination uses `page` and `page_size` and is enabled on
 
 `GET /api/alerts` and `GET /api/decisions` support a structured `q` search when paginated. Search supports free text, quoted phrases, `AND`, `OR`, `NOT`, `-`, grouping, field matching with `:`, exact matching with `=`, inequality with `<>`, and date comparisons with `<`, `<=`, `>`, `>=`.
 
-Alert search fields: `id`, `scenario`, `message`, `ip`/`source`, `country`, `as`, `target`, `date`/`created`/`created_at`/`time`, `sim`/`simulation`, `machine`, `origin`.
+Alert search fields: `id`, `instance`, `scenario`, `message`, `ip`/`source`, `country`, `region`, `city`, `as`, `target`, `date`/`created`/`created_at`/`time`, `sim`/`simulation`, `machine`, `origin`, `decision`/`decisions`.
 
 Use a quoted empty value to match an empty field, such as `origin:""`. Use `origin<>""` or `-origin:""` to require a non-empty value.
 
-Decision search fields: `id`, `alert`/`alert_id`, `scenario`/`reason`, `ip`/`value`, `country`, `as`, `target`, `date`/`created`/`created_at`/`time`, `action`, `type`, `status`, `duplicate`, `sim`/`simulation`, `machine`, `origin`.
+Decision search fields: `id`, `instance`, `alert`/`alert_id`, `scenario`/`reason`, `ip`/`value`, `country`, `region`, `city`, `as`, `target`, `date`/`created`/`created_at`/`time`, `action`, `type`, `status`, `duplicate`, `sim`/`simulation`, `machine`, `origin`.
 
 Date range filters use `dateStart` and `dateEnd`. Use `YYYY-MM-DD` for day buckets or values containing `T` for hour-level comparisons. `tz_offset` is an offset in minutes; `browser_tz` accepts an IANA timezone. They control local bucket comparisons when the server has no fixed timezone configured.
 

@@ -255,6 +255,7 @@ describe('CrowdsecDatabase duplicates and indexes', () => {
     const rebuiltAlertIndexes = db.db.prepare("PRAGMA index_list('alerts')").all() as Array<{ name: string }>;
     const rebuiltDecisionIndexes = db.db.prepare("PRAGMA index_list('decisions')").all() as Array<{ name: string }>;
     expect(rebuiltAlertIndexes.map((index) => index.name)).toContain('idx_alerts_created_at');
+    expect(rebuiltAlertIndexes.map((index) => index.name)).toContain('idx_alerts_filters');
     expect(rebuiltDecisionIndexes.map((index) => index.name)).toContain('idx_decisions_stop_alert_id');
     expect(rebuiltDecisionIndexes.map((index) => index.name)).toContain('idx_decisions_alert_created_id');
     expect(rebuiltDecisionIndexes.map((index) => index.name)).toContain('idx_decisions_alert_summary');
@@ -294,6 +295,23 @@ describe('CrowdsecDatabase duplicates and indexes', () => {
       'USING COVERING INDEX idx_decisions_alert_summary (alert_id=?)',
     );
     expect(alertDecisionSummaryPlan.map((step) => step.detail).join('\n')).not.toContain('USE TEMP B-TREE');
+    expect(
+      (db.db.prepare("PRAGMA index_info('idx_alerts_filters')").all() as Array<{ name: string }>).map((column) => column.name),
+    ).toEqual([
+      'instance_id', 'country', 'scenario', 'as_name', 'source_ip', 'target', 'country_name',
+      'region', 'city', 'machine', 'origins', 'message', 'upstream_id', 'simulated', 'created_at', 'id',
+    ]);
+    const filteredAlertCountPlan = db.db.prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT COUNT(*)
+      FROM alerts INDEXED BY idx_alerts_filters
+      WHERE instance_id = ?
+        AND country IN (?, ?)
+        AND COALESCE(LOWER(scenario), '') LIKE ?
+    `).all('default', 'DE', 'NL', '%crowdsecurity/http-probing%') as Array<{ detail: string }>;
+    expect(filteredAlertCountPlan.map((step) => step.detail).join('\n')).toContain(
+      'USING COVERING INDEX idx_alerts_filters (instance_id=? AND country=?)',
+    );
     expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts WHERE alerts_fts MATCH ?').get('deferred') as { count: number }).count).toBe(1);
 
     db.close();

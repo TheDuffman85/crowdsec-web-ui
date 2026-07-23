@@ -272,6 +272,7 @@ export function Alerts() {
     const selectedAlertInstanceIdRef = useRef<string | undefined>(undefined);
 
     const PAGE_SIZE = 50;
+    const MAX_ALERT_REFRESH_SIZE = 200;
     const MAX_MODAL_DECISION_REFRESH_SIZE = 200;
     const hasMoreAlerts = currentPage < totalPages;
     const observer = useRef<IntersectionObserver | null>(null);
@@ -280,6 +281,7 @@ export function Alerts() {
     const selectAllAlertsRef = useRef<HTMLInputElement | null>(null);
     const previousSelectedAlertIdRef = useRef<string | null>(null);
     const modalSelectedAlertIdRef = useRef<string | null>(null);
+    const alertsRef = useRef<AlertListItem[]>([]);
     const currentPageRef = useRef(1);
     const inFlightLoadKeysRef = useRef(new Set<string>());
     const lastCompletedLoadRef = useRef<{ key: string; completedAt: number } | null>(null);
@@ -544,34 +546,39 @@ export function Alerts() {
                 ? parseSimulationFilter(searchParams.get("simulation"))
                 : 'all';
             const filters = buildServerFilters(requestedSimulationFilter);
-            const alertsResult = await fetchAlertsPaginated(page, PAGE_SIZE, filters);
+            const loadedPageCount = Math.max(1, currentPageRef.current);
+            const requestedPageSize = !append && preserveLoadedPages
+                ? Math.min(MAX_ALERT_REFRESH_SIZE, loadedPageCount * PAGE_SIZE)
+                : PAGE_SIZE;
+            const alertsResult = await fetchAlertsPaginated(page, requestedPageSize, filters);
             let alertsData = alertsResult.data;
             let nextPage = alertsResult.pagination.page;
+            const totalPagesAtDefaultSize = Math.ceil(alertsResult.pagination.total / PAGE_SIZE);
 
             if (!append && preserveLoadedPages) {
-                const loadedPageCount = Math.max(1, currentPageRef.current);
-                const maxPageToRefresh = Math.max(1, Math.min(loadedPageCount, alertsResult.pagination.total_pages || 1));
-                if (maxPageToRefresh > 1) {
-                    const remainingPages = await Promise.all(
-                        Array.from({ length: maxPageToRefresh - 1 }, (_, index) =>
-                            fetchAlertsPaginated(index + 2, PAGE_SIZE, filters),
-                        ),
-                    );
-                    alertsData = [alertsResult, ...remainingPages].flatMap((result) => result.data);
-                }
-                nextPage = maxPageToRefresh;
+                nextPage = Math.max(1, Math.min(loadedPageCount, totalPagesAtDefaultSize || 1));
+                const refreshedAlertKeys = new Set(alertsData.map(alertKey));
+                const visibleAlertCount = Math.min(
+                    alertsResult.pagination.total,
+                    nextPage * PAGE_SIZE,
+                );
+                alertsData = [
+                    ...alertsData,
+                    ...alertsRef.current.filter((alert) => !refreshedAlertKeys.has(alertKey(alert))),
+                ].slice(0, visibleAlertCount);
+            } else if (append) {
+                alertsData = [...alertsRef.current, ...alertsData];
             }
 
-            setAlerts((current) => append ? [...current, ...alertsData] : alertsData);
+            alertsRef.current = alertsData;
+            setAlerts(alertsData);
             currentPageRef.current = append ? alertsResult.pagination.page : nextPage;
             setCurrentPage(currentPageRef.current);
-            setTotalPages(alertsResult.pagination.total_pages);
+            setTotalPages(totalPagesAtDefaultSize);
             setTotalAlerts(alertsResult.pagination.total);
             setTotalUnfilteredAlerts(alertsResult.pagination.unfiltered_total);
             const nextSelectableIds = alertsData.map(alertKey);
-            setSelectableAlertIds((current) => append
-                ? Array.from(new Set([...current, ...nextSelectableIds]))
-                : nextSelectableIds);
+            setSelectableAlertIds(nextSelectableIds);
             if (!append) {
                 setSelectedAlertIds((current) => current.filter((id) => nextSelectableIds.includes(id)));
             }

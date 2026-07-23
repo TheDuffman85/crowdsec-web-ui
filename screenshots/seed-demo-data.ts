@@ -95,6 +95,11 @@ function insertAlert(options: DemoAlertOptions) {
     machine_alias: options.machine,
     events_count: options.eventsCount,
     events: buildEvents(options),
+    meta: [
+      { key: 'service', value: options.target },
+      { key: 'source_provider', value: options.asName },
+      { key: 'affected_assets', value: [options.machine, options.target] },
+    ],
     decisions,
     target: options.target,
     simulated: options.simulated === true,

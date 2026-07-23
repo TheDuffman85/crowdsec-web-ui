@@ -468,8 +468,8 @@ describe('Alerts page search and pagination', () => {
       </MemoryRouter>,
     );
 
-    await waitFor(() => expect(fetchAlertsPaginatedMock.mock.calls.length).toBeGreaterThanOrEqual(callCountBeforeRefresh + 2));
-    expect(fetchAlertsPaginatedMock.mock.calls.slice(callCountBeforeRefresh, callCountBeforeRefresh + 2).map(([page]) => page)).toEqual([1, 2]);
+    await waitFor(() => expect(fetchAlertsPaginatedMock.mock.calls.length).toBe(callCountBeforeRefresh + 1));
+    expect(fetchAlertsPaginatedMock.mock.calls[callCountBeforeRefresh]?.slice(0, 2)).toEqual([1, 100]);
     expect(screen.getByText('Showing 100 of 120 alerts')).toBeInTheDocument();
     expect(screen.getByText('10.1.0.100')).toBeInTheDocument();
     expect(screen.queryByText('10.1.0.101')).not.toBeInTheDocument();
