@@ -48,18 +48,23 @@ describe('alert helpers', () => {
     ).toBe('Unknown');
   });
 
-  test('buildMetaSearch excludes context keys and empty values', () => {
+  test('buildMetaSearch combines event metadata and alert contexts', () => {
     expect(
       buildMetaSearch([
         {
           meta: [
             { key: 'context', value: 'skip' },
             { key: 'service', value: 'ssh' },
+            { key: 'duplicate', value: 'example.test' },
             { key: 'scope', value: '' },
           ],
         },
+      ], [
+        { key: 'host', value: 'example.test' },
+        { key: 'details', value: { protected: true } },
+        { key: 'empty', value: '   ' },
       ]),
-    ).toBe('ssh');
+    ).toBe('ssh example.test {"protected":true}');
   });
 
   test('getAlertSourceValue falls back from ip to value to range', () => {
@@ -99,10 +104,11 @@ describe('alert helpers', () => {
       source: { ip: '1.2.3.4', cn: 'DE' },
       target: 'ssh',
       events: [{ meta: [{ key: 'service', value: 'ssh' }] }],
+      meta: [{ key: 'host', value: 'example.test' }],
       decisions: [{ id: 5, type: 'ban', duration: '5m' }],
     });
 
-    expect(slim.meta_search).toBe('ssh');
+    expect(slim.meta_search).toBe('ssh example.test');
     expect(slim.decisions).toHaveLength(1);
     expect(slim.source?.ip).toBe('1.2.3.4');
     expect(slim.simulated).toBe(false);

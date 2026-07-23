@@ -12,6 +12,9 @@ import { CountryFlag } from "../components/CountryFlag";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { EventCard } from "../components/EventCard";
+import { ContextSummary } from "../components/ContextSummary";
+import { Collapsible } from "../components/ui/Collapsible";
+import { getDisplayMetadata, isAppSecEvent } from "../lib/alertMetadata";
 import { getCountryName } from "../lib/utils";
 import { getDecisionExpirationState } from "../lib/decisionExpiration";
 import { loadStoredTableColumnPreferences, saveStoredTableColumnPreferences } from "../lib/tableColumns";
@@ -977,6 +980,10 @@ export function Alerts() {
 
     const visibleAlerts = filteredAlerts;
     const selectedAlertEvents = selectedAlert && hasAlertEvents(selectedAlert) ? selectedAlert.events ?? [] : [];
+    const selectedAlertContext = selectedAlert && 'meta' in selectedAlert
+        ? getDisplayMetadata(selectedAlert.meta)
+        : [];
+    const selectedAlertIsAppSec = selectedAlertEvents.some(isAppSecEvent);
     const selectedAlertIsSimulated = selectedAlert ? isSimulatedAlert(selectedAlert) : false;
     const selectedAlertSourceValue = getAlertSourceValue(selectedAlert?.source);
     const alertSummaryGridColumns = multipleInstances
@@ -1489,13 +1496,25 @@ export function Alerts() {
                         </div>
 
                         {/* Message */}
-                        {selectedAlert.message && (
-                            <div className="p-4 bg-blue-50 dark:bg-blue-900/10 rounded-lg border border-blue-100 dark:border-blue-900/30">
+                        {(selectedAlert.message || selectedAlertIsAppSec) && (
+                            <div className={`rounded-lg border p-4 ${selectedAlertIsAppSec
+                                ? 'border-red-200 bg-red-50 dark:border-red-900/50 dark:bg-red-900/10'
+                                : 'border-blue-100 bg-blue-50 dark:border-blue-900/30 dark:bg-blue-900/10'
+                            }`}>
                                 <div className="flex items-start gap-2">
-                                    <Info size={18} className="text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
-                                    <div className="text-sm text-gray-900 dark:text-gray-100">
-                                        {selectedAlert.message}
-                                    </div>
+                                    {selectedAlertIsAppSec ? (
+                                        <Badge variant="danger" className="mt-0.5 shrink-0 gap-1">
+                                            <Shield size={12} />
+                                            AppSec / WAF
+                                        </Badge>
+                                    ) : (
+                                        <Info size={18} className="text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+                                    )}
+                                    {selectedAlert.message && (
+                                        <div className="text-sm text-gray-900 dark:text-gray-100">
+                                            {selectedAlert.message}
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         )}
@@ -1594,32 +1613,48 @@ export function Alerts() {
                             </div>
                         )}
 
-                        {/* Events Breakdown */}
-                        <div>
-                            <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">
-                                {t('pages.alerts.eventsTitle', { count: selectedAlertEvents.length })}
-                            </h4>
-                            <div className="space-y-2">
-                                {(showAllEvents
-                                    ? selectedAlertEvents
-                                    : selectedAlertEvents.slice(0, 10)
-                                )?.map((event, idx) => (
-                                    <EventCard
-                                        key={idx}
-                                        event={event}
-                                        index={idx}
-                                    />
-                                ))}
+                        {/* Alert Context */}
+                        {selectedAlertContext.length > 0 && (
+                            <div>
+                                <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">
+                                    {t('pages.alerts.contextSummary')}
+                                </h4>
+                                <ContextSummary key={alertKey(selectedAlert)} entries={selectedAlertContext} />
                             </div>
-                            {!showAllEvents && selectedAlertEvents.length > 10 && (
-                                <button
-                                    onClick={() => setShowAllEvents(true)}
-                                    className="mt-3 w-full py-2 text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 bg-gray-50 dark:bg-gray-900/30 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors cursor-pointer"
-                                >
-                                    {t('pages.alerts.showAllEvents', { total: selectedAlertEvents.length, remaining: selectedAlertEvents.length - 10 })}
-                                </button>
-                            )}
-                        </div>
+                        )}
+
+                        {/* Events Breakdown */}
+                        <Collapsible
+                            trigger={
+                                <h4 className="text-lg font-semibold text-gray-900 dark:text-white">
+                                    {t('pages.alerts.eventsTitle', { count: selectedAlertEvents.length })}
+                                </h4>
+                            }
+                            defaultOpen={false}
+                        >
+                            <div className="mt-3">
+                                <div className="space-y-2">
+                                    {(showAllEvents
+                                        ? selectedAlertEvents
+                                        : selectedAlertEvents.slice(0, 10)
+                                    )?.map((event, idx) => (
+                                        <EventCard
+                                            key={idx}
+                                            event={event}
+                                            index={idx}
+                                        />
+                                    ))}
+                                </div>
+                                {!showAllEvents && selectedAlertEvents.length > 10 && (
+                                    <button
+                                        onClick={() => setShowAllEvents(true)}
+                                        className="mt-3 w-full py-2 text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 bg-gray-50 dark:bg-gray-900/30 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors cursor-pointer"
+                                    >
+                                        {t('pages.alerts.showAllEvents', { total: selectedAlertEvents.length, remaining: selectedAlertEvents.length - 10 })}
+                                    </button>
+                                )}
+                            </div>
+                        </Collapsible>
 
                     </div>
                 )}

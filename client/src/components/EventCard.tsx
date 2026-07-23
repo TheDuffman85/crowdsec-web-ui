@@ -1,26 +1,30 @@
 import { Badge } from "./ui/Badge";
 import { Collapsible } from "./ui/Collapsible";
 import { getHubUrl } from "../lib/utils";
-import { ExternalLink, Shield } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import type { AlertEvent, AlertMetaValue } from '../types';
+import type { PropsWithChildren } from 'react';
 import { useI18n } from "../lib/i18n";
 import { useDateTime } from "../lib/dateTime";
+import { formatMetaValue, getDisplayMetadata, isAppSecEvent } from '../lib/alertMetadata';
+import { MetadataTable } from './MetadataTable';
 
 interface EventCardProps {
     event: AlertEvent;
     index: number;
 }
 
-function formatMetaValue(value: AlertMetaValue | undefined): string | undefined {
-    if (value == null || value === '') {
-        return undefined;
-    }
-
-    if (typeof value === 'object') {
-        return JSON.stringify(value);
-    }
-
-    return String(value);
+function EventDetailRow({ label, children }: PropsWithChildren<{ label: string }>) {
+    return (
+        <div className="grid grid-cols-1 sm:grid-cols-[minmax(9rem,12rem)_1fr]">
+            <dt className="px-3 py-1.5 text-xs font-semibold text-gray-500 break-all dark:text-gray-400">
+                {label}
+            </dt>
+            <dd className="min-w-0 border-t border-gray-200 bg-white px-3 py-1.5 text-xs dark:border-gray-800 dark:bg-gray-950 sm:border-t-0 sm:border-l">
+                {children}
+            </dd>
+        </div>
+    );
 }
 
 // Meta keys that get special styled rendering in the summary section
@@ -40,9 +44,7 @@ export function EventCard({ event, index }: EventCardProps) {
     const { formatDateTime } = useDateTime();
     const getMeta = (key: string): AlertMetaValue | undefined => event.meta?.find((meta) => meta.key === key)?.value;
 
-    const isAppSecEvent = event.meta?.some((meta) =>
-        meta.key === 'matched_zones' || meta.key === 'rule_name' || meta.key === 'appsec_action'
-    );
+    const appSecEvent = isAppSecEvent(event);
 
     // Known fields
     const ruleName = formatMetaValue(getMeta('rule_name'));
@@ -58,103 +60,74 @@ export function EventCard({ event, index }: EventCardProps) {
     const httpStatus = formatMetaValue(getMeta('http_status'));
     const httpUserAgent = formatMetaValue(getMeta('http_user_agent'));
     const service = formatMetaValue(getMeta('service'));
+    const ruleHubUrl = ruleName ? getHubUrl(ruleName) : undefined;
 
     // Additional meta fields not covered by styled rendering
     // Filter out entries with empty/null/undefined values
-    const additionalMeta = event.meta?.filter((meta) =>
+    const additionalMeta = getDisplayMetadata(event.meta?.filter((meta) =>
         !STYLED_META_KEYS.has(meta.key) && !EXCLUDED_META_KEYS.has(meta.key) && meta.value != null && meta.value !== ''
-    ) || [];
+    ));
 
     return (
-        <div className={`flex gap-3 items-start p-3 rounded border text-sm ${isAppSecEvent
-            ? 'bg-red-50 dark:bg-red-900/10 border-red-100 dark:border-red-900/30'
-            : 'bg-gray-50 dark:bg-gray-900/30 border-gray-100 dark:border-gray-800'
-        }`}>
+        <div className="flex gap-3 items-start p-3 rounded border border-gray-100 bg-gray-50 text-sm dark:border-gray-800 dark:bg-gray-900/30">
             <span className="text-xs font-semibold text-gray-400 dark:text-gray-500 pt-0.5 shrink-0">#{index + 1}</span>
             <div className="flex-1 min-w-0">
-                {/* AppSec Badge */}
-                {isAppSecEvent && (
-                    <div className="mb-2 flex items-center gap-2">
-                        <Badge variant="danger" className="flex items-center gap-1">
-                            <Shield size={12} />
-                            AppSec / WAF
-                        </Badge>
-                    </div>
-                )}
-
                 <div className="space-y-2">
-                {/* Timestamp and Service */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                    <div>
-                        <span className="text-gray-500">{t('components.eventCard.timestamp')}:</span>{' '}
-                        <span className="font-mono text-xs">{event.timestamp ? formatDateTime(event.timestamp) : '-'}</span>
-                    </div>
+                {/* Event summary */}
+                <dl className="overflow-hidden rounded border border-gray-100 bg-gray-50 divide-y divide-gray-100 dark:border-gray-800 dark:bg-gray-900/30 dark:divide-gray-800">
+                    <EventDetailRow label={t('components.eventCard.timestamp')}>
+                        <span className="font-mono">{event.timestamp ? formatDateTime(event.timestamp) : '-'}</span>
+                    </EventDetailRow>
                     {service && (
-                        <div>
-                            <span className="text-gray-500">{t('components.eventCard.service')}:</span> {service}
-                        </div>
+                        <EventDetailRow label={t('components.eventCard.service')}>
+                            <span className="font-mono break-all">{service}</span>
+                        </EventDetailRow>
                     )}
-                </div>
-
-                {/* Target FQDN/Host */}
-                {(targetFqdn || targetHost) && (
-                    <div>
-                        <span className="text-gray-500">{t('components.eventCard.target')}:</span>{' '}
-                        <span className="font-mono text-xs">{targetFqdn || targetHost}</span>
-                    </div>
-                )}
-
-                {/* Traefik Router */}
-                {traefikRouter && (
-                    <div>
-                        <span className="text-gray-500">{t('components.eventCard.router')}:</span>{' '}
-                        <span className="font-mono text-xs">{traefikRouter}</span>
-                    </div>
-                )}
-
-                {/* AppSec Rule Info */}
-                {isAppSecEvent && ruleName && (
-                    <div>
-                        <span className="text-gray-500">{t('components.eventCard.rule')}:</span>{' '}
-                        {(() => {
-                            const hubUrl = getHubUrl(ruleName);
-                            return hubUrl ? (
+                    {(targetFqdn || targetHost) && (
+                        <EventDetailRow label={t('components.eventCard.target')}>
+                            <span className="font-mono break-all">{targetFqdn || targetHost}</span>
+                        </EventDetailRow>
+                    )}
+                    {traefikRouter && (
+                        <EventDetailRow label={t('components.eventCard.router')}>
+                            <span className="font-mono break-all">{traefikRouter}</span>
+                        </EventDetailRow>
+                    )}
+                    {appSecEvent && ruleName && (
+                        <EventDetailRow label={t('components.eventCard.rule')}>
+                            {ruleHubUrl ? (
                                 <a
-                                    href={hubUrl}
+                                    href={ruleHubUrl}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="font-mono text-xs hover:text-primary-600 dark:hover:text-primary-400 transition-colors inline-flex items-center gap-1"
+                                    className="inline-flex items-center gap-1 font-mono transition-colors hover:text-primary-600 dark:hover:text-primary-400"
                                 >
                                     {ruleName}
                                     <ExternalLink size={10} />
                                 </a>
                             ) : (
-                                <span className="font-mono text-xs">{ruleName}</span>
-                            );
-                        })()}
-                    </div>
-                )}
-
-                {/* AppSec Details */}
-                {isAppSecEvent && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                <span className="font-mono break-all">{ruleName}</span>
+                            )}
+                        </EventDetailRow>
+                    )}
+                    {appSecEvent && (
+                        <>
                         {matchedZones && (
-                            <div>
-                                <span className="text-gray-500">{t('components.eventCard.matchedZone')}:</span>{' '}
-                                <Badge variant="outline" className="ml-1">{matchedZones}</Badge>
-                            </div>
+                            <EventDetailRow label={t('components.eventCard.matchedZone')}>
+                                <Badge variant="outline">{matchedZones}</Badge>
+                            </EventDetailRow>
                         )}
                         {ruleIds && (
-                            <div>
-                                <span className="text-gray-500">{t('components.eventCard.ruleId')}:</span>{' '}
-                                <span className="font-mono text-xs">{ruleIds}</span>
-                            </div>
+                            <EventDetailRow label={t('components.eventCard.ruleId')}>
+                                <span className="font-mono break-all">{ruleIds}</span>
+                            </EventDetailRow>
                         )}
-                    </div>
-                )}
+                        </>
+                    )}
+                </dl>
 
                 {/* Message/Description */}
-                {isAppSecEvent && message && (
+                {appSecEvent && message && (
                     <div className="text-xs text-gray-600 dark:text-gray-300 italic">
                         {message}
                     </div>
@@ -185,15 +158,8 @@ export function EventCard({ event, index }: EventCardProps) {
                         }
                         defaultOpen={false}
                     >
-                        <div className="mt-1 bg-white dark:bg-gray-950 rounded border border-gray-200 dark:border-gray-800 divide-y divide-gray-100 dark:divide-gray-800">
-                            {additionalMeta.map((meta, i) => (
-                                <div key={i} className="grid grid-cols-[minmax(100px,auto)_1fr] gap-3 px-3 py-1.5 text-xs">
-                                    <span className="text-gray-500 font-medium">{meta.key}</span>
-                                    <span className="font-mono break-all text-gray-700 dark:text-gray-300">
-                                        {formatMetaValue(meta.value)}
-                                    </span>
-                                </div>
-                            ))}
+                        <div className="mt-1">
+                            <MetadataTable entries={additionalMeta} />
                         </div>
                     </Collapsible>
                 )}

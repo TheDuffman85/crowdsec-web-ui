@@ -29,7 +29,7 @@ A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alert
 | Area | Highlights |
 | --- | --- |
 | Dashboard | Alert and active-decision totals, attack map, drilldowns, top lists, filters, and simulation counts |
-| Alerts | Searchable alert history, IP/AS/location context, event details, simulation labels, and configurable columns |
+| Alerts | Searchable alert history and CrowdSec alert contexts, IP/AS/location details, event metadata, simulation labels, and configurable columns |
 | Decisions | Active and expired decisions, duplicate hiding, manual bans, custom durations, reasons, and cleanup actions |
 | Multi-instance | Several CrowdSec LAPIs, per-instance views, and a Combined scope for Dashboard, Alerts, and Decisions |
 | Metrics | Optional Prometheus views for LAPI activity, bouncers, AppSec, parsers, latency, parsing time, and whitelists |

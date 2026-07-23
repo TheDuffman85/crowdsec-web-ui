@@ -8,6 +8,72 @@ import { Alerts } from '../../Alerts';
 import { type DecisionListItem, type SlimAlert } from '../../../types';
 
 describe('Alerts page details and actions', () => {
+  test('shows alert contexts as an expanded metadata section', async () => {
+    vi.mocked(api.fetchAlert).mockResolvedValueOnce({
+      id: 1,
+      created_at: '2026-03-23T11:00:00.000Z',
+      scenario: 'crowdsecurity/vpatch-git-config',
+      source: { ip: '1.2.3.4' },
+      message: 'WAF block: crowdsecurity/vpatch-git-config from 1.2.3.4',
+      decisions: [],
+      events: [{
+        timestamp: '2026-03-23T11:00:00.000Z',
+        meta: [
+          { key: 'service', value: 'http' },
+          { key: 'rule_name', value: 'crowdsecurity/vpatch-git-config' },
+          { key: 'matched_zones', value: 'REQUEST_FILENAME' },
+        ],
+      }],
+      meta: [
+        { key: 'host', value: 'example.test' },
+        { key: 'host', value: 'alternate.test' },
+        { key: 'details', value: { protected: true } },
+        { key: 'enabled', value: false },
+        { key: 'target_uri', value: '["/one","/two","/three","/four","/five","/six","/seven"]' },
+        { key: 'empty', value: '   ' },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/alerts?id=1']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Context')).toBeInTheDocument());
+    const wafBadge = screen.getByText('AppSec / WAF');
+    expect(wafBadge).toHaveClass('bg-red-100', 'text-red-800');
+    expect(wafBadge.closest('div.rounded-lg')).toHaveClass('border-red-200', 'bg-red-50');
+    expect(screen.getAllByText('host')).toHaveLength(2);
+    expect(screen.getByText('example.test')).toBeInTheDocument();
+    expect(screen.getByText('alternate.test')).toBeInTheDocument();
+    expect(screen.getByText('{"protected":true}')).toBeInTheDocument();
+    expect(screen.getByText('false')).toBeInTheDocument();
+    expect(screen.getByText('/one')).toBeInTheDocument();
+    expect(screen.getByText('/five')).toBeInTheDocument();
+    expect(screen.queryByText('/six')).not.toBeInTheDocument();
+    expect(screen.queryByText('/seven')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Show all 7 values (2 more)' }));
+    expect(screen.getByText('/six')).toBeInTheDocument();
+    expect(screen.getByText('/seven')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Show first 5 values' }));
+    expect(screen.queryByText('/six')).not.toBeInTheDocument();
+
+    const eventsToggle = screen.getByRole('button', { name: 'Events (1)' });
+    expect(eventsToggle).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.click(eventsToggle);
+    expect(eventsToggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getAllByText('AppSec / WAF')).toHaveLength(1);
+
+    const contextHeading = screen.getByText('Context');
+    const decisionsHeading = screen.getByText('Decisions Taken');
+    expect(decisionsHeading.compareDocumentPosition(contextHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByText('empty')).not.toBeInTheDocument();
+    vi.mocked(api.fetchDecisionsPaginated).mockClear();
+  });
+
   test('streams large decision lists inside alert details', async () => {
     const triggerIntersection = installControlledIntersectionObserver();
     vi.mocked(api.fetchConfig).mockResolvedValue({

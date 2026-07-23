@@ -192,6 +192,7 @@ export interface AlertRecord {
   machine_alias?: string;
   events_count?: number;
   events?: AlertEvent[];
+  meta?: AlertMeta[];
   decisions?: AlertDecision[];
   target?: string;
   meta_search?: string;

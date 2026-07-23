@@ -114,13 +114,15 @@ These routes are mounted below `/api/auth`. Auth setup/login routes are availabl
 | Method | Endpoint | Description |
 | --- | --- | --- |
 | GET | `/api/alerts` | List synced alerts. Without `page`, returns an array. With `page`, returns a paginated response. |
-| GET | `/api/alerts/:id` | Fetch alert details from CrowdSec LAPI, hydrate with decisions, and apply simulation visibility. `:id` must be numeric. |
+| GET | `/api/alerts/:id` | Fetch alert details, including CrowdSec `meta` context entries, from CrowdSec LAPI; hydrate with decisions; and apply simulation visibility. `:id` must be numeric. |
 | GET | `/api/instances/:instanceId/alerts/:id` | Fetch an alert from a specific instance. |
 | POST | `/api/alerts/bulk-delete` | Immediately hide multiple alerts and durably queue deletion of them and their linked decisions. Body: `{ "ids": [1, "2"] }`. Blocked in read-only mode. |
 | DELETE | `/api/alerts/:id` | Immediately hide one alert and durably queue deletion of it and its linked decisions. `:id` must be numeric. Blocked in read-only mode. |
 | DELETE | `/api/instances/:instanceId/alerts/:id` | Delete one alert from a specific instance and its local cache. Blocked in read-only mode. |
 
 Supported paginated alert parameters: `instance`, `q`, `ip`, `country`, `scenario`, `as`, `date`, `dateStart`, `dateEnd`, `target`, `simulation`, `include_decisions`, `tz_offset`, `browser_tz`.
+
+Free-text `q` searches include CrowdSec alert context values from `meta` in addition to the standard alert and event metadata fields.
 
 `simulation` accepts `all`, `live`, or `simulated`; unknown values behave like `all`.
 

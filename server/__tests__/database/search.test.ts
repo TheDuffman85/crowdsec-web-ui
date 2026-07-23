@@ -9,6 +9,41 @@ import { decisionFromRow } from '../../normalized-record';
 import { createLegacyDatabase, createTestDatabase, createTestDatabasePath, tempDirs } from './harness';
 
 describe('CrowdsecDatabase search', () => {
+  test('backfills alert context values into cached search indexes', () => {
+    const dbPath = createTestDatabasePath();
+    let db = new CrowdsecDatabase({ dbPath });
+    const alert = {
+      id: 1,
+      created_at: '2026-07-22T12:00:00.000Z',
+      scenario: 'crowdsecurity/http-bf',
+      message: 'legacy cached alert',
+      source: { ip: '192.0.2.1' },
+      events: [{ meta: [{ key: 'service', value: 'http' }] }],
+      meta: [{ key: 'host', value: 'protected.example.test' }],
+    };
+    db.insertAlert({
+      $id: alert.id,
+      $uuid: 'alert-1',
+      $created_at: alert.created_at,
+      $scenario: alert.scenario,
+      $source_ip: alert.source.ip,
+      $message: alert.message,
+      $raw_data: JSON.stringify(alert),
+    });
+    db.db.prepare("UPDATE alerts SET meta_search = 'http', search_text = 'legacy cached alert http'").run();
+    db.db.prepare("UPDATE alerts_fts SET search_text = 'legacy cached alert http' WHERE alert_id = '1'").run();
+    db.db.prepare("DELETE FROM meta WHERE key = 'alert_context_search_version'").run();
+    db.close();
+
+    db = new CrowdsecDatabase({ dbPath });
+    expect(db.db.prepare('SELECT meta_search FROM alerts WHERE id = 1').get()).toEqual({
+      meta_search: 'http protected.example.test',
+    });
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts WHERE alerts_fts MATCH ?')
+      .get('"protected.example.test"') as { count: number }).count).toBe(1);
+    db.close();
+  });
+
   test('defers only search indexes when reconciling a populated cache', () => {
     const db = createTestDatabase();
     const insertAlert = (id: number, message: string) => db.insertAlert({

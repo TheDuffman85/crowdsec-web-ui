@@ -30,16 +30,23 @@ export function getAlertTarget(alert: Pick<AlertRecord, 'events' | 'scenario' | 
   return resolveMachineName(alert) || 'Unknown';
 }
 
-export function buildMetaSearch(events: AlertEvent[] | undefined): string {
+export function buildMetaSearch(events: AlertEvent[] | undefined, alertMeta: AlertMeta[] | undefined = undefined): string {
   const values = new Set<string>();
+
+  const addValue = (value: AlertMeta['value']) => {
+    if (value == null) return;
+    const serialized = typeof value === 'object' ? JSON.stringify(value) : String(value);
+    const normalized = serialized?.trim();
+    if (normalized) values.add(normalized);
+  };
 
   for (const event of events || []) {
     for (const meta of event.meta || []) {
-      if (meta.key !== 'context' && meta.value !== '') {
-        values.add(String(meta.value));
-      }
+      if (meta.key !== 'context') addValue(meta.value);
     }
   }
+
+  for (const meta of alertMeta || []) addValue(meta.value);
 
   return values.size > 0 ? [...values].join(' ') : '';
 }
@@ -109,7 +116,7 @@ export function toSlimAlert(alert: AlertRecord): SlimAlert {
     machine_alias: alert.machine_alias,
     source: alert.source || null,
     target: alert.target,
-    meta_search: typeof alert.meta_search === 'string' ? alert.meta_search : buildMetaSearch(alert.events),
+    meta_search: typeof alert.meta_search === 'string' ? alert.meta_search : buildMetaSearch(alert.events, alert.meta),
     decisions: (alert.decisions || []).map(toSlimDecision),
     simulated: alert.simulated === true,
   };

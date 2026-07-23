@@ -18,6 +18,7 @@ export function Collapsible({ trigger, children, defaultOpen = false, className 
             <button
                 type="button"
                 onClick={() => setIsOpen(!isOpen)}
+                aria-expanded={isOpen}
                 className="flex items-center gap-1 w-full text-left cursor-pointer"
             >
                 <ChevronRight

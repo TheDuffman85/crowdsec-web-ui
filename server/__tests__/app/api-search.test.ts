@@ -13,6 +13,41 @@ import {
 } from './harness';
 
 describe('createApp search API', () => {
+  test('matches free-text alert searches against alert context values', async () => {
+    const matchingAlert = sampleAlert({
+      id: 1,
+      uuid: 'alert-1',
+      meta: [{ key: 'host', value: 'protected.example.test' }],
+    });
+    const otherAlert = sampleAlert({
+      id: 2,
+      uuid: 'alert-2',
+      source: { ip: '5.6.7.8' },
+      meta: [{ key: 'host', value: 'other.example.test' }],
+    });
+    const { controller, database } = createController({
+      fetchResolver: (url) => url.includes('/v1/alerts?')
+        ? Response.json([matchingAlert, otherAlert])
+        : undefined,
+    });
+    seedAlert(database, matchingAlert);
+    seedAlert(database, otherAlert);
+
+    const response = await controller.fetch(new Request(
+      'http://localhost/crowdsec/api/alerts?page=1&page_size=10&q=protected.example.test',
+    ));
+
+    expect(response.status).toBe(200);
+    expect((await response.json()) as PaginatedResponse<SlimAlert>).toEqual(expect.objectContaining({
+      data: [expect.objectContaining({ id: 1, meta_search: expect.stringContaining('protected.example.test') })],
+      pagination: expect.objectContaining({ total: 1 }),
+    }));
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
   test('matches alert search queries against decision origins', async () => {
     const searchAlerts = [
       sampleAlert({

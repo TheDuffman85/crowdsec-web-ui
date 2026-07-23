@@ -68,7 +68,7 @@ export function deriveAlertIndexValuesFromRecord(alert: AlertRecord | null | und
   const asName = normalizeText(alert?.source?.as_name);
   const target = alert ? normalizeText(alert.target || getAlertTarget(alert)) : null;
   const machine = alert ? normalizeText(resolveMachineName(alert)) : null;
-  const metaSearch = alert ? normalizeText(buildMetaSearch(alert.events)) : null;
+  const metaSearch = alert ? normalizeText(buildMetaSearch(alert.events, alert.meta)) : null;
   const origins = alert ? normalizeText(collectDistinctOrigins(alert.decisions).join(' ')) : null;
   const simulated = alert && isAlertSimulated(alert) ? 1 : 0;
   const countryName = country ? getCountryName(country) : null;
