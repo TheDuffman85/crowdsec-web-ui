@@ -8,9 +8,16 @@ interface CollapsibleProps {
     children: ReactNode;
     defaultOpen?: boolean;
     className?: string;
+    triggerClassName?: string;
 }
 
-export function Collapsible({ trigger, children, defaultOpen = false, className }: CollapsibleProps) {
+export function Collapsible({
+    trigger,
+    children,
+    defaultOpen = false,
+    className,
+    triggerClassName,
+}: CollapsibleProps) {
     const [isOpen, setIsOpen] = useState(defaultOpen);
 
     return (
@@ -19,7 +26,10 @@ export function Collapsible({ trigger, children, defaultOpen = false, className 
                 type="button"
                 onClick={() => setIsOpen(!isOpen)}
                 aria-expanded={isOpen}
-                className="flex items-center gap-1 w-full text-left cursor-pointer"
+                className={cn(
+                    "flex w-full items-center gap-1 text-left cursor-pointer",
+                    triggerClassName,
+                )}
             >
                 <ChevronRight
                     size={16}

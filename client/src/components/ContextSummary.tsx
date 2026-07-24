@@ -34,9 +34,9 @@ export function ContextSummary({ entries }: ContextSummaryProps) {
                         <dt className="px-3 py-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400 break-all">
                             {entry.key}
                         </dt>
-                        <dd className="min-w-0 border-t border-gray-200 dark:border-gray-800 sm:border-t-0 sm:border-l">
+                        <dd className="min-w-0 border-t border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-950 sm:border-t-0 sm:border-l">
                             {visibleItems ? (
-                                <div className="h-full overflow-hidden bg-white divide-y divide-gray-100 dark:bg-gray-950 dark:divide-gray-800">
+                                <div className="h-full overflow-hidden divide-y divide-gray-100 dark:divide-gray-800">
                                     {visibleItems.map((item, itemIndex) => (
                                         <div
                                             key={`${item}-${itemIndex}`}
@@ -58,7 +58,7 @@ export function ContextSummary({ entries }: ContextSummaryProps) {
                                     )}
                                 </div>
                             ) : (
-                                <span className="font-mono text-xs leading-5 text-gray-700 break-all dark:text-gray-200">
+                                <span className="block px-3 py-1.5 font-mono text-xs leading-5 text-gray-700 break-all dark:text-gray-200">
                                     {entry.formattedValue}
                                 </span>
                             )}

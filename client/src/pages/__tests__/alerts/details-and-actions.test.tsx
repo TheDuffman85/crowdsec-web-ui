@@ -66,6 +66,13 @@ describe('Alerts page details and actions', () => {
     await userEvent.click(eventsToggle);
     expect(eventsToggle).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getAllByText('AppSec / WAF')).toHaveLength(1);
+    const eventToggle = screen.getByRole('button', { name: '#1' });
+    expect(eventToggle).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.click(eventToggle);
+    expect(eventToggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('service')).toBeInTheDocument();
+    expect(screen.getByText('rule_name')).toBeInTheDocument();
+    expect(screen.getByText('matched_zones')).toBeInTheDocument();
 
     const contextHeading = screen.getByText('Context');
     const decisionsHeading = screen.getByText('Decisions Taken');
