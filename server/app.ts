@@ -78,7 +78,7 @@ import {
   type DashboardAttackLocationAccumulator,
 } from './dashboard-locations';
 import { createAttackLocationResolver, type AttackLocationResolver } from './attack-location-geocoder';
-import { getAlertSourceValue, getAlertTarget, resolveAlertHistoryAt, resolveAlertReason, resolveAlertScenario, toSlimAlert } from './utils/alerts';
+import { getAlertSourceValue, getAlertTargetSummary, resolveAlertHistoryAt, resolveAlertReason, resolveAlertScenario, toSlimAlert, withAlertTargetSummary } from './utils/alerts';
 import { parseGoDuration, toDuration } from './utils/duration';
 import { fetchCrowdsecMetrics } from './metrics';
 import { DatabaseQueryWorker, QueryWorkerTimeoutError } from './query-worker-client';
@@ -1050,7 +1050,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         if (!alert) {
           return context.json({ error: 'Alert not found' }, 404);
         }
-        const payload = applySimulationModeToAlert({ ...alert, decisions: [] }, config.simulationsEnabled);
+        const payload = applySimulationModeToAlert({ ...withAlertTargetSummary(alert), decisions: [] }, config.simulationsEnabled);
         return payload ? context.json(payload) : context.json({ error: 'Alert not found' }, 404);
       }
 
@@ -1060,7 +1060,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         return context.json({ error: 'Alert not found' }, 404);
       }
 
-      const payload = applySimulationModeToAlert(hydrateAlertWithDecisions(normalizedAlert), config.simulationsEnabled);
+      const payload = applySimulationModeToAlert(hydrateAlertWithDecisions(withAlertTargetSummary(normalizedAlert)), config.simulationsEnabled);
       if (!payload) {
         return context.json({ error: 'Alert not found' }, 404);
       }
@@ -1196,7 +1196,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     if (!instance) return context.json({ error: 'Unknown CrowdSec instance' }, 404);
     try {
       const alert = normalizeAlertDetail(await lapiClients.get(instanceId)!.getAlertById(context.req.param('id')), context.req.param('id'));
-      return alert ? context.json(withInstanceName({ ...alert, instance_id: instanceId })) : context.json({ error: 'Alert not found' }, 404);
+      return alert
+        ? context.json(withInstanceName({ ...withAlertTargetSummary(alert), instance_id: instanceId }))
+        : context.json({ error: 'Alert not found' }, 404);
     } catch (error: any) {
       return context.json({ error: error?.message || 'Failed to retrieve alert' }, error?.status === 404 ? 404 : 502);
     }
@@ -2414,12 +2416,14 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     const decisions = alert.decisions || [];
     const alertSource = alert.source || null;
     const sourceValue = getAlertSourceValue(alertSource);
-    const target = getAlertTarget(alert);
+    const targetSummary = getAlertTargetSummary(alert);
+    const target = targetSummary.target;
     const machine = resolveMachineName(alert);
     const simulated = isAlertSimulated(alert);
     const enrichedAlert: AlertRecord = {
       ...alert,
       target,
+      target_count: targetSummary.count,
       simulated,
     };
     const alertHistoryAt = resolveAlertHistoryAt(alert);
@@ -2461,6 +2465,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         as: alertSource?.as_name,
         machine,
         target,
+        target_count: targetSummary.count,
         simulated: decisionSimulated,
         is_duplicate: false,
       };
@@ -2714,9 +2719,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
 
     const { decisions: _incomingDecisions, ...incomingAlertMetadata } = alert;
+    const targetSummary = getAlertTargetSummary(alert);
     const incomingMetadata = {
       ...incomingAlertMetadata,
-      target: getAlertTarget(alert),
+      target: targetSummary.target,
+      target_count: targetSummary.count,
       simulated: isAlertSimulated(alert),
     } as AlertRecord;
     if (snapshot.metadata_hash !== alertMetadataFingerprint(incomingMetadata)) {
@@ -6796,6 +6803,7 @@ function applySimulationModeToAlert(alert: AlertRecord, simulationsEnabled: bool
       expiration: typeof decision.stop_at === 'string' ? decision.stop_at : undefined,
       alert_id: decision.alert_id as string | number | undefined,
       target: typeof decision.target === 'string' ? decision.target : null,
+      target_count: typeof decision.target_count === 'number' ? decision.target_count : undefined,
       simulated: normalizeDecisionSimulated(decision),
     },
   };

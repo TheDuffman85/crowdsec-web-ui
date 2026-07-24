@@ -66,8 +66,8 @@ export interface InstanceSummary {
 }
 
 export type TableColumnPreferenceTable = 'alerts' | 'decisions';
-export type AlertTableColumnId = 'id' | 'instance' | 'time' | 'scenario' | 'country' | 'region' | 'city' | 'as' | 'source' | 'machine' | 'origin' | 'decisions';
-export type DecisionTableColumnId = 'id' | 'instance' | 'time' | 'scenario' | 'country' | 'region' | 'city' | 'as' | 'source' | 'action' | 'expiration' | 'machine' | 'origin' | 'alert';
+export type AlertTableColumnId = 'id' | 'instance' | 'time' | 'scenario' | 'target' | 'country' | 'region' | 'city' | 'as' | 'source' | 'machine' | 'origin' | 'decisions';
+export type DecisionTableColumnId = 'id' | 'instance' | 'time' | 'scenario' | 'target' | 'country' | 'region' | 'city' | 'as' | 'source' | 'action' | 'expiration' | 'machine' | 'origin' | 'alert';
 export type TableColumnId = AlertTableColumnId | DecisionTableColumnId;
 
 export interface TableColumnDefinition {
@@ -89,6 +89,7 @@ export const TABLE_COLUMN_DEFINITIONS: Record<TableColumnPreferenceTable, TableC
     { id: 'city', label: 'City', defaultVisible: false },
     { id: 'as', label: 'AS', defaultVisible: true },
     { id: 'source', label: 'IP / Range', defaultVisible: true },
+    { id: 'target', label: 'Target', defaultVisible: true },
     { id: 'machine', label: 'Machine', defaultVisible: false },
     { id: 'origin', label: 'Origin', defaultVisible: false },
     { id: 'decisions', label: 'Decisions', defaultVisible: true },
@@ -105,6 +106,7 @@ export const TABLE_COLUMN_DEFINITIONS: Record<TableColumnPreferenceTable, TableC
     { id: 'source', label: 'IP / Range', defaultVisible: true },
     { id: 'action', label: 'Action', defaultVisible: true },
     { id: 'expiration', label: 'Expiration', defaultVisible: true },
+    { id: 'target', label: 'Target', defaultVisible: true },
     { id: 'machine', label: 'Machine', defaultVisible: false },
     { id: 'origin', label: 'Origin', defaultVisible: false },
     { id: 'alert', label: 'Alert', defaultVisible: true },
@@ -223,6 +225,7 @@ export interface AlertRecord {
   meta?: AlertMeta[];
   decisions?: AlertDecision[];
   target?: string;
+  target_count?: number;
   meta_search?: string;
   simulated?: boolean;
   [key: string]: unknown;
@@ -260,6 +263,7 @@ export interface SlimAlert {
   machine_alias?: string;
   source: AlertSource | null;
   target?: string;
+  target_count?: number;
   meta_search: string;
   decisions: SlimDecision[];
   decision_summary?: AlertDecisionSummary;
@@ -280,6 +284,7 @@ export interface DecisionListDetail {
   expiration?: string;
   alert_id?: string | number;
   target?: string | null;
+  target_count?: number;
   simulated?: boolean;
 }
 

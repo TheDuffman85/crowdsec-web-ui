@@ -28,6 +28,13 @@ describe('createApp synchronization consistency and pruning', () => {
         cn: 'DE',
         as_name: 'Hetzner',
       },
+      events: [
+        { meta: [{ key: 'target_fqdn', value: 'api.example.test' }] },
+        { meta: [{ key: 'target_host', value: 'admin.example.test' }] },
+        { meta: [{ key: 'target_fqdn', value: 'api.example.test' }] },
+        { meta: [{ key: 'service', value: 'ssh' }] },
+        { meta: [{ key: 'target_fqdn', value: 'api.example.test' }] },
+      ],
       decisions: [
         {
           id: 2001,
@@ -90,10 +97,18 @@ describe('createApp synchronization consistency and pruning', () => {
     ));
     expect(alertsResponse.status).toBe(200);
     const alertsJson = await alertsResponse.json() as {
-      data: Array<{ id: number; decisions: unknown[]; decision_summary: { active_count: number; expired_count: number } }>;
+      data: Array<{
+        id: number;
+        target?: string;
+        target_count?: number;
+        decisions: unknown[];
+        decision_summary: { active_count: number; expired_count: number };
+      }>;
     };
     const alertRow = alertsJson.data.find((alert) => alert.id === 200);
     expect(alertRow).toMatchObject({
+      target: 'api.example.test',
+      target_count: 3,
       decisions: [],
       decision_summary: { active_count: 1, expired_count: 0 },
     });
@@ -101,11 +116,15 @@ describe('createApp synchronization consistency and pruning', () => {
     const decisionsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions?page=1&page_size=50&alert_id=200&include_expired=true'));
     expect(decisionsResponse.status).toBe(200);
     const decisionsJson = await decisionsResponse.json() as {
-      data: Array<{ id: number }>;
+      data: Array<{ id: number; detail: { target?: string; target_count?: number } }>;
       pagination: { total: number };
     };
     expect(decisionsJson.pagination.total).toBe(1);
     expect(decisionsJson.data.map((decision) => decision.id)).toEqual([2001]);
+    expect(decisionsJson.data[0]?.detail).toMatchObject({
+      target: 'api.example.test',
+      target_count: 3,
+    });
     expect(database.getDecisionById('2999')).toBeNull();
 
     controller.stopBackgroundTasks();

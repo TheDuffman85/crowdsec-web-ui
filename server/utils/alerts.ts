@@ -1,20 +1,32 @@
 import type { AlertDecision, AlertEvent, AlertMeta, AlertRecord, AlertSource, SlimAlert, SlimDecision } from '../../shared/contracts';
 import { resolveMachineName } from '../../shared/machine';
 
-export function getAlertTarget(alert: Pick<AlertRecord, 'events' | 'scenario' | 'machine_alias' | 'machine_id'> | null | undefined): string {
-  if (!alert) return 'Unknown';
+export interface AlertTargetSummary {
+  target: string;
+  count: number;
+}
 
+export function getAlertTargetSummary(
+  alert: Pick<AlertRecord, 'events' | 'scenario' | 'machine_alias' | 'machine_id'> | null | undefined,
+): AlertTargetSummary {
+  if (!alert) return { target: 'Unknown', count: 1 };
+
+  const targetCounts = new Map<string, number>();
   const events = Array.isArray(alert.events) ? alert.events : [];
   for (const event of events) {
     const metas = Array.isArray(event.meta) ? event.meta : [];
-    const fqdn = findMetaValue(metas, 'target_fqdn');
-    if (fqdn) return fqdn;
+    const target = findMetaValue(metas, 'target_fqdn')
+      || findMetaValue(metas, 'target_host')
+      || findMetaValue(metas, 'service');
+    if (target) {
+      targetCounts.set(target, (targetCounts.get(target) || 0) + 1);
+    }
+  }
 
-    const host = findMetaValue(metas, 'target_host');
-    if (host) return host;
-
-    const service = findMetaValue(metas, 'service');
-    if (service) return service;
+  if (targetCounts.size > 0) {
+    const [target] = [...targetCounts.entries()]
+      .sort((left, right) => right[1] - left[1])[0];
+    return { target, count: targetCounts.size };
   }
 
   if (alert.scenario) {
@@ -22,12 +34,25 @@ export function getAlertTarget(alert: Pick<AlertRecord, 'events' | 'scenario' | 
     if (scenarioName) {
       const serviceName = scenarioName.split('-')[0];
       if (serviceName) {
-        return serviceName;
+        return { target: serviceName, count: 1 };
       }
     }
   }
 
-  return resolveMachineName(alert) || 'Unknown';
+  return { target: resolveMachineName(alert) || 'Unknown', count: 1 };
+}
+
+export function getAlertTarget(alert: Pick<AlertRecord, 'events' | 'scenario' | 'machine_alias' | 'machine_id'> | null | undefined): string {
+  return getAlertTargetSummary(alert).target;
+}
+
+export function withAlertTargetSummary<T extends AlertRecord>(alert: T): T {
+  const summary = getAlertTargetSummary(alert);
+  return {
+    ...alert,
+    target: summary.target,
+    target_count: summary.count,
+  };
 }
 
 export function buildMetaSearch(events: AlertEvent[] | undefined, alertMeta: AlertMeta[] | undefined = undefined): string {
@@ -116,6 +141,7 @@ export function toSlimAlert(alert: AlertRecord): SlimAlert {
     machine_alias: alert.machine_alias,
     source: alert.source || null,
     target: alert.target,
+    target_count: typeof alert.target_count === 'number' ? alert.target_count : undefined,
     meta_search: typeof alert.meta_search === 'string' ? alert.meta_search : buildMetaSearch(alert.events, alert.meta),
     decisions: (alert.decisions || []).map(toSlimDecision),
     simulated: alert.simulated === true,
@@ -124,5 +150,7 @@ export function toSlimAlert(alert: AlertRecord): SlimAlert {
 
 function findMetaValue(metas: AlertMeta[], key: string): string | undefined {
   const value = metas.find((meta) => meta.key === key)?.value;
-  return typeof value === 'string' ? value : undefined;
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  return normalized || undefined;
 }

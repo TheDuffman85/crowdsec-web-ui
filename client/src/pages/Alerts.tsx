@@ -13,6 +13,7 @@ import { QuickFilters, type QuickFilterDefinition, type QuickFilterSectionId } f
 import { CountryFlag } from "../components/CountryFlag";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
+import { TargetDisplay } from "../components/TargetDisplay";
 import { EventCard } from "../components/EventCard";
 import { ContextSummary } from "../components/ContextSummary";
 import { Collapsible } from "../components/ui/Collapsible";
@@ -1117,8 +1118,8 @@ export function Alerts() {
     const selectedAlertIsSimulated = selectedAlert ? isSimulatedAlert(selectedAlert) : false;
     const selectedAlertSourceValue = getAlertSourceValue(selectedAlert?.source);
     const alertSummaryGridColumns = multipleInstances
-        ? (isAlertColumnVisible('machine') ? 'md:grid-cols-5' : 'md:grid-cols-4')
-        : (isAlertColumnVisible('machine') ? 'md:grid-cols-4' : 'md:grid-cols-3');
+        ? (isAlertColumnVisible('machine') ? 'md:grid-cols-3 xl:grid-cols-6' : 'md:grid-cols-3 xl:grid-cols-5')
+        : (isAlertColumnVisible('machine') ? 'md:grid-cols-3 xl:grid-cols-5' : 'md:grid-cols-2 xl:grid-cols-4');
     const deleteActionTitle = pendingDeleteAction?.kind === "single"
         ? t('pages.alerts.deleteAlertTitle')
         : pendingDeleteAction?.kind === "selected"
@@ -1380,6 +1381,12 @@ export function Alerts() {
                                                                 />
                                                             </td>
                                                         );
+                                                    case 'target':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[180px]">
+                                                                <TargetDisplay target={alert.target} targetCount={alert.target_count} />
+                                                            </td>
+                                                        );
                                                     case 'country':
                                                         return (
                                                             <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 align-middle">
@@ -1634,6 +1641,14 @@ export function Alerts() {
                                         <span>{selectedAlert.source.as_name}</span>
                                     )}
                                 </div>
+                            </div>
+                            <div className={ALERT_DETAIL_CARD_CLASS_NAME}>
+                                <h4 className={ALERT_DETAIL_LABEL_CLASS_NAME}>{t('tableColumns.target')}</h4>
+                                <TargetDisplay
+                                    target={selectedAlert.target}
+                                    targetCount={selectedAlert.target_count}
+                                    className={ALERT_DETAIL_PRIMARY_CLASS_NAME}
+                                />
                             </div>
                         </div>
 

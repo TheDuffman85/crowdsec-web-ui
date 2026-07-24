@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { normalizeMachineId, resolveMachineName } from '../../../shared/machine';
-import { buildMetaSearch, getAlertSourceValue, getAlertTarget, resolveAlertReason, resolveAlertScenario, toSlimAlert, toSlimDecision } from '../alerts';
+import { buildMetaSearch, getAlertSourceValue, getAlertTarget, getAlertTargetSummary, resolveAlertReason, resolveAlertScenario, toSlimAlert, toSlimDecision, withAlertTargetSummary } from '../alerts';
 
 describe('alert helpers', () => {
   test('getAlertTarget prioritizes event metadata', () => {
@@ -46,6 +46,31 @@ describe('alert helpers', () => {
         scenario: 'crowdsecurity/-bf',
       }),
     ).toBe('Unknown');
+  });
+
+  test('getAlertTargetSummary selects the most frequent target and counts distinct values', () => {
+    const alert = {
+      id: 1,
+      created_at: '2025-01-01T00:00:00.000Z',
+      scenario: 'crowdsecurity/ssh-bf',
+      events: [
+        { meta: [{ key: 'target_fqdn', value: 'api.example.test' }, { key: 'service', value: 'http' }] },
+        { meta: [{ key: 'target_host', value: 'admin.example.test' }] },
+        { meta: [{ key: 'target_fqdn', value: 'api.example.test' }] },
+        { meta: [{ key: 'service', value: 'ssh' }] },
+        { meta: [{ key: 'target_fqdn', value: 'api.example.test' }] },
+        { meta: [{ key: 'target_host', value: ' admin.example.test ' }] },
+      ],
+    };
+
+    expect(getAlertTargetSummary(alert)).toEqual({
+      target: 'api.example.test',
+      count: 3,
+    });
+    expect(withAlertTargetSummary(alert)).toEqual(expect.objectContaining({
+      target: 'api.example.test',
+      target_count: 3,
+    }));
   });
 
   test('buildMetaSearch combines event metadata and alert contexts', () => {

@@ -13,6 +13,7 @@ import { QuickFilters, type QuickFilterDefinition, type QuickFilterSectionId } f
 import { CountryFlag } from "../components/CountryFlag";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
+import { TargetDisplay } from "../components/TargetDisplay";
 import { getCountryName } from "../lib/utils";
 import { getDecisionExpirationState } from "../lib/decisionExpiration";
 import { TABLE_COLUMN_DEFINITIONS } from "../../../shared/contracts";
@@ -1259,6 +1260,15 @@ export function Decisions() {
                                                                     name={decision.detail.reason}
                                                                     showLink={true}
                                                                     simulated={simulationsEnabled && isSimulatedDecision(decision)}
+                                                                />
+                                                            </td>
+                                                        );
+                                                    case 'target':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[180px]">
+                                                                <TargetDisplay
+                                                                    target={decision.detail.target}
+                                                                    targetCount={decision.detail.target_count}
                                                                 />
                                                             </td>
                                                         );

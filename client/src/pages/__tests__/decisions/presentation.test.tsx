@@ -86,8 +86,38 @@ describe('Decisions page presentation and columns', () => {
     expect(screen.queryByRole('columnheader', { name: 'Origin' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Region' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'City' })).not.toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Target' })).toBeInTheDocument();
     expect(screen.queryByText('Berlin')).not.toBeInTheDocument();
     expect(screen.queryByText('State of Berlin')).not.toBeInTheDocument();
+  });
+
+  test('shows the primary target and distinct target count', async () => {
+    vi.mocked(api.fetchDecisionsPaginated).mockImplementationOnce(async (page, pageSize) =>
+      toPaginatedDecisions([{
+        id: 91,
+        created_at: '2026-03-23T10:00:00.000Z',
+        value: '203.0.113.91',
+        expired: false,
+        is_duplicate: false,
+        detail: {
+          origin: 'crowdsec',
+          reason: 'crowdsecurity/http-probing',
+          target: 'api.example.test',
+          target_count: 3,
+        },
+      }], page, pageSize),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByTitle('api.example.test · 3 distinct targets')).toBeInTheDocument());
+    expect(screen.getByText('3')).toBeInTheDocument();
+    const headers = getVisibleColumnHeaderNames();
+    expect(headers.indexOf('Target')).toBe(headers.indexOf('Expiration') + 1);
   });
 
   test('counts decision expiration down live from the absolute stop time', async () => {

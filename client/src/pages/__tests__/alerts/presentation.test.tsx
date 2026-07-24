@@ -86,6 +86,7 @@ describe('Alerts page presentation and columns', () => {
     expect(screen.queryByRole('columnheader', { name: 'Origin' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Region' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'City' })).not.toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Target' })).toBeInTheDocument();
     expect(screen.queryByText('Berlin')).not.toBeInTheDocument();
     expect(screen.queryByText('State of Berlin')).not.toBeInTheDocument();
   });
@@ -183,9 +184,48 @@ describe('Alerts page presentation and columns', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 
-    await waitFor(() => expect(getVisibleColumnHeaderNames()).toEqual(['Time', 'Scenario', 'Country', 'AS', 'IP / Range', 'Decisions', 'Actions']));
+    await waitFor(() => expect(getVisibleColumnHeaderNames()).toEqual(['Time', 'Scenario', 'Country', 'AS', 'IP / Range', 'Target', 'Decisions', 'Actions']));
     expect(JSON.parse(window.localStorage.getItem('crowdsec-web-ui:alerts:table-column-order') || '[]'))
-      .toEqual(['id', 'instance', 'time', 'scenario', 'country', 'region', 'city', 'as', 'source', 'machine', 'origin', 'decisions']);
+      .toEqual(['id', 'instance', 'time', 'scenario', 'country', 'region', 'city', 'as', 'source', 'target', 'machine', 'origin', 'decisions']);
+  });
+
+  test('shows the primary target, distinct target count, and target detail card', async () => {
+    vi.mocked(api.fetchAlertsPaginated).mockImplementationOnce(async (page, pageSize) => toPaginatedAlerts([{
+      id: 91,
+      created_at: '2026-03-23T10:00:00.000Z',
+      scenario: 'crowdsecurity/http-probing',
+      source: { ip: '203.0.113.91', cn: 'DE' },
+      target: 'api.example.test',
+      target_count: 3,
+      meta_search: '',
+      decisions: [],
+    }], page, pageSize));
+    vi.mocked(api.fetchAlert).mockResolvedValueOnce({
+      id: 91,
+      created_at: '2026-03-23T10:00:00.000Z',
+      scenario: 'crowdsecurity/http-probing',
+      source: { ip: '203.0.113.91', cn: 'DE' },
+      target: 'api.example.test',
+      target_count: 3,
+      decisions: [],
+      events: [],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByTitle('api.example.test · 3 distinct targets')).toBeInTheDocument());
+    await userEvent.click(screen.getByText('203.0.113.91'));
+    await waitFor(() => expect(screen.getByText('Alert Details #91')).toBeInTheDocument());
+    expect(screen.getAllByTitle('api.example.test · 3 distinct targets')).toHaveLength(2);
+    expect(screen.getAllByText('3')).toHaveLength(2);
+    const detailsDialog = screen.getByRole('dialog', { name: 'Alert Details #91' });
+    const sourceHeading = within(detailsDialog).getByText('IP / Range');
+    const targetHeading = within(detailsDialog).getByText('Target');
+    expect(sourceHeading.compareDocumentPosition(targetHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   test('keeps saved order for hidden alert columns when they are enabled later', async () => {

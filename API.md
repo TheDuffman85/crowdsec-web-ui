@@ -125,6 +125,8 @@ Supported paginated alert parameters: `instance`, `q`, `ip`, `country`, `scenari
 
 Free-text `q` searches include CrowdSec alert context values from `meta` in addition to the standard alert and event metadata fields.
 
+Alert records expose the most frequent event target as `target` and the total number of distinct event targets as `target_count`. Decision list items carry the same values in `detail.target` and `detail.target_count`.
+
 `simulation` accepts `all`, `live`, or `simulated`; unknown values behave like `all`.
 
 Set `include_decisions=false` to omit decision hydration from paginated lists or single-instance alert details. Bulk deletion accepts `ids` in single-instance deployments or instance-qualified `refs` as described above.
