@@ -292,6 +292,7 @@ export function Decisions() {
             source: 'ip',
             action: 'action',
             expiration: 'status',
+            target: 'target',
             machine: 'machine',
             origin: 'origin',
             alert: 'alert',
@@ -314,8 +315,6 @@ export function Decisions() {
             });
             sectionOrder.push(field);
         }
-        fields.push({ field: 'target', label: t('components.eventCard.target') });
-        sectionOrder.push('target');
         return { fields, sectionOrder };
     }, [t, visibleDecisionColumns]);
     const quickFilterDateRange = useMemo(() => {
@@ -1114,15 +1113,6 @@ export function Decisions() {
 
             <div className="space-y-2">
                 <div className="flex items-stretch gap-2">
-                    <button
-                        type="button"
-                        onClick={() => setShowColumnsModal(true)}
-                        className="inline-flex items-center justify-center rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-gray-600 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
-                        aria-label={t('components.tableColumns.chooseDecisionColumns')}
-                        title={t('components.tableColumns.chooseColumns')}
-                    >
-                        <Columns3 size={18} />
-                    </button>
                     <QuickFilters {...quickFilterProps} />
                     <CollapsibleSearchControls
                         inputRef={searchInputRef}
@@ -1150,6 +1140,15 @@ export function Decisions() {
                             aria-describedby={queryError ? 'decisions-search-error' : undefined}
                         />
                     </CollapsibleSearchControls>
+                    <button
+                        type="button"
+                        onClick={() => setShowColumnsModal(true)}
+                        className="ml-auto inline-flex items-center justify-center rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-gray-600 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
+                        aria-label={t('components.tableColumns.chooseDecisionColumns')}
+                        title={t('components.tableColumns.chooseColumns')}
+                    >
+                        <Columns3 size={18} />
+                    </button>
                 </div>
                 {queryError && (
                     <p id="decisions-search-error" className="text-xs text-red-600 dark:text-red-400">

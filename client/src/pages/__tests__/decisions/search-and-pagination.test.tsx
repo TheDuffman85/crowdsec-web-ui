@@ -37,10 +37,11 @@ describe('Decisions page search and pagination', () => {
     const filtersButton = screen.getByRole('button', { name: 'Filters' });
     const columnsButton = screen.getByRole('button', { name: 'Choose decision table columns' });
     expect(Array.from(columnsButton.parentElement!.children).slice(0, 3)).toEqual([
-      columnsButton,
       filtersButton,
       searchButton.parentElement!.parentElement!,
+      columnsButton,
     ]);
+    expect(columnsButton).toHaveClass('ml-auto');
     expect(screen.queryByPlaceholderText('Filter decisions...')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Search syntax help' })).not.toBeInTheDocument();
     const input = await expandDecisionSearch();
@@ -156,7 +157,7 @@ describe('Decisions page search and pagination', () => {
 
   test('offers quick filters for every visible decision column', async () => {
     window.localStorage.setItem('crowdsec-web-ui:table-column-preferences', JSON.stringify({
-      decisions: ['id', 'instance', 'region', 'city', 'machine', 'origin', 'alert'],
+      decisions: ['id', 'instance', 'region', 'target', 'city', 'machine', 'origin', 'alert'],
     }));
     render(
       <MemoryRouter initialEntries={['/decisions']}>
@@ -166,7 +167,7 @@ describe('Decisions page search and pagination', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: /^Filters/ }));
     const drawer = screen.getByRole('dialog', { name: 'Quick filters' });
-    const expectedSections = ['ID', 'Instance', 'Region', 'City', 'Machine', 'Origin', 'Alert', 'Target'];
+    const expectedSections = ['ID', 'Instance', 'Region', 'Target', 'City', 'Machine', 'Origin', 'Alert'];
     for (const name of expectedSections) {
       expect(within(drawer).getByRole('button', { name })).toBeInTheDocument();
     }
@@ -174,6 +175,22 @@ describe('Decisions page search and pagination', () => {
       .map((button) => button.textContent?.trim())
       .filter((name): name is string => Boolean(name && expectedSections.includes(name)));
     expect(sectionNames).toEqual(expectedSections);
+    expect(screen.getByRole('columnheader', { name: 'Target' })).toBeInTheDocument();
+  });
+
+  test('hides the target quick filter when the target column is hidden', async () => {
+    window.localStorage.setItem('crowdsec-web-ui:table-column-preferences', JSON.stringify({
+      decisions: ['time', 'source'],
+    }));
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(await screen.findByRole('button', { name: /^Filters/ }));
+    const drawer = screen.getByRole('dialog', { name: 'Quick filters' });
+    expect(within(drawer).queryByRole('button', { name: 'Target' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Target' })).not.toBeInTheDocument();
   });
 
