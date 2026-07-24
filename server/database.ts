@@ -114,7 +114,7 @@ const CREATE_SYNC_SECONDARY_INDEXES_SQL = `
   CREATE INDEX IF NOT EXISTS idx_decisions_alert_created_id ON decisions(alert_id, created_at DESC, id DESC, stop_at);
   CREATE INDEX IF NOT EXISTS idx_decisions_duplicate_paging ON decisions(is_duplicate, created_at DESC, id DESC, stop_at);
   CREATE INDEX IF NOT EXISTS idx_decisions_duplicate_filters ON decisions(
-    is_duplicate, stop_at, scenario, value, as_name, target, country, country_name,
+    is_duplicate, instance_id, stop_at, scenario, value, as_name, target, country, country_name,
     region, city, machine, origin, type, simulated, alert_id, created_at DESC, id DESC
   );
   CREATE INDEX IF NOT EXISTS idx_decisions_duplicate_value_paging ON decisions(
@@ -2794,9 +2794,19 @@ function migrateRecordIndexColumns(db: Database): void {
   db.exec('DROP INDEX IF EXISTS idx_decisions_alert_id');
   db.exec('DROP INDEX IF EXISTS idx_decisions_duplicate_created_at');
   db.exec('DROP INDEX IF EXISTS idx_decisions_duplicate_active');
+  migrateDecisionDuplicateFilterIndex(db);
   db.exec(CREATE_SYNC_SECONDARY_INDEXES_SQL);
 
   backfillRecordIndexes(db);
+}
+
+function migrateDecisionDuplicateFilterIndex(db: Database): void {
+  const columns = (
+    db.query("PRAGMA index_info('idx_decisions_duplicate_filters')").all() as Array<{ name: string }>
+  ).map((column) => column.name);
+  if (columns.length > 0 && columns[1] !== 'instance_id') {
+    db.exec('DROP INDEX idx_decisions_duplicate_filters');
+  }
 }
 
 function migrateNormalizedDecisionPayloads(db: Database): void {

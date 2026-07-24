@@ -171,6 +171,32 @@ describe('CrowdsecDatabase auth and migrations', () => {
     db.close();
   });
 
+  test('migrates the decision filter index to cover instance-scoped counts', () => {
+    const dbPath = createTestDatabasePath();
+    const initial = new CrowdsecDatabase({ dbPath });
+    initial.db.exec(`
+      DROP INDEX idx_decisions_duplicate_filters;
+      CREATE INDEX idx_decisions_duplicate_filters ON decisions(
+        is_duplicate, stop_at, scenario, value, as_name, target, country, country_name,
+        region, city, machine, origin, type, simulated, alert_id, created_at DESC, id DESC
+      );
+    `);
+    initial.close();
+
+    const migrated = new CrowdsecDatabase({ dbPath });
+    const columns = migrated.db.prepare(
+      "PRAGMA index_info('idx_decisions_duplicate_filters')",
+    ).all() as Array<{ name: string }>;
+
+    expect(columns.map((column) => column.name).slice(0, 3)).toEqual([
+      'is_duplicate',
+      'instance_id',
+      'stop_at',
+    ]);
+
+    migrated.close();
+  });
+
   test('adds and backfills source coordinates for legacy alerts', () => {
     const dbPath = createTestDatabasePath();
     const legacy = createLegacyDatabase(dbPath);

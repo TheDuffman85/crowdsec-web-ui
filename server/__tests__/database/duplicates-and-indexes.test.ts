@@ -296,6 +296,27 @@ describe('CrowdsecDatabase duplicates and indexes', () => {
     );
     expect(alertDecisionSummaryPlan.map((step) => step.detail).join('\n')).not.toContain('USE TEMP B-TREE');
     expect(
+      (db.db.prepare("PRAGMA index_info('idx_decisions_duplicate_filters')").all() as Array<{ name: string }>).map((column) => column.name),
+    ).toEqual([
+      'is_duplicate', 'instance_id', 'stop_at', 'scenario', 'value', 'as_name', 'target', 'country',
+      'country_name', 'region', 'city', 'machine', 'origin', 'type', 'simulated', 'alert_id', 'created_at', 'id',
+    ]);
+    const filteredDecisionCountPlan = db.db.prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT COUNT(*)
+      FROM decisions INDEXED BY idx_decisions_duplicate_filters
+      WHERE instance_id IN (?, ?)
+        AND stop_at > ?
+        AND is_duplicate = 0
+    `).all(
+      'primary',
+      'secondary',
+      '2026-01-01T00:00:00.000Z',
+    ) as Array<{ detail: string }>;
+    expect(filteredDecisionCountPlan.map((step) => step.detail).join('\n')).toContain(
+      'USING COVERING INDEX idx_decisions_duplicate_filters (is_duplicate=? AND instance_id=? AND stop_at>?)',
+    );
+    expect(
       (db.db.prepare("PRAGMA index_info('idx_alerts_filters')").all() as Array<{ name: string }>).map((column) => column.name),
     ).toEqual([
       'instance_id', 'country', 'scenario', 'as_name', 'source_ip', 'target', 'country_name',
