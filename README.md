@@ -880,10 +880,10 @@ Use `POST /api/cache/clear` for a full cache reset. Synchronization internals ar
 | [API reference](API.md) | Authentication, routes, parameters, and request/response shapes |
 | [Development guide](DEVELOPMENT.md) | Local setup, builds, tests, metadata, translations, and synchronization internals |
 | [Load testing guide](LOAD_TESTING.md) | Synthetic profiles, overrides, benchmarks, and container workflow |
-| [CrowdSec LAPI](https://docs.crowdsec.net/docs/local_api/intro/) | LAPI purpose, architecture, and authentication overview |
-| [CrowdSec configuration](https://docs.crowdsec.net/docs/configuration/crowdsec_configuration/) | LAPI server settings and trusted IPs |
-| [CrowdSec TLS authentication](https://docs.crowdsec.net/docs/local_api/tls_auth/) | Agent mTLS setup |
-| [CrowdSec Prometheus](https://docs.crowdsec.net/docs/next/observability/prometheus/) | Runtime metrics configuration |
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/chart?repos=TheDuffman85/crowdsec-web-ui&type=date&legend=top-left&sealed_token=sIZgMEsvAELrAcobilkaKTbofrchv0xMb7iRiIfxjDZWY44Qt7QkWhQje7Y8KV0jT1Bta4U_DQIN9H000PGFXvPmmEPblq9_j3GwwGq4dzsvRyJfa-MHZEbBO0BIqwzEZn46x-LjQUdE6FCjgGqUJAkAPX4pfK0rsV0aysAc9-GAKcAdKSHCG_sGXD0s)](https://www.star-history.com/?type=date&repos=TheDuffman85%2Fcrowdsec-web-ui)
 
 ## Related Projects
 
@@ -900,7 +900,3 @@ Use `POST /api/cache/clear` for a full cache reset. Synchronization internals ar
     </td>
   </tr>
 </table>
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/chart?repos=TheDuffman85/crowdsec-web-ui&type=date&legend=top-left&sealed_token=sIZgMEsvAELrAcobilkaKTbofrchv0xMb7iRiIfxjDZWY44Qt7QkWhQje7Y8KV0jT1Bta4U_DQIN9H000PGFXvPmmEPblq9_j3GwwGq4dzsvRyJfa-MHZEbBO0BIqwzEZn46x-LjQUdE6FCjgGqUJAkAPX4pfK0rsV0aysAc9-GAKcAdKSHCG_sGXD0s)](https://www.star-history.com/?type=date&repos=TheDuffman85%2Fcrowdsec-web-ui)
