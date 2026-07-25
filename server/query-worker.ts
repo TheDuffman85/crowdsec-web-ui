@@ -2,6 +2,7 @@ import BetterSqlite3 from 'better-sqlite3';
 import { parentPort, workerData } from 'node:worker_threads';
 import { matchesIpSearchValue } from '../shared/search';
 import { installTimestampedConsole } from './logging';
+import { withoutUnavailableIndexHints } from './query-index-fallback';
 
 type WorkerRequest = {
   id: number;
@@ -46,12 +47,25 @@ try {
 parentPort?.on('message', (request: WorkerRequest) => {
   const response: WorkerResponse = { id: request.id };
   try {
-    const statement = database.prepare(request.sql);
-    response.rows = request.method === 'all'
-      ? statement.all(...request.params)
-      : statement.get(...request.params);
+    response.rows = executeQuery(request);
   } catch (error) {
-    response.error = error instanceof Error ? error.message : String(error);
+    const fallbackSql = withoutUnavailableIndexHints(request.sql, error);
+    if (fallbackSql) {
+      try {
+        response.rows = executeQuery({ ...request, sql: fallbackSql });
+      } catch (fallbackError) {
+        response.error = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+      }
+    } else {
+      response.error = error instanceof Error ? error.message : String(error);
+    }
   }
   parentPort?.postMessage(response);
 });
+
+function executeQuery(request: WorkerRequest): unknown {
+  const statement = database.prepare(request.sql);
+  return request.method === 'all'
+    ? statement.all(...request.params)
+    : statement.get(...request.params);
+}

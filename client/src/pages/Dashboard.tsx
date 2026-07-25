@@ -1,39 +1,83 @@
 import { lazy, Suspense, useEffect, useState, useMemo, useCallback, useRef } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { fetchDashboardStats, fetchConfig } from "../lib/api";
 import { useRefresh } from "../contexts/useRefresh";
 import { Card, CardContent } from "../components/ui/Card";
 import { StatCard } from "../components/StatCard";
 import { ScenarioName } from "../components/ScenarioName";
+import { QuickFilters, type QuickFilterDefinition, type QuickFilterSectionId } from "../components/QuickFilters";
 import {
     ShieldAlert,
     Gavel,
     Activity,
     TrendingUp,
-    FilterX,
-
-    Filter,
     Percent
 } from "lucide-react";
 import { Switch } from "../components/ui/Switch";
 import { DASHBOARD_COLORS } from "../lib/dashboardColors";
-import { getCountryName } from "../lib/utils";
+import { getCountryCodesMatchingName, getCountryName } from "../lib/utils";
 import type {
     ConfigResponse,
     DashboardFilters,
     DashboardStatsBucket,
     DashboardStatsResponse,
+    FacetField,
     SimulationFilter,
 } from '../types';
 import { useI18n } from "../lib/i18n";
 import { useDateTime } from "../lib/dateTime";
+import {
+    ALERT_QUICK_FILTER_FIELDS,
+    DECISION_QUICK_FILTER_FIELDS,
+    emptyStoredQuickFilters,
+    getStoredQuickFilterSelection,
+    loadStoredQuickFilters,
+    saveStoredQuickFilters,
+    setStoredQuickFilterSelection,
+    storedQuickFiltersEqual,
+    type StoredQuickFilters,
+} from "../lib/quickFilters";
+import {
+    replaceSearchDateRange,
+    replaceSearchFacetSelection,
+    serializeSearchNode,
+    type SearchDateRange,
+    type SearchFacetSelection,
+    type SearchNode,
+} from "../../../shared/search";
 
 type Granularity = 'day' | 'hour';
 type ScaleMode = 'linear' | 'symlog';
 type PercentageBasis = 'filtered' | 'global';
 type FilterKey = 'country' | 'scenario' | 'as' | 'ip' | 'target' | 'simulation';
 type DashboardStatListItem = DashboardStatsResponse['topCountries'][number];
+
+const DASHBOARD_QUICK_FILTER_FIELDS: FacetField[] = [
+    'country',
+    'scenario',
+    'as',
+    'ip',
+    'target',
+    'id',
+    'instance',
+    'region',
+    'city',
+    'machine',
+    'origin',
+];
+
+const DASHBOARD_UNAVAILABLE_QUICK_FILTER_FIELDS: FacetField[] = [
+    'decision',
+    'action',
+    'status',
+    'alert',
+];
+
+const DASHBOARD_ALL_QUICK_FILTER_FIELDS = new Set<FacetField>([
+    ...DASHBOARD_QUICK_FILTER_FIELDS,
+    ...DASHBOARD_UNAVAILABLE_QUICK_FILTER_FIELDS,
+]);
 
 interface DashboardCountState {
     alerts: number;
@@ -104,7 +148,7 @@ function parseStoredPercentageBasis(value: string | null): PercentageBasis {
     return value === 'filtered' ? 'filtered' : 'global';
 }
 
-function parseStoredFilters(value: string | null): DashboardFilters {
+function parseLegacyStoredFilters(value: string | null): DashboardFilters {
     if (!value) {
         return EMPTY_FILTERS;
     }
@@ -118,6 +162,109 @@ function parseStoredFilters(value: string | null): DashboardFilters {
         console.error("Failed to parse saved filters", error);
         return EMPTY_FILTERS;
     }
+}
+
+function migrateLegacyDashboardFilters(stored: StoredQuickFilters): {
+    filters: StoredQuickFilters;
+    simulation: SimulationFilter;
+    dateRangeSticky: boolean;
+} {
+    const legacyStorageKey = 'dashboard_filters';
+    const legacy = parseLegacyStoredFilters(localStorage.getItem(legacyStorageKey));
+    localStorage.removeItem(legacyStorageKey);
+    let filters = stored;
+    const legacySelections: Array<[FacetField, string | null]> = [
+        ['country', legacy.country],
+        ['scenario', legacy.scenario],
+        ['as', legacy.as],
+        ['ip', legacy.ip],
+        ['target', legacy.target],
+    ];
+
+    for (const [field, value] of legacySelections) {
+        const existing = getStoredQuickFilterSelection(filters, field);
+        if (value && existing.included.length === 0 && existing.excluded.length === 0) {
+            filters = setStoredQuickFilterSelection(filters, field, {
+                included: [value],
+                excluded: [],
+            });
+        }
+    }
+
+    if (
+        legacy.dateRange
+        && !filters.dateRange.start
+        && !filters.dateRange.end
+    ) {
+        filters = {
+            ...filters,
+            dateRange: {
+                start: legacy.dateRange.start,
+                end: legacy.dateRange.end,
+            },
+        };
+    }
+
+    if (filters.simulation === 'all' && legacy.simulation !== 'all') {
+        filters = {
+            ...filters,
+            simulation: legacy.simulation,
+        };
+    }
+
+    return {
+        filters,
+        simulation: filters.simulation,
+        dateRangeSticky: legacy.dateRangeSticky,
+    };
+}
+
+function buildStoredSearchAst(
+    stored: StoredQuickFilters,
+    fields: FacetField[],
+    includeDateRange: boolean,
+): SearchNode | null {
+    let ast: SearchNode | null = null;
+    for (const field of fields) {
+        ast = replaceSearchFacetSelection(
+            ast,
+            field,
+            getStoredQuickFilterSelection(stored, field),
+        );
+    }
+
+    return includeDateRange
+        ? replaceSearchDateRange(ast, stored.dateRange)
+        : ast;
+}
+
+function getSingleIncludedSelection(
+    stored: StoredQuickFilters,
+    field: FacetField,
+): string | null {
+    const selection = getStoredQuickFilterSelection(stored, field);
+    return selection.included.length === 1 && selection.excluded.length === 0
+        ? selection.included[0]
+        : null;
+}
+
+function toDashboardFilters(
+    stored: StoredQuickFilters,
+    simulation: SimulationFilter,
+    dateRangeSticky: boolean,
+): DashboardFilters {
+    return {
+        dateRange: stored.dateRange.start || stored.dateRange.end
+            ? { ...stored.dateRange }
+            : null,
+        dateRangeSticky,
+        country: getSingleIncludedSelection(stored, 'country'),
+        scenario: getSingleIncludedSelection(stored, 'scenario'),
+        as: getSingleIncludedSelection(stored, 'as'),
+        ip: getSingleIncludedSelection(stored, 'ip'),
+        target: getSingleIncludedSelection(stored, 'target'),
+        simulation,
+    };
 }
 
 function toActivitySeries(
@@ -143,18 +290,16 @@ function quoteSearchValue(value: string): string {
     return `"${value.replace(/"/g, '')}"`;
 }
 
-function buildDashboardDrilldownQuery(filters: DashboardFilters, simulationsEnabled: boolean): string {
-    const clauses: string[] = [];
+function buildDashboardDrilldownQuery(
+    searchAst: SearchNode | null,
+    simulation: SimulationFilter,
+    simulationsEnabled: boolean,
+): string {
+    const query = serializeSearchNode(searchAst);
+    const clauses = query ? [query] : [];
 
-    if (filters.country) clauses.push(`country:${quoteSearchValue(filters.country)}`);
-    if (filters.scenario) clauses.push(`scenario:${quoteSearchValue(filters.scenario)}`);
-    if (filters.as) clauses.push(`as:${quoteSearchValue(filters.as)}`);
-    if (filters.ip) clauses.push(`ip:${quoteSearchValue(filters.ip)}`);
-    if (filters.target) clauses.push(`target:${quoteSearchValue(filters.target)}`);
-    if (filters.dateRange?.start) clauses.push(`date>=${quoteSearchValue(filters.dateRange.start)}`);
-    if (filters.dateRange?.end) clauses.push(`date<=${quoteSearchValue(filters.dateRange.end)}`);
-    if (simulationsEnabled && filters.simulation !== 'all') {
-        clauses.push(`sim:${filters.simulation}`);
+    if (simulationsEnabled && simulation !== 'all') {
+        clauses.push(`sim=${quoteSearchValue(simulation)}`);
     }
 
     return clauses.join(' AND ');
@@ -214,7 +359,6 @@ export function Dashboard() {
     const [searchParams] = useSearchParams();
     const { language, t } = useI18n();
     const { formatDate, formatTime } = useDateTime();
-    const navigate = useNavigate();
     const { refreshSignal } = useRefresh();
     const [initialLoading, setInitialLoading] = useState(true);
     const [backgroundRefreshing, setBackgroundRefreshing] = useState(false);
@@ -246,13 +390,41 @@ export function Dashboard() {
     const filterApplyingRef = useRef(false);
     const latestFilterApplicationVersionRef = useRef(0);
 
-    // Active filters
-    const [filters, setFilters] = useState<DashboardFilters>(() => parseStoredFilters(localStorage.getItem('dashboard_filters')));
+    const [initialStoredFilters] = useState(() => migrateLegacyDashboardFilters(loadStoredQuickFilters()));
+    const [persistedQuickFilters, setPersistedQuickFilters] = useState<StoredQuickFilters>(
+        initialStoredFilters.filters,
+    );
+    const persistedQuickFiltersRef = useRef(persistedQuickFilters);
+    const [simulationFilter, setSimulationFilter] = useState<SimulationFilter>(
+        initialStoredFilters.simulation,
+    );
+    const [dateRangeSticky, setDateRangeSticky] = useState(initialStoredFilters.dateRangeSticky);
+    const filters = useMemo(
+        () => toDashboardFilters(persistedQuickFilters, simulationFilter, dateRangeSticky),
+        [dateRangeSticky, persistedQuickFilters, simulationFilter],
+    );
+    const dashboardAlertFacetAst = useMemo(
+        () => buildStoredSearchAst(persistedQuickFilters, ALERT_QUICK_FILTER_FIELDS, false),
+        [persistedQuickFilters],
+    );
+    const dashboardDecisionFacetAst = useMemo(
+        () => buildStoredSearchAst(persistedQuickFilters, DECISION_QUICK_FILTER_FIELDS, false),
+        [persistedQuickFilters],
+    );
+    const dashboardAlertSearchAst = useMemo(
+        () => buildStoredSearchAst(persistedQuickFilters, ALERT_QUICK_FILTER_FIELDS, true),
+        [persistedQuickFilters],
+    );
+    const dashboardDecisionSearchAst = useMemo(
+        () => buildStoredSearchAst(persistedQuickFilters, DECISION_QUICK_FILTER_FIELDS, true),
+        [persistedQuickFilters],
+    );
 
-    // Persist filters and granularity
     useEffect(() => {
-        localStorage.setItem('dashboard_filters', JSON.stringify(filters));
-    }, [filters]);
+        if (!storedQuickFiltersEqual(loadStoredQuickFilters(), persistedQuickFilters)) {
+            saveStoredQuickFilters(persistedQuickFilters);
+        }
+    }, [persistedQuickFilters]);
 
     useEffect(() => {
         localStorage.setItem('dashboard_granularity', granularity);
@@ -285,6 +457,18 @@ export function Dashboard() {
         return true;
     }, []);
 
+    const updatePersistedQuickFilters = useCallback((
+        update: (current: StoredQuickFilters) => StoredQuickFilters,
+    ) => {
+        const current = persistedQuickFiltersRef.current;
+        const next = update(current);
+        if (storedQuickFiltersEqual(current, next)) return false;
+        persistedQuickFiltersRef.current = next;
+        saveStoredQuickFilters(next);
+        setPersistedQuickFilters(next);
+        return true;
+    }, []);
+
     // Handler to change granularity and clear date range simultaneously (explicit user action)
     const handleGranularityChange = (newGranularity: Granularity) => {
         if (newGranularity === granularity && filters.dateRange === null) {
@@ -293,7 +477,11 @@ export function Dashboard() {
 
         startFilterApplication(() => {
             setGranularity(newGranularity);
-            setFilters(prev => ({ ...prev, dateRange: null }));
+            setDateRangeSticky(false);
+            updatePersistedQuickFilters((current) => ({
+                ...current,
+                dateRange: { start: '', end: '' },
+            }));
         });
     };
 
@@ -309,6 +497,10 @@ export function Dashboard() {
         if (filters.as) requestFilters.as = filters.as;
         if (filters.ip) requestFilters.ip = filters.ip;
         if (filters.target) requestFilters.target = filters.target;
+        const alertQuery = serializeSearchNode(dashboardAlertFacetAst);
+        const decisionQuery = serializeSearchNode(dashboardDecisionFacetAst);
+        if (alertQuery) requestFilters.q = alertQuery;
+        if (decisionQuery) requestFilters.decision_q = decisionQuery;
         if (filters.dateRange) {
             requestFilters.dateStart = filters.dateRange.start;
             requestFilters.dateEnd = filters.dateRange.end;
@@ -318,7 +510,7 @@ export function Dashboard() {
         }
 
         return requestFilters;
-    }, [filters, granularity, searchParams]);
+    }, [dashboardAlertFacetAst, dashboardDecisionFacetAst, filters, granularity, searchParams]);
 
     const loadData = useCallback(async (isBackground = false, signal?: AbortSignal, force = false) => {
         const requestFilters = buildDashboardStatsFilters();
@@ -441,7 +633,11 @@ export function Dashboard() {
     const dashboardData = dashboardStats ?? EMPTY_DASHBOARD_STATS;
     const stats = dashboardData.totals;
     const requestedInstanceId = searchParams.get('instance') || 'all';
-    const configuredInstances = config?.instances || [];
+    const configuredInstances = useMemo(() => config?.instances || [], [config?.instances]);
+    const instanceNames = useMemo(
+        () => Object.fromEntries(configuredInstances.map((instance) => [instance.id, instance.name])),
+        [configuredInstances],
+    );
     const isAllInstancesScope = requestedInstanceId === 'all' && configuredInstances.length > 1;
     const selectedInstance = requestedInstanceId === 'all'
         ? configuredInstances[0]
@@ -537,8 +733,9 @@ export function Dashboard() {
             }
 
             startFilterApplication(() => {
-                setFilters(prev => ({
-                    ...prev,
+                setSimulationFilter(nextSimulation);
+                updatePersistedQuickFilters((current) => ({
+                    ...current,
                     simulation: nextSimulation,
                 }));
             });
@@ -546,33 +743,50 @@ export function Dashboard() {
         }
 
         startFilterApplication(() => {
-            setFilters(prev => ({
-                ...prev,
-                [type]: prev[type] === value ? null : value
-            }));
+            updatePersistedQuickFilters((current) => {
+                const selection = getStoredQuickFilterSelection(current, type);
+                const included = selection.included.includes(value)
+                    ? selection.included.filter((candidate) => candidate !== value)
+                    : [...selection.included, value];
+                return setStoredQuickFilterSelection(current, type, {
+                    included,
+                    excluded: selection.excluded.filter((candidate) => candidate !== value),
+                });
+            });
         });
     };
 
     const clearFilters = () => {
+        const hasStoredFilters = Object.values(
+            persistedQuickFiltersRef.current.selections,
+        ).some((selection) => Boolean(
+            selection
+            && (selection.included.length > 0 || selection.excluded.length > 0)
+        )) || Boolean(
+            persistedQuickFiltersRef.current.dateRange.start
+            || persistedQuickFiltersRef.current.dateRange.end
+        );
         if (
             filterApplyingRef.current ||
             (
-                filters.dateRange === null &&
-                filters.country === null &&
-                filters.scenario === null &&
-                filters.as === null &&
-                filters.ip === null &&
-                filters.target === null &&
+                !hasStoredFilters &&
                 filters.simulation === 'all'
             )
         ) {
             return;
         }
 
-        startFilterApplication(() => setFilters(EMPTY_FILTERS));
+        startFilterApplication(() => {
+            setSimulationFilter('all');
+            setDateRangeSticky(false);
+            updatePersistedQuickFilters(() => emptyStoredQuickFilters());
+        });
     };
 
-    const handleDateRangeSelect = (dateRange: DashboardFilters['dateRange'], isAtEnd: boolean) => {
+    const handleDateRangeSelect = useCallback((
+        dateRange: DashboardFilters['dateRange'],
+        isAtEnd: boolean,
+    ) => {
         if (filterApplyingRef.current) {
             return;
         }
@@ -585,18 +799,119 @@ export function Dashboard() {
         }
 
         startFilterApplication(() => {
-            setFilters(prev => ({
-                ...prev,
-                dateRange,
-                dateRangeSticky: nextDateRangeSticky,
+            setDateRangeSticky(nextDateRangeSticky);
+            updatePersistedQuickFilters((current) => ({
+                ...current,
+                dateRange: dateRange
+                    ? { start: dateRange.start, end: dateRange.end }
+                    : { start: '', end: '' },
             }));
         });
-    };
+    }, [
+        filters.dateRange,
+        filters.dateRangeSticky,
+        startFilterApplication,
+        updatePersistedQuickFilters,
+    ]);
+
+    const applyFacetSelection = useCallback((
+        field: FacetField,
+        selection: SearchFacetSelection,
+    ) => {
+        if (
+            filterApplyingRef.current
+            || !DASHBOARD_ALL_QUICK_FILTER_FIELDS.has(field)
+        ) {
+            return;
+        }
+
+        if (!DASHBOARD_QUICK_FILTER_FIELDS.includes(field)) {
+            updatePersistedQuickFilters((current) => setStoredQuickFilterSelection(
+                current,
+                field,
+                selection,
+            ));
+            return;
+        }
+
+        startFilterApplication(() => {
+            updatePersistedQuickFilters((current) => setStoredQuickFilterSelection(
+                current,
+                field,
+                selection,
+            ));
+        });
+    }, [startFilterApplication, updatePersistedQuickFilters]);
+
+    const applyQuickFilterDateRange = useCallback((range: SearchDateRange) => {
+        if (filterApplyingRef.current) return;
+        const nextRange = range.start || range.end
+            ? { start: range.start, end: range.end }
+            : null;
+        handleDateRangeSelect(nextRange, Boolean(range.end));
+    }, [handleDateRangeSelect]);
+
+    const quickFilterFields = useMemo<QuickFilterDefinition[]>(() => [
+        { field: 'scenario', label: t('tableColumns.scenario') },
+        { field: 'country', label: t('tableColumns.country') },
+        { field: 'as', label: t('tableColumns.as') },
+        { field: 'ip', label: t('tableColumns.source') },
+        { field: 'target', label: t('tableColumns.target') },
+        { field: 'id', label: t('tableColumns.id') },
+        { field: 'instance', label: t('tableColumns.instance') },
+        { field: 'region', label: t('tableColumns.region') },
+        { field: 'city', label: t('tableColumns.city') },
+        { field: 'machine', label: t('tableColumns.machine') },
+        { field: 'origin', label: t('tableColumns.origin') },
+        { field: 'decision', label: t('tableColumns.decisions'), applicable: false },
+        { field: 'action', label: t('tableColumns.action'), applicable: false },
+        { field: 'status', label: t('tableColumns.expiration'), applicable: false },
+        { field: 'alert', label: t('tableColumns.alert'), applicable: false },
+    ], [t]);
+    const quickFilterSectionOrder = useMemo<QuickFilterSectionId[]>(
+        () => [
+            'date',
+            ...quickFilterFields
+                .filter(({ applicable }) => applicable !== false)
+                .map(({ field }) => field),
+        ],
+        [quickFilterFields],
+    );
+    const formatFacetValue = useCallback((field: FacetField, value: string) => {
+        if (field === 'country') return getCountryName(value, language) || value;
+        if (field === 'instance') return instanceNames[value] || value;
+        return value;
+    }, [instanceNames, language]);
+    const getFacetSearchValues = useCallback((field: FacetField, search: string) => {
+        if (field === 'country') return getCountryCodesMatchingName(search, language);
+        if (field !== 'instance') return [];
+        const normalizedSearch = search.trim().toLocaleLowerCase(language);
+        return Object.entries(instanceNames)
+            .filter(([, name]) => name.toLocaleLowerCase(language).includes(normalizedSearch))
+            .map(([id]) => id);
+    }, [instanceNames, language]);
+    const getDashboardFacetSelection = useCallback((
+        field: FacetField,
+        selection: SearchFacetSelection,
+    ) => (
+        DASHBOARD_QUICK_FILTER_FIELDS.includes(field)
+            ? selection
+            : getStoredQuickFilterSelection(persistedQuickFilters, field)
+    ), [persistedQuickFilters]);
 
     const simulationsEnabled = config?.simulations_enabled === true;
-    const drilldownQuery = buildDashboardDrilldownQuery(filters, simulationsEnabled);
-    const alertsLink = buildDashboardDrilldownHref('/alerts', drilldownQuery);
-    const decisionsLink = buildDashboardDrilldownHref('/decisions', drilldownQuery);
+    const alertDrilldownQuery = buildDashboardDrilldownQuery(
+        dashboardAlertSearchAst,
+        filters.simulation,
+        simulationsEnabled,
+    );
+    const decisionDrilldownQuery = buildDashboardDrilldownQuery(
+        dashboardDecisionSearchAst,
+        filters.simulation,
+        simulationsEnabled,
+    );
+    const alertsLink = buildDashboardDrilldownHref('/alerts', alertDrilldownQuery);
+    const decisionsLink = buildDashboardDrilldownHref('/decisions', decisionDrilldownQuery);
     const filteredTotals = dashboardData.filteredTotals;
     const filteredSimulationAlertsCount = filteredTotals.simulatedAlerts;
     const filteredSimulationDecisionsCount = filteredTotals.simulatedDecisions;
@@ -625,13 +940,16 @@ export function Dashboard() {
             : filteredAllDecisions;
     const showSimulationBreakout = simulationsEnabled && filters.simulation === 'all';
 
-    const hasActiveFilters = filters.dateRange !== null ||
-        filters.country !== null ||
-        filters.scenario !== null ||
-        filters.as !== null ||
-        filters.ip !== null ||
-        filters.target !== null ||
+    const hasActiveFilters = Object.values(persistedQuickFilters.selections).some((selection) => (
+        Boolean(selection && (selection.included.length > 0 || selection.excluded.length > 0))
+    )) ||
+        filters.dateRange !== null ||
         filters.simulation !== 'all';
+    const selectedCountryValues = getStoredQuickFilterSelection(persistedQuickFilters, 'country').included;
+    const selectedScenarioValues = getStoredQuickFilterSelection(persistedQuickFilters, 'scenario').included;
+    const selectedAsValues = getStoredQuickFilterSelection(persistedQuickFilters, 'as').included;
+    const selectedTargetValues = getStoredQuickFilterSelection(persistedQuickFilters, 'target').included;
+    const dashboardFacetFilters = buildDashboardStatsFilters();
     const dashboardRefreshing = backgroundRefreshing || filterApplying;
 
     if (initialLoading) {
@@ -759,50 +1077,41 @@ export function Dashboard() {
                         </div>
                     </div>
 
-                    <div className="flex flex-col md:flex-row items-center gap-4">
-                        <div className="min-h-[38px]">
-                            <div className={`flex flex-row items-center gap-2 transition-opacity ${hasActiveFilters ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
-                                <button
-                                    onClick={() => navigate(alertsLink)}
-                                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
-                                >
-                                    <Filter className="w-4 h-4" />
-                                    <span className="hidden sm:inline">{t('pages.dashboard.viewAlerts')}</span>
-                                    <span className="sm:hidden">{t('pages.alerts.title')}</span>
-                                </button>
-                                <button
-                                    onClick={() => navigate(decisionsLink)}
-                                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
-                                >
-                                    <Filter className="w-4 h-4" />
-                                    <span className="hidden sm:inline">{t('pages.dashboard.viewDecisions')}</span>
-                                    <span className="sm:hidden">{t('pages.decisions.title')}</span>
-                                </button>
-                                <button
-                                    onClick={clearFilters}
-                                    disabled={filterApplying || !hasActiveFilters}
-                                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md transition-colors disabled:cursor-wait"
-                                >
-                                    <FilterX className="w-4 h-4" />
-                                    <span className="hidden sm:inline">{t('pages.dashboard.resetFilters')}</span>
-                                    <span className="sm:hidden">{t('common.reset')}</span>
-                                </button>
-                            </div>
-                        </div>
+                    <div className="flex flex-col items-center gap-4 md:flex-row">
+                        <div className="flex items-center gap-4">
+                            <QuickFilters
+                                page="alerts"
+                                fields={quickFilterFields}
+                                sectionOrder={quickFilterSectionOrder}
+                                unavailableSectionOrder={DASHBOARD_UNAVAILABLE_QUICK_FILTER_FIELDS}
+                                filters={dashboardFacetFilters}
+                                searchAst={dashboardAlertSearchAst}
+                                onSelectionChange={applyFacetSelection}
+                                dateRange={persistedQuickFilters.dateRange}
+                                onDateRangeChange={applyQuickFilterDateRange}
+                                onClearAll={clearFilters}
+                                getSelection={getDashboardFacetSelection}
+                                formatValue={formatFacetValue}
+                                getSearchValues={getFacetSearchValues}
+                                busy={dashboardRefreshing}
+                                refreshKey={refreshSignal}
+                                triggerClassName="h-[38px] box-border rounded-lg border-gray-100 px-3 py-1.5 shadow-sm dark:border-gray-700"
+                            />
 
-                        <div className="flex items-center gap-3 bg-white dark:bg-gray-800 px-3 py-1.5 rounded-lg border border-gray-100 dark:border-gray-700 shadow-sm h-[38px] box-border">
-                            <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
-                                <Percent className="w-4 h-4" />
-                            </div>
+                            <div className="flex h-[38px] box-border items-center gap-3 rounded-lg border border-gray-100 bg-white px-3 py-1.5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+                                <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+                                    <Percent className="h-4 w-4" />
+                                </div>
 
-                            <div className="flex items-center gap-2">
-                                <span className={`text-xs font-medium ${percentageBasis === 'filtered' ? 'text-primary-600' : 'text-gray-500'}`}>{t('pages.dashboard.filtered')}</span>
-                                <Switch
-                                    id="percentage-basis"
-                                    checked={percentageBasis === 'global'}
-                                    onCheckedChange={(checked) => setPercentageBasis(checked ? 'global' : 'filtered')}
-                                />
-                                <span className={`text-xs font-medium ${percentageBasis === 'global' ? 'text-primary-600' : 'text-gray-500'}`}>{t('pages.dashboard.global')}</span>
+                                <div className="flex items-center gap-2">
+                                    <span className={`text-xs font-medium ${percentageBasis === 'filtered' ? 'text-primary-600' : 'text-gray-500'}`}>{t('pages.dashboard.filtered')}</span>
+                                    <Switch
+                                        id="percentage-basis"
+                                        checked={percentageBasis === 'global'}
+                                        onCheckedChange={(checked) => setPercentageBasis(checked ? 'global' : 'filtered')}
+                                    />
+                                    <span className={`text-xs font-medium ${percentageBasis === 'global' ? 'text-primary-600' : 'text-gray-500'}`}>{t('pages.dashboard.global')}</span>
+                                </div>
                             </div>
                         </div>
 
@@ -886,6 +1195,7 @@ export function Dashboard() {
                         items={statistics.topCountries}
                         onSelect={(item) => toggleFilter('country', item.countryCode)}
                         selectedValue={filters.country}
+                        selectedValues={selectedCountryValues}
                         renderLabel={(item) => (
                             <span className="text-sm truncate font-medium text-gray-900 dark:text-gray-100" title={item.count === 0 && item.label === item.countryCode ? item.label : getCountryName(item.countryCode, language) ?? item.label}>
                                 {item.count === 0 && item.label === item.countryCode ? item.label : getCountryName(item.countryCode, language) ?? item.label}
@@ -898,6 +1208,7 @@ export function Dashboard() {
                         items={statistics.topScenarios}
                         onSelect={(item) => toggleFilter('scenario', item.label)}
                         selectedValue={filters.scenario}
+                        selectedValues={selectedScenarioValues}
                         renderLabel={(item) => (
                             <ScenarioName name={item.label} showLink={true} />
                         )}
@@ -908,6 +1219,7 @@ export function Dashboard() {
                         items={statistics.topAS}
                         onSelect={(item) => toggleFilter('as', item.label)}
                         selectedValue={filters.as}
+                        selectedValues={selectedAsValues}
                         total={percentageBasis === 'global' ? dashboardData.globalTotal : filteredTotals.alerts}
                     />
                     <StatCard
@@ -915,6 +1227,7 @@ export function Dashboard() {
                         items={statistics.topTargets}
                         onSelect={(item) => toggleFilter('target', item.label)}
                         selectedValue={filters.target}
+                        selectedValues={selectedTargetValues}
                         total={percentageBasis === 'global' ? dashboardData.globalTotal : filteredTotals.alerts}
                     />
                 </div>

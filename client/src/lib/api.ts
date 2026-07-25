@@ -145,7 +145,7 @@ export async function fetchFacet(
     page: 'alerts' | 'decisions',
     field: FacetField,
     filters?: Record<string, string>,
-    options: { search?: string; offset?: number; limit?: number; signal?: AbortSignal } = {},
+    options: { search?: string; searchValues?: string[]; offset?: number; limit?: number; signal?: AbortSignal } = {},
 ): Promise<FacetResponse> {
     const params = new URLSearchParams({
         field,
@@ -153,6 +153,9 @@ export async function fetchFacet(
         limit: String(options.limit ?? 10),
     });
     if (options.search) params.set('search', options.search);
+    if (options.searchValues?.length) {
+        params.set('search_values', JSON.stringify(options.searchValues));
+    }
     for (const [key, value] of Object.entries(filters ?? {})) {
         if (value) params.set(key, value);
     }

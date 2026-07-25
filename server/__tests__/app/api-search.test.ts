@@ -253,6 +253,34 @@ describe('createApp search API', () => {
       }),
     );
 
+    const filteredResponse = await controller.fetch(new Request(
+      'http://localhost/crowdsec/api/decisions?page=1&page_size=10&q=scenario%3Dcrowdsecurity%2Fappsec-native',
+    ));
+    expect(filteredResponse.status).toBe(200);
+    expect((await filteredResponse.json()) as {
+      data: Array<{ id: number; is_duplicate: boolean; detail: { reason: string } }>;
+      pagination: { total: number };
+    }).toEqual(expect.objectContaining({
+      data: [
+        expect.objectContaining({
+          id: 10,
+          is_duplicate: false,
+          detail: expect.objectContaining({ reason: 'crowdsecurity/appsec-native' }),
+        }),
+      ],
+      pagination: expect.objectContaining({ total: 1 }),
+    }));
+
+    const filteredFacetResponse = await controller.fetch(new Request(
+      'http://localhost/crowdsec/api/decisions/facets?field=action&q=scenario%3Dcrowdsecurity%2Fappsec-native',
+    ));
+    expect(filteredFacetResponse.status).toBe(200);
+    expect((await filteredFacetResponse.json()) as {
+      values: Array<{ value: string; count: number }>;
+    }).toEqual(expect.objectContaining({
+      values: [expect.objectContaining({ value: 'ban', count: 1 })],
+    }));
+
     const duplicatesResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions?page=1&page_size=10&hide_duplicates=false'));
     expect(duplicatesResponse.status).toBe(200);
     expect((await duplicatesResponse.json()) as { data: Array<{ id: number; is_duplicate: boolean }> }).toEqual(

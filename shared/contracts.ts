@@ -35,6 +35,7 @@ export type FacetField = AlertFacetField | DecisionFacetField;
 
 export interface FacetValue {
   value: string;
+  label?: string;
   count: number;
 }
 
@@ -225,6 +226,7 @@ export interface AlertRecord {
   meta?: AlertMeta[];
   decisions?: AlertDecision[];
   target?: string;
+  targets?: string[];
   target_count?: number;
   meta_search?: string;
   simulated?: boolean;
@@ -263,6 +265,7 @@ export interface SlimAlert {
   machine_alias?: string;
   source: AlertSource | null;
   target?: string;
+  targets?: string[];
   target_count?: number;
   meta_search: string;
   decisions: SlimDecision[];
@@ -284,6 +287,7 @@ export interface DecisionListDetail {
   expiration?: string;
   alert_id?: string | number;
   target?: string | null;
+  targets?: string[];
   target_count?: number;
   simulated?: boolean;
 }
@@ -294,6 +298,8 @@ export interface DecisionListItem {
   instance_name?: string;
   created_at: string;
   machine?: string;
+  machine_id?: string;
+  machine_alias?: string;
   scenario?: string;
   value?: string;
   expired: boolean;

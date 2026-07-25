@@ -506,16 +506,16 @@ describe('multi-instance API', () => {
         'http://localhost/api/alerts/facets?field=instance&instance=primary&q=instance:primary',
       ));
       expect((await instanceAlerts.json() as any).values).toEqual(expect.arrayContaining([
-        { value: 'primary', count: 1 },
-        { value: 'secondary', count: 1 },
+        { value: 'primary', label: 'Primary', count: 1 },
+        { value: 'secondary', label: 'Secondary', count: 1 },
       ]));
 
       const instanceDecisions = await controller.fetch(new Request(
         'http://localhost/api/decisions/facets?field=instance&instance=primary&q=instance:primary',
       ));
       expect((await instanceDecisions.json() as any).values).toEqual(expect.arrayContaining([
-        { value: 'primary', count: 1 },
-        { value: 'secondary', count: 1 },
+        { value: 'primary', label: 'Primary', count: 1 },
+        { value: 'secondary', label: 'Secondary', count: 1 },
       ]));
     } finally {
       controller.stopBackgroundTasks();

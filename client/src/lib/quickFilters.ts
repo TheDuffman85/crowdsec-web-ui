@@ -12,6 +12,7 @@ import {
     type SearchPage,
 } from '../../../shared/search';
 import type { FacetField } from '../types';
+import type { DashboardSimulationFilter } from '../../../shared/contracts';
 
 export const QUICK_FILTERS_STORAGE_KEY = 'crowdsec-web-ui:quick-filters';
 
@@ -55,12 +56,14 @@ const ALL_QUICK_FILTER_FIELDS = new Set<FacetField>([
 export interface StoredQuickFilters {
     selections: Partial<Record<FacetField, SearchFacetSelection>>;
     dateRange: SearchDateRange;
+    simulation: DashboardSimulationFilter;
 }
 
 export function emptyStoredQuickFilters(): StoredQuickFilters {
     return {
         selections: {},
         dateRange: { start: '', end: '' },
+        simulation: 'all',
     };
 }
 
@@ -142,6 +145,17 @@ export function mergeStoredQuickFiltersIntoQuery(
         ast = replaceSearchDateRange(ast, nextDateRange);
     }
 
+    const querySimulation = getSearchFacetSelection(ast, 'sim');
+    if (
+        !isSelectionActive(querySimulation)
+        && filters.simulation !== 'all'
+    ) {
+        ast = replaceSearchFacetSelection(ast, 'sim', {
+            included: [filters.simulation],
+            excluded: [],
+        });
+    }
+
     return serializeSearchNode(ast);
 }
 
@@ -159,12 +173,22 @@ export function syncStoredQuickFiltersFromSearch(
             getSearchFacetSelection(searchAst, field),
         );
     }
+    const simulationSelection = getSearchFacetSelection(searchAst, 'sim');
+    const simulation = simulationSelection.excluded.length === 0
+        && simulationSelection.included.length === 1
+        && (
+            simulationSelection.included[0] === 'live'
+            || simulationSelection.included[0] === 'simulated'
+        )
+        ? simulationSelection.included[0]
+        : 'all';
     return {
         ...next,
         dateRange: {
             start: dateRange.start,
             end: dateRange.end,
         },
+        simulation,
     };
 }
 
@@ -179,7 +203,7 @@ function normalizeStoredQuickFilters(value: unknown): StoredQuickFilters {
     const normalized = emptyStoredQuickFilters();
     if (!value || typeof value !== 'object' || Array.isArray(value)) return normalized;
 
-    const input = value as { selections?: unknown; dateRange?: unknown };
+    const input = value as { selections?: unknown; dateRange?: unknown; simulation?: unknown };
     if (input.selections && typeof input.selections === 'object' && !Array.isArray(input.selections)) {
         for (const [field, selection] of Object.entries(input.selections)) {
             if (!ALL_QUICK_FILTER_FIELDS.has(field as FacetField)) continue;
@@ -196,6 +220,10 @@ function normalizeStoredQuickFilters(value: unknown): StoredQuickFilters {
             start: typeof dateRange.start === 'string' ? dateRange.start : '',
             end: typeof dateRange.end === 'string' ? dateRange.end : '',
         };
+    }
+
+    if (input.simulation === 'live' || input.simulation === 'simulated') {
+        normalized.simulation = input.simulation;
     }
 
     return normalized;

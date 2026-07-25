@@ -78,7 +78,7 @@ import {
   type DashboardAttackLocationAccumulator,
 } from './dashboard-locations';
 import { createAttackLocationResolver, type AttackLocationResolver } from './attack-location-geocoder';
-import { getAlertSourceValue, getAlertTargetSummary, resolveAlertHistoryAt, resolveAlertReason, resolveAlertScenario, toSlimAlert, withAlertTargetSummary } from './utils/alerts';
+import { getAlertSourceValue, getAlertTargets, getAlertTargetSummary, resolveAlertHistoryAt, resolveAlertReason, resolveAlertScenario, toSlimAlert, withAlertTargetSummary } from './utils/alerts';
 import { parseGoDuration, toDuration } from './utils/duration';
 import { fetchCrowdsecMetrics } from './metrics';
 import { DatabaseQueryWorker, QueryWorkerTimeoutError } from './query-worker-client';
@@ -261,6 +261,7 @@ interface PageRequest {
 interface FacetRequest {
   field: FacetField;
   search: string;
+  searchValues: string[];
   offset: number;
   limit: number;
 }
@@ -300,6 +301,8 @@ interface DecisionListFilters {
 
 interface DashboardStatsFilters {
   instanceId: string;
+  q: string;
+  decisionQ: string;
   country: string;
   scenario: string;
   as: string;
@@ -322,27 +325,52 @@ interface DashboardStatsCache {
 }
 
 interface DashboardAlertStatsRecord {
+  id: string | number;
   instanceId: string;
   createdAt: string;
   timestamp: number;
   country?: string;
+  region?: string;
+  city?: string;
   scenario?: string;
   asName?: string;
   ip?: string;
+  sourceValue?: string;
+  sourceRange?: string;
   latitude?: number;
   longitude?: number;
   target?: string;
+  targets?: string[];
+  machine?: string;
+  machineId?: string;
+  machineAlias?: string;
+  origins?: string[];
   simulated: boolean;
 }
 
 interface DashboardDecisionStatsRecord {
+  id: string | number;
   instanceId: string;
+  alertId?: string | number;
   createdAt: string;
   stopAt?: string;
   timestamp: number;
   stopTimestamp: number;
   value?: string;
   country?: string;
+  region?: string;
+  city?: string;
+  scenario?: string;
+  asName?: string;
+  target?: string;
+  targets?: string[];
+  type?: string;
+  origin?: string;
+  machine?: string;
+  machineId?: string;
+  machineAlias?: string;
+  duration?: string;
+  isDuplicate: boolean;
   simulated: boolean;
 }
 
@@ -2417,12 +2445,14 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     const alertSource = alert.source || null;
     const sourceValue = getAlertSourceValue(alertSource);
     const targetSummary = getAlertTargetSummary(alert);
+    const targets = getAlertTargets(alert);
     const target = targetSummary.target;
     const machine = resolveMachineName(alert);
     const simulated = isAlertSimulated(alert);
     const enrichedAlert: AlertRecord = {
       ...alert,
       target,
+      targets,
       target_count: targetSummary.count,
       simulated,
     };
@@ -2464,7 +2494,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         city: alertSource?.city,
         as: alertSource?.as_name,
         machine,
+        machine_id: alert.machine_id,
+        machine_alias: alert.machine_alias,
         target,
+        targets,
         target_count: targetSummary.count,
         simulated: decisionSimulated,
         is_duplicate: false,
@@ -2720,9 +2753,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
     const { decisions: _incomingDecisions, ...incomingAlertMetadata } = alert;
     const targetSummary = getAlertTargetSummary(alert);
+    const targets = getAlertTargets(alert);
     const incomingMetadata = {
       ...incomingAlertMetadata,
       target: targetSummary.target,
+      targets,
       target_count: targetSummary.count,
       simulated: isAlertSimulated(alert),
     } as AlertRecord;
@@ -4705,49 +4740,27 @@ ${errorSummary}  Status: ${syncSummary.state}
     searchAst: SearchNode | null,
     includeExpired: boolean,
   ): Promise<PaginatedResponse<DecisionListItem>> {
-    const since = new Date(Date.now() - config.lookbackMs).toISOString();
     const now = new Date().toISOString();
-    const duplicateSql = '(decisions.is_duplicate = 1)';
-    const baseWhere = createSqlWhere();
-    if (filters.instanceId !== 'all') {
-      baseWhere.add('instance_id = ?', filters.instanceId);
-    } else {
-      baseWhere.add(`instance_id IN (${config.instances.map(() => '?').join(',')})`, ...config.instances.map((instance) => instance.id));
-    }
-    if (includeExpired) {
-      baseWhere.add('(created_at >= ? OR stop_at > ?)', since, now);
-    } else {
-      baseWhere.add('stop_at > ?', now);
-    }
-    if (!config.simulationsEnabled) {
-      baseWhere.add('simulated = 0');
-    }
-
-    const filteredWhere = baseWhere.clone();
-    addDecisionSqlFilters(filteredWhere, filters, true);
-    const searchWhere = compileDecisionSearchSql(searchAst, filters, now);
-    if (searchWhere) {
-      filteredWhere.add(searchWhere.sql, ...searchWhere.params);
-    }
+    const query = buildDecisionListQuery(filters, searchAst, includeExpired, now);
 
     const offset = (pageRequest.page - 1) * pageRequest.pageSize;
-    const decisionsTable = `decisions ${getDecisionPageIndexHint(filters, searchAst)}`.trim();
     const [unfilteredTotal, total, rows] = await Promise.all([
-      queryCount('decisions', baseWhere),
-      queryCount('decisions', filteredWhere),
+      queryCount('decisions', query.baseWhere),
+      queryDecisionListCount(query),
       queryWorker.all<NormalizedDecisionRow & {
         is_duplicate?: number;
         latitude?: number | null;
         longitude?: number | null;
       }>(`
-        SELECT ${DECISION_RECORD_COLUMNS}, ${duplicateSql} AS is_duplicate,
+        ${query.cteSql}
+        SELECT ${DECISION_RECORD_COLUMNS}, ${query.dynamicDedup ? '0' : '(is_duplicate = 1)'} AS is_duplicate,
           (SELECT latitude FROM alerts WHERE alerts.id = decisions.alert_id) AS latitude,
           (SELECT longitude FROM alerts WHERE alerts.id = decisions.alert_id) AS longitude
-        FROM ${decisionsTable}
-        ${filteredWhere.toSql()}
+        FROM ${query.fromSql}
+        ${query.outerWhereSql}
         ORDER BY created_at DESC, id DESC
         LIMIT ? OFFSET ?
-      `, [...filteredWhere.params, pageRequest.pageSize, offset]),
+      `, [...query.params, pageRequest.pageSize, offset]),
     ]);
 
     const alertCoordinates = new Map<string, { latitude: number; longitude: number }>();
@@ -4782,6 +4795,206 @@ ${errorSummary}  Status: ${syncSummary.state}
           .map((decision) => ({ instance_id: decision.instance_id || primaryInstance.id, id: decision.id })),
       } : {}),
     };
+  }
+
+  function buildDecisionListQuery(
+    filters: DecisionListFilters,
+    searchAst: SearchNode | null,
+    includeExpired: boolean,
+    now: string,
+  ): {
+    baseWhere: SqlWhere;
+    cteSql: string;
+    fromSql: string;
+    outerWhereSql: string;
+    params: unknown[];
+    dynamicDedup: boolean;
+  } {
+    const since = new Date(Date.now() - config.lookbackMs).toISOString();
+    const baseWhere = createSqlWhere();
+    if (filters.instanceId !== 'all') {
+      baseWhere.add('instance_id = ?', filters.instanceId);
+    } else {
+      baseWhere.add(`instance_id IN (${config.instances.map(() => '?').join(',')})`, ...config.instances.map((instance) => instance.id));
+    }
+    if (includeExpired) {
+      baseWhere.add('(created_at >= ? OR stop_at > ?)', since, now);
+    } else {
+      baseWhere.add('stop_at > ?', now);
+    }
+    if (!config.simulationsEnabled) {
+      baseWhere.add('simulated = 0');
+    }
+
+    const dynamicDedup = !filters.showDuplicates && decisionFiltersCanSplitDuplicateGroup(filters, searchAst);
+    const filteredWhere = baseWhere.clone();
+    addDecisionSqlFilters(filteredWhere, filters, !dynamicDedup);
+    const searchWhere = compileDecisionSearchSql(searchAst, filters, now);
+    if (searchWhere) {
+      filteredWhere.add(searchWhere.sql, ...searchWhere.params);
+    }
+
+    if (!dynamicDedup) {
+      return {
+        baseWhere,
+        cteSql: '',
+        fromSql: `decisions AS decisions ${getDecisionPageIndexHint(filters, searchAst)}`.trim(),
+        outerWhereSql: filteredWhere.toSql(),
+        params: filteredWhere.params,
+        dynamicDedup: false,
+      };
+    }
+
+    return {
+      baseWhere,
+      cteSql: `
+        WITH ranked_filtered_decisions AS (
+          SELECT decisions.*,
+            CASE
+              WHEN stop_at <= ? THEN 1
+              ELSE ROW_NUMBER() OVER (
+                PARTITION BY instance_id, value, simulated
+                ORDER BY
+                  stop_at DESC,
+                  CASE WHEN id GLOB '[0-9]*' THEN CAST(id AS INTEGER) ELSE -1 END DESC,
+                  id DESC
+              )
+            END AS filtered_duplicate_rank
+          FROM decisions
+          ${filteredWhere.toSql()}
+        )
+      `,
+      fromSql: 'ranked_filtered_decisions AS decisions',
+      outerWhereSql: 'WHERE filtered_duplicate_rank = 1',
+      params: [now, ...filteredWhere.params],
+      dynamicDedup: true,
+    };
+  }
+
+  function decisionFiltersCanSplitDuplicateGroup(
+    filters: DecisionListFilters,
+    searchAst: SearchNode | null,
+  ): boolean {
+    return Boolean(
+      searchAst
+      || filters.alertId
+      || filters.country
+      || filters.scenario
+      || filters.as
+      || filters.ip
+      || filters.target
+      || filters.dateStart
+      || filters.dateEnd
+    );
+  }
+
+  async function queryDecisionListCount(query: {
+    cteSql: string;
+    fromSql: string;
+    outerWhereSql: string;
+    params: unknown[];
+  }): Promise<number> {
+    const row = await queryWorker.get<{ count: number }>(`
+      ${query.cteSql}
+      SELECT COUNT(*) AS count
+      FROM ${query.fromSql}
+      ${query.outerWhereSql}
+    `, query.params);
+    return row.count;
+  }
+
+  async function queryDashboardFilteredListTotals(
+    filters: DashboardStatsFilters,
+    alertSearchAst: SearchNode | null,
+    decisionSearchAst: SearchNode | null,
+  ): Promise<{
+    alerts: number;
+    decisions: number;
+    simulatedAlerts: number;
+    simulatedDecisions: number;
+  }> {
+    const alertFilters: AlertListFilters = {
+      instanceId: filters.instanceId,
+      q: filters.q,
+      ip: filters.ip,
+      country: filters.country,
+      scenario: filters.scenario,
+      as: filters.as,
+      date: '',
+      dateStart: filters.dateStart,
+      dateEnd: filters.dateEnd,
+      target: filters.target,
+      simulation: filters.simulation,
+      timezoneOffsetMinutes: filters.timezoneOffsetMinutes,
+      timeZone: filters.timeZone,
+    };
+    const decisionFilters: DecisionListFilters = {
+      instanceId: filters.instanceId,
+      q: filters.decisionQ,
+      alertId: '',
+      country: filters.country,
+      scenario: filters.scenario,
+      as: filters.as,
+      ip: filters.ip,
+      target: filters.target,
+      dateStart: filters.dateStart,
+      dateEnd: filters.dateEnd,
+      simulation: filters.simulation,
+      showDuplicates: false,
+      timezoneOffsetMinutes: filters.timezoneOffsetMinutes,
+      timeZone: filters.timeZone,
+    };
+
+    const alertWhere = createSqlWhere();
+    alertWhere.add('created_at >= ?', new Date(Date.now() - config.lookbackMs).toISOString());
+    if (filters.instanceId !== 'all') {
+      alertWhere.add('instance_id = ?', filters.instanceId);
+    } else {
+      alertWhere.add(`instance_id IN (${config.instances.map(() => '?').join(',')})`, ...config.instances.map((instance) => instance.id));
+    }
+    if (!config.simulationsEnabled) {
+      alertWhere.add('simulated = 0');
+    }
+    addAlertSqlFilters(alertWhere, alertFilters);
+    const alertSearchWhere = compileAlertSearchSql(alertSearchAst, alertFilters);
+    if (alertSearchWhere) {
+      alertWhere.add(alertSearchWhere.sql, ...alertSearchWhere.params);
+    }
+
+    const decisionQuery = buildDecisionListQuery(
+      decisionFilters,
+      decisionSearchAst,
+      false,
+      new Date().toISOString(),
+    );
+    const [alertRows, decisionRows] = await Promise.all([
+      queryWorker.all<{ simulated: number; count: number }>(`
+        SELECT simulated, COUNT(*) AS count
+        FROM alerts ${getAlertCountIndexHint(alertFilters, alertSearchAst)}
+        ${alertWhere.toSql()}
+        GROUP BY simulated
+      `, alertWhere.params),
+      queryWorker.all<{ simulated: number; count: number }>(`
+        ${decisionQuery.cteSql}
+        SELECT simulated, COUNT(*) AS count
+        FROM ${decisionQuery.fromSql}
+        ${decisionQuery.outerWhereSql}
+        GROUP BY simulated
+      `, decisionQuery.params),
+    ]);
+
+    const alerts = alertRows.reduce((sum, row) => sum + Number(row.count || 0), 0);
+    const simulatedAlerts = alertRows
+      .filter((row) => row.simulated === 1)
+      .reduce((sum, row) => sum + Number(row.count || 0), 0);
+    const decisions = decisionRows
+      .filter((row) => row.simulated !== 1)
+      .reduce((sum, row) => sum + Number(row.count || 0), 0);
+    const simulatedDecisions = decisionRows
+      .filter((row) => row.simulated === 1)
+      .reduce((sum, row) => sum + Number(row.count || 0), 0);
+
+    return { alerts, decisions, simulatedAlerts, simulatedDecisions };
   }
 
   async function queryAlertFacet(
@@ -4830,9 +5043,23 @@ ${errorSummary}  Status: ${syncSummary.state}
       as: "COALESCE(TRIM(as_name), '')",
       ip: "COALESCE(TRIM(source_ip), '')",
       target: "COALESCE(TRIM(target), '')",
-      machine: "COALESCE(TRIM(machine), '')",
+      machine: normalizedMachineIdSql('machine_id', 'machine'),
       origin: "COALESCE(TRIM(origins), '')",
     } as Record<string, string>)[request.field];
+    const instanceLabel = request.field === 'instance'
+      ? buildInstanceFacetLabelSql('instance_id', config.instances)
+      : null;
+    const labelDefinition = request.field === 'country'
+      ? {
+        sql: "COALESCE(NULLIF(TRIM(country_name), ''), COALESCE(TRIM(country), ''))",
+        params: [] as unknown[],
+      }
+      : request.field === 'machine'
+        ? {
+          sql: "COALESCE(NULLIF(TRIM(machine), ''), COALESCE(TRIM(machine_id), ''))",
+          params: [] as unknown[],
+        }
+        : instanceLabel;
     if (request.field === 'decision') {
       const simulationSql = config.simulationsEnabled ? '' : ' AND facet_decision.simulated = 0';
       const now = new Date().toISOString();
@@ -4850,7 +5077,7 @@ ${errorSummary}  Status: ${syncSummary.state}
               FROM alerts
               ${filteredWhere.toSql()}
             )
-            SELECT 'active' AS value
+            SELECT 'active' AS value, 'active' AS label
             FROM filtered_alerts
             WHERE EXISTS (
                 SELECT 1 FROM decisions facet_decision
@@ -4858,7 +5085,7 @@ ${errorSummary}  Status: ${syncSummary.state}
                   AND facet_decision.stop_at > ?${simulationSql}
               )
             UNION ALL
-            SELECT 'expired' AS value
+            SELECT 'expired' AS value, 'expired' AS label
             FROM filtered_alerts
             WHERE EXISTS (
                 SELECT 1 FROM decisions facet_decision
@@ -4866,7 +5093,7 @@ ${errorSummary}  Status: ${syncSummary.state}
                   AND facet_decision.stop_at <= ?${simulationSql}
               )
             UNION ALL
-            SELECT '' AS value
+            SELECT '' AS value, '' AS label
             FROM filtered_alerts
             WHERE NOT EXISTS (
                 SELECT 1 FROM decisions facet_decision
@@ -4883,6 +5110,77 @@ ${errorSummary}  Status: ${syncSummary.state}
       setCachedFacetResponse(cacheKey, response);
       return response;
     }
+    if (request.field === 'origin') {
+      const simulationSql = config.simulationsEnabled ? '' : ' AND facet_decision.simulated = 0';
+      const response = await queryFacetValues(
+        'alerts',
+        "''",
+        [],
+        filteredWhere,
+        request,
+        searchAst,
+        {
+          sql: `
+            WITH filtered_alerts AS (
+              SELECT id
+              FROM alerts
+              ${filteredWhere.toSql()}
+            ),
+            distinct_origins AS (
+              SELECT DISTINCT filtered_alerts.id AS alert_id, TRIM(facet_decision.origin) AS value
+              FROM filtered_alerts
+              INNER JOIN decisions AS facet_decision
+                ON facet_decision.alert_id = filtered_alerts.id
+              WHERE COALESCE(TRIM(facet_decision.origin), '') <> ''${simulationSql}
+            )
+            SELECT value, value AS label
+            FROM distinct_origins
+            UNION ALL
+            SELECT '' AS value, '' AS label
+            FROM filtered_alerts
+            WHERE NOT EXISTS (
+              SELECT 1
+              FROM decisions AS facet_decision
+              WHERE facet_decision.alert_id = filtered_alerts.id
+                AND COALESCE(TRIM(facet_decision.origin), '') <> ''${simulationSql}
+            )
+          `,
+          params: filteredWhere.params,
+        },
+      );
+      setCachedFacetResponse(cacheKey, response);
+      return response;
+    }
+    if (request.field === 'target') {
+      const response = await queryFacetValues(
+        'alerts',
+        "''",
+        [],
+        filteredWhere,
+        request,
+        searchAst,
+        {
+          sql: `
+            WITH filtered_alerts AS (
+              SELECT id, target, extra_data
+              FROM alerts
+              ${filteredWhere.toSql()}
+            ),
+            distinct_targets AS (
+              SELECT DISTINCT filtered_alerts.id AS alert_id,
+                COALESCE(TRIM(CAST(target_value.value AS TEXT)), '') AS value
+              FROM filtered_alerts
+              INNER JOIN json_each(${jsonStringArraySql('filtered_alerts.extra_data', 'targets', 'filtered_alerts.target')}) AS target_value
+            )
+            SELECT value, value AS label
+            FROM distinct_targets
+          `,
+          params: filteredWhere.params,
+        },
+      );
+      setCachedFacetResponse(cacheKey, response);
+      return response;
+    }
     if (!valueSql) throw new Error(`Unsupported alert facet field: ${request.field}`);
 
     const response = await queryFacetValues(
@@ -4892,6 +5190,8 @@ ${errorSummary}  Status: ${syncSummary.state}
       filteredWhere,
       request,
       searchAst,
+      undefined,
+      labelDefinition || undefined,
     );
     setCachedFacetResponse(cacheKey, response);
     return response;
@@ -4913,29 +5213,13 @@ ${errorSummary}  Status: ${syncSummary.state}
     const cached = getCachedFacetResponse(cacheKey);
     if (cached) return cached;
 
-    const since = new Date(Date.now() - config.lookbackMs).toISOString();
     const now = new Date().toISOString();
-    const baseWhere = createSqlWhere();
-    if (effectiveFilters.instanceId !== 'all') {
-      baseWhere.add('instance_id = ?', effectiveFilters.instanceId);
-    } else {
-      baseWhere.add(`instance_id IN (${config.instances.map(() => '?').join(',')})`, ...config.instances.map((instance) => instance.id));
-    }
-    if (effectiveIncludeExpired) {
-      baseWhere.add('(created_at >= ? OR stop_at > ?)', since, now);
-    } else {
-      baseWhere.add('stop_at > ?', now);
-    }
-    if (!config.simulationsEnabled) {
-      baseWhere.add('simulated = 0');
-    }
-
-    const filteredWhere = baseWhere.clone();
-    addDecisionSqlFilters(filteredWhere, effectiveFilters, true);
-    const searchWhere = compileDecisionSearchSql(prunedSearchAst, effectiveFilters, now);
-    if (searchWhere) {
-      filteredWhere.add(searchWhere.sql, ...searchWhere.params);
-    }
+    const decisionQuery = buildDecisionListQuery(
+      effectiveFilters,
+      prunedSearchAst,
+      effectiveIncludeExpired,
+      now,
+    );
 
     const valueDefinition = request.field === 'status'
       ? { sql: "CASE WHEN stop_at > ? THEN 'active' ELSE 'expired' END", params: [now] }
@@ -4952,20 +5236,96 @@ ${errorSummary}  Status: ${syncSummary.state}
           ip: "COALESCE(TRIM(value), '')",
           target: "COALESCE(TRIM(target), '')",
           action: "COALESCE(TRIM(type), '')",
-          machine: "COALESCE(TRIM(machine), '')",
+          machine: decisionMachineIdSql('extra_data', 'machine'),
           origin: "COALESCE(TRIM(origin), '')",
         } as Record<string, string>)[request.field],
         params: [],
       };
     if (!valueDefinition.sql) throw new Error(`Unsupported decision facet field: ${request.field}`);
 
+    const instanceLabel = request.field === 'instance'
+      ? buildInstanceFacetLabelSql('instance_id', config.instances)
+      : null;
+    const labelDefinition = request.field === 'country'
+      ? {
+        sql: "COALESCE(NULLIF(TRIM(country_name), ''), COALESCE(TRIM(country), ''))",
+        params: [] as unknown[],
+      }
+      : request.field === 'machine'
+        ? {
+          sql: decisionMachineLabelSql('extra_data', 'machine'),
+          params: [] as unknown[],
+        }
+        : instanceLabel;
+
+    if (request.field === 'target') {
+      const response = await queryFacetValues(
+        'decisions',
+        "''",
+        [],
+        createSqlWhere(),
+        request,
+        searchAst,
+        {
+          prefixSql: decisionQuery.cteSql,
+          sql: `
+            WITH filtered_decisions AS (
+              SELECT id, target, extra_data
+              FROM ${decisionQuery.fromSql}
+              ${decisionQuery.outerWhereSql}
+            ),
+            distinct_targets AS (
+              SELECT DISTINCT filtered_decisions.id AS decision_id,
+                COALESCE(TRIM(CAST(target_value.value AS TEXT)), '') AS value
+              FROM filtered_decisions
+              INNER JOIN json_each(${jsonStringArraySql('filtered_decisions.extra_data', 'targets', 'filtered_decisions.target')}) AS target_value
+            )
+            SELECT value, value AS label
+            FROM distinct_targets
+          `,
+          params: decisionQuery.params,
+        },
+      );
+      setCachedFacetResponse(cacheKey, response);
+      return response;
+    }
+
     const response = await queryFacetValues(
       'decisions',
       valueDefinition.sql,
       valueDefinition.params,
-      filteredWhere,
+      createSqlWhere(),
       request,
       searchAst,
+      {
+        prefixSql: decisionQuery.cteSql,
+        sql: labelDefinition
+          ? `
+            SELECT ${valueDefinition.sql} AS value, ${labelDefinition.sql} AS label
+            FROM ${decisionQuery.fromSql}
+            ${decisionQuery.outerWhereSql}
+          `
+          : `
+            SELECT value, value AS label
+            FROM (
+              SELECT ${valueDefinition.sql} AS value
+              FROM ${decisionQuery.fromSql}
+              ${decisionQuery.outerWhereSql}
+            )
+          `,
+        params: decisionQuery.cteSql
+          ? [
+            ...decisionQuery.params,
+            ...valueDefinition.params,
+            ...(labelDefinition?.params || []),
+          ]
+          : [
+            ...valueDefinition.params,
+            ...(labelDefinition?.params || []),
+            ...decisionQuery.params,
+          ],
+      },
+      labelDefinition || undefined,
     );
     setCachedFacetResponse(cacheKey, response);
     return response;
@@ -4978,7 +5338,8 @@ ${errorSummary}  Status: ${syncSummary.state}
     where: SqlWhere,
     request: FacetRequest,
     originalSearchAst: SearchNode | null,
-    facetRows?: { sql: string; params: unknown[] },
+    facetRows?: { prefixSql?: string; sql: string; params: unknown[] },
+    labelDefinition?: { sql: string; params: unknown[] },
   ): Promise<FacetResponse> {
     const selection = getSearchFacetSelection(originalSearchAst, request.field);
     const selectedValues = [...new Set([...selection.included, ...selection.excluded])]
@@ -4987,38 +5348,73 @@ ${errorSummary}  Status: ${syncSummary.state}
     const outerParams: unknown[] = [];
     const selectedPlaceholders = selectedValues.map(() => '?').join(', ');
 
-    if (request.search) {
-      const searchClause = "LOWER(value) LIKE ? ESCAPE '\\'";
+    if (request.search || request.searchValues.length > 0) {
+      const searchClauses: string[] = [];
+      const searchParams: unknown[] = [];
+      if (request.search) {
+        searchClauses.push("LOWER(value) LIKE ? ESCAPE '\\'", "LOWER(label) LIKE ? ESCAPE '\\'");
+        searchParams.push(likeParam(request.search), likeParam(request.search));
+      }
+      if (request.searchValues.length > 0) {
+        searchClauses.push(`value IN (${request.searchValues.map(() => '?').join(', ')})`);
+        searchParams.push(...request.searchValues);
+      }
+      const searchClause = `(${searchClauses.join(' OR ')})`;
       if (selectedValues.length > 0) {
-        outerClauses.push(`(${searchClause} OR value IN (${selectedPlaceholders}))`);
-        outerParams.push(likeParam(request.search), ...selectedValues);
+        outerClauses.push(`(${searchClause}
+          OR value IN (${selectedPlaceholders})
+          OR label IN (${selectedPlaceholders}))`);
+        outerParams.push(...searchParams, ...selectedValues, ...selectedValues);
       } else {
         outerClauses.push(searchClause);
-        outerParams.push(likeParam(request.search));
+        outerParams.push(...searchParams);
       }
     }
 
     const selectedOrderSql = selectedValues.length > 0
-      ? `CASE WHEN value IN (${selectedPlaceholders}) THEN 0 ELSE 1 END, `
+      ? `CASE
+        WHEN value IN (${selectedPlaceholders}) OR label IN (${selectedPlaceholders}) THEN 0
+        ELSE 1
+      END, `
       : '';
-    const rows = await facetQueryWorker.all<{ value: string | null; count: number }>(`
-      WITH facet_rows(value) AS (
-        ${facetRows?.sql ?? `
+    const facetRowsCte = facetRows
+      ? `facet_rows(value, label) AS (
+        ${facetRows.sql}
+      )`
+      : labelDefinition
+        ? `facet_rows(value, label) AS (
+          SELECT ${valueSql}
+            AS value, ${labelDefinition.sql} AS label
+          FROM ${tableName}
+          ${where.toSql()}
+        )`
+        : `facet_values(value) AS (
           SELECT ${valueSql}
           FROM ${tableName}
           ${where.toSql()}
-        `}
-      )
-      SELECT value, COUNT(*) AS count
+        ),
+        facet_rows(value, label) AS (
+          SELECT value, value AS label
+          FROM facet_values
+        )`;
+    const rows = await facetQueryWorker.all<{ value: string | null; label: string | null; count: number }>(`
+      ${facetRows?.prefixSql
+        ? `${facetRows.prefixSql.trim()}, ${facetRowsCte}`
+        : `WITH ${facetRowsCte}`}
+      SELECT value, MAX(label) AS label, COUNT(*) AS count
       FROM facet_rows
       ${outerClauses.length > 0 ? `WHERE ${outerClauses.join(' AND ')}` : ''}
       GROUP BY value
-      ORDER BY ${selectedOrderSql}count DESC, value COLLATE NOCASE ASC
+      ORDER BY ${selectedOrderSql}count DESC, label COLLATE NOCASE ASC, value COLLATE NOCASE ASC
       LIMIT ? OFFSET ?
     `, [
-      ...(facetRows?.params ?? [...valueParams, ...where.params]),
+      ...(facetRows?.params ?? [
+        ...valueParams,
+        ...(labelDefinition?.params || []),
+        ...where.params,
+      ]),
       ...outerParams,
-      ...(selectedValues.length > 0 ? selectedValues : []),
+      ...(selectedValues.length > 0 ? [...selectedValues, ...selectedValues] : []),
       request.limit + 1,
       request.offset,
     ]);
@@ -5027,6 +5423,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       field: request.field,
       values: rows.slice(0, request.limit).map((row) => ({
         value: row.value || '',
+        ...((row.label || '') !== (row.value || '') ? { label: row.label || '' } : {}),
         count: Number(row.count) || 0,
       })),
       offset: request.offset,
@@ -5238,12 +5635,33 @@ ${errorSummary}  Status: ${syncSummary.state}
     timeZone: string | null,
   ): void {
     if (!dateStart && !dateEnd) return;
-    const includeHour = dateStart.includes('T') || dateEnd.includes('T');
     if (dateStart) {
-      where.add(`${column} >= ?`, getDateFilterBoundary(dateStart, timezoneOffsetMinutes, timeZone, includeHour).toISOString());
+      const parsedStart = parseSqlSearchDateValue(dateStart, { timezoneOffsetMinutes, timeZone });
+      where.add(
+        `${column} >= ?`,
+        new Date(parsedStart?.start ?? getDateFilterBoundary(
+          dateStart,
+          timezoneOffsetMinutes,
+          timeZone,
+          dateStart.includes('T'),
+        ).getTime()).toISOString(),
+      );
     }
     if (dateEnd) {
-      where.add(`${column} <= ?`, getDateFilterBoundary(dateEnd, timezoneOffsetMinutes, timeZone, includeHour).toISOString());
+      const parsedEnd = parseSqlSearchDateValue(dateEnd, { timezoneOffsetMinutes, timeZone });
+      if (parsedEnd && parsedEnd.precision !== 'instant') {
+        where.add(`${column} < ?`, new Date(parsedEnd.end).toISOString());
+      } else {
+        where.add(
+          `${column} <= ?`,
+          new Date(parsedEnd?.end ?? getDateFilterBoundary(
+            dateEnd,
+            timezoneOffsetMinutes,
+            timeZone,
+            dateEnd.includes('T'),
+          ).getTime()).toISOString(),
+        );
+      }
     }
   }
 
@@ -5326,22 +5744,35 @@ ${errorSummary}  Status: ${syncSummary.state}
       const batchWhere = alertWhere.clone();
       batchWhere.add('id > ?', lastAlertId);
       const alertRows = await queryWorker.all<{
-      id: number;
+      id: string;
+      internal_id: number;
       instance_id: string;
       created_at: string;
       country?: string | null;
+      region?: string | null;
+      city?: string | null;
       scenario?: string | null;
       as_name?: string | null;
       source_ip?: string | null;
+      source_value?: string | null;
+      source_range?: string | null;
       latitude?: number | null;
       longitude?: number | null;
       target?: string | null;
+      machine_id?: string | null;
+      machine_alias?: string | null;
+      machine?: string | null;
+      extra_data?: string | null;
+      origins?: string | null;
       simulated?: number | null;
     }>(`
-      SELECT id, instance_id, created_at, country, scenario, as_name, source_ip, latitude, longitude, target, simulated
+      SELECT COALESCE(upstream_id, CAST(id AS TEXT)) AS id, id AS internal_id,
+        instance_id, created_at, country, region, city, scenario, as_name,
+        source_ip, source_value, source_range, latitude, longitude, target,
+        machine_id, machine_alias, machine, origins, simulated, extra_data
       FROM alerts
       ${batchWhere.toSql()}
-      ORDER BY id ASC
+      ORDER BY alerts.id ASC
       LIMIT ?
     `, [...batchWhere.params, DASHBOARD_INDEX_BATCH_SIZE]);
       if (alertRows.length === 0) {
@@ -5362,21 +5793,31 @@ ${errorSummary}  Status: ${syncSummary.state}
         }
 
         alerts.push({
+          id: row.id,
           instanceId: row.instance_id,
           createdAt,
           timestamp,
           country: row.country || undefined,
+          region: row.region || undefined,
+          city: row.city || undefined,
           scenario: row.scenario || undefined,
           asName: row.as_name || undefined,
           ip: row.source_ip || undefined,
+          sourceValue: row.source_value || undefined,
+          sourceRange: row.source_range || undefined,
           latitude: normalizeDashboardCoordinate(row.latitude, -90, 90),
           longitude: normalizeDashboardCoordinate(row.longitude, -180, 180),
           target: row.target || undefined,
+          targets: readExtraStringArray(row.extra_data, 'targets', row.target),
+          machine: row.machine || undefined,
+          machineId: row.machine_id || undefined,
+          machineAlias: row.machine_alias || undefined,
+          origins: row.origins?.split(/\s+/).filter(Boolean),
           simulated,
         });
       }
 
-      lastAlertId = Number(alertRows[alertRows.length - 1]?.id || lastAlertId);
+      lastAlertId = Number(alertRows[alertRows.length - 1]?.internal_id || lastAlertId);
       await delay(0);
     }
 
@@ -5399,14 +5840,30 @@ ${errorSummary}  Status: ${syncSummary.state}
       batchWhere.add('rowid > ?', lastDecisionRowId);
       const decisionRows = await queryWorker.all<{
       rowid: number;
+      upstream_id?: string | null;
       instance_id: string;
+      alert_upstream_id?: string | null;
       created_at: string;
       stop_at?: string | null;
       value?: string | null;
       country?: string | null;
+      region?: string | null;
+      city?: string | null;
+      scenario?: string | null;
+      as_name?: string | null;
+      target?: string | null;
+      type?: string | null;
+      origin?: string | null;
+      machine?: string | null;
+      extra_data?: string | null;
+      duration?: string | null;
+      is_duplicate?: number | null;
       simulated?: number | null;
     }>(`
-      SELECT rowid, instance_id, created_at, stop_at, value, country, simulated
+      SELECT rowid, COALESCE(upstream_id, CAST(id AS TEXT)) AS upstream_id,
+        instance_id, alert_upstream_id, created_at, stop_at, value, country,
+        region, city, scenario, as_name, target, type, origin, machine, duration,
+        is_duplicate, simulated, extra_data
       FROM decisions
       ${batchWhere.toSql()}
       ORDER BY rowid ASC
@@ -5437,13 +5894,28 @@ ${errorSummary}  Status: ${syncSummary.state}
         }
 
         decisions.push({
+          id: row.upstream_id || row.rowid,
           instanceId: row.instance_id,
+          alertId: row.alert_upstream_id || undefined,
           createdAt,
           stopAt,
           timestamp,
           stopTimestamp: normalizedStopTimestamp,
           value: row.value || undefined,
           country: row.country || undefined,
+          region: row.region || undefined,
+          city: row.city || undefined,
+          scenario: row.scenario || undefined,
+          asName: row.as_name || undefined,
+          target: row.target || undefined,
+          targets: readExtraStringArray(row.extra_data, 'targets', row.target),
+          type: row.type || undefined,
+          origin: row.origin || undefined,
+          machine: row.machine || undefined,
+          machineId: readExtraString(row.extra_data, 'machine_id'),
+          machineAlias: readExtraString(row.extra_data, 'machine_alias'),
+          duration: row.duration || undefined,
+          isDuplicate: row.is_duplicate === 1,
           simulated,
         });
       }
@@ -5581,6 +6053,90 @@ ${errorSummary}  Status: ${syncSummary.state}
   ): Promise<DashboardStatsResponse> {
     const nowTimestamp = Date.now();
     const lookbackDays = Math.max(1, Math.round(lookbackHours(config.lookbackPeriod) / 24));
+    const instanceNameById = new Map(
+      config.instances.map((instance) => [instance.id, instance.name]),
+    );
+    const compiledDashboardSearch = compileAlertSearch(
+      filters.q,
+      { machineEnabled: true, originEnabled: true },
+      {
+        timezoneOffsetMinutes: filters.timezoneOffsetMinutes,
+        timeZone: filters.timeZone,
+      },
+    );
+    const compiledDashboardDecisionSearch = compileDecisionSearch(
+      filters.decisionQ,
+      { machineEnabled: true, originEnabled: true },
+      {
+        timezoneOffsetMinutes: filters.timezoneOffsetMinutes,
+        timeZone: filters.timeZone,
+      },
+    );
+    const dashboardSearchPredicate = compiledDashboardSearch.ok
+      ? (alert: DashboardAlertStatsRecord) => compiledDashboardSearch.predicate({
+        id: alert.id,
+        instance_id: alert.instanceId,
+        instance_name: instanceNameById.get(alert.instanceId),
+        created_at: alert.createdAt,
+        scenario: alert.scenario,
+        machine_id: alert.machineId,
+        machine_alias: alert.machineAlias || alert.machine,
+        source: {
+          ip: alert.ip,
+          value: alert.sourceValue,
+          range: alert.sourceRange,
+          cn: alert.country,
+          region: alert.region,
+          city: alert.city,
+          as_name: alert.asName,
+        },
+        target: alert.target,
+        targets: alert.targets,
+        meta_search: '',
+        decisions: (alert.origins || []).map((origin, index) => ({
+          id: index,
+          origin,
+        })),
+        simulated: alert.simulated,
+      })
+      : null;
+    const dashboardDecisionSearchPredicate = compiledDashboardDecisionSearch.ok
+      ? (decision: DashboardDecisionStatsRecord) => compiledDashboardDecisionSearch.predicate({
+        id: decision.id,
+        instance_id: decision.instanceId,
+        instance_name: instanceNameById.get(decision.instanceId),
+        created_at: decision.createdAt,
+        machine: decision.machine,
+        machine_id: decision.machineId,
+        machine_alias: decision.machineAlias,
+        scenario: decision.scenario,
+        value: decision.value,
+        expired: decision.stopTimestamp <= nowTimestamp,
+        is_duplicate: decision.isDuplicate,
+        simulated: decision.simulated,
+        detail: {
+          origin: decision.origin || '',
+          type: decision.type,
+          reason: decision.scenario,
+          action: decision.type,
+          country: decision.country,
+          city: decision.city,
+          region: decision.region,
+          as: decision.asName,
+          duration: decision.duration,
+          expiration: decision.stopAt,
+          alert_id: decision.alertId,
+          target: decision.target,
+          targets: decision.targets,
+          simulated: decision.simulated,
+        },
+      })
+      : null;
+    const exactListTotalsPromise = queryDashboardFilteredListTotals(
+      filters,
+      compiledDashboardSearch.ok ? compiledDashboardSearch.ast : null,
+      compiledDashboardDecisionSearch.ok ? compiledDashboardDecisionSearch.ast : null,
+    );
 
     const filteredAlertAccumulator = createDashboardStatsAccumulator();
     const chartAlertAccumulator = createDashboardStatsAccumulator();
@@ -5603,14 +6159,14 @@ ${errorSummary}  Status: ${syncSummary.state}
         continue;
       }
 
-      if (matchesDashboardAlertFilters(alert, filters, false)) {
+      if (matchesDashboardAlertFilters(alert, filters, dashboardSearchPredicate, false)) {
         addDashboardAlert(sliderAlertAccumulator, alert, filters);
         if (alert.ip) {
           sliderAlertIps.add(alert.ip);
         }
       }
 
-      if (matchesDashboardAlertFilters(alert, filters, true)) {
+      if (matchesDashboardAlertFilters(alert, filters, dashboardSearchPredicate, true)) {
         addDashboardAlert(filteredAlertAccumulator, alert, filters);
         addDashboardAttackLocation(filteredAlertAccumulator.attackLocations, alert);
         addDashboardAlert(chartAlertAccumulator, alert, filters);
@@ -5623,6 +6179,8 @@ ${errorSummary}  Status: ${syncSummary.state}
     const filteredDecisionAccumulator = createDashboardDecisionAccumulator();
     const chartDecisionAccumulator = createDashboardDecisionAccumulator();
     const sliderDecisionAccumulator = createDashboardDecisionAccumulator();
+    const filteredActiveDecisionPrimaries = new Map<string, DashboardDecisionStatsRecord>();
+    const sliderActiveDecisionPrimaries = new Map<string, DashboardDecisionStatsRecord>();
 
     let globalTotal = 0;
     for (let index = 0; index < statsIndex.decisions.length; index += 1) {
@@ -5636,22 +6194,51 @@ ${errorSummary}  Status: ${syncSummary.state}
       }
 
       const isActive = decision.stopTimestamp > nowTimestamp;
-      if (matchesDashboardDecisionFilters(decision, filters, sliderAlertIps, false)) {
-        addDashboardDecision(sliderDecisionAccumulator, decision, filters, isActive);
+      if (matchesDashboardDecisionFilters(
+        decision,
+        filters,
+        dashboardDecisionSearchPredicate,
+        sliderAlertIps,
+        false,
+      )) {
+        if (isActive) {
+          selectDashboardDecisionPrimary(sliderActiveDecisionPrimaries, decision);
+        } else {
+          addDashboardDecision(sliderDecisionAccumulator, decision, filters, false);
+        }
       }
 
-      if (matchesDashboardDecisionFilters(decision, filters, filteredAlertIps, true)) {
-        addDashboardDecision(chartDecisionAccumulator, decision, filters, isActive);
-        const country = normalizeDashboardCountryCode(decision.country)
-          || (decision.value ? alertCountryByIp.get(decision.value) : undefined);
-        addDashboardDecisionCountry(filteredDecisionAccumulator, decision, country, isActive);
+      if (
+        matchesDashboardDecisionFilters(
+          decision,
+          filters,
+          dashboardDecisionSearchPredicate,
+          filteredAlertIps,
+          true,
+        )
+      ) {
         if (isActive) {
-          if (decision.simulated) {
-            filteredDecisionAccumulator.simulatedDecisions += 1;
-          } else {
-            filteredDecisionAccumulator.decisions += 1;
-          }
+          selectDashboardDecisionPrimary(filteredActiveDecisionPrimaries, decision);
+        } else {
+          addDashboardDecision(chartDecisionAccumulator, decision, filters, false);
+          const country = normalizeDashboardCountryCode(decision.country)
+            || (decision.value ? alertCountryByIp.get(decision.value) : undefined);
+          addDashboardDecisionCountry(filteredDecisionAccumulator, decision, country, false);
         }
+      }
+    }
+    for (const decision of sliderActiveDecisionPrimaries.values()) {
+      addDashboardDecision(sliderDecisionAccumulator, decision, filters, true);
+    }
+    for (const decision of filteredActiveDecisionPrimaries.values()) {
+      addDashboardDecision(chartDecisionAccumulator, decision, filters, true);
+      const country = normalizeDashboardCountryCode(decision.country)
+        || (decision.value ? alertCountryByIp.get(decision.value) : undefined);
+      addDashboardDecisionCountry(filteredDecisionAccumulator, decision, country, true);
+      if (decision.simulated) {
+        filteredDecisionAccumulator.simulatedDecisions += 1;
+      } else {
+        filteredDecisionAccumulator.decisions += 1;
       }
     }
     for (let index = 0; index < statsIndex.alerts.length; index += 1) {
@@ -5669,14 +6256,15 @@ ${errorSummary}  Status: ${syncSummary.state}
     const attackLocations = await attackLocationResolver.resolve(
       dashboardAttackLocationData(filteredAlertAccumulator.attackLocations),
     );
+    const exactListTotals = await exactListTotalsPromise;
 
     const response: DashboardStatsResponse = {
       totals: statsIndex.totals,
       filteredTotals: {
-        alerts: filteredAlertAccumulator.alerts,
-        decisions: filteredDecisionAccumulator.decisions,
-        simulatedAlerts: filteredAlertAccumulator.simulatedAlerts,
-        simulatedDecisions: filteredDecisionAccumulator.simulatedDecisions,
+        alerts: exactListTotals.alerts,
+        decisions: exactListTotals.decisions,
+        simulatedAlerts: exactListTotals.simulatedAlerts,
+        simulatedDecisions: exactListTotals.simulatedDecisions,
       },
       globalTotal,
       topTargets: topDashboardEntries(filteredAlertAccumulator.targets),
@@ -6124,6 +6712,92 @@ function spaceSeparatedTextCondition(column: string, value: string): SqlConditio
   };
 }
 
+function buildInstanceFacetLabelSql(
+  column: string,
+  instances: ReadonlyArray<{ id: string; name: string }>,
+): { sql: string; params: unknown[] } {
+  if (instances.length === 0) {
+    return { sql: `COALESCE(TRIM(${column}), '')`, params: [] };
+  }
+  return {
+    sql: `CASE COALESCE(TRIM(${column}), '')
+      ${instances.map(() => 'WHEN ? THEN ?').join('\n')}
+      ELSE COALESCE(TRIM(${column}), '')
+    END`,
+    params: instances.flatMap((instance) => [instance.id, instance.name]),
+  };
+}
+
+function normalizedMachineIdSql(idColumn: string, fallbackColumn: string): string {
+  return `CASE
+    WHEN COALESCE(LOWER(TRIM(${idColumn})), '') IN ('', 'n/a', 'na', 'unknown')
+      THEN COALESCE(TRIM(${fallbackColumn}), '')
+    ELSE TRIM(${idColumn})
+  END`;
+}
+
+function decisionMachineIdSql(extraDataColumn: string, fallbackColumn: string): string {
+  const idColumn = `CAST(json_extract(${extraDataColumn}, '$.machine_id') AS TEXT)`;
+  return normalizedMachineIdSql(idColumn, fallbackColumn);
+}
+
+function decisionMachineLabelSql(extraDataColumn: string, fallbackColumn: string): string {
+  const aliasColumn = `CAST(json_extract(${extraDataColumn}, '$.machine_alias') AS TEXT)`;
+  return `CASE
+    WHEN COALESCE(LOWER(TRIM(${aliasColumn})), '') IN ('', 'n/a', 'na', 'unknown')
+      THEN COALESCE(TRIM(${fallbackColumn}), '')
+    ELSE TRIM(${aliasColumn})
+  END`;
+}
+
+function jsonStringArraySql(extraDataColumn: string, key: string, fallbackColumn: string): string {
+  const path = `$.${key}`;
+  return `CASE
+    WHEN json_valid(${extraDataColumn}) = 1
+      AND json_type(${extraDataColumn}, '${path}') = 'array'
+      THEN json_extract(${extraDataColumn}, '${path}')
+    ELSE json_array(${fallbackColumn})
+  END`;
+}
+
+function anyTextColumnCondition(columns: string[], value: string, exact = false): SqlCondition {
+  const conditions = columns.map((column) => textCondition(`LOWER(${column})`, value, exact));
+  return {
+    sql: `(${conditions.map((condition) => condition.sql).join(' OR ')})`,
+    params: conditions.flatMap((condition) => condition.params),
+  };
+}
+
+function targetFieldCondition(
+  targetColumn: string,
+  extraDataColumn: string,
+  value: string,
+  exact = false,
+): SqlCondition {
+  const primary = textCondition(`LOWER(${targetColumn})`, value, exact);
+  const arrayValue = "LOWER(TRIM(CAST(target_filter_value.value AS TEXT)))";
+  const arrayCondition = textCondition(arrayValue, value, exact);
+  return {
+    sql: `(${primary.sql} OR EXISTS (
+      SELECT 1
+      FROM json_each(${jsonStringArraySql(extraDataColumn, 'targets', targetColumn)}) AS target_filter_value
+      WHERE ${arrayCondition.sql}
+    ))`,
+    params: [...primary.params, ...arrayCondition.params],
+  };
+}
+
+function targetEmptyCondition(targetColumn: string, extraDataColumn: string): SqlCondition {
+  return {
+    sql: `NOT EXISTS (
+      SELECT 1
+      FROM json_each(${jsonStringArraySql(extraDataColumn, 'targets', targetColumn)}) AS target_filter_value
+      WHERE COALESCE(TRIM(CAST(target_filter_value.value AS TEXT)), '') <> ''
+    )`,
+    params: [],
+  };
+}
+
 function ipCondition(column: string, value: string, exact = false): SqlCondition {
   const normalized = value.trim().toLowerCase();
   if (exact) {
@@ -6194,13 +6868,17 @@ function alertFieldCondition(
     case 'as':
       return textCondition('LOWER(as_name)', value, exact);
     case 'target':
-      return textCondition('LOWER(target)', value, exact);
+      return targetFieldCondition('target', 'extra_data', value, exact);
     case 'date':
       return textCondition('LOWER(created_at)', value, exact);
     case 'sim':
       return simulationTermCondition(value);
     case 'machine':
-      return textCondition('LOWER(machine)', value, exact);
+      return anyTextColumnCondition([
+        normalizedMachineIdSql('machine_id', 'machine'),
+        'machine_alias',
+        'machine',
+      ], value, exact);
     case 'origin':
       return exact ? spaceSeparatedTextCondition('origins', value) : textCondition('LOWER(origins)', value);
     case 'decision':
@@ -6241,7 +6919,7 @@ function decisionFieldCondition(
     case 'as':
       return textCondition('LOWER(as_name)', value, exact);
     case 'target':
-      return textCondition('LOWER(target)', value, exact);
+      return targetFieldCondition('target', 'extra_data', value, exact);
     case 'date':
       return textCondition('LOWER(created_at)', value, exact);
     case 'action':
@@ -6254,7 +6932,11 @@ function decisionFieldCondition(
     case 'sim':
       return simulationTermCondition(value);
     case 'machine':
-      return textCondition('LOWER(machine)', value, exact);
+      return anyTextColumnCondition([
+        decisionMachineIdSql('extra_data', 'machine'),
+        decisionMachineLabelSql('extra_data', 'machine'),
+        'machine',
+      ], value, exact);
     case 'origin':
       return textCondition('LOWER(origin)', value, exact);
     default:
@@ -6284,6 +6966,15 @@ function instanceFieldCondition(
 }
 
 function alertEmptyFieldCondition(field: string, simulationsEnabled = true): SqlCondition {
+  if (field === 'target') {
+    return targetEmptyCondition('target', 'extra_data');
+  }
+  if (field === 'machine') {
+    return {
+      sql: `COALESCE(TRIM(${normalizedMachineIdSql('machine_id', 'machine')}), '') = ''`,
+      params: [],
+    };
+  }
   switch (field) {
     case 'scenario':
     case 'message':
@@ -6292,8 +6983,6 @@ function alertEmptyFieldCondition(field: string, simulationsEnabled = true): Sql
     case 'region':
     case 'city':
     case 'as':
-    case 'target':
-    case 'machine':
     case 'origin':
       return emptyTextCondition({
         scenario: 'scenario',
@@ -6303,8 +6992,6 @@ function alertEmptyFieldCondition(field: string, simulationsEnabled = true): Sql
         region: 'region',
         city: 'city',
         as: 'as_name',
-        target: 'target',
-        machine: 'machine',
         origin: 'origins',
       }[field]);
     case 'decision':
@@ -6347,6 +7034,15 @@ function alertDecisionCondition(value: string, now: string, simulationsEnabled: 
 }
 
 function decisionEmptyFieldCondition(field: string): SqlCondition {
+  if (field === 'target') {
+    return targetEmptyCondition('target', 'extra_data');
+  }
+  if (field === 'machine') {
+    return {
+      sql: `COALESCE(TRIM(${decisionMachineIdSql('extra_data', 'machine')}), '') = ''`,
+      params: [],
+    };
+  }
   switch (field) {
     case 'alert':
     case 'scenario':
@@ -6355,10 +7051,8 @@ function decisionEmptyFieldCondition(field: string): SqlCondition {
     case 'region':
     case 'city':
     case 'as':
-    case 'target':
     case 'action':
     case 'type':
-    case 'machine':
     case 'origin':
       return emptyTextCondition({
         alert: 'alert_id',
@@ -6368,10 +7062,8 @@ function decisionEmptyFieldCondition(field: string): SqlCondition {
         region: 'region',
         city: 'city',
         as: 'as_name',
-        target: 'target',
         action: 'type',
         type: 'type',
-        machine: 'machine',
         origin: 'origin',
       }[field]);
     default:
@@ -6784,6 +7476,8 @@ function applySimulationModeToAlert(alert: AlertRecord, simulationsEnabled: bool
     instance_name: typeof decision.instance_name === 'string' ? decision.instance_name : undefined,
     created_at: String(decision.created_at || ''),
     machine: typeof decision.machine === 'string' ? decision.machine : undefined,
+    machine_id: typeof decision.machine_id === 'string' ? decision.machine_id : undefined,
+    machine_alias: typeof decision.machine_alias === 'string' ? decision.machine_alias : undefined,
     scenario: typeof decision.scenario === 'string' ? decision.scenario : undefined,
     value: typeof decision.value === 'string' ? decision.value : undefined,
     expired,
@@ -6803,6 +7497,9 @@ function applySimulationModeToAlert(alert: AlertRecord, simulationsEnabled: bool
       expiration: typeof decision.stop_at === 'string' ? decision.stop_at : undefined,
       alert_id: decision.alert_id as string | number | undefined,
       target: typeof decision.target === 'string' ? decision.target : null,
+      targets: Array.isArray(decision.targets)
+        ? decision.targets.filter((target): target is string => typeof target === 'string' && target.trim().length > 0)
+        : undefined,
       target_count: typeof decision.target_count === 'number' ? decision.target_count : undefined,
       simulated: normalizeDecisionSimulated(decision),
     },
@@ -6902,9 +7599,25 @@ function getFacetRequest(
   return {
     field: field as FacetField,
     search: String(context.req.query('search') || '').trim().slice(0, 200),
+    searchValues: parseFacetSearchValues(context.req.query('search_values')),
     offset: clampInteger(context.req.query('offset'), 0, FACET_MAX_OFFSET, 0),
     limit: clampInteger(context.req.query('limit'), 1, FACET_MAX_LIMIT, FACET_DEFAULT_LIMIT),
   };
+}
+
+function parseFacetSearchValues(rawValue: string | undefined): string[] {
+  if (!rawValue) return [];
+  try {
+    const parsed = JSON.parse(rawValue) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return [...new Set(parsed
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.trim())
+      .filter(Boolean))]
+      .slice(0, 700);
+  } catch {
+    return [];
+  }
 }
 
 function clampInteger(
@@ -6986,6 +7699,8 @@ function getDecisionListFiltersFromValues(readValue: (key: string) => string | u
 function getDashboardStatsFilters(context: HonoContext, timeZone: string | null): DashboardStatsFilters {
   return {
     instanceId: context.req.query('instance') || 'all',
+    q: context.req.query('q') || '',
+    decisionQ: context.req.query('decision_q') ?? context.req.query('q') ?? '',
     country: context.req.query('country') || '',
     scenario: context.req.query('scenario') || '',
     as: context.req.query('as') || '',
@@ -7042,8 +7757,10 @@ function matchesDashboardSimulationFilter(isSimulated: boolean, filter: Dashboar
 function matchesDashboardAlertFilters(
   alert: DashboardAlertStatsRecord,
   filters: DashboardStatsFilters,
+  searchPredicate: ((alert: DashboardAlertStatsRecord) => boolean) | null,
   includeDateRange: boolean,
 ): boolean {
+  if (searchPredicate && !searchPredicate(alert)) return false;
   if (filters.country && alert.country !== filters.country) return false;
   if (filters.scenario && alert.scenario !== filters.scenario) return false;
   if (filters.as && alert.asName !== filters.as) return false;
@@ -7060,12 +7777,24 @@ function matchesDashboardAlertFilters(
 function matchesDashboardDecisionFilters(
   decision: DashboardDecisionStatsRecord,
   filters: DashboardStatsFilters,
+  searchPredicate: ((decision: DashboardDecisionStatsRecord) => boolean) | null,
   alertIps: Set<string>,
   includeDateRange: boolean,
 ): boolean {
+  if (searchPredicate && !searchPredicate(decision)) return false;
   if (filters.ip && !matchesIpSearchValue(decision.value, filters.ip)) return false;
+  if (filters.country && decision.country !== filters.country) return false;
+  if (filters.scenario && decision.scenario !== filters.scenario) return false;
+  if (filters.as && decision.asName !== filters.as) return false;
+  if (filters.target && decision.target !== filters.target) return false;
 
-  if (requiresDashboardAlertIpJoin(filters) && (!decision.value || !alertIps.has(decision.value))) {
+  // Legacy Dashboard requests supplied only an alert-oriented q. Preserve their
+  // alert-to-decision relationship when no explicit decision query is present.
+  if (
+    !filters.decisionQ
+    && requiresDashboardAlertIpJoin(filters)
+    && (!decision.value || !alertIps.has(decision.value))
+  ) {
     return false;
   }
 
@@ -7077,7 +7806,7 @@ function matchesDashboardDecisionFilters(
 }
 
 function requiresDashboardAlertIpJoin(filters: DashboardStatsFilters): boolean {
-  return Boolean(filters.country || filters.scenario || filters.as || filters.target);
+  return Boolean(filters.q || filters.country || filters.scenario || filters.as || filters.target);
 }
 
 function matchesDashboardDateRange(isoString: string, filters: DashboardStatsFilters): boolean {
@@ -7148,6 +7877,36 @@ function addDashboardDecision(
       : accumulator.activeLiveDecisionBuckets;
     incrementCount(activeBucketMap, bucketKey);
   }
+}
+
+function selectDashboardDecisionPrimary(
+  primaries: Map<string, DashboardDecisionStatsRecord>,
+  candidate: DashboardDecisionStatsRecord,
+): void {
+  const valueKey = candidate.value === undefined ? '\u0001' : `\u0002${candidate.value}`;
+  const key = `${candidate.instanceId}\u0000${valueKey}\u0000${candidate.simulated ? '1' : '0'}`;
+  const current = primaries.get(key);
+  if (!current || compareDashboardDecisionRank(candidate, current) > 0) {
+    primaries.set(key, candidate);
+  }
+}
+
+function compareDashboardDecisionRank(
+  left: DashboardDecisionStatsRecord,
+  right: DashboardDecisionStatsRecord,
+): number {
+  if (left.stopTimestamp !== right.stopTimestamp) {
+    return left.stopTimestamp - right.stopTimestamp;
+  }
+
+  const leftId = String(left.id);
+  const rightId = String(right.id);
+  const leftNumericId = /^\d+$/.test(leftId) ? Number(leftId) : -1;
+  const rightNumericId = /^\d+$/.test(rightId) ? Number(rightId) : -1;
+  if (leftNumericId !== rightNumericId) {
+    return leftNumericId - rightNumericId;
+  }
+  return leftId.localeCompare(rightId);
 }
 
 function normalizeDashboardCountryCode(country: string | undefined): string | undefined {
@@ -7399,19 +8158,49 @@ function sanitizeRequestTimeZone(value: string | undefined): string | null {
   }
 }
 
+function parseRecordExtras(value: string | null | undefined): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function readExtraString(value: string | null | undefined, key: string): string | undefined {
+  const candidate = parseRecordExtras(value)[key];
+  return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : undefined;
+}
+
+function readExtraStringArray(
+  value: string | null | undefined,
+  key: string,
+  fallback?: string | null,
+): string[] | undefined {
+  const candidate = parseRecordExtras(value)[key];
+  const values = Array.isArray(candidate)
+    ? candidate.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
+  if (values.length > 0) return [...new Set(values.map((item) => item.trim()))];
+  return typeof fallback === 'string' && fallback.trim() ? [fallback.trim()] : undefined;
+}
+
 function matchesAlertListFilters(alert: SlimAlert, filters: AlertListFilters): boolean {
   if (!matchesSimulationFilter(alert.simulated === true, filters.simulation)) return false;
 
   const scenario = (alert.scenario || '').toLowerCase();
   const cn = (alert.source?.cn || '').toLowerCase();
   const asName = (alert.source?.as_name || '').toLowerCase();
-  const target = (alert.target || '').toLowerCase();
 
   if (filters.ip && !getSlimAlertSourceValues(alert).some((value) => matchesIpSearchValue(value, filters.ip))) return false;
   if (filters.country && !cn.includes(filters.country)) return false;
   if (filters.scenario && !scenario.includes(filters.scenario)) return false;
   if (filters.as && !asName.includes(filters.as)) return false;
-  if (filters.target && !target.includes(filters.target)) return false;
+  if (filters.target && ![...(alert.targets || []), alert.target || '']
+    .some((target) => target.toLowerCase().includes(filters.target))) return false;
   if (filters.date && !(alert.created_at && alert.created_at.startsWith(filters.date))) return false;
 
   if (filters.dateStart || filters.dateEnd) {
@@ -7439,8 +8228,9 @@ function matchesDecisionListFilters(decision: DecisionListItem, filters: Decisio
 
   if (filters.target) {
     const value = (decision.value || '').toLowerCase();
-    const target = (decision.detail.target || '').toLowerCase();
-    if (!value.includes(filters.target) && !target.includes(filters.target)) return false;
+    const matchesTarget = [...(decision.detail.targets || []), decision.detail.target || '']
+      .some((target) => target.toLowerCase().includes(filters.target));
+    if (!value.includes(filters.target) && !matchesTarget) return false;
   }
 
   if (filters.dateStart || filters.dateEnd) {

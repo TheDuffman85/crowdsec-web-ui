@@ -546,10 +546,10 @@ const alertFieldMatchers: AlertFieldMatcherMap = {
   region: (alert, value) => includesNormalized(alert.source?.region, value),
   city: (alert, value) => includesNormalized(alert.source?.city, value),
   as: (alert, value) => includesNormalized(alert.source?.as_name, value),
-  target: (alert, value) => includesNormalized(alert.target, value),
+  target: (alert, value) => getAlertTargetValues(alert).some((target) => includesNormalized(target, value)),
   date: (alert, value) => includesNormalized(alert.created_at, value),
   sim: (alert, value) => matchesSimulationTerm(alert.simulated === true, value),
-  machine: (alert, value) => includesNormalized(resolveMachineName(alert), value),
+  machine: (alert, value) => getAlertMachineValues(alert).some((machine) => includesNormalized(machine, value)),
   origin: (alert, value) => collectDistinctOrigins(alert.decisions).some((origin) => includesNormalized(origin, value)),
   decision: (alert, value) => getAlertDecisionStates(alert).some((state) => includesNormalized(state, value)),
 };
@@ -564,14 +564,14 @@ const decisionFieldMatchers: DecisionFieldMatcherMap = {
   region: (decision, value) => includesNormalized(decision.detail.region, value),
   city: (decision, value) => includesNormalized(decision.detail.city, value),
   as: (decision, value) => includesNormalized(decision.detail.as, value),
-  target: (decision, value) => includesNormalized(decision.detail.target, value),
+  target: (decision, value) => getDecisionTargetValues(decision).some((target) => includesNormalized(target, value)),
   date: (decision, value) => includesNormalized(decision.created_at, value),
   action: (decision, value) => includesNormalized(decision.detail.action, value),
   type: (decision, value) => includesNormalized(decision.detail.type, value),
   status: (decision, value) => matchesDecisionStatus(decision, value),
   duplicate: (decision, value) => matchesBoolean(decision.is_duplicate, value),
   sim: (decision, value) => matchesSimulationTerm(decision.simulated === true, value),
-  machine: (decision, value) => includesNormalized(decision.machine, value),
+  machine: (decision, value) => getDecisionMachineValues(decision).some((machine) => includesNormalized(machine, value)),
   origin: (decision, value) => includesNormalized(decision.detail.origin, value),
 };
 
@@ -585,10 +585,10 @@ const alertExactFieldMatchers: AlertFieldMatcherMap = {
   region: (alert, value) => equalsNormalized(alert.source?.region, value),
   city: (alert, value) => equalsNormalized(alert.source?.city, value),
   as: (alert, value) => equalsNormalized(alert.source?.as_name, value),
-  target: (alert, value) => equalsNormalized(alert.target, value),
+  target: (alert, value) => getAlertTargetValues(alert).some((target) => equalsNormalized(target, value)),
   date: (alert, value) => equalsNormalized(alert.created_at, value),
   sim: alertFieldMatchers.sim,
-  machine: (alert, value) => equalsNormalized(resolveMachineName(alert), value),
+  machine: (alert, value) => getAlertMachineValues(alert).some((machine) => equalsNormalized(machine, value)),
   origin: (alert, value) => collectDistinctOrigins(alert.decisions).some((origin) => equalsNormalized(origin, value)),
   decision: (alert, value) => getAlertDecisionStates(alert).some((state) => equalsNormalized(state, value)),
 };
@@ -603,14 +603,14 @@ const decisionExactFieldMatchers: DecisionFieldMatcherMap = {
   region: (decision, value) => equalsNormalized(decision.detail.region, value),
   city: (decision, value) => equalsNormalized(decision.detail.city, value),
   as: (decision, value) => equalsNormalized(decision.detail.as, value),
-  target: (decision, value) => equalsNormalized(decision.detail.target, value),
+  target: (decision, value) => getDecisionTargetValues(decision).some((target) => equalsNormalized(target, value)),
   date: (decision, value) => equalsNormalized(decision.created_at, value),
   action: (decision, value) => equalsNormalized(decision.detail.action, value),
   type: (decision, value) => equalsNormalized(decision.detail.type, value),
   status: decisionFieldMatchers.status,
   duplicate: decisionFieldMatchers.duplicate,
   sim: decisionFieldMatchers.sim,
-  machine: (decision, value) => equalsNormalized(decision.machine, value),
+  machine: (decision, value) => getDecisionMachineValues(decision).some((machine) => equalsNormalized(machine, value)),
   origin: (decision, value) => equalsNormalized(decision.detail.origin, value),
 };
 
@@ -624,10 +624,10 @@ const alertFieldEmptyMatchers: AlertFieldEmptyMatcherMap = {
   region: (alert) => isEmptyValue(alert.source?.region),
   city: (alert) => isEmptyValue(alert.source?.city),
   as: (alert) => isEmptyValue(alert.source?.as_name),
-  target: (alert) => isEmptyValue(alert.target),
+  target: (alert) => getAlertTargetValues(alert).length === 0,
   date: (alert) => isEmptyValue(alert.created_at),
   sim: () => false,
-  machine: (alert) => isEmptyValue(resolveMachineName(alert)),
+  machine: (alert) => getAlertMachineValues(alert).length === 0,
   origin: (alert) => collectDistinctOrigins(alert.decisions).length === 0,
   decision: (alert) => getAlertDecisionStates(alert).length === 0,
 };
@@ -642,14 +642,14 @@ const decisionFieldEmptyMatchers: DecisionFieldEmptyMatcherMap = {
   region: (decision) => isEmptyValue(decision.detail.region),
   city: (decision) => isEmptyValue(decision.detail.city),
   as: (decision) => isEmptyValue(decision.detail.as),
-  target: (decision) => isEmptyValue(decision.detail.target),
+  target: (decision) => getDecisionTargetValues(decision).length === 0,
   date: (decision) => isEmptyValue(decision.created_at),
   action: (decision) => isEmptyValue(decision.detail.action),
   type: (decision) => isEmptyValue(decision.detail.type),
   status: () => false,
   duplicate: () => false,
   sim: () => false,
-  machine: (decision) => isEmptyValue(decision.machine),
+  machine: (decision) => getDecisionMachineValues(decision).length === 0,
   origin: (decision) => isEmptyValue(decision.detail.origin),
 };
 
@@ -956,16 +956,28 @@ function buildFacetSelectionNode(field: string, selection: SearchFacetSelection)
   let result: SearchNode | null = null;
 
   if (included.length > 0) {
-    let expression: SearchNode = { kind: 'term', value: included[0], quoted: false };
+    let expression: SearchNode = {
+      kind: 'comparison',
+      field,
+      operator: '=',
+      value: included[0],
+      quoted: false,
+    };
     for (const value of included.slice(1)) {
       expression = {
         kind: 'binary',
         operator: 'OR',
         left: expression,
-        right: { kind: 'term', value, quoted: false },
+        right: {
+          kind: 'comparison',
+          field,
+          operator: '=',
+          value,
+          quoted: false,
+        },
       };
     }
-    result = { kind: 'field', field, expression };
+    result = expression;
   }
 
   for (const value of excluded) {
@@ -1628,10 +1640,8 @@ function matchAlertFreeText(alert: SlimAlert, value: string): boolean {
   const scenario = alert.scenario || '';
   const message = alert.message || '';
   const asName = alert.source?.as_name || '';
-  const target = alert.target || '';
   const countryCode = alert.source?.cn || '';
   const countryName = getCountryName(countryCode);
-  const machine = resolveMachineName(alert) || '';
   const origins = collectDistinctOrigins(alert.decisions);
   const simulationSearch = alert.simulated === true ? 'simulation simulated' : 'live';
   const sourceValues = getAlertSourceValues(alert);
@@ -1640,12 +1650,12 @@ function matchAlertFreeText(alert: SlimAlert, value: string): boolean {
     scenario,
     message,
     asName,
-    target,
     countryCode,
     countryName,
-    machine,
     alert.meta_search || '',
     simulationSearch,
+    ...getAlertTargetValues(alert),
+    ...getAlertMachineValues(alert),
     ...origins,
   ].some((candidate) => includesNormalized(candidate, value));
 }
@@ -1653,7 +1663,6 @@ function matchAlertFreeText(alert: SlimAlert, value: string): boolean {
 function matchDecisionFreeText(decision: DecisionListItem, value: string): boolean {
   const countryCode = decision.detail.country || '';
   const countryName = getCountryName(countryCode);
-  const machine = decision.machine || '';
   const simulationSearch = decision.simulated === true ? 'simulation simulated' : 'live';
 
   return matchesIpSearchValue(decision.value, value) || [
@@ -1664,9 +1673,42 @@ function matchDecisionFreeText(decision: DecisionListItem, value: string): boole
     decision.detail.action || '',
     decision.detail.type || '',
     decision.detail.origin || '',
-    machine,
     simulationSearch,
+    ...getDecisionTargetValues(decision),
+    ...getDecisionMachineValues(decision),
   ].some((candidate) => includesNormalized(candidate, value));
+}
+
+function distinctSearchValues(values: Array<string | null | undefined>): string[] {
+  const distinct = new Map<string, string>();
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    const normalized = trimmed.toLowerCase();
+    if (!distinct.has(normalized)) distinct.set(normalized, trimmed);
+  }
+  return [...distinct.values()];
+}
+
+function getAlertTargetValues(alert: SlimAlert): string[] {
+  return distinctSearchValues([...(alert.targets || []), alert.target]);
+}
+
+function getDecisionTargetValues(decision: DecisionListItem): string[] {
+  return distinctSearchValues([...(decision.detail.targets || []), decision.detail.target]);
+}
+
+function getAlertMachineValues(alert: SlimAlert): string[] {
+  return distinctSearchValues([alert.machine_id, alert.machine_alias, resolveMachineName(alert)]);
+}
+
+function getDecisionMachineValues(decision: DecisionListItem): string[] {
+  return distinctSearchValues([
+    decision.machine_id,
+    decision.machine_alias,
+    decision.machine,
+  ]);
 }
 
 function normalizeComparisonOperator(value: Exclude<SearchComparatorTokenValue, ':'>): SearchComparisonOperator {

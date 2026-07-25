@@ -14,6 +14,7 @@ interface StatCardProps<TItem extends StatListItem> {
     emptyMessage?: string;
     onSelect?: (item: TItem) => void;
     selectedValue?: string | null;
+    selectedValues?: string[];
     renderLabel?: (item: TItem) => ReactNode;
     getExternalLink?: (item: TItem) => string | null;
     total?: number;
@@ -29,6 +30,7 @@ export function StatCard<TItem extends StatListItem>({
     emptyMessage,
     onSelect, // Changed from getLink to generic onSelect
     selectedValue, // The currently selected value for highlighting
+    selectedValues = [],
     renderLabel, // Optional function to render custom label content
     getExternalLink,
     total // Optional total count to calculate percentages against global total instead of visible items
@@ -58,7 +60,9 @@ export function StatCard<TItem extends StatListItem>({
                 ) : (
                     <div className="space-y-2">
                         {items.map((item, idx) => {
-                            const isSelected = selectedValue === item.value || selectedValue === item.label; // Handle both potential value types
+                            const isSelected = selectedValue === item.value
+                                || selectedValue === item.label
+                                || selectedValues.includes(item.value ?? item.label);
                             const percent = denominator > 0 ? (item.count / denominator * 100).toFixed(1) : '0.0';
 
                             const handleRowClick = () => {

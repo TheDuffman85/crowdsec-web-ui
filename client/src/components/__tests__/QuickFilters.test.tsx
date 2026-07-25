@@ -112,6 +112,126 @@ describe('QuickFilters', () => {
     });
   });
 
+  test('displays a formatted instance name while selecting its id', async () => {
+    const user = userEvent.setup();
+    const onSelectionChange = vi.fn();
+    vi.mocked(api.fetchFacet).mockResolvedValueOnce({
+      field: 'instance',
+      values: [{ value: 'primary', count: 9 }],
+      offset: 0,
+      has_more: false,
+    });
+
+    render(
+      <I18nContext.Provider value={i18n}>
+        <QuickFilters
+          page="alerts"
+          fields={[{ field: 'instance', label: 'Instance' }]}
+          filters={{}}
+          searchAst={null}
+          onSelectionChange={onSelectionChange}
+          dateRange={{ start: '', end: '' }}
+          onDateRangeChange={vi.fn()}
+          onClearAll={vi.fn()}
+          formatValue={(field, value) => (
+            field === 'instance' && value === 'primary' ? 'Primary Office' : value
+          )}
+        />
+      </I18nContext.Provider>,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Filters' }));
+    await user.click(screen.getByRole('button', { name: 'Instance' }));
+    await user.click(await screen.findByRole('button', { name: 'Primary Office' }));
+
+    expect(screen.queryByText('primary')).not.toBeInTheDocument();
+    expect(onSelectionChange).toHaveBeenCalledWith('instance', {
+      included: ['primary'],
+      excluded: [],
+    });
+  });
+
+  test('uses a facet label for display while preserving its stable value', async () => {
+    const user = userEvent.setup();
+    const onSelectionChange = vi.fn();
+    vi.mocked(api.fetchFacet).mockResolvedValueOnce({
+      field: 'machine',
+      values: [{ value: 'machine-1', label: 'Gateway', count: 4 }],
+      offset: 0,
+      has_more: false,
+    });
+
+    render(
+      <I18nContext.Provider value={i18n}>
+        <QuickFilters
+          page="alerts"
+          fields={[{ field: 'machine', label: 'Machine' }]}
+          filters={{}}
+          searchAst={null}
+          onSelectionChange={onSelectionChange}
+          dateRange={{ start: '', end: '' }}
+          onDateRangeChange={vi.fn()}
+          onClearAll={vi.fn()}
+          getSelection={() => ({ included: ['Gateway'], excluded: [] })}
+        />
+      </I18nContext.Provider>,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Filters' }));
+    await user.click(screen.getByRole('button', { name: 'Machine' }));
+    const checkbox = await screen.findByRole('checkbox', { name: 'Toggle Gateway in Machine' });
+    expect(checkbox).toBeChecked();
+    await user.click(checkbox);
+    expect(onSelectionChange).toHaveBeenLastCalledWith('machine', {
+      included: [],
+      excluded: ['machine-1'],
+    });
+    await user.click(await screen.findByRole('button', { name: 'Gateway' }));
+
+    expect(screen.queryByText('machine-1')).not.toBeInTheDocument();
+    expect(onSelectionChange).toHaveBeenCalledWith('machine', {
+      included: ['machine-1'],
+      excluded: [],
+    });
+  });
+
+  test('passes display-name matches to facet search as raw values', async () => {
+    const user = userEvent.setup();
+    const getSearchValues = vi.fn(() => ['DE']);
+    render(
+      <I18nContext.Provider value={i18n}>
+        <QuickFilters
+          page="alerts"
+          fields={[{ field: 'country', label: 'Country' }]}
+          filters={{}}
+          searchAst={null}
+          onSelectionChange={vi.fn()}
+          dateRange={{ start: '', end: '' }}
+          onDateRangeChange={vi.fn()}
+          onClearAll={vi.fn()}
+          getSearchValues={getSearchValues}
+        />
+      </I18nContext.Provider>,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Filters' }));
+    await user.click(screen.getByRole('button', { name: 'Country' }));
+    await screen.findByText('DE');
+    await user.click(screen.getByRole('button', { name: 'Search Country' }));
+    await user.type(screen.getByPlaceholderText('Search values...'), 'Germany');
+
+    await waitFor(() => expect(api.fetchFacet).toHaveBeenLastCalledWith(
+      'alerts',
+      'country',
+      {},
+      expect.objectContaining({
+        search: 'Germany',
+        searchValues: ['DE'],
+      }),
+    ));
+    expect(getSearchValues).toHaveBeenCalledWith('country', 'Germany');
+  });
+
   test('keeps existing values visible while changed filters refresh in the background', async () => {
     const user = userEvent.setup();
     const onSelectionChange = vi.fn();
@@ -188,6 +308,21 @@ describe('QuickFilters', () => {
     expect(api.fetchFacet).not.toHaveBeenCalled();
     await user.click(screen.getByRole('button', { name: 'Country' }));
     await waitFor(() => expect(api.fetchFacet).toHaveBeenCalledTimes(1));
+  });
+
+  test('clears active filters from the trigger without opening the drawer', async () => {
+    const user = userEvent.setup();
+    const { onClearAll } = renderFilters({
+      selection: { included: ['DE'], excluded: [] },
+    });
+
+    const trigger = screen.getByRole('button', { name: 'Filters' });
+    expect(trigger).toHaveTextContent('2');
+
+    await user.click(screen.getByRole('button', { name: 'Clear all filters' }));
+
+    expect(onClearAll).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog', { name: 'Quick filters' })).not.toBeInTheDocument();
   });
 
   test('closes the drawer with Escape and restores trigger focus', async () => {
@@ -296,19 +431,21 @@ describe('QuickFilters', () => {
     expect(api.fetchFacet).not.toHaveBeenCalled();
   });
 
-  test('shows the same header count and clear control for every active section', async () => {
+  test('shows count and clear controls for active sections without duplicating them in the drawer header', async () => {
     const user = userEvent.setup();
-    const { onSelectionChange, onDateRangeChange, onClearAll } = renderFilters({
+    const { onSelectionChange, onDateRangeChange } = renderFilters({
       selection: { included: ['DE'], excluded: [] },
       dateRange: { start: '2026-03-29T01', end: '2026-03-29T03' },
     });
 
     await user.click(screen.getByRole('button', { name: 'Filters' }));
+    const dialog = screen.getByRole('dialog', { name: 'Quick filters' });
     const titleContainer = screen.getByRole('heading', { name: 'Quick filters' }).parentElement;
     const dateSection = screen.getByRole('button', { name: 'Date and time' }).closest('section');
     const countrySection = screen.getByRole('button', { name: 'Country' }).closest('section');
     expect(titleContainer).not.toBeNull();
-    expect(within(titleContainer!).getByText('4')).toBeInTheDocument();
+    expect(within(titleContainer!).queryByText('4')).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Clear all filters' })).not.toBeInTheDocument();
     expect(dateSection).not.toBeNull();
     expect(countrySection).not.toBeNull();
     expect(within(dateSection!).getByText('2')).toBeInTheDocument();
@@ -329,8 +466,5 @@ describe('QuickFilters', () => {
       included: [],
       excluded: [],
     });
-
-    await user.click(screen.getByRole('button', { name: 'Clear all filters' }));
-    expect(onClearAll).toHaveBeenCalledTimes(1);
   });
 });

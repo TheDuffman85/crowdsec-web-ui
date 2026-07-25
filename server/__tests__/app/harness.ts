@@ -9,7 +9,7 @@ import { createRuntimeConfig } from '../../config';
 import { CrowdsecDatabase } from '../../database';
 import { LapiClient, type LapiRequestInit } from '../../lapi';
 import { createApp, type CreateAppOptions } from '../../app';
-import { getAlertTargetSummary, resolveAlertHistoryAt } from '../../utils/alerts';
+import { getAlertTargets, getAlertTargetSummary, resolveAlertHistoryAt } from '../../utils/alerts';
 import type { MqttPublishConfig } from '../../notifications/mqtt-client';
 
 export let tempDir: string;
@@ -521,9 +521,11 @@ export function createController(options: {
 export function seedAlert(database: CrowdsecDatabase, alert: AlertRecord): void {
   const insert = database.transaction<AlertRecord>((record) => {
     const targetSummary = getAlertTargetSummary(record);
+    const targets = getAlertTargets(record);
     const enrichedRecord = {
       ...record,
-      target: record.target || targetSummary.target,
+      target: targetSummary.target,
+      targets,
       target_count: targetSummary.count,
     };
     const alertHistoryAt = resolveAlertHistoryAt(record);
@@ -563,7 +565,10 @@ export function seedAlert(database: CrowdsecDatabase, alert: AlertRecord): void 
           city: record.source?.city,
           as: record.source?.as_name,
           machine: resolveMachineName(record),
-          target: record.target || targetSummary.target,
+          machine_id: record.machine_id,
+          machine_alias: record.machine_alias,
+          target: targetSummary.target,
+          targets,
           target_count: targetSummary.count,
           alert_id: record.id,
           simulated: decision.simulated === true,

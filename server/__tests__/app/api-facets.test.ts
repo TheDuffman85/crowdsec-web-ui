@@ -23,6 +23,7 @@ describe('createApp facet API', () => {
         uuid: 'facet-alert-2',
         scenario: 'ssh',
         target: 'http',
+        events: [{ meta: [{ key: 'service', value: 'http' }] }],
         source: { ip: '2.2.2.2', cn: 'US', as_name: 'AWS' },
       }),
       sampleAlert({
@@ -30,6 +31,7 @@ describe('createApp facet API', () => {
         uuid: 'facet-alert-3',
         scenario: 'nginx',
         target: 'nginx',
+        events: [{ meta: [{ key: 'service', value: 'nginx' }] }],
         source: { ip: '3.3.3.3', cn: 'DE', as_name: 'Hetzner' },
       }),
     ];
@@ -44,7 +46,7 @@ describe('createApp facet API', () => {
     expect(response.status).toBe(200);
     expect(await response.json() as FacetResponse).toEqual({
       field: 'country',
-      values: [{ value: 'DE', count: 1 }],
+      values: [{ value: 'DE', label: 'Germany', count: 1 }],
       offset: 0,
       has_more: true,
     });
@@ -54,7 +56,7 @@ describe('createApp facet API', () => {
     ));
     expect(await nextResponse.json() as FacetResponse).toEqual({
       field: 'country',
-      values: [{ value: 'US', count: 1 }],
+      values: [{ value: 'US', label: 'United States', count: 1 }],
       offset: 1,
       has_more: false,
     });
@@ -83,7 +85,7 @@ describe('createApp facet API', () => {
     ));
     expect(await invalidatedResponse.json() as FacetResponse).toEqual({
       field: 'country',
-      values: [{ value: 'US', count: 1 }],
+      values: [{ value: 'US', label: 'United States', count: 1 }],
       offset: 0,
       has_more: false,
     });
@@ -136,6 +138,86 @@ describe('createApp facet API', () => {
       'http://localhost/crowdsec/api/alerts/facets?field=unsupported',
     ));
     expect(invalidResponse.status).toBe(400);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('separates facet values from labels and expands multi-valued alert metadata', async () => {
+    const now = Date.now();
+    const { controller, database } = createController({
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+    });
+    seedAlert(database, sampleAlert({
+      id: 1,
+      uuid: 'facet-labeled-values',
+      target: undefined,
+      machine_id: 'machine-1',
+      machine_alias: 'Gateway',
+      events: [
+        { meta: [{ key: 'target_host', value: 'api.example.test' }] },
+        { meta: [{ key: 'service', value: 'ssh' }] },
+      ],
+      decisions: [
+        {
+          id: 10,
+          value: '1.1.1.1',
+          type: 'ban',
+          stop_at: new Date(now + 60_000).toISOString(),
+          origin: 'manual',
+        },
+        {
+          id: 11,
+          value: '1.1.1.1',
+          type: 'ban',
+          stop_at: new Date(now + 60_000).toISOString(),
+          origin: 'CAPI',
+        },
+      ],
+    }));
+
+    const machineResponse = await controller.fetch(new Request(
+      'http://localhost/crowdsec/api/alerts/facets?field=machine&search=gateway&q=machine%3DGateway&limit=1',
+    ));
+    expect((await machineResponse.json() as FacetResponse).values).toEqual([
+      { value: 'machine-1', label: 'Gateway', count: 1 },
+    ]);
+
+    const countryResponse = await controller.fetch(new Request(
+      'http://localhost/crowdsec/api/alerts/facets?field=country&search=germany',
+    ));
+    expect((await countryResponse.json() as FacetResponse).values).toEqual([
+      { value: 'DE', label: 'Germany', count: 1 },
+    ]);
+
+    const originResponse = await controller.fetch(new Request(
+      'http://localhost/crowdsec/api/alerts/facets?field=origin',
+    ));
+    expect((await originResponse.json() as FacetResponse).values).toEqual(expect.arrayContaining([
+      { value: 'CAPI', count: 1 },
+      { value: 'manual', count: 1 },
+    ]));
+
+    const targetResponse = await controller.fetch(new Request(
+      'http://localhost/crowdsec/api/alerts/facets?field=target',
+    ));
+    expect((await targetResponse.json() as FacetResponse).values).toEqual(expect.arrayContaining([
+      { value: 'api.example.test', count: 1 },
+      { value: 'ssh', count: 1 },
+    ]));
+
+    const filteredAlerts = await controller.fetch(new Request(
+      'http://localhost/crowdsec/api/alerts?page=1&page_size=50&q=machine%3Dmachine-1%20AND%20target%3Dssh',
+    ));
+    expect(filteredAlerts.status, await filteredAlerts.clone().text()).toBe(200);
+    expect((await filteredAlerts.json() as { pagination: { total: number } }).pagination.total).toBe(1);
+
+    const filteredDecisions = await controller.fetch(new Request(
+      'http://localhost/crowdsec/api/decisions?page=1&page_size=50&include_expired=true&hide_duplicates=false&q=machine%3Dmachine-1%20AND%20target%3Dssh',
+    ));
+    expect(filteredDecisions.status, await filteredDecisions.clone().text()).toBe(200);
+    expect((await filteredDecisions.json() as { pagination: { total: number } }).pagination.total).toBe(2);
 
     controller.stopBackgroundTasks();
     database.close();

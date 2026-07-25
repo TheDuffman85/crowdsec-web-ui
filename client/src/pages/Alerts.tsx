@@ -18,7 +18,7 @@ import { EventCard } from "../components/EventCard";
 import { ContextSummary } from "../components/ContextSummary";
 import { Collapsible } from "../components/ui/Collapsible";
 import { getDisplayMetadata, isAppSecEvent } from "../lib/alertMetadata";
-import { getCountryName } from "../lib/utils";
+import { getCountryCodesMatchingName, getCountryName } from "../lib/utils";
 import { getDecisionExpirationState } from "../lib/decisionExpiration";
 import {
     loadStoredTableColumnOrders,
@@ -255,6 +255,7 @@ export function Alerts() {
     const [simulationsEnabled, setSimulationsEnabled] = useState(false);
     const [canManageEnforcement, setCanManageEnforcement] = useState(false);
     const [multipleInstances, setMultipleInstances] = useState(false);
+    const [instanceNames, setInstanceNames] = useState<Record<string, string>>({});
     const [tableColumnPreferences, setTableColumnPreferences] = useState<TableColumnPreferences>(() => loadStoredTableColumnPreferences());
     const [showColumnsModal, setShowColumnsModal] = useState(false);
     const [searchDraft, setSearchDraft] = useState(initialQueryParam);
@@ -323,6 +324,7 @@ export function Alerts() {
         simulationsEnabled: boolean;
         canManageEnforcement: boolean;
         multipleInstances: boolean;
+        instanceNames: Record<string, string>;
     } | null>(null);
     const hasLoadedAlertsRef = useRef(false);
     const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -627,11 +629,20 @@ export function Alerts() {
     ]);
     const formatFacetValue = useCallback((field: FacetField, value: string) => {
         if (field === 'country') return getCountryName(value, language) || value;
+        if (field === 'instance') return instanceNames[value] || value;
         if (field === 'decision') {
             return value === 'active' ? t('common.active') : t('common.inactive');
         }
         return value;
-    }, [language, t]);
+    }, [instanceNames, language, t]);
+    const getFacetSearchValues = useCallback((field: FacetField, search: string) => {
+        if (field === 'country') return getCountryCodesMatchingName(search, language);
+        if (field !== 'instance') return [];
+        const normalizedSearch = search.trim().toLocaleLowerCase(language);
+        return Object.entries(instanceNames)
+            .filter(([, name]) => name.toLocaleLowerCase(language).includes(normalizedSearch))
+            .map(([id]) => id);
+    }, [instanceNames, language]);
 
     const loadConfig = useCallback(async (refresh = false) => {
         if (!refresh && configRef.current) {
@@ -643,12 +654,16 @@ export function Alerts() {
             simulationsEnabled: configData.simulations_enabled === true,
             canManageEnforcement: configData.permissions?.can_manage_enforcement !== false,
             multipleInstances: (configData.instances?.length || 0) > 1,
+            instanceNames: Object.fromEntries(
+                (configData.instances || []).map((instance) => [instance.id, instance.name]),
+            ),
         };
 
         configRef.current = nextConfig;
         setSimulationsEnabled(nextConfig.simulationsEnabled);
         setCanManageEnforcement(nextConfig.canManageEnforcement);
         setMultipleInstances(nextConfig.multipleInstances);
+        setInstanceNames(nextConfig.instanceNames);
 
         return nextConfig;
     }, []);
@@ -1321,6 +1336,7 @@ export function Alerts() {
         onClearAll: clearQuickFilters,
         getSelection: getFacetSelection,
         formatValue: formatFacetValue,
+        getSearchValues: getFacetSearchValues,
         busy: tableBusy,
         refreshKey: facetRefreshKey,
     };

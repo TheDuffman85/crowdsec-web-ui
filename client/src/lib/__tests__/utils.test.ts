@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { cn, getCountryName, getHubUrl } from '../utils';
+import { cn, getCountryCodesMatchingName, getCountryName, getHubUrl } from '../utils';
 
 describe('utils', () => {
   test('cn merges class values', () => {
@@ -20,6 +20,12 @@ describe('utils', () => {
     expect(getCountryName('de')).toBe('Germany');
     expect(getCountryName('DE', 'zh')).toBe('德国');
     expect(getCountryName(null)).toBeNull();
+  });
+
+  test('finds raw country codes from localized display names', () => {
+    expect(getCountryCodesMatchingName('Germany')).toContain('DE');
+    expect(getCountryCodesMatchingName('德国', 'zh')).toContain('DE');
+    expect(getCountryCodesMatchingName('')).toEqual([]);
   });
 
   test('getCountryName falls back to the code when Intl throws', () => {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { normalizeMachineId, resolveMachineName } from '../../../shared/machine';
-import { buildMetaSearch, getAlertSourceValue, getAlertTarget, getAlertTargetSummary, resolveAlertReason, resolveAlertScenario, toSlimAlert, toSlimDecision, withAlertTargetSummary } from '../alerts';
+import { buildMetaSearch, getAlertSourceValue, getAlertTarget, getAlertTargets, getAlertTargetSummary, resolveAlertReason, resolveAlertScenario, toSlimAlert, toSlimDecision, withAlertTargetSummary } from '../alerts';
 
 describe('alert helpers', () => {
   test('getAlertTarget prioritizes event metadata', () => {
@@ -67,8 +67,14 @@ describe('alert helpers', () => {
       target: 'api.example.test',
       count: 3,
     });
+    expect(getAlertTargets(alert)).toEqual([
+      'api.example.test',
+      'admin.example.test',
+      'ssh',
+    ]);
     expect(withAlertTargetSummary(alert)).toEqual(expect.objectContaining({
       target: 'api.example.test',
+      targets: ['api.example.test', 'admin.example.test', 'ssh'],
       target_count: 3,
     }));
   });

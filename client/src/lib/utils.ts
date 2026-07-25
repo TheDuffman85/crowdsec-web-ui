@@ -28,3 +28,27 @@ export function getCountryName(code?: string | null, locale = 'en'): string | nu
         return code;
     }
 }
+
+const localizedCountryEntries = new Map<string, Array<{ code: string; name: string }>>();
+
+export function getCountryCodesMatchingName(search: string, locale = 'en'): string[] {
+    const normalizedSearch = search.trim().toLocaleLowerCase(locale);
+    if (!normalizedSearch) return [];
+
+    let entries = localizedCountryEntries.get(locale);
+    if (!entries) {
+        entries = [];
+        for (let first = 65; first <= 90; first += 1) {
+            for (let second = 65; second <= 90; second += 1) {
+                const code = String.fromCharCode(first, second);
+                const name = getCountryName(code, locale);
+                if (name && name !== code) entries.push({ code, name });
+            }
+        }
+        localizedCountryEntries.set(locale, entries);
+    }
+
+    return entries
+        .filter(({ name }) => name.toLocaleLowerCase(locale).includes(normalizedSearch))
+        .map(({ code }) => code);
+}

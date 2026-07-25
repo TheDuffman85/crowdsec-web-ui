@@ -39,7 +39,7 @@ describe('Alerts page search and pagination', () => {
     const filtersButton = screen.getByRole('button', { name: 'Filters' });
     const columnsButton = screen.getByRole('button', { name: 'Choose alert table columns' });
     expect(Array.from(columnsButton.parentElement!.children).slice(0, 3)).toEqual([
-      filtersButton,
+      filtersButton.parentElement!,
       searchButton.parentElement!.parentElement!,
       columnsButton,
     ]);
@@ -132,16 +132,17 @@ describe('Alerts page search and pagination', () => {
       </MemoryRouter>,
     );
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Filters' }));
-    const drawer = screen.getByRole('dialog', { name: 'Quick filters' });
-    expect(within(drawer).getByText('2')).toBeInTheDocument();
-    await userEvent.click(within(drawer).getByRole('button', { name: 'Clear all filters' }));
+    const filtersButton = await screen.findByRole('button', { name: 'Filters' });
+    expect(within(filtersButton).getByText('2')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Clear all filters' }));
 
     await waitFor(() => {
       expect(fetchAlertsPaginatedMock.mock.calls.at(-1)?.[2]).toMatchObject({ q: 'ssh' });
       expect(fetchAlertsPaginatedMock.mock.calls.at(-1)?.[2]?.dateStart).toBeUndefined();
     });
-    expect(within(drawer).queryByRole('button', { name: 'Clear all filters' })).not.toBeInTheDocument();
+    expect(within(filtersButton).queryByText('2')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Clear all filters' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Quick filters' })).not.toBeInTheDocument();
   });
 
   test('offers quick filters for every visible filterable alert column', async () => {
@@ -206,8 +207,8 @@ describe('Alerts page search and pagination', () => {
       </MemoryRouter>,
     );
 
-    await waitFor(() => expect(fetchAlertsPaginatedMock.mock.calls.at(-1)?.[2]?.q).toBe('country:DE'));
-    expect(fetchAlertsPaginatedMock.mock.calls[0]?.[2]?.q).toBe('country:DE');
+    await waitFor(() => expect(fetchAlertsPaginatedMock.mock.calls.at(-1)?.[2]?.q).toBe('country=DE'));
+    expect(fetchAlertsPaginatedMock.mock.calls[0]?.[2]?.q).toBe('country=DE');
     await userEvent.click(await screen.findByRole('button', { name: 'Filters' }));
     expect(screen.getByRole('button', { name: 'Action' })).toBeDisabled();
     await userEvent.click(screen.getByRole('button', { name: 'Clear Action' }));
@@ -217,7 +218,7 @@ describe('Alerts page search and pagination', () => {
     ).toEqual({
       country: { included: ['DE'], excluded: [] },
     }));
-    expect(fetchAlertsPaginatedMock.mock.calls.at(-1)?.[2]?.q).toBe('country:DE');
+    expect(fetchAlertsPaginatedMock.mock.calls.at(-1)?.[2]?.q).toBe('country=DE');
   });
 
   test('writes quick-filter selections to browser storage', async () => {

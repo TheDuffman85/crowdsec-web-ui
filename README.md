@@ -28,9 +28,9 @@ A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alert
 
 | Area | Highlights |
 | --- | --- |
-| Dashboard | Alert and active-decision totals, attack map, drilldowns, top lists, filters, and simulation counts |
-| Alerts | Searchable alert history, count-aware quick filters, CrowdSec alert contexts, IP/AS/location details, event metadata, simulation labels, and configurable columns |
-| Decisions | Active and expired decisions, count-aware quick filters, duplicate hiding, manual bans, custom durations, reasons, and cleanup actions |
+| Dashboard | Alert and active-decision totals, attack map, drilldowns, top lists, shared quick filters, and simulation counts |
+| Alerts | Searchable alert history, persistent count-aware quick filters, CrowdSec alert contexts, IP/AS/location details, event metadata, simulation labels, and configurable columns |
+| Decisions | Active and expired decisions, persistent count-aware quick filters, duplicate hiding, manual bans, custom durations, reasons, and cleanup actions |
 | Multi-instance | Several CrowdSec LAPIs, per-instance views, and a Combined scope for Dashboard, Alerts, and Decisions |
 | Metrics | Optional Prometheus views for LAPI activity, bouncers, AppSec, parsers, latency, parsing time, and whitelists |
 | Notifications | Alert, decision, CVE, availability, and update rules delivered through Email, Gotify, MQTT, ntfy, or Webhooks |
@@ -731,18 +731,37 @@ AppSec and latency sections appear only when CrowdSec emits those metrics. Time-
 - `ID`, `Machine`, and `Origin` are hidden by default. `Machine` prefers `machine_alias`, then `machine_id`; multiple alert decision origins display as `Mixed`.
 - Hidden columns remain searchable through fields such as `id:`, `machine:`, and `origin:`.
 
+### Quick Filters
+
+Dashboard, Alerts, and Decisions share one count-aware Quick Filters drawer. Its trigger shows the number of active selections, and the clear control in the drawer header resets all stored quick filters.
+
+Instance and machine options use stable IDs for filtering while displaying their configured names or aliases. Country, instance, and machine searches match the displayed label as well as the stored value. Alerts with several origins or targets contribute to each distinct facet option instead of exposing a combined bucket.
+
+- Filter selections, date range, and simulation mode persist in local storage for the current browser profile and are restored when navigating between the three pages.
+- Changing a structured search field updates the matching quick-filter selection, and changing a quick filter updates the structured search. A field supplied explicitly in a page URL takes precedence over its stored value; stored values fill fields that are absent.
+- Dashboard top countries, scenarios, AS numbers, targets, the world map, and the Activity History range update the same shared state. Changes made in the drawer update those widgets in return.
+- Filtered Dashboard alert and active-decision counts use the same indexed predicates as the Alerts and Decisions lists. The alert card links with the alert-compatible query, while the decision card links with the decision-compatible query.
+- The drawer follows each table's configured column order. Filters for hidden columns are grouped under **Hidden columns**.
+- Page-only filters remain visible under **Unavailable** when another page cannot apply them. Alerts lists `Action`, `Status`, and `Alert` there; Decisions lists `Decision`; Dashboard lists all four. Their stored selections are preserved for the page that supports them and can be cleared from any drawer.
+- Facet selections use exact equality. Selecting the target `tausend.me` generates `target=tausend.me` and does not include `bw.tausend.me`. Manually entering `target:tausend.me` remains a broader contains search.
+- Each facet reports counts after the other active filters have been applied. Use the facet search control to find values beyond the initially loaded list.
+
+Dashboard applies the shared fields `Country`, `Scenario`, `AS`, `IP / Range`, `Target`, `ID`, `Instance`, `Region`, `City`, `Machine`, and `Origin`. Filters that depend on decision-only or alert-list-only data are retained in **Unavailable** instead of being silently discarded.
+
+Active decisions are deduplicated by instance, value, and simulation mode. When filters exclude the globally preferred decision, the best matching decision is promoted so enabling **Hide duplicates** cannot make an otherwise matching duplicate group disappear.
+
 ### Search Syntax
 
 | Syntax | Example |
 | --- | --- |
 | Free text / quoted phrase | `ssh hetzner`, `"nginx bf"` |
-| Field / exact value | `country:germany`, `country=DE` |
+| Field contains / exact value | `country:germany`, `country=DE` |
 | Date comparison | `date>=2026-03-24`, `date<2026-03-25T12:00:00Z` |
 | Negative / empty | `-sim:simulated`, `sim<>simulated`, `origin:""`, `origin<>""` |
 | Boolean / grouping | `country:(germany OR france) AND -sim:simulated` |
 | Decision filters | `status:active AND action:ban`, `alert:123 OR ip:"192.168.5.0/24"` |
 
-Date fields support `<`, `>`, `<=`, `>=`, and `=>`. A bare field name is free text unless followed by `:`. Quote literal `AND`, `OR`, or `NOT`. The search `Info` button lists page-specific fields and examples.
+The `:` operator performs a case-insensitive contains match, while `=` matches the complete field value. Quick Filter selections use `=`. Date fields support `<`, `>`, `<=`, `>=`, and `=>`. A bare field name is free text unless followed by `:`. Quote literal `AND`, `OR`, or `NOT`. The search `Info` button lists page-specific fields and examples.
 
 #### Examples
 

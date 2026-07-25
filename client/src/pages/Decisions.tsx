@@ -14,7 +14,7 @@ import { CountryFlag } from "../components/CountryFlag";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
 import { TargetDisplay } from "../components/TargetDisplay";
-import { getCountryName } from "../lib/utils";
+import { getCountryCodesMatchingName, getCountryName } from "../lib/utils";
 import { getDecisionExpirationState } from "../lib/decisionExpiration";
 import { TABLE_COLUMN_DEFINITIONS } from "../../../shared/contracts";
 import {
@@ -181,6 +181,7 @@ export function Decisions() {
     const [simulationsEnabled, setSimulationsEnabled] = useState(false);
     const [canManageEnforcement, setCanManageEnforcement] = useState(false);
     const [multipleInstances, setMultipleInstances] = useState(false);
+    const [instanceNames, setInstanceNames] = useState<Record<string, string>>({});
     const [tableColumnPreferences, setTableColumnPreferences] = useState<TableColumnPreferences>(() => loadStoredTableColumnPreferences());
     const [showColumnsModal, setShowColumnsModal] = useState(false);
     const [searchDraft, setSearchDraft] = useState(initialQueryParam);
@@ -236,6 +237,7 @@ export function Decisions() {
         simulationsEnabled: boolean;
         canManageEnforcement: boolean;
         multipleInstances: boolean;
+        instanceNames: Record<string, string>;
     } | null>(null);
     const hasLoadedDecisionsRef = useRef(false);
     const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -580,11 +582,20 @@ export function Decisions() {
     ]);
     const formatFacetValue = useCallback((field: FacetField, value: string) => {
         if (field === 'country') return getCountryName(value, language) || value;
+        if (field === 'instance') return instanceNames[value] || value;
         if (field === 'status') {
             return value === 'active' ? t('common.active') : t('pages.decisions.expired');
         }
         return value;
-    }, [language, t]);
+    }, [instanceNames, language, t]);
+    const getFacetSearchValues = useCallback((field: FacetField, search: string) => {
+        if (field === 'country') return getCountryCodesMatchingName(search, language);
+        if (field !== 'instance') return [];
+        const normalizedSearch = search.trim().toLocaleLowerCase(language);
+        return Object.entries(instanceNames)
+            .filter(([, name]) => name.toLocaleLowerCase(language).includes(normalizedSearch))
+            .map(([id]) => id);
+    }, [instanceNames, language]);
 
     const loadConfig = useCallback(async (refresh = false) => {
         if (!refresh && configRef.current) {
@@ -596,12 +607,16 @@ export function Decisions() {
             simulationsEnabled: configData.simulations_enabled === true,
             canManageEnforcement: configData.permissions?.can_manage_enforcement !== false,
             multipleInstances: (configData.instances?.length || 0) > 1,
+            instanceNames: Object.fromEntries(
+                (configData.instances || []).map((instance) => [instance.id, instance.name]),
+            ),
         };
 
         configRef.current = nextConfig;
         setSimulationsEnabled(nextConfig.simulationsEnabled);
         setCanManageEnforcement(nextConfig.canManageEnforcement);
         setMultipleInstances(nextConfig.multipleInstances);
+        setInstanceNames(nextConfig.instanceNames);
 
         return nextConfig;
     }, []);
@@ -1156,6 +1171,7 @@ export function Decisions() {
         onClearAll: clearQuickFilters,
         getSelection: getFacetSelection,
         formatValue: formatFacetValue,
+        getSearchValues: getFacetSearchValues,
         busy: tableBusy,
         refreshKey: facetRefreshKey,
     };

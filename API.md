@@ -49,6 +49,8 @@ Alert and decision list pagination uses `page` and `page_size` and is enabled on
 
 `GET /api/alerts` and `GET /api/decisions` support a structured `q` search when paginated. Search supports free text, quoted phrases, `AND`, `OR`, `NOT`, `-`, grouping, field matching with `:`, exact matching with `=`, inequality with `<>`, and date comparisons with `<`, `<=`, `>`, `>=`.
 
+`:` performs a case-insensitive contains match and `=` matches the complete normalized field value. The browser's Quick Filters use exact `=` predicates for selected facet values, so a selection such as `target=tausend.me` does not also match `bw.tausend.me`. Multiple selected values are joined with `OR`; exclusions use `<>`.
+
 Alert search fields: `id`, `instance`, `scenario`, `message`, `ip`/`source`, `country`, `region`, `city`, `as`, `target`, `date`/`created`/`created_at`/`time`, `sim`/`simulation`, `machine`, `origin`, `decision`/`decisions`.
 
 Use a quoted empty value to match an empty field, such as `origin:""`. Use `origin<>""` or `-origin:""` to require a non-empty value.
@@ -131,7 +133,7 @@ Alert records expose the most frequent event target as `target` and the total nu
 
 Set `include_decisions=false` to omit decision hydration from paginated lists or single-instance alert details. Bulk deletion accepts `ids` in single-instance deployments or instance-qualified `refs` as described above.
 
-Alert facets require `field=id|instance|scenario|country|region|city|as|ip|target|machine|origin|decision`. The `decision` facet returns `active`, `expired`, and an empty value for alerts without decisions. Facets accept the same filters as the paginated alert endpoint, plus optional case-insensitive `search`, `offset` (clamped to `0–500`), and `limit` (default `10`, maximum `50`). The requested field's own predicates are removed so counts remain disjunctive. Facet requests return `400` for unsupported fields and `504` when their isolated five-second query budget is exhausted.
+Alert facets require `field=id|instance|scenario|country|region|city|as|ip|target|machine|origin|decision`. The `decision` facet returns `active`, `expired`, and an empty value for alerts without decisions. Facets accept the same filters as the paginated alert endpoint, plus optional case-insensitive `search`, `offset` (clamped to `0–500`), and `limit` (default `10`, maximum `50`). A facet value can include a `label`; the browser displays that label while applying `value` as the exact `=` predicate. Instance and machine facets therefore retain stable IDs while showing configured names or aliases, and `search` matches both values and labels. Multi-origin and multi-target alerts contribute once to each distinct origin or target bucket. The requested field's own predicates are removed so counts remain disjunctive. Facet requests return `400` for unsupported fields and `504` when their isolated five-second query budget is exhausted.
 
 ## Decisions
 
@@ -147,11 +149,11 @@ Alert facets require `field=id|instance|scenario|country|region|city|as|ip|targe
 Supported decision query parameters: `instance`, `include_expired`, `page`, `page_size`, `q`, `alert_id`, `country`, `scenario`, `as`, `ip`, `target`, `dateStart`, `dateEnd`, `simulation`, `hide_duplicates`, `tz_offset`, `browser_tz`.
 
 - `include_expired=true` includes expired decisions within the configured lookback window.
-- Duplicate decisions are hidden by default in paginated results. Set `hide_duplicates=false` or filter by `alert_id` to show them.
+- Duplicate decisions are hidden by default in paginated results. Deduplication is applied after active filters, so the preferred matching row remains visible even when the globally preferred row does not match. Set `hide_duplicates=false` or filter by `alert_id` to show every row.
 - `simulation` accepts `all`, `live`, or `simulated`; unknown values behave like `all`.
 - Bulk deletion accepts `ids` in single-instance deployments or instance-qualified `refs` as described above.
 
-Decision facets require `field=id|instance|alert|scenario|country|region|city|as|ip|target|action|status|machine|origin` and support the same facet pagination and search parameters as alert facets. Status faceting considers both active and expired values within the configured lookback window even when the list is currently active-only.
+Decision facets require `field=id|instance|alert|scenario|country|region|city|as|ip|target|action|status|machine|origin` and support the same value/label, pagination, and search behavior as alert facets. Status faceting considers both active and expired values within the configured lookback window even when the list is currently active-only.
 
 Both facet endpoints return at most the requested limit and use an empty string for missing raw values:
 
@@ -198,10 +200,14 @@ Alert deletion requests return after a durable deletion tombstone is stored and 
 | GET | `/api/stats/decisions` | Decision records shaped for chart/stat consumers within the configured lookback window. |
 | GET | `/api/dashboard/stats` | Aggregated dashboard totals, filtered totals, top targets/countries/scenarios/AS, world-map country data, bounded source-location clusters, and history series. |
 
-Supported dashboard filters: `instance`, `country`, `scenario`, `as`, `ip`, `target`, `dateStart`, `dateEnd`, `simulation`, `granularity`, `tz_offset`, `browser_tz`.
+Supported dashboard filters: `instance`, `q`, `decision_q`, `country`, `scenario`, `as`, `ip`, `target`, `dateStart`, `dateEnd`, `simulation`, `granularity`, `tz_offset`, `browser_tz`.
 
 - `simulation` accepts `all`, `live`, or `simulated`.
 - `granularity=hour` returns hourly buckets; any other value uses daily buckets.
+- `q` uses alert structured-search semantics and controls the filtered alert count, top lists, map data, and alert history.
+- `decision_q` uses decision structured-search semantics and controls the filtered active-decision count and decision history. When omitted, it falls back to `q` for compatibility.
+- The browser sends separate alert and decision queries from the same persisted Quick Filter state. Filtered Dashboard counts therefore match the corresponding paginated list totals, including default active-only and duplicate-hiding behavior on Decisions.
+- The legacy scalar filters remain supported. If both a scalar filter and `q` are supplied, both must match.
 
 ## CrowdSec Metrics
 

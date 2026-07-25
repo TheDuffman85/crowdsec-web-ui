@@ -102,6 +102,23 @@ describe('createApp dashboard API', () => {
       topScenarios: [expect.objectContaining({ label: 'crowdsecurity/ssh-bf', count: 1 })],
     }));
 
+    const sharedFilterParams = new URLSearchParams({
+      q: 'country:(DE OR US) AND -scenario:http-probing',
+    });
+    const sharedFilterResponse = await controller.fetch(new Request(
+      `http://localhost/crowdsec/api/dashboard/stats?${sharedFilterParams.toString()}`,
+    ));
+    expect((await sharedFilterResponse.json()) as {
+      filteredTotals: { alerts: number; decisions: number; simulatedAlerts: number; simulatedDecisions: number };
+      topScenarios: Array<{ label: string; count: number }>;
+    }).toEqual(expect.objectContaining({
+      filteredTotals: { alerts: 2, decisions: 1, simulatedAlerts: 1, simulatedDecisions: 1 },
+      topScenarios: expect.arrayContaining([
+        expect.objectContaining({ label: 'crowdsecurity/ssh-bf', count: 1 }),
+        expect.objectContaining({ label: 'crowdsecurity/nginx-bf', count: 1 }),
+      ]),
+    }));
+
     const simulatedResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats?simulation=simulated'));
     expect((await simulatedResponse.json()) as {
       filteredTotals: { alerts: number; decisions: number; simulatedAlerts: number; simulatedDecisions: number };
@@ -119,6 +136,139 @@ describe('createApp dashboard API', () => {
     controller.stopBackgroundTasks();
     database.close();
     destroyTempDir();
+  });
+
+  test('keeps an exact target selection consistent between dashboard stats and alert drilldown', async () => {
+    const alerts = [
+      sampleAlert({
+        id: 701,
+        uuid: 'dashboard-target-root',
+        source: { ip: '192.0.2.1', value: '192.0.2.1', cn: 'DE' },
+        target: 'tausend.me',
+        events: [{ meta: [{ key: 'target_host', value: 'tausend.me' }] }],
+      }),
+      sampleAlert({
+        id: 702,
+        uuid: 'dashboard-target-subdomain',
+        source: { ip: '192.0.2.2', value: '192.0.2.2', cn: 'DE' },
+        target: 'bw.tausend.me',
+        events: [{ meta: [{ key: 'target_host', value: 'bw.tausend.me' }] }],
+      }),
+    ];
+    const { controller, database } = createController({
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+    });
+    alerts.forEach((alert) => seedAlert(database, alert));
+
+    try {
+      const exactParams = new URLSearchParams({ q: 'target=tausend.me' });
+      const dashboardResponse = await controller.fetch(new Request(
+        `http://localhost/crowdsec/api/dashboard/stats?${exactParams.toString()}`,
+      ));
+      expect((await dashboardResponse.json()) as DashboardStatsResponse).toEqual(expect.objectContaining({
+        filteredTotals: expect.objectContaining({ alerts: 1 }),
+        topTargets: [expect.objectContaining({ label: 'tausend.me', count: 1 })],
+      }));
+
+      exactParams.set('page', '1');
+      exactParams.set('page_size', '10');
+      const exactAlertsResponse = await controller.fetch(new Request(
+        `http://localhost/crowdsec/api/alerts?${exactParams.toString()}`,
+      ));
+      const exactAlerts = (await exactAlertsResponse.json()) as PaginatedResponse<SlimAlert>;
+      expect(exactAlerts.pagination.total).toBe(1);
+      expect(exactAlerts.data.map((alert) => alert.target)).toEqual(['tausend.me']);
+
+      const broadParams = new URLSearchParams({ q: 'target:tausend.me', page: '1', page_size: '10' });
+      const broadAlertsResponse = await controller.fetch(new Request(
+        `http://localhost/crowdsec/api/alerts?${broadParams.toString()}`,
+      ));
+      expect(((await broadAlertsResponse.json()) as PaginatedResponse<SlimAlert>).pagination.total).toBe(2);
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
+  test('matches filtered list totals and promotes a matching duplicate decision', async () => {
+    const createdAt = new Date().toISOString();
+    const source = { ip: '192.0.2.80', value: '192.0.2.80', cn: 'DE', as_name: 'Example AS' };
+    const matchingAlert = sampleAlert({
+      id: 801,
+      uuid: 'dashboard-filter-matching-alert',
+      created_at: createdAt,
+      scenario: 'crowdsecurity/http-probing',
+      source,
+      target: 'bw.tausend.me',
+      events: [{ meta: [{ key: 'target_host', value: 'bw.tausend.me' }] }],
+      decisions: [{
+        id: 8010,
+        value: source.ip,
+        type: 'ban',
+        scenario: 'crowdsecurity/http-probing',
+        stop_at: new Date(Date.now() + 2 * 60 * 60_000).toISOString(),
+        simulated: false,
+      }],
+    });
+    const globallyPreferredAlert = sampleAlert({
+      id: 802,
+      uuid: 'dashboard-filter-global-duplicate',
+      created_at: createdAt,
+      scenario: 'crowdsecurity/ssh-bf',
+      source,
+      target: 'ssh',
+      decisions: [{
+        id: 8020,
+        value: source.ip,
+        type: 'ban',
+        scenario: 'crowdsecurity/ssh-bf',
+        stop_at: new Date(Date.now() + 4 * 60 * 60_000).toISOString(),
+        simulated: false,
+      }],
+    });
+    const { controller, database } = createController({
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+    });
+    seedAlert(database, matchingAlert);
+    seedAlert(database, globallyPreferredAlert);
+    database.refreshDecisionDuplicateFlags(new Date().toISOString(), true);
+
+    try {
+      expect(database.db.prepare('SELECT is_duplicate FROM decisions WHERE upstream_id = ?').get('8010')).toEqual({
+        is_duplicate: 1,
+      });
+
+      const query = 'scenario=crowdsecurity/http-probing AND country=DE AND target=bw.tausend.me';
+      const dashboardParams = new URLSearchParams({ q: query, decision_q: query });
+      const listParams = new URLSearchParams({ q: query, page: '1', page_size: '10' });
+      const [dashboardResponse, alertsResponse, decisionsResponse] = await Promise.all([
+        controller.fetch(new Request(`http://localhost/crowdsec/api/dashboard/stats?${dashboardParams}`)),
+        controller.fetch(new Request(`http://localhost/crowdsec/api/alerts?${listParams}`)),
+        controller.fetch(new Request(`http://localhost/crowdsec/api/decisions?${listParams}`)),
+      ]);
+      const dashboard = (await dashboardResponse.json()) as DashboardStatsResponse;
+      const alerts = (await alertsResponse.json()) as PaginatedResponse<SlimAlert>;
+      const decisions = (await decisionsResponse.json()) as PaginatedResponse<{
+        id: string | number;
+        is_duplicate: boolean;
+      }>;
+
+      expect(alerts.pagination.total).toBe(1);
+      expect(decisions.pagination.total).toBe(1);
+      expect(decisions.data).toEqual([
+        expect.objectContaining({ id: 8010, is_duplicate: false }),
+      ]);
+      expect(dashboard.filteredTotals.alerts).toBe(alerts.pagination.total);
+      expect(
+        dashboard.filteredTotals.decisions + dashboard.filteredTotals.simulatedDecisions,
+      ).toBe(decisions.pagination.total);
+      expect(dashboard.series.activeDecisionsHistory.some((bucket) => bucket.count === 1)).toBe(true);
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
   });
 
   test('refreshes cached dashboard active totals when a decision expires without a database mutation', async () => {

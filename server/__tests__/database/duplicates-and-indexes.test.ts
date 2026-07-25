@@ -249,7 +249,27 @@ describe('CrowdsecDatabase duplicates and indexes', () => {
       $message: 'deferred searchable alert',
       $raw_data: JSON.stringify({ id: 1, message: 'deferred searchable alert' }),
     });
+    db.insertDecision({
+      $id: 'deferred-decision',
+      $uuid: 'deferred-decision',
+      $alert_id: 1,
+      $created_at: '2026-01-01T00:00:00.000Z',
+      $stop_at: '2030-01-01T00:00:00.000Z',
+      $value: '1.2.3.4',
+      $type: 'ban',
+      $origin: 'crowdsec',
+      $scenario: 'crowdsecurity/ssh-bf',
+      $raw_data: JSON.stringify({ id: 'deferred-decision', value: '1.2.3.4' }),
+    });
     expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts').get() as { count: number }).count).toBe(0);
+    expect(db.deleteActiveAlertsMissing([1], '2029-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z')).toEqual({
+      alerts: 0,
+      decisions: 0,
+    });
+    expect(db.refreshDecisionDuplicateFlags('2029-01-01T00:00:00.000Z')).toBe(0);
+    expect(
+      (db.db.prepare("PRAGMA index_list('decisions')").all() as Array<{ name: string }>).map((index) => index.name),
+    ).toContain('idx_decisions_duplicate_primary');
 
     db.rebuildSearchIndexes();
     const rebuiltAlertIndexes = db.db.prepare("PRAGMA index_list('alerts')").all() as Array<{ name: string }>;
@@ -315,6 +335,41 @@ describe('CrowdsecDatabase duplicates and indexes', () => {
     ) as Array<{ detail: string }>;
     expect(filteredDecisionCountPlan.map((step) => step.detail).join('\n')).toContain(
       'USING COVERING INDEX idx_decisions_duplicate_filters (is_duplicate=? AND instance_id=? AND stop_at>?)',
+    );
+    const filteredDuplicateRankingPlan = db.db.prepare(`
+      EXPLAIN QUERY PLAN
+      WITH ranked_filtered_decisions AS (
+        SELECT decisions.*,
+          CASE
+            WHEN stop_at <= ? THEN 1
+            ELSE ROW_NUMBER() OVER (
+              PARTITION BY instance_id, value, simulated
+              ORDER BY
+                stop_at DESC,
+                CASE WHEN id GLOB '[0-9]*' THEN CAST(id AS INTEGER) ELSE -1 END DESC,
+                id DESC
+            )
+          END AS filtered_duplicate_rank
+        FROM decisions
+        WHERE instance_id = ?
+          AND stop_at > ?
+          AND scenario = ?
+          AND country = ?
+          AND target = ?
+      )
+      SELECT COUNT(*)
+      FROM ranked_filtered_decisions
+      WHERE filtered_duplicate_rank = 1
+    `).all(
+      '2026-01-01T00:00:00.000Z',
+      'default',
+      '2026-01-01T00:00:00.000Z',
+      'crowdsecurity/http-probing',
+      'DE',
+      'bw.tausend.me',
+    ) as Array<{ detail: string }>;
+    expect(filteredDuplicateRankingPlan.map((step) => step.detail).join('\n')).toContain(
+      'SEARCH decisions USING INDEX idx_decisions_target (target=?)',
     );
     expect(
       (db.db.prepare("PRAGMA index_info('idx_alerts_filters')").all() as Array<{ name: string }>).map((column) => column.name),

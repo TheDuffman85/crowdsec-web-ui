@@ -30,6 +30,7 @@ describe('persisted quick filters', () => {
         country: { included: ['DE'], excluded: ['US'] },
       },
       dateRange: { start: '', end: '2026-03-24T12:00' },
+      simulation: 'all',
     });
   });
 
@@ -49,10 +50,10 @@ describe('persisted quick filters', () => {
     };
 
     expect(mergeStoredQuickFiltersIntoQuery('alerts', 'ssh', filters)).toBe(
-      'ssh AND country:DE AND date>=2026-03-24T10:00',
+      'ssh AND country=DE AND date>=2026-03-24T10:00',
     );
     expect(mergeStoredQuickFiltersIntoQuery('decisions', 'ssh', filters)).toBe(
-      'ssh AND country:DE AND action:ban AND date>=2026-03-24T10:00',
+      'ssh AND country=DE AND action=ban AND date>=2026-03-24T10:00',
     );
   });
 
@@ -63,6 +64,18 @@ describe('persisted quick filters', () => {
     });
 
     expect(mergeStoredQuickFiltersIntoQuery('alerts', 'country:DE', filters)).toBe('country:DE');
+  });
+
+  test('shares the persisted simulation mode through search syntax', () => {
+    const filters = {
+      ...emptyStoredQuickFilters(),
+      simulation: 'simulated' as const,
+    };
+
+    expect(mergeStoredQuickFiltersIntoQuery('alerts', '', filters)).toBe('sim=simulated');
+    expect(mergeStoredQuickFiltersIntoQuery('decisions', 'country:DE', filters)).toBe(
+      'country:DE AND sim=simulated',
+    );
   });
 
   test('syncing one page preserves filters exclusive to the other page', () => {

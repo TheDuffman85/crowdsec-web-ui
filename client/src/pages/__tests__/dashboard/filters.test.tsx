@@ -1,11 +1,180 @@
 import { buildDashboardStatsResponse, chartSpy, createDeferred, fetchConfigMock, fetchDashboardStatsMock, mapSpy } from './harness';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { Dashboard } from '../../Dashboard';
 import { describe, expect, test } from 'vitest';
+import { QUICK_FILTERS_STORAGE_KEY } from '../../../lib/quickFilters';
 
 describe('Dashboard filters and drilldowns', () => {
+  test('replaces the three drilldown controls with the shared quick-filter trigger', async () => {
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Top Countries');
+    expect(screen.getByRole('button', { name: 'Filters' })).toHaveClass(
+      'h-[38px]',
+      'rounded-lg',
+      'border-gray-100',
+      'shadow-sm',
+    );
+    expect(screen.getByRole('button', { name: 'Filters' }).parentElement?.parentElement).toContainElement(
+      screen.getByRole('switch'),
+    );
+    expect(screen.queryByRole('button', { name: 'View Alerts' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'View Decisions' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reset Filters' })).not.toBeInTheDocument();
+  });
+
+  test('shows page-only filters in the unavailable section and allows clearing them', async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(QUICK_FILTERS_STORAGE_KEY, JSON.stringify({
+      selections: {
+        action: { included: ['ban'], excluded: [] },
+      },
+      dateRange: { start: '', end: '' },
+      simulation: 'all',
+    }));
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Top Countries');
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ decision_q: 'action=ban' }),
+      expect.any(Object),
+    ));
+    await user.click(screen.getByRole('button', { name: 'Filters' }));
+
+    expect(screen.getByRole('heading', { name: 'Unavailable' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Decisions' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Action' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Expiration' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Alert' })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Clear Action' }));
+    await waitFor(() => expect(
+      JSON.parse(localStorage.getItem(QUICK_FILTERS_STORAGE_KEY) || '{}').selections.action,
+    ).toBeUndefined());
+  });
+
+  test('hydrates dashboard requests from shared quick-filter persistence', async () => {
+    localStorage.setItem(QUICK_FILTERS_STORAGE_KEY, JSON.stringify({
+      selections: {
+        country: { included: ['DE', 'FR'], excluded: ['US'] },
+        machine: { included: ['firewall-1'], excluded: [] },
+      },
+      dateRange: { start: '2026-04-01T10:00', end: '2026-04-02T10:00' },
+      simulation: 'live',
+    }));
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        q: '(country=DE OR country=FR) AND country<>US AND machine=firewall-1',
+        decision_q: '(country=DE OR country=FR) AND country<>US AND machine=firewall-1',
+        dateStart: '2026-04-01T10:00',
+        dateEnd: '2026-04-02T10:00',
+        simulation: 'live',
+      }),
+      expect.any(Object),
+    ));
+    expect(screen.getByRole('button', { name: 'Filters' })).toHaveTextContent('6');
+  });
+
+  test('writes top-list selections to quick-filter persistence and reflects drawer changes', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Top Countries');
+    await user.click(screen.getByText('Germany'));
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ country: 'DE', q: 'country=DE', decision_q: 'country=DE' }),
+      expect.any(Object),
+    ));
+    expect(JSON.parse(localStorage.getItem(QUICK_FILTERS_STORAGE_KEY) || '{}').selections.country).toEqual({
+      included: ['DE'],
+      excluded: [],
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Filters' }));
+    await user.click(screen.getByRole('button', { name: 'Country' }));
+    await user.click(await screen.findByRole('checkbox', { name: 'Toggle France in Country' }));
+
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        q: 'country=DE OR country=FR',
+        decision_q: 'country=DE OR country=FR',
+      }),
+      expect.any(Object),
+    ));
+    expect(JSON.parse(localStorage.getItem(QUICK_FILTERS_STORAGE_KEY) || '{}').selections.country).toEqual({
+      included: ['DE', 'FR'],
+      excluded: [],
+    });
+  });
+
+  test('keeps the activity-history range and quick-filter date range in sync', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(chartSpy).toHaveBeenCalled());
+    const chartProps = chartSpy.mock.calls.at(-1)?.[0] as {
+      onDateRangeSelect: (
+        range: { start: string; end: string } | null,
+        isAtEnd: boolean,
+      ) => void;
+    };
+    act(() => {
+      chartProps.onDateRangeSelect(
+        { start: '2026-04-01T10:00', end: '2026-04-02T11:00' },
+        true,
+      );
+    });
+
+    await waitFor(() => expect(
+      JSON.parse(localStorage.getItem(QUICK_FILTERS_STORAGE_KEY) || '{}').dateRange,
+    ).toEqual({
+      start: '2026-04-01T10:00',
+      end: '2026-04-02T11:00',
+    }));
+
+    await user.click(screen.getByRole('button', { name: 'Filters' }));
+    await user.click(screen.getByRole('button', { name: 'Date and time' }));
+    fireEvent.change(screen.getByLabelText('From'), {
+      target: { value: '2026-04-01T12:00' },
+    });
+
+    await waitFor(() => {
+      const latestChartProps = chartSpy.mock.calls.at(-1)?.[0] as {
+        selectedDateRange: { start: string; end: string } | null;
+      };
+      expect(latestChartProps.selectedDateRange).toEqual({
+        start: '2026-04-01T12:00',
+        end: '2026-04-02T11:00',
+      });
+    });
+  });
+
   test.each([
     { connected: [true, true], status: 'All online', count: '2 of 2 online' },
     { connected: [true, false], status: 'Partial', count: '1 of 2 online' },
@@ -173,7 +342,7 @@ describe('Dashboard filters and drilldowns', () => {
 
     const alertsParams = new URLSearchParams((alertsCard as HTMLElement).getAttribute('href')?.split('?')[1] ?? '');
     const decisionsParams = new URLSearchParams((decisionsCard as HTMLElement).getAttribute('href')?.split('?')[1] ?? '');
-    const expectedQuery = 'country:DE AND scenario:crowdsecurity/ssh-bf AND as:Hetzner AND target:ssh AND sim:live';
+    const expectedQuery = 'scenario=crowdsecurity/ssh-bf AND country=DE AND as=Hetzner AND target=ssh AND sim=live';
 
     expect(alertsParams.get('q')).toBe(expectedQuery);
     expect(decisionsParams.get('q')).toBe(expectedQuery);
@@ -204,7 +373,7 @@ describe('Dashboard filters and drilldowns', () => {
     const decisionsCard = screen.getByText('Active Decisions').closest('a');
     const params = new URLSearchParams((alertsCard as HTMLElement).getAttribute('href')?.split('?')[1] ?? '');
     const decisionsParams = new URLSearchParams((decisionsCard as HTMLElement).getAttribute('href')?.split('?')[1] ?? '');
-    const expectedQuery = 'country:DE AND date>=2026-03-29T01 AND date<=2026-03-29T03';
+    const expectedQuery = 'country=DE AND date>=2026-03-29T01 AND date<=2026-03-29T03';
 
     expect(params.get('q')).toBe(expectedQuery);
     expect(decisionsParams.get('q')).toBe(expectedQuery);

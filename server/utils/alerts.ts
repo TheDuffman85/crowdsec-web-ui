@@ -7,10 +7,28 @@ export interface AlertTargetSummary {
 }
 
 export function getAlertTargetSummary(
-  alert: Pick<AlertRecord, 'events' | 'scenario' | 'machine_alias' | 'machine_id'> | null | undefined,
+  alert: Pick<AlertRecord, 'events' | 'scenario' | 'machine_alias' | 'machine_id' | 'target' | 'targets'> | null | undefined,
 ): AlertTargetSummary {
   if (!alert) return { target: 'Unknown', count: 1 };
 
+  const targets = getAlertTargets(alert);
+  return {
+    target: targets[0] || 'Unknown',
+    count: Math.max(1, targets.length),
+  };
+}
+
+export function getAlertTargets(
+  alert: Pick<AlertRecord, 'events' | 'scenario' | 'machine_alias' | 'machine_id' | 'target' | 'targets'> | null | undefined,
+): string[] {
+  if (!alert) return ['Unknown'];
+  if (Array.isArray(alert.targets)) {
+    const targets = [...new Set(alert.targets
+      .filter((target): target is string => typeof target === 'string')
+      .map((target) => target.trim())
+      .filter(Boolean))];
+    if (targets.length > 0) return targets;
+  }
   const targetCounts = new Map<string, number>();
   const events = Array.isArray(alert.events) ? alert.events : [];
   for (const event of events) {
@@ -24,9 +42,9 @@ export function getAlertTargetSummary(
   }
 
   if (targetCounts.size > 0) {
-    const [target] = [...targetCounts.entries()]
-      .sort((left, right) => right[1] - left[1])[0];
-    return { target, count: targetCounts.size };
+    return [...targetCounts.entries()]
+      .sort((left, right) => right[1] - left[1])
+      .map(([target]) => target);
   }
 
   if (alert.scenario) {
@@ -34,12 +52,12 @@ export function getAlertTargetSummary(
     if (scenarioName) {
       const serviceName = scenarioName.split('-')[0];
       if (serviceName) {
-        return { target: serviceName, count: 1 };
+        return [serviceName];
       }
     }
   }
 
-  return { target: resolveMachineName(alert) || 'Unknown', count: 1 };
+  return [resolveMachineName(alert) || 'Unknown'];
 }
 
 export function getAlertTarget(alert: Pick<AlertRecord, 'events' | 'scenario' | 'machine_alias' | 'machine_id'> | null | undefined): string {
@@ -48,9 +66,11 @@ export function getAlertTarget(alert: Pick<AlertRecord, 'events' | 'scenario' | 
 
 export function withAlertTargetSummary<T extends AlertRecord>(alert: T): T {
   const summary = getAlertTargetSummary(alert);
+  const targets = getAlertTargets(alert);
   return {
     ...alert,
     target: summary.target,
+    targets,
     target_count: summary.count,
   };
 }
@@ -141,6 +161,9 @@ export function toSlimAlert(alert: AlertRecord): SlimAlert {
     machine_alias: alert.machine_alias,
     source: alert.source || null,
     target: alert.target,
+    targets: Array.isArray(alert.targets)
+      ? alert.targets.filter((target): target is string => typeof target === 'string' && target.trim().length > 0)
+      : undefined,
     target_count: typeof alert.target_count === 'number' ? alert.target_count : undefined,
     meta_search: typeof alert.meta_search === 'string' ? alert.meta_search : buildMetaSearch(alert.events, alert.meta),
     decisions: (alert.decisions || []).map(toSlimDecision),

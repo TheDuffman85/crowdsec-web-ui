@@ -38,7 +38,7 @@ describe('Decisions page search and pagination', () => {
     const filtersButton = screen.getByRole('button', { name: 'Filters' });
     const columnsButton = screen.getByRole('button', { name: 'Choose decision table columns' });
     expect(Array.from(columnsButton.parentElement!.children).slice(0, 3)).toEqual([
-      filtersButton,
+      filtersButton.parentElement!,
       searchButton.parentElement!.parentElement!,
       columnsButton,
     ]);
@@ -129,11 +129,22 @@ describe('Decisions page search and pagination', () => {
     expect(within(expirationHeader).getByText('1')).toBeInTheDocument();
     expect(within(expirationSection!).getByRole('button', { name: 'Clear Expiration' })).toBeInTheDocument();
 
-    await user.click(within(drawer).getByRole('button', { name: 'Clear all filters' }));
+    await user.click(within(drawer).getByRole('button', { name: 'Close filters' }));
+    await user.click(screen.getByRole('button', { name: 'Clear all filters' }));
     await waitFor(() => expect(fetchDecisionsPaginatedMock.mock.calls.at(-1)?.[2]?.include_expired).toBeUndefined());
     await waitFor(() => expect(within(filtersButton).queryByText('1')).not.toBeInTheDocument());
-    expect(within(expirationHeader).queryByText('1')).not.toBeInTheDocument();
-    expect(within(drawer).queryByRole('button', { name: 'Clear all filters' })).not.toBeInTheDocument();
+
+    await user.click(filtersButton);
+    const clearedDrawer = screen.getByRole('dialog', { name: 'Quick filters' });
+    const clearedExpirationSection = within(clearedDrawer)
+      .getByRole('button', { name: 'Expiration' })
+      .closest('section');
+    expect(clearedExpirationSection).not.toBeNull();
+    const clearedExpirationHeader = clearedExpirationSection!.firstElementChild as HTMLElement;
+    expect(within(clearedExpirationHeader).queryByText('1')).not.toBeInTheDocument();
+    expect(
+      within(clearedExpirationSection!).queryByRole('button', { name: 'Clear Expiration' }),
+    ).not.toBeInTheDocument();
   });
 
   test('uses advanced-search date-time comparisons from quick filters', async () => {
@@ -216,8 +227,8 @@ describe('Decisions page search and pagination', () => {
       </MemoryRouter>,
     );
 
-    await waitFor(() => expect(fetchDecisionsPaginatedMock.mock.calls.at(-1)?.[2]?.q).toBe('country:DE'));
-    expect(fetchDecisionsPaginatedMock.mock.calls[0]?.[2]?.q).toBe('country:DE');
+    await waitFor(() => expect(fetchDecisionsPaginatedMock.mock.calls.at(-1)?.[2]?.q).toBe('country=DE'));
+    expect(fetchDecisionsPaginatedMock.mock.calls[0]?.[2]?.q).toBe('country=DE');
     await userEvent.click(await screen.findByRole('button', { name: /^Filters/ }));
     expect(screen.getByRole('button', { name: 'Decisions' })).toBeDisabled();
     await userEvent.click(screen.getByRole('button', { name: 'Clear Decisions' }));
@@ -227,7 +238,7 @@ describe('Decisions page search and pagination', () => {
     ).toEqual({
       country: { included: ['DE'], excluded: [] },
     }));
-    expect(fetchDecisionsPaginatedMock.mock.calls.at(-1)?.[2]?.q).toBe('country:DE');
+    expect(fetchDecisionsPaginatedMock.mock.calls.at(-1)?.[2]?.q).toBe('country=DE');
   });
 
   test('applies an initial advanced search URL query on the first decision load', async () => {

@@ -41,6 +41,8 @@ const baseDecision: DecisionListItem = {
   id: 10,
   created_at: '2026-03-24T10:00:00.000Z',
   machine: 'host-a',
+  machine_id: 'machine-1',
+  machine_alias: 'host-a',
   value: '1.2.3.4',
   expired: false,
   is_duplicate: false,
@@ -134,6 +136,29 @@ describe('shared search compiler', () => {
 
     expect(compiled.predicate(baseAlert)).toBe(true);
     expect(compiled.predicate({ ...baseAlert, simulated: true })).toBe(false);
+  });
+
+  test('matches stable machine ids and every represented target', () => {
+    const alertSearch = compileAlertSearch('machine=machine-1 AND target=admin.example.test', {
+      machineEnabled: true,
+    });
+    const decisionSearch = compileDecisionSearch('machine=machine-1 AND target=admin.example.test', {
+      machineEnabled: true,
+    });
+    const alert = {
+      ...baseAlert,
+      targets: ['api.example.test', 'admin.example.test'],
+    };
+    const decision = {
+      ...baseDecision,
+      detail: {
+        ...baseDecision.detail,
+        targets: ['api.example.test', 'admin.example.test'],
+      },
+    };
+
+    expect(alertSearch.ok && alertSearch.predicate(alert)).toBe(true);
+    expect(decisionSearch.ok && decisionSearch.predicate(decision)).toBe(true);
   });
 
   test('distinguishes broad and exact text field matches', () => {
@@ -528,7 +553,7 @@ describe('shared search compiler', () => {
       excluded: [],
     });
     const serialized = serializeSearchNode(replaced);
-    expect(serialized).toBe('scenario:ssh AND country:("United States" OR "A\\"B")');
+    expect(serialized).toBe('scenario:ssh AND (country="United States" OR country="A\\"B")');
     expect(compileAlertSearch(serialized).ok).toBe(true);
   });
 
@@ -538,6 +563,28 @@ describe('shared search compiler', () => {
       excluded: ['', 'DE'],
     });
     expect(serializeSearchNode(updated)).toBe('country<>"" AND country<>DE');
+  });
+
+  test('keeps facet selections exact while preserving manually entered broad searches', () => {
+    const selectedTarget = replaceSearchFacetSelection(null, 'target', {
+      included: ['tausend.me'],
+      excluded: [],
+    });
+    const exactQuery = serializeSearchNode(selectedTarget);
+    expect(exactQuery).toBe('target=tausend.me');
+
+    const exact = compileAlertSearch(exactQuery);
+    const broad = compileAlertSearch('target:tausend.me');
+    expect(exact.ok).toBe(true);
+    expect(broad.ok).toBe(true);
+    if (!exact.ok || !broad.ok) return;
+
+    const rootTarget = { ...baseAlert, target: 'tausend.me' };
+    const subdomainTarget = { ...baseAlert, target: 'bw.tausend.me' };
+    expect(exact.predicate(rootTarget)).toBe(true);
+    expect(exact.predicate(subdomainTarget)).toBe(false);
+    expect(broad.predicate(rootTarget)).toBe(true);
+    expect(broad.predicate(subdomainTarget)).toBe(true);
   });
 
   test('extracts and replaces dashboard-compatible date-time ranges', () => {

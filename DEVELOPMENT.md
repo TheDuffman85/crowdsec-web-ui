@@ -146,6 +146,32 @@ CROWDSEC_MTLS_CONTAINER=my-crowdsec-test pnpm run test:mtls:crowdsec
 
 `CROWDSEC_MTLS_KEEP=1` keeps both the container and its temporary mounted files and prints their paths for inspection. Remove them manually when finished.
 
+## Quick Filter Architecture
+
+Quick Filters are structured-search editors shared by Dashboard, Alerts, and Decisions.
+
+| Path | Responsibility |
+| --- | --- |
+| `client/src/components/QuickFilters.tsx` | Accessible side drawer, active counts, visible/hidden/unavailable sections, facet search, pagination, and clear controls |
+| `client/src/lib/quickFilters.ts` | Browser-local persistence, normalization, page-field compatibility, and synchronization between stored selections and search ASTs |
+| `shared/search.ts` | Parsing, compiling, editing, and serializing structured searches |
+| `server/app.ts` | Alert/decision facet queries and Dashboard `q` evaluation |
+
+Keep these invariants when changing filters:
+
+- The canonical browser key is `crowdsec-web-ui:quick-filters`. It stores field inclusions/exclusions, the date range, and simulation mode. Do not add another page-specific persistence mechanism.
+- Alerts, Decisions, and Dashboard read and write the same stored object. Synchronization updates fields supported by the current page without deleting selections that are only usable elsewhere.
+- A field that exists on another page but cannot be applied on the current page belongs in the drawer's **Unavailable** section. Keep its active selection visible and clearable without requesting an unsupported facet.
+- Included facet values are exact comparisons serialized with `=`; excluded values use `<>`. The typed `field:value` form must remain a broader contains search. This distinction prevents a selected target such as `tausend.me` from matching subdomains.
+- Multiple included values for one field are joined with `OR`; different fields and exclusions are combined with `AND`.
+- Dashboard widgets must update the shared state rather than maintaining parallel country, scenario, AS, target, or date filters. Dashboard-supported `q` fields must also be represented in its cached alert statistics record.
+- Dashboard requests carry alert-compatible filters in `q` and decision-compatible filters in `decision_q`. Headline filtered totals use the same indexed SQL predicates as the paginated lists; cached records continue to drive charts, maps, and top lists.
+- URL search predicates take precedence over persisted selections for the same field. Stored selections fill fields absent from the initial URL.
+- Facet counts are disjunctive: the requested facet's own predicate is removed while all other active filters remain.
+- Default decision requests use the precomputed `is_duplicate` indexes. If active filters can exclude that global primary, rank only the filtered candidate set and promote its best row. Keep this hybrid path: it preserves correct filtered results without imposing window ranking on high-volume unfiltered requests.
+
+When changing this flow, cover persistence/query synchronization in `client/src/lib/__tests__/quickFilters.test.ts`, page integration in the Alerts, Decisions, and Dashboard tests, structured-search semantics in `server/__tests__/search/search.test.ts`, and Dashboard/API consistency in `server/__tests__/app/api-dashboard.test.ts`.
+
 ## Cache and Synchronization Internals
 
 ### Synchronization

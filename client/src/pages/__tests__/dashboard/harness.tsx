@@ -5,12 +5,14 @@ const {
   mapSpy,
   fetchConfigMock,
   fetchDashboardStatsMock,
+  fetchFacetMock,
   setLastUpdatedMock,
 } = vi.hoisted(() => ({
   chartSpy: vi.fn(),
   mapSpy: vi.fn(),
   fetchConfigMock: vi.fn(),
   fetchDashboardStatsMock: vi.fn(),
+  fetchFacetMock: vi.fn(),
   setLastUpdatedMock: vi.fn(),
 }));
 let refreshSignalMock = 0;
@@ -39,6 +41,7 @@ vi.mock('../../../components/WorldMapCard', () => ({
 vi.mock('../../../lib/api', () => ({
   fetchConfig: fetchConfigMock,
   fetchDashboardStats: fetchDashboardStatsMock,
+  fetchFacet: fetchFacetMock,
 }));
 
 function buildDashboardStatsResponse(filters?: Record<string, string>) {
@@ -118,6 +121,20 @@ beforeEach(() => {
   chartSpy.mockClear();
   mapSpy.mockClear();
   fetchDashboardStatsMock.mockClear();
+  fetchFacetMock.mockReset();
+  fetchFacetMock.mockImplementation(async (
+    _page: string,
+    field: string,
+  ) => ({
+    field,
+    values: field === 'country'
+      ? [{ value: 'DE', count: 1 }, { value: 'FR', count: 1 }]
+      : field === 'scenario'
+        ? [{ value: 'crowdsecurity/ssh-bf', count: 1 }]
+        : [],
+    offset: 0,
+    has_more: false,
+  }));
   setLastUpdatedMock.mockClear();
   fetchConfigMock.mockResolvedValue({
     lookback_period: '7d',
@@ -156,4 +173,4 @@ function setRefreshSignalMock(value: number): void {
   refreshSignalMock = value;
 }
 
-export { chartSpy, mapSpy, fetchConfigMock, fetchDashboardStatsMock, setLastUpdatedMock, refreshSignalMock, buildDashboardStatsResponse, createDeferred, setRefreshSignalMock };
+export { chartSpy, mapSpy, fetchConfigMock, fetchDashboardStatsMock, fetchFacetMock, setLastUpdatedMock, refreshSignalMock, buildDashboardStatsResponse, createDeferred, setRefreshSignalMock };

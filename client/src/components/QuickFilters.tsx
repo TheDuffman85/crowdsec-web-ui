@@ -45,8 +45,10 @@ interface QuickFiltersProps {
     onClearAll: () => void;
     getSelection?: (field: FacetField, selection: SearchFacetSelection) => SearchFacetSelection;
     formatValue?: (field: FacetField, value: string) => string;
+    getSearchValues?: (field: FacetField, search: string) => string[];
     busy?: boolean;
     refreshKey?: number | string;
+    triggerClassName?: string;
 }
 
 export function QuickFilters({
@@ -63,8 +65,10 @@ export function QuickFilters({
     onClearAll,
     getSelection,
     formatValue,
+    getSearchValues,
     busy = false,
     refreshKey = 0,
+    triggerClassName,
 }: QuickFiltersProps) {
     const { t } = useI18n();
     const [drawerOpen, setDrawerOpen] = useState(false);
@@ -149,28 +153,52 @@ export function QuickFilters({
             onSelectionChange={onSelectionChange}
             getSelection={getSelection}
             formatValue={formatValue}
+            getSearchValues={getSearchValues}
             refreshKey={refreshKey}
         />
     );
 
-    return (
-        <>
-            <button
-                ref={triggerRef}
-                type="button"
-                onClick={() => setDrawerOpen(true)}
-                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
-                aria-haspopup="dialog"
-                aria-expanded={drawerOpen}
-                aria-label={t('components.quickFilters.filters')}
-            >
-                <Filter size={18} aria-hidden="true" />
-                {activeCount > 0 && (
+    const trigger = (
+        <button
+            ref={triggerRef}
+            type="button"
+            onClick={() => setDrawerOpen(true)}
+            className={`inline-flex items-center justify-center gap-2 border bg-white text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 ${
+                triggerClassName
+                    ?? 'min-h-11 rounded-md border-gray-300 px-3 dark:border-gray-700'
+            }`}
+            aria-haspopup="dialog"
+            aria-expanded={drawerOpen}
+            aria-label={t('components.quickFilters.filters')}
+        >
+            <Filter size={18} aria-hidden="true" />
+            {activeCount > 0 && (
+                <>
                     <span className="min-w-5 rounded-full bg-primary-600 px-1.5 text-xs text-white">
                         {activeCount}
                     </span>
+                    <span className="h-5 w-2 shrink-0" aria-hidden="true" />
+                </>
+            )}
+        </button>
+    );
+
+    return (
+        <>
+            <div className="relative inline-flex shrink-0">
+                {trigger}
+                {activeCount > 0 && (
+                    <button
+                        type="button"
+                        onClick={onClearAll}
+                        className="absolute inset-y-0 right-0 inline-flex w-7 items-center justify-center rounded-r-[inherit] text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:z-10 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-gray-100"
+                        aria-label={t('components.quickFilters.clearAll')}
+                        title={t('components.quickFilters.clearAll')}
+                    >
+                        <X size={16} aria-hidden="true" />
+                    </button>
                 )}
-            </button>
+            </div>
             {drawerOpen && createPortal(
                 <div className="fixed inset-0 z-[10000]">
                     <button
@@ -187,27 +215,9 @@ export function QuickFilters({
                         className="absolute inset-y-0 right-0 flex w-[min(100vw,24rem)] flex-col bg-white pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)] shadow-2xl dark:bg-gray-800"
                     >
                         <div className="flex min-h-16 shrink-0 items-center justify-between gap-2 border-b border-gray-200 px-4 dark:border-gray-700">
-                            <div className="flex min-w-0 items-center gap-2">
-                                <h2 id="quick-filters-drawer-title" className="truncate text-lg font-semibold">
-                                    {t('components.quickFilters.title')}
-                                </h2>
-                                {activeCount > 0 && (
-                                    <span className="min-w-5 shrink-0 rounded-full bg-primary-600 px-1.5 text-center text-xs font-medium text-white">
-                                        {activeCount}
-                                    </span>
-                                )}
-                                {activeCount > 0 && (
-                                    <button
-                                        type="button"
-                                        onClick={onClearAll}
-                                        className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-gray-100"
-                                        aria-label={t('components.quickFilters.clearAll')}
-                                        title={t('components.quickFilters.clearAll')}
-                                    >
-                                        <X size={16} aria-hidden="true" />
-                                    </button>
-                                )}
-                            </div>
+                            <h2 id="quick-filters-drawer-title" className="truncate text-lg font-semibold">
+                                {t('components.quickFilters.title')}
+                            </h2>
                             <button
                                 ref={closeButtonRef}
                                 type="button"
@@ -251,6 +261,7 @@ function FacetGroups({
     onSelectionChange,
     getSelection,
     formatValue,
+    getSearchValues,
     refreshKey,
 }: FacetGroupsProps) {
     const { t } = useI18n();
@@ -273,6 +284,7 @@ function FacetGroups({
                     onSelectionChange,
                     getSelection,
                     formatValue,
+                    getSearchValues,
                     refreshKey,
                 })}
             </div>
@@ -300,6 +312,7 @@ function FacetGroups({
                             onSelectionChange,
                             getSelection,
                             formatValue,
+                            getSearchValues,
                             refreshKey,
                         })}
                     </div>
@@ -329,6 +342,7 @@ function FacetGroups({
                             onSelectionChange,
                             getSelection,
                             formatValue,
+                            getSearchValues,
                             refreshKey,
                         })}
                     </div>
@@ -350,6 +364,7 @@ interface FilterGroupRenderOptions {
     onSelectionChange: QuickFiltersProps['onSelectionChange'];
     getSelection?: QuickFiltersProps['getSelection'];
     formatValue?: QuickFiltersProps['formatValue'];
+    getSearchValues?: QuickFiltersProps['getSearchValues'];
     refreshKey?: QuickFiltersProps['refreshKey'];
 }
 
@@ -386,6 +401,7 @@ function renderFilterGroups(
                 onSelectionChange={options.onSelectionChange}
                 getSelection={options.getSelection}
                 formatValue={options.formatValue}
+                getSearchValues={options.getSearchValues}
                 refreshKey={options.refreshKey}
             />
         );
@@ -492,6 +508,7 @@ interface FacetGroupProps {
     onSelectionChange: (field: FacetField, selection: SearchFacetSelection) => void;
     getSelection?: QuickFiltersProps['getSelection'];
     formatValue?: QuickFiltersProps['formatValue'];
+    getSearchValues?: QuickFiltersProps['getSearchValues'];
     refreshKey?: number | string;
 }
 
@@ -506,6 +523,7 @@ function FacetGroup({
     onSelectionChange,
     getSelection,
     formatValue,
+    getSearchValues,
     refreshKey,
 }: FacetGroupProps) {
     const { language, t } = useI18n();
@@ -529,8 +547,13 @@ function FacetGroup({
     });
     const requestGenerationRef = useRef(0);
     const numberFormatter = useMemo(() => new Intl.NumberFormat(language), [language]);
+    const searchValues = useMemo(
+        () => debouncedSearch ? getSearchValues?.(definition.field, debouncedSearch) || [] : [],
+        [debouncedSearch, definition.field, getSearchValues],
+    );
     const filterKey = JSON.stringify(filters);
-    const requestBaseKey = `${filterKey}\u0000${debouncedSearch}\u0000${String(refreshKey)}`;
+    const searchValuesKey = JSON.stringify(searchValues);
+    const requestBaseKey = `${filterKey}\u0000${debouncedSearch}\u0000${searchValuesKey}\u0000${String(refreshKey)}`;
     const offset = pagination.baseKey === requestBaseKey ? pagination.offset : 0;
     const requestKey = `${requestBaseKey}\u0000${offset}\u0000${retryKey}`;
     // Keep the last successful values visible while a changed filter waits for the
@@ -559,6 +582,7 @@ function FacetGroup({
 
         void fetchFacet(page, definition.field, filters, {
             search: debouncedSearch,
+            searchValues,
             offset,
             limit: offset === 0 ? 10 : 25,
             signal: controller.signal,
@@ -601,26 +625,38 @@ function FacetGroup({
         requestBaseKey,
         requestKey,
         retryKey,
+        searchValues,
     ]);
 
-    const isChecked = (value: string) => {
+    const matchesFacetEntry = (candidate: string, value: string, label?: string) => (
+        candidate.trim().toLowerCase() === value.trim().toLowerCase()
+        || Boolean(label && candidate.trim().toLowerCase() === label.trim().toLowerCase())
+    );
+
+    const isChecked = (value: string, label?: string) => {
         if (selection.included.length > 0) {
-            return selection.included.includes(value);
+            return selection.included.some((candidate) => matchesFacetEntry(candidate, value, label));
         }
-        return !selection.excluded.includes(value);
+        return !selection.excluded.some((candidate) => matchesFacetEntry(candidate, value, label));
     };
 
-    const toggleValue = (value: string) => {
+    const toggleValue = (value: string, label?: string) => {
         if (selection.included.length > 0) {
-            if (selection.included.includes(value)) {
-                const included = selection.included.filter((candidate) => candidate !== value);
+            if (selection.included.some((candidate) => matchesFacetEntry(candidate, value, label))) {
+                const included = selection.included.filter((candidate) => !matchesFacetEntry(candidate, value, label));
                 onSelectionChange(definition.field, included.length > 0
                     ? { included, excluded: selection.excluded }
-                    : { included: [], excluded: [...selection.excluded, value] });
+                    : {
+                        included: [],
+                        excluded: [
+                            ...selection.excluded.filter((candidate) => !matchesFacetEntry(candidate, value, label)),
+                            value,
+                        ],
+                    });
             } else {
                 onSelectionChange(definition.field, {
                     included: [...selection.included, value],
-                    excluded: selection.excluded.filter((candidate) => candidate !== value),
+                    excluded: selection.excluded.filter((candidate) => !matchesFacetEntry(candidate, value, label)),
                 });
             }
             return;
@@ -628,15 +664,19 @@ function FacetGroup({
 
         onSelectionChange(definition.field, {
             included: [],
-            excluded: selection.excluded.includes(value)
-                ? selection.excluded.filter((candidate) => candidate !== value)
+            excluded: selection.excluded.some((candidate) => matchesFacetEntry(candidate, value, label))
+                ? selection.excluded.filter((candidate) => !matchesFacetEntry(candidate, value, label))
                 : [...selection.excluded, value],
         });
     };
 
-    const displayValue = (value: string) => value === ''
-        ? t('components.quickFilters.empty')
-        : formatValue?.(definition.field, value) || value;
+    const displayValue = (value: string, label?: string) => {
+        if (value === '') return t('components.quickFilters.empty');
+        const formattedValue = formatValue?.(definition.field, value);
+        return formattedValue && formattedValue !== value
+            ? formattedValue
+            : label || formattedValue || value;
+    };
 
     return (
         <section className={`py-1 ${applicable ? '' : 'opacity-50'}`} data-applicable={applicable}>
@@ -707,12 +747,12 @@ function FacetGroup({
                                     <label className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center">
                                         <input
                                             type="checkbox"
-                                            checked={isChecked(entry.value)}
-                                            onChange={() => toggleValue(entry.value)}
+                                            checked={isChecked(entry.value, entry.label)}
+                                            onChange={() => toggleValue(entry.value, entry.label)}
                                             className="h-5 w-5 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                                             aria-label={t('components.quickFilters.toggleValue', {
                                                 field: definition.label,
-                                                value: displayValue(entry.value),
+                                                value: displayValue(entry.value, entry.label),
                                             })}
                                         />
                                     </label>
@@ -723,9 +763,9 @@ function FacetGroup({
                                             excluded: [],
                                         })}
                                         className="min-w-0 flex-1 self-stretch truncate text-left text-sm"
-                                        title={displayValue(entry.value)}
+                                        title={displayValue(entry.value, entry.label)}
                                     >
-                                        {displayValue(entry.value)}
+                                        {displayValue(entry.value, entry.label)}
                                     </button>
                                     <span className="shrink-0 px-2 text-xs tabular-nums text-gray-500 dark:text-gray-400">
                                         {numberFormatter.format(entry.count)}

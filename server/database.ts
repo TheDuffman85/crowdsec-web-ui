@@ -556,7 +556,7 @@ export class CrowdsecDatabase {
     `);
     this.getActiveAlertIdsStatement = this.db.query(`
       SELECT DISTINCT active.alert_id AS id
-      FROM decisions AS active INDEXED BY idx_decisions_stop_alert_id
+      FROM decisions AS active
       WHERE active.stop_at > $now
         AND active.alert_id IS NOT NULL
         AND EXISTS (
@@ -1520,6 +1520,13 @@ export class CrowdsecDatabase {
   }
 
   refreshDecisionDuplicateFlags(now: string, force = false): number {
+    // Fresh bulk imports drop every secondary index. Build only the narrow
+    // ranking index immediately before this pass instead of maintaining it
+    // across every imported row.
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_decisions_duplicate_primary
+      ON decisions(value, simulated, stop_at DESC, id)
+    `);
     if (!this.decisionDuplicateFlagsInitialized && this.decisionDuplicateDirtyKeys.size === 0) {
       this.loadDecisionDuplicateRefreshState();
     }
