@@ -369,6 +369,7 @@ export function Alerts() {
     const quickFilterConfig = useMemo<{
         fields: QuickFilterDefinition[];
         sectionOrder: QuickFilterSectionId[];
+        hiddenSectionOrder: QuickFilterSectionId[];
     }>(() => {
         const fieldByColumn: Partial<Record<TableColumnId, FacetField>> = {
             id: 'id',
@@ -386,17 +387,25 @@ export function Alerts() {
         };
         const fields: QuickFilterDefinition[] = [];
         const sectionOrder: QuickFilterSectionId[] = [];
-        for (const column of visibleAlertColumns) {
+        const hiddenSectionOrder: QuickFilterSectionId[] = [];
+        const visibleColumnIds = new Set(visibleAlertColumns);
+        const addColumn = (column: TableColumnId, order: QuickFilterSectionId[]) => {
             if (column === 'time') {
-                sectionOrder.push('date');
-                continue;
+                order.push('date');
+                return;
             }
             const field = fieldByColumn[column];
-            if (!field) continue;
+            if (!field) return;
             fields.push({ field, label: t(`tableColumns.${column}`) });
-            sectionOrder.push(field);
+            order.push(field);
+        };
+        for (const column of visibleAlertColumns) {
+            addColumn(column, sectionOrder);
         }
-        return { fields, sectionOrder };
+        for (const { id: column } of TABLE_COLUMN_DEFINITIONS.alerts) {
+            if (!visibleColumnIds.has(column)) addColumn(column, hiddenSectionOrder);
+        }
+        return { fields, sectionOrder, hiddenSectionOrder };
     }, [t, visibleAlertColumns]);
     const quickFilterDateRange = useMemo(() => {
         const range = compiledSearch.ok ? getSearchDateRange(compiledSearch.ast) : { start: '', end: '' };
@@ -454,6 +463,41 @@ export function Alerts() {
         setSearchParams(nextParams);
     }, [
         cancelSearchDebounce,
+        searchDateOptions,
+        searchParams,
+        searchValidationFeatures,
+        setSearchParams,
+    ]);
+    const clearQuickFilters = useCallback(() => {
+        const currentQuery = searchParams.get('q') ?? '';
+        const currentSearch = compileAlertSearch(currentQuery, searchValidationFeatures, searchDateOptions);
+        if (!currentSearch.ok) return;
+
+        let nextSearchAst = currentSearch.ast;
+        for (const { field } of quickFilterConfig.fields) {
+            nextSearchAst = replaceSearchFacetSelection(nextSearchAst, field, {
+                included: [],
+                excluded: [],
+            });
+        }
+        nextSearchAst = replaceSearchDateRange(nextSearchAst, { start: '', end: '' });
+        const nextQuery = serializeSearchNode(nextSearchAst);
+        const nextParams = new URLSearchParams(searchParams);
+        nextParams.delete('dateStart');
+        nextParams.delete('dateEnd');
+        if (nextQuery) nextParams.set('q', nextQuery);
+        else nextParams.delete('q');
+
+        cancelSearchDebounce();
+        searchDraftRef.current = nextQuery;
+        searchSelectionRef.current = { start: nextQuery.length, end: nextQuery.length };
+        skipSearchParamSyncRef.current = nextQuery;
+        setSearchDraft(nextQuery);
+        setDebouncedSearchDraft(nextQuery);
+        setSearchParams(nextParams);
+    }, [
+        cancelSearchDebounce,
+        quickFilterConfig.fields,
         searchDateOptions,
         searchParams,
         searchValidationFeatures,
@@ -680,8 +724,10 @@ export function Alerts() {
 
     useEffect(() => {
         const nextQuery = queryParam ?? "";
-        if (skipSearchParamSyncRef.current === nextQuery) {
-            skipSearchParamSyncRef.current = null;
+        if (skipSearchParamSyncRef.current !== null) {
+            if (skipSearchParamSyncRef.current === nextQuery) {
+                skipSearchParamSyncRef.current = null;
+            }
             return;
         }
         cancelSearchDebounce();
@@ -765,6 +811,9 @@ export function Alerts() {
         }
 
         const nextQuery = debouncedSearchDraft.trim();
+        if (skipSearchParamSyncRef.current === nextQuery) {
+            return;
+        }
         if (queryParam === nextQuery) {
             return;
         }
@@ -1140,11 +1189,13 @@ export function Alerts() {
         page: 'alerts' as const,
         fields: quickFilterConfig.fields,
         sectionOrder: quickFilterConfig.sectionOrder,
+        hiddenSectionOrder: quickFilterConfig.hiddenSectionOrder,
         filters: facetFilters,
         searchAst: compiledSearch.ok ? compiledSearch.ast : null,
         onSelectionChange: applyFacetSelection,
         dateRange: quickFilterDateRange,
         onDateRangeChange: applyDateRange,
+        onClearAll: clearQuickFilters,
         formatValue: formatFacetValue,
         busy: tableBusy,
         refreshKey: facetRefreshKey,

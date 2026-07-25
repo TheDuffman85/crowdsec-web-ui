@@ -34,11 +34,13 @@ interface QuickFiltersProps {
     page: 'alerts' | 'decisions';
     fields: QuickFilterDefinition[];
     sectionOrder?: QuickFilterSectionId[];
+    hiddenSectionOrder?: QuickFilterSectionId[];
     filters: Record<string, string>;
     searchAst: SearchNode | null;
     onSelectionChange: (field: FacetField, selection: SearchFacetSelection) => void;
     dateRange: SearchDateRange;
     onDateRangeChange: (range: SearchDateRange) => void;
+    onClearAll: () => void;
     getSelection?: (field: FacetField, selection: SearchFacetSelection) => SearchFacetSelection;
     formatValue?: (field: FacetField, value: string) => string;
     busy?: boolean;
@@ -49,11 +51,13 @@ export function QuickFilters({
     page,
     fields,
     sectionOrder,
+    hiddenSectionOrder,
     filters,
     searchAst,
     onSelectionChange,
     dateRange,
     onDateRangeChange,
+    onClearAll,
     getSelection,
     formatValue,
     busy = false,
@@ -130,6 +134,7 @@ export function QuickFilters({
             page={page}
             fields={fields}
             sectionOrder={sectionOrder}
+            hiddenSectionOrder={hiddenSectionOrder}
             filters={filters}
             searchAst={searchAst}
             dateRange={dateRange}
@@ -177,15 +182,33 @@ export function QuickFilters({
                         aria-labelledby="quick-filters-drawer-title"
                         className="absolute inset-y-0 right-0 flex w-[min(100vw,24rem)] flex-col bg-white pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)] shadow-2xl dark:bg-gray-800"
                     >
-                        <div className="flex min-h-16 shrink-0 items-center justify-between border-b border-gray-200 px-4 dark:border-gray-700">
-                            <h2 id="quick-filters-drawer-title" className="text-lg font-semibold">
-                                {t('components.quickFilters.title')}
-                            </h2>
+                        <div className="flex min-h-16 shrink-0 items-center justify-between gap-2 border-b border-gray-200 px-4 dark:border-gray-700">
+                            <div className="flex min-w-0 items-center gap-2">
+                                <h2 id="quick-filters-drawer-title" className="truncate text-lg font-semibold">
+                                    {t('components.quickFilters.title')}
+                                </h2>
+                                {activeCount > 0 && (
+                                    <span className="min-w-5 shrink-0 rounded-full bg-primary-600 px-1.5 text-center text-xs font-medium text-white">
+                                        {activeCount}
+                                    </span>
+                                )}
+                                {activeCount > 0 && (
+                                    <button
+                                        type="button"
+                                        onClick={onClearAll}
+                                        className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-gray-100"
+                                        aria-label={t('components.quickFilters.clearAll')}
+                                        title={t('components.quickFilters.clearAll')}
+                                    >
+                                        <X size={16} aria-hidden="true" />
+                                    </button>
+                                )}
+                            </div>
                             <button
                                 ref={closeButtonRef}
                                 type="button"
                                 onClick={() => setDrawerOpen(false)}
-                                className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+                                className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
                                 aria-label={t('components.quickFilters.close')}
                             >
                                 <X size={20} />
@@ -202,7 +225,7 @@ export function QuickFilters({
     );
 }
 
-interface FacetGroupsProps extends Omit<QuickFiltersProps, 'busy'> {
+interface FacetGroupsProps extends Omit<QuickFiltersProps, 'busy' | 'onClearAll'> {
     openFields: Set<FacetField | 'date'>;
     enabled: boolean;
     onToggleField: (field: FacetField | 'date') => void;
@@ -212,6 +235,7 @@ function FacetGroups({
     page,
     fields,
     sectionOrder,
+    hiddenSectionOrder = [],
     filters,
     searchAst,
     dateRange,
@@ -224,46 +248,114 @@ function FacetGroups({
     formatValue,
     refreshKey,
 }: FacetGroupsProps) {
+    const { t } = useI18n();
     const definitions = new Map(fields.map((definition) => [definition.field, definition]));
     const orderedSections: QuickFilterSectionId[] = sectionOrder
         ?? ['date', ...fields.map((definition) => definition.field)];
 
     return (
-        <div className="divide-y divide-gray-200 dark:divide-gray-700">
-            {orderedSections.map((section) => {
-                if (section === 'date') {
-                    return (
-                        <DateTimeFilterGroup
-                            key="date"
-                            open={openFields.has('date')}
-                            onToggle={() => onToggleField('date')}
-                            range={dateRange}
-                            onChange={onDateRangeChange}
-                        />
-                    );
-                }
-
-                const definition = definitions.get(section);
-                if (!definition) return null;
-                return (
-                    <FacetGroup
-                        key={definition.field}
-                        page={page}
-                        definition={definition}
-                        filters={filters}
-                        searchAst={searchAst}
-                        open={openFields.has(definition.field)}
-                        enabled={enabled}
-                        onToggle={() => onToggleField(definition.field)}
-                        onSelectionChange={onSelectionChange}
-                        getSelection={getSelection}
-                        formatValue={formatValue}
-                        refreshKey={refreshKey}
-                    />
-                );
-            })}
+        <div>
+            <div className="divide-y divide-gray-200 dark:divide-gray-700">
+                {renderFilterGroups(orderedSections, definitions, {
+                    page,
+                    filters,
+                    searchAst,
+                    dateRange,
+                    onDateRangeChange,
+                    openFields,
+                    enabled,
+                    onToggleField,
+                    onSelectionChange,
+                    getSelection,
+                    formatValue,
+                    refreshKey,
+                })}
+            </div>
+            {hiddenSectionOrder.length > 0 && (
+                <section
+                    className="mt-4 border-t border-gray-300 pt-4 dark:border-gray-600"
+                    aria-labelledby="quick-filters-hidden-columns-title"
+                >
+                    <h3
+                        id="quick-filters-hidden-columns-title"
+                        className="px-2 pb-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400"
+                    >
+                        {t('components.quickFilters.hiddenColumns')}
+                    </h3>
+                    <div className="divide-y divide-gray-200 dark:divide-gray-700">
+                        {renderFilterGroups(hiddenSectionOrder, definitions, {
+                            page,
+                            filters,
+                            searchAst,
+                            dateRange,
+                            onDateRangeChange,
+                            openFields,
+                            enabled,
+                            onToggleField,
+                            onSelectionChange,
+                            getSelection,
+                            formatValue,
+                            refreshKey,
+                        })}
+                    </div>
+                </section>
+            )}
         </div>
     );
+}
+
+interface FilterGroupRenderOptions {
+    page: QuickFiltersProps['page'];
+    filters: QuickFiltersProps['filters'];
+    searchAst: QuickFiltersProps['searchAst'];
+    dateRange: QuickFiltersProps['dateRange'];
+    onDateRangeChange: QuickFiltersProps['onDateRangeChange'];
+    openFields: FacetGroupsProps['openFields'];
+    enabled: boolean;
+    onToggleField: FacetGroupsProps['onToggleField'];
+    onSelectionChange: QuickFiltersProps['onSelectionChange'];
+    getSelection?: QuickFiltersProps['getSelection'];
+    formatValue?: QuickFiltersProps['formatValue'];
+    refreshKey?: QuickFiltersProps['refreshKey'];
+}
+
+function renderFilterGroups(
+    sections: QuickFilterSectionId[],
+    definitions: Map<FacetField, QuickFilterDefinition>,
+    options: FilterGroupRenderOptions,
+) {
+    return sections.map((section) => {
+        if (section === 'date') {
+            return (
+                <DateTimeFilterGroup
+                    key="date"
+                    open={options.openFields.has('date')}
+                    onToggle={() => options.onToggleField('date')}
+                    range={options.dateRange}
+                    onChange={options.onDateRangeChange}
+                />
+            );
+        }
+
+        const definition = definitions.get(section);
+        if (!definition) return null;
+        return (
+            <FacetGroup
+                key={definition.field}
+                page={options.page}
+                definition={definition}
+                filters={options.filters}
+                searchAst={options.searchAst}
+                open={options.openFields.has(definition.field)}
+                enabled={options.enabled}
+                onToggle={() => options.onToggleField(definition.field)}
+                onSelectionChange={options.onSelectionChange}
+                getSelection={options.getSelection}
+                formatValue={options.formatValue}
+                refreshKey={options.refreshKey}
+            />
+        );
+    });
 }
 
 interface DateTimeFilterGroupProps {

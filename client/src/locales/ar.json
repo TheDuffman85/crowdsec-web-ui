@@ -67,6 +67,8 @@
   "components.quickFilters.title": "عوامل تصفية سريعة",
   "components.quickFilters.filters": "عوامل التصفية",
   "components.quickFilters.close": "إغلاق عوامل التصفية",
+  "components.quickFilters.clearAll": "مسح جميع عوامل التصفية",
+  "components.quickFilters.hiddenColumns": "الأعمدة المخفية",
   "components.quickFilters.empty": "فارغ",
   "components.quickFilters.date": "التاريخ والوقت",
   "components.quickFilters.from": "من",

@@ -67,6 +67,8 @@
   "components.quickFilters.title": "快速筛选",
   "components.quickFilters.filters": "筛选",
   "components.quickFilters.close": "关闭筛选",
+  "components.quickFilters.clearAll": "清除所有筛选",
+  "components.quickFilters.hiddenColumns": "隐藏的列",
   "components.quickFilters.empty": "空",
   "components.quickFilters.date": "日期和时间",
   "components.quickFilters.from": "从",

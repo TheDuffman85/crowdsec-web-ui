@@ -32,15 +32,18 @@ function renderFilters(
     busy?: boolean;
     onSelectionChange?: Mock<(field: FacetField, selection: SearchFacetSelection) => void>;
     onDateRangeChange?: Mock<(range: SearchDateRange) => void>;
+    onClearAll?: Mock<() => void>;
     selection?: SearchFacetSelection;
     dateRange?: SearchDateRange;
     sectionOrder?: QuickFilterSectionId[];
+    hiddenSectionOrder?: QuickFilterSectionId[];
   } = {},
 ) {
   const onSelectionChange = options.onSelectionChange
     || vi.fn<(field: FacetField, selection: SearchFacetSelection) => void>();
   const onDateRangeChange = options.onDateRangeChange
     || vi.fn<(range: SearchDateRange) => void>();
+  const onClearAll = options.onClearAll || vi.fn<() => void>();
   const result = render(
     <I18nContext.Provider value={i18n}>
       <QuickFilters
@@ -54,13 +57,15 @@ function renderFilters(
         onSelectionChange={onSelectionChange}
         dateRange={options.dateRange ?? { start: '', end: '' }}
         onDateRangeChange={onDateRangeChange}
+        onClearAll={onClearAll}
         getSelection={options.selection ? () => options.selection! : undefined}
         sectionOrder={options.sectionOrder}
+        hiddenSectionOrder={options.hiddenSectionOrder}
         busy={options.busy}
       />
     </I18nContext.Provider>,
   );
-  return { ...result, onSelectionChange, onDateRangeChange };
+  return { ...result, onSelectionChange, onDateRangeChange, onClearAll };
 }
 
 describe('QuickFilters', () => {
@@ -121,6 +126,7 @@ describe('QuickFilters', () => {
           onSelectionChange={onSelectionChange}
           dateRange={{ start: '', end: '' }}
           onDateRangeChange={onDateRangeChange}
+          onClearAll={vi.fn()}
           busy={busy}
         />
       </I18nContext.Provider>
@@ -172,6 +178,7 @@ describe('QuickFilters', () => {
           onSelectionChange={vi.fn()}
           dateRange={{ start: '', end: '' }}
           onDateRangeChange={vi.fn()}
+          onClearAll={vi.fn()}
           busy={false}
         />
       </I18nContext.Provider>,
@@ -228,16 +235,40 @@ describe('QuickFilters', () => {
     expect(screen.getByRole('button', { name: 'Date and time' }).querySelector('.lucide-calendar-clock')).toBeNull();
   });
 
+  test('renders hidden columns in a separate section below visible columns', async () => {
+    const user = userEvent.setup();
+    renderFilters({
+      sectionOrder: ['date', 'country'],
+      hiddenSectionOrder: ['ip'],
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Filters' }));
+    const dialog = screen.getByRole('dialog', { name: 'Quick filters' });
+    const hiddenHeading = within(dialog).getByRole('heading', { name: 'Hidden columns' });
+    const hiddenSection = hiddenHeading.closest('section');
+
+    expect(hiddenSection).not.toBeNull();
+    expect(within(hiddenSection!).getByRole('button', { name: 'IP' })).toBeInTheDocument();
+    expect(within(hiddenSection!).queryByRole('button', { name: 'Country' })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Country' }).compareDocumentPosition(hiddenHeading)
+      & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   test('shows the same header count and clear control for every active section', async () => {
     const user = userEvent.setup();
-    const { onSelectionChange, onDateRangeChange } = renderFilters({
+    const { onSelectionChange, onDateRangeChange, onClearAll } = renderFilters({
       selection: { included: ['DE'], excluded: [] },
       dateRange: { start: '2026-03-29T01', end: '2026-03-29T03' },
     });
 
     await user.click(screen.getByRole('button', { name: 'Filters' }));
+    const titleContainer = screen.getByRole('heading', { name: 'Quick filters' }).parentElement;
     const dateSection = screen.getByRole('button', { name: 'Date and time' }).closest('section');
     const countrySection = screen.getByRole('button', { name: 'Country' }).closest('section');
+    expect(titleContainer).not.toBeNull();
+    expect(within(titleContainer!).getByText('4')).toBeInTheDocument();
     expect(dateSection).not.toBeNull();
     expect(countrySection).not.toBeNull();
     expect(within(dateSection!).getByText('2')).toBeInTheDocument();
@@ -258,5 +289,8 @@ describe('QuickFilters', () => {
       included: [],
       excluded: [],
     });
+
+    await user.click(screen.getByRole('button', { name: 'Clear all filters' }));
+    expect(onClearAll).toHaveBeenCalledTimes(1);
   });
 });

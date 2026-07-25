@@ -121,6 +121,28 @@ describe('Alerts page search and pagination', () => {
     );
   });
 
+  test('clears every quick filter at once while preserving free-text search', async () => {
+    const fetchAlertsPaginatedMock = vi.mocked(api.fetchAlertsPaginated);
+    fetchAlertsPaginatedMock.mockClear();
+
+    render(
+      <MemoryRouter initialEntries={['/alerts?q=ssh%20AND%20country:DE&dateStart=2026-03-24T10:00']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Filters' }));
+    const drawer = screen.getByRole('dialog', { name: 'Quick filters' });
+    expect(within(drawer).getByText('2')).toBeInTheDocument();
+    await userEvent.click(within(drawer).getByRole('button', { name: 'Clear all filters' }));
+
+    await waitFor(() => {
+      expect(fetchAlertsPaginatedMock.mock.calls.at(-1)?.[2]).toMatchObject({ q: 'ssh' });
+      expect(fetchAlertsPaginatedMock.mock.calls.at(-1)?.[2]?.dateStart).toBeUndefined();
+    });
+    expect(within(drawer).queryByRole('button', { name: 'Clear all filters' })).not.toBeInTheDocument();
+  });
+
   test('offers quick filters for every visible filterable alert column', async () => {
     window.localStorage.setItem('crowdsec-web-ui:table-column-preferences', JSON.stringify({
       alerts: ['id', 'instance', 'target', 'region', 'city', 'machine', 'origin', 'decisions'],
@@ -141,11 +163,13 @@ describe('Alerts page search and pagination', () => {
       .map((button) => button.textContent?.trim())
       .filter((name): name is string => Boolean(name && expectedSections.includes(name)));
     expect(sectionNames).toEqual(expectedSections);
-    expect(within(drawer).queryByRole('button', { name: 'Date and time' })).not.toBeInTheDocument();
+    const hiddenColumns = within(drawer).getByRole('heading', { name: 'Hidden columns' }).closest('section');
+    expect(hiddenColumns).not.toBeNull();
+    expect(within(hiddenColumns!).getByRole('button', { name: 'Date and time' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Target' })).toBeInTheDocument();
   });
 
-  test('hides the target quick filter when the target column is hidden', async () => {
+  test('lists the target quick filter below visible filters when the target column is hidden', async () => {
     window.localStorage.setItem('crowdsec-web-ui:table-column-preferences', JSON.stringify({
       alerts: ['time', 'source'],
     }));
@@ -157,7 +181,10 @@ describe('Alerts page search and pagination', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: 'Filters' }));
     const drawer = screen.getByRole('dialog', { name: 'Quick filters' });
-    expect(within(drawer).queryByRole('button', { name: 'Target' })).not.toBeInTheDocument();
+    const hiddenColumns = within(drawer).getByRole('heading', { name: 'Hidden columns' }).closest('section');
+    expect(hiddenColumns).not.toBeNull();
+    expect(within(hiddenColumns!).getByRole('button', { name: 'Target' })).toBeInTheDocument();
+    expect(within(hiddenColumns!).queryByRole('button', { name: 'Date and time' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Target' })).not.toBeInTheDocument();
   });
 

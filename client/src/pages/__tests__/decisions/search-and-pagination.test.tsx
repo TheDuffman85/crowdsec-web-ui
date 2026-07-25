@@ -128,10 +128,11 @@ describe('Decisions page search and pagination', () => {
     expect(within(expirationHeader).getByText('1')).toBeInTheDocument();
     expect(within(expirationSection!).getByRole('button', { name: 'Clear Expiration' })).toBeInTheDocument();
 
-    await user.click(screen.getByRole('checkbox', { name: /Toggle .*Expired.* in Expiration/ }));
+    await user.click(within(drawer).getByRole('button', { name: 'Clear all filters' }));
     await waitFor(() => expect(fetchDecisionsPaginatedMock.mock.calls.at(-1)?.[2]?.include_expired).toBeUndefined());
     await waitFor(() => expect(within(filtersButton).queryByText('1')).not.toBeInTheDocument());
     expect(within(expirationHeader).queryByText('1')).not.toBeInTheDocument();
+    expect(within(drawer).queryByRole('button', { name: 'Clear all filters' })).not.toBeInTheDocument();
   });
 
   test('uses advanced-search date-time comparisons from quick filters', async () => {
@@ -178,7 +179,7 @@ describe('Decisions page search and pagination', () => {
     expect(screen.getByRole('columnheader', { name: 'Target' })).toBeInTheDocument();
   });
 
-  test('hides the target quick filter when the target column is hidden', async () => {
+  test('lists the target quick filter below visible filters when the target column is hidden', async () => {
     window.localStorage.setItem('crowdsec-web-ui:table-column-preferences', JSON.stringify({
       decisions: ['time', 'source'],
     }));
@@ -190,7 +191,10 @@ describe('Decisions page search and pagination', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: /^Filters/ }));
     const drawer = screen.getByRole('dialog', { name: 'Quick filters' });
-    expect(within(drawer).queryByRole('button', { name: 'Target' })).not.toBeInTheDocument();
+    const hiddenColumns = within(drawer).getByRole('heading', { name: 'Hidden columns' }).closest('section');
+    expect(hiddenColumns).not.toBeNull();
+    expect(within(hiddenColumns!).getByRole('button', { name: 'Target' })).toBeInTheDocument();
+    expect(within(hiddenColumns!).queryByRole('button', { name: 'Date and time' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Target' })).not.toBeInTheDocument();
   });
 

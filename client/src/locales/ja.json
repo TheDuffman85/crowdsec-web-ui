@@ -67,6 +67,8 @@
   "components.quickFilters.title": "クイックフィルター",
   "components.quickFilters.filters": "フィルター",
   "components.quickFilters.close": "フィルターを閉じる",
+  "components.quickFilters.clearAll": "すべてのフィルターをクリア",
+  "components.quickFilters.hiddenColumns": "非表示の列",
   "components.quickFilters.empty": "空",
   "components.quickFilters.date": "日時",
   "components.quickFilters.from": "開始",

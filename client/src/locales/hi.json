@@ -67,6 +67,8 @@
   "components.quickFilters.title": "त्वरित फ़िल्टर",
   "components.quickFilters.filters": "फ़िल्टर",
   "components.quickFilters.close": "फ़िल्टर बंद करें",
+  "components.quickFilters.clearAll": "सभी फ़िल्टर साफ़ करें",
+  "components.quickFilters.hiddenColumns": "छिपे हुए कॉलम",
   "components.quickFilters.empty": "खाली",
   "components.quickFilters.date": "दिनांक और समय",
   "components.quickFilters.from": "से",

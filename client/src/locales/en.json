@@ -67,6 +67,8 @@
   "components.quickFilters.title": "Quick filters",
   "components.quickFilters.filters": "Filters",
   "components.quickFilters.close": "Close filters",
+  "components.quickFilters.clearAll": "Clear all filters",
+  "components.quickFilters.hiddenColumns": "Hidden columns",
   "components.quickFilters.empty": "Empty",
   "components.quickFilters.date": "Date and time",
   "components.quickFilters.from": "From",

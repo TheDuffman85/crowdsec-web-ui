@@ -67,6 +67,8 @@
   "components.quickFilters.title": "Filtres rapides",
   "components.quickFilters.filters": "Filtres",
   "components.quickFilters.close": "Fermer les filtres",
+  "components.quickFilters.clearAll": "Effacer tous les filtres",
+  "components.quickFilters.hiddenColumns": "Colonnes masquées",
   "components.quickFilters.empty": "Vide",
   "components.quickFilters.date": "Date et heure",
   "components.quickFilters.from": "Du",
