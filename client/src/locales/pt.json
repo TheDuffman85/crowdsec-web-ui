@@ -69,6 +69,7 @@
   "components.quickFilters.close": "Fechar filtros",
   "components.quickFilters.clearAll": "Limpar todos os filtros",
   "components.quickFilters.hiddenColumns": "Colunas ocultas",
+  "components.quickFilters.unavailable": "Indisponíveis",
   "components.quickFilters.empty": "Vazio",
   "components.quickFilters.date": "Data e hora",
   "components.quickFilters.from": "De",

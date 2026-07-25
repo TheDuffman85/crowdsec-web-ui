@@ -6,6 +6,7 @@ import { StrictMode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import * as api from '../../../lib/api';
 import { Decisions } from '../../Decisions';
+import { QUICK_FILTERS_STORAGE_KEY } from '../../../lib/quickFilters';
 import { type DecisionListItem, type PaginatedResponse } from '../../../types';
 
 async function expandDecisionSearch() {
@@ -196,6 +197,37 @@ describe('Decisions page search and pagination', () => {
     expect(within(hiddenColumns!).getByRole('button', { name: 'Target' })).toBeInTheDocument();
     expect(within(hiddenColumns!).queryByRole('button', { name: 'Date and time' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Target' })).not.toBeInTheDocument();
+  });
+
+  test('applies persisted common filters and keeps alert-only filters disabled and clearable', async () => {
+    window.localStorage.setItem(QUICK_FILTERS_STORAGE_KEY, JSON.stringify({
+      selections: {
+        country: { included: ['DE'], excluded: [] },
+        decision: { included: ['active'], excluded: [] },
+      },
+      dateRange: { start: '', end: '' },
+    }));
+    const fetchDecisionsPaginatedMock = vi.mocked(api.fetchDecisionsPaginated);
+    fetchDecisionsPaginatedMock.mockClear();
+
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(fetchDecisionsPaginatedMock.mock.calls.at(-1)?.[2]?.q).toBe('country:DE'));
+    expect(fetchDecisionsPaginatedMock.mock.calls[0]?.[2]?.q).toBe('country:DE');
+    await userEvent.click(await screen.findByRole('button', { name: /^Filters/ }));
+    expect(screen.getByRole('button', { name: 'Decisions' })).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: 'Clear Decisions' }));
+
+    await waitFor(() => expect(
+      JSON.parse(window.localStorage.getItem(QUICK_FILTERS_STORAGE_KEY) || '{}').selections,
+    ).toEqual({
+      country: { included: ['DE'], excluded: [] },
+    }));
+    expect(fetchDecisionsPaginatedMock.mock.calls.at(-1)?.[2]?.q).toBe('country:DE');
   });
 
   test('applies an initial advanced search URL query on the first decision load', async () => {

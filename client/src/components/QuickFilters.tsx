@@ -26,6 +26,7 @@ export interface QuickFilterDefinition {
     field: FacetField;
     label: string;
     defaultSelection?: SearchFacetSelection;
+    applicable?: boolean;
 }
 
 export type QuickFilterSectionId = FacetField | 'date';
@@ -35,6 +36,7 @@ interface QuickFiltersProps {
     fields: QuickFilterDefinition[];
     sectionOrder?: QuickFilterSectionId[];
     hiddenSectionOrder?: QuickFilterSectionId[];
+    unavailableSectionOrder?: QuickFilterSectionId[];
     filters: Record<string, string>;
     searchAst: SearchNode | null;
     onSelectionChange: (field: FacetField, selection: SearchFacetSelection) => void;
@@ -52,6 +54,7 @@ export function QuickFilters({
     fields,
     sectionOrder,
     hiddenSectionOrder,
+    unavailableSectionOrder,
     filters,
     searchAst,
     onSelectionChange,
@@ -135,6 +138,7 @@ export function QuickFilters({
             fields={fields}
             sectionOrder={sectionOrder}
             hiddenSectionOrder={hiddenSectionOrder}
+            unavailableSectionOrder={unavailableSectionOrder}
             filters={filters}
             searchAst={searchAst}
             dateRange={dateRange}
@@ -236,6 +240,7 @@ function FacetGroups({
     fields,
     sectionOrder,
     hiddenSectionOrder = [],
+    unavailableSectionOrder = [],
     filters,
     searchAst,
     dateRange,
@@ -284,6 +289,35 @@ function FacetGroups({
                     </h3>
                     <div className="divide-y divide-gray-200 dark:divide-gray-700">
                         {renderFilterGroups(hiddenSectionOrder, definitions, {
+                            page,
+                            filters,
+                            searchAst,
+                            dateRange,
+                            onDateRangeChange,
+                            openFields,
+                            enabled,
+                            onToggleField,
+                            onSelectionChange,
+                            getSelection,
+                            formatValue,
+                            refreshKey,
+                        })}
+                    </div>
+                </section>
+            )}
+            {unavailableSectionOrder.length > 0 && (
+                <section
+                    className="mt-4 border-t border-gray-300 pt-4 dark:border-gray-600"
+                    aria-labelledby="quick-filters-unavailable-title"
+                >
+                    <h3
+                        id="quick-filters-unavailable-title"
+                        className="px-2 pb-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400"
+                    >
+                        {t('components.quickFilters.unavailable')}
+                    </h3>
+                    <div className="divide-y divide-gray-200 dark:divide-gray-700">
+                        {renderFilterGroups(unavailableSectionOrder, definitions, {
                             page,
                             filters,
                             searchAst,
@@ -505,7 +539,8 @@ function FacetGroup({
     const values = result.values;
     const hasMore = result.baseKey === requestBaseKey && result.hasMore;
     const error = result.requestKey === requestKey && result.error;
-    const loading = open && enabled && result.requestKey !== requestKey;
+    const applicable = definition.applicable !== false;
+    const loading = open && enabled && applicable && result.requestKey !== requestKey;
     const selection = getSelection?.(
         definition.field,
         getSearchFacetSelection(searchAst, definition.field),
@@ -518,7 +553,7 @@ function FacetGroup({
     }, [search]);
 
     useEffect(() => {
-        if (!open || !enabled) return;
+        if (!open || !enabled || !applicable) return;
         const controller = new AbortController();
         const generation = ++requestGenerationRef.current;
 
@@ -557,6 +592,7 @@ function FacetGroup({
         debouncedSearch,
         definition.field,
         enabled,
+        applicable,
         filterKey,
         filters,
         offset,
@@ -603,12 +639,13 @@ function FacetGroup({
         : formatValue?.(definition.field, value) || value;
 
     return (
-        <section className="py-1">
+        <section className={`py-1 ${applicable ? '' : 'opacity-50'}`} data-applicable={applicable}>
             <div className="flex min-h-11 items-center gap-1">
                 <button
                     type="button"
                     onClick={onToggle}
-                    className="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left text-sm font-semibold hover:bg-gray-50 dark:hover:bg-gray-700"
+                    disabled={!applicable}
+                    className="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left text-sm font-semibold enabled:hover:bg-gray-50 disabled:cursor-not-allowed dark:enabled:hover:bg-gray-700"
                     aria-expanded={open}
                 >
                     <ChevronDown

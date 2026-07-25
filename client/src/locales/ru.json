@@ -69,6 +69,7 @@
   "components.quickFilters.close": "Закрыть фильтры",
   "components.quickFilters.clearAll": "Очистить все фильтры",
   "components.quickFilters.hiddenColumns": "Скрытые столбцы",
+  "components.quickFilters.unavailable": "Недоступно",
   "components.quickFilters.empty": "Пусто",
   "components.quickFilters.date": "Дата и время",
   "components.quickFilters.from": "С",

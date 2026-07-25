@@ -256,6 +256,46 @@ describe('QuickFilters', () => {
     ).toBeTruthy();
   });
 
+  test('greys out an unavailable filter while keeping its clear control enabled', async () => {
+    const user = userEvent.setup();
+    const onSelectionChange = vi.fn();
+    render(
+      <I18nContext.Provider value={i18n}>
+        <QuickFilters
+          page="alerts"
+          fields={[
+            { field: 'country', label: 'Country' },
+            { field: 'action', label: 'Action', applicable: false },
+          ]}
+          filters={{}}
+          searchAst={null}
+          onSelectionChange={onSelectionChange}
+          dateRange={{ start: '', end: '' }}
+          onDateRangeChange={vi.fn()}
+          onClearAll={vi.fn()}
+          getSelection={(field, selection) => field === 'action'
+            ? { included: ['ban'], excluded: [] }
+            : selection}
+          sectionOrder={['country']}
+          unavailableSectionOrder={['action']}
+        />
+      </I18nContext.Provider>,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Filters' }));
+    expect(screen.getByRole('heading', { name: 'Unavailable' })).toBeInTheDocument();
+    const actionButton = screen.getByRole('button', { name: 'Action' });
+    expect(actionButton).toBeDisabled();
+    expect(actionButton.closest('section')).toHaveAttribute('data-applicable', 'false');
+
+    await user.click(screen.getByRole('button', { name: 'Clear Action' }));
+    expect(onSelectionChange).toHaveBeenCalledWith('action', {
+      included: [],
+      excluded: [],
+    });
+    expect(api.fetchFacet).not.toHaveBeenCalled();
+  });
+
   test('shows the same header count and clear control for every active section', async () => {
     const user = userEvent.setup();
     const { onSelectionChange, onDateRangeChange, onClearAll } = renderFilters({

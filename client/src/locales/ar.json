@@ -69,6 +69,7 @@
   "components.quickFilters.close": "إغلاق عوامل التصفية",
   "components.quickFilters.clearAll": "مسح جميع عوامل التصفية",
   "components.quickFilters.hiddenColumns": "الأعمدة المخفية",
+  "components.quickFilters.unavailable": "غير متاح",
   "components.quickFilters.empty": "فارغ",
   "components.quickFilters.date": "التاريخ والوقت",
   "components.quickFilters.from": "من",

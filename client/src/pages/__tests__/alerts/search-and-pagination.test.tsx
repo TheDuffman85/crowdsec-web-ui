@@ -8,6 +8,7 @@ import * as api from '../../../lib/api';
 import { compileAlertSearch } from '../../../../../shared/search';
 import { Alerts } from '../../Alerts';
 import { type PaginatedResponse, type SlimAlert } from '../../../types';
+import { QUICK_FILTERS_STORAGE_KEY } from '../../../lib/quickFilters';
 
 async function expandAlertSearch() {
   const toggle = screen.getByRole('button', { name: 'Expand search' });
@@ -186,6 +187,90 @@ describe('Alerts page search and pagination', () => {
     expect(within(hiddenColumns!).getByRole('button', { name: 'Target' })).toBeInTheDocument();
     expect(within(hiddenColumns!).queryByRole('button', { name: 'Date and time' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Target' })).not.toBeInTheDocument();
+  });
+
+  test('applies persisted common filters and keeps decision-only filters disabled and clearable', async () => {
+    window.localStorage.setItem(QUICK_FILTERS_STORAGE_KEY, JSON.stringify({
+      selections: {
+        country: { included: ['DE'], excluded: [] },
+        action: { included: ['ban'], excluded: [] },
+      },
+      dateRange: { start: '', end: '' },
+    }));
+    const fetchAlertsPaginatedMock = vi.mocked(api.fetchAlertsPaginated);
+    fetchAlertsPaginatedMock.mockClear();
+
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(fetchAlertsPaginatedMock.mock.calls.at(-1)?.[2]?.q).toBe('country:DE'));
+    expect(fetchAlertsPaginatedMock.mock.calls[0]?.[2]?.q).toBe('country:DE');
+    await userEvent.click(await screen.findByRole('button', { name: 'Filters' }));
+    expect(screen.getByRole('button', { name: 'Action' })).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: 'Clear Action' }));
+
+    await waitFor(() => expect(
+      JSON.parse(window.localStorage.getItem(QUICK_FILTERS_STORAGE_KEY) || '{}').selections,
+    ).toEqual({
+      country: { included: ['DE'], excluded: [] },
+    }));
+    expect(fetchAlertsPaginatedMock.mock.calls.at(-1)?.[2]?.q).toBe('country:DE');
+  });
+
+  test('writes quick-filter selections to browser storage', async () => {
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Filters' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Country' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Germany' }));
+
+    await waitFor(() => expect(
+      JSON.parse(window.localStorage.getItem(QUICK_FILTERS_STORAGE_KEY) || '{}').selections,
+    ).toMatchObject({
+      country: { included: ['DE'], excluded: [] },
+    }));
+  });
+
+  test('places current-page filters first and orders unavailable filters by the decisions page', async () => {
+    window.localStorage.setItem('crowdsec-web-ui:table-column-preferences', JSON.stringify({
+      alerts: ['source', 'time'],
+      decisions: ['expiration', 'alert', 'action'],
+    }));
+
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Filters' }));
+    const drawer = screen.getByRole('dialog', { name: 'Quick filters' });
+    const allButtons = within(drawer).getAllByRole('button');
+    const facetButtons = allButtons.filter((button) => (
+      button.closest('section')?.hasAttribute('data-applicable')
+    ));
+    const unavailableButtons = facetButtons.filter((button) => button.closest('section')
+      ?.getAttribute('data-applicable') === 'false');
+    const currentPageButtons = allButtons.filter((button) => (
+      ['IP / Range', 'Date and time'].includes(button.textContent || '')
+    ));
+
+    expect(currentPageButtons.map((button) => button.textContent)).toEqual([
+      'IP / Range',
+      'Date and time',
+    ]);
+    expect(unavailableButtons.map((button) => button.textContent)).toEqual([
+      'Expiration',
+      'Alert',
+      'Action',
+    ]);
   });
 
   test('opens the alert search syntax help modal', async () => {
