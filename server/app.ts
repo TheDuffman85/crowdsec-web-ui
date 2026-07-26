@@ -658,16 +658,19 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   }
   const dashboardStatsCaches = new Map<string, DashboardStatsCache>();
   let dashboardStatsCacheVersion = 0;
+  let dashboardStatsResponseVersion = 0;
   const dashboardStatsScopeVersions = new Map<string, number>([
     ['all', 0],
     ...config.instances.map((instance) => [instance.id, 0] as const),
   ]);
   const dashboardStatsReadyPublishedKeys = new Set<string>();
   const dashboardStatsResponseCache = new Map<string, DashboardStatsResponse>();
+  const dashboardStatsResponseValidUntil = new Map<string, number>();
   const staleDashboardStatsResponseCache = new Map<string, DashboardStatsResponse>();
   const dashboardStatsIndexPromises = new Map<string, Promise<DashboardStatsCache>>();
   const dashboardStatsResponsePromises = new Map<string, Promise<DashboardStatsResponse>>();
   let lastDashboardStatsFilters: DashboardStatsFilters | null = null;
+  let lastDashboardStatsRequestedAt = 0;
 
   const persistedConfig = loadPersistedConfig(database);
   let refreshIntervalMs = persistedConfig.refresh_interval_ms ?? config.refreshIntervalMs;
@@ -1830,6 +1833,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       await prepareReadCache('dashboard stats request');
       const filters = getDashboardStatsFilters(context, config.timeZone);
       lastDashboardStatsFilters = { ...filters };
+      lastDashboardStatsRequestedAt = Date.now();
       const initialScopePending = filters.instanceId === 'all'
         ? historicalInstanceSyncPending.size > 0
         : historicalInstanceSyncPending.has(filters.instanceId);
@@ -3551,16 +3555,17 @@ ${errorSummary}  Status: ${syncSummary.state}
         ? await runPlannedReconcileWindows(reconcilePlan, deltaStartedAt, excludedKeys)
         : { alerts: 0, decisions: 0, errors: [], successfulWindows: 0, changed: false };
       if (reconcilePlan) finishReconcilePlan(reconcilePlan);
+      const removed = await cleanupOldData();
+      const dataChanged = deltaSummary.changed
+        || reconcileSummary.changed
+        || removed.alerts > 0
+        || removed.decisions > 0;
       const duplicateRefreshStartedAt = Date.now();
       await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
       console.log(`Decision duplicate index refreshed in ${formatElapsedTime(Date.now() - duplicateRefreshStartedAt)}.`);
-      // Rebuild before announcing completion so the refresh does not transfer
-      // its most expensive database scan to the first dashboard request. This
-      // also refreshes time-dependent active totals when no SQLite rows changed.
-      invalidateDashboardStatsCache();
       const dashboardRefreshStartedAt = Date.now();
       try {
-        if (await prepareDashboardStatsAfterRefresh()) {
+        if (await prepareDashboardStatsAfterRefresh(dataChanged)) {
           console.log(`Dashboard statistics prepared in ${formatElapsedTime(Date.now() - dashboardRefreshStartedAt)}.`);
         }
       } catch (error: any) {
@@ -3607,17 +3612,17 @@ ${errorSummary}  Status: ${syncSummary.state}
 
       reconcileWindowState.headLastSuccess = now;
       saveReconcileWindowState();
+      const removed = await cleanupOldData();
+      const dataChanged = summary.changed || removed.alerts > 0 || removed.decisions > 0;
       await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
-      invalidateDashboardStatsCache();
       try {
-        await prepareDashboardStatsAfterRefresh();
+        await prepareDashboardStatsAfterRefresh(dataChanged);
       } catch (error: any) {
         console.error('Failed to prepare dashboard statistics after latest-window refresh:', error.message);
       }
       cache.lastUpdate = new Date(now).toISOString();
       instanceLastUpdates.set(primaryInstance.id, cache.lastUpdate);
       lapiClient.updateStatus(true, null);
-      await cleanupOldData();
       await runNotificationEvaluation('manual latest-window refresh');
       cacheRefreshCompletedAt = new Date().toISOString();
       publishCacheUpdate(cacheRefreshCompletedAt);
@@ -3635,13 +3640,15 @@ ${errorSummary}  Status: ${syncSummary.state}
     });
   }
 
-  async function cleanupOldData(): Promise<void> {
+  async function cleanupOldData(): Promise<{ alerts: number; decisions: number }> {
     const cutoff = new Date(Date.now() - config.lookbackMs).toISOString();
     try {
       const removed = await syncWorker.cleanupOldData(cutoff);
       console.log(`Cleanup: Removed ${removed.alerts} old alerts, ${removed.decisions} old decisions`);
+      return removed;
     } catch (error: any) {
       console.error('Cleanup failed:', error.message);
+      return { alerts: 0, decisions: 0 };
     }
   }
 
@@ -3657,7 +3664,6 @@ ${errorSummary}  Status: ${syncSummary.state}
   async function updateCache(options: { throwOnError?: boolean; reconcile?: boolean; skipIfBusy?: boolean } = {}): Promise<void> {
     return runCacheRefresh(async () => {
       await updateCacheDelta(options);
-      await cleanupOldData();
       await runNotificationEvaluation('cache update');
     }, options.skipIfBusy);
   }
@@ -5864,7 +5870,7 @@ ${errorSummary}  Status: ${syncSummary.state}
         instance_id, alert_upstream_id, created_at, stop_at, value, country,
         region, city, scenario, as_name, target, type, origin, machine, duration,
         is_duplicate, simulated, extra_data
-      FROM decisions
+      FROM decisions NOT INDEXED
       ${batchWhere.toSql()}
       ORDER BY rowid ASC
       LIMIT ?
@@ -5954,10 +5960,13 @@ ${errorSummary}  Status: ${syncSummary.state}
 
       const responseCacheKey = getDashboardStatsResponseCacheKey(statsIndex.key, filters);
       const cachedResponse = dashboardStatsResponseCache.get(responseCacheKey);
-      if (cachedResponse) {
+      const cachedResponseValidUntil = dashboardStatsResponseValidUntil.get(responseCacheKey) || 0;
+      if (cachedResponse && cachedResponseValidUntil > Date.now()) {
         if (statsIndex.key === getDashboardStatsCacheKey(filters.instanceId)) return cachedResponse;
         continue;
       }
+      dashboardStatsResponseCache.delete(responseCacheKey);
+      dashboardStatsResponseValidUntil.delete(responseCacheKey);
 
       const pending = dashboardStatsResponsePromises.get(responseCacheKey);
       if (pending) {
@@ -6040,9 +6049,67 @@ ${errorSummary}  Status: ${syncSummary.state}
     });
   }
 
-  async function prepareDashboardStatsAfterRefresh(): Promise<boolean> {
+  async function prepareDashboardStatsAfterRefresh(
+    dataChanged: boolean,
+    instanceId?: string,
+  ): Promise<boolean> {
+    if (dataChanged) {
+      invalidateDashboardStatsCache(instanceId);
+    } else {
+      invalidateFacetResponses();
+      if (!lastDashboardStatsFilters) return false;
+      if (
+        instanceId
+        && lastDashboardStatsFilters.instanceId !== 'all'
+        && lastDashboardStatsFilters.instanceId !== instanceId
+      ) {
+        return false;
+      }
+      const indexKey = getDashboardStatsCacheKey(lastDashboardStatsFilters.instanceId);
+      const responseKey = getDashboardStatsResponseCacheKey(indexKey, lastDashboardStatsFilters);
+      if (
+        dashboardStatsResponseCache.has(responseKey)
+        && (dashboardStatsResponseValidUntil.get(responseKey) || 0) > Date.now()
+      ) {
+        return false;
+      }
+      // Time-dependent decision state can change without a SQLite mutation.
+      // Keep the expensive row index and rebuild only cached responses so the
+      // dashboard and list endpoints use the same current timestamp semantics.
+      invalidateDashboardStatsResponses({ preserveStale: true, invalidateFacets: false });
+    }
     if (!lastDashboardStatsFilters) return false;
-    await buildDashboardStats(lastDashboardStatsFilters);
+    if (
+      instanceId
+      && lastDashboardStatsFilters.instanceId !== 'all'
+      && lastDashboardStatsFilters.instanceId !== instanceId
+    ) {
+      return false;
+    }
+    // A dashboard visit used to make every future refresh rebuild the entire
+    // dashboard index, even after the user moved to Alerts or Decisions. Keep
+    // eager preparation only while dashboard requests are still active. An
+    // inactive dashboard builds synchronously from the published database
+    // revision on its next request, so it cannot expose a mixed revision.
+    const dashboardActivityWindowMs = Math.max(10_000, refreshIntervalMs * 2);
+    if (Date.now() - lastDashboardStatsRequestedAt > dashboardActivityWindowMs) {
+      return false;
+    }
+    // Build the shared row index first. The user may change dashboard filters
+    // while a large post-refresh index is being assembled; in that case only
+    // prepare the latest requested response instead of finishing an obsolete
+    // filter and then scanning the same rows again.
+    const indexFilters = { ...lastDashboardStatsFilters };
+    await getDashboardStatsIndex(indexFilters.instanceId);
+    const responseFilters = lastDashboardStatsFilters;
+    if (
+      instanceId
+      && responseFilters.instanceId !== 'all'
+      && responseFilters.instanceId !== instanceId
+    ) {
+      return true;
+    }
+    await buildDashboardStats(responseFilters);
     return true;
   }
 
@@ -6052,7 +6119,13 @@ ${errorSummary}  Status: ${syncSummary.state}
     responseCacheKey: string,
   ): Promise<DashboardStatsResponse> {
     const nowTimestamp = Date.now();
+    let responseValidUntil = nowTimestamp + 60 * 60_000;
     const lookbackDays = Math.max(1, Math.round(lookbackHours(config.lookbackPeriod) / 24));
+    const includeTimeBoundary = (timestamp: number) => {
+      if (timestamp > nowTimestamp && timestamp < responseValidUntil) {
+        responseValidUntil = timestamp;
+      }
+    };
     const instanceNameById = new Map(
       config.instances.map((instance) => [instance.id, instance.name]),
     );
@@ -6151,6 +6224,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       }
       const alert = statsIndex.alerts[index];
       if (filters.instanceId !== 'all' && alert.instanceId !== filters.instanceId) continue;
+      includeTimeBoundary(alert.timestamp + config.lookbackMs);
       if (alert.ip && alert.country && alert.country !== 'Unknown') {
         alertCountryByIp.set(alert.ip, alert.country);
       }
@@ -6181,6 +6255,8 @@ ${errorSummary}  Status: ${syncSummary.state}
     const sliderDecisionAccumulator = createDashboardDecisionAccumulator();
     const filteredActiveDecisionPrimaries = new Map<string, DashboardDecisionStatsRecord>();
     const sliderActiveDecisionPrimaries = new Map<string, DashboardDecisionStatsRecord>();
+    let currentActiveDecisions = 0;
+    let currentActiveSimulatedDecisions = 0;
 
     let globalTotal = 0;
     for (let index = 0; index < statsIndex.decisions.length; index += 1) {
@@ -6189,11 +6265,23 @@ ${errorSummary}  Status: ${syncSummary.state}
       }
       const decision = statsIndex.decisions[index];
       if (filters.instanceId !== 'all' && decision.instanceId !== filters.instanceId) continue;
+      const isActive = decision.stopTimestamp > nowTimestamp;
+      if (isActive) {
+        includeTimeBoundary(decision.stopTimestamp);
+      } else {
+        includeTimeBoundary(decision.timestamp + config.lookbackMs);
+      }
+      if (isActive) {
+        if (decision.simulated) {
+          currentActiveSimulatedDecisions += 1;
+        } else {
+          currentActiveDecisions += 1;
+        }
+      }
       if (!matchesDashboardSimulationFilter(decision.simulated, filters.simulation)) {
         continue;
       }
 
-      const isActive = decision.stopTimestamp > nowTimestamp;
       if (matchesDashboardDecisionFilters(
         decision,
         filters,
@@ -6259,7 +6347,12 @@ ${errorSummary}  Status: ${syncSummary.state}
     const exactListTotals = await exactListTotalsPromise;
 
     const response: DashboardStatsResponse = {
-      totals: statsIndex.totals,
+      totals: {
+        alerts: statsIndex.totals.alerts,
+        decisions: currentActiveDecisions,
+        simulatedAlerts: statsIndex.totals.simulatedAlerts,
+        simulatedDecisions: currentActiveSimulatedDecisions,
+      },
       filteredTotals: {
         alerts: exactListTotals.alerts,
         decisions: exactListTotals.decisions,
@@ -6287,14 +6380,19 @@ ${errorSummary}  Status: ${syncSummary.state}
       },
     };
 
-    if (statsIndex.key === getDashboardStatsCacheKey(filters.instanceId)) {
+    if (
+      statsIndex.key === getDashboardStatsCacheKey(filters.instanceId)
+      && responseCacheKey === getDashboardStatsResponseCacheKey(statsIndex.key, filters)
+    ) {
       dashboardStatsResponseCache.set(responseCacheKey, response);
+      dashboardStatsResponseValidUntil.set(responseCacheKey, responseValidUntil);
       const staleCacheKey = getStaleDashboardStatsResponseCacheKey(filters);
       staleDashboardStatsResponseCache.set(staleCacheKey, response);
       if (dashboardStatsResponseCache.size > 50) {
         const firstKey = dashboardStatsResponseCache.keys().next().value;
         if (firstKey) {
           dashboardStatsResponseCache.delete(firstKey);
+          dashboardStatsResponseValidUntil.delete(firstKey);
         }
       }
       if (staleDashboardStatsResponseCache.size > 50) {
@@ -6313,39 +6411,44 @@ ${errorSummary}  Status: ${syncSummary.state}
     return `${dashboardStatsCacheVersion}:${scopeVersion}:${config.lookbackMs}:${config.simulationsEnabled ? 'sim' : 'live'}:${instanceId}`;
   }
 
-  function invalidateDashboardStatsCache(instanceId?: string): void {
+  function invalidateFacetResponses(): void {
     facetResponseCache.clear();
     facetCacheVersion += 1;
+  }
+
+  function invalidateDashboardStatsResponses(
+    options: { preserveStale?: boolean; invalidateFacets?: boolean } = {},
+  ): void {
+    if (options.invalidateFacets !== false) {
+      invalidateFacetResponses();
+    }
+    dashboardStatsResponseCache.clear();
+    dashboardStatsResponseValidUntil.clear();
+    dashboardStatsReadyPublishedKeys.clear();
+    dashboardStatsResponseVersion += 1;
+    if (!options.preserveStale) {
+      staleDashboardStatsResponseCache.clear();
+    }
+  }
+
+  function invalidateDashboardStatsCache(instanceId?: string): void {
+    invalidateDashboardStatsResponses();
     if (instanceId) {
       const affectedScopes = new Set([instanceId, 'all']);
       for (const scope of affectedScopes) {
         dashboardStatsScopeVersions.set(scope, (dashboardStatsScopeVersions.get(scope) || 0) + 1);
       }
-      dashboardStatsReadyPublishedKeys.clear();
       for (const [key, cached] of dashboardStatsCaches) {
         if (affectedScopes.has(cached.scope)) dashboardStatsCaches.delete(key);
-      }
-      for (const key of dashboardStatsResponseCache.keys()) {
-        if (key.includes(`\"instanceId\":\"${instanceId}\"`) || key.includes(`\"instanceId\":\"all\"`)) {
-          dashboardStatsResponseCache.delete(key);
-        }
-      }
-      for (const key of staleDashboardStatsResponseCache.keys()) {
-        if (key.includes(`\"instanceId\":\"${instanceId}\"`) || key.includes(`\"instanceId\":\"all\"`)) {
-          staleDashboardStatsResponseCache.delete(key);
-        }
       }
       return;
     }
     dashboardStatsCaches.clear();
-    dashboardStatsResponseCache.clear();
-    staleDashboardStatsResponseCache.clear();
-    dashboardStatsReadyPublishedKeys.clear();
     dashboardStatsCacheVersion += 1;
   }
 
   function getDashboardStatsResponseCacheKey(indexKey: string, filters: DashboardStatsFilters): string {
-    return `${dashboardStatsCacheVersion}:${indexKey}:${JSON.stringify(filters)}`;
+    return `${dashboardStatsResponseVersion}:${indexKey}:${JSON.stringify(filters)}`;
   }
 
   function getStaleDashboardStatsResponseCacheKey(filters: DashboardStatsFilters): string {
@@ -6410,8 +6513,13 @@ ${errorSummary}  Status: ${syncSummary.state}
         status.message = `${instance.name} sync complete`;
         status.errors = [];
         instanceLastUpdates.set(instanceId, new Date(now).toISOString());
-        if (summary.changed) {
-          invalidateDashboardStatsCache(instanceId);
+        let dashboardPrepared = false;
+        try {
+          dashboardPrepared = await prepareDashboardStatsAfterRefresh(summary.changed, instanceId);
+        } catch (error: any) {
+          console.error(`Failed to prepare dashboard statistics after ${instance.name} update:`, error.message);
+        }
+        if (summary.changed || dashboardPrepared) {
           const revision = new Date().toISOString();
           cacheRefreshCompletedAt = revision;
           publishCacheUpdate(revision, [instanceId]);

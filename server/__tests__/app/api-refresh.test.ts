@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from 'vitest';
 import path from 'path';
 import type { AlertRecord, DashboardStatsResponse, PaginatedResponse, SlimAlert } from '../../../shared/contracts';
 import { CrowdsecDatabase } from '../../database';
+import { DatabaseQueryWorker } from '../../query-worker-client';
 import {
   createController,
   dashboardDateKey,
@@ -166,4 +167,166 @@ describe('createApp refresh API', () => {
     expect(fetchCalls.some((call) => call.url.includes('/v1/alerts?'))).toBe(true);
   });
 
- });
+  test('publishes one revision only after dashboard, alert, and decision views agree', async () => {
+    const initialAlert = sampleAlert({
+      id: 901,
+      uuid: 'refresh-consistency-901',
+      created_at: new Date(Date.now() - 4_000).toISOString(),
+      source: { ip: '192.0.2.10', value: '192.0.2.10', cn: 'DE' },
+      decisions: [{
+        id: 9010,
+        value: '192.0.2.10',
+        stop_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+        type: 'ban',
+        origin: 'manual',
+        simulated: false,
+      }],
+    });
+    const refreshedAlert = sampleAlert({
+      id: 902,
+      uuid: 'refresh-consistency-902',
+      created_at: new Date(Date.now() - 1_000).toISOString(),
+      source: { ip: '192.0.2.20', value: '192.0.2.20', cn: 'US' },
+      decisions: [{
+        id: 9020,
+        value: '192.0.2.20',
+        stop_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+        type: 'ban',
+        origin: 'manual',
+        simulated: false,
+      }],
+    });
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    seedAlert(database, initialAlert);
+    const { controller, lapiClient } = createController({
+      database,
+      initialCacheState: {
+        isInitialized: true,
+        isComplete: true,
+        lastUpdate: new Date(Date.now() - 5_000).toISOString(),
+      },
+      fetchResolver: (url) => url.includes('/v1/alerts?')
+        ? Response.json([initialAlert, refreshedAlert])
+        : undefined,
+    });
+    await lapiClient.login();
+
+    try {
+      const initialDashboard = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats'));
+      expect(((await initialDashboard.json()) as DashboardStatsResponse).totals.alerts).toBe(1);
+
+      const publishedRevisions: string[] = [];
+      const unsubscribe = controller.subscribeCacheUpdates((revision) => {
+        publishedRevisions.push(revision);
+      });
+      const refresh = await controller.fetch(new Request('http://localhost/crowdsec/api/cache/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'delta' }),
+      }));
+      unsubscribe();
+
+      expect(refresh.status).toBe(200);
+      const refreshPayload = await refresh.json() as { completed_at: string };
+      expect(publishedRevisions).toEqual([refreshPayload.completed_at]);
+
+      const [dashboardResponse, alertsResponse, decisionsResponse] = await Promise.all([
+        controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats')),
+        controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=10&include_decisions=false')),
+        controller.fetch(new Request('http://localhost/crowdsec/api/decisions?page=1&page_size=10')),
+      ]);
+      const dashboard = (await dashboardResponse.json()) as DashboardStatsResponse;
+      const alerts = (await alertsResponse.json()) as PaginatedResponse<SlimAlert>;
+      const decisions = (await decisionsResponse.json()) as PaginatedResponse<{ id: string | number }>;
+
+      expect(dashboard.pending).toBeUndefined();
+      expect(dashboard.totals.alerts).toBe(alerts.pagination.total);
+      expect(dashboard.filteredTotals.alerts).toBe(alerts.pagination.total);
+      expect(
+        dashboard.filteredTotals.decisions + dashboard.filteredTotals.simulatedDecisions,
+      ).toBe(decisions.pagination.total);
+      expect(alerts.data.map((alert) => alert.id).sort()).toEqual([901, 902]);
+      expect(decisions.data.map((decision) => Number(decision.id)).sort()).toEqual([9010, 9020]);
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+    }
+  });
+
+  test('does not keep rebuilding a large dashboard after dashboard requests stop', async () => {
+    const initialAlert = sampleAlert({
+      id: 911,
+      uuid: 'refresh-demand-911',
+      created_at: new Date(Date.now() - 4_000).toISOString(),
+      decisions: [{
+        id: 9110,
+        value: '192.0.2.11',
+        stop_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+        type: 'ban',
+        origin: 'manual',
+        simulated: false,
+      }],
+    });
+    const refreshedAlert = sampleAlert({
+      id: 912,
+      uuid: 'refresh-demand-912',
+      created_at: new Date(Date.now() - 1_000).toISOString(),
+      decisions: [{
+        id: 9120,
+        value: '192.0.2.12',
+        stop_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+        type: 'ban',
+        origin: 'manual',
+        simulated: false,
+      }],
+    });
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const queryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath });
+    const queryAllSpy = vi.spyOn(queryWorker, 'all');
+    seedAlert(database, initialAlert);
+    const { controller, lapiClient } = createController({
+      database,
+      queryWorker,
+      env: { CROWDSEC_REFRESH_INTERVAL: '5s' },
+      initialCacheState: {
+        isInitialized: true,
+        isComplete: true,
+        lastUpdate: new Date(Date.now() - 5_000).toISOString(),
+      },
+      fetchResolver: (url) => url.includes('/v1/alerts?')
+        ? Response.json([initialAlert, refreshedAlert])
+        : undefined,
+    });
+    await lapiClient.login();
+    const nowSpy = vi.spyOn(Date, 'now');
+
+    try {
+      const initialDashboard = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats'));
+      expect(((await initialDashboard.json()) as DashboardStatsResponse).totals.alerts).toBe(1);
+      const decisionIndexQueryCount = () => queryAllSpy.mock.calls.filter(([sql]) => (
+        sql.includes('SELECT rowid')
+        && sql.includes('FROM decisions')
+        && sql.includes('ORDER BY rowid ASC')
+      )).length;
+      const initialDecisionIndexQueries = decisionIndexQueryCount();
+
+      nowSpy.mockReturnValue(Date.now() + 11_000);
+      const refresh = await controller.fetch(new Request('http://localhost/crowdsec/api/cache/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'delta' }),
+      }));
+      expect(refresh.status).toBe(200);
+      expect(decisionIndexQueryCount()).toBe(initialDecisionIndexQueries);
+
+      const currentDashboard = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats'));
+      expect(((await currentDashboard.json()) as DashboardStatsResponse).totals.alerts).toBe(2);
+      expect(decisionIndexQueryCount()).toBeGreaterThan(initialDecisionIndexQueries);
+    } finally {
+      nowSpy.mockRestore();
+      controller.stopBackgroundTasks();
+      database.close();
+    }
+  });
+
+});

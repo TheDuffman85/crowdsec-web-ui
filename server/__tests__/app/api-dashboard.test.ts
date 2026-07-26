@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from 'vitest';
 import path from 'path';
 import type { AlertRecord, DashboardStatsResponse, PaginatedResponse, SlimAlert } from '../../../shared/contracts';
 import { CrowdsecDatabase } from '../../database';
+import { DatabaseQueryWorker } from '../../query-worker-client';
 import {
   createController,
   dashboardDateKey,
@@ -281,9 +282,12 @@ describe('createApp dashboard API', () => {
       decisions: [{ id: 1040, value: '1.2.3.4', stop_at: stopAt, type: 'ban', origin: 'crowdsec', simulated: false }],
     });
     const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const queryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath });
+    const queryAllSpy = vi.spyOn(queryWorker, 'all');
     seedAlert(database, alert);
     const { controller } = createController({
       database,
+      queryWorker,
       env: { CROWDSEC_REFRESH_INTERVAL: '0', CROWDSEC_LOOKBACK_PERIOD: '1h' },
       initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
       fetchResolver: (url) => {
@@ -297,12 +301,35 @@ describe('createApp dashboard API', () => {
       expect((await firstResponse.json()) as { filteredTotals: { decisions: number } }).toEqual(
         expect.objectContaining({ filteredTotals: expect.objectContaining({ decisions: 1 }) }),
       );
+      const initialDecisionIndexQueries = queryAllSpy.mock.calls.filter(([sql]) => (
+        sql.includes('SELECT rowid')
+        && sql.includes('FROM decisions')
+        && sql.includes('ORDER BY rowid ASC')
+      )).length;
+      expect(initialDecisionIndexQueries).toBeGreaterThan(0);
+      expect(queryAllSpy.mock.calls.some(([sql]) => (
+        sql.includes('SELECT rowid')
+        && sql.includes('FROM decisions NOT INDEXED')
+        && sql.includes('ORDER BY rowid ASC')
+      ))).toBe(true);
 
       await new Promise((resolve) => setTimeout(resolve, 1_100));
       const secondResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats'));
-      expect((await secondResponse.json()) as { filteredTotals: { decisions: number } }).toEqual(
-        expect.objectContaining({ filteredTotals: expect.objectContaining({ decisions: 0 }) }),
+      expect((await secondResponse.json()) as {
+        totals: { decisions: number };
+        filteredTotals: { decisions: number };
+      }).toEqual(
+        expect.objectContaining({
+          totals: expect.objectContaining({ decisions: 0 }),
+          filteredTotals: expect.objectContaining({ decisions: 0 }),
+        }),
       );
+      const refreshedDecisionIndexQueries = queryAllSpy.mock.calls.filter(([sql]) => (
+        sql.includes('SELECT rowid')
+        && sql.includes('FROM decisions')
+        && sql.includes('ORDER BY rowid ASC')
+      )).length;
+      expect(refreshedDecisionIndexQueries).toBe(initialDecisionIndexQueries);
     } finally {
       controller.stopBackgroundTasks();
       database.close();
