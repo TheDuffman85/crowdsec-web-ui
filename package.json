@@ -47,7 +47,7 @@
     "hono": "4.12.27",
     "i18next": "^26.3.4",
     "local-reverse-geocoder": "0.16.8",
-    "mqtt": "^5.15.1",
+    "mqtt": "^5.15.2",
     "openid-client": "^6.8.4",
     "otplib": "^13.4.1",
     "qrcode": "^1.5.4",
