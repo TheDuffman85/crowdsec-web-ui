@@ -54,7 +54,7 @@
     "react-i18next": "^17.0.8",
     "sortablejs": "^1.15.7",
     "undici": "8.5.0",
-    "ws": "8.21.0",
+    "ws": "8.21.1",
     "yaml": "^2.9.0"
   },
   "devDependencies": {
