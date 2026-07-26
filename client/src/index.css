@@ -61,17 +61,3 @@ path:focus {
     transform: translateY(0);
   }
 }
-
-.world-map-attack-pulse {
-  r: var(--world-map-attack-pulse-radius, 3px);
-  stroke-width: var(--world-map-attack-pulse-stroke, 1px);
-}
-
-.world-map-attack-pulse-outline {
-  stroke-width: var(--world-map-attack-pulse-outline-stroke, 2.5px);
-}
-
-.world-map-attack-dot {
-  r: var(--world-map-attack-dot-radius, 2.5px);
-  stroke-width: var(--world-map-attack-dot-stroke, 0.75px);
-}

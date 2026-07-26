@@ -13,8 +13,8 @@ export type DashboardAttackLocationAccumulator = Map<string, DashboardAttackLoca
 // A quarter degree is sub-pixel at the dashboard's default world-map scale,
 // while collapsing city-level IP geolocation duplicates before they reach the browser.
 const LOCATION_GRID_DEGREES = 0.25;
-// Bound both the response payload and the number of concurrent CSS animations.
-export const DASHBOARD_ATTACK_LOCATION_LIMIT = 500;
+// Bound both the response payload and the total number of world-map markers.
+export const DASHBOARD_ATTACK_LOCATION_LIMIT = 250;
 
 export function addDashboardAttackLocation(
   locations: DashboardAttackLocationAccumulator,

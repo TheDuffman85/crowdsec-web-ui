@@ -10,6 +10,19 @@ const { choroplethMountSpy, choroplethUnmountSpy, transformWrapperPropsSpy } = v
   transformWrapperPropsSpy: vi.fn(),
 }));
 
+const canvasContext = {
+  arc: vi.fn(),
+  beginPath: vi.fn(),
+  clearRect: vi.fn(),
+  fill: vi.fn(),
+  fillStyle: '',
+  globalAlpha: 1,
+  lineWidth: 1,
+  setTransform: vi.fn(),
+  stroke: vi.fn(),
+  strokeStyle: '',
+};
+
 vi.mock('@nivo/geo', async () => {
   const React = await import('react');
 
@@ -101,6 +114,16 @@ describe('WorldMapCard', () => {
     choroplethMountSpy.mockClear();
     choroplethUnmountSpy.mockClear();
     transformWrapperPropsSpy.mockClear();
+    canvasContext.arc.mockClear();
+    canvasContext.beginPath.mockClear();
+    canvasContext.clearRect.mockClear();
+    canvasContext.fill.mockClear();
+    canvasContext.setTransform.mockClear();
+    canvasContext.stroke.mockClear();
+
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(
+      canvasContext as unknown as CanvasRenderingContext2D,
+    );
 
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
@@ -170,20 +193,16 @@ describe('WorldMapCard', () => {
     const overlay = await screen.findByTestId('world-map-attack-markers');
     expect(overlay).toHaveAttribute('aria-hidden', 'true');
     expect(overlay).toHaveClass('pointer-events-none');
+    expect(overlay).toHaveAttribute('data-marker-count', '1');
+    expect(overlay).toHaveAttribute('data-first-marker-location', '52.52:13.405');
+    expect(within(overlay).getByTestId('world-map-attack-marker-dots')).toBeInstanceOf(HTMLCanvasElement);
+    expect(within(overlay).getByTestId('world-map-attack-marker-pulses')).toBeInstanceOf(HTMLCanvasElement);
+    expect(overlay.querySelector('animate, animateTransform')).toBeNull();
 
-    const berlinMarker = overlay.querySelector('[data-latitude="52.52"][data-longitude="13.405"]');
-    expect(berlinMarker).not.toBeNull();
-    expect(overlay.querySelectorAll('[data-latitude]')).toHaveLength(1);
-    expect(berlinMarker?.querySelectorAll('.world-map-attack-pulse')).toHaveLength(2);
-    expect(berlinMarker?.querySelectorAll('.world-map-attack-pulse[cx="0"][cy="0"]')).toHaveLength(2);
-    expect(berlinMarker?.querySelectorAll('animateTransform[attributeName="transform"][type="scale"]')).toHaveLength(2);
-    expect(berlinMarker?.querySelectorAll('animate[attributeName="opacity"]')).toHaveLength(2);
-    expect(berlinMarker?.querySelector('.world-map-attack-pulse-outline')).toHaveAttribute('stroke', '#7f1d1d');
-    expect(berlinMarker?.querySelector('.world-map-attack-pulse:not(.world-map-attack-pulse-outline)')).toHaveAttribute('stroke', '#ffffff');
-    expect(berlinMarker?.querySelector('.world-map-attack-dot')).toHaveAttribute('fill', '#dc2626');
-    expect(berlinMarker?.querySelector('.world-map-attack-dot')).toHaveAttribute('stroke-width', '0.75');
-
-    const projectedCoordinates = berlinMarker?.getAttribute('transform')?.match(/-?\d+(?:\.\d+)?/g)?.map(Number) ?? [];
+    const projectedCoordinates = [
+      Number(overlay.getAttribute('data-first-marker-x')),
+      Number(overlay.getAttribute('data-first-marker-y')),
+    ];
     expect(projectedCoordinates).toHaveLength(2);
     expect(projectedCoordinates.every(Number.isFinite)).toBe(true);
 
@@ -196,11 +215,36 @@ describe('WorldMapCard', () => {
       />,
     );
 
-    await waitFor(() => expect(overlay.querySelector('[data-latitude="37.7749"]')).not.toBeNull());
-    expect(overlay.querySelector('[data-latitude="52.52"]')).toBeNull();
+    await waitFor(() => expect(overlay).toHaveAttribute('data-first-marker-location', '37.7749:-122.4194'));
   });
 
-  test('counter-scales marker geometry without changing its position transform', async () => {
+  test('renders every marker through two canvases without SMIL animation nodes', async () => {
+    const attackLocations = Array.from({ length: 100 }, (_, index) => ({
+      latitude: 0,
+      longitude: index - 50,
+      count: 1,
+      liveCount: 1,
+      simulatedCount: 0,
+    }));
+
+    render(
+      <WorldMapCard
+        data={[]}
+        attackLocations={attackLocations}
+        onCountrySelect={vi.fn()}
+        selectedCountry={null}
+      />,
+    );
+
+    const overlay = await screen.findByTestId('world-map-attack-markers');
+
+    expect(overlay).toHaveAttribute('data-marker-count', '100');
+    expect(overlay).toHaveAttribute('data-max-concurrent-pulses', '25');
+    expect(overlay.querySelectorAll('canvas')).toHaveLength(2);
+    expect(overlay.querySelector('animate, animateTransform')).toBeNull();
+  });
+
+  test('keeps marker geometry sharp while tracking the zoomed map position', async () => {
     render(
       <WorldMapCard
         data={[{ label: 'Germany', countryCode: 'DE', count: 1 }]}
@@ -211,21 +255,52 @@ describe('WorldMapCard', () => {
     );
 
     const overlay = await screen.findByTestId('world-map-attack-markers');
+    const mapContent = screen.getByTestId('world-map-content');
+    const dotsCanvas = screen.getByTestId('world-map-attack-marker-dots') as HTMLCanvasElement;
+    const markerX = Number(overlay.getAttribute('data-first-marker-x'));
+    const markerY = Number(overlay.getAttribute('data-first-marker-y'));
+    vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({
+      bottom: 387,
+      height: 387,
+      left: 0,
+      right: 638,
+      top: 0,
+      width: 638,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(mapContent, 'getBoundingClientRect').mockReturnValue({
+      bottom: 1575,
+      height: 1800,
+      left: -400,
+      right: 2800,
+      top: -225,
+      width: 3200,
+      x: -400,
+      y: -225,
+      toJSON: () => ({}),
+    });
     const transformProps = transformWrapperPropsSpy.mock.calls.at(-1)?.[0] as {
       onTransform?: (ref: unknown, state: { scale: number; positionX: number; positionY: number }) => void;
     };
-    const marker = overlay.querySelector('[data-latitude="52.52"]');
-    const markerTransform = marker?.getAttribute('transform');
+    canvasContext.arc.mockClear();
 
     transformProps.onTransform?.({}, { scale: 4, positionX: 0, positionY: 0 });
 
-    expect(overlay.style.getPropertyValue('--world-map-attack-pulse-radius')).toBe('0.75px');
-    expect(overlay.style.getPropertyValue('--world-map-attack-pulse-outline-stroke')).toBe('0.625px');
-    expect(overlay.style.getPropertyValue('--world-map-attack-pulse-stroke')).toBe('0.25px');
-    expect(overlay.style.getPropertyValue('--world-map-attack-dot-radius')).toBe('0.625px');
-    expect(overlay.style.getPropertyValue('--world-map-attack-dot-stroke')).toBe('0.1875px');
-    expect(marker?.getAttribute('transform')).toBe(markerTransform);
-    expect(overlay.querySelector('.world-map-attack-marker-visual')).toBeNull();
+    await waitFor(() => {
+      expect(canvasContext.arc).toHaveBeenCalledWith(
+        -400 + markerX * 4,
+        -225 + markerY * 4,
+        2.5,
+        0,
+        Math.PI * 2,
+      );
+    });
+    expect(dotsCanvas.width).toBe(638);
+    expect(dotsCanvas.height).toBe(387);
+    expect(mapContent).not.toContainElement(overlay);
+    expect(overlay.querySelector('animate, animateTransform')).toBeNull();
   });
 
   test('adds location attack details to the country tooltip while hovering a marker', async () => {
@@ -249,8 +324,10 @@ describe('WorldMapCard', () => {
     );
 
     const overlay = await screen.findByTestId('world-map-attack-markers');
-    const marker = overlay.querySelector('[data-latitude="52.52"]');
-    const projectedCoordinates = marker?.getAttribute('transform')?.match(/-?\d+(?:\.\d+)?/g)?.map(Number) ?? [];
+    const projectedCoordinates = [
+      Number(overlay.getAttribute('data-first-marker-x')),
+      Number(overlay.getAttribute('data-first-marker-y')),
+    ];
     expect(projectedCoordinates).toHaveLength(2);
 
     vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({
@@ -369,7 +446,8 @@ describe('WorldMapCard', () => {
 
     fireEvent.click(toggle);
     const overlay = await screen.findByTestId('world-map-attack-markers');
-    expect(overlay.querySelectorAll('.world-map-attack-pulse')).toHaveLength(2);
+    expect(overlay.querySelectorAll('canvas')).toHaveLength(2);
+    expect(overlay.querySelector('animate, animateTransform')).toBeNull();
     await waitFor(() => expect(window.localStorage.getItem('crowdsec-web-ui:dashboard:map-animation-enabled')).toBe('true'));
 
     unmount();

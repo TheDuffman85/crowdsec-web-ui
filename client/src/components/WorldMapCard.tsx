@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useLayoutEffect, useCallback, type CSSProperties } from 'react';
+import { useState, useEffect, useMemo, useRef, useLayoutEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Choropleth, type ChoroplethBoundFeature } from '@nivo/geo';
 import { geoNaturalEarth1 } from 'd3-geo';
@@ -21,6 +21,17 @@ import { CountryFlag } from './CountryFlag';
 // Using local Natural Earth data which has proper ISO properties
 const geoUrl = assetUrl("/world-50m.json");
 const MAP_ANIMATION_STORAGE_KEY = 'crowdsec-web-ui:dashboard:map-animation-enabled';
+const MAX_CONCURRENT_ATTACK_MARKER_PULSES = 25;
+const ATTACK_MARKER_PULSE_MIN_INTERVAL_MS = 60;
+const ATTACK_MARKER_PULSE_MAX_INTERVAL_MS = 120;
+const ATTACK_MARKER_PULSE_DURATION_MS = 2_200;
+const ATTACK_MARKER_PULSE_VISIBLE_DURATION_MS = ATTACK_MARKER_PULSE_DURATION_MS * 0.7;
+const ATTACK_MARKER_FRAME_INTERVAL_MS = 1_000 / 30;
+const MAX_STATIC_CANVAS_PIXEL_RATIO = 2;
+const MAX_ANIMATED_CANVAS_PIXEL_RATIO = 1;
+const MAP_WIDTH = 800;
+const MAP_HEIGHT = 450;
+const MAP_PROJECTION_SCALE = 120;
 
 function getInitialAttackMarkerAnimationEnabled(): boolean {
     const storedPreference = window.localStorage.getItem(MAP_ANIMATION_STORAGE_KEY);
@@ -29,17 +40,6 @@ function getInitialAttackMarkerAnimationEnabled(): boolean {
     }
 
     return !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-}
-
-function setAttackMarkerVisualScale(element: SVGSVGElement | null, scale: number): void {
-    if (!element || scale <= 0 || !Number.isFinite(scale)) return;
-
-    const inverseScale = 1 / scale;
-    element.style.setProperty('--world-map-attack-pulse-radius', `${3 * inverseScale}px`);
-    element.style.setProperty('--world-map-attack-pulse-outline-stroke', `${2.5 * inverseScale}px`);
-    element.style.setProperty('--world-map-attack-pulse-stroke', `${1 * inverseScale}px`);
-    element.style.setProperty('--world-map-attack-dot-radius', `${2.5 * inverseScale}px`);
-    element.style.setProperty('--world-map-attack-dot-stroke', `${0.75 * inverseScale}px`);
 }
 
 interface GeoFeatureProperties {
@@ -80,6 +80,156 @@ interface AttackMarker {
     countryCode?: string;
     x: number;
     y: number;
+}
+
+interface AttackMarkerPulse {
+    x: number;
+    y: number;
+    startedAt: number;
+}
+
+interface AttackMarkerViewport {
+    offsetX: number;
+    offsetY: number;
+    scaleX: number;
+    scaleY: number;
+    width: number;
+    height: number;
+}
+
+function getAttackMarkerViewport(
+    mapElement: HTMLDivElement | null,
+    overlayElement: HTMLDivElement | null,
+    mapWidth: number,
+    mapHeight: number,
+): AttackMarkerViewport {
+    const mapBounds = mapElement?.getBoundingClientRect();
+    const overlayBounds = overlayElement?.getBoundingClientRect();
+    if (
+        !mapBounds
+        || !overlayBounds
+        || mapBounds.width <= 0
+        || mapBounds.height <= 0
+        || mapWidth <= 0
+        || mapHeight <= 0
+    ) {
+        return {
+            offsetX: 0,
+            offsetY: 0,
+            scaleX: 1,
+            scaleY: 1,
+            width: mapWidth,
+            height: mapHeight,
+        };
+    }
+
+    return {
+        offsetX: mapBounds.left - overlayBounds.left,
+        offsetY: mapBounds.top - overlayBounds.top,
+        scaleX: mapBounds.width / mapWidth,
+        scaleY: mapBounds.height / mapHeight,
+        width: overlayBounds.width,
+        height: overlayBounds.height,
+    };
+}
+
+function prepareAttackMarkerCanvas(
+    canvas: HTMLCanvasElement | null,
+    mapWidth: number,
+    mapHeight: number,
+    maxPixelRatio: number,
+): CanvasRenderingContext2D | null {
+    if (!canvas) return null;
+
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, maxPixelRatio);
+    const pixelWidth = Math.max(1, Math.round(mapWidth * pixelRatio));
+    const pixelHeight = Math.max(1, Math.round(mapHeight * pixelRatio));
+    if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+        canvas.width = pixelWidth;
+        canvas.height = pixelHeight;
+    }
+
+    const context = canvas.getContext('2d');
+    if (!context) return null;
+
+    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+    context.clearRect(0, 0, mapWidth, mapHeight);
+    return context;
+}
+
+function drawAttackMarkerDots(
+    canvas: HTMLCanvasElement | null,
+    markers: AttackMarker[],
+    viewportTransform: AttackMarkerViewport,
+    mapWidth: number,
+    mapHeight: number,
+): void {
+    const context = prepareAttackMarkerCanvas(
+        canvas,
+        mapWidth,
+        mapHeight,
+        MAX_STATIC_CANVAS_PIXEL_RATIO,
+    );
+    if (!context) return;
+
+    context.fillStyle = '#dc2626';
+    context.strokeStyle = '#ffffff';
+    context.lineWidth = 0.75;
+
+    for (const marker of markers) {
+        context.beginPath();
+        context.arc(
+            viewportTransform.offsetX + marker.x * viewportTransform.scaleX,
+            viewportTransform.offsetY + marker.y * viewportTransform.scaleY,
+            2.5,
+            0,
+            Math.PI * 2,
+        );
+        context.fill();
+        context.stroke();
+    }
+}
+
+function drawAttackMarkerPulses(
+    canvas: HTMLCanvasElement | null,
+    pulses: AttackMarkerPulse[],
+    now: number,
+    viewportTransform: AttackMarkerViewport,
+    mapWidth: number,
+    mapHeight: number,
+): void {
+    const context = prepareAttackMarkerCanvas(
+        canvas,
+        mapWidth,
+        mapHeight,
+        MAX_ANIMATED_CANVAS_PIXEL_RATIO,
+    );
+    if (!context) return;
+
+    for (const pulse of pulses) {
+        const elapsed = now - pulse.startedAt;
+        if (elapsed < 0 || elapsed >= ATTACK_MARKER_PULSE_VISIBLE_DURATION_MS) continue;
+
+        const progress = elapsed / ATTACK_MARKER_PULSE_VISIBLE_DURATION_MS;
+        const easedProgress = 1 - Math.pow(1 - progress, 3);
+        const radius = 3 * (1 + 1.5 * easedProgress);
+        const x = viewportTransform.offsetX + pulse.x * viewportTransform.scaleX;
+        const y = viewportTransform.offsetY + pulse.y * viewportTransform.scaleY;
+        context.globalAlpha = 0.65 * (1 - easedProgress);
+
+        context.beginPath();
+        context.arc(x, y, radius, 0, Math.PI * 2);
+        context.strokeStyle = '#7f1d1d';
+        context.lineWidth = 2.5;
+        context.stroke();
+
+        context.beginPath();
+        context.arc(x, y, radius, 0, Math.PI * 2);
+        context.strokeStyle = '#ffffff';
+        context.lineWidth = 1;
+        context.stroke();
+    }
+    context.globalAlpha = 1;
 }
 
 interface WorldMapCardProps {
@@ -168,15 +318,25 @@ export function WorldMapCard({
     const [geoFeatures, setGeoFeatures] = useState<GeoFeature[]>([]);
     const [isLoadingStats, setIsLoadingStats] = useState(true);
     const containerRef = useRef<HTMLDivElement | null>(null);
-    const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
     const [initialScale, setInitialScale] = useState(() => window.innerWidth < 800 ? 0.7 : 1.0);
-    const mapTransformScaleRef = useRef(initialScale);
     const [tooltipEnabled, setTooltipEnabled] = useState(true);
     const [animationEnabled, setAnimationEnabled] = useState(getInitialAttackMarkerAnimationEnabled);
     const previousSelectedCountryRef = useRef<string | null>(selectedCountry);
     const touchTooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const tooltipRef = useRef<HTMLDivElement | null>(null);
-    const attackMarkerOverlayRef = useRef<SVGSVGElement | null>(null);
+    const mapContentRef = useRef<HTMLDivElement | null>(null);
+    const attackMarkerOverlayRef = useRef<HTMLDivElement | null>(null);
+    const attackMarkerDotsCanvasRef = useRef<HTMLCanvasElement | null>(null);
+    const attackMarkerPulsesCanvasRef = useRef<HTMLCanvasElement | null>(null);
+    const attackMarkerDotsFrameRef = useRef<number | null>(null);
+    const attackMarkerViewportRef = useRef<AttackMarkerViewport>({
+        offsetX: 0,
+        offsetY: 0,
+        scaleX: 1,
+        scaleY: 1,
+        width: 1,
+        height: 1,
+    });
     const tooltipPositionRef = useRef<TooltipPosition>({ x: 0, y: 0 });
     const [documentVisible, setDocumentVisible] = useState(() => document.visibilityState !== 'hidden');
     const [hoveredAttackMarker, setHoveredAttackMarker] = useState<AttackMarker | null>(null);
@@ -355,21 +515,6 @@ export function WorldMapCard({
         );
     };
 
-    // Track container size for dynamic map scaling
-    useLayoutEffect(() => {
-        if (!containerRef.current) return;
-
-        const resizeObserver = new ResizeObserver((entries) => {
-            for (const entry of entries) {
-                const { width, height } = entry.contentRect;
-                setDimensions({ width, height });
-            }
-        });
-
-        resizeObserver.observe(containerRef.current);
-        return () => resizeObserver.disconnect();
-    }, []);
-
     const transformComponentRef = useRef<ReactZoomPanPinchRef | null>(null);
 
     // Add viewport resize handler to reset zoom
@@ -399,53 +544,11 @@ export function WorldMapCard({
         };
     }, []);
 
-    // Calculate responsive map dimensions based on container size
-    // Maintain 16:9 aspect ratio while fitting within container
-    const BASE_WIDTH = 800;
-    const BASE_HEIGHT = 450;
-    const BASE_PROJECTION_SCALE = 120;
-
-    const { mapWidth, mapHeight, projectionScale } = useMemo(() => {
-        if (dimensions.width === 0 || dimensions.height === 0) {
-            // Fallback before first measurement
-            return {
-                mapWidth: BASE_WIDTH,
-                mapHeight: BASE_HEIGHT,
-                projectionScale: BASE_PROJECTION_SCALE
-            };
-        }
-
-        // Use the actual container dimensions, but maintain aspect ratio
-        // The map should fit entirely within the container
-        const containerWidth = dimensions.width;
-        const containerHeight = dimensions.height;
-        const aspectRatio = BASE_WIDTH / BASE_HEIGHT;
-
-        let width, height;
-
-        // Calculate dimensions that fit within container while maintaining aspect ratio
-        if (containerWidth / containerHeight > aspectRatio) {
-            // Container is wider than aspect ratio - constrain by height
-            height = containerHeight;
-            width = height * aspectRatio;
-        } else {
-            // Container is taller than aspect ratio - constrain by width
-            width = containerWidth;
-            height = width / aspectRatio;
-        }
-
-        // Calculate scale factor for projection
-        const scaleFactor = width / BASE_WIDTH;
-        // Add padding factor for mobile viewports to ensure map fits with margins
-        const paddingFactor = width < 800 ? 0.70 : 0.95;
-        const newProjectionScale = BASE_PROJECTION_SCALE * scaleFactor * paddingFactor;
-
-        return {
-            mapWidth: Math.max(width, 200), // Minimum width of 200px
-            mapHeight: Math.max(height, 112.5), // Minimum height maintaining aspect ratio
-            projectionScale: Math.max(newProjectionScale, 30) // Minimum projection scale
-        };
-    }, [dimensions.width, dimensions.height]);
+    // Preserve the established default framing. The map is transformed as one
+    // fixed coordinate system while the marker canvases independently fit the viewport.
+    const mapWidth = MAP_WIDTH;
+    const mapHeight = MAP_HEIGHT;
+    const projectionScale = MAP_PROJECTION_SCALE;
 
     // Fetch and process map data once, including across development StrictMode remounts.
     useEffect(() => {
@@ -522,18 +625,119 @@ export function WorldMapCard({
         return markers;
     }, [animationEnabled, attackLocations, geoFeatures.length, mapHeight, mapWidth, projectionScale]);
 
-    useEffect(() => {
-        const overlay = attackMarkerOverlayRef.current;
-        if (!overlay || typeof overlay.pauseAnimations !== 'function' || typeof overlay.unpauseAnimations !== 'function') {
-            return;
-        }
+    const drawAttackMarkerDotsInViewport = useCallback(() => {
+        const viewport = getAttackMarkerViewport(
+            mapContentRef.current,
+            attackMarkerOverlayRef.current,
+            mapWidth,
+            mapHeight,
+        );
+        attackMarkerViewportRef.current = viewport;
+        drawAttackMarkerDots(
+            attackMarkerDotsCanvasRef.current,
+            attackMarkers,
+            viewport,
+            viewport.width,
+            viewport.height,
+        );
+    }, [attackMarkers, mapHeight, mapWidth]);
 
-        if (documentVisible) {
-            overlay.unpauseAnimations();
-        } else {
-            overlay.pauseAnimations();
-        }
-    }, [animationEnabled, attackMarkers.length, documentVisible]);
+    useLayoutEffect(() => {
+        drawAttackMarkerDotsInViewport();
+    }, [drawAttackMarkerDotsInViewport]);
+
+    useEffect(() => {
+        return () => {
+            if (attackMarkerDotsFrameRef.current !== null) {
+                window.cancelAnimationFrame(attackMarkerDotsFrameRef.current);
+            }
+        };
+    }, []);
+
+    useEffect(() => {
+        const pulseCanvas = attackMarkerPulsesCanvasRef.current;
+        if (!pulseCanvas || !documentVisible || attackMarkers.length === 0) return;
+
+        const markerOrder = attackMarkers.map((_, index) => index);
+        const shuffleMarkerOrder = () => {
+            for (let index = markerOrder.length - 1; index > 0; index -= 1) {
+                const swapIndex = Math.floor(Math.random() * (index + 1));
+                [markerOrder[index], markerOrder[swapIndex]] = [markerOrder[swapIndex], markerOrder[index]];
+            }
+        };
+        const nextRandomDelay = () => (
+            ATTACK_MARKER_PULSE_MIN_INTERVAL_MS
+            + Math.random() * (ATTACK_MARKER_PULSE_MAX_INTERVAL_MS - ATTACK_MARKER_PULSE_MIN_INTERVAL_MS)
+        );
+
+        shuffleMarkerOrder();
+        const pulses: AttackMarkerPulse[] = Array.from({
+            length: Math.min(MAX_CONCURRENT_ATTACK_MARKER_PULSES, attackMarkers.length),
+        }, () => ({ x: 0, y: 0, startedAt: Number.NEGATIVE_INFINITY }));
+        let nextMarkerOrderIndex = 0;
+        let nextPulseIndex = 0;
+        let timeoutId: number | undefined;
+        let animationTimerId: number | undefined;
+
+        const pulseNextMarker = () => {
+            const now = performance.now();
+            const pulse = pulses[nextPulseIndex];
+            const pulseWait = pulse.startedAt + ATTACK_MARKER_PULSE_DURATION_MS - now;
+            if (pulseWait > 0) {
+                timeoutId = window.setTimeout(pulseNextMarker, pulseWait);
+                return;
+            }
+
+            const markerIndex = markerOrder[nextMarkerOrderIndex];
+            const marker = attackMarkers[markerIndex];
+            pulse.x = marker.x;
+            pulse.y = marker.y;
+            pulse.startedAt = now;
+            nextPulseIndex = (nextPulseIndex + 1) % pulses.length;
+            nextMarkerOrderIndex += 1;
+
+            if (nextMarkerOrderIndex >= markerOrder.length) {
+                nextMarkerOrderIndex = 0;
+                shuffleMarkerOrder();
+            }
+
+            timeoutId = window.setTimeout(pulseNextMarker, nextRandomDelay());
+        };
+
+        const drawFrame = () => {
+            const viewport = attackMarkerViewportRef.current;
+            drawAttackMarkerPulses(
+                pulseCanvas,
+                pulses,
+                performance.now(),
+                viewport,
+                viewport.width,
+                viewport.height,
+            );
+            animationTimerId = window.setTimeout(drawFrame, ATTACK_MARKER_FRAME_INTERVAL_MS);
+        };
+
+        pulseNextMarker();
+        drawFrame();
+
+        return () => {
+            if (timeoutId !== undefined) {
+                window.clearTimeout(timeoutId);
+            }
+            if (animationTimerId !== undefined) {
+                window.clearTimeout(animationTimerId);
+            }
+            // Resetting the backing store clears the transient pulse layer
+            // without acquiring another rendering context during teardown.
+            pulseCanvas.width = Math.max(
+                1,
+                Math.round(
+                    attackMarkerViewportRef.current.width
+                    * Math.min(window.devicePixelRatio || 1, MAX_ANIMATED_CANVAS_PIXEL_RATIO),
+                ),
+            );
+        };
+    }, [attackMarkers, documentVisible]);
 
     const updateHoveredAttackMarker = useCallback((clientX: number, clientY: number) => {
         const overlay = attackMarkerOverlayRef.current;
@@ -547,14 +751,18 @@ export function WorldMapCard({
             setHoveredAttackMarker(null);
             return;
         }
+        const mapBounds = mapContentRef.current?.getBoundingClientRect();
+        const markerBounds = mapBounds && mapBounds.width > 0 && mapBounds.height > 0
+            ? mapBounds
+            : bounds;
 
         const hitRadius = 8;
         let closestMarker: AttackMarker | null = null;
         let closestDistanceSquared = hitRadius * hitRadius;
 
         for (const marker of attackMarkers) {
-            const markerClientX = bounds.left + (marker.x / mapWidth) * bounds.width;
-            const markerClientY = bounds.top + (marker.y / mapHeight) * bounds.height;
+            const markerClientX = markerBounds.left + (marker.x / mapWidth) * markerBounds.width;
+            const markerClientY = markerBounds.top + (marker.y / mapHeight) * markerBounds.height;
             const deltaX = clientX - markerClientX;
             const deltaY = clientY - markerClientY;
             const distanceSquared = deltaX * deltaX + deltaY * deltaY;
@@ -709,8 +917,13 @@ export function WorldMapCard({
                             limitToBounds={false}
                             onTransform={(_ref, state) => {
                                 if (state.scale > 0 && Number.isFinite(state.scale)) {
-                                    mapTransformScaleRef.current = state.scale;
-                                    setAttackMarkerVisualScale(attackMarkerOverlayRef.current, state.scale);
+                                    if (attackMarkerDotsFrameRef.current !== null) {
+                                        window.cancelAnimationFrame(attackMarkerDotsFrameRef.current);
+                                    }
+                                    attackMarkerDotsFrameRef.current = window.requestAnimationFrame(() => {
+                                        attackMarkerDotsFrameRef.current = null;
+                                        drawAttackMarkerDotsInViewport();
+                                    });
                                 }
                             }}
                             onPanning={() => {
@@ -769,8 +982,13 @@ export function WorldMapCard({
                                             <RotateCcw className="w-4 h-4 text-gray-600 dark:text-gray-300" />
                                         </button>
                                     </div>
-                                            <TransformComponent wrapperStyle={{ width: '100%', height: '100%' }} contentStyle={{ width: '100%', height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-                                        <div className="relative" style={{ width: mapWidth, height: mapHeight }}>
+                                    <TransformComponent wrapperStyle={{ width: '100%', height: '100%' }} contentStyle={{ width: '100%', height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                                        <div
+                                            ref={mapContentRef}
+                                            className="relative"
+                                            style={{ width: mapWidth, height: mapHeight }}
+                                            data-testid="world-map-content"
+                                        >
                                             <Choropleth
                                                 width={mapWidth}
                                                 height={mapHeight}
@@ -797,110 +1015,35 @@ export function WorldMapCard({
                                                 }}
                                                 tooltip={MapTooltip}
                                             />
-                                            {animationEnabled && attackMarkers.length > 0 && (
-                                                <svg
-                                                    ref={attackMarkerOverlayRef}
-                                                    className={`pointer-events-none absolute inset-0 ${documentVisible ? '' : 'world-map-attack-markers-paused'}`}
-                                                    width={mapWidth}
-                                                    height={mapHeight}
-                                                    viewBox={`0 0 ${mapWidth} ${mapHeight}`}
-                                                    style={{
-                                                        '--world-map-attack-pulse-radius': `${3 / mapTransformScaleRef.current}px`,
-                                                        '--world-map-attack-pulse-outline-stroke': `${2.5 / mapTransformScaleRef.current}px`,
-                                                        '--world-map-attack-pulse-stroke': `${1 / mapTransformScaleRef.current}px`,
-                                                        '--world-map-attack-dot-radius': `${2.5 / mapTransformScaleRef.current}px`,
-                                                        '--world-map-attack-dot-stroke': `${0.75 / mapTransformScaleRef.current}px`,
-                                                    } as CSSProperties}
-                                                    aria-hidden="true"
-                                                    data-testid="world-map-attack-markers"
-                                                >
-                                                    {attackMarkers.map((marker, index) => (
-                                                        <g
-                                                            key={`${marker.latitude}:${marker.longitude}`}
-                                                            data-latitude={marker.latitude}
-                                                            data-longitude={marker.longitude}
-                                                            transform={`translate(${marker.x} ${marker.y})`}
-                                                        >
-                                                            <circle
-                                                                className="world-map-attack-pulse world-map-attack-pulse-outline"
-                                                                cx="0"
-                                                                cy="0"
-                                                                r="3"
-                                                                fill="none"
-                                                                stroke="#7f1d1d"
-                                                                strokeWidth="2.5"
-                                                            >
-                                                                <animateTransform
-                                                                    attributeName="transform"
-                                                                    type="scale"
-                                                                    values="1;2.5;2.5"
-                                                                    keyTimes="0;0.7;1"
-                                                                    calcMode="spline"
-                                                                    keySplines="0 0 0.2 1;0 0 1 1"
-                                                                    dur="2.2s"
-                                                                    begin={`${-(index % 11) * 0.17}s`}
-                                                                    repeatCount="indefinite"
-                                                                />
-                                                                <animate
-                                                                    attributeName="opacity"
-                                                                    values="0.65;0;0"
-                                                                    keyTimes="0;0.7;1"
-                                                                    calcMode="spline"
-                                                                    keySplines="0 0 0.2 1;0 0 1 1"
-                                                                    dur="2.2s"
-                                                                    begin={`${-(index % 11) * 0.17}s`}
-                                                                    repeatCount="indefinite"
-                                                                />
-                                                            </circle>
-                                                            <circle
-                                                                className="world-map-attack-pulse"
-                                                                cx="0"
-                                                                cy="0"
-                                                                r="3"
-                                                                fill="none"
-                                                                stroke="#ffffff"
-                                                                strokeWidth="1"
-                                                            >
-                                                                <animateTransform
-                                                                    attributeName="transform"
-                                                                    type="scale"
-                                                                    values="1;2.5;2.5"
-                                                                    keyTimes="0;0.7;1"
-                                                                    calcMode="spline"
-                                                                    keySplines="0 0 0.2 1;0 0 1 1"
-                                                                    dur="2.2s"
-                                                                    begin={`${-(index % 11) * 0.17}s`}
-                                                                    repeatCount="indefinite"
-                                                                />
-                                                                <animate
-                                                                    attributeName="opacity"
-                                                                    values="0.65;0;0"
-                                                                    keyTimes="0;0.7;1"
-                                                                    calcMode="spline"
-                                                                    keySplines="0 0 0.2 1;0 0 1 1"
-                                                                    dur="2.2s"
-                                                                    begin={`${-(index % 11) * 0.17}s`}
-                                                                    repeatCount="indefinite"
-                                                                />
-                                                            </circle>
-                                                            <circle
-                                                                className="world-map-attack-dot"
-                                                                cx="0"
-                                                                cy="0"
-                                                                r="2.5"
-                                                                fill="#dc2626"
-                                                                stroke="#ffffff"
-                                                                strokeWidth="0.75"
-                                                            />
-                                                        </g>
-                                                    ))}
-                                                </svg>
-                                            )}
                                         </div>
                                     </TransformComponent>
                                 </>
                             )}
                         </TransformWrapper>
+                        {animationEnabled && attackMarkers.length > 0 && (
+                            <div
+                                ref={attackMarkerOverlayRef}
+                                className={`pointer-events-none absolute inset-0 z-[1] overflow-hidden ${documentVisible ? '' : 'world-map-attack-markers-paused'}`}
+                                aria-hidden="true"
+                                data-testid="world-map-attack-markers"
+                                data-marker-count={attackMarkers.length}
+                                data-max-concurrent-pulses={MAX_CONCURRENT_ATTACK_MARKER_PULSES}
+                                data-first-marker-location={`${attackMarkers[0].latitude}:${attackMarkers[0].longitude}`}
+                                data-first-marker-x={attackMarkers[0].x}
+                                data-first-marker-y={attackMarkers[0].y}
+                            >
+                                <canvas
+                                    ref={attackMarkerPulsesCanvasRef}
+                                    className="absolute inset-0 h-full w-full"
+                                    data-testid="world-map-attack-marker-pulses"
+                                />
+                                <canvas
+                                    ref={attackMarkerDotsCanvasRef}
+                                    className="absolute inset-0 h-full w-full"
+                                    data-testid="world-map-attack-marker-dots"
+                                />
+                            </div>
+                        )}
                     </div>
                 )}
             </CardContent>
