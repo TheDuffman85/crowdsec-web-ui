@@ -72,7 +72,7 @@
     "@types/react-dom": "^19.2.3",
     "@types/ws": "8.18.1",
     "@vitejs/plugin-react": "^6.0.3",
-    "@vitest/coverage-v8": "4.1.9",
+    "@vitest/coverage-v8": "4.1.10",
     "clsx": "^2.1.1",
     "d3-geo": "1.12.1",
     "eslint": "^10.6.0",
