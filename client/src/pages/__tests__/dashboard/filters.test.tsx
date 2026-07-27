@@ -24,6 +24,11 @@ describe('Dashboard filters and drilldowns', () => {
     expect(screen.getByRole('button', { name: 'Filters' }).parentElement?.parentElement).toContainElement(
       screen.getByRole('switch'),
     );
+    const simulationToggle = screen.getByRole('button', { name: 'Simulation' });
+    const percentageToggle = screen.getByRole('switch');
+    const filtersButton = screen.getByRole('button', { name: 'Filters' });
+    expect(simulationToggle.compareDocumentPosition(percentageToggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(percentageToggle.compareDocumentPosition(filtersButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'View Alerts' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'View Decisions' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Reset Filters' })).not.toBeInTheDocument();

@@ -17,9 +17,10 @@ async function expandDecisionSearch() {
   expect(screen.getByRole('button', { name: 'Search syntax help' })).toBeInTheDocument();
   const collapseButton = screen.getByRole('button', { name: 'Collapse search' });
   expect(collapseButton).toHaveAttribute('aria-expanded', 'true');
-  expect(collapseButton).toHaveClass('border-r-0');
-  expect(collapseButton.nextElementSibling).toContainElement(input);
-  expect(input.parentElement).toHaveClass('rounded-l-none');
+  expect(collapseButton).toHaveClass('border-l-0');
+  expect(collapseButton.previousElementSibling).toContainElement(input);
+  expect(input.parentElement).toHaveClass('rounded-r-none');
+  expect(screen.getByRole('button', { name: 'Search syntax help' }).compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(input.parentElement?.querySelector('.lucide-search')).toBeNull();
   return input;
 }
@@ -37,12 +38,12 @@ describe('Decisions page search and pagination', () => {
     const searchButton = screen.getByRole('button', { name: 'Expand search' });
     const filtersButton = screen.getByRole('button', { name: 'Filters' });
     const columnsButton = screen.getByRole('button', { name: 'Choose decision table columns' });
-    expect(Array.from(columnsButton.parentElement!.children).slice(0, 3)).toEqual([
-      filtersButton.parentElement!,
+    expect(columnsButton.parentElement!.firstElementChild).toBe(columnsButton);
+    expect(Array.from(columnsButton.nextElementSibling!.children)).toEqual([
       searchButton.parentElement!.parentElement!,
-      columnsButton,
+      filtersButton.parentElement!,
     ]);
-    expect(columnsButton).toHaveClass('ml-auto');
+    expect(columnsButton.nextElementSibling).toHaveClass('ml-auto');
     expect(screen.queryByPlaceholderText('Filter decisions...')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Search syntax help' })).not.toBeInTheDocument();
     const input = await expandDecisionSearch();

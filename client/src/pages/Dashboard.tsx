@@ -1078,43 +1078,6 @@ export function Dashboard() {
                     </div>
 
                     <div className="flex flex-col items-center gap-4 md:flex-row">
-                        <div className="flex items-center gap-4">
-                            <QuickFilters
-                                page="alerts"
-                                fields={quickFilterFields}
-                                sectionOrder={quickFilterSectionOrder}
-                                unavailableSectionOrder={DASHBOARD_UNAVAILABLE_QUICK_FILTER_FIELDS}
-                                filters={dashboardFacetFilters}
-                                searchAst={dashboardAlertSearchAst}
-                                onSelectionChange={applyFacetSelection}
-                                dateRange={persistedQuickFilters.dateRange}
-                                onDateRangeChange={applyQuickFilterDateRange}
-                                onClearAll={clearFilters}
-                                getSelection={getDashboardFacetSelection}
-                                formatValue={formatFacetValue}
-                                getSearchValues={getFacetSearchValues}
-                                busy={dashboardRefreshing}
-                                refreshKey={refreshSignal}
-                                triggerClassName="h-[38px] box-border rounded-lg border-gray-100 px-3 py-1.5 shadow-sm dark:border-gray-700"
-                            />
-
-                            <div className="flex h-[38px] box-border items-center gap-3 rounded-lg border border-gray-100 bg-white px-3 py-1.5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-                                <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
-                                    <Percent className="h-4 w-4" />
-                                </div>
-
-                                <div className="flex items-center gap-2">
-                                    <span className={`text-xs font-medium ${percentageBasis === 'filtered' ? 'text-primary-600' : 'text-gray-500'}`}>{t('pages.dashboard.filtered')}</span>
-                                    <Switch
-                                        id="percentage-basis"
-                                        checked={percentageBasis === 'global'}
-                                        onCheckedChange={(checked) => setPercentageBasis(checked ? 'global' : 'filtered')}
-                                    />
-                                    <span className={`text-xs font-medium ${percentageBasis === 'global' ? 'text-primary-600' : 'text-gray-500'}`}>{t('pages.dashboard.global')}</span>
-                                </div>
-                            </div>
-                        </div>
-
                         {simulationsEnabled && (
                             <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 shadow-sm dark:border-gray-700 dark:bg-gray-800">
                                 <span className="text-xs font-medium text-gray-500 dark:text-gray-400">{t('pages.dashboard.mode')}</span>
@@ -1133,6 +1096,43 @@ export function Dashboard() {
                                 ))}
                             </div>
                         )}
+
+                        <div className="flex items-center gap-4">
+                            <div className="flex h-[38px] box-border items-center gap-3 rounded-lg border border-gray-100 bg-white px-3 py-1.5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+                                <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+                                    <Percent className="h-4 w-4" />
+                                </div>
+
+                                <div className="flex items-center gap-2">
+                                    <span className={`text-xs font-medium ${percentageBasis === 'filtered' ? 'text-primary-600' : 'text-gray-500'}`}>{t('pages.dashboard.filtered')}</span>
+                                    <Switch
+                                        id="percentage-basis"
+                                        checked={percentageBasis === 'global'}
+                                        onCheckedChange={(checked) => setPercentageBasis(checked ? 'global' : 'filtered')}
+                                    />
+                                    <span className={`text-xs font-medium ${percentageBasis === 'global' ? 'text-primary-600' : 'text-gray-500'}`}>{t('pages.dashboard.global')}</span>
+                                </div>
+                            </div>
+
+                            <QuickFilters
+                                page="alerts"
+                                fields={quickFilterFields}
+                                sectionOrder={quickFilterSectionOrder}
+                                unavailableSectionOrder={DASHBOARD_UNAVAILABLE_QUICK_FILTER_FIELDS}
+                                filters={dashboardFacetFilters}
+                                searchAst={dashboardAlertSearchAst}
+                                onSelectionChange={applyFacetSelection}
+                                dateRange={persistedQuickFilters.dateRange}
+                                onDateRangeChange={applyQuickFilterDateRange}
+                                onClearAll={clearFilters}
+                                getSelection={getDashboardFacetSelection}
+                                formatValue={formatFacetValue}
+                                getSearchValues={getFacetSearchValues}
+                                busy={dashboardRefreshing}
+                                refreshKey={refreshSignal}
+                                triggerClassName="h-[38px] box-border rounded-lg border-gray-100 px-3 py-1.5 shadow-sm dark:border-gray-700"
+                            />
+                        </div>
                     </div>
                 </div>
 

@@ -1426,42 +1426,44 @@ export function Alerts() {
 
             <div className="space-y-2">
                 <div className="flex items-stretch gap-2">
-                    <QuickFilters {...quickFilterProps} />
-                    <CollapsibleSearchControls
-                        inputRef={searchInputRef}
-                        onHelp={() => setShowSearchSyntaxModal(true)}
-                    >
-                        <HighlightedSearchInput
-                            ref={searchInputRef}
-                            searchPage="alerts"
-                            showSearchIcon={false}
-                            containerClassName="rounded-l-none"
-                            className="rounded-l-none"
-                            searchFeatures={searchValidationFeatures}
-                            placeholder={t('pages.alerts.filterPlaceholder')}
-                            value={searchDraft}
-                            error={queryError}
-                            onChange={(e) => {
-                                searchDraftRef.current = e.target.value;
-                                setSearchDraft(e.target.value);
-                                updateSearchSelectionFromInput(e.target);
-                            }}
-                            onClick={(e) => updateSearchSelectionFromInput(e.currentTarget)}
-                            onKeyUp={(e) => updateSearchSelectionFromInput(e.currentTarget)}
-                            onSelect={(e) => updateSearchSelectionFromInput(e.currentTarget)}
-                            aria-invalid={queryError ? 'true' : 'false'}
-                            aria-describedby={queryError ? 'alerts-search-error' : undefined}
-                        />
-                    </CollapsibleSearchControls>
                     <button
                         type="button"
                         onClick={() => setShowColumnsModal(true)}
-                        className="ml-auto inline-flex items-center justify-center rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-gray-600 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
+                        className="inline-flex items-center justify-center rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-gray-600 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
                         aria-label={t('components.tableColumns.chooseAlertColumns')}
                         title={t('components.tableColumns.chooseColumns')}
                     >
                         <Columns3 size={18} />
                     </button>
+                    <div className="ml-auto flex min-w-0 flex-1 items-stretch justify-end gap-2">
+                        <CollapsibleSearchControls
+                            inputRef={searchInputRef}
+                            onHelp={() => setShowSearchSyntaxModal(true)}
+                        >
+                            <HighlightedSearchInput
+                                ref={searchInputRef}
+                                searchPage="alerts"
+                                showSearchIcon={false}
+                                containerClassName="rounded-r-none"
+                                className="rounded-r-none"
+                                searchFeatures={searchValidationFeatures}
+                                placeholder={t('pages.alerts.filterPlaceholder')}
+                                value={searchDraft}
+                                error={queryError}
+                                onChange={(e) => {
+                                    searchDraftRef.current = e.target.value;
+                                    setSearchDraft(e.target.value);
+                                    updateSearchSelectionFromInput(e.target);
+                                }}
+                                onClick={(e) => updateSearchSelectionFromInput(e.currentTarget)}
+                                onKeyUp={(e) => updateSearchSelectionFromInput(e.currentTarget)}
+                                onSelect={(e) => updateSearchSelectionFromInput(e.currentTarget)}
+                                aria-invalid={queryError ? 'true' : 'false'}
+                                aria-describedby={queryError ? 'alerts-search-error' : undefined}
+                            />
+                        </CollapsibleSearchControls>
+                        <QuickFilters {...quickFilterProps} />
+                    </div>
                 </div>
                 {queryError && (
                     <p id="alerts-search-error" className="text-xs text-red-600 dark:text-red-400">
