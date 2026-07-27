@@ -1252,8 +1252,8 @@ export function Dashboard() {
             </div>
 
             {/* Statistics Section */}
-            <div className="space-y-4">
-                <div className="mb-4 space-y-1">
+            <div className="space-y-6">
+                <div className="relative space-y-2">
                     <div className="flex flex-col gap-4 md:flex-row md:items-center">
                         <div className="flex shrink-0 items-center gap-2">
                             <TrendingUp className="w-6 h-6 text-primary-600 dark:text-primary-400" />
@@ -1306,21 +1306,21 @@ export function Dashboard() {
                             />
                         </div>
                     </div>
-                    <div className="min-h-[1.25rem] text-sm text-gray-500" aria-live="polite">
+                    {dashboardSearchError && (
+                        <p id="dashboard-search-error" className="text-xs text-red-600 dark:text-red-400">
+                            {t('common.searchSyntaxError', {
+                                position: dashboardSearchError.position + 1,
+                                message: dashboardSearchError.message,
+                            })}
+                        </p>
+                    )}
+                    <div className="pointer-events-none absolute left-0 top-full mt-1 text-sm text-gray-500" aria-live="polite">
                         <span className={`inline-flex items-center gap-2 transition-opacity ${dashboardRefreshing ? 'opacity-100' : 'opacity-0'}`}>
                             <span className="h-2 w-2 rounded-full bg-primary-500 animate-pulse" aria-hidden="true" />
                             {t('common.refreshingDashboard')}
                         </span>
                     </div>
                 </div>
-                {dashboardSearchError && (
-                    <p id="dashboard-search-error" className="text-xs text-red-600 dark:text-red-400">
-                        {t('common.searchSyntaxError', {
-                            position: dashboardSearchError.position + 1,
-                            message: dashboardSearchError.message,
-                        })}
-                    </p>
-                )}
 
                 {/* Charts Area */}
                 <div

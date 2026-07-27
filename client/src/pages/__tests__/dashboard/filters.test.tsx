@@ -31,6 +31,8 @@ describe('Dashboard filters and drilldowns', () => {
     const filtersButton = screen.getByRole('button', { name: 'Filters' });
     const toolbar = statisticsHeading.parentElement?.parentElement;
     expect(toolbar).toHaveClass('md:items-center');
+    expect(toolbar?.parentElement).toHaveClass('space-y-2');
+    expect(toolbar?.parentElement?.parentElement).toHaveClass('space-y-6');
     expect(toolbar).toContainElement(searchButton);
     expect(toolbar).toContainElement(filtersButton);
     expect(statisticsHeading.compareDocumentPosition(searchButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
