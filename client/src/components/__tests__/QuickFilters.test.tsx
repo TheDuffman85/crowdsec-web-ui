@@ -481,8 +481,13 @@ describe('QuickFilters', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
     fireEvent.click(screen.getByRole('button', { name: 'Date and time' }));
 
-    expect(screen.getByRole('button', { name: 'Last 7 days' }))
-      .toHaveAttribute('aria-pressed', 'true');
+    const selectedRange = screen.getByRole('button', { name: 'Last 7 days' });
+    expect(selectedRange).toHaveAttribute('aria-pressed', 'true');
+    expect(selectedRange).toHaveClass(
+      'dark:bg-primary-900',
+      'dark:text-primary-100',
+      'dark:border-primary-400',
+    );
   });
 
   test('orders sections as requested and does not render a date calendar icon', async () => {

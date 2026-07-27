@@ -658,7 +658,7 @@ function DateTimeFilterGroup({
                                         onClick={() => onChange({ start: preset.start, end: '' })}
                                         className={`min-h-11 rounded-md border px-3 py-2 text-sm font-medium transition-colors ${
                                             selected
-                                                ? 'border-primary-600 bg-primary-50 text-primary-700 dark:border-primary-400 dark:bg-primary-950/40 dark:text-primary-300'
+                                                ? 'border-primary-600 bg-primary-50 text-primary-700 dark:border-primary-400 dark:bg-primary-900 dark:text-primary-100'
                                                 : 'border-gray-300 bg-white text-gray-700 hover:border-primary-400 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-200 dark:hover:border-primary-500 dark:hover:bg-gray-700'
                                         }`}
                                     >
