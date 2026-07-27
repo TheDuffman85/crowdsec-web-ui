@@ -153,7 +153,7 @@ function dashboardConfigMatches(
     next: ConfigResponse,
 ): boolean {
     if (!current) return false;
-    return current.lookback_days === next.lookback_days
+    return current.lookback_hours === next.lookback_hours
         && current.simulations_enabled === next.simulations_enabled
         && JSON.stringify(current.lapi_status) === JSON.stringify(next.lapi_status)
         && JSON.stringify(current.instances || []) === JSON.stringify(next.instances || []);
@@ -1293,6 +1293,7 @@ export function Dashboard() {
                                 dateRange={persistedQuickFilters.dateRange}
                                 onDateRangeChange={applyQuickFilterDateRange}
                                 onClearAll={clearFilters}
+                                lookbackHours={config?.lookback_hours ?? 168}
                                 simulation={simulationsEnabled
                                     ? { value: simulationFilter, onChange: applyQuickFilterSimulation }
                                     : undefined}

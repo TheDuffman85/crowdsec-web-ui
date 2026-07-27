@@ -181,6 +181,7 @@ export function Decisions() {
         persistedQuickFilters,
     ));
     const [decisions, setDecisions] = useState<DecisionListItem[]>([]);
+    const [lookbackHours, setLookbackHours] = useState(168);
     const [simulationsEnabled, setSimulationsEnabled] = useState(false);
     const [canManageEnforcement, setCanManageEnforcement] = useState(false);
     const [multipleInstances, setMultipleInstances] = useState(false);
@@ -237,6 +238,7 @@ export function Decisions() {
     }) => Promise<void>>(async () => {});
     const lastRefreshSignalRef = useRef(refreshSignal);
     const configRef = useRef<{
+        lookbackHours: number;
         simulationsEnabled: boolean;
         canManageEnforcement: boolean;
         multipleInstances: boolean;
@@ -647,6 +649,7 @@ export function Decisions() {
 
         const configData = await fetchConfig();
         const nextConfig = {
+            lookbackHours: configData.lookback_hours,
             simulationsEnabled: configData.simulations_enabled === true,
             canManageEnforcement: configData.permissions?.can_manage_enforcement !== false,
             multipleInstances: (configData.instances?.length || 0) > 1,
@@ -656,6 +659,7 @@ export function Decisions() {
         };
 
         configRef.current = nextConfig;
+        setLookbackHours(nextConfig.lookbackHours);
         setSimulationsEnabled(nextConfig.simulationsEnabled);
         setCanManageEnforcement(nextConfig.canManageEnforcement);
         setMultipleInstances(nextConfig.multipleInstances);
@@ -1212,6 +1216,7 @@ export function Decisions() {
         dateRange: quickFilterDateRange,
         onDateRangeChange: applyDateRange,
         onClearAll: clearQuickFilters,
+        lookbackHours,
         simulation: simulationsEnabled
             ? { value: quickFilterSimulation, onChange: applySimulationSelection }
             : undefined,

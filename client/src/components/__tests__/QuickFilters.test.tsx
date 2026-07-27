@@ -35,6 +35,7 @@ function renderFilters(
     onClearAll?: Mock<() => void>;
     selection?: SearchFacetSelection;
     dateRange?: SearchDateRange;
+    lookbackHours?: number;
     sectionOrder?: QuickFilterSectionId[];
     hiddenSectionOrder?: QuickFilterSectionId[];
   } = {},
@@ -58,6 +59,7 @@ function renderFilters(
         dateRange={options.dateRange ?? { start: '', end: '' }}
         onDateRangeChange={onDateRangeChange}
         onClearAll={onClearAll}
+        lookbackHours={options.lookbackHours}
         getSelection={options.selection ? () => options.selection! : undefined}
         sectionOrder={options.sectionOrder}
         hiddenSectionOrder={options.hiddenSectionOrder}
@@ -82,6 +84,7 @@ describe('QuickFilters', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
   });
@@ -406,6 +409,65 @@ describe('QuickFilters', () => {
       end: '',
     });
     expect(from).toHaveAttribute('step', '3600');
+  });
+
+  test('offers touch-friendly one-tap date ranges while retaining custom inputs', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 6, 27, 12, 34));
+    const { onDateRangeChange } = renderFilters();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Date and time' }));
+
+    const last24Hours = screen.getByRole('button', { name: 'Last 24 hours' });
+    expect(last24Hours).toHaveClass('min-h-11');
+    expect(last24Hours).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Last 48 hours' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Last 30 days' })).not.toBeInTheDocument();
+    expect(within(screen.getByText('Quick ranges').closest('fieldset')!)
+      .getAllByRole('button')).toHaveLength(4);
+    expect(screen.getByText('Custom range')).toBeInTheDocument();
+    expect(screen.getByLabelText('From')).toHaveClass('text-base', 'sm:text-sm', 'min-w-0');
+
+    fireEvent.click(last24Hours);
+    expect(onDateRangeChange).toHaveBeenLastCalledWith({
+      start: '2026-07-26T12:00',
+      end: '',
+    });
+    expect(api.fetchFacet).not.toHaveBeenCalled();
+  });
+
+  test('uses the configured lookback as the longest quick range', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 6, 27, 12, 34));
+    const { onDateRangeChange } = renderFilters({ lookbackHours: 72 });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Date and time' }));
+
+    expect(screen.getByRole('button', { name: 'Last 3 days' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Last 48 hours' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Last 7 days' })).not.toBeInTheDocument();
+    expect(within(screen.getByText('Quick ranges').closest('fieldset')!)
+      .getAllByRole('button')).toHaveLength(4);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Last 3 days' }));
+    expect(onDateRangeChange).toHaveBeenLastCalledWith({
+      start: '2026-07-24T12:00',
+      end: '',
+    });
+  });
+
+  test('marks a matching quick date range as selected', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 6, 27, 12, 34));
+    renderFilters({ dateRange: { start: '2026-07-20T12', end: '' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Date and time' }));
+
+    expect(screen.getByRole('button', { name: 'Last 7 days' }))
+      .toHaveAttribute('aria-pressed', 'true');
   });
 
   test('orders sections as requested and does not render a date calendar icon', async () => {

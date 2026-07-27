@@ -13,6 +13,7 @@ import {
     X,
 } from 'lucide-react';
 import { fetchFacet } from '../lib/api';
+import { getBrowserTimeZone, useDateTime } from '../lib/dateTime';
 import { useI18n } from '../lib/i18n';
 import {
     getSearchFacetSelection,
@@ -49,6 +50,7 @@ interface QuickFiltersProps {
     dateRange: SearchDateRange;
     onDateRangeChange: (range: SearchDateRange) => void;
     onClearAll: () => void;
+    lookbackHours?: number;
     simulation?: QuickFilterSimulation;
     getSelection?: (field: FacetField, selection: SearchFacetSelection) => SearchFacetSelection;
     formatValue?: (field: FacetField, value: string) => string;
@@ -70,6 +72,7 @@ export function QuickFilters({
     dateRange,
     onDateRangeChange,
     onClearAll,
+    lookbackHours = 168,
     simulation,
     getSelection,
     formatValue,
@@ -158,6 +161,7 @@ export function QuickFilters({
             searchAst={searchAst}
             dateRange={dateRange}
             onDateRangeChange={onDateRangeChange}
+            lookbackHours={lookbackHours}
             simulation={simulation}
             openFields={openFields}
             enabled={enabled && !busy}
@@ -267,6 +271,7 @@ function FacetGroups({
     searchAst,
     dateRange,
     onDateRangeChange,
+    lookbackHours = 168,
     simulation,
     openFields,
     enabled,
@@ -297,6 +302,7 @@ function FacetGroups({
                     searchAst,
                     dateRange,
                     onDateRangeChange,
+                    lookbackHours,
                     simulation,
                     openFields,
                     enabled,
@@ -326,6 +332,7 @@ function FacetGroups({
                             searchAst,
                             dateRange,
                             onDateRangeChange,
+                            lookbackHours,
                             simulation,
                             openFields,
                             enabled,
@@ -357,6 +364,7 @@ function FacetGroups({
                             searchAst,
                             dateRange,
                             onDateRangeChange,
+                            lookbackHours,
                             simulation,
                             openFields,
                             enabled,
@@ -380,6 +388,7 @@ interface FilterGroupRenderOptions {
     searchAst: QuickFiltersProps['searchAst'];
     dateRange: QuickFiltersProps['dateRange'];
     onDateRangeChange: QuickFiltersProps['onDateRangeChange'];
+    lookbackHours: number;
     simulation?: QuickFiltersProps['simulation'];
     openFields: FacetGroupsProps['openFields'];
     enabled: boolean;
@@ -405,6 +414,7 @@ function renderFilterGroups(
                     onToggle={() => options.onToggleField('date')}
                     range={options.dateRange}
                     onChange={options.onDateRangeChange}
+                    lookbackHours={options.lookbackHours}
                 />
             );
         }
@@ -563,6 +573,7 @@ interface DateTimeFilterGroupProps {
     onToggle: () => void;
     range: SearchDateRange;
     onChange: (range: SearchDateRange) => void;
+    lookbackHours: number;
 }
 
 function DateTimeFilterGroup({
@@ -570,11 +581,18 @@ function DateTimeFilterGroup({
     onToggle,
     range,
     onChange,
+    lookbackHours,
 }: DateTimeFilterGroupProps) {
-    const { t } = useI18n();
+    const { language, t } = useI18n();
+    const { timeZone } = useDateTime();
     const startValue = toDateTimeLocalValue(range.start);
     const endValue = toDateTimeLocalValue(range.end);
     const activeCount = Number(Boolean(range.start)) + Number(Boolean(range.end));
+    const presets = getDateTimePresets(
+        new Date(),
+        timeZone ?? getBrowserTimeZone(),
+        lookbackHours,
+    );
 
     return (
         <section className="py-1">
@@ -599,7 +617,41 @@ function DateTimeFilterGroup({
                 />
             </div>
             {open && (
-                <div className="space-y-3 px-2 pb-3">
+                <div className="space-y-4 px-2 pb-4">
+                    <fieldset>
+                        <legend className="mb-2 text-xs font-medium text-gray-600 dark:text-gray-300">
+                            {t('components.quickFilters.quickRanges')}
+                        </legend>
+                        <div className="grid grid-cols-2 gap-2">
+                            {presets.map((preset) => {
+                                const selected = toHourPrecision(range.start) === preset.start
+                                    && !range.end;
+                                return (
+                                    <button
+                                        key={preset.hours}
+                                        type="button"
+                                        aria-pressed={selected}
+                                        onClick={() => onChange({ start: preset.start, end: '' })}
+                                        className={`min-h-11 rounded-md border px-3 py-2 text-sm font-medium transition-colors ${
+                                            selected
+                                                ? 'border-primary-600 bg-primary-50 text-primary-700 dark:border-primary-400 dark:bg-primary-950/40 dark:text-primary-300'
+                                                : 'border-gray-300 bg-white text-gray-700 hover:border-primary-400 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-200 dark:hover:border-primary-500 dark:hover:bg-gray-700'
+                                        }`}
+                                    >
+                                        {formatDateTimePresetLabel(preset, language, t)}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </fieldset>
+                    <div
+                        className="flex items-center gap-3 text-xs font-medium text-gray-500 dark:text-gray-400"
+                        aria-hidden="true"
+                    >
+                        <span className="h-px flex-1 bg-gray-200 dark:bg-gray-700" />
+                        <span>{t('components.quickFilters.customRange')}</span>
+                        <span className="h-px flex-1 bg-gray-200 dark:bg-gray-700" />
+                    </div>
                     <label className="block text-xs font-medium text-gray-600 dark:text-gray-300">
                         <span className="mb-1 block">{t('components.quickFilters.from')}</span>
                         <input
@@ -611,7 +663,7 @@ function DateTimeFilterGroup({
                                 start: toHourPrecision(event.target.value),
                                 end: toHourPrecision(range.end),
                             })}
-                            className="min-h-11 w-full rounded-md border border-gray-300 bg-white px-2 text-sm outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900"
+                            className="min-h-11 min-w-0 w-full rounded-md border border-gray-300 bg-white px-2 text-base outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 sm:text-sm dark:border-gray-600 dark:bg-gray-900"
                         />
                     </label>
                     <label className="block text-xs font-medium text-gray-600 dark:text-gray-300">
@@ -625,13 +677,114 @@ function DateTimeFilterGroup({
                                 start: toHourPrecision(range.start),
                                 end: toHourPrecision(event.target.value),
                             })}
-                            className="min-h-11 w-full rounded-md border border-gray-300 bg-white px-2 text-sm outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900"
+                            className="min-h-11 min-w-0 w-full rounded-md border border-gray-300 bg-white px-2 text-base outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 sm:text-sm dark:border-gray-600 dark:bg-gray-900"
                         />
                     </label>
                 </div>
             )}
         </section>
     );
+}
+
+type DateTimePresetUnit = 'minute' | 'hour' | 'day';
+
+interface DateTimePreset {
+    hours: number;
+    preferredUnit?: DateTimePresetUnit;
+    start: string;
+}
+
+const DATE_TIME_PRESET_CANDIDATES = [
+    { hours: 1, preferredUnit: 'hour' },
+    { hours: 24, preferredUnit: 'hour' },
+    { hours: 48, preferredUnit: 'hour' },
+    { hours: 12, preferredUnit: 'hour' },
+    { hours: 6, preferredUnit: 'hour' },
+    { hours: 0.5, preferredUnit: 'minute' },
+    { hours: 0.25, preferredUnit: 'minute' },
+    { hours: 5 / 60, preferredUnit: 'minute' },
+    { hours: 1 / 60, preferredUnit: 'minute' },
+] as const;
+
+function getDateTimePresets(
+    now: Date,
+    timeZone: string | null,
+    configuredLookbackHours: number,
+): DateTimePreset[] {
+    const lookbackHours = Number.isFinite(configuredLookbackHours) && configuredLookbackHours > 0
+        ? configuredLookbackHours
+        : 168;
+    const shorterPresets: Array<{
+        hours: number;
+        preferredUnit?: DateTimePresetUnit;
+    }> = DATE_TIME_PRESET_CANDIDATES
+        .filter(({ hours }) => hours < lookbackHours)
+        .slice(0, 3)
+        .map((preset) => ({ ...preset }))
+        .sort((left, right) => left.hours - right.hours);
+    const durations = [...shorterPresets, { hours: lookbackHours }];
+
+    return durations.map(({ hours, preferredUnit }) => {
+        const start = new Date(now.getTime() - hours * 60 * 60 * 1000);
+        return { hours, preferredUnit, start: formatHour(start, timeZone) };
+    });
+}
+
+function formatDateTimePresetLabel(
+    preset: Pick<DateTimePreset, 'hours' | 'preferredUnit'>,
+    language: string,
+    t: ReturnType<typeof useI18n>['t'],
+): string {
+    const unit = preset.preferredUnit ?? getDateTimePresetUnit(preset.hours);
+    const rawCount = unit === 'minute'
+        ? preset.hours * 60
+        : unit === 'day'
+            ? preset.hours / 24
+            : preset.hours;
+    const count = Math.round(rawCount);
+    const formattedCount = new Intl.NumberFormat(language).format(count);
+    const singular = count === 1;
+    const key = unit === 'minute'
+        ? singular
+            ? 'components.quickFilters.lastMinute'
+            : 'components.quickFilters.lastMinutes'
+        : unit === 'day'
+            ? singular
+                ? 'components.quickFilters.lastDay'
+                : 'components.quickFilters.lastDays'
+            : singular
+                ? 'components.quickFilters.lastHour'
+                : 'components.quickFilters.lastHours';
+    return t(key, { count: formattedCount });
+}
+
+function getDateTimePresetUnit(hours: number): DateTimePresetUnit {
+    if (!Number.isInteger(hours)) return 'minute';
+    if (hours % 24 === 0) return 'day';
+    return 'hour';
+}
+
+function formatHour(value: Date, timeZone: string | null): string {
+    if (timeZone) {
+        const parts = new Intl.DateTimeFormat('en', {
+            timeZone,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            hourCycle: 'h23',
+        }).formatToParts(value);
+        const part = (type: Intl.DateTimeFormatPartTypes) => (
+            parts.find((candidate) => candidate.type === type)?.value ?? ''
+        );
+        return `${part('year')}-${part('month')}-${part('day')}T${part('hour')}:00`;
+    }
+
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, '0');
+    const day = String(value.getDate()).padStart(2, '0');
+    const hour = String(value.getHours()).padStart(2, '0');
+    return `${year}-${month}-${day}T${hour}:00`;
 }
 
 function toDateTimeLocalValue(value: string): string {
