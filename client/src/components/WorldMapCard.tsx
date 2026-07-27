@@ -238,6 +238,7 @@ interface WorldMapCardProps {
     onCountrySelect: (countryCode: string) => void;
     selectedCountry: string | null;
     simulationsEnabled?: boolean;
+    selectionDisabledReason?: string;
 }
 
 let geoFeaturesPromise: Promise<GeoFeature[]> | null = null;
@@ -313,6 +314,7 @@ export function WorldMapCard({
     onCountrySelect,
     selectedCountry,
     simulationsEnabled = false,
+    selectionDisabledReason,
 }: WorldMapCardProps) {
     const { language, t } = useI18n();
     const [geoFeatures, setGeoFeatures] = useState<GeoFeature[]>([]);
@@ -834,6 +836,11 @@ export function WorldMapCard({
     }, [selectedCountry, geoFeatures, isLoadingStats]);
 
     return (
+        <div
+            className="h-full"
+            aria-disabled={selectionDisabledReason ? 'true' : undefined}
+            title={selectionDisabledReason}
+        >
         <Card className="h-full flex flex-col overflow-hidden">
             <CardHeader className="flex items-center justify-between gap-4">
                 <CardTitle className="flex items-center gap-2">
@@ -864,7 +871,9 @@ export function WorldMapCard({
                 ) : (
                     <div
                         ref={containerRef}
-                        className={`w-full h-full absolute inset-0 world-map-container ${isFiltered ? 'country-filtered' : ''}`}
+                        className={`w-full h-full absolute inset-0 world-map-container ${
+                            isFiltered ? 'country-filtered' : ''
+                        } ${selectionDisabledReason ? 'country-selection-disabled' : ''}`}
                         onPointerMoveCapture={(event) => {
                             updateTooltipPosition(event.clientX, event.clientY);
                             updateHoveredAttackMarker(event.clientX, event.clientY);
@@ -880,6 +889,12 @@ export function WorldMapCard({
                             .world-map-container path:hover {
                                 filter: brightness(0.85);
                                 opacity: 1 !important;
+                            }
+                            .world-map-container.country-selection-disabled path {
+                                cursor: not-allowed;
+                            }
+                            .world-map-container.country-selection-disabled path:hover {
+                                filter: none;
                             }
                             /* Fallback styles if JS fails */
                             .world-map-container.country-filtered path {
@@ -996,6 +1011,7 @@ export function WorldMapCard({
                                                 borderWidth={0.5}
                                                 borderColor="#ffffff"
                                                 onClick={(feature) => {
+                                                    if (selectionDisabledReason) return;
                                                     const featureId = getFeatureCountryCode(feature);
                                                     if (featureId) {
                                                         onCountrySelect(featureId);
@@ -1035,6 +1051,7 @@ export function WorldMapCard({
                     </div>
                 )}
             </CardContent>
-        </Card >
+        </Card>
+        </div>
     );
 }

@@ -11,10 +11,13 @@ import { type PaginatedResponse, type SlimAlert } from '../../../types';
 import { QUICK_FILTERS_STORAGE_KEY } from '../../../lib/quickFilters';
 
 async function expandAlertSearch() {
-  const toggle = screen.getByRole('button', { name: 'Expand search' });
-  await userEvent.click(toggle);
+  const wasCollapsed = screen.queryByPlaceholderText('Filter alerts...') === null;
+  if (wasCollapsed) {
+    const toggle = screen.getByRole('button', { name: 'Expand search' });
+    await userEvent.click(toggle);
+  }
   const input = await screen.findByPlaceholderText('Filter alerts...');
-  expect(input).toHaveFocus();
+  if (wasCollapsed) expect(input).toHaveFocus();
   expect(screen.getByRole('button', { name: 'Search syntax help' })).toBeInTheDocument();
   const collapseButton = screen.getByRole('button', { name: 'Collapse search' });
   expect(collapseButton).toHaveAttribute('aria-expanded', 'true');
@@ -100,7 +103,7 @@ describe('Alerts page search and pagination', () => {
     fetchAlertsPaginatedMock.mockClear();
 
     render(
-      <MemoryRouter initialEntries={['/alerts?q=country:DE']}>
+      <MemoryRouter initialEntries={['/alerts?q=country%3DDE']}>
         <Alerts />
       </MemoryRouter>,
     );
@@ -115,35 +118,41 @@ describe('Alerts page search and pagination', () => {
     });
 
     await waitFor(() => expect(fetchAlertsPaginatedMock.mock.calls.at(-1)?.[2]?.q).toBe(
-      'country:DE AND date>=2026-03-24T10:00 AND date<=2026-03-24T12:00',
+      'country=DE AND date>=2026-03-24T10:00 AND date<=2026-03-24T12:00',
     ));
     await expandAlertSearch();
     expect(screen.getByPlaceholderText('Filter alerts...')).toHaveValue(
-      'country:DE AND date>=2026-03-24T10:00 AND date<=2026-03-24T12:00',
+      'country=DE AND date>=2026-03-24T10:00 AND date<=2026-03-24T12:00',
     );
   });
 
-  test('clears every quick filter at once while preserving free-text search', async () => {
-    const fetchAlertsPaginatedMock = vi.mocked(api.fetchAlertsPaginated);
-    fetchAlertsPaginatedMock.mockClear();
-
+  test('disables quick filters for an unsafe search and re-enables them after it is simplified', async () => {
     render(
-      <MemoryRouter initialEntries={['/alerts?q=ssh%20AND%20country:DE&dateStart=2026-03-24T10:00']}>
+      <MemoryRouter initialEntries={['/alerts?q=target%3Aabc']}>
         <Alerts />
       </MemoryRouter>,
     );
 
-    const filtersButton = await screen.findByRole('button', { name: 'Filters' });
-    expect(within(filtersButton).getByText('2')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Clear all filters' }));
+    const disabledFilters = await screen.findByRole('button', { name: /^Filters:/ });
+    expect(disabledFilters).toBeDisabled();
+    expect(screen.getByText(/Broad `:` matches cannot be edited safely/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Filter alerts...')).toBeInTheDocument();
+    expect(screen.getByText(/Broad `:` matches cannot be edited safely/).closest(
+      '[data-search-controls-footer="true"]',
+    )).not.toBeNull();
+    expect(
+      JSON.parse(localStorage.getItem(QUICK_FILTERS_STORAGE_KEY) || '{}').selections?.target,
+    ).toBeUndefined();
 
-    await waitFor(() => {
-      expect(fetchAlertsPaginatedMock.mock.calls.at(-1)?.[2]).toMatchObject({ q: 'ssh' });
-      expect(fetchAlertsPaginatedMock.mock.calls.at(-1)?.[2]?.dateStart).toBeUndefined();
-    });
-    expect(within(filtersButton).queryByText('2')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Clear all filters' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('dialog', { name: 'Quick filters' })).not.toBeInTheDocument();
+    const input = await expandAlertSearch();
+    fireEvent.change(input, { target: { value: 'target=abc' } });
+    await flushAlertSearchDebounce();
+
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeEnabled();
+    expect(screen.queryByText(/Broad `:` matches cannot be edited safely/)).not.toBeInTheDocument();
+    await waitFor(() => expect(
+      JSON.parse(localStorage.getItem(QUICK_FILTERS_STORAGE_KEY) || '{}').selections?.target,
+    ).toEqual({ included: ['abc'], excluded: [] }));
   });
 
   test('offers quick filters for every visible filterable alert column', async () => {
@@ -534,7 +543,7 @@ describe('Alerts page search and pagination', () => {
 
     await waitFor(() => expect(screen.getByText('Showing 1 of 1 alerts (3 total before filters)')).toBeInTheDocument());
     expect(screen.getByRole('columnheader', { name: 'IP / Range' })).toBeInTheDocument();
-    expect(screen.getByText('192.168.5.0/24')).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: '192.168.5.0/24' })).toBeInTheDocument();
     expect(screen.queryByText('1.2.3.4')).not.toBeInTheDocument();
   });
 

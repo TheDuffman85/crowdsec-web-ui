@@ -21,16 +21,17 @@ describe('Dashboard filters and drilldowns', () => {
 
     await screen.findByText('Top Countries');
     expect(screen.getByRole('button', { name: 'Filters' })).toHaveClass(
-      'h-[38px]',
-      'rounded-lg',
-      'border-gray-100',
-      'shadow-sm',
+      'min-h-11',
+      'rounded-md',
+      'border-gray-300',
     );
     const statisticsHeading = screen.getByRole('heading', { name: 'Last 7 Days Statistics' });
     const searchButton = screen.getByRole('button', { name: 'Expand search' });
     const filtersButton = screen.getByRole('button', { name: 'Filters' });
     const toolbar = statisticsHeading.parentElement?.parentElement;
-    expect(toolbar).toHaveClass('md:items-center');
+    expect(statisticsHeading.parentElement).toHaveClass('min-h-11', 'items-center');
+    expect(searchButton).toHaveClass('min-h-11');
+    expect(toolbar).toHaveClass('md:items-start');
     expect(toolbar?.parentElement).toHaveClass('space-y-2');
     expect(toolbar?.parentElement?.parentElement).toHaveClass('space-y-6');
     expect(toolbar).toContainElement(searchButton);
@@ -86,17 +87,64 @@ describe('Dashboard filters and drilldowns', () => {
 
     await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        q: 'country=DE',
-        decision_q: 'country=DE',
+        q: 'country:DE',
+        decision_q: 'country:DE',
       }),
       expect.any(Object),
     ));
-    expect(screen.getByPlaceholderText('Search')).toHaveValue('country=DE');
+    expect(screen.getByPlaceholderText('Search')).toHaveValue('country:DE');
 
     const alertsCard = screen.getByText('Total Alerts').closest('a');
     const decisionsCard = screen.getByText('Active Decisions').closest('a');
-    expect(alertsCard).toHaveAttribute('href', '/alerts?q=country%3DDE');
-    expect(decisionsCard).toHaveAttribute('href', '/decisions?q=country%3DDE');
+    expect(alertsCard).toHaveAttribute('href', '/alerts?q=country%3ADE');
+    expect(decisionsCard).toHaveAttribute('href', '/decisions?q=country%3ADE');
+  });
+
+  test('preserves a broad URL search instead of restoring its exact quick-filter form', async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(QUICK_FILTERS_STORAGE_KEY, JSON.stringify({
+      selections: {
+        target: { included: ['abc'], excluded: [] },
+      },
+      dateRange: { start: '', end: '' },
+      simulation: 'all',
+    }));
+
+    render(
+      <MemoryRouter initialEntries={['/?q=target%3Aabc']}>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Top Countries');
+
+    expect(screen.getByPlaceholderText('Search')).toHaveValue('target:abc');
+    expect(screen.getByRole('button', { name: /^Filters:/ })).toBeDisabled();
+    expect(screen.getByText(/Broad `:` matches cannot be edited safely/)).toBeInTheDocument();
+    expect(screen.getByText(/Broad `:` matches cannot be edited safely/).closest(
+      '[data-search-controls-footer="true"]',
+    )).not.toBeNull();
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        q: 'target:abc',
+        decision_q: 'target:abc',
+      }),
+      expect.any(Object),
+    ));
+
+    const input = screen.getByPlaceholderText('Search');
+    await user.clear(input);
+    await user.type(input, 'target=abc');
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Filters' })).toBeEnabled());
+    expect(screen.queryByText(/Broad `:` matches cannot be edited safely/)).not.toBeInTheDocument();
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        q: 'target=abc',
+        decision_q: 'target=abc',
+      }),
+      expect.any(Object),
+    ));
   });
 
   test('shows quick-filter selections in search and opens dashboard syntax help', async () => {

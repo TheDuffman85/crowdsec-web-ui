@@ -10,10 +10,13 @@ import { QUICK_FILTERS_STORAGE_KEY } from '../../../lib/quickFilters';
 import { type DecisionListItem, type PaginatedResponse } from '../../../types';
 
 async function expandDecisionSearch() {
-  const toggle = screen.getByRole('button', { name: 'Expand search' });
-  await userEvent.click(toggle);
+  const wasCollapsed = screen.queryByPlaceholderText('Filter decisions...') === null;
+  if (wasCollapsed) {
+    const toggle = screen.getByRole('button', { name: 'Expand search' });
+    await userEvent.click(toggle);
+  }
   const input = await screen.findByPlaceholderText('Filter decisions...');
-  expect(input).toHaveFocus();
+  if (wasCollapsed) expect(input).toHaveFocus();
   expect(screen.getByRole('button', { name: 'Search syntax help' })).toBeInTheDocument();
   const collapseButton = screen.getByRole('button', { name: 'Collapse search' });
   expect(collapseButton).toHaveAttribute('aria-expanded', 'true');
@@ -153,7 +156,7 @@ describe('Decisions page search and pagination', () => {
     fetchDecisionsPaginatedMock.mockClear();
 
     render(
-      <MemoryRouter initialEntries={['/decisions?q=action:ban']}>
+      <MemoryRouter initialEntries={['/decisions?q=action%3Dban']}>
         <Decisions />
       </MemoryRouter>,
     );
@@ -165,8 +168,27 @@ describe('Decisions page search and pagination', () => {
     });
 
     await waitFor(() => expect(fetchDecisionsPaginatedMock.mock.calls.at(-1)?.[2]?.q).toBe(
-      'action:ban AND date>=2026-03-24T10:00',
+      'action=ban AND date>=2026-03-24T10:00',
     ));
+  });
+
+  test('disables quick filters for unsafe Boolean logic and re-enables them after it is simplified', async () => {
+    render(
+      <MemoryRouter initialEntries={['/decisions?q=target%3Dssh%20OR%20country%3DDE']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('button', { name: /^Filters:/ })).toBeDisabled();
+    expect(screen.getByText(/Boolean expression cannot be represented/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Filter decisions...')).toBeInTheDocument();
+
+    const input = await expandDecisionSearch();
+    fireEvent.change(input, { target: { value: 'target=ssh AND country=DE' } });
+    await flushDecisionSearchDebounce();
+
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeEnabled();
+    expect(screen.queryByText(/Boolean expression cannot be represented/)).not.toBeInTheDocument();
   });
 
   test('offers quick filters for every visible decision column', async () => {

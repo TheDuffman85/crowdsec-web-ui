@@ -38,6 +38,7 @@ function renderFilters(
     lookbackHours?: number;
     sectionOrder?: QuickFilterSectionId[];
     hiddenSectionOrder?: QuickFilterSectionId[];
+    disabledReason?: string;
   } = {},
 ) {
   const onSelectionChange = options.onSelectionChange
@@ -64,6 +65,7 @@ function renderFilters(
         sectionOrder={options.sectionOrder}
         hiddenSectionOrder={options.hiddenSectionOrder}
         busy={options.busy}
+        disabledReason={options.disabledReason}
       />
     </I18nContext.Provider>,
   );
@@ -87,6 +89,19 @@ describe('QuickFilters', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
+  });
+
+  test('shows a clearly disabled trigger without exposing destructive clear actions', () => {
+    renderFilters({
+      selection: { included: ['DE'], excluded: [] },
+      disabledReason: 'Broad matches cannot be represented safely.',
+    });
+
+    const trigger = screen.getByRole('button', { name: /Filters: Broad matches/ });
+    expect(trigger).toBeDisabled();
+    expect(trigger).toHaveAttribute('title', 'Broad matches cannot be represented safely.');
+    expect(trigger.querySelector('.lucide-circle-alert')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Clear all filters' })).not.toBeInTheDocument();
   });
 
   test('places the simulation mode after Scenario and only renders it when configured', async () => {

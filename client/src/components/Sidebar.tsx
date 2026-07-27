@@ -15,6 +15,7 @@ import { Modal } from "./ui/Modal";
 import { DropdownSelect } from "./ui/DropdownSelect";
 import { InstanceIcon } from "./InstanceIcon";
 import type { ManualRefreshMode } from "../types";
+import { compileAlertSearch, compileDecisionSearch } from "../../../shared/search";
 
 type ThemeMode = 'light' | 'dark';
 const METRICS_SIDEBAR_PREFERENCE_EVENT = 'metrics-sidebar-preference-changed';
@@ -92,8 +93,38 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
         if (location.pathname === path) {
             return `${location.pathname}${location.search}${location.hash}`;
         }
-        if (!['/', '/alerts', '/decisions', '/metrics'].includes(path) || instances.length <= 1) return path;
-        return `${path}?instance=${encodeURIComponent(currentInstance)}`;
+        if (!['/', '/alerts', '/decisions', '/metrics'].includes(path)) return path;
+
+        const params = new URLSearchParams();
+        if (instances.length > 1) {
+            params.set('instance', currentInstance);
+        }
+
+        const currentQuery = new URLSearchParams(location.search).get('q');
+        const searchPages = ['/', '/alerts', '/decisions'];
+        const switchingSearchPage = (
+            searchPages.includes(location.pathname)
+            && searchPages.includes(path)
+        );
+        const destinationSupportsQuery = currentQuery && (
+            path === '/'
+                ? (
+                    compileAlertSearch(currentQuery, { machineEnabled: true, originEnabled: true }).ok
+                    && compileDecisionSearch(currentQuery, { machineEnabled: true, originEnabled: true }).ok
+                )
+                : path === '/alerts'
+                    ? compileAlertSearch(currentQuery, { machineEnabled: true, originEnabled: true }).ok
+                    : compileDecisionSearch(currentQuery, { machineEnabled: true, originEnabled: true }).ok
+        );
+        if (
+            currentQuery
+            && switchingSearchPage
+            && destinationSupportsQuery
+        ) {
+            params.set('q', currentQuery);
+        }
+
+        return params.size > 0 ? `${path}?${params.toString()}` : path;
     };
 
     const changeInstance = (instanceId: string) => {

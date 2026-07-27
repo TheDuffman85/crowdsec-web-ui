@@ -18,6 +18,7 @@ interface StatCardProps<TItem extends StatListItem> {
     renderLabel?: (item: TItem) => ReactNode;
     getExternalLink?: (item: TItem) => string | null;
     total?: number;
+    selectionDisabledReason?: string;
 }
 
 /**
@@ -33,7 +34,8 @@ export function StatCard<TItem extends StatListItem>({
     selectedValues = [],
     renderLabel, // Optional function to render custom label content
     getExternalLink,
-    total // Optional total count to calculate percentages against global total instead of visible items
+    total, // Optional total count to calculate percentages against global total instead of visible items
+    selectionDisabledReason,
 }: StatCardProps<TItem>) {
     const { t } = useI18n();
     const resolvedEmptyMessage = emptyMessage ?? t('common.noDataAvailable');
@@ -66,7 +68,7 @@ export function StatCard<TItem extends StatListItem>({
                             const percent = denominator > 0 ? (item.count / denominator * 100).toFixed(1) : '0.0';
 
                             const handleRowClick = () => {
-                                if (onSelect) {
+                                if (onSelect && !selectionDisabledReason) {
                                     onSelect(item);
                                 }
                             };
@@ -77,9 +79,13 @@ export function StatCard<TItem extends StatListItem>({
                                 <div
                                     key={idx}
                                     onClick={handleRowClick}
-                                    className={`flex items-center justify-between p-2 rounded-lg transition-colors cursor-pointer border ${isSelected
+                                    aria-disabled={selectionDisabledReason ? 'true' : undefined}
+                                    title={selectionDisabledReason}
+                                    className={`flex items-center justify-between p-2 rounded-lg transition-colors border ${
+                                        selectionDisabledReason ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'
+                                    } ${isSelected
                                         ? 'bg-primary-50 dark:bg-primary-900/40 border-primary-200 dark:border-primary-800'
-                                        : 'border-transparent hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                                        : `border-transparent ${selectionDisabledReason ? '' : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'}`
                                         }`}
                                 >
                                     <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">

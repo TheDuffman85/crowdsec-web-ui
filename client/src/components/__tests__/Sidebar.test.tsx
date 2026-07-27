@@ -268,6 +268,38 @@ describe('Sidebar', () => {
     expect(currentPageLinks.map((link) => link.getAttribute('href'))).toEqual([entry, entry]);
   });
 
+  test.each([
+    ['/alerts?q=target%3Aabc', 'Decisions', '/decisions?q=target%3Aabc'],
+    ['/decisions?q=target%3Aabc', 'Alerts', '/alerts?q=target%3Aabc'],
+    ['/alerts?q=target%3Aabc', 'Dashboard', '/?q=target%3Aabc'],
+    ['/?q=target%3Aabc', 'Alerts', '/alerts?q=target%3Aabc'],
+    ['/?q=target%3Aabc', 'Decisions', '/decisions?q=target%3Aabc'],
+  ])('preserves a compatible advanced search when switching from %s', async (entry, label, expectedHref) => {
+    vi.mocked(useNotificationUnreadCount).mockReturnValue({
+      unreadCount: 0,
+      setUnreadCount: vi.fn(),
+      refreshUnreadCount: vi.fn(),
+    });
+
+    renderSidebar(undefined, [entry]);
+
+    const destinationLinks = screen.getAllByRole('link', { name: label });
+    expect(destinationLinks.map((link) => link.getAttribute('href'))).toEqual([expectedHref, expectedHref]);
+  });
+
+  test('does not carry a page-specific advanced search to an incompatible page', async () => {
+    vi.mocked(useNotificationUnreadCount).mockReturnValue({
+      unreadCount: 0,
+      setUnreadCount: vi.fn(),
+      refreshUnreadCount: vi.fn(),
+    });
+
+    renderSidebar(undefined, ['/decisions?q=action%3Aban']);
+
+    const alertsLinks = screen.getAllByRole('link', { name: 'Alerts' });
+    expect(alertsLinks.map((link) => link.getAttribute('href'))).toEqual(['/alerts', '/alerts']);
+  });
+
   test('hides manual refresh controls when the feature is disabled', async () => {
     vi.mocked(useNotificationUnreadCount).mockReturnValue({
       unreadCount: 0,

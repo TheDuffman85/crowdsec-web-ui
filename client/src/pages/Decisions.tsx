@@ -9,7 +9,7 @@ import { HighlightedSearchInput } from "../components/HighlightedSearchInput";
 import { CollapsibleSearchControls } from "../components/CollapsibleSearchControls";
 import { SearchSyntaxModal } from "../components/SearchSyntaxModal";
 import { TableColumnsModal } from "../components/TableColumnsModal";
-import { QuickFilters, type QuickFilterDefinition, type QuickFilterSectionId } from "../components/QuickFilters";
+import { QuickFilterDisabledNotice, QuickFilters, type QuickFilterDefinition, type QuickFilterSectionId } from "../components/QuickFilters";
 import { CountryFlag } from "../components/CountryFlag";
 import { ScenarioName } from "../components/ScenarioName";
 import { TimeDisplay } from "../components/TimeDisplay";
@@ -37,6 +37,7 @@ import {
     type QuickFilterSimulationValue,
     type StoredQuickFilters,
 } from "../lib/quickFilters";
+import { getQuickFilterCompatibility } from "../lib/quickFilterCompatibility";
 import {
     compileDecisionSearch,
     getSearchDateRange,
@@ -265,6 +266,12 @@ export function Decisions() {
         ? debouncedSearchDraft.trim()
         : queryParam?.trim() ?? "";
     const queryError: SearchParseError | null = compiledSearch.ok ? null : compiledSearch.error;
+    const quickFilterCompatibility = compiledSearch.ok
+        ? getQuickFilterCompatibility(compiledSearch.ast, DECISION_QUICK_FILTER_FIELDS)
+        : { compatible: false as const, reason: 'syntax-error' as const };
+    const quickFilterDisabledReason = quickFilterCompatibility.compatible
+        ? undefined
+        : t(`components.quickFilters.disabled.${quickFilterCompatibility.reason}`);
     const updatePersistedQuickFilters = useCallback((
         update: (current: StoredQuickFilters) => StoredQuickFilters,
     ) => {
@@ -428,7 +435,7 @@ export function Decisions() {
     );
 
     useEffect(() => {
-        if (!compiledSearch.ok) return;
+        if (!compiledSearch.ok || !quickFilterCompatibility.compatible) return;
         const current = persistedQuickFiltersRef.current;
         const next = syncStoredQuickFiltersFromSearch(
             current,
@@ -439,7 +446,7 @@ export function Decisions() {
         if (storedQuickFiltersEqual(current, next)) return;
         persistedQuickFiltersRef.current = next;
         saveStoredQuickFilters(next);
-    }, [compiledSearch, quickFilterDateRange]);
+    }, [compiledSearch, quickFilterCompatibility.compatible, quickFilterDateRange]);
 
     const getFacetSelection = useCallback((
         field: FacetField,
@@ -1225,6 +1232,7 @@ export function Decisions() {
         getSearchValues: getFacetSearchValues,
         busy: tableBusy,
         refreshKey: facetRefreshKey,
+        disabledReason: quickFilterDisabledReason,
     };
 
     return (
@@ -1354,20 +1362,33 @@ export function Decisions() {
             )}
 
             <div className="space-y-2">
-                <div className="flex items-stretch gap-2">
+                <div className="flex items-start gap-2">
                     <button
                         type="button"
                         onClick={() => setShowColumnsModal(true)}
-                        className="inline-flex items-center justify-center rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-gray-600 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
+                        className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-gray-600 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
                         aria-label={t('components.tableColumns.chooseDecisionColumns')}
                         title={t('components.tableColumns.chooseColumns')}
                     >
                         <Columns3 size={18} />
                     </button>
-                    <div className="ml-auto flex min-w-0 flex-1 items-stretch justify-end gap-2">
+                    <div className="ml-auto flex min-w-0 flex-1 items-start justify-end gap-2">
                         <CollapsibleSearchControls
                             inputRef={searchInputRef}
                             onHelp={() => setShowSearchSyntaxModal(true)}
+                            forceExpanded={Boolean(quickFilterDisabledReason)}
+                            footer={(queryError || quickFilterDisabledReason) ? (
+                                <div className="space-y-1">
+                                    {queryError && (
+                                        <p id="decisions-search-error" className="text-xs text-red-600 dark:text-red-400">
+                                            {t('common.searchSyntaxError', { position: queryError.position + 1, message: queryError.message })}
+                                        </p>
+                                    )}
+                                    {quickFilterDisabledReason && (
+                                        <QuickFilterDisabledNotice reason={quickFilterDisabledReason} />
+                                    )}
+                                </div>
+                            ) : undefined}
                         >
                             <HighlightedSearchInput
                                 ref={searchInputRef}
@@ -1394,11 +1415,6 @@ export function Decisions() {
                         <QuickFilters {...quickFilterProps} />
                     </div>
                 </div>
-                {queryError && (
-                    <p id="decisions-search-error" className="text-xs text-red-600 dark:text-red-400">
-                        {t('common.searchSyntaxError', { position: queryError.position + 1, message: queryError.message })}
-                    </p>
-                )}
             </div>
 
 

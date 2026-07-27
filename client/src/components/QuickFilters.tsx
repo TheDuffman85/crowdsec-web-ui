@@ -7,6 +7,7 @@ import {
 import { createPortal } from 'react-dom';
 import {
     ChevronDown,
+    CircleAlert,
     Filter,
     RefreshCw,
     Search,
@@ -58,6 +59,7 @@ interface QuickFiltersProps {
     busy?: boolean;
     refreshKey?: number | string;
     triggerClassName?: string;
+    disabledReason?: string;
 }
 
 export function QuickFilters({
@@ -80,6 +82,7 @@ export function QuickFilters({
     busy = false,
     refreshKey = 0,
     triggerClassName,
+    disabledReason,
 }: QuickFiltersProps) {
     const { t } = useI18n();
     const [drawerOpen, setDrawerOpen] = useState(false);
@@ -87,7 +90,7 @@ export function QuickFilters({
     const triggerRef = useRef<HTMLButtonElement>(null);
     const drawerRef = useRef<HTMLDivElement>(null);
     const closeButtonRef = useRef<HTMLButtonElement>(null);
-    const enabled = drawerOpen;
+    const enabled = drawerOpen && !disabledReason;
     const activeCount = useMemo(() => fields.reduce((count, definition) => {
         const selection = getSelection?.(
             definition.field,
@@ -179,16 +182,21 @@ export function QuickFilters({
             ref={triggerRef}
             type="button"
             onClick={() => setDrawerOpen(true)}
-            className={`inline-flex items-center justify-center gap-2 border bg-white text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 ${
+            disabled={Boolean(disabledReason)}
+            title={disabledReason}
+            className={`inline-flex items-center justify-center gap-2 border bg-white text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:border-amber-300 disabled:bg-amber-50 disabled:text-amber-700 disabled:opacity-80 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 dark:disabled:border-amber-700 dark:disabled:bg-amber-950/30 dark:disabled:text-amber-300 ${
                 triggerClassName
                     ?? 'min-h-11 rounded-md border-gray-300 px-3 dark:border-gray-700'
             }`}
             aria-haspopup="dialog"
             aria-expanded={drawerOpen}
-            aria-label={t('components.quickFilters.filters')}
+            aria-label={disabledReason
+                ? `${t('components.quickFilters.filters')}: ${disabledReason}`
+                : t('components.quickFilters.filters')}
         >
             <Filter size={18} aria-hidden="true" />
-            {activeCount > 0 && (
+            {disabledReason && <CircleAlert size={16} aria-hidden="true" />}
+            {!disabledReason && activeCount > 0 && (
                 <>
                     <span className="min-w-5 rounded-full bg-primary-600 px-1.5 text-xs text-white">
                         {activeCount}
@@ -203,7 +211,7 @@ export function QuickFilters({
         <>
             <div className="relative inline-flex shrink-0">
                 {trigger}
-                {activeCount > 0 && (
+                {!disabledReason && activeCount > 0 && (
                     <button
                         type="button"
                         onClick={onClearAll}
@@ -252,6 +260,22 @@ export function QuickFilters({
                 document.body,
             )}
         </>
+    );
+}
+
+export function QuickFilterDisabledNotice({ reason }: { reason: string }) {
+    const { t } = useI18n();
+    return (
+        <p
+            role="status"
+            className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-300"
+        >
+            <CircleAlert className="mt-0.5 shrink-0" size={14} aria-hidden="true" />
+            <span>
+                <span className="font-semibold">{t('components.quickFilters.disabledTitle')}:</span>{' '}
+                {reason}
+            </span>
+        </p>
     );
 }
 
