@@ -471,6 +471,7 @@ describe('createApp refresh API', () => {
       );
       const pendingDashboard = (await pendingDashboardResponse.json()) as DashboardStatsResponse;
       expect(pendingDashboard.pending).toBe(true);
+      expect(pendingDashboard.stale).toBe(true);
       expect(pendingDashboard.totals.alerts).toBe(1);
 
       releaseDashboard();

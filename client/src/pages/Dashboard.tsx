@@ -461,6 +461,7 @@ export function Dashboard() {
     const { refreshSignal } = useRefresh();
     const [initialLoading, setInitialLoading] = useState(true);
     const [backgroundRefreshing, setBackgroundRefreshing] = useState(false);
+    const [dashboardStatsPending, setDashboardStatsPending] = useState(false);
     const [filterApplying, setFilterApplying] = useState(false);
     const [filterApplicationVersion, setFilterApplicationVersion] = useState(0);
     const [config, setConfig] = useState<ConfigResponse | null>(null);
@@ -699,7 +700,7 @@ export function Dashboard() {
             (inFlightLoad && !inFlightLoad.signal?.aborted) ||
             (lastCompletedLoad?.key === loadKey && Date.now() - lastCompletedLoad.completedAt < 250)
         )) {
-            if (isFilterApplication) {
+            if (filterApplyingRef.current) {
                 finishFilterApplication();
             }
             return;
@@ -716,7 +717,7 @@ export function Dashboard() {
         }
 
         let completedLoadWasPending = false;
-        let completedLoadHadCurrentStats = false;
+        let completedLoadHadRenderableStats = false;
         try {
             const [configData, dashboardStatsData] = await Promise.all([
                 fetchConfig(),
@@ -732,9 +733,15 @@ export function Dashboard() {
                 window.clearTimeout(pendingStatsRetryTimeoutRef.current);
                 pendingStatsRetryTimeoutRef.current = null;
             }
-            const hasCurrentStats = dashboardStatsRef.current !== null && dashboardStatsRef.current.pending !== true;
-            completedLoadHadCurrentStats = hasCurrentStats;
+            const hasCurrentStats = dashboardStatsRef.current !== null && (
+                dashboardStatsRef.current.pending !== true
+                || dashboardStatsRef.current.stale === true
+            );
+            const responseHasRenderableStats = dashboardStatsData.pending !== true
+                || dashboardStatsData.stale === true;
+            completedLoadHadRenderableStats = hasCurrentStats || responseHasRenderableStats;
             completedLoadWasPending = dashboardStatsData.pending === true;
+            setDashboardStatsPending(completedLoadWasPending);
             if (!dashboardStatsData.pending || !hasCurrentStats) {
                 dashboardStatsRef.current = dashboardStatsData;
                 const applyDashboardStats = () => {
@@ -760,6 +767,7 @@ export function Dashboard() {
             }
             console.error("Failed to load dashboard data", error);
             setConfigRequestFailed(true);
+            setDashboardStatsPending(false);
         } finally {
             if (inFlightLoadKeysRef.current.get(loadKey)?.requestId === requestId) {
                 inFlightLoadKeysRef.current.delete(loadKey);
@@ -768,14 +776,13 @@ export function Dashboard() {
                 lastCompletedLoadRef.current = { key: loadKey, completedAt: Date.now() };
             }
             if (!signal?.aborted) {
-                setInitialLoading(completedLoadWasPending && !completedLoadHadCurrentStats);
+                setInitialLoading(completedLoadWasPending && !completedLoadHadRenderableStats);
                 setBackgroundRefreshing(false);
             }
             if (
-                isFilterApplication &&
+                filterApplyingRef.current &&
                 requestId === nextLoadRequestIdRef.current &&
-                !signal?.aborted &&
-                !completedLoadWasPending
+                !signal?.aborted
             ) {
                 finishFilterApplication();
             }
@@ -1135,7 +1142,7 @@ export function Dashboard() {
     const selectedAsValues = getStoredQuickFilterSelection(persistedQuickFilters, 'as').included;
     const selectedTargetValues = getStoredQuickFilterSelection(persistedQuickFilters, 'target').included;
     const dashboardFacetFilters = buildDashboardStatsFilters();
-    const dashboardRefreshing = backgroundRefreshing || filterApplying;
+    const dashboardRefreshing = backgroundRefreshing || dashboardStatsPending || filterApplying;
 
     if (initialLoading) {
         return <div className="text-center p-8 text-gray-500">{t('common.loadingDashboard')}</div>;
@@ -1292,7 +1299,7 @@ export function Dashboard() {
                                 getSelection={getDashboardFacetSelection}
                                 formatValue={formatFacetValue}
                                 getSearchValues={getFacetSearchValues}
-                                busy={dashboardRefreshing}
+                                busy={filterApplying}
                                 refreshKey={refreshSignal}
                                 triggerClassName="h-[38px] box-border rounded-lg border-gray-100 px-3 py-1.5 shadow-sm dark:border-gray-700"
                             />

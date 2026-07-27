@@ -94,7 +94,7 @@ describe('Dashboard loading and refresh', () => {
     });
   });
 
-  test('prevents another filter change until the current filter has been applied', async () => {
+  test('prevents another filter change until the current filter request settles', async () => {
     const pendingLiveStats = createDeferred<ReturnType<typeof buildDashboardStatsResponse>>();
     fetchDashboardStatsMock.mockImplementation((filters?: Record<string, string>) => {
       if (filters?.simulation === 'live') {
@@ -140,6 +140,50 @@ describe('Dashboard loading and refresh', () => {
     ));
     await userEvent.click(screen.getByRole('checkbox', { name: 'Toggle Live in Mode' }));
 
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ simulation: 'simulated' }),
+      expect.any(Object),
+    ));
+  });
+
+  test('releases filter controls while matching dashboard statistics continue warming', async () => {
+    fetchDashboardStatsMock.mockImplementation(async (filters?: Record<string, string>) => {
+      if (filters?.simulation === 'live') {
+        return {
+          ...buildDashboardStatsResponse(),
+          pending: true,
+          retryAfterMs: 10_000,
+        };
+      }
+
+      return buildDashboardStatsResponse(filters);
+    });
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Total Alerts')).toBeInTheDocument());
+    fetchDashboardStatsMock.mockClear();
+
+    await openSimulationQuickFilter();
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Toggle Simulation in Mode' }));
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ simulation: 'live' }),
+      expect.any(Object),
+    ));
+
+    await waitFor(() => expect(
+      screen.getByRole('checkbox', { name: 'Toggle Live in Mode' }),
+    ).toBeEnabled());
+    expect(screen.getByText('Refreshing dashboard...')).toHaveClass('opacity-100');
+    expect(screen.getByText('Chart').closest('[aria-disabled="true"]')).toBeNull();
+    expect(screen.getByText('Top Countries').closest('[aria-disabled="true"]')).toBeNull();
+
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Toggle Simulation in Mode' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Toggle Live in Mode' }));
     await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
       expect.objectContaining({ simulation: 'simulated' }),
       expect.any(Object),
@@ -223,6 +267,26 @@ describe('Dashboard loading and refresh', () => {
     expect(setLastUpdatedMock).not.toHaveBeenCalled();
   });
 
+  test('renders stale dashboard statistics immediately while a remounted page waits for refresh', async () => {
+    fetchDashboardStatsMock.mockResolvedValueOnce({
+      ...buildDashboardStatsResponse(),
+      pending: true,
+      stale: true,
+      retryAfterMs: 10_000,
+    });
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    const alertsLabel = await screen.findByText('Total Alerts');
+    expect(screen.queryByText('Loading dashboard...')).not.toBeInTheDocument();
+    expect(within(alertsLabel.closest('a') as HTMLElement)
+      .getByRole('heading', { level: 3 })).toHaveTextContent('2');
+  });
+
   test('reloads dashboard totals for a cache refresh even inside the duplicate-request window', async () => {
     const { rerender } = render(
       <MemoryRouter>
@@ -292,7 +356,7 @@ describe('Dashboard loading and refresh', () => {
     );
 
     await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.getByText('Refreshing dashboard...')).toHaveClass('opacity-0'));
+    await waitFor(() => expect(screen.getByText('Refreshing dashboard...')).toHaveClass('opacity-100'));
     expect(chartSpy).toHaveBeenCalledTimes(chartRenderCount);
     expect(mapSpy).toHaveBeenCalledTimes(mapRenderCount);
   });

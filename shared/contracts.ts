@@ -388,6 +388,7 @@ export interface DashboardStatsSeries {
 
 export interface DashboardStatsResponse {
   pending?: boolean;
+  stale?: boolean;
   retryAfterMs?: number;
   totals: DashboardStatsTotals;
   filteredTotals: DashboardStatsTotals;

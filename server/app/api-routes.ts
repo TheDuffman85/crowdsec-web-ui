@@ -1063,6 +1063,7 @@ app.get(`${config.basePath}/api/dashboard/stats`, ensureAuth, ensurePublishedRev
         return context.json({
           ...staleResponse,
           pending: true,
+          stale: true,
           retryAfterMs: 1_500,
         });
       }
