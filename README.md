@@ -76,6 +76,9 @@ You need a running CrowdSec LAPI. Connect the Web UI using either watcher passwo
 ```bash
 openssl rand -hex 32
 docker exec crowdsec cscli machines add crowdsec-web-ui --password 'replace-with-generated-password' -f /dev/null
+
+# For local installations
+sudo cscli machines add crowdsec-web-ui --password 'replace-with-generated-password' -f /dev/null
 ```
 
 Replace `replace-with-generated-password` with the value printed by `openssl`.
@@ -96,8 +99,13 @@ services:
     container_name: crowdsec_web_ui
     ports:
       - "3000:3000"
+    # For local CrowdSec instances
+    # extra_hosts:
+      # - "host.docker.internal:host-gateway"
     environment:
       CONFIG_INSTANCE_LAPI_URL: http://crowdsec:8080
+      # For local CrowdSec instances
+      # CONFIG_INSTANCE_LAPI_URL: http://host.docker.internal:8080
       CONFIG_INSTANCE_LAPI_AUTH_USERNAME: crowdsec-web-ui
       CONFIG_INSTANCE_LAPI_AUTH_PASSWORD: your-crowdsec-password
     volumes:
