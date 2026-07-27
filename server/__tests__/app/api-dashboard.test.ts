@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import path from 'path';
 import type { AlertRecord, DashboardStatsResponse, PaginatedResponse, SlimAlert } from '../../../shared/contracts';
+import { parseDashboardBucketKey } from '../../app/dashboard-stats';
 import { CrowdsecDatabase } from '../../database';
 import { DatabaseQueryWorker, QueryWorkerTimeoutError } from '../../query-worker-client';
 import {
@@ -576,7 +577,7 @@ describe('createApp dashboard API', () => {
     }));
 
     const hourOne = await controller.fetch(new Request(
-      `http://localhost/crowdsec/api/dashboard/stats?granularity=hour&dateStart=${berlinHour}&dateEnd=${berlinHour}&tz_offset=720`,
+      `http://localhost/crowdsec/api/dashboard/stats?granularity=hour&dateStart=${berlinHour}&dateEnd=${berlinHour}&tz_offset=720&browser_tz=America%2FLos_Angeles`,
     ));
     expect(await hourOne.json()).toEqual(expect.objectContaining({
       filteredTotals: expect.objectContaining({ alerts: 1 }),
@@ -584,6 +585,73 @@ describe('createApp dashboard API', () => {
         alertsHistory: [expect.objectContaining({ date: berlinHour, count: 1 })],
       }),
     }));
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('keeps dashboard and alert counts aligned at a browser timezone day boundary', async () => {
+    const browserTimeZone = 'America/Los_Angeles';
+    const localDateParts = new Intl.DateTimeFormat('en', {
+      timeZone: browserTimeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date(Date.now() - 24 * 60 * 60 * 1_000));
+    const localDatePart = (type: Intl.DateTimeFormatPartTypes) => (
+      localDateParts.find((part) => part.type === type)?.value
+    );
+    const localDate = `${localDatePart('year')}-${localDatePart('month')}-${localDatePart('day')}`;
+    const dayStart = parseDashboardBucketKey(localDate, 0, browserTimeZone).getTime();
+    const insideDay = new Date(dayStart + 60 * 60 * 1_000).toISOString();
+    const outsideDay = new Date(dayStart - 60 * 60 * 1_000).toISOString();
+    const alerts = [
+      sampleAlert({
+        id: 1901,
+        uuid: 'browser-timezone-inside-day',
+        created_at: insideDay,
+        decisions: [],
+      }),
+      sampleAlert({
+        id: 1902,
+        uuid: 'browser-timezone-outside-day',
+        created_at: outsideDay,
+        decisions: [],
+      }),
+    ];
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_LOOKBACK_PERIOD: '168h',
+      },
+      initialCacheState: {
+        isInitialized: true,
+        isComplete: true,
+        lastUpdate: new Date().toISOString(),
+      },
+    });
+    alerts.forEach((alert) => seedAlert(database, alert));
+    const filters = new URLSearchParams({
+      dateStart: localDate,
+      dateEnd: localDate,
+      tz_offset: '0',
+      browser_tz: browserTimeZone,
+    });
+
+    const dashboardResponse = await controller.fetch(new Request(
+      `http://localhost/crowdsec/api/dashboard/stats?${filters.toString()}`,
+    ));
+    const dashboard = await dashboardResponse.json() as DashboardStatsResponse;
+    filters.set('page', '1');
+    filters.set('page_size', '10');
+    const alertsResponse = await controller.fetch(new Request(
+      `http://localhost/crowdsec/api/alerts?${filters.toString()}`,
+    ));
+    const alertPage = await alertsResponse.json() as PaginatedResponse<SlimAlert>;
+
+    expect(dashboard.filteredTotals.alerts).toBe(1);
+    expect(alertPage.pagination.total).toBe(dashboard.filteredTotals.alerts);
+    expect(alertPage.data.map((alert) => alert.id)).toEqual([1901]);
 
     controller.stopBackgroundTasks();
     database.close();

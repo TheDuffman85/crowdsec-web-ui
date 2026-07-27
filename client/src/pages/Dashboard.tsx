@@ -27,7 +27,7 @@ import type {
     SimulationFilter,
 } from '../types';
 import { useI18n } from "../lib/i18n";
-import { useDateTime } from "../lib/dateTime";
+import { getBrowserTimeZone, useDateTime } from "../lib/dateTime";
 import {
     ALERT_QUICK_FILTER_FIELDS,
     DECISION_QUICK_FILTER_FIELDS,
@@ -863,6 +863,8 @@ export function Dashboard() {
             tz_offset: String(new Date().getTimezoneOffset()),
             instance: searchParams.get('instance') || 'all',
         };
+        const browserTimeZone = getBrowserTimeZone();
+        if (browserTimeZone) requestFilters.browser_tz = browserTimeZone;
 
         if (filters.country) requestFilters.country = filters.country;
         if (filters.scenario) requestFilters.scenario = filters.scenario;

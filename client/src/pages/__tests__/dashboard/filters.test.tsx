@@ -12,6 +12,25 @@ async function openSimulationQuickFilter() {
 }
 
 describe('Dashboard filters and drilldowns', () => {
+  test('sends the browser timezone with dashboard filters', async () => {
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Top Countries');
+    const browserTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    expect(browserTimeZone).toBeTruthy();
+    expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        browser_tz: browserTimeZone,
+        tz_offset: String(new Date().getTimezoneOffset()),
+      }),
+      expect.any(Object),
+    );
+  });
+
   test('replaces the three drilldown controls with the shared quick-filter trigger', async () => {
     render(
       <MemoryRouter>
