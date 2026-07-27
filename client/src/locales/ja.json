@@ -94,7 +94,7 @@
   "components.quickFilters.status": "ステータス",
   "components.quickFilters.disabledTitle": "クイックフィルターは利用できません",
   "components.quickFilters.disabled.syntax-error": "高度な検索の構文エラーを修正すると、再び有効になります。",
-  "components.quickFilters.disabled.broad-match": "`:` を使った部分一致は安全に編集できません。`=` または `<>` を使った完全一致に置き換えるか、高度な検索をクリアしてください。",
+  "components.quickFilters.disabled.broad-match": "`:` 演算子による部分一致はクイックフィルターでは利用できません。完全一致には `=` または `<>` を使用するか、検索をクリアしてください。",
   "components.quickFilters.disabled.free-text": "自由入力テキストやフレーズはクイックフィルターで表現できません。削除するか、高度な検索をクリアしてください。",
   "components.quickFilters.disabled.strict-date": "`<` と `>` を使った厳密な日付比較は表現できません。`<=` または `>=` を使うか、高度な検索をクリアしてください。",
   "components.quickFilters.disabled.unsupported-field": "クイックフィルターで利用できないフィールドが検索に含まれています。その条件を削除するか、高度な検索をクリアしてください。",

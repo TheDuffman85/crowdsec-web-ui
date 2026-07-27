@@ -100,6 +100,34 @@ describe('Dashboard filters and drilldowns', () => {
     expect(decisionsCard).toHaveAttribute('href', '/decisions?q=country%3ADE');
   });
 
+  test('preserves the query order while a dashboard search is being typed', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Top Countries');
+    await user.click(screen.getByRole('button', { name: 'Expand search' }));
+    const input = screen.getByPlaceholderText('Search');
+    const query = 'date>=2026-07-27T00:00 AND target=tausend ';
+
+    await user.type(input, query);
+
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dateStart: '2026-07-27T00:00',
+        q: 'target=tausend',
+        decision_q: 'target=tausend',
+      }),
+      expect.any(Object),
+    ));
+    expect(input).toHaveValue(query);
+    expect(input).toHaveFocus();
+    expect(input).toHaveProperty('selectionStart', query.length);
+  });
+
   test('preserves a broad URL search instead of restoring its exact quick-filter form', async () => {
     const user = userEvent.setup();
     localStorage.setItem(QUICK_FILTERS_STORAGE_KEY, JSON.stringify({
@@ -120,8 +148,8 @@ describe('Dashboard filters and drilldowns', () => {
 
     expect(screen.getByPlaceholderText('Search')).toHaveValue('target:abc');
     expect(screen.getByRole('button', { name: /^Filters:/ })).toBeDisabled();
-    expect(screen.getByText(/Broad `:` matches cannot be edited safely/)).toBeInTheDocument();
-    expect(screen.getByText(/Broad `:` matches cannot be edited safely/).closest(
+    expect(screen.getByText(/The `:` operator performs a broad match/)).toBeInTheDocument();
+    expect(screen.getByText(/The `:` operator performs a broad match/).closest(
       '[data-search-controls-footer="true"]',
     )).not.toBeNull();
     await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
@@ -137,7 +165,7 @@ describe('Dashboard filters and drilldowns', () => {
     await user.type(input, 'target=abc');
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Filters' })).toBeEnabled());
-    expect(screen.queryByText(/Broad `:` matches cannot be edited safely/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/The `:` operator performs a broad match/)).not.toBeInTheDocument();
     await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         q: 'target=abc',

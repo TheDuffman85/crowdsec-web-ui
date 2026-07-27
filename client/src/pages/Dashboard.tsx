@@ -810,16 +810,17 @@ export function Dashboard() {
             }
             dashboardSearchEditedByUserRef.current = false;
             const nextCustomSearch = stripDashboardQuickFilters(compiled.ast);
-            const nextQuery = combineDashboardSearchQuery(
-                serializeSearchNode(buildDashboardVisibleSearchAst(nextFilters)),
-                nextCustomSearch,
-            );
-            updateDashboardCustomSearch(nextCustomSearch);
+            dashboardCustomSearchRef.current = nextCustomSearch;
+            setDashboardCustomSearch(nextCustomSearch);
             setSimulationFilter(nextFilters.simulation);
             setQuickFiltersAppliedCompatible(true);
-            updatePersistedQuickFilters(() => nextFilters);
+            if (!storedQuickFiltersEqual(persistedQuickFiltersRef.current, nextFilters)) {
+                persistedQuickFiltersRef.current = nextFilters;
+                saveStoredQuickFilters(nextFilters);
+                setPersistedQuickFilters(nextFilters);
+            }
             const nextParams = new URLSearchParams(searchParams);
-            if (nextQuery) nextParams.set('q', nextQuery);
+            if (dashboardSearchDraft) nextParams.set('q', dashboardSearchDraft);
             else nextParams.delete('q');
             if (nextParams.toString() !== searchParams.toString()) {
                 setSearchParams(nextParams, { replace: true });
@@ -831,8 +832,6 @@ export function Dashboard() {
         dashboardSearchError,
         searchParams,
         setSearchParams,
-        updateDashboardCustomSearch,
-        updatePersistedQuickFilters,
     ]);
 
     // Handler to change granularity and clear date range simultaneously (explicit user action)

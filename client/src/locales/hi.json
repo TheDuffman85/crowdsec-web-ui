@@ -94,7 +94,7 @@
   "components.quickFilters.status": "स्थिति",
   "components.quickFilters.disabledTitle": "त्वरित फ़िल्टर उपलब्ध नहीं हैं",
   "components.quickFilters.disabled.syntax-error": "इन्हें फिर से सक्षम करने के लिए उन्नत खोज की सिंटैक्स त्रुटि ठीक करें।",
-  "components.quickFilters.disabled.broad-match": "`:` वाले व्यापक मिलान सुरक्षित रूप से संपादित नहीं किए जा सकते। उन्हें `=` या `<>` वाले सटीक मिलान से बदलें, या उन्नत खोज साफ़ करें।",
+  "components.quickFilters.disabled.broad-match": "`:` ऑपरेटर व्यापक मिलान करता है, जो त्वरित फ़िल्टर में उपलब्ध नहीं है। सटीक तुलना के लिए `=` या `<>` का उपयोग करें, या खोज साफ़ करें।",
   "components.quickFilters.disabled.free-text": "मुक्त पाठ और वाक्यांशों को त्वरित फ़िल्टर के रूप में नहीं दिखाया जा सकता। उन्हें हटाएँ या उन्नत खोज साफ़ करें।",
   "components.quickFilters.disabled.strict-date": "`<` और `>` वाली सख्त दिनांक तुलनाएँ नहीं दिखाई जा सकतीं। `<=` या `>=` का उपयोग करें, या उन्नत खोज साफ़ करें।",
   "components.quickFilters.disabled.unsupported-field": "खोज में ऐसा फ़ील्ड है जो त्वरित फ़िल्टर के रूप में उपलब्ध नहीं है। उस शर्त को हटाएँ या उन्नत खोज साफ़ करें।",

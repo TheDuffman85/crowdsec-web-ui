@@ -94,7 +94,7 @@
   "components.quickFilters.status": "Status",
   "components.quickFilters.disabledTitle": "Quick filters unavailable",
   "components.quickFilters.disabled.syntax-error": "Fix the advanced-search syntax error to enable them again.",
-  "components.quickFilters.disabled.broad-match": "Broad `:` matches cannot be edited safely. Replace them with exact `=` or `<>` comparisons, or clear the advanced search.",
+  "components.quickFilters.disabled.broad-match": "The `:` operator performs a broad match, which is not available in Quick Filters. Use `=` or `<>` for an exact comparison, or clear the search.",
   "components.quickFilters.disabled.free-text": "Free text and phrases cannot be represented as Quick Filters. Remove them or clear the advanced search.",
   "components.quickFilters.disabled.strict-date": "Strict `<` and `>` date comparisons cannot be represented. Use `<=` or `>=`, or clear the advanced search.",
   "components.quickFilters.disabled.unsupported-field": "The search uses a field that is not available as a Quick Filter. Remove that clause or clear the advanced search.",

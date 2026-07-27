@@ -135,9 +135,9 @@ describe('Alerts page search and pagination', () => {
 
     const disabledFilters = await screen.findByRole('button', { name: /^Filters:/ });
     expect(disabledFilters).toBeDisabled();
-    expect(screen.getByText(/Broad `:` matches cannot be edited safely/)).toBeInTheDocument();
+    expect(screen.getByText(/The `:` operator performs a broad match/)).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Filter alerts...')).toBeInTheDocument();
-    expect(screen.getByText(/Broad `:` matches cannot be edited safely/).closest(
+    expect(screen.getByText(/The `:` operator performs a broad match/).closest(
       '[data-search-controls-footer="true"]',
     )).not.toBeNull();
     expect(
@@ -149,7 +149,7 @@ describe('Alerts page search and pagination', () => {
     await flushAlertSearchDebounce();
 
     expect(screen.getByRole('button', { name: 'Filters' })).toBeEnabled();
-    expect(screen.queryByText(/Broad `:` matches cannot be edited safely/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/The `:` operator performs a broad match/)).not.toBeInTheDocument();
     await waitFor(() => expect(
       JSON.parse(localStorage.getItem(QUICK_FILTERS_STORAGE_KEY) || '{}').selections?.target,
     ).toEqual({ included: ['abc'], excluded: [] }));

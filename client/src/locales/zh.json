@@ -94,7 +94,7 @@
   "components.quickFilters.status": "状态",
   "components.quickFilters.disabledTitle": "快速筛选不可用",
   "components.quickFilters.disabled.syntax-error": "修复高级搜索中的语法错误即可重新启用快速筛选。",
-  "components.quickFilters.disabled.broad-match": "无法安全编辑使用 `:` 的宽泛匹配。请改用 `=` 或 `<>` 精确比较，或清除高级搜索。",
+  "components.quickFilters.disabled.broad-match": "`:` 运算符执行宽泛匹配，而快速筛选不支持这种匹配。请使用 `=` 或 `<>` 进行精确比较，或清除搜索。",
   "components.quickFilters.disabled.free-text": "自由文本和短语无法表示为快速筛选。请移除它们或清除高级搜索。",
   "components.quickFilters.disabled.strict-date": "无法表示使用 `<` 和 `>` 的严格日期比较。请使用 `<=` 或 `>=`，或清除高级搜索。",
   "components.quickFilters.disabled.unsupported-field": "搜索使用了快速筛选不支持的字段。请移除该条件或清除高级搜索。",

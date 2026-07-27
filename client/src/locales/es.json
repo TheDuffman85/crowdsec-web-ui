@@ -94,7 +94,7 @@
   "components.quickFilters.status": "Estado",
   "components.quickFilters.disabledTitle": "Filtros rápidos no disponibles",
   "components.quickFilters.disabled.syntax-error": "Corrige el error de sintaxis de la búsqueda avanzada para volver a activarlos.",
-  "components.quickFilters.disabled.broad-match": "Las coincidencias amplias con `:` no se pueden editar de forma segura. Sustitúyelas por comparaciones exactas con `=` o `<>`, o borra la búsqueda avanzada.",
+  "components.quickFilters.disabled.broad-match": "El operador `:` realiza una coincidencia amplia, que no está disponible en los filtros rápidos. Usa `=` o `<>` para una comparación exacta, o borra la búsqueda.",
   "components.quickFilters.disabled.free-text": "El texto libre y las frases no se pueden representar como filtros rápidos. Elimínalos o borra la búsqueda avanzada.",
   "components.quickFilters.disabled.strict-date": "Las comparaciones estrictas de fecha con `<` y `>` no se pueden representar. Usa `<=` o `>=`, o borra la búsqueda avanzada.",
   "components.quickFilters.disabled.unsupported-field": "La búsqueda usa un campo que no está disponible como filtro rápido. Elimina esa condición o borra la búsqueda avanzada.",
