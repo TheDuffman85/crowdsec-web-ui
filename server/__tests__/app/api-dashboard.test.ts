@@ -368,8 +368,16 @@ describe('createApp dashboard API', () => {
       ))).toBe(true);
 
       await new Promise((resolve) => setTimeout(resolve, 1_100));
-      const secondResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats'));
-      expect((await secondResponse.json()) as {
+      let secondResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats'));
+      let secondDashboard = (await secondResponse.json()) as DashboardStatsResponse;
+      if (secondDashboard.pending) {
+        await vi.waitFor(async () => {
+          secondResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats'));
+          secondDashboard = (await secondResponse.json()) as DashboardStatsResponse;
+          expect(secondDashboard.pending).not.toBe(true);
+        });
+      }
+      expect(secondDashboard as {
         totals: { decisions: number };
         filteredTotals: { decisions: number };
       }).toEqual(

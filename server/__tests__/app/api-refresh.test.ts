@@ -168,7 +168,7 @@ describe('createApp refresh API', () => {
     expect(fetchCalls.some((call) => call.url.includes('/v1/alerts?'))).toBe(true);
   });
 
-  test('publishes one revision only after dashboard, alert, and decision views agree', async () => {
+  test('publishes the committed revision while dashboard analytics warm in the background', async () => {
     const initialAlert = sampleAlert({
       id: 901,
       uuid: 'refresh-consistency-901',
@@ -236,11 +236,18 @@ describe('createApp refresh API', () => {
         controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=10&include_decisions=false')),
         controller.fetch(new Request('http://localhost/crowdsec/api/decisions?page=1&page_size=10')),
       ]);
-      const dashboard = (await dashboardResponse.json()) as DashboardStatsResponse;
+      let dashboard = (await dashboardResponse.json()) as DashboardStatsResponse;
       const alerts = (await alertsResponse.json()) as PaginatedResponse<SlimAlert>;
       const decisions = (await decisionsResponse.json()) as PaginatedResponse<{ id: string | number }>;
 
-      expect(dashboard.pending).toBeUndefined();
+      if (dashboard.pending) {
+        expect(dashboard.totals.alerts).toBe(1);
+        await vi.waitFor(async () => {
+          const response = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats'));
+          dashboard = (await response.json()) as DashboardStatsResponse;
+          expect(dashboard.pending).not.toBe(true);
+        });
+      }
       expect(dashboard.totals.alerts).toBe(alerts.pagination.total);
       expect(dashboard.filteredTotals.alerts).toBe(alerts.pagination.total);
       expect(
@@ -352,7 +359,7 @@ describe('createApp refresh API', () => {
     }
   });
 
-  test('holds page reads after commit until the matching dashboard revision is ready', async () => {
+  test('releases page reads after commit while the matching dashboard revision warms', async () => {
     const initialAlert = sampleAlert({
       id: 931,
       uuid: 'publication-barrier-931',
@@ -382,7 +389,8 @@ describe('createApp refresh API', () => {
     const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
     seedAlert(database, initialAlert);
     const queryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath });
-    const realAll = queryWorker.all.bind(queryWorker);
+    const analyticsQueryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath, maxWorkers: 1 });
+    const realAll = analyticsQueryWorker.all.bind(analyticsQueryWorker);
     let holdDashboardIndex = false;
     let dashboardIndexHeld = false;
     let releaseDashboard!: () => void;
@@ -393,11 +401,10 @@ describe('createApp refresh API', () => {
     const dashboardBuildStarted = new Promise<void>((resolve) => {
       dashboardBuildReached = resolve;
     });
-    vi.spyOn(queryWorker, 'all').mockImplementation(async (sql, params, options) => {
+    vi.spyOn(analyticsQueryWorker, 'all').mockImplementation(async (sql, params, options) => {
       if (
         holdDashboardIndex
         && !dashboardIndexHeld
-        && options?.label === 'dashboard alert index'
       ) {
         dashboardIndexHeld = true;
         dashboardBuildReached();
@@ -408,6 +415,7 @@ describe('createApp refresh API', () => {
     const { controller, lapiClient } = createController({
       database,
       queryWorker,
+      analyticsQueryWorker,
       initialCacheState: {
         isInitialized: true,
         isComplete: true,
@@ -431,31 +439,41 @@ describe('createApp refresh API', () => {
       }));
       await dashboardBuildStarted;
 
-      let readsSettled = false;
+      const completedRefresh = await Promise.race([
+        refreshPromise,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 500)),
+      ]);
+      if (!completedRefresh) {
+        releaseDashboard();
+        await refreshPromise;
+        throw new Error('Refresh response remained blocked by dashboard preparation');
+      }
+      expect(completedRefresh.status).toBe(200);
+
       const readsPromise = Promise.all([
-        controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats')),
         controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=10&include_decisions=false')),
         controller.fetch(new Request('http://localhost/crowdsec/api/decisions?page=1&page_size=10')),
-      ]).finally(() => {
-        readsSettled = true;
-      });
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(readsSettled).toBe(false);
+      ]).then(async ([alertsResponse, decisionsResponse]) => ({
+        alerts: (await alertsResponse.json()) as PaginatedResponse<SlimAlert>,
+        decisions: (await decisionsResponse.json()) as PaginatedResponse<{ id: string | number }>,
+      }));
+      const pendingReads = await Promise.race([
+        readsPromise,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 500)),
+      ]);
+      expect(pendingReads).not.toBeNull();
+      if (!pendingReads) throw new Error('Page reads remained blocked by dashboard preparation');
+      expect(pendingReads.alerts.pagination.total).toBe(2);
+      expect(pendingReads.decisions.pagination.total).toBe(2);
+
+      const pendingDashboardResponse = await controller.fetch(
+        new Request('http://localhost/crowdsec/api/dashboard/stats'),
+      );
+      const pendingDashboard = (await pendingDashboardResponse.json()) as DashboardStatsResponse;
+      expect(pendingDashboard.pending).toBe(true);
+      expect(pendingDashboard.totals.alerts).toBe(1);
 
       releaseDashboard();
-      expect((await refreshPromise).status).toBe(200);
-      const [dashboardResponse, alertsResponse, decisionsResponse] = await readsPromise;
-      const dashboard = (await dashboardResponse.json()) as DashboardStatsResponse;
-      const alerts = (await alertsResponse.json()) as PaginatedResponse<SlimAlert>;
-      const decisions = (await decisionsResponse.json()) as PaginatedResponse<{ id: string | number }>;
-
-      expect(dashboard.totals.alerts).toBe(2);
-      expect(alerts.pagination.total).toBe(2);
-      expect(decisions.pagination.total).toBe(2);
-      expect(dashboard.filteredTotals.alerts).toBe(alerts.pagination.total);
-      expect(
-        dashboard.filteredTotals.decisions + dashboard.filteredTotals.simulatedDecisions,
-      ).toBe(decisions.pagination.total);
     } finally {
       releaseDashboard();
       controller.stopBackgroundTasks();

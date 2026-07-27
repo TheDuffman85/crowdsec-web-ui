@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, useMemo, useCallback, useRef } from "react";
+import { lazy, memo, startTransition, Suspense, useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { fetchDashboardStats, fetchConfig } from "../lib/api";
@@ -103,8 +103,8 @@ interface InFlightDashboardLoad {
     signal?: AbortSignal;
 }
 
-const ActivityBarChart = lazy(async () => ({ default: (await import('../components/DashboardCharts')).ActivityBarChart }));
-const WorldMapCard = lazy(async () => ({ default: (await import('../components/WorldMapCard')).WorldMapCard }));
+const ActivityBarChart = memo(lazy(async () => ({ default: (await import('../components/DashboardCharts')).ActivityBarChart })));
+const WorldMapCard = memo(lazy(async () => ({ default: (await import('../components/WorldMapCard')).WorldMapCard })));
 
 const EMPTY_FILTERS: DashboardFilters = {
     dateRange: null,
@@ -147,6 +147,17 @@ const EMPTY_DASHBOARD_STATS: DashboardStatsResponse = {
         unfilteredSimulatedDecisionsHistory: [],
     },
 };
+
+function dashboardConfigMatches(
+    current: ConfigResponse | null,
+    next: ConfigResponse,
+): boolean {
+    if (!current) return false;
+    return current.lookback_days === next.lookback_days
+        && current.simulations_enabled === next.simulations_enabled
+        && JSON.stringify(current.lapi_status) === JSON.stringify(next.lapi_status)
+        && JSON.stringify(current.instances || []) === JSON.stringify(next.instances || []);
+}
 
 function parseStoredGranularity(value: string | null): Granularity {
     return value === 'hour' ? 'hour' : 'day';
@@ -617,7 +628,7 @@ export function Dashboard() {
     ]);
 
     // Handler to change granularity and clear date range simultaneously (explicit user action)
-    const handleGranularityChange = (newGranularity: Granularity) => {
+    const handleGranularityChange = useCallback((newGranularity: Granularity) => {
         if (newGranularity === granularity && filters.dateRange === null) {
             return;
         }
@@ -630,7 +641,12 @@ export function Dashboard() {
                 dateRange: { start: '', end: '' },
             }));
         });
-    };
+    }, [
+        filters.dateRange,
+        granularity,
+        startFilterApplication,
+        updatePersistedQuickFilters,
+    ]);
 
     const buildDashboardStatsFilters = useCallback((): Record<string, string> => {
         const requestFilters: Record<string, string> = {
@@ -710,7 +726,7 @@ export function Dashboard() {
                 return;
             }
 
-            setConfig(configData);
+            setConfig((current) => dashboardConfigMatches(current, configData) ? current : configData);
             setConfigRequestFailed(false);
             if (pendingStatsRetryTimeoutRef.current !== null) {
                 window.clearTimeout(pendingStatsRetryTimeoutRef.current);
@@ -721,8 +737,15 @@ export function Dashboard() {
             completedLoadWasPending = dashboardStatsData.pending === true;
             if (!dashboardStatsData.pending || !hasCurrentStats) {
                 dashboardStatsRef.current = dashboardStatsData;
-                setDashboardStats(dashboardStatsData);
-                setDashboardStatsLoadKey(loadKey);
+                const applyDashboardStats = () => {
+                    setDashboardStats(dashboardStatsData);
+                    setDashboardStatsLoadKey(loadKey);
+                };
+                if (isBackground && !isFilterApplication && hasCurrentStats) {
+                    startTransition(applyDashboardStats);
+                } else {
+                    applyDashboardStats();
+                }
             }
             if (dashboardStatsData.pending) {
                 pendingStatsRetryTimeoutRef.current = window.setTimeout(() => {
@@ -881,7 +904,7 @@ export function Dashboard() {
     
 
     // Handle Filters
-    const toggleFilter = (type: FilterKey, value: string | null | undefined) => {
+    const toggleFilter = useCallback((type: FilterKey, value: string | null | undefined) => {
         if (!value || filterApplyingRef.current) {
             return;
         }
@@ -898,7 +921,10 @@ export function Dashboard() {
                 });
             });
         });
-    };
+    }, [startFilterApplication, updatePersistedQuickFilters]);
+    const handleCountrySelect = useCallback((code: string) => {
+        toggleFilter('country', code);
+    }, [toggleFilter]);
 
     const clearFilters = () => {
         const hasStoredFilters = Object.values(
@@ -1329,7 +1355,7 @@ export function Dashboard() {
                             <WorldMapCard
                                 data={statistics.allCountries}
                                 attackLocations={dashboardData.attackLocations}
-                                onCountrySelect={(code) => toggleFilter('country', code)}
+                                onCountrySelect={handleCountrySelect}
                                 selectedCountry={filters.country}
                                 simulationsEnabled={simulationsEnabled}
                             />

@@ -1,10 +1,11 @@
-import { buildDashboardStatsResponse, chartSpy, createDeferred, fetchDashboardStatsMock, setLastUpdatedMock, setRefreshSignalMock } from './harness';
+import { buildDashboardStatsResponse, chartSpy, createDeferred, fetchConfigMock, fetchDashboardStatsMock, mapSpy, setLastUpdatedMock, setRefreshSignalMock } from './harness';
 import { StrictMode } from 'react';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { Dashboard } from '../../Dashboard';
 import { describe, expect, test } from 'vitest';
+import { createDateTimeContextValue, DateTimeContext } from '../../../lib/dateTime';
 
 async function openSimulationQuickFilter() {
   await userEvent.click(screen.getByRole('button', { name: 'Filters' }));
@@ -253,6 +254,47 @@ describe('Dashboard loading and refresh', () => {
         .getByRole('heading', { level: 3 })).toHaveTextContent('5');
     });
     expect(fetchDashboardStatsMock).toHaveBeenCalledTimes(2);
+  });
+
+  test('does not rerender visualizations while a background refresh is still pending', async () => {
+    const initialStats = buildDashboardStatsResponse();
+    fetchDashboardStatsMock
+      .mockResolvedValueOnce(initialStats)
+      .mockResolvedValueOnce({
+        ...initialStats,
+        pending: true,
+        retryAfterMs: 10_000,
+      });
+    const stableConfig = await fetchConfigMock();
+    fetchConfigMock.mockClear();
+    fetchConfigMock.mockImplementation(async () => structuredClone(stableConfig));
+    const dateTime = createDateTimeContextValue({ timeZone: null, timeFormat: 'browser' });
+
+    const { rerender } = render(
+      <DateTimeContext.Provider value={dateTime}>
+        <MemoryRouter>
+          <Dashboard />
+        </MemoryRouter>
+      </DateTimeContext.Provider>,
+    );
+    await waitFor(() => expect(chartSpy).toHaveBeenCalled());
+    await waitFor(() => expect(mapSpy).toHaveBeenCalled());
+    const chartRenderCount = chartSpy.mock.calls.length;
+    const mapRenderCount = mapSpy.mock.calls.length;
+
+    setRefreshSignalMock(1);
+    rerender(
+      <DateTimeContext.Provider value={dateTime}>
+        <MemoryRouter>
+          <Dashboard />
+        </MemoryRouter>
+      </DateTimeContext.Provider>,
+    );
+
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByText('Refreshing dashboard...')).toHaveClass('opacity-0'));
+    expect(chartSpy).toHaveBeenCalledTimes(chartRenderCount);
+    expect(mapSpy).toHaveBeenCalledTimes(mapRenderCount);
   });
 
   test('does not trigger a duplicate dashboard load when filters change after a refresh signal', async () => {

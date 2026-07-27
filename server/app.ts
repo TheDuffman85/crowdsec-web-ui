@@ -3744,20 +3744,11 @@ ${errorSummary}  Status: ${syncSummary.state}
         throw error;
       }
 
+      let publishedRevision: string | null = null;
       try {
         const { deltaSummary, reconcileSummary, dataChanged } = refreshResult;
         if (reconcilePlan) finishReconcilePlan(reconcilePlan);
-        const dashboardRefreshStartedAt = Date.now();
-        try {
-          if (await prepareDashboardStatsAfterRefresh(dataChanged)) {
-            console.log(`Dashboard statistics prepared in ${formatElapsedTime(Date.now() - dashboardRefreshStartedAt)}.`);
-          }
-        } catch (error: any) {
-          // Dashboard requests retain their normal lazy-build fallback if cache
-          // preparation fails; a reporting-cache failure must not lose a valid
-          // LAPI delta or prevent the next refresh from running.
-          console.error('Failed to prepare dashboard statistics after delta update:', error.message);
-        }
+        prepareDashboardStatsAfterRefreshInBackground(dataChanged, undefined, 'delta update');
         // Advance only through the exact authoritative delta end. Work performed
         // after this timestamp is intentionally picked up by the next overlap.
         cache.lastUpdate = new Date(deltaStartedAt).toISOString();
@@ -3769,10 +3760,11 @@ ${errorSummary}  Status: ${syncSummary.state}
           `Delta update complete: ${deltaSummary.alerts} alerts and ${deltaSummary.decisions} decisions synced; ${completedReconcileWindows} reconciliation window${completedReconcileWindows === 1 ? '' : 's'} completed`,
         );
         cacheRefreshCompletedAt = new Date().toISOString();
-        publishCacheUpdate(cacheRefreshCompletedAt);
+        publishedRevision = cacheRefreshCompletedAt;
       } finally {
         releasePublishedRevision?.();
       }
+      if (publishedRevision) publishCacheUpdate(publishedRevision);
     } catch (error: any) {
       console.error('Failed to update cache delta:', error.message);
       lapiClient.updateStatus(false, error);
@@ -3802,25 +3794,23 @@ ${errorSummary}  Status: ${syncSummary.state}
         await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
         return { summary, dataChanged };
       });
+      let publishedRevision: string | null = null;
       try {
         const { summary, dataChanged } = committedRefresh.result;
         reconcileWindowState.headLastSuccess = now;
         saveReconcileWindowState();
-        try {
-          await prepareDashboardStatsAfterRefresh(dataChanged);
-        } catch (error: any) {
-          console.error('Failed to prepare dashboard statistics after latest-window refresh:', error.message);
-        }
+        prepareDashboardStatsAfterRefreshInBackground(dataChanged, undefined, 'latest-window refresh');
         cache.lastUpdate = new Date(now).toISOString();
         instanceLastUpdates.set(primaryInstance.id, cache.lastUpdate);
         lapiClient.updateStatus(true, null);
-        await runNotificationEvaluation('manual latest-window refresh');
         cacheRefreshCompletedAt = new Date().toISOString();
-        publishCacheUpdate(cacheRefreshCompletedAt);
+        publishedRevision = cacheRefreshCompletedAt;
         console.log(`Latest-window refresh complete: ${summary.alerts} alerts and ${summary.decisions} decisions synced.`);
       } finally {
         committedRefresh.releasePublishedRevision();
       }
+      if (publishedRevision) publishCacheUpdate(publishedRevision);
+      await runNotificationEvaluation('manual latest-window refresh');
     });
   }
 
@@ -6327,7 +6317,10 @@ ${errorSummary}  Status: ${syncSummary.state}
     instanceId?: string,
   ): Promise<boolean> {
     if (dataChanged) {
-      invalidateDashboardStatsCache(instanceId);
+      // Preserve the last complete response while the new analytics generation
+      // warms. Dashboard requests mark it pending, while list endpoints can
+      // immediately read the newly committed SQLite revision.
+      invalidateDashboardStatsCache(instanceId, { preserveStale: true });
     } else {
       invalidateFacetResponses();
       if (!lastDashboardStatsFilters) return false;
@@ -6384,6 +6377,29 @@ ${errorSummary}  Status: ${syncSummary.state}
     }
     await buildDashboardStats(responseFilters);
     return true;
+  }
+
+  function prepareDashboardStatsAfterRefreshInBackground(
+    dataChanged: boolean,
+    instanceId: string | undefined,
+    refreshLabel: string,
+    onPrepared?: () => void,
+  ): void {
+    const startedAt = Date.now();
+    // Cache invalidation happens synchronously before the first await in
+    // prepareDashboardStatsAfterRefresh. The publication writer can therefore
+    // be released as soon as this function returns; only the expensive warm-up
+    // continues in the background.
+    void prepareDashboardStatsAfterRefresh(dataChanged, instanceId).then((prepared) => {
+      if (!prepared) return;
+      console.log(`Dashboard statistics prepared in ${formatElapsedTime(Date.now() - startedAt)}.`);
+      onPrepared?.();
+    }).catch((error: any) => {
+      // Dashboard requests retain their normal lazy-build fallback if cache
+      // preparation fails; a reporting-cache failure must not lose a valid
+      // LAPI delta or prevent the next refresh from running.
+      console.error(`Failed to prepare dashboard statistics after ${refreshLabel}:`, error.message);
+    });
   }
 
   async function buildDashboardStatsResponse(
@@ -6717,8 +6733,11 @@ ${errorSummary}  Status: ${syncSummary.state}
     }
   }
 
-  function invalidateDashboardStatsCache(instanceId?: string): void {
-    invalidateDashboardStatsResponses();
+  function invalidateDashboardStatsCache(
+    instanceId?: string,
+    options: { preserveStale?: boolean } = {},
+  ): void {
+    invalidateDashboardStatsResponses({ preserveStale: options.preserveStale });
     if (instanceId) {
       const affectedScopes = new Set([instanceId, 'all']);
       for (const scope of affectedScopes) {
@@ -6796,6 +6815,7 @@ ${errorSummary}  Status: ${syncSummary.state}
           await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
           return summary;
         });
+        let publishedRevision: string | null = null;
         try {
           const summary = committedRefresh.result;
           client.updateStatus(true);
@@ -6804,21 +6824,28 @@ ${errorSummary}  Status: ${syncSummary.state}
           status.message = `${instance.name} sync complete`;
           status.errors = [];
           instanceLastUpdates.set(instanceId, new Date(now).toISOString());
-          let dashboardPrepared = false;
-          try {
-            dashboardPrepared = await prepareDashboardStatsAfterRefresh(summary.changed, instanceId);
-          } catch (error: any) {
-            console.error(`Failed to prepare dashboard statistics after ${instance.name} update:`, error.message);
-          }
-          if (summary.changed || dashboardPrepared) {
+          prepareDashboardStatsAfterRefreshInBackground(
+            summary.changed,
+            instanceId,
+            `${instance.name} update`,
+            summary.changed
+              ? undefined
+              : () => {
+                  const revision = new Date().toISOString();
+                  cacheRefreshCompletedAt = revision;
+                  publishCacheUpdate(revision, [instanceId]);
+                },
+          );
+          if (summary.changed) {
             const revision = new Date().toISOString();
             cacheRefreshCompletedAt = revision;
-            publishCacheUpdate(revision, [instanceId]);
+            publishedRevision = revision;
           }
           console.log(`[${instance.name}] Delta update complete: ${summary.alerts} alerts and ${summary.decisions} decisions synced.`);
         } finally {
           committedRefresh.releasePublishedRevision();
         }
+        if (publishedRevision) publishCacheUpdate(publishedRevision, [instanceId]);
       } catch (error: any) {
         client.updateStatus(false, error);
         status.state = 'failed';
