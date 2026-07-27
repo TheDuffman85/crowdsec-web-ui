@@ -149,7 +149,9 @@ describe('ActivityBarChart', () => {
     expect(setGranularity).toHaveBeenCalledWith('hour');
   });
 
-  test('keeps the chart controls on a single row on mobile-sized layouts', () => {
+  test('switches the percentage basis from the header controls', async () => {
+    const setPercentageBasis = vi.fn();
+
     render(
       <ActivityBarChart
         alertsData={series}
@@ -158,17 +160,47 @@ describe('ActivityBarChart', () => {
         unfilteredDecisionsData={series}
         granularity="day"
         setGranularity={vi.fn()}
+        percentageBasis="global"
+        setPercentageBasis={setPercentageBasis}
         onDateRangeSelect={vi.fn()}
         selectedDateRange={null}
         isSticky={false}
       />,
     );
 
+    const basisGroup = screen.getByRole('group', { name: 'Percentage basis' });
+    expect(basisGroup).toHaveTextContent('%');
+    expect(basisGroup).toContainElement(screen.getByRole('button', { name: 'Filtered' }));
+    expect(screen.getByRole('button', { name: 'Global' })).toHaveAttribute('aria-pressed', 'true');
+    await userEvent.click(screen.getByRole('button', { name: 'Filtered' }));
+    expect(setPercentageBasis).toHaveBeenCalledWith('filtered');
+  });
+
+  test('keeps the chart controls in one responsive group', () => {
+    render(
+      <ActivityBarChart
+        alertsData={series}
+        decisionsData={series}
+        unfilteredAlertsData={series}
+        unfilteredDecisionsData={series}
+        granularity="day"
+        setGranularity={vi.fn()}
+        percentageBasis="global"
+        setPercentageBasis={vi.fn()}
+        onDateRangeSelect={vi.fn()}
+        selectedDateRange={null}
+        isSticky={false}
+      />,
+    );
+
+    const basisGroup = screen.getByRole('group', { name: 'Percentage basis' });
     const scaleGroup = screen.getByRole('group', { name: 'Activity chart scale' });
     const granularityGroup = screen.getByRole('group', { name: 'Activity chart granularity' });
     const controlsWrapper = scaleGroup.parentElement;
 
+    expect(basisGroup.parentElement).toBe(controlsWrapper);
     expect(controlsWrapper).toHaveClass('justify-between');
+    expect(controlsWrapper).toHaveClass('flex-wrap', 'sm:flex-nowrap');
     expect(controlsWrapper).not.toHaveClass('flex-col');
     expect(granularityGroup).not.toHaveClass('self-start');
   });

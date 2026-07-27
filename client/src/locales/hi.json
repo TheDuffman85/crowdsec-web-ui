@@ -433,6 +433,7 @@
   "pages.dashboard.filtered": "फ़िल्टर किया गया",
   "pages.dashboard.global": "वैश्विक",
   "pages.dashboard.lastDaysStats": "पिछले {days} दिनों के आँकड़े",
+  "pages.dashboard.percentageBasis": "प्रतिशत आधार",
   "pages.dashboard.lapisOnlineCount": "{total} में से {online} ऑनलाइन",
   "pages.dashboard.lapisPartiallyOnline": "आंशिक रूप से ऑनलाइन",
   "pages.dashboard.mode": "मोड",

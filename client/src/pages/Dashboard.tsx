@@ -14,10 +14,8 @@ import {
     ShieldAlert,
     Gavel,
     Activity,
-    TrendingUp,
-    Percent
+    TrendingUp
 } from "lucide-react";
-import { Switch } from "../components/ui/Switch";
 import { DASHBOARD_COLORS } from "../lib/dashboardColors";
 import { getCountryCodesMatchingName, getCountryName } from "../lib/utils";
 import type {
@@ -1211,28 +1209,11 @@ export function Dashboard() {
             <div className="space-y-4">
                 <div className="mb-4 space-y-1">
                     <div className="flex flex-col gap-4 md:flex-row md:items-center">
-                        <div className="flex shrink-0 flex-col items-start gap-4 sm:flex-row sm:items-center sm:gap-8">
-                            <div className="flex items-center gap-2">
-                                <TrendingUp className="w-6 h-6 text-primary-600 dark:text-primary-400" />
-                                <h3 className="text-2xl font-bold text-gray-900 dark:text-white">
-                                    {t('pages.dashboard.lastDaysStats', { days: config?.lookback_days ?? 7 })}
-                                </h3>
-                            </div>
-                            <div className="flex h-[38px] box-border items-center gap-3 rounded-lg border border-gray-100 bg-white px-3 py-1.5 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-                                <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
-                                    <Percent className="h-4 w-4" />
-                                </div>
-
-                                <div className="flex items-center gap-2">
-                                    <span className={`text-xs font-medium ${percentageBasis === 'filtered' ? 'text-primary-600' : 'text-gray-500'}`}>{t('pages.dashboard.filtered')}</span>
-                                    <Switch
-                                        id="percentage-basis"
-                                        checked={percentageBasis === 'global'}
-                                        onCheckedChange={(checked) => setPercentageBasis(checked ? 'global' : 'filtered')}
-                                    />
-                                    <span className={`text-xs font-medium ${percentageBasis === 'global' ? 'text-primary-600' : 'text-gray-500'}`}>{t('pages.dashboard.global')}</span>
-                                </div>
-                            </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                            <TrendingUp className="w-6 h-6 text-primary-600 dark:text-primary-400" />
+                            <h3 className="text-2xl font-bold text-gray-900 dark:text-white">
+                                {t('pages.dashboard.lastDaysStats', { days: config?.lookback_days ?? 7 })}
+                            </h3>
                         </div>
                         <div className="flex w-full min-w-0 flex-1 items-center justify-end gap-2">
                             <CollapsibleSearchControls
@@ -1323,6 +1304,8 @@ export function Dashboard() {
                                 setGranularity={handleGranularityChange}
                                 scaleMode={scaleMode}
                                 setScaleMode={setScaleMode}
+                                percentageBasis={percentageBasis}
+                                setPercentageBasis={setPercentageBasis}
                             />
                         </Suspense>
                     </div>

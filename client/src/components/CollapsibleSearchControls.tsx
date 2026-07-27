@@ -58,7 +58,7 @@ export function CollapsibleSearchControls({
                     onClick={() => setExpanded((current) => !current)}
                     className={`inline-flex shrink-0 items-center justify-center border px-3 transition-colors ${controlSize} ${
                         expanded
-                            ? 'rounded-r-md border-primary-500 border-l-0 bg-primary-50 text-primary-700 dark:border-primary-500 dark:bg-primary-900/30 dark:text-primary-300'
+                            ? 'rounded-r-md border-gray-300 border-l-0 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'
                             : 'rounded-md border-gray-300 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'
                     }`}
                     aria-label={toggleLabel}

@@ -27,19 +27,28 @@ describe('Dashboard filters and drilldowns', () => {
       'shadow-sm',
     );
     const statisticsHeading = screen.getByRole('heading', { name: 'Last 7 Days Statistics' });
-    const percentageToggle = screen.getByRole('switch');
     const searchButton = screen.getByRole('button', { name: 'Expand search' });
     const filtersButton = screen.getByRole('button', { name: 'Filters' });
-    const toolbar = statisticsHeading.parentElement?.parentElement?.parentElement;
-    expect(statisticsHeading.parentElement?.parentElement).toContainElement(percentageToggle);
-    expect(statisticsHeading.parentElement?.parentElement).toHaveClass('sm:gap-8');
+    const toolbar = statisticsHeading.parentElement?.parentElement;
     expect(toolbar).toHaveClass('md:items-center');
-    expect(toolbar).toContainElement(percentageToggle);
     expect(toolbar).toContainElement(searchButton);
     expect(toolbar).toContainElement(filtersButton);
-    expect(statisticsHeading.compareDocumentPosition(percentageToggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(percentageToggle.compareDocumentPosition(searchButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(statisticsHeading.compareDocumentPosition(searchButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(searchButton.compareDocumentPosition(filtersButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await waitFor(() => expect(chartSpy).toHaveBeenCalled());
+    const chartProps = chartSpy.mock.calls.at(-1)?.[0] as {
+      percentageBasis: 'filtered' | 'global';
+      setPercentageBasis: (basis: 'filtered' | 'global') => void;
+    };
+    expect(chartProps.percentageBasis).toBe('global');
+    act(() => chartProps.setPercentageBasis('filtered'));
+    await waitFor(() => {
+      const latestChartProps = chartSpy.mock.calls.at(-1)?.[0] as {
+        percentageBasis: 'filtered' | 'global';
+      };
+      expect(latestChartProps.percentageBasis).toBe('filtered');
+    });
+    expect(localStorage.getItem('dashboard_percentage_basis')).toBe('filtered');
     expect(screen.queryByRole('button', { name: 'Simulation' })).not.toBeInTheDocument();
     await openSimulationQuickFilter();
     const scenarioFilter = screen.getByRole('button', { name: 'Scenario' });
@@ -61,6 +70,16 @@ describe('Dashboard filters and drilldowns', () => {
     await screen.findByText('Top Countries');
     fetchDashboardStatsMock.mockClear();
     await user.click(screen.getByRole('button', { name: 'Expand search' }));
+    expect(screen.getByRole('button', { name: 'Collapse search' })).toHaveClass(
+      'border-gray-300',
+      'bg-white',
+      'text-gray-600',
+    );
+    expect(screen.getByRole('button', { name: 'Collapse search' })).not.toHaveClass(
+      'border-primary-500',
+      'bg-primary-50',
+      'text-primary-700',
+    );
     await user.type(screen.getByPlaceholderText('Search'), 'country:DE');
 
     await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(

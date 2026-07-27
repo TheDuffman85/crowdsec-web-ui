@@ -433,6 +433,7 @@
   "pages.dashboard.filtered": "С фильтром",
   "pages.dashboard.global": "Глобально",
   "pages.dashboard.lastDaysStats": "Статистика за последние {days} дн.",
+  "pages.dashboard.percentageBasis": "База процентов",
   "pages.dashboard.lapisOnlineCount": "{online} из {total} в сети",
   "pages.dashboard.lapisPartiallyOnline": "Частичная доступность",
   "pages.dashboard.mode": "Режим",

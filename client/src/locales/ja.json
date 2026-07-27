@@ -433,6 +433,7 @@
   "pages.dashboard.filtered": "フィルター済み",
   "pages.dashboard.global": "グローバル",
   "pages.dashboard.lastDaysStats": "過去 {days} 日間の統計",
+  "pages.dashboard.percentageBasis": "割合の基準",
   "pages.dashboard.lapisOnlineCount": "{total}件中{online}件がオンライン",
   "pages.dashboard.lapisPartiallyOnline": "一部オンライン",
   "pages.dashboard.mode": "モード",

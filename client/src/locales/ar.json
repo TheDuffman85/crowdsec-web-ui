@@ -433,6 +433,7 @@
   "pages.dashboard.filtered": "مفلتر",
   "pages.dashboard.global": "عام",
   "pages.dashboard.lastDaysStats": "إحصاءات آخر {days} أيام",
+  "pages.dashboard.percentageBasis": "أساس النسبة المئوية",
   "pages.dashboard.lapisOnlineCount": "{online} من {total} متصل",
   "pages.dashboard.lapisPartiallyOnline": "متصل جزئيًا",
   "pages.dashboard.mode": "الوضع",

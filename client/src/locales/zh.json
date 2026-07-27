@@ -433,6 +433,7 @@
   "pages.dashboard.filtered": "筛选后",
   "pages.dashboard.global": "全局",
   "pages.dashboard.lastDaysStats": "最近 {days} 天统计",
+  "pages.dashboard.percentageBasis": "百分比基准",
   "pages.dashboard.lapisOnlineCount": "{online}/{total} 在线",
   "pages.dashboard.lapisPartiallyOnline": "部分在线",
   "pages.dashboard.mode": "模式",

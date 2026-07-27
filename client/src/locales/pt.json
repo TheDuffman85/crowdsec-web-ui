@@ -433,6 +433,7 @@
   "pages.dashboard.filtered": "Filtrado",
   "pages.dashboard.global": "Global",
   "pages.dashboard.lastDaysStats": "Estatísticas dos últimos {days} dias",
+  "pages.dashboard.percentageBasis": "Base percentual",
   "pages.dashboard.lapisOnlineCount": "{online} de {total} online",
   "pages.dashboard.lapisPartiallyOnline": "Parcialmente disponível",
   "pages.dashboard.mode": "Modo",
