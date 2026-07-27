@@ -2,7 +2,7 @@ import { describe, expect, test, vi } from 'vitest';
 import path from 'path';
 import type { AlertRecord, DashboardStatsResponse, PaginatedResponse, SlimAlert } from '../../../shared/contracts';
 import { CrowdsecDatabase } from '../../database';
-import { DatabaseQueryWorker } from '../../query-worker-client';
+import { DatabaseQueryWorker, QueryWorkerTimeoutError } from '../../query-worker-client';
 import {
   createController,
   dashboardDateKey,
@@ -14,6 +14,51 @@ import {
 } from './harness';
 
 describe('createApp dashboard API', () => {
+  test('handles an analytics timeout immediately while dashboard enrichment is still pending', async () => {
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    seedAlert(database, sampleAlert());
+    const queryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath });
+    const realAll = queryWorker.all.bind(queryWorker);
+    vi.spyOn(queryWorker, 'all').mockImplementation((sql, params, options) => {
+      if (sql.includes('SELECT simulated, COUNT(*) AS count')) {
+        return Promise.reject(new QueryWorkerTimeoutError(30_000, {
+          label: 'dashboard totals regression query',
+        }));
+      }
+      return realAll(sql, params, options);
+    });
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+    const { controller } = createController({
+      database,
+      queryWorker,
+      initialCacheState: {
+        isInitialized: true,
+        isComplete: true,
+        lastUpdate: new Date().toISOString(),
+      },
+      attackLocationResolver: {
+        resolve: (locations) => new Promise((resolve) => {
+          setTimeout(() => resolve(locations), 25);
+        }),
+      },
+    });
+
+    try {
+      const response = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats'));
+      expect(response.status).toBe(504);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandledRejections).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandledRejection);
+      controller.stopBackgroundTasks();
+      database.close();
+    }
+  });
+
   test('aggregates dashboard stats with mutual filters, simulation mode, and timezone date ranges', async () => {
     const createdAt = new Date().toISOString();
     const stopAt = new Date(Date.now() + 60 * 60 * 1_000).toISOString();

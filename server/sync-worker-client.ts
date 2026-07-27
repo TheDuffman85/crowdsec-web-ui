@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { Worker } from 'node:worker_threads';
 import type { AlertInsertParams, DecisionInsertParams, SearchIndexRebuildScope } from './database';
 
@@ -16,8 +17,32 @@ export type SyncAlertMutation = SyncAlertMutationBase & (
   | { alert?: never; alertId: string | number }
 );
 
+export interface AlertDecisionComparison {
+  alertId: string | number;
+  instanceId: string;
+  metadataHash: string | null;
+  decisionIds: string[];
+  inactiveDecisionIds: string[];
+  observedAt: string;
+  origins: string | null;
+  simulated: number;
+}
+
+export interface AlertDecisionComparisonResult {
+  alertId: string | number;
+  decisionIdsToPersist: string[] | null;
+  removedIds: string[];
+  reconcileDecisions: boolean;
+  updateAlertRawDataOnly: boolean;
+}
+
+export interface DatabaseTransactionOptions {
+  beforeCommit?: () => void | Promise<void>;
+}
+
 type SyncWorkerRequest =
   | { type: 'persist-alerts'; mutations: SyncAlertMutation[] }
+  | { type: 'compare-alert-decisions'; comparisons: AlertDecisionComparison[] }
   | { type: 'delete-alerts-missing-between'; start: string; end: string; keepIds: Array<string | number>; instanceId?: string }
   | { type: 'delete-cached-alerts'; ids: Array<string | number> }
   | { type: 'delete-cached-decisions'; ids: Array<string | number> }
@@ -25,6 +50,9 @@ type SyncWorkerRequest =
   | { type: 'rebuild-search-indexes'; scope?: SearchIndexRebuildScope }
   | { type: 'refresh-duplicate-flags'; now: string }
   | { type: 'cleanup-old-data'; cutoff: string }
+  | { type: 'begin-transaction' }
+  | { type: 'commit-transaction' }
+  | { type: 'rollback-transaction' }
   | { type: 'clear-sync-data' };
 
 type SyncWorkerResponse = {
@@ -49,6 +77,7 @@ export class DatabaseSyncWorker {
   private nextId = 1;
   private readonly pending = new Map<number, PendingRequest>();
   private operationQueue: Promise<void> = Promise.resolve();
+  private readonly transactionContext = new AsyncLocalStorage<boolean>();
 
   constructor(options: { dbPath: string; walEnabled?: boolean; timeoutMs?: number }) {
     this.dbPath = options.dbPath;
@@ -58,6 +87,12 @@ export class DatabaseSyncWorker {
 
   persistAlerts(mutations: SyncAlertMutation[]): Promise<{ changed: boolean }> {
     return this.execute({ type: 'persist-alerts', mutations });
+  }
+
+  compareAlertDecisions(
+    comparisons: AlertDecisionComparison[],
+  ): Promise<Array<AlertDecisionComparisonResult | null>> {
+    return this.execute({ type: 'compare-alert-decisions', comparisons });
   }
 
   deleteAlertsMissingBetween(
@@ -103,6 +138,28 @@ export class DatabaseSyncWorker {
     return result;
   }
 
+  runTransaction<T>(operation: () => Promise<T>, options: DatabaseTransactionOptions = {}): Promise<T> {
+    return this.runExclusive(async () => {
+      await this.dispatch<void>({ type: 'begin-transaction' }, this.timeoutMs);
+      try {
+        const result = await this.transactionContext.run(true, operation);
+        await options.beforeCommit?.();
+        await this.dispatch<void>({ type: 'commit-transaction' }, this.timeoutMs);
+        return result;
+      } catch (error) {
+        try {
+          await this.dispatch<void>({ type: 'rollback-transaction' }, this.timeoutMs);
+        } catch (rollbackError) {
+          console.error(
+            'Failed to roll back database refresh transaction:',
+            rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+          );
+        }
+        throw error;
+      }
+    });
+  }
+
   close(): void {
     for (const [id, pending] of this.pending) {
       clearTimeout(pending.timeout);
@@ -115,6 +172,9 @@ export class DatabaseSyncWorker {
   }
 
   private execute<T>(request: SyncWorkerRequest, timeoutMs = this.timeoutMs): Promise<T> {
+    if (this.transactionContext.getStore()) {
+      return this.dispatch<T>(request, timeoutMs);
+    }
     return this.runExclusive(() => this.dispatch<T>(request, timeoutMs));
   }
 

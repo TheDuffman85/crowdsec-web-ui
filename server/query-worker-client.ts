@@ -7,9 +7,12 @@ type PendingQuery = {
   method: QueryMethod;
   sql: string;
   params: unknown[];
+  label: string;
+  queuedAt: number;
+  startedAt?: number;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
-  timeout: ReturnType<typeof setTimeout>;
+  timeout: ReturnType<typeof setTimeout> | null;
   worker?: WorkerSlot;
 };
 
@@ -25,33 +28,49 @@ type WorkerSlot = {
 };
 
 export class QueryWorkerTimeoutError extends Error {
-  constructor(timeoutMs: number) {
-    super(`Database query exceeded ${timeoutMs}ms timeout`);
+  readonly stage: 'queue' | 'execution';
+  readonly label: string;
+
+  constructor(timeoutMs: number, options: { stage?: 'queue' | 'execution'; label?: string } = {}) {
+    const stage = options.stage ?? 'execution';
+    const label = options.label || 'database query';
+    super(stage === 'queue'
+      ? `${label} waited more than ${timeoutMs}ms for a database query worker`
+      : `${label} exceeded ${timeoutMs}ms execution timeout`);
     this.name = 'QueryWorkerTimeoutError';
+    this.stage = stage;
+    this.label = label;
   }
 }
 
 export class DatabaseQueryWorker {
   private readonly dbPath: string;
   private readonly timeoutMs: number;
+  private readonly queueTimeoutMs: number;
   private readonly maxWorkers: number;
   private nextId = 1;
   private readonly pending = new Map<number, PendingQuery>();
   private readonly queue: PendingQuery[] = [];
   private readonly workers = new Set<WorkerSlot>();
 
-  constructor(options: { dbPath: string; timeoutMs?: number; maxWorkers?: number }) {
+  constructor(options: {
+    dbPath: string;
+    timeoutMs?: number;
+    queueTimeoutMs?: number;
+    maxWorkers?: number;
+  }) {
     this.dbPath = options.dbPath;
     this.timeoutMs = options.timeoutMs ?? 30_000;
+    this.queueTimeoutMs = options.queueTimeoutMs ?? this.timeoutMs;
     this.maxWorkers = Math.max(1, options.maxWorkers ?? 3);
   }
 
-  all<T>(sql: string, params: unknown[] = []): Promise<T[]> {
-    return this.execute<T[]>('all', sql, params);
+  all<T>(sql: string, params: unknown[] = [], options: { label?: string } = {}): Promise<T[]> {
+    return this.execute<T[]>('all', sql, params, options.label);
   }
 
-  get<T>(sql: string, params: unknown[] = []): Promise<T> {
-    return this.execute<T>('get', sql, params);
+  get<T>(sql: string, params: unknown[] = [], options: { label?: string } = {}): Promise<T> {
+    return this.execute<T>('get', sql, params, options.label);
   }
 
   close(): void {
@@ -63,31 +82,37 @@ export class DatabaseQueryWorker {
     this.queue.length = 0;
   }
 
-  private execute<T>(method: QueryMethod, sql: string, params: unknown[]): Promise<T> {
+  private execute<T>(method: QueryMethod, sql: string, params: unknown[], requestedLabel?: string): Promise<T> {
     const id = this.nextId++;
+    const label = requestedLabel?.trim() || describeQuery(sql);
 
     return new Promise<T>((resolve, reject) => {
       const timeout = setTimeout(() => {
         const pending = this.pending.get(id);
-        if (!pending) {
-          return;
-        }
+        if (!pending || pending.worker) return;
         this.pending.delete(id);
         const queueIndex = this.queue.indexOf(pending);
         if (queueIndex !== -1) {
           this.queue.splice(queueIndex, 1);
         }
-        reject(new QueryWorkerTimeoutError(this.timeoutMs));
-        if (pending.worker) {
-          this.restartWorker(pending.worker);
-        }
-      }, this.timeoutMs);
+        const waitedMs = Date.now() - pending.queuedAt;
+        console.warn(
+          `[query-worker] ${pending.label} timed out in queue after ${waitedMs}ms `
+          + `(queued=${this.queue.length}, active=${this.activeWorkerCount()}/${this.maxWorkers}).`,
+        );
+        reject(new QueryWorkerTimeoutError(this.queueTimeoutMs, {
+          stage: 'queue',
+          label: pending.label,
+        }));
+      }, this.queueTimeoutMs);
 
       const pending: PendingQuery = {
         id,
         method,
         sql,
         params,
+        label,
+        queuedAt: Date.now(),
         resolve: (value) => resolve(value as T),
         reject,
         timeout,
@@ -112,6 +137,21 @@ export class DatabaseQueryWorker {
       }
 
       pending.worker = slot;
+      pending.startedAt = Date.now();
+      if (pending.timeout) clearTimeout(pending.timeout);
+      pending.timeout = setTimeout(() => {
+        if (!this.pending.delete(pending.id)) return;
+        const executedMs = Date.now() - (pending.startedAt || pending.queuedAt);
+        console.warn(
+          `[query-worker] ${pending.label} timed out during execution after ${executedMs}ms `
+          + `(queued=${this.queue.length}, active=${this.activeWorkerCount()}/${this.maxWorkers}).`,
+        );
+        pending.reject(new QueryWorkerTimeoutError(this.timeoutMs, {
+          stage: 'execution',
+          label: pending.label,
+        }));
+        this.restartWorker(slot);
+      }, this.timeoutMs);
       slot.currentId = pending.id;
       slot.worker.postMessage({
         id: pending.id,
@@ -173,7 +213,7 @@ export class DatabaseQueryWorker {
       return;
     }
     this.pending.delete(message.id);
-    clearTimeout(pending.timeout);
+    if (pending.timeout) clearTimeout(pending.timeout);
     if (slot.currentId === message.id) {
       slot.currentId = null;
     }
@@ -192,7 +232,7 @@ export class DatabaseQueryWorker {
       const pending = this.pending.get(slot.currentId);
       if (pending) {
         this.pending.delete(slot.currentId);
-        clearTimeout(pending.timeout);
+        if (pending.timeout) clearTimeout(pending.timeout);
         pending.reject(error);
       }
       slot.currentId = null;
@@ -209,9 +249,23 @@ export class DatabaseQueryWorker {
 
   private rejectPending(error: Error): void {
     for (const [id, pending] of this.pending) {
-      clearTimeout(pending.timeout);
+      if (pending.timeout) clearTimeout(pending.timeout);
       pending.reject(error);
       this.pending.delete(id);
     }
   }
+
+  private activeWorkerCount(): number {
+    let active = 0;
+    for (const slot of this.workers) {
+      if (slot.currentId !== null) active += 1;
+    }
+    return active;
+  }
+}
+
+function describeQuery(sql: string): string {
+  const normalized = sql.replace(/\s+/g, ' ').trim();
+  const operation = normalized.match(/\b(?:FROM|UPDATE|INTO|DELETE FROM)\s+([A-Za-z0-9_]+)/i)?.[1];
+  return operation ? `${operation} query` : 'database query';
 }

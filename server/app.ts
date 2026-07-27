@@ -82,7 +82,12 @@ import { getAlertSourceValue, getAlertTargets, getAlertTargetSummary, resolveAle
 import { parseGoDuration, toDuration } from './utils/duration';
 import { fetchCrowdsecMetrics } from './metrics';
 import { DatabaseQueryWorker, QueryWorkerTimeoutError } from './query-worker-client';
-import { DatabaseSyncWorker, type SyncAlertMutation } from './sync-worker-client';
+import {
+  DatabaseSyncWorker,
+  type AlertDecisionComparison,
+  type AlertDecisionComparisonResult,
+  type SyncAlertMutation,
+} from './sync-worker-client';
 
 type HonoContext = any;
 type HonoNext = any;
@@ -129,6 +134,7 @@ export interface CreateAppOptions {
   initialCacheState?: Partial<CacheState>;
   rootRedirectPath?: string;
   queryWorker?: DatabaseQueryWorker;
+  analyticsQueryWorker?: DatabaseQueryWorker;
   facetQueryWorker?: DatabaseQueryWorker;
   syncWorker?: Pick<
     DatabaseSyncWorker,
@@ -143,7 +149,7 @@ export interface CreateAppOptions {
     | 'clearSyncData'
     | 'runExclusive'
     | 'close'
-  >;
+  > & Partial<Pick<DatabaseSyncWorker, 'compareAlertDecisions' | 'runTransaction'>>;
   attackLocationResolver?: AttackLocationResolver;
 }
 
@@ -186,6 +192,13 @@ interface AlertSyncQuery {
   scenario?: string;
   includeCapi?: boolean;
   singleScopeOnly?: boolean;
+}
+
+interface AlertSyncDelta {
+  decisionIdsToPersist: Set<string> | null;
+  removedIds: Set<string>;
+  reconcileDecisions: boolean;
+  updateAlertRawDataOnly: boolean;
 }
 
 interface SyncHistorySummary {
@@ -544,6 +557,13 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     allowPrivateAddresses: config.notificationAllowPrivateAddresses,
   });
   const queryWorker = options.queryWorker || new DatabaseQueryWorker({ dbPath: database.dbPath });
+  const analyticsQueryWorker = options.analyticsQueryWorker
+    || (options.queryWorker ? queryWorker : new DatabaseQueryWorker({
+      dbPath: database.dbPath,
+      timeoutMs: 60_000,
+      queueTimeoutMs: 30_000,
+      maxWorkers: 1,
+    }));
   const facetQueryWorker = options.facetQueryWorker || new DatabaseQueryWorker({
     dbPath: database.dbPath,
     timeoutMs: 5_000,
@@ -671,6 +691,69 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   const dashboardStatsResponsePromises = new Map<string, Promise<DashboardStatsResponse>>();
   let lastDashboardStatsFilters: DashboardStatsFilters | null = null;
   let lastDashboardStatsRequestedAt = 0;
+  let activePublishedRevisionReaders = 0;
+  let queuedPublishedRevisionWriters = 0;
+  let publishedRevisionWriterTail = Promise.resolve();
+  let publishedRevisionReadersDrained: Promise<void> | null = null;
+  let resolvePublishedRevisionReadersDrained: (() => void) | null = null;
+  let publishedRevisionReadersAllowed: Promise<void> | null = null;
+  let resolvePublishedRevisionReadersAllowed: (() => void) | null = null;
+  const onDemandRefreshPreparedContextKey = 'onDemandRefreshPrepared';
+
+  async function acquirePublishedRevisionRead(): Promise<() => void> {
+    while (queuedPublishedRevisionWriters > 0) {
+      if (!publishedRevisionReadersAllowed) {
+        publishedRevisionReadersAllowed = new Promise<void>((resolve) => {
+          resolvePublishedRevisionReadersAllowed = resolve;
+        });
+      }
+      await publishedRevisionReadersAllowed;
+    }
+
+    activePublishedRevisionReaders += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      activePublishedRevisionReaders -= 1;
+      if (activePublishedRevisionReaders === 0) {
+        resolvePublishedRevisionReadersDrained?.();
+        resolvePublishedRevisionReadersDrained = null;
+        publishedRevisionReadersDrained = null;
+      }
+    };
+  }
+
+  async function acquirePublishedRevisionWrite(): Promise<() => void> {
+    queuedPublishedRevisionWriters += 1;
+    let releaseWriterTurn!: () => void;
+    const writerTurn = new Promise<void>((resolve) => {
+      releaseWriterTurn = resolve;
+    });
+    const previousWriter = publishedRevisionWriterTail;
+    publishedRevisionWriterTail = previousWriter.then(() => writerTurn);
+    await previousWriter;
+
+    if (activePublishedRevisionReaders > 0) {
+      publishedRevisionReadersDrained = new Promise<void>((resolve) => {
+        resolvePublishedRevisionReadersDrained = resolve;
+      });
+      await publishedRevisionReadersDrained;
+    }
+
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      queuedPublishedRevisionWriters -= 1;
+      releaseWriterTurn();
+      if (queuedPublishedRevisionWriters === 0) {
+        resolvePublishedRevisionReadersAllowed?.();
+        resolvePublishedRevisionReadersAllowed = null;
+        publishedRevisionReadersAllowed = null;
+      }
+    };
+  }
 
   const persistedConfig = loadPersistedConfig(database);
   let refreshIntervalMs = persistedConfig.refresh_interval_ms ?? config.refreshIntervalMs;
@@ -913,7 +996,6 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
     await next();
   });
-
   app.use('*', activityTrackerMiddleware);
 
   const healthHandler = (context: HonoContext) => context.json({ status: 'ok' });
@@ -933,11 +1015,22 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     return context.json({ error: 'Read-only mode is enabled', code: 'READ_ONLY' }, 403);
   };
 
-  app.get(`${config.basePath}/api/alerts`, ensureAuth, async (context) => {
+  const ensurePublishedRevisionRead = async (context: HonoContext, next: HonoNext) => {
+    if (refreshIntervalMs === 0) {
+      await updateCache({ skipIfBusy: true });
+      context.set(onDemandRefreshPreparedContextKey, true);
+    }
+    const releaseRevision = await acquirePublishedRevisionRead();
     try {
-      if (refreshIntervalMs === 0) {
-        await updateCache({ skipIfBusy: true });
-      }
+      await next();
+    } finally {
+      releaseRevision();
+    }
+  };
+
+  app.get(`${config.basePath}/api/alerts`, ensureAuth, ensurePublishedRevisionRead, async (context) => {
+    try {
+      await prepareOnDemandRefresh(context);
 
       await prepareReadCache('alerts request');
 
@@ -980,16 +1073,14 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
   });
 
-  app.get(`${config.basePath}/api/alerts/facets`, ensureAuth, async (context) => {
+  app.get(`${config.basePath}/api/alerts/facets`, ensureAuth, ensurePublishedRevisionRead, async (context) => {
     const request = getFacetRequest(context, ALERT_FACET_FIELDS);
     if ('error' in request) {
       return context.json({ error: request.error }, 400);
     }
 
     try {
-      if (refreshIntervalMs === 0) {
-        await updateCache({ skipIfBusy: true });
-      }
+      await prepareOnDemandRefresh(context);
       await prepareReadCache('alert facets request');
 
       const filters = getAlertListFilters(context, config.timeZone);
@@ -1065,7 +1156,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
   });
 
-  app.get(`${config.basePath}/api/alerts/:id`, ensureAuth, async (context) => {
+  app.get(`${config.basePath}/api/alerts/:id`, ensureAuth, ensurePublishedRevisionRead, async (context) => {
     if (config.instances.length > 1) return context.json({ error: 'instance_id is required when multiple CrowdSec instances are configured' }, 400);
     const alertId = String(context.req.param('id'));
     if (!/^\d+$/.test(alertId)) {
@@ -1131,11 +1222,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
   });
 
-  app.get(`${config.basePath}/api/decisions`, ensureAuth, async (context) => {
+  app.get(`${config.basePath}/api/decisions`, ensureAuth, ensurePublishedRevisionRead, async (context) => {
     try {
-      if (refreshIntervalMs === 0) {
-        await updateCache({ skipIfBusy: true });
-      }
+      await prepareOnDemandRefresh(context);
 
       await prepareReadCache('decisions request');
 
@@ -1183,16 +1272,14 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
   });
 
-  app.get(`${config.basePath}/api/decisions/facets`, ensureAuth, async (context) => {
+  app.get(`${config.basePath}/api/decisions/facets`, ensureAuth, ensurePublishedRevisionRead, async (context) => {
     const request = getFacetRequest(context, DECISION_FACET_FIELDS);
     if ('error' in request) {
       return context.json({ error: request.error }, 400);
     }
 
     try {
-      if (refreshIntervalMs === 0) {
-        await updateCache({ skipIfBusy: true });
-      }
+      await prepareOnDemandRefresh(context);
       await prepareReadCache('decision facets request');
 
       const filters = getDecisionListFilters(context, config.timeZone);
@@ -1222,7 +1309,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
   });
 
-  app.get(`${config.basePath}/api/instances/:instanceId/alerts/:id`, ensureAuth, async (context) => {
+  app.get(`${config.basePath}/api/instances/:instanceId/alerts/:id`, ensureAuth, ensurePublishedRevisionRead, async (context) => {
     const instanceId = String(context.req.param('instanceId'));
     const instance = config.instances.find((candidate) => candidate.id === instanceId);
     if (!instance) return context.json({ error: 'Unknown CrowdSec instance' }, 404);
@@ -1724,11 +1811,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
   });
 
-  app.get(`${config.basePath}/api/stats/alerts`, ensureAuth, async (context) => {
+  app.get(`${config.basePath}/api/stats/alerts`, ensureAuth, ensurePublishedRevisionRead, async (context) => {
     try {
-      if (refreshIntervalMs === 0) {
-        await updateCache({ skipIfBusy: true });
-      }
+      await prepareOnDemandRefresh(context);
 
       await prepareReadCache('stats alerts request');
 
@@ -1737,7 +1822,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       if (!config.simulationsEnabled) {
         where.add('simulated = 0');
       }
-      const alerts = (await queryWorker.all<{
+      const alerts = (await analyticsQueryWorker.all<{
         created_at: string;
         scenario?: string | null;
         source_ip?: string | null;
@@ -1750,7 +1835,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         FROM alerts
         ${where.toSql()}
         ORDER BY created_at DESC, id DESC
-      `, where.params)).map((row): StatsAlert => ({
+      `, where.params, { label: 'alert statistics' })).map((row): StatsAlert => ({
         created_at: row.created_at,
         scenario: row.scenario || undefined,
         source: row.source_ip || row.country || row.as_name
@@ -1777,11 +1862,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
   });
 
-  app.get(`${config.basePath}/api/stats/decisions`, ensureAuth, async (context) => {
+  app.get(`${config.basePath}/api/stats/decisions`, ensureAuth, ensurePublishedRevisionRead, async (context) => {
     try {
-      if (refreshIntervalMs === 0) {
-        await updateCache({ skipIfBusy: true });
-      }
+      await prepareOnDemandRefresh(context);
 
       await prepareReadCache('stats decisions request');
 
@@ -1791,7 +1874,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       if (!config.simulationsEnabled) {
         where.add('simulated = 0');
       }
-      const decisions = (await queryWorker.all<{
+      const decisions = (await analyticsQueryWorker.all<{
         id: string | number;
         created_at: string;
         scenario?: string | null;
@@ -1804,7 +1887,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         FROM decisions
         ${where.toSql()}
         ORDER BY created_at DESC, id DESC
-      `, where.params)).map((row): StatsDecision => ({
+      `, where.params, { label: 'decision statistics' })).map((row): StatsDecision => ({
         id: row.id,
         created_at: row.created_at,
         scenario: row.scenario || undefined,
@@ -1825,11 +1908,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
   });
 
-  app.get(`${config.basePath}/api/dashboard/stats`, ensureAuth, async (context) => {
+  app.get(`${config.basePath}/api/dashboard/stats`, ensureAuth, ensurePublishedRevisionRead, async (context) => {
     try {
-      if (refreshIntervalMs === 0) {
-        await updateCache({ skipIfBusy: true });
-      }
+      await prepareOnDemandRefresh(context);
 
       await prepareReadCache('dashboard stats request');
       const filters = getDashboardStatsFilters(context, config.timeZone);
@@ -2672,11 +2753,13 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     const removedDecisionIds = new Set<string>();
     const affectedDecisionIds = new Set<string>();
     const observedAt = new Date().toISOString();
+    const deltas = await getAlertSyncDeltas(alerts, observedAt, instanceId);
     let decisionMutationCount = 0;
-    for (const alert of alerts) {
+    for (let alertIndex = 0; alertIndex < alerts.length; alertIndex += 1) {
+      const alert = alerts[alertIndex];
       const decisions = Array.isArray(alert.decisions) ? alert.decisions : [];
       const alertId = String(alert.id);
-      const delta = getAlertSyncDelta(alert, decisions, observedAt, instanceId);
+      const delta = deltas[alertIndex];
       if (delta) {
         alertsToPersist.push(alert);
         if (delta.decisionIdsToPersist) {
@@ -2734,12 +2817,92 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
   }
 
-  function getAlertSyncDelta(alert: AlertRecord, decisions: AlertDecision[], observedAt: string, instanceId = primaryInstance.id): {
-    decisionIdsToPersist: Set<string> | null;
-    removedIds: Set<string>;
-    reconcileDecisions: boolean;
-    updateAlertRawDataOnly: boolean;
-  } | null {
+  async function getAlertSyncDeltas(
+    alerts: AlertRecord[],
+    observedAt: string,
+    instanceId: string,
+  ): Promise<Array<AlertSyncDelta | null>> {
+    if (!syncWorker.compareAlertDecisions) {
+      return alerts.map((alert) => getAlertSyncDelta(
+        alert,
+        Array.isArray(alert.decisions) ? alert.decisions : [],
+        observedAt,
+        instanceId,
+      ));
+    }
+
+    const comparisons = alerts.map((alert) => buildAlertDecisionComparison(
+      alert,
+      Array.isArray(alert.decisions) ? alert.decisions : [],
+      observedAt,
+      instanceId,
+    ));
+    const decisionCount = comparisons.reduce((total, comparison) => total + comparison.decisionIds.length, 0);
+    const startedAt = Date.now();
+    const results = await syncWorker.compareAlertDecisions(comparisons);
+    if (decisionCount >= SYNC_DEFER_SEARCH_INDEX_DECISION_THRESHOLD) {
+      console.log(
+        `Compared ${decisionCount} incoming decision IDs with the committed cache `
+        + `in ${formatElapsedTime(Date.now() - startedAt)} off the request thread.`,
+      );
+    }
+    return results.map(toAlertSyncDelta);
+  }
+
+  function buildAlertDecisionComparison(
+    alert: AlertRecord,
+    decisions: AlertDecision[],
+    observedAt: string,
+    instanceId: string,
+  ): AlertDecisionComparison {
+    const decisionIds: string[] = [];
+    const inactiveDecisionIds: string[] = [];
+    for (const decision of decisions) {
+      const id = String(decision.id);
+      decisionIds.push(id);
+      if (isIncomingDecisionInactive(decision)) inactiveDecisionIds.push(id);
+    }
+
+    const { decisions: _incomingDecisions, ...incomingAlertMetadata } = alert;
+    const targetSummary = getAlertTargetSummary(alert);
+    const targets = getAlertTargets(alert);
+    const incomingMetadata = {
+      ...incomingAlertMetadata,
+      target: targetSummary.target,
+      targets,
+      target_count: targetSummary.count,
+      simulated: isAlertSimulated(alert),
+    } as AlertRecord;
+    return {
+      alertId: alert.id,
+      instanceId,
+      metadataHash: alertMetadataFingerprint(incomingMetadata),
+      decisionIds,
+      inactiveDecisionIds,
+      observedAt,
+      origins: collectDistinctOrigins(decisions).join(' ').trim() || null,
+      simulated: isAlertSimulated(alert) ? 1 : 0,
+    };
+  }
+
+  function toAlertSyncDelta(result: AlertDecisionComparisonResult | null): AlertSyncDelta | null {
+    if (!result) return null;
+    return {
+      decisionIdsToPersist: result.decisionIdsToPersist === null
+        ? null
+        : new Set(result.decisionIdsToPersist),
+      removedIds: new Set(result.removedIds),
+      reconcileDecisions: result.reconcileDecisions,
+      updateAlertRawDataOnly: result.updateAlertRawDataOnly,
+    };
+  }
+
+  function getAlertSyncDelta(
+    alert: AlertRecord,
+    decisions: AlertDecision[],
+    observedAt: string,
+    instanceId = primaryInstance.id,
+  ): AlertSyncDelta | null {
     // Most CrowdSec decision changes are membership changes. Expiration is the
     // exception: LAPI retains the ID on its historical alert and changes the
     // remaining duration to zero/negative. Track only those rare candidates so
@@ -3541,52 +3704,75 @@ ${errorSummary}  Status: ${syncSummary.state}
       const headWindow = reconcilePlan?.windows.find((window) => window.head);
       const deltaStart = Math.min(normalDeltaStart, headWindow?.start ?? normalDeltaStart);
       console.log(`Fetching delta updates (${formatSyncWindow(deltaStart, deltaStartedAt, deltaStartedAt)})...`);
-      const deltaSummary = await syncAlertWindow(deltaStart, deltaStartedAt, deltaStartedAt);
-      if (deltaSummary.errors.length > 0) {
-        throw deltaSummary.lastError || new Error(`Delta update incomplete: ${deltaSummary.errors.join('; ')}`);
-      }
-      if (headWindow) {
-        // The expanded delta already authoritatively reconciled the moving
-        // head, avoiding a second set of LAPI scope requests for that window.
-        recordReconcileWindowSuccess(headWindow, deltaStartedAt);
+      const reconcileStateBeforeRefresh = structuredClone(reconcileWindowState);
+      let refreshResult: {
+        deltaSummary: WindowSyncSummary;
+        reconcileSummary: WindowSyncSummary;
+        dataChanged: boolean;
+      };
+      let releasePublishedRevision: (() => void) | null = null;
+      try {
+        const committedRefresh = await runConsistentDatabaseRefresh(async () => {
+          const deltaSummary = await syncAlertWindow(deltaStart, deltaStartedAt, deltaStartedAt);
+          if (deltaSummary.errors.length > 0) {
+            throw deltaSummary.lastError || new Error(`Delta update incomplete: ${deltaSummary.errors.join('; ')}`);
+          }
+          if (headWindow) {
+            // The expanded delta already authoritatively reconciled the moving
+            // head, avoiding a second set of LAPI scope requests for that window.
+            recordReconcileWindowSuccess(headWindow, deltaStartedAt);
+          }
+
+          const excludedKeys = headWindow ? new Set([headWindow.key]) : new Set<string>();
+          const reconcileSummary: WindowSyncSummary = reconcilePlan
+            ? await runPlannedReconcileWindows(reconcilePlan, deltaStartedAt, excludedKeys)
+            : { alerts: 0, decisions: 0, errors: [], successfulWindows: 0, changed: false };
+          const removed = await cleanupOldData();
+          const dataChanged = deltaSummary.changed
+            || reconcileSummary.changed
+            || removed.alerts > 0
+            || removed.decisions > 0;
+          const duplicateRefreshStartedAt = Date.now();
+          await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
+          console.log(`Decision duplicate index refreshed in ${formatElapsedTime(Date.now() - duplicateRefreshStartedAt)}.`);
+          return { deltaSummary, reconcileSummary, dataChanged };
+        });
+        refreshResult = committedRefresh.result;
+        releasePublishedRevision = committedRefresh.releasePublishedRevision;
+      } catch (error) {
+        reconcileWindowState = reconcileStateBeforeRefresh;
+        throw error;
       }
 
-      const excludedKeys = headWindow ? new Set([headWindow.key]) : new Set<string>();
-      const reconcileSummary: WindowSyncSummary = reconcilePlan
-        ? await runPlannedReconcileWindows(reconcilePlan, deltaStartedAt, excludedKeys)
-        : { alerts: 0, decisions: 0, errors: [], successfulWindows: 0, changed: false };
-      if (reconcilePlan) finishReconcilePlan(reconcilePlan);
-      const removed = await cleanupOldData();
-      const dataChanged = deltaSummary.changed
-        || reconcileSummary.changed
-        || removed.alerts > 0
-        || removed.decisions > 0;
-      const duplicateRefreshStartedAt = Date.now();
-      await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
-      console.log(`Decision duplicate index refreshed in ${formatElapsedTime(Date.now() - duplicateRefreshStartedAt)}.`);
-      const dashboardRefreshStartedAt = Date.now();
       try {
-        if (await prepareDashboardStatsAfterRefresh(dataChanged)) {
-          console.log(`Dashboard statistics prepared in ${formatElapsedTime(Date.now() - dashboardRefreshStartedAt)}.`);
+        const { deltaSummary, reconcileSummary, dataChanged } = refreshResult;
+        if (reconcilePlan) finishReconcilePlan(reconcilePlan);
+        const dashboardRefreshStartedAt = Date.now();
+        try {
+          if (await prepareDashboardStatsAfterRefresh(dataChanged)) {
+            console.log(`Dashboard statistics prepared in ${formatElapsedTime(Date.now() - dashboardRefreshStartedAt)}.`);
+          }
+        } catch (error: any) {
+          // Dashboard requests retain their normal lazy-build fallback if cache
+          // preparation fails; a reporting-cache failure must not lose a valid
+          // LAPI delta or prevent the next refresh from running.
+          console.error('Failed to prepare dashboard statistics after delta update:', error.message);
         }
-      } catch (error: any) {
-        // Dashboard requests retain their normal lazy-build fallback if cache
-        // preparation fails; a reporting-cache failure must not lose a valid
-        // LAPI delta or prevent the next refresh from running.
-        console.error('Failed to prepare dashboard statistics after delta update:', error.message);
+        // Advance only through the exact authoritative delta end. Work performed
+        // after this timestamp is intentionally picked up by the next overlap.
+        cache.lastUpdate = new Date(deltaStartedAt).toISOString();
+        instanceLastUpdates.set(primaryInstance.id, cache.lastUpdate);
+        const reconcileError = reconcileSummary.lastError || (reconcileSummary.errors[0] ? new Error(reconcileSummary.errors[0]) : null);
+        lapiClient.updateStatus(reconcileSummary.errors.length === 0, reconcileError);
+        const completedReconcileWindows = reconcileSummary.successfulWindows + (headWindow ? 1 : 0);
+        console.log(
+          `Delta update complete: ${deltaSummary.alerts} alerts and ${deltaSummary.decisions} decisions synced; ${completedReconcileWindows} reconciliation window${completedReconcileWindows === 1 ? '' : 's'} completed`,
+        );
+        cacheRefreshCompletedAt = new Date().toISOString();
+        publishCacheUpdate(cacheRefreshCompletedAt);
+      } finally {
+        releasePublishedRevision?.();
       }
-      // Advance only through the exact authoritative delta end. Work performed
-      // after this timestamp is intentionally picked up by the next overlap.
-      cache.lastUpdate = new Date(deltaStartedAt).toISOString();
-      instanceLastUpdates.set(primaryInstance.id, cache.lastUpdate);
-      const reconcileError = reconcileSummary.lastError || (reconcileSummary.errors[0] ? new Error(reconcileSummary.errors[0]) : null);
-      lapiClient.updateStatus(reconcileSummary.errors.length === 0, reconcileError);
-      const completedReconcileWindows = reconcileSummary.successfulWindows + (headWindow ? 1 : 0);
-      console.log(
-        `Delta update complete: ${deltaSummary.alerts} alerts and ${deltaSummary.decisions} decisions synced; ${completedReconcileWindows} reconciliation window${completedReconcileWindows === 1 ? '' : 's'} completed`,
-      );
-      cacheRefreshCompletedAt = new Date().toISOString();
-      publishCacheUpdate(cacheRefreshCompletedAt);
     } catch (error: any) {
       console.error('Failed to update cache delta:', error.message);
       lapiClient.updateStatus(false, error);
@@ -3604,30 +3790,37 @@ ${errorSummary}  Status: ${syncSummary.state}
       const currentWindowStart = Math.floor(now / config.reconcileWindowMs) * config.reconcileWindowMs;
       const start = Math.max(now - config.lookbackMs, currentWindowStart);
       console.log(`Manual latest-window refresh (${formatSyncWindow(start, now, now)})...`);
-      const summary = await syncAlertWindow(start, now, now);
-      if (summary.errors.length > 0) {
-        const error = summary.lastError || new Error(`Latest-window refresh incomplete: ${summary.errors.join('; ')}`);
-        lapiClient.updateStatus(false, error);
-        throw error;
-      }
-
-      reconcileWindowState.headLastSuccess = now;
-      saveReconcileWindowState();
-      const removed = await cleanupOldData();
-      const dataChanged = summary.changed || removed.alerts > 0 || removed.decisions > 0;
-      await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
+      const committedRefresh = await runConsistentDatabaseRefresh(async () => {
+        const summary = await syncAlertWindow(start, now, now);
+        if (summary.errors.length > 0) {
+          const error = summary.lastError || new Error(`Latest-window refresh incomplete: ${summary.errors.join('; ')}`);
+          lapiClient.updateStatus(false, error);
+          throw error;
+        }
+        const removed = await cleanupOldData();
+        const dataChanged = summary.changed || removed.alerts > 0 || removed.decisions > 0;
+        await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
+        return { summary, dataChanged };
+      });
       try {
-        await prepareDashboardStatsAfterRefresh(dataChanged);
-      } catch (error: any) {
-        console.error('Failed to prepare dashboard statistics after latest-window refresh:', error.message);
+        const { summary, dataChanged } = committedRefresh.result;
+        reconcileWindowState.headLastSuccess = now;
+        saveReconcileWindowState();
+        try {
+          await prepareDashboardStatsAfterRefresh(dataChanged);
+        } catch (error: any) {
+          console.error('Failed to prepare dashboard statistics after latest-window refresh:', error.message);
+        }
+        cache.lastUpdate = new Date(now).toISOString();
+        instanceLastUpdates.set(primaryInstance.id, cache.lastUpdate);
+        lapiClient.updateStatus(true, null);
+        await runNotificationEvaluation('manual latest-window refresh');
+        cacheRefreshCompletedAt = new Date().toISOString();
+        publishCacheUpdate(cacheRefreshCompletedAt);
+        console.log(`Latest-window refresh complete: ${summary.alerts} alerts and ${summary.decisions} decisions synced.`);
+      } finally {
+        committedRefresh.releasePublishedRevision();
       }
-      cache.lastUpdate = new Date(now).toISOString();
-      instanceLastUpdates.set(primaryInstance.id, cache.lastUpdate);
-      lapiClient.updateStatus(true, null);
-      await runNotificationEvaluation('manual latest-window refresh');
-      cacheRefreshCompletedAt = new Date().toISOString();
-      publishCacheUpdate(cacheRefreshCompletedAt);
-      console.log(`Latest-window refresh complete: ${summary.alerts} alerts and ${summary.decisions} decisions synced.`);
     });
   }
 
@@ -3660,6 +3853,36 @@ ${errorSummary}  Status: ${syncSummary.state}
       cacheRefreshPromise = null;
     });
     return cacheRefreshPromise;
+  }
+
+  async function runConsistentDatabaseRefresh<T>(
+    operation: () => Promise<T>,
+  ): Promise<{ result: T; releasePublishedRevision: () => void }> {
+    let releasePublishedRevision: (() => void) | null = null;
+    try {
+      const result = syncWorker.runTransaction
+        ? await syncWorker.runTransaction(operation, {
+            beforeCommit: async () => {
+              releasePublishedRevision = await acquirePublishedRevisionWrite();
+            },
+          })
+        : await (async () => {
+            releasePublishedRevision = await acquirePublishedRevisionWrite();
+            return operation();
+          })();
+      let released = false;
+      return {
+        result,
+        releasePublishedRevision: () => {
+          if (released) return;
+          released = true;
+          releasePublishedRevision?.();
+        },
+      };
+    } catch (error) {
+      (releasePublishedRevision as (() => void) | null)?.();
+      throw error;
+    }
   }
 
   async function updateCache(options: { throwOnError?: boolean; reconcile?: boolean; skipIfBusy?: boolean } = {}): Promise<void> {
@@ -3712,6 +3935,15 @@ ${errorSummary}  Status: ${syncSummary.state}
     }
 
     await ensureBootstrapReady(source);
+  }
+
+  async function prepareOnDemandRefresh(context: HonoContext): Promise<void> {
+    if (
+      refreshIntervalMs === 0
+      && !context.get(onDemandRefreshPreparedContextKey)
+    ) {
+      await updateCache({ skipIfBusy: true });
+    }
   }
 
   function isBackgroundBootstrapSource(source: string | null): boolean {
@@ -5015,19 +5247,19 @@ ${errorSummary}  Status: ${syncSummary.state}
       new Date().toISOString(),
     );
     const [alertRows, decisionRows] = await Promise.all([
-      queryWorker.all<{ simulated: number; count: number }>(`
+      analyticsQueryWorker.all<{ simulated: number; count: number }>(`
         SELECT simulated, COUNT(*) AS count
         FROM alerts ${getAlertCountIndexHint(alertFilters, alertSearchAst)}
         ${alertWhere.toSql()}
         GROUP BY simulated
-      `, alertWhere.params),
-      queryWorker.all<{ simulated: number; count: number }>(`
+      `, alertWhere.params, { label: 'dashboard alert totals' }),
+      analyticsQueryWorker.all<{ simulated: number; count: number }>(`
         ${decisionQuery.cteSql}
         SELECT simulated, COUNT(*) AS count
         FROM ${decisionQuery.fromSql}
         ${decisionQuery.outerWhereSql}
         GROUP BY simulated
-      `, decisionQuery.params),
+      `, decisionQuery.params, { label: 'dashboard decision totals' }),
     ]);
 
     const alerts = alertRows.reduce((sum, row) => sum + Number(row.count || 0), 0);
@@ -5790,7 +6022,7 @@ ${errorSummary}  Status: ${syncSummary.state}
     while (true) {
       const batchWhere = alertWhere.clone();
       batchWhere.add('id > ?', lastAlertId);
-      const alertRows = await queryWorker.all<{
+      const alertRows = await analyticsQueryWorker.all<{
       id: string;
       internal_id: number;
       instance_id: string;
@@ -5821,7 +6053,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       ${batchWhere.toSql()}
       ORDER BY alerts.id ASC
       LIMIT ?
-    `, [...batchWhere.params, DASHBOARD_INDEX_BATCH_SIZE]);
+    `, [...batchWhere.params, DASHBOARD_INDEX_BATCH_SIZE], { label: 'dashboard alert index' });
       if (alertRows.length === 0) {
         break;
       }
@@ -5885,7 +6117,7 @@ ${errorSummary}  Status: ${syncSummary.state}
     while (true) {
       const batchWhere = decisionWhere.clone();
       batchWhere.add('rowid > ?', lastDecisionRowId);
-      const decisionRows = await queryWorker.all<{
+      const decisionRows = await analyticsQueryWorker.all<{
       rowid: number;
       upstream_id?: string | null;
       instance_id: string;
@@ -5915,7 +6147,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       ${batchWhere.toSql()}
       ORDER BY rowid ASC
       LIMIT ?
-    `, [...batchWhere.params, DASHBOARD_INDEX_BATCH_SIZE]);
+    `, [...batchWhere.params, DASHBOARD_INDEX_BATCH_SIZE], { label: 'dashboard decision index' });
       if (decisionRows.length === 0) {
         break;
       }
@@ -6246,10 +6478,21 @@ ${errorSummary}  Status: ${syncSummary.state}
         },
       })
       : null;
-    const exactListTotalsPromise = queryDashboardFilteredListTotals(
+    // Keep the database totals query concurrent with the in-memory chart
+    // aggregation, but attach its rejection handler immediately. A slow
+    // analytics worker used to let this promise reject while the dashboard
+    // loops or location resolver were still running; Node then treated the
+    // temporarily unhandled rejection as a fatal process error.
+    const exactListTotalsResultPromise = queryDashboardFilteredListTotals(
       filters,
       compiledDashboardSearch.ok ? compiledDashboardSearch.ast : null,
       compiledDashboardDecisionSearch.ok ? compiledDashboardDecisionSearch.ast : null,
+    ).then(
+      (value) => ({ value, error: null as Error | null }),
+      (error: unknown) => ({
+        value: null,
+        error: error instanceof Error ? error : new Error(String(error)),
+      }),
     );
 
     const filteredAlertAccumulator = createDashboardStatsAccumulator();
@@ -6385,7 +6628,9 @@ ${errorSummary}  Status: ${syncSummary.state}
     const attackLocations = await attackLocationResolver.resolve(
       dashboardAttackLocationData(filteredAlertAccumulator.attackLocations),
     );
-    const exactListTotals = await exactListTotalsPromise;
+    const exactListTotalsResult = await exactListTotalsResultPromise;
+    if (exactListTotalsResult.error) throw exactListTotalsResult.error;
+    const exactListTotals = exactListTotalsResult.value!;
 
     const response: DashboardStatsResponse = {
       totals: {
@@ -6536,36 +6781,44 @@ ${errorSummary}  Status: ${syncSummary.state}
         const start = Number.isFinite(previousUpdateMs)
           ? Math.max(now - runtime.lookbackMs, previousUpdateMs - 10_000)
           : Math.max(now - runtime.lookbackMs, now - overlapMs);
-        const summary = await syncAlertWindow(start, now, now, (window, alerts, decisions) => {
-          status.progress = 60;
-          status.message = getServerTranslator(database)('components.syncOverlay.statusProcessingWindow', {
-            window,
-            alerts,
-            decisions,
-          });
-        }, runtime);
-        if (summary.errors.length > 0) {
-          throw summary.lastError || new Error(summary.errors.join('; '));
-        }
-        await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
-        client.updateStatus(true);
-        status.state = 'complete';
-        status.progress = 100;
-        status.message = `${instance.name} sync complete`;
-        status.errors = [];
-        instanceLastUpdates.set(instanceId, new Date(now).toISOString());
-        let dashboardPrepared = false;
+        const committedRefresh = await runConsistentDatabaseRefresh(async () => {
+          const summary = await syncAlertWindow(start, now, now, (window, alerts, decisions) => {
+            status.progress = 60;
+            status.message = getServerTranslator(database)('components.syncOverlay.statusProcessingWindow', {
+              window,
+              alerts,
+              decisions,
+            });
+          }, runtime);
+          if (summary.errors.length > 0) {
+            throw summary.lastError || new Error(summary.errors.join('; '));
+          }
+          await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
+          return summary;
+        });
         try {
-          dashboardPrepared = await prepareDashboardStatsAfterRefresh(summary.changed, instanceId);
-        } catch (error: any) {
-          console.error(`Failed to prepare dashboard statistics after ${instance.name} update:`, error.message);
+          const summary = committedRefresh.result;
+          client.updateStatus(true);
+          status.state = 'complete';
+          status.progress = 100;
+          status.message = `${instance.name} sync complete`;
+          status.errors = [];
+          instanceLastUpdates.set(instanceId, new Date(now).toISOString());
+          let dashboardPrepared = false;
+          try {
+            dashboardPrepared = await prepareDashboardStatsAfterRefresh(summary.changed, instanceId);
+          } catch (error: any) {
+            console.error(`Failed to prepare dashboard statistics after ${instance.name} update:`, error.message);
+          }
+          if (summary.changed || dashboardPrepared) {
+            const revision = new Date().toISOString();
+            cacheRefreshCompletedAt = revision;
+            publishCacheUpdate(revision, [instanceId]);
+          }
+          console.log(`[${instance.name}] Delta update complete: ${summary.alerts} alerts and ${summary.decisions} decisions synced.`);
+        } finally {
+          committedRefresh.releasePublishedRevision();
         }
-        if (summary.changed || dashboardPrepared) {
-          const revision = new Date().toISOString();
-          cacheRefreshCompletedAt = revision;
-          publishCacheUpdate(revision, [instanceId]);
-        }
-        console.log(`[${instance.name}] Delta update complete: ${summary.alerts} alerts and ${summary.decisions} decisions synced.`);
       } catch (error: any) {
         client.updateStatus(false, error);
         status.state = 'failed';
@@ -6659,6 +6912,7 @@ ${errorSummary}  Status: ${syncSummary.state}
       instanceRefreshTimers.clear();
       historicalInstanceSyncPending.clear();
       queryWorker.close();
+      if (analyticsQueryWorker !== queryWorker) analyticsQueryWorker.close();
       facetQueryWorker.close();
       syncWorker.close();
       cacheUpdateListeners.clear();

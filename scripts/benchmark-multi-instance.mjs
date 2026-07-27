@@ -9,11 +9,11 @@ const warmFacetLimitMs = 500;
 const coldFacetLimitMs = 2_000;
 
 const listRequests = [
-  [`${scopeName} alerts`, `/api/alerts?paginated=true&page=1&page_size=50&instance=${encodeURIComponent(scopeId)}`],
+  [`${scopeName} alerts`, `/api/alerts?paginated=true&page=1&page_size=50&include_decisions=false&instance=${encodeURIComponent(scopeId)}`],
   [`${scopeName} decisions`, `/api/decisions?paginated=true&page=1&page_size=50&instance=${encodeURIComponent(scopeId)}`],
   [`${scopeName} search`, `/api/alerts?paginated=true&page=1&page_size=50&instance=${encodeURIComponent(scopeId)}&q=scenario%3Assh`],
   [`${scopeName} dashboard`, `/api/dashboard/stats?instance=${encodeURIComponent(scopeId)}`],
-  ['Combined alerts', '/api/alerts?paginated=true&page=1&page_size=50&instance=all'],
+  ['Combined alerts', '/api/alerts?paginated=true&page=1&page_size=50&include_decisions=false&instance=all'],
   ['Combined decisions', '/api/decisions?paginated=true&page=1&page_size=50&instance=all'],
   ['Combined search', '/api/alerts?paginated=true&page=1&page_size=50&instance=all&q=scenario%3Assh'],
   ['Combined dashboard', '/api/dashboard/stats?instance=all'],

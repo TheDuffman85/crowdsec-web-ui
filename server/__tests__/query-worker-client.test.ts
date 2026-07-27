@@ -45,4 +45,44 @@ describe('DatabaseQueryWorker', () => {
     worker.close();
     database.close();
   });
+
+  test('distinguishes queue starvation from query execution timeouts', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-query-worker-'));
+    tempDirs.push(dir);
+    const dbPath = path.join(dir, 'test.db');
+    const database = new CrowdsecDatabase({ dbPath });
+    const worker = new DatabaseQueryWorker({
+      dbPath,
+      maxWorkers: 1,
+      timeoutMs: 250,
+      queueTimeoutMs: 25,
+    });
+    workers.push(worker);
+    const slowQuery = worker.get(`
+      WITH RECURSIVE counter(value) AS (
+        SELECT 1
+        UNION ALL
+        SELECT value + 1 FROM counter WHERE value < 100000000
+      )
+      SELECT SUM(value) AS total FROM counter
+    `, [], { label: 'slow regression query' });
+    const queuedQuery = worker.get<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM alerts',
+      [],
+      { label: 'queued regression query' },
+    );
+
+    await expect(queuedQuery).rejects.toMatchObject({
+      name: 'QueryWorkerTimeoutError',
+      stage: 'queue',
+      label: 'queued regression query',
+    });
+    await expect(slowQuery).rejects.toEqual(expect.objectContaining({
+      name: 'QueryWorkerTimeoutError',
+      stage: 'execution',
+      label: 'slow regression query',
+    }));
+
+    database.close();
+  });
 });

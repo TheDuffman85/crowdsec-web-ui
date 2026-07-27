@@ -194,4 +194,106 @@ describe('DatabaseSyncWorker', () => {
     });
     database.close();
   });
+
+  test('keeps readers on the committed revision until a refresh transaction commits', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-sync-worker-'));
+    tempDirs.push(dir);
+    const dbPath = path.join(dir, 'test.db');
+    const database = new CrowdsecDatabase({ dbPath });
+    const worker = new DatabaseSyncWorker({ dbPath });
+    workers.push(worker);
+    const mutation = {
+      alert: {
+        $id: 1,
+        $uuid: 'transaction-alert',
+        $created_at: '2026-07-14T00:00:00.000Z',
+        $message: 'Atomic refresh alert',
+        $raw_data: JSON.stringify({ id: 1 }),
+      },
+      decisions: [],
+      keepDecisionIds: [],
+    };
+
+    await worker.runTransaction(async () => {
+      await worker.persistAlerts([mutation]);
+      expect(database.countAlerts()).toBe(0);
+    });
+    expect(database.countAlerts()).toBe(1);
+
+    await expect(worker.runTransaction(async () => {
+      await worker.persistAlerts([{
+        ...mutation,
+        alert: { ...mutation.alert, $id: 2, $uuid: 'rolled-back-alert' },
+      }]);
+      expect(database.countAlerts()).toBe(1);
+      throw new Error('abort refresh');
+    })).rejects.toThrow('abort refresh');
+    expect(database.countAlerts()).toBe(1);
+
+    database.close();
+  });
+
+  test('compares large alert decision membership exactly in the sync worker', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-sync-worker-'));
+    tempDirs.push(dir);
+    const dbPath = path.join(dir, 'test.db');
+    const database = new CrowdsecDatabase({ dbPath });
+    const worker = new DatabaseSyncWorker({ dbPath });
+    workers.push(worker);
+    database.insertAlert({
+      $id: 1,
+      $instance_id: 'default',
+      $uuid: 'blocklist-alert',
+      $created_at: '2026-07-14T00:00:00.000Z',
+      $message: 'Blocklist import',
+      $record: {
+        id: 1,
+        uuid: 'blocklist-alert',
+        created_at: '2026-07-14T00:00:00.000Z',
+        message: 'Blocklist import',
+        decisions: [],
+      },
+    });
+    for (const id of ['keep', 'remove']) {
+      database.insertDecision({
+        $id: id,
+        $instance_id: 'default',
+        $uuid: id,
+        $alert_id: 1,
+        $created_at: '2026-07-14T00:00:00.000Z',
+        $stop_at: '2026-08-14T00:00:00.000Z',
+        $value: `198.51.100.${id === 'keep' ? 1 : 2}`,
+        $type: 'ban',
+        $origin: 'lists',
+        $scenario: 'crowdsecurity/blocklist-import',
+        $record: { id, alert_id: 1, origin: 'lists' },
+      });
+    }
+    const snapshot = database.getAlertDecisionSnapshot(1, 'default');
+    expect(snapshot).not.toBeNull();
+    const comparison = {
+      alertId: 1,
+      instanceId: 'default',
+      metadataHash: snapshot!.metadata_hash,
+      decisionIds: ['keep', 'remove'],
+      inactiveDecisionIds: [],
+      observedAt: '2026-07-15T00:00:00.000Z',
+      origins: snapshot!.origins,
+      simulated: snapshot!.simulated,
+    };
+
+    await expect(worker.compareAlertDecisions([comparison])).resolves.toEqual([null]);
+    await expect(worker.compareAlertDecisions([{
+      ...comparison,
+      decisionIds: ['keep', 'add'],
+    }])).resolves.toEqual([{
+      alertId: 1,
+      decisionIdsToPersist: ['add'],
+      removedIds: ['remove'],
+      reconcileDecisions: false,
+      updateAlertRawDataOnly: true,
+    }]);
+
+    database.close();
+  });
 });
