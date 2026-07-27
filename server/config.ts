@@ -64,6 +64,7 @@ export interface RuntimeConfig {
   idleThresholdMs: number;
   lapiRequestTimeoutMs: number;
   bouncerPropagationDelayMs: number;
+  deletionQueueMaxAgeMs: number;
   prometheusUrl?: string;
   prometheusRequestTimeoutMs: number;
   heartbeatIntervalMs: number;
@@ -396,6 +397,7 @@ function createRuntimeConfigFromEnvironment(env: NodeJS.ProcessEnv): RuntimeConf
     idleThresholdMs: parseRefreshInterval(env.CROWDSEC_IDLE_THRESHOLD || '2m'),
     lapiRequestTimeoutMs: parsePositiveIntervalEnv(env.CROWDSEC_LAPI_REQUEST_TIMEOUT, '30s'),
     bouncerPropagationDelayMs: parseNonNegativeIntervalEnv(env.CROWDSEC_BOUNCER_PROPAGATION_DELAY, '15s'),
+    deletionQueueMaxAgeMs: parseNonNegativeIntervalEnv(env.CROWDSEC_DELETION_QUEUE_MAX_AGE, '24h'),
     prometheusUrl: env.CROWDSEC_PROMETHEUS_URL?.trim() || undefined,
     prometheusRequestTimeoutMs: parsePositiveIntervalEnv(env.CROWDSEC_PROMETHEUS_REQUEST_TIMEOUT, '5s'),
     heartbeatIntervalMs: parseRefreshInterval(env.CROWDSEC_HEARTBEAT_INTERVAL || '30s'),

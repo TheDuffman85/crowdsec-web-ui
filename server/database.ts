@@ -1429,6 +1429,14 @@ export class CrowdsecDatabase {
     `).run(completedAt, completedAt, String(alertId));
   }
 
+  expireAlertDeletion(alertId: string | number, completedAt: string, error: string): void {
+    this.db.prepare(`
+      UPDATE pending_alert_deletions
+      SET completed_at = ?, last_attempt_at = ?, last_error = ?
+      WHERE alert_id = ? AND completed_at IS NULL
+    `).run(completedAt, completedAt, error, String(alertId));
+  }
+
   purgeCompletedAlertDeletions(completedBefore: string): number {
     const changes = this.db.prepare(`
       DELETE FROM pending_alert_deletions

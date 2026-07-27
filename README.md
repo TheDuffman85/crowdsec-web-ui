@@ -267,6 +267,7 @@ Synchronization durations accept `ms`, `s`, `m`, `h`, or `d`, for example `500ms
 | `crowdsec.sync.idleThreshold` | `2m` | Inactivity before idle refresh behavior begins. | `CONFIG_CROWDSEC_SYNC_IDLE_THRESHOLD` |
 | `crowdsec.sync.requestTimeout` | `30s` | Timeout for individual LAPI requests. | `CONFIG_CROWDSEC_SYNC_REQUEST_TIMEOUT` |
 | `crowdsec.sync.bouncerPropagationDelay` | `15s` | Grace period before deleting alerts owned by expired decisions. | `CONFIG_CROWDSEC_SYNC_BOUNCER_PROPAGATION_DELAY` |
+| `crowdsec.sync.deletionQueueMaxAge` | `24h` | Stops retrying failed queued deletions after this age; `0` disables the limit. Tombstones remain until the retention window passes. | `CONFIG_CROWDSEC_SYNC_DELETION_QUEUE_MAX_AGE` |
 | `crowdsec.sync.metricsRequestTimeout` | `5s` | Default timeout for metrics endpoints. | `CONFIG_CROWDSEC_SYNC_METRICS_REQUEST_TIMEOUT` |
 | `crowdsec.sync.heartbeatInterval` | `30s` | CrowdSec machine heartbeat cadence; `0` disables it. | `CONFIG_CROWDSEC_SYNC_HEARTBEAT_INTERVAL` |
 | `crowdsec.sync.alertSyncChunk` | `12h` | Historical import window size. | `CONFIG_CROWDSEC_SYNC_ALERT_SYNC_CHUNK` |
@@ -544,9 +545,14 @@ https://<crowdsec-web-ui-host>/api/auth/oidc/callback
 
 ## Deployment and Security
 
-### Trusted IPs for Delete Operations (Optional)
+<a id="trusted-ips-for-delete-operations-optional"></a>
 
-If delete operations return `403 Forbidden`, add the Web UI network to CrowdSec's trusted IPs in `/etc/crowdsec/config.yaml`.
+### Trusted IPs for Alert Deletion
+
+> [!IMPORTANT]
+> CrowdSec only permits alert deletion when the request comes from loopback or an address listed in `api.server.trusted_ips`. Registering the Web UI as a CrowdSec machine authenticates it, but does not grant this IP-based permission.
+
+When the Web UI runs in Docker, add the **Web UI container's source IP or, preferably, its Docker network CIDR** to CrowdSec's `/etc/crowdsec/config.yaml`. This is not the browser's IP or the Docker host's public IP. Without this entry, decision operations can still work while alert deletion fails with `403 Forbidden`.
 
 ```yaml
 api:
@@ -557,7 +563,7 @@ api:
       - 172.16.0.0/12  # Docker default bridge network
 ```
 
-Restart CrowdSec after updating the file. The current CrowdSec container does not provide a `TRUSTED_IPS` environment override. See the [CrowdSec configuration reference](https://docs.crowdsec.net/docs/configuration/crowdsec_configuration/).
+Use the narrowest CIDR that contains the Web UI container and LAPI network. Container IPs can change when containers are recreated, so the Docker network CIDR is usually more reliable than one container IP. Restart CrowdSec after updating the file. The current CrowdSec container does not provide a `TRUSTED_IPS` environment override. See the [CrowdSec configuration reference](https://docs.crowdsec.net/docs/configuration/crowdsec_configuration/).
 
 ### Local or Custom LAPI Certificate
 

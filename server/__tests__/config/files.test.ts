@@ -58,6 +58,7 @@ crowdsec:
     idleThreshold: 1m
     requestTimeout: 45s
     bouncerPropagationDelay: 5s
+    deletionQueueMaxAge: 6h
     metricsRequestTimeout: 8s
     heartbeatInterval: 1m
     alertSyncChunk: 4h
@@ -108,6 +109,7 @@ instances:
         lookbackMs: 172_800_000,
         refreshIntervalMs: 30_000,
         manualRefreshEnabled: true,
+        deletionQueueMaxAgeMs: 21_600_000,
         notificationSecretKey: 'notification-secret',
         notificationAllowPrivateAddresses: false,
         notificationDebugPayloads: true,
@@ -230,6 +232,7 @@ instances:
       CONFIG_AUTH_OIDC_ADMIN_GROUPS_1: 'secops',
       CONFIG_UPDATES_ENABLED: 'false',
       CONFIG_CROWDSEC_SYNC_REFRESH_INTERVAL: '2m',
+      CONFIG_CROWDSEC_SYNC_DELETION_QUEUE_MAX_AGE: '6h',
       CONFIG_INSTANCE_LAPI_URL: 'https://primary.example.com:8080',
       CONFIG_INSTANCE_LAPI_AUTH_USERNAME: 'watcher',
       CONFIG_INSTANCE_LAPI_AUTH_PASSWORD: 'do-not-write-this-password',
@@ -256,6 +259,7 @@ instances:
         timeZone: 'UTC',
         readOnly: true,
         refreshIntervalMs: 120_000,
+        deletionQueueMaxAgeMs: 21_600_000,
         updateCheckEnabled: false,
       });
       expect(config.dashboardAuth.sessionSecret).toBe('do-not-write-this-auth-secret');

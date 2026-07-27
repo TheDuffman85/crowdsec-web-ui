@@ -89,7 +89,7 @@ type HonoNext = any;
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 type AnyError = Error & {
   code?: string;
-  response?: { status: number };
+  response?: { data?: unknown; status: number };
   request?: unknown;
   helpLink?: string;
   helpText?: string;
@@ -855,6 +855,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   Older Reconcile: ${getIntervalName(config.reconcileOldIntervalMs)}
   Reconcile Windows Per Refresh: ${config.reconcileWindowsPerRefresh}
   Machine Heartbeat: ${config.heartbeatIntervalMs > 0 ? getIntervalName(config.heartbeatIntervalMs) : 'Disabled'}
+  Deletion Queue Maximum Age: ${config.deletionQueueMaxAgeMs > 0 ? getIntervalName(config.deletionQueueMaxAgeMs) : 'Disabled'}
   Prometheus Metrics: ${config.prometheusUrl ? `Enabled (${config.prometheusUrl})` : 'Disabled'}
   Auth Mode: ${config.crowdsecAuthMode}
   Simulations: ${config.simulationsEnabled ? 'Enabled' : 'Disabled'}
@@ -4048,8 +4049,26 @@ ${errorSummary}  Status: ${syncSummary.state}
     return error.response?.status === 403;
   }
 
+  function getLapiErrorMessage(error: AnyError): string {
+    const data = error.response?.data;
+    if (typeof data === 'string') return data;
+    if (!data || typeof data !== 'object') return '';
+
+    const message = 'message' in data ? data.message : undefined;
+    if (typeof message === 'string') return message;
+
+    const errorMessage = 'error' in data ? data.error : undefined;
+    return typeof errorMessage === 'string' ? errorMessage : '';
+  }
+
   function isAlreadyGoneError(error: AnyError): boolean {
-    return error.response?.status === 404 || error.response?.status === 410;
+    const status = error.response?.status;
+    if (status === 404 || status === 410) return true;
+
+    // CrowdSec currently reports missing alerts and decisions as HTTP 500.
+    // Only accept its explicit absence messages so unrelated server failures
+    // remain retryable.
+    return status === 500 && /\b(?:not found|doesn['’]?t exist)\b/i.test(getLapiErrorMessage(error));
   }
 
   function toFailure(kind: 'alert' | 'decision', id: string, error: AnyError): BulkDeleteFailure {
@@ -4190,9 +4209,13 @@ ${errorSummary}  Status: ${syncSummary.state}
     return Math.min(...rows.map((row) => {
       const lastAttempt = row.last_attempt_at ? Date.parse(row.last_attempt_at) : 0;
       const retryAt = row.last_error && lastAttempt > 0 ? lastAttempt + retryDelayMs : 0;
-      if (!row.decisions_deleted_at) return retryAt || now;
+      const requestedAt = Date.parse(row.requested_at);
+      const expiresAt = config.deletionQueueMaxAgeMs > 0 && Number.isFinite(requestedAt)
+        ? requestedAt + config.deletionQueueMaxAgeMs
+        : Number.POSITIVE_INFINITY;
+      if (!row.decisions_deleted_at) return Math.min(retryAt || now, expiresAt);
       const deleteAt = row.delete_after ? Date.parse(row.delete_after) : now;
-      return Math.max(deleteAt, retryAt);
+      return Math.min(Math.max(deleteAt, retryAt), expiresAt);
     }));
   }
 
@@ -4247,6 +4270,24 @@ ${errorSummary}  Status: ${syncSummary.state}
       }
 
       for (const row of rows) {
+        const requestedAt = Date.parse(row.requested_at);
+        if (
+          config.deletionQueueMaxAgeMs > 0
+          && Number.isFinite(requestedAt)
+          && requestedAt + config.deletionQueueMaxAgeMs <= Date.now()
+        ) {
+          const completedAt = new Date().toISOString();
+          const maxAge = getIntervalName(config.deletionQueueMaxAgeMs);
+          const expirationError = `Maximum deletion queue age of ${maxAge} exceeded${row.last_error ? `; last error: ${row.last_error}` : ''}`;
+          await syncWorker.runExclusive(() => {
+            database.expireAlertDeletion(row.alert_id, completedAt, expirationError);
+          });
+          console.error(
+            `[deletion-queue] Stopped retrying alert ${row.alert_id} after ${maxAge}; its tombstone remains active.${row.last_error ? ` Last error: ${row.last_error}` : ''}`,
+          );
+          continue;
+        }
+
         let decisionsDeletedAt = row.decisions_deleted_at;
         let deleteAfter = row.delete_after;
 

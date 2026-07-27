@@ -44,6 +44,7 @@ export const DEPRECATED_CONFIG_ENV = [
   'CROWDSEC_PROMETHEUS_REQUEST_TIMEOUT', 'CROWDSEC_SIMULATIONS_ENABLED', 'CROWDSEC_LOOKBACK_PERIOD',
   'CROWDSEC_REFRESH_INTERVAL', 'CROWDSEC_MANUAL_REFRESH_ENABLED', 'CROWDSEC_IDLE_REFRESH_INTERVAL',
   'CROWDSEC_IDLE_THRESHOLD', 'CROWDSEC_LAPI_REQUEST_TIMEOUT', 'CROWDSEC_BOUNCER_PROPAGATION_DELAY',
+  'CROWDSEC_DELETION_QUEUE_MAX_AGE',
   'CROWDSEC_HEARTBEAT_INTERVAL', 'CROWDSEC_ALERT_SYNC_CHUNK', 'CROWDSEC_ALERT_SYNC_MIN_CHUNK',
   'CROWDSEC_RECONCILE_WINDOW', 'CROWDSEC_RECONCILE_RECENT_AGE', 'CROWDSEC_RECONCILE_RECENT_INTERVAL',
   'CROWDSEC_RECONCILE_ACTIVE_INTERVAL', 'CROWDSEC_RECONCILE_OLD_INTERVAL',
@@ -230,6 +231,7 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
     lookback: 'CROWDSEC_LOOKBACK_PERIOD', refreshInterval: 'CROWDSEC_REFRESH_INTERVAL',
     idleRefreshInterval: 'CROWDSEC_IDLE_REFRESH_INTERVAL', idleThreshold: 'CROWDSEC_IDLE_THRESHOLD',
     requestTimeout: 'CROWDSEC_LAPI_REQUEST_TIMEOUT', bouncerPropagationDelay: 'CROWDSEC_BOUNCER_PROPAGATION_DELAY',
+    deletionQueueMaxAge: 'CROWDSEC_DELETION_QUEUE_MAX_AGE',
     metricsRequestTimeout: 'CROWDSEC_PROMETHEUS_REQUEST_TIMEOUT', heartbeatInterval: 'CROWDSEC_HEARTBEAT_INTERVAL',
     alertSyncChunk: 'CROWDSEC_ALERT_SYNC_CHUNK', alertSyncMinChunk: 'CROWDSEC_ALERT_SYNC_MIN_CHUNK',
     reconcileWindow: 'CROWDSEC_RECONCILE_WINDOW', reconcileRecentAge: 'CROWDSEC_RECONCILE_RECENT_AGE',
@@ -238,7 +240,7 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
   } as const;
   knownKeys(sync, [...Object.keys(syncKeys), 'manualRefreshEnabled', 'reconcileWindowsPerRefresh', 'bootstrapRetryEnabled'], 'crowdsec.sync');
   const zeroDurationKeys = new Set([
-    'refreshInterval', 'idleRefreshInterval', 'idleThreshold', 'bouncerPropagationDelay',
+    'refreshInterval', 'idleRefreshInterval', 'idleThreshold', 'bouncerPropagationDelay', 'deletionQueueMaxAge',
     'heartbeatInterval', 'bootstrapRetryDelay',
   ]);
   for (const [key, envName] of Object.entries(syncKeys)) {
@@ -305,7 +307,7 @@ export const CONFIG_KEY_ORDER = new Map<string, readonly string[]>([
   ['crowdsec.alertFilters.legacy', ['origins', 'extraScenarios']],
   ['crowdsec.sync', [
     'lookback', 'refreshInterval', 'manualRefreshEnabled', 'idleRefreshInterval', 'idleThreshold',
-    'requestTimeout', 'bouncerPropagationDelay', 'metricsRequestTimeout', 'heartbeatInterval',
+    'requestTimeout', 'bouncerPropagationDelay', 'deletionQueueMaxAge', 'metricsRequestTimeout', 'heartbeatInterval',
     'alertSyncChunk', 'alertSyncMinChunk', 'reconcileWindow', 'reconcileRecentAge',
     'reconcileRecentInterval', 'reconcileActiveInterval', 'reconcileOldInterval',
     'reconcileWindowsPerRefresh', 'bootstrapRetryDelay', 'bootstrapRetryEnabled',
@@ -415,6 +417,7 @@ const LEGACY_GENERATED_CONFIG_PATHS = [
   ['CROWDSEC_IDLE_THRESHOLD', ['crowdsec', 'sync', 'idleThreshold']],
   ['CROWDSEC_LAPI_REQUEST_TIMEOUT', ['crowdsec', 'sync', 'requestTimeout']],
   ['CROWDSEC_BOUNCER_PROPAGATION_DELAY', ['crowdsec', 'sync', 'bouncerPropagationDelay']],
+  ['CROWDSEC_DELETION_QUEUE_MAX_AGE', ['crowdsec', 'sync', 'deletionQueueMaxAge']],
   ['CROWDSEC_PROMETHEUS_REQUEST_TIMEOUT', ['crowdsec', 'sync', 'metricsRequestTimeout']],
   ['CROWDSEC_HEARTBEAT_INTERVAL', ['crowdsec', 'sync', 'heartbeatInterval']],
   ['CROWDSEC_ALERT_SYNC_CHUNK', ['crowdsec', 'sync', 'alertSyncChunk']],
@@ -534,6 +537,7 @@ export function generateApplicationConfig(env: NodeJS.ProcessEnv, config: Runtim
         idleThreshold: duration(config.idleThresholdMs),
         requestTimeout: duration(config.lapiRequestTimeoutMs),
         bouncerPropagationDelay: duration(config.bouncerPropagationDelayMs),
+        deletionQueueMaxAge: duration(config.deletionQueueMaxAgeMs),
         metricsRequestTimeout: duration(config.prometheusRequestTimeoutMs),
         heartbeatInterval: duration(config.heartbeatIntervalMs),
         alertSyncChunk: duration(config.alertSyncChunkMs),
@@ -599,6 +603,7 @@ const CONFIG_VALUE_ENV = [
   ['CONFIG_CROWDSEC_SYNC_IDLE_THRESHOLD', ['crowdsec', 'sync', 'idleThreshold']],
   ['CONFIG_CROWDSEC_SYNC_REQUEST_TIMEOUT', ['crowdsec', 'sync', 'requestTimeout']],
   ['CONFIG_CROWDSEC_SYNC_BOUNCER_PROPAGATION_DELAY', ['crowdsec', 'sync', 'bouncerPropagationDelay']],
+  ['CONFIG_CROWDSEC_SYNC_DELETION_QUEUE_MAX_AGE', ['crowdsec', 'sync', 'deletionQueueMaxAge']],
   ['CONFIG_CROWDSEC_SYNC_METRICS_REQUEST_TIMEOUT', ['crowdsec', 'sync', 'metricsRequestTimeout']],
   ['CONFIG_CROWDSEC_SYNC_HEARTBEAT_INTERVAL', ['crowdsec', 'sync', 'heartbeatInterval']],
   ['CONFIG_CROWDSEC_SYNC_ALERT_SYNC_CHUNK', ['crowdsec', 'sync', 'alertSyncChunk']],

@@ -73,6 +73,7 @@
 #     idleThreshold: 2m
 #     requestTimeout: 30s
 #     bouncerPropagationDelay: 15s
+#     deletionQueueMaxAge: 24h
 #     metricsRequestTimeout: 5s
 #     heartbeatInterval: 30s
 #     alertSyncChunk: 12h

@@ -109,6 +109,13 @@ describe('config helpers', () => {
     expect(createRuntimeConfig({ CROWDSEC_BOUNCER_PROPAGATION_DELAY: 'invalid' }).bouncerPropagationDelayMs).toBe(15_000);
   });
 
+  test('limits the lifetime of failed deletion queue entries', () => {
+    expect(createRuntimeConfig({}).deletionQueueMaxAgeMs).toBe(86_400_000);
+    expect(createRuntimeConfig({ CROWDSEC_DELETION_QUEUE_MAX_AGE: '0' }).deletionQueueMaxAgeMs).toBe(0);
+    expect(createRuntimeConfig({ CROWDSEC_DELETION_QUEUE_MAX_AGE: '6h' }).deletionQueueMaxAgeMs).toBe(21_600_000);
+    expect(createRuntimeConfig({ CROWDSEC_DELETION_QUEUE_MAX_AGE: 'invalid' }).deletionQueueMaxAgeMs).toBe(86_400_000);
+  });
+
   test('createRuntimeConfig reads relevant environment values', () => {
     const config = createRuntimeConfig({
       PORT: '4000',
@@ -129,6 +136,7 @@ describe('config helpers', () => {
       CROWDSEC_IDLE_THRESHOLD: '30s',
       CROWDSEC_LAPI_REQUEST_TIMEOUT: '2m',
       CROWDSEC_BOUNCER_PROPAGATION_DELAY: '20s',
+      CROWDSEC_DELETION_QUEUE_MAX_AGE: '6h',
       CROWDSEC_PROMETHEUS_URL: 'http://crowdsec:6060/metrics',
       CROWDSEC_PROMETHEUS_REQUEST_TIMEOUT: '10s',
       CROWDSEC_HEARTBEAT_INTERVAL: '1m',
@@ -186,6 +194,7 @@ describe('config helpers', () => {
     expect(config.idleRefreshIntervalMs).toBe(60_000);
     expect(config.lapiRequestTimeoutMs).toBe(120_000);
     expect(config.bouncerPropagationDelayMs).toBe(20_000);
+    expect(config.deletionQueueMaxAgeMs).toBe(21_600_000);
     expect(config.prometheusUrl).toBe('http://crowdsec:6060/metrics');
     expect(config.prometheusRequestTimeoutMs).toBe(10_000);
     expect(config.heartbeatIntervalMs).toBe(60_000);

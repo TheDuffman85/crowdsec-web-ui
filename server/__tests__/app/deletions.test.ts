@@ -205,6 +205,104 @@ describe('createApp deletion workflows', () => {
     destroyTempDir();
   });
 
+  test('completes queued deletion when the alert is already missing from LAPI', async () => {
+    const { controller, database, lapiClient } = createController({
+      fetchResolver: (url, init) => {
+        if (url.endsWith('/v1/alerts/1') && init?.method === 'DELETE') {
+          return Response.json({ message: 'ent: alert not found' }, { status: 500 });
+        }
+        return undefined;
+      },
+    });
+    seedAlert(database, sampleAlert());
+    await lapiClient.login();
+
+    const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts/1', {
+      method: 'DELETE',
+    }));
+
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(database.getAlertDeletionTombstone('1')?.completed_at).not.toBeNull();
+    });
+    expect(database.getAlertDeletionTombstone('1')?.last_error).toBeNull();
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('continues queued alert deletion when a linked decision is already missing from LAPI', async () => {
+    const { controller, database, lapiClient, fetchCalls } = createController({
+      fetchResolver: (url, init) => {
+        if (url.endsWith('/v1/decisions/10') && init?.method === 'DELETE') {
+          return Response.json(
+            { message: "decision with id '10' doesn't exist: delete failed" },
+            { status: 500 },
+          );
+        }
+        return undefined;
+      },
+    });
+    seedAlert(database, sampleAlert());
+    await lapiClient.login();
+
+    const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts/1', {
+      method: 'DELETE',
+    }));
+
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(database.getAlertDeletionTombstone('1')?.completed_at).not.toBeNull();
+    });
+    expect(fetchCalls.some((call) => call.url.endsWith('/v1/alerts/1') && call.method === 'DELETE')).toBe(true);
+    expect(database.getAlertDeletionTombstone('1')?.last_error).toBeNull();
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('stops retrying expired queue entries while retaining their sync tombstones', async () => {
+    const { controller, database, fetchCalls } = createController({
+      env: {
+        CROWDSEC_DELETION_QUEUE_MAX_AGE: '1s',
+        CROWDSEC_HEARTBEAT_INTERVAL: 'manual',
+        CROWDSEC_REFRESH_INTERVAL: 'manual',
+      },
+      fetchResolver: (url, init) => {
+        if (url.includes('/v1/alerts?') && (!init?.method || init.method === 'GET')) {
+          return Response.json([sampleAlert()]);
+        }
+        return undefined;
+      },
+    });
+    seedAlert(database, sampleAlert());
+    const queue = database.transaction(() => {
+      database.queueAlertDeletion('1', ['10'], new Date(Date.now() - 60_000).toISOString());
+      database.deleteDecisionsByAlertId('1');
+      database.deleteAlert('1');
+    });
+    queue(undefined);
+
+    controller.startBackgroundTasks();
+
+    await vi.waitFor(() => {
+      expect(database.getAlertDeletionTombstone('1')?.completed_at).not.toBeNull();
+    });
+    expect(database.getAlertDeletionTombstone('1')?.last_error).toContain('Maximum deletion queue age of 1s exceeded');
+    expect(fetchCalls.some((call) =>
+      /\/v1\/(?:alerts|decisions)\/\d+$/.test(call.url) && call.method === 'DELETE',
+    )).toBe(false);
+    await vi.waitFor(() => expect(controller.getSyncStatus().state).toBe('complete'));
+    expect(database.countAlerts()).toBe(0);
+    expect(database.countDecisions()).toBe(0);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
   test('bulk alert delete immediately hides alerts before backend deletion completes', async () => {
     const { controller, database, lapiClient, fetchCalls } = createController();
     seedAlert(database, sampleAlert());

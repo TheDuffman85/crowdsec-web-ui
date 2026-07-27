@@ -190,7 +190,7 @@ Alert deletion, bulk deletion, and cleanup responses use:
 }
 ```
 
-Alert deletion requests return after a durable deletion tombstone is stored and the alert is removed from the visible cache. A backend worker expires linked decisions, waits for the configured bouncer propagation delay, and then deletes the owning alert. Pending work survives restarts, is processed before historical sync, and prevents sync from restoring the hidden alert. `ip` is only included for cleanup-by-IP responses.
+Alert deletion requests return after a durable deletion tombstone is stored and the alert is removed from the visible cache. A backend worker expires linked decisions, waits for the configured bouncer propagation delay, and then deletes the owning alert. Pending work survives restarts, is processed before historical sync, and prevents sync from restoring the hidden alert. Failed work is retried until `crowdsec.sync.deletionQueueMaxAge` (24 hours by default); its tombstone remains active after retries stop so historical sync cannot immediately restore the alert. `ip` is only included for cleanup-by-IP responses.
 
 ## Stats and Dashboard
 
