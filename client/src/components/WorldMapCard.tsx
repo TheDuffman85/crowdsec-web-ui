@@ -328,7 +328,6 @@ export function WorldMapCard({
     const attackMarkerOverlayRef = useRef<HTMLDivElement | null>(null);
     const attackMarkerDotsCanvasRef = useRef<HTMLCanvasElement | null>(null);
     const attackMarkerPulsesCanvasRef = useRef<HTMLCanvasElement | null>(null);
-    const attackMarkerDotsFrameRef = useRef<number | null>(null);
     const attackMarkerViewportRef = useRef<AttackMarkerViewport>({
         offsetX: 0,
         offsetY: 0,
@@ -647,14 +646,6 @@ export function WorldMapCard({
     }, [drawAttackMarkerDotsInViewport]);
 
     useEffect(() => {
-        return () => {
-            if (attackMarkerDotsFrameRef.current !== null) {
-                window.cancelAnimationFrame(attackMarkerDotsFrameRef.current);
-            }
-        };
-    }, []);
-
-    useEffect(() => {
         const pulseCanvas = attackMarkerPulsesCanvasRef.current;
         if (!pulseCanvas || !documentVisible || attackMarkers.length === 0) return;
 
@@ -917,13 +908,10 @@ export function WorldMapCard({
                             limitToBounds={false}
                             onTransform={(_ref, state) => {
                                 if (state.scale > 0 && Number.isFinite(state.scale)) {
-                                    if (attackMarkerDotsFrameRef.current !== null) {
-                                        window.cancelAnimationFrame(attackMarkerDotsFrameRef.current);
-                                    }
-                                    attackMarkerDotsFrameRef.current = window.requestAnimationFrame(() => {
-                                        attackMarkerDotsFrameRef.current = null;
-                                        drawAttackMarkerDotsInViewport();
-                                    });
+                                    // The zoom library applies its CSS transform before invoking
+                                    // this callback. Redraw now so the independently rendered
+                                    // marker canvases are painted in the same frame as the map.
+                                    drawAttackMarkerDotsInViewport();
                                 }
                             }}
                             onPanning={() => {

@@ -303,6 +303,78 @@ describe('WorldMapCard', () => {
     expect(overlay.querySelector('animate, animateTransform')).toBeNull();
   });
 
+  test('keeps markers synchronized through consecutive zoom frames', async () => {
+    render(
+      <WorldMapCard
+        data={[{ label: 'Germany', countryCode: 'DE', count: 1 }]}
+        attackLocations={[{ latitude: 52.52, longitude: 13.405, count: 1, liveCount: 1, simulatedCount: 0 }]}
+        onCountrySelect={vi.fn()}
+        selectedCountry={null}
+      />,
+    );
+
+    const overlay = await screen.findByTestId('world-map-attack-markers');
+    const mapContent = screen.getByTestId('world-map-content');
+    const markerX = Number(overlay.getAttribute('data-first-marker-x'));
+    const markerY = Number(overlay.getAttribute('data-first-marker-y'));
+    vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({
+      bottom: 450,
+      height: 450,
+      left: 0,
+      right: 800,
+      top: 0,
+      width: 800,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(mapContent, 'getBoundingClientRect')
+      .mockReturnValueOnce({
+        bottom: 675,
+        height: 675,
+        left: -200,
+        right: 1000,
+        top: -112.5,
+        width: 1200,
+        x: -200,
+        y: -112.5,
+        toJSON: () => ({}),
+      })
+      .mockReturnValueOnce({
+        bottom: 900,
+        height: 900,
+        left: -400,
+        right: 1200,
+        top: -225,
+        width: 1600,
+        x: -400,
+        y: -225,
+        toJSON: () => ({}),
+      });
+    const transformProps = transformWrapperPropsSpy.mock.calls.at(-1)?.[0] as {
+      onTransform?: (ref: unknown, state: { scale: number; positionX: number; positionY: number }) => void;
+    };
+    canvasContext.arc.mockClear();
+
+    transformProps.onTransform?.({}, { scale: 1.5, positionX: 0, positionY: 0 });
+    expect(canvasContext.arc).toHaveBeenLastCalledWith(
+      -200 + markerX * 1.5,
+      -112.5 + markerY * 1.5,
+      2.5,
+      0,
+      Math.PI * 2,
+    );
+
+    transformProps.onTransform?.({}, { scale: 2, positionX: 0, positionY: 0 });
+    expect(canvasContext.arc).toHaveBeenLastCalledWith(
+      -400 + markerX * 2,
+      -225 + markerY * 2,
+      2.5,
+      0,
+      Math.PI * 2,
+    );
+  });
+
   test('adds location attack details to the country tooltip while hovering a marker', async () => {
     render(
       <WorldMapCard
