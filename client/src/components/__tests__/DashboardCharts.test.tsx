@@ -176,7 +176,7 @@ describe('ActivityBarChart', () => {
     expect(setPercentageBasis).toHaveBeenCalledWith('filtered');
   });
 
-  test('keeps the chart controls in one responsive group', () => {
+  test('keeps the scale and granularity controls together when the header wraps', () => {
     render(
       <ActivityBarChart
         alertsData={series}
@@ -196,13 +196,15 @@ describe('ActivityBarChart', () => {
     const basisGroup = screen.getByRole('group', { name: 'Percentage basis' });
     const scaleGroup = screen.getByRole('group', { name: 'Activity chart scale' });
     const granularityGroup = screen.getByRole('group', { name: 'Activity chart granularity' });
-    const controlsWrapper = scaleGroup.parentElement;
+    const pairedControls = scaleGroup.parentElement;
+    const controlsWrapper = pairedControls?.parentElement;
 
     expect(basisGroup.parentElement).toBe(controlsWrapper);
     expect(controlsWrapper).toHaveClass('justify-between');
     expect(controlsWrapper).toHaveClass('flex-wrap', 'sm:flex-nowrap');
     expect(controlsWrapper).not.toHaveClass('flex-col');
-    expect(granularityGroup).not.toHaveClass('self-start');
+    expect(pairedControls).toHaveClass('flex', 'flex-nowrap');
+    expect(pairedControls).toContainElement(granularityGroup);
   });
 
   test('renders the activity chart with linear scaling by default', () => {
