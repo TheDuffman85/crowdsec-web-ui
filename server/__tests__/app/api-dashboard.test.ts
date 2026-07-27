@@ -172,12 +172,21 @@ describe('createApp dashboard API', () => {
       filteredTotals: { alerts: 1, decisions: 0, simulatedAlerts: 1, simulatedDecisions: 1 },
     }));
 
+    const timelineResponse = await controller.fetch(new Request(
+      `http://localhost/crowdsec/api/dashboard/stats?tz_offset=${timezoneOffset}`,
+    ));
+    const timelinePayload = await timelineResponse.json() as DashboardStatsResponse;
     const dateResponse = await controller.fetch(new Request(`http://localhost/crowdsec/api/dashboard/stats?dateStart=${dateKey}&dateEnd=${dateKey}&tz_offset=${timezoneOffset}`));
-    expect((await dateResponse.json()) as {
-      filteredTotals: { alerts: number; decisions: number; simulatedAlerts: number; simulatedDecisions: number };
-    }).toEqual(expect.objectContaining({
+    const datePayload = await dateResponse.json() as DashboardStatsResponse;
+    expect(datePayload).toEqual(expect.objectContaining({
       filteredTotals: { alerts: 3, decisions: 2, simulatedAlerts: 1, simulatedDecisions: 1 },
     }));
+    expect(datePayload.series.unfilteredAlertsHistory.map((bucket) => bucket.date)).toEqual(
+      timelinePayload.series.unfilteredAlertsHistory.map((bucket) => bucket.date),
+    );
+    expect(datePayload.series.unfilteredDecisionsHistory.map((bucket) => bucket.date)).toEqual(
+      timelinePayload.series.unfilteredDecisionsHistory.map((bucket) => bucket.date),
+    );
 
     controller.stopBackgroundTasks();
     database.close();

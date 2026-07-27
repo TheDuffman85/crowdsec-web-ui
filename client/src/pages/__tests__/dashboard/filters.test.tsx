@@ -252,11 +252,59 @@ describe('Dashboard filters and drilldowns', () => {
     await waitFor(() => {
       const latestChartProps = chartSpy.mock.calls.at(-1)?.[0] as {
         selectedDateRange: { start: string; end: string } | null;
+        isSticky: boolean;
       };
       expect(latestChartProps.selectedDateRange).toEqual({
         start: '2026-04-01T12:00',
         end: '2026-04-02T11:00',
       });
+      expect(latestChartProps.isSticky).toBe(false);
+    });
+  });
+
+  test('keeps an explicit advanced-search till boundary fixed', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(chartSpy).toHaveBeenCalled());
+    const chartProps = chartSpy.mock.calls.at(-1)?.[0] as {
+      onDateRangeSelect: (
+        range: { start: string; end: string } | null,
+        isAtEnd: boolean,
+      ) => void;
+    };
+    act(() => {
+      chartProps.onDateRangeSelect(
+        { start: '2026-04-01T10:00', end: '2026-04-07T10:00' },
+        true,
+      );
+    });
+    await waitFor(() => {
+      const latestChartProps = chartSpy.mock.calls.at(-1)?.[0] as { isSticky: boolean };
+      expect(latestChartProps.isSticky).toBe(true);
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Expand search' }));
+    fireEvent.change(screen.getByPlaceholderText('Search'), {
+      target: {
+        value: 'date>=2026-04-01T10:00 AND date<=2026-04-02T11:00',
+      },
+    });
+
+    await waitFor(() => {
+      const latestChartProps = chartSpy.mock.calls.at(-1)?.[0] as {
+        selectedDateRange: { start: string; end: string } | null;
+        isSticky: boolean;
+      };
+      expect(latestChartProps.selectedDateRange).toEqual({
+        start: '2026-04-01T10:00',
+        end: '2026-04-02T11:00',
+      });
+      expect(latestChartProps.isSticky).toBe(false);
     });
   });
 

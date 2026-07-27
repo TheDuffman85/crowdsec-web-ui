@@ -466,6 +466,7 @@ export function Dashboard() {
     ));
     const [dashboardCustomSearch, setDashboardCustomSearch] = useState('');
     const dashboardCustomSearchRef = useRef('');
+    const dashboardSearchEditedByUserRef = useRef(false);
     const [showDashboardSearchSyntax, setShowDashboardSearchSyntax] = useState(false);
     const dashboardSearchInputRef = useRef<HTMLInputElement | null>(null);
     const dashboardSearchHelp = useMemo(() => buildDashboardSearchHelp(), []);
@@ -581,6 +582,11 @@ export function Dashboard() {
         ));
     }, []);
 
+    const updateDashboardSearchDraftFromUser = useCallback((search: string) => {
+        dashboardSearchEditedByUserRef.current = true;
+        setDashboardSearchDraft(search);
+    }, []);
+
     useEffect(() => {
         if (dashboardSearchError) return;
         const timeout = window.setTimeout(() => {
@@ -590,9 +596,16 @@ export function Dashboard() {
                 persistedQuickFiltersRef.current,
                 compiled.ast,
             );
+            const searchDateRangeChanged = (
+                nextFilters.dateRange.start !== persistedQuickFiltersRef.current.dateRange.start
+                || nextFilters.dateRange.end !== persistedQuickFiltersRef.current.dateRange.end
+            );
+            if (dashboardSearchEditedByUserRef.current && searchDateRangeChanged) {
+                setDateRangeSticky(false);
+            }
+            dashboardSearchEditedByUserRef.current = false;
             updateDashboardCustomSearch(stripDashboardQuickFilters(compiled.ast));
             setSimulationFilter(nextFilters.simulation);
-            setDateRangeSticky(Boolean(nextFilters.dateRange.end));
             updatePersistedQuickFilters(() => nextFilters);
         }, 300);
         return () => window.clearTimeout(timeout);
@@ -981,7 +994,7 @@ export function Dashboard() {
         const nextRange = range.start || range.end
             ? { start: range.start, end: range.end }
             : null;
-        handleDateRangeSelect(nextRange, Boolean(range.end));
+        handleDateRangeSelect(nextRange, false);
     }, [handleDateRangeSelect]);
     const applyQuickFilterSimulation = useCallback((simulation: QuickFilterSimulationValue) => {
         if (filterApplyingRef.current || simulation === simulationFilter) return;
@@ -1231,7 +1244,7 @@ export function Dashboard() {
                                     placeholder={t('common.search')}
                                     value={dashboardSearchDraft}
                                     error={dashboardSearchError}
-                                    onChange={(event) => setDashboardSearchDraft(event.target.value)}
+                                    onChange={(event) => updateDashboardSearchDraftFromUser(event.target.value)}
                                     aria-invalid={dashboardSearchError ? 'true' : 'false'}
                                     aria-describedby={dashboardSearchError ? 'dashboard-search-error' : undefined}
                                 />
@@ -1379,7 +1392,7 @@ export function Dashboard() {
                 isOpen={showDashboardSearchSyntax}
                 onClose={() => setShowDashboardSearchSyntax(false)}
                 onSelectExample={(query) => {
-                    setDashboardSearchDraft(query);
+                    updateDashboardSearchDraftFromUser(query);
                     setShowDashboardSearchSyntax(false);
                 }}
                 onInsertSnippet={(snippet) => {
@@ -1389,7 +1402,7 @@ export function Dashboard() {
                     const prefix = dashboardSearchDraft.slice(0, start);
                     const needsSpace = prefix.length > 0 && !/\s$/.test(prefix);
                     const nextQuery = `${prefix}${needsSpace ? ' ' : ''}${snippet}${dashboardSearchDraft.slice(end)}`;
-                    setDashboardSearchDraft(nextQuery);
+                    updateDashboardSearchDraftFromUser(nextQuery);
                     setShowDashboardSearchSyntax(false);
                     window.requestAnimationFrame(() => {
                         const caret = start + (needsSpace ? 1 : 0) + snippet.length;
