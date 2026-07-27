@@ -78,6 +78,27 @@ describe('persisted quick filters', () => {
     );
   });
 
+  test('persists both simulation checkboxes being cleared', () => {
+    const filters = {
+      ...emptyStoredQuickFilters(),
+      simulation: 'none' as const,
+    };
+    const query = mergeStoredQuickFiltersIntoQuery('alerts', '', filters);
+    expect(query).toBe('sim<>live AND sim<>simulated');
+
+    const compiled = compileAlertSearch(query);
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) return;
+    const synced = syncStoredQuickFiltersFromSearch(
+      emptyStoredQuickFilters(),
+      'alerts',
+      compiled.ast,
+      { start: '', end: '' },
+    );
+    saveStoredQuickFilters(synced);
+    expect(loadStoredQuickFilters().simulation).toBe('none');
+  });
+
   test('syncing one page preserves filters exclusive to the other page', () => {
     let filters = setStoredQuickFilterSelection(emptyStoredQuickFilters(), 'action', {
       included: ['ban'],

@@ -28,13 +28,16 @@ import {
 import {
     ALERT_QUICK_FILTER_FIELDS,
     emptyStoredQuickFilters,
+    getQuickFilterSimulation,
     getStoredQuickFilterSelection,
     loadStoredQuickFilters,
     mergeStoredQuickFiltersIntoQuery,
+    quickFilterSimulationSelection,
     saveStoredQuickFilters,
     setStoredQuickFilterSelection,
     storedQuickFiltersEqual,
     syncStoredQuickFiltersFromSearch,
+    type QuickFilterSimulationValue,
     type StoredQuickFilters,
 } from "../lib/quickFilters";
 import { TABLE_COLUMN_DEFINITIONS } from "../../../shared/contracts";
@@ -512,6 +515,10 @@ export function Alerts() {
             ? selection
             : getStoredQuickFilterSelection(persistedQuickFilters, field)
     ), [applicableQuickFilterFields, persistedQuickFilters]);
+    const quickFilterSimulation = getQuickFilterSimulation(
+        compiledSearch.ok ? compiledSearch.ast : null,
+        currentSimulationFilter,
+    );
 
     useEffect(() => {
         if (!compiledSearch.ok) return;
@@ -563,6 +570,37 @@ export function Alerts() {
         setSearchParams,
         updatePersistedQuickFilters,
     ]);
+    const applySimulationSelection = useCallback((simulation: QuickFilterSimulationValue) => {
+        const currentQuery = searchParams.get('q') ?? '';
+        const currentSearch = compileAlertSearch(currentQuery, searchValidationFeatures, searchDateOptions);
+        if (!currentSearch.ok) return;
+
+        const nextQuery = serializeSearchNode(replaceSearchFacetSelection(
+            currentSearch.ast,
+            'sim',
+            quickFilterSimulationSelection(simulation),
+        ));
+        const nextParams = new URLSearchParams(searchParams);
+        nextParams.delete('simulation');
+        if (nextQuery) nextParams.set('q', nextQuery);
+        else nextParams.delete('q');
+
+        cancelSearchDebounce();
+        searchDraftRef.current = nextQuery;
+        searchSelectionRef.current = { start: nextQuery.length, end: nextQuery.length };
+        skipSearchParamSyncRef.current = nextQuery;
+        setSearchDraft(nextQuery);
+        setDebouncedSearchDraft(nextQuery);
+        setSearchParams(nextParams);
+        updatePersistedQuickFilters((current) => ({ ...current, simulation }));
+    }, [
+        cancelSearchDebounce,
+        searchDateOptions,
+        searchParams,
+        searchValidationFeatures,
+        setSearchParams,
+        updatePersistedQuickFilters,
+    ]);
     const applyDateRange = useCallback((range: SearchDateRange) => {
         updatePersistedQuickFilters((current) => ({ ...current, dateRange: range }));
         const currentQuery = searchParams.get('q') ?? '';
@@ -603,11 +641,16 @@ export function Alerts() {
                 excluded: [],
             });
         }
+        nextSearchAst = replaceSearchFacetSelection(nextSearchAst, 'sim', {
+            included: [],
+            excluded: [],
+        });
         nextSearchAst = replaceSearchDateRange(nextSearchAst, { start: '', end: '' });
         const nextQuery = serializeSearchNode(nextSearchAst);
         const nextParams = new URLSearchParams(searchParams);
         nextParams.delete('dateStart');
         nextParams.delete('dateEnd');
+        nextParams.delete('simulation');
         if (nextQuery) nextParams.set('q', nextQuery);
         else nextParams.delete('q');
 
@@ -1334,6 +1377,9 @@ export function Alerts() {
         dateRange: quickFilterDateRange,
         onDateRangeChange: applyDateRange,
         onClearAll: clearQuickFilters,
+        simulation: simulationsEnabled
+            ? { value: quickFilterSimulation, onChange: applySimulationSelection }
+            : undefined,
         getSelection: getFacetSelection,
         formatValue: formatFacetValue,
         getSearchValues: getFacetSearchValues,

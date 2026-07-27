@@ -6,6 +6,11 @@ import { Dashboard } from '../../Dashboard';
 import { describe, expect, test } from 'vitest';
 import { QUICK_FILTERS_STORAGE_KEY } from '../../../lib/quickFilters';
 
+async function openSimulationQuickFilter() {
+  await userEvent.click(screen.getByRole('button', { name: 'Filters' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Mode' }));
+}
+
 describe('Dashboard filters and drilldowns', () => {
   test('replaces the three drilldown controls with the shared quick-filter trigger', async () => {
     render(
@@ -21,17 +26,73 @@ describe('Dashboard filters and drilldowns', () => {
       'border-gray-100',
       'shadow-sm',
     );
-    expect(screen.getByRole('button', { name: 'Filters' }).parentElement?.parentElement).toContainElement(
-      screen.getByRole('switch'),
-    );
-    const simulationToggle = screen.getByRole('button', { name: 'Simulation' });
+    const statisticsHeading = screen.getByRole('heading', { name: 'Last 7 Days Statistics' });
     const percentageToggle = screen.getByRole('switch');
+    const searchButton = screen.getByRole('button', { name: 'Expand search' });
     const filtersButton = screen.getByRole('button', { name: 'Filters' });
-    expect(simulationToggle.compareDocumentPosition(percentageToggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(percentageToggle.compareDocumentPosition(filtersButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const toolbar = statisticsHeading.parentElement?.parentElement?.parentElement;
+    expect(statisticsHeading.parentElement?.parentElement).toContainElement(percentageToggle);
+    expect(statisticsHeading.parentElement?.parentElement).toHaveClass('sm:gap-8');
+    expect(toolbar).toHaveClass('md:items-center');
+    expect(toolbar).toContainElement(percentageToggle);
+    expect(toolbar).toContainElement(searchButton);
+    expect(toolbar).toContainElement(filtersButton);
+    expect(statisticsHeading.compareDocumentPosition(percentageToggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(percentageToggle.compareDocumentPosition(searchButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(searchButton.compareDocumentPosition(filtersButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Simulation' })).not.toBeInTheDocument();
+    await openSimulationQuickFilter();
+    const scenarioFilter = screen.getByRole('button', { name: 'Scenario' });
+    const modeFilter = screen.getByRole('button', { name: 'Mode' });
+    expect(scenarioFilter.compareDocumentPosition(modeFilter) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'View Alerts' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'View Decisions' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Reset Filters' })).not.toBeInTheDocument();
+  });
+
+  test('applies dashboard advanced search to alert and decision data', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Top Countries');
+    fetchDashboardStatsMock.mockClear();
+    await user.click(screen.getByRole('button', { name: 'Expand search' }));
+    await user.type(screen.getByPlaceholderText('Search'), 'country:DE');
+
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        q: 'country=DE',
+        decision_q: 'country=DE',
+      }),
+      expect.any(Object),
+    ));
+    expect(screen.getByPlaceholderText('Search')).toHaveValue('country=DE');
+
+    const alertsCard = screen.getByText('Total Alerts').closest('a');
+    const decisionsCard = screen.getByText('Active Decisions').closest('a');
+    expect(alertsCard).toHaveAttribute('href', '/alerts?q=country%3DDE');
+    expect(decisionsCard).toHaveAttribute('href', '/decisions?q=country%3DDE');
+  });
+
+  test('shows quick-filter selections in search and opens dashboard syntax help', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Top Countries');
+    await user.click(screen.getByText('Germany'));
+    await user.click(screen.getByRole('button', { name: 'Expand search' }));
+
+    expect(screen.getByPlaceholderText('Search')).toHaveValue('country=DE');
+    await user.click(screen.getByRole('button', { name: 'Search syntax help' }));
+    expect(screen.getByRole('heading', { name: 'Dashboard Search Syntax' })).toBeInTheDocument();
   });
 
   test('shows page-only filters in the unavailable section and allows clearing them', async () => {
@@ -95,7 +156,7 @@ describe('Dashboard filters and drilldowns', () => {
       }),
       expect.any(Object),
     ));
-    expect(screen.getByRole('button', { name: 'Filters' })).toHaveTextContent('6');
+    expect(screen.getByRole('button', { name: 'Filters' })).toHaveTextContent('7');
   });
 
   test('writes top-list selections to quick-filter persistence and reflects drawer changes', async () => {
@@ -309,17 +370,20 @@ describe('Dashboard filters and drilldowns', () => {
     expect(alertsCard).not.toBeNull();
     expect(decisionsCard).not.toBeNull();
 
-    await userEvent.click(screen.getByRole('button', { name: 'Live' }));
+    await openSimulationQuickFilter();
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Toggle Simulation in Mode' }));
     await waitFor(() => expect(within(alertsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('1'));
     await waitFor(() => expect(within(decisionsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('1'));
     expect(within(alertsCard as HTMLElement).queryByText('Simulation')).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: 'Simulation' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Toggle Simulation in Mode' }));
+    await waitFor(() => expect(within(alertsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('2'));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Toggle Live in Mode' }));
     await waitFor(() => expect(within(alertsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('1'));
     await waitFor(() => expect(within(decisionsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('1'));
     expect(within(decisionsCard as HTMLElement).queryByText('Simulation')).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: 'All' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Toggle Live in Mode' }));
     await waitFor(() => expect(within(alertsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('2'));
     await waitFor(() => expect(within(decisionsCard as HTMLElement).getByRole('heading', { level: 3 })).toHaveTextContent('2'));
     expect(within(alertsCard as HTMLElement).getByText('Simulation')).toBeInTheDocument();
@@ -338,7 +402,8 @@ describe('Dashboard filters and drilldowns', () => {
     await userEvent.click(screen.getByText('ssh-bf'));
     await userEvent.click(screen.getByText('Hetzner'));
     await userEvent.click(screen.getAllByText('ssh')[0]);
-    await userEvent.click(screen.getByRole('button', { name: 'Live' }));
+    await openSimulationQuickFilter();
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Toggle Simulation in Mode' }));
 
     const alertsCard = screen.getByText('Total Alerts').closest('a');
     const decisionsCard = screen.getByText('Active Decisions').closest('a');

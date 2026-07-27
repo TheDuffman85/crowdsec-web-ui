@@ -86,6 +86,58 @@ describe('QuickFilters', () => {
     vi.clearAllMocks();
   });
 
+  test('places the simulation mode after Scenario and only renders it when configured', async () => {
+    const user = userEvent.setup();
+    const onSimulationChange = vi.fn();
+    const props = {
+      page: 'alerts' as const,
+      fields: [
+        { field: 'scenario' as const, label: 'Scenario' },
+        { field: 'country' as const, label: 'Country' },
+      ],
+      sectionOrder: ['scenario', 'country'] as QuickFilterSectionId[],
+      filters: {},
+      searchAst: null,
+      onSelectionChange: vi.fn(),
+      dateRange: { start: '', end: '' },
+      onDateRangeChange: vi.fn(),
+      onClearAll: vi.fn(),
+    };
+    const { rerender } = render(
+      <I18nContext.Provider value={i18n}>
+        <QuickFilters
+          {...props}
+          simulation={{ value: 'all', onChange: onSimulationChange }}
+        />
+      </I18nContext.Provider>,
+    );
+
+    expect(screen.getByRole('button', { name: 'Filters' })).not.toHaveTextContent('1');
+    await user.click(screen.getByRole('button', { name: 'Filters' }));
+    const scenario = screen.getByRole('button', { name: 'Scenario' });
+    const mode = screen.getByRole('button', { name: 'Mode' });
+    const country = screen.getByRole('button', { name: 'Country' });
+    expect(scenario.compareDocumentPosition(mode) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(mode.compareDocumentPosition(country) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await user.click(mode);
+    expect(screen.queryByRole('checkbox', { name: /All/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Toggle Live in Mode' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Toggle Simulation in Mode' })).toBeChecked();
+    await user.click(screen.getByRole('checkbox', { name: 'Toggle Live in Mode' }));
+    expect(onSimulationChange).toHaveBeenCalledWith('simulated');
+
+    await user.click(within(screen.getByRole('dialog', { name: 'Quick filters' }))
+      .getByRole('button', { name: 'Close filters' }));
+    rerender(
+      <I18nContext.Provider value={i18n}>
+        <QuickFilters {...props} />
+      </I18nContext.Provider>,
+    );
+    await user.click(screen.getByRole('button', { name: 'Filters' }));
+    expect(screen.queryByRole('button', { name: 'Mode' })).not.toBeInTheDocument();
+  });
+
   test('does not fetch until the drawer and a group are opened', async () => {
     const user = userEvent.setup();
     const { onSelectionChange } = renderFilters();

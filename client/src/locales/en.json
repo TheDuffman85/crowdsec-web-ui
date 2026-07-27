@@ -433,6 +433,7 @@
   "pages.dashboard.filtered": "Filtered",
   "pages.dashboard.global": "Global",
   "pages.dashboard.lastDaysStats": "Last {days} Days Statistics",
+  "pages.dashboard.searchSyntaxTitle": "Dashboard Search Syntax",
   "pages.dashboard.lapisOnlineCount": "{online} of {total} online",
   "pages.dashboard.lapisPartiallyOnline": "Partial",
   "pages.dashboard.mode": "Mode",

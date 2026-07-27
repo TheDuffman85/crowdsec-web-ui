@@ -21,6 +21,7 @@ import {
     type SearchNode,
 } from '../../../shared/search';
 import type { FacetField, FacetValue } from '../types';
+import type { QuickFilterSimulationValue } from '../lib/quickFilters';
 
 export interface QuickFilterDefinition {
     field: FacetField;
@@ -29,7 +30,12 @@ export interface QuickFilterDefinition {
     applicable?: boolean;
 }
 
-export type QuickFilterSectionId = FacetField | 'date';
+export type QuickFilterSectionId = FacetField | 'date' | 'simulation';
+
+interface QuickFilterSimulation {
+    value: QuickFilterSimulationValue;
+    onChange: (value: QuickFilterSimulationValue) => void;
+}
 
 interface QuickFiltersProps {
     page: 'alerts' | 'decisions';
@@ -43,6 +49,7 @@ interface QuickFiltersProps {
     dateRange: SearchDateRange;
     onDateRangeChange: (range: SearchDateRange) => void;
     onClearAll: () => void;
+    simulation?: QuickFilterSimulation;
     getSelection?: (field: FacetField, selection: SearchFacetSelection) => SearchFacetSelection;
     formatValue?: (field: FacetField, value: string) => string;
     getSearchValues?: (field: FacetField, search: string) => string[];
@@ -63,6 +70,7 @@ export function QuickFilters({
     dateRange,
     onDateRangeChange,
     onClearAll,
+    simulation,
     getSelection,
     formatValue,
     getSearchValues,
@@ -72,7 +80,7 @@ export function QuickFilters({
 }: QuickFiltersProps) {
     const { t } = useI18n();
     const [drawerOpen, setDrawerOpen] = useState(false);
-    const [openFields, setOpenFields] = useState<Set<FacetField | 'date'>>(() => new Set());
+    const [openFields, setOpenFields] = useState<Set<QuickFilterSectionId>>(() => new Set());
     const triggerRef = useRef<HTMLButtonElement>(null);
     const drawerRef = useRef<HTMLDivElement>(null);
     const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -83,12 +91,15 @@ export function QuickFilters({
             getSearchFacetSelection(searchAst, definition.field),
         ) ?? getSearchFacetSelection(searchAst, definition.field);
         return count + getActiveSelectionCount(definition, selection);
-    }, Number(Boolean(dateRange.start)) + Number(Boolean(dateRange.end))), [
+    }, Number(Boolean(dateRange.start))
+        + Number(Boolean(dateRange.end))
+        + getSimulationActiveCount(simulation?.value)), [
         dateRange.end,
         dateRange.start,
         fields,
         getSelection,
         searchAst,
+        simulation?.value,
     ]);
 
     useEffect(() => {
@@ -127,7 +138,7 @@ export function QuickFilters({
         };
     }, [drawerOpen]);
 
-    const toggleField = (field: FacetField | 'date') => {
+    const toggleField = (field: QuickFilterSectionId) => {
         setOpenFields((current) => {
             const next = new Set(current);
             if (next.has(field)) next.delete(field);
@@ -147,6 +158,7 @@ export function QuickFilters({
             searchAst={searchAst}
             dateRange={dateRange}
             onDateRangeChange={onDateRangeChange}
+            simulation={simulation}
             openFields={openFields}
             enabled={enabled && !busy}
             onToggleField={toggleField}
@@ -240,9 +252,9 @@ export function QuickFilters({
 }
 
 interface FacetGroupsProps extends Omit<QuickFiltersProps, 'busy' | 'onClearAll'> {
-    openFields: Set<FacetField | 'date'>;
+    openFields: Set<QuickFilterSectionId>;
     enabled: boolean;
-    onToggleField: (field: FacetField | 'date') => void;
+    onToggleField: (field: QuickFilterSectionId) => void;
 }
 
 function FacetGroups({
@@ -255,6 +267,7 @@ function FacetGroups({
     searchAst,
     dateRange,
     onDateRangeChange,
+    simulation,
     openFields,
     enabled,
     onToggleField,
@@ -266,8 +279,14 @@ function FacetGroups({
 }: FacetGroupsProps) {
     const { t } = useI18n();
     const definitions = new Map(fields.map((definition) => [definition.field, definition]));
-    const orderedSections: QuickFilterSectionId[] = sectionOrder
-        ?? ['date', ...fields.map((definition) => definition.field)];
+    const orderedSections = addSimulationAfterScenario(
+        sectionOrder ?? ['date', ...fields.map((definition) => definition.field)],
+        Boolean(simulation),
+    );
+    const orderedHiddenSections = addSimulationAfterScenario(
+        hiddenSectionOrder,
+        Boolean(simulation),
+    );
 
     return (
         <div>
@@ -278,6 +297,7 @@ function FacetGroups({
                     searchAst,
                     dateRange,
                     onDateRangeChange,
+                    simulation,
                     openFields,
                     enabled,
                     onToggleField,
@@ -288,7 +308,7 @@ function FacetGroups({
                     refreshKey,
                 })}
             </div>
-            {hiddenSectionOrder.length > 0 && (
+            {orderedHiddenSections.length > 0 && (
                 <section
                     className="mt-4 border-t border-gray-300 pt-4 dark:border-gray-600"
                     aria-labelledby="quick-filters-hidden-columns-title"
@@ -300,12 +320,13 @@ function FacetGroups({
                         {t('components.quickFilters.hiddenColumns')}
                     </h3>
                     <div className="divide-y divide-gray-200 dark:divide-gray-700">
-                        {renderFilterGroups(hiddenSectionOrder, definitions, {
+                        {renderFilterGroups(orderedHiddenSections, definitions, {
                             page,
                             filters,
                             searchAst,
                             dateRange,
                             onDateRangeChange,
+                            simulation,
                             openFields,
                             enabled,
                             onToggleField,
@@ -336,6 +357,7 @@ function FacetGroups({
                             searchAst,
                             dateRange,
                             onDateRangeChange,
+                            simulation,
                             openFields,
                             enabled,
                             onToggleField,
@@ -358,6 +380,7 @@ interface FilterGroupRenderOptions {
     searchAst: QuickFiltersProps['searchAst'];
     dateRange: QuickFiltersProps['dateRange'];
     onDateRangeChange: QuickFiltersProps['onDateRangeChange'];
+    simulation?: QuickFiltersProps['simulation'];
     openFields: FacetGroupsProps['openFields'];
     enabled: boolean;
     onToggleField: FacetGroupsProps['onToggleField'];
@@ -385,6 +408,19 @@ function renderFilterGroups(
                 />
             );
         }
+        if (section === 'simulation') {
+            if (!options.simulation) return null;
+            return (
+                <SimulationFilterGroup
+                    key="simulation"
+                    open={options.openFields.has('simulation')}
+                    enabled={options.enabled}
+                    value={options.simulation.value}
+                    onToggle={() => options.onToggleField('simulation')}
+                    onChange={options.simulation.onChange}
+                />
+            );
+        }
 
         const definition = definitions.get(section);
         if (!definition) return null;
@@ -406,6 +442,120 @@ function renderFilterGroups(
             />
         );
     });
+}
+
+function addSimulationAfterScenario(
+    sections: QuickFilterSectionId[],
+    enabled: boolean,
+): QuickFilterSectionId[] {
+    if (!enabled || sections.includes('simulation')) return sections;
+    const scenarioIndex = sections.indexOf('scenario');
+    if (scenarioIndex < 0) return sections;
+    return [
+        ...sections.slice(0, scenarioIndex + 1),
+        'simulation',
+        ...sections.slice(scenarioIndex + 1),
+    ];
+}
+
+interface SimulationFilterGroupProps {
+    open: boolean;
+    enabled: boolean;
+    value: QuickFilterSimulationValue;
+    onToggle: () => void;
+    onChange: (value: QuickFilterSimulationValue) => void;
+}
+
+function SimulationFilterGroup({
+    open,
+    enabled,
+    value,
+    onToggle,
+    onChange,
+}: SimulationFilterGroupProps) {
+    const { t } = useI18n();
+    const options: Array<{ value: 'live' | 'simulated'; label: string }> = [
+        { value: 'live', label: t('common.live') },
+        { value: 'simulated', label: t('pages.dashboard.simulation') },
+    ];
+    const isChecked = (option: 'live' | 'simulated') => (
+        value === 'all' || value === option
+    );
+    const toggleOption = (option: 'live' | 'simulated') => {
+        const liveChecked = isChecked('live');
+        const simulatedChecked = isChecked('simulated');
+        const nextLiveChecked = option === 'live' ? !liveChecked : liveChecked;
+        const nextSimulatedChecked = option === 'simulated' ? !simulatedChecked : simulatedChecked;
+        if (nextLiveChecked && nextSimulatedChecked) onChange('all');
+        else if (nextLiveChecked) onChange('live');
+        else if (nextSimulatedChecked) onChange('simulated');
+        else onChange('none');
+    };
+
+    return (
+        <section className="py-1">
+            <div className="flex min-h-11 items-center gap-1">
+                <button
+                    type="button"
+                    onClick={onToggle}
+                    className="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left text-sm font-semibold hover:bg-gray-50 dark:hover:bg-gray-700"
+                    aria-expanded={open}
+                >
+                    <ChevronDown
+                        size={16}
+                        className={`shrink-0 transition-transform ${open ? '' : '-rotate-90'}`}
+                        aria-hidden="true"
+                    />
+                    <span className="truncate">{t('pages.dashboard.mode')}</span>
+                </button>
+                <ActiveFilterControls
+                    count={getSimulationActiveCount(value)}
+                    clearLabel={t('components.quickFilters.clearSection', {
+                        field: t('pages.dashboard.mode'),
+                    })}
+                    onClear={() => onChange('all')}
+                />
+            </div>
+            {open && (
+                <div className="pb-2 pl-2">
+                    {options.map((option) => (
+                        <div
+                            key={option.value}
+                            className="flex min-h-11 items-center rounded-md hover:bg-gray-50 dark:hover:bg-gray-700/60"
+                        >
+                            <label className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center">
+                                <input
+                                    type="checkbox"
+                                    value={option.value}
+                                    checked={isChecked(option.value)}
+                                    disabled={!enabled}
+                                    onChange={() => toggleOption(option.value)}
+                                    aria-label={t('components.quickFilters.toggleValue', {
+                                        value: option.label,
+                                        field: t('pages.dashboard.mode'),
+                                    })}
+                                    className="h-5 w-5 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                                />
+                            </label>
+                            <button
+                                type="button"
+                                disabled={!enabled}
+                                onClick={() => onChange(option.value)}
+                                className="min-w-0 flex-1 self-stretch truncate text-left text-sm"
+                            >
+                                {option.label}
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </section>
+    );
+}
+
+function getSimulationActiveCount(value?: QuickFilterSimulationValue): number {
+    if (value === 'none') return 2;
+    return value && value !== 'all' ? 1 : 0;
 }
 
 interface DateTimeFilterGroupProps {

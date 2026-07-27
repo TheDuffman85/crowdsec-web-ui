@@ -15,6 +15,7 @@ import type { FacetField } from '../types';
 import type { DashboardSimulationFilter } from '../../../shared/contracts';
 
 export const QUICK_FILTERS_STORAGE_KEY = 'crowdsec-web-ui:quick-filters';
+export type QuickFilterSimulationValue = DashboardSimulationFilter | 'none';
 
 export const ALERT_QUICK_FILTER_FIELDS: FacetField[] = [
     'id',
@@ -56,7 +57,7 @@ const ALL_QUICK_FILTER_FIELDS = new Set<FacetField>([
 export interface StoredQuickFilters {
     selections: Partial<Record<FacetField, SearchFacetSelection>>;
     dateRange: SearchDateRange;
-    simulation: DashboardSimulationFilter;
+    simulation: QuickFilterSimulationValue;
 }
 
 export function emptyStoredQuickFilters(): StoredQuickFilters {
@@ -100,6 +101,41 @@ export function getStoredQuickFilterSelection(
     field: FacetField,
 ): SearchFacetSelection {
     return filters.selections[field] ?? { included: [], excluded: [] };
+}
+
+export function getQuickFilterSimulation(
+    searchAst: SearchNode | null,
+    fallback: QuickFilterSimulationValue = 'all',
+): QuickFilterSimulationValue {
+    if (fallback !== 'all') return fallback;
+    const selection = getSearchFacetSelection(searchAst, 'sim');
+    const included = new Set(selection.included);
+    const excluded = new Set(selection.excluded);
+    if (included.size === 1 && included.has('live') && excluded.size === 0) return 'live';
+    if (included.size === 1 && included.has('simulated') && excluded.size === 0) return 'simulated';
+    if (included.size === 0 && excluded.size === 1 && excluded.has('simulated')) return 'live';
+    if (included.size === 0 && excluded.size === 1 && excluded.has('live')) return 'simulated';
+    if (
+        included.size === 0
+        && excluded.size === 2
+        && excluded.has('live')
+        && excluded.has('simulated')
+    ) {
+        return 'none';
+    }
+    return 'all';
+}
+
+export function quickFilterSimulationSelection(
+    value: QuickFilterSimulationValue,
+): SearchFacetSelection {
+    if (value === 'live' || value === 'simulated') {
+        return { included: [value], excluded: [] };
+    }
+    if (value === 'none') {
+        return { included: [], excluded: ['live', 'simulated'] };
+    }
+    return { included: [], excluded: [] };
 }
 
 export function setStoredQuickFilterSelection(
@@ -150,10 +186,11 @@ export function mergeStoredQuickFiltersIntoQuery(
         !isSelectionActive(querySimulation)
         && filters.simulation !== 'all'
     ) {
-        ast = replaceSearchFacetSelection(ast, 'sim', {
-            included: [filters.simulation],
-            excluded: [],
-        });
+        ast = replaceSearchFacetSelection(
+            ast,
+            'sim',
+            quickFilterSimulationSelection(filters.simulation),
+        );
     }
 
     return serializeSearchNode(ast);
@@ -173,15 +210,7 @@ export function syncStoredQuickFiltersFromSearch(
             getSearchFacetSelection(searchAst, field),
         );
     }
-    const simulationSelection = getSearchFacetSelection(searchAst, 'sim');
-    const simulation = simulationSelection.excluded.length === 0
-        && simulationSelection.included.length === 1
-        && (
-            simulationSelection.included[0] === 'live'
-            || simulationSelection.included[0] === 'simulated'
-        )
-        ? simulationSelection.included[0]
-        : 'all';
+    const simulation = getQuickFilterSimulation(searchAst);
     return {
         ...next,
         dateRange: {
@@ -222,7 +251,11 @@ function normalizeStoredQuickFilters(value: unknown): StoredQuickFilters {
         };
     }
 
-    if (input.simulation === 'live' || input.simulation === 'simulated') {
+    if (
+        input.simulation === 'live'
+        || input.simulation === 'simulated'
+        || input.simulation === 'none'
+    ) {
         normalized.simulation = input.simulation;
     }
 

@@ -6,6 +6,11 @@ import { MemoryRouter } from 'react-router-dom';
 import { Dashboard } from '../../Dashboard';
 import { describe, expect, test } from 'vitest';
 
+async function openSimulationQuickFilter() {
+  await userEvent.click(screen.getByRole('button', { name: 'Filters' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Mode' }));
+}
+
 describe('Dashboard loading and refresh', () => {
   test('restores the saved activity chart scale mode and defaults to linear', async () => {
     localStorage.setItem('dashboard_scale_mode', 'symlog');
@@ -61,7 +66,8 @@ describe('Dashboard loading and refresh', () => {
     expect(screen.getByText('Chart')).toBeInTheDocument();
     expect(screen.getByText('Map')).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: 'Live' }));
+    await openSimulationQuickFilter();
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Toggle Simulation in Mode' }));
 
     expect(screen.getByText('Chart')).toBeInTheDocument();
     expect(screen.getByText('Map')).toBeInTheDocument();
@@ -76,7 +82,7 @@ describe('Dashboard loading and refresh', () => {
     expect(statisticControls).not.toBeNull();
     expect(statisticControls).not.toHaveClass('opacity-70');
     expect(statisticControls).not.toHaveClass('transition-opacity');
-    expect(screen.getByRole('button', { name: 'Live' })).not.toHaveClass('disabled:opacity-60');
+    expect(screen.getByRole('checkbox', { name: 'Toggle Live in Mode' })).toBeDisabled();
 
     deferred.resolve(buildDashboardStatsResponse({ simulation: 'live' }));
 
@@ -106,17 +112,18 @@ describe('Dashboard loading and refresh', () => {
     await waitFor(() => expect(screen.getByText('Total Alerts')).toBeInTheDocument());
     fetchDashboardStatsMock.mockClear();
 
-    await userEvent.click(screen.getByRole('button', { name: 'Live' }));
+    await openSimulationQuickFilter();
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Toggle Simulation in Mode' }));
     await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
       expect.objectContaining({ simulation: 'live' }),
       expect.any(Object),
     ));
 
-    expect(screen.getByRole('button', { name: 'All' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Live' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Simulation' })).toBeDisabled();
+    expect(screen.queryByRole('checkbox', { name: /All/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Toggle Live in Mode' })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: 'Toggle Simulation in Mode' })).toBeDisabled();
 
-    await userEvent.click(screen.getByRole('button', { name: 'Simulation' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Toggle Live in Mode' }));
     expect(fetchDashboardStatsMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ simulation: 'simulated' }),
       expect.any(Object),
@@ -124,8 +131,13 @@ describe('Dashboard loading and refresh', () => {
 
     pendingLiveStats.resolve(buildDashboardStatsResponse({ simulation: 'live' }));
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Simulation' })).toBeEnabled());
-    await userEvent.click(screen.getByRole('button', { name: 'Simulation' }));
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Toggle Live in Mode' })).toBeEnabled());
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Toggle Simulation in Mode' }));
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ simulation: 'live' }),
+      expect.any(Object),
+    ));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Toggle Live in Mode' }));
 
     await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
       expect.objectContaining({ simulation: 'simulated' }),
@@ -280,7 +292,8 @@ describe('Dashboard loading and refresh', () => {
     await waitFor(() => expect(screen.getByText('Total Alerts')).toBeInTheDocument());
     fetchDashboardStatsMock.mockClear();
     completedLiveLoads.length = 0;
-    await userEvent.click(screen.getByRole('button', { name: 'Live' }));
+    await openSimulationQuickFilter();
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Toggle Simulation in Mode' }));
 
     await waitFor(() => {
       const alertsCard = screen.getByText('Total Alerts').closest('a');

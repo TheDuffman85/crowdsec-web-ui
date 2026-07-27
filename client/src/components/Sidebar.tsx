@@ -89,6 +89,9 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
         || (instances.length > 1 ? 'all' : instances[0]?.id || 'all');
 
     const scopedLink = (path: string) => {
+        if (location.pathname === path) {
+            return `${location.pathname}${location.search}${location.hash}`;
+        }
         if (!['/', '/alerts', '/decisions', '/metrics'].includes(path) || instances.length <= 1) return path;
         return `${path}?instance=${encodeURIComponent(currentInstance)}`;
     };

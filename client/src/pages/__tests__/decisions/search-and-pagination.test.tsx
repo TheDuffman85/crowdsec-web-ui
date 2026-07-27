@@ -192,6 +192,37 @@ describe('Decisions page search and pagination', () => {
     expect(screen.getByRole('columnheader', { name: 'Target' })).toBeInTheDocument();
   });
 
+  test('filters live and simulation decisions from the quick-filter drawer', async () => {
+    const fetchDecisionsPaginatedMock = vi.mocked(api.fetchDecisionsPaginated);
+    fetchDecisionsPaginatedMock.mockClear();
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Filters' }));
+    const drawer = screen.getByRole('dialog', { name: 'Quick filters' });
+    const scenario = within(drawer).getByRole('button', { name: 'Scenario' });
+    const mode = within(drawer).getByRole('button', { name: 'Mode' });
+    expect(scenario.compareDocumentPosition(mode) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await userEvent.click(mode);
+    expect(within(drawer).queryByRole('checkbox', { name: /All/ })).not.toBeInTheDocument();
+    await userEvent.click(within(drawer).getByRole('checkbox', { name: 'Toggle Live in Mode' }));
+    await waitFor(() => expect(fetchDecisionsPaginatedMock.mock.calls.at(-1)?.[2]).toMatchObject({
+      q: 'sim=simulated',
+    }));
+    expect(within(screen.getByRole('button', { name: 'Filters' })).getByText('1')).toBeInTheDocument();
+
+    await userEvent.click(within(drawer).getByRole('checkbox', { name: 'Toggle Live in Mode' }));
+    await waitFor(() => expect(fetchDecisionsPaginatedMock.mock.calls.at(-1)?.[2]?.q).toBeUndefined());
+    await userEvent.click(within(drawer).getByRole('checkbox', { name: 'Toggle Simulation in Mode' }));
+    await waitFor(() => expect(fetchDecisionsPaginatedMock.mock.calls.at(-1)?.[2]).toMatchObject({
+      q: 'sim=live',
+    }));
+  });
+
   test('lists the target quick filter below visible filters when the target column is hidden', async () => {
     window.localStorage.setItem('crowdsec-web-ui:table-column-preferences', JSON.stringify({
       decisions: ['time', 'source'],

@@ -24,9 +24,12 @@ vi.mock('../../contexts/useNotificationUnreadCount', () => ({
   useNotificationUnreadCount: vi.fn(),
 }));
 
-function renderSidebar(translations?: Record<string, string>) {
+function renderSidebar(
+  translations?: Record<string, string>,
+  initialEntries: string[] = ['/'],
+) {
   const sidebar = (
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntries}>
       <Sidebar
         isOpen
         onClose={vi.fn()}
@@ -246,6 +249,23 @@ describe('Sidebar', () => {
     expect(screen.getAllByRole('link', { name: 'Settings' }).map((link) => link.getAttribute('href'))).toContain('/settings');
     expect(screen.queryByLabelText('Language')).not.toBeInTheDocument();
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+  });
+
+  test.each([
+    ['/alerts?q=country%3DDE&instance=primary', 'Alerts'],
+    ['/decisions?q=action%3Dban&include_expired=true&instance=primary', 'Decisions'],
+  ])('preserves filters when linking to the current page from %s', async (entry, label) => {
+    vi.mocked(useNotificationUnreadCount).mockReturnValue({
+      unreadCount: 0,
+      setUnreadCount: vi.fn(),
+      refreshUnreadCount: vi.fn(),
+    });
+
+    renderSidebar(undefined, [entry]);
+
+    const currentPageLinks = screen.getAllByRole('link', { name: label });
+    expect(currentPageLinks).toHaveLength(2);
+    expect(currentPageLinks.map((link) => link.getAttribute('href'))).toEqual([entry, entry]);
   });
 
   test('hides manual refresh controls when the feature is disabled', async () => {
