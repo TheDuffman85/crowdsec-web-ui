@@ -107,7 +107,7 @@ function Assert-ToolingInstalled {
     $pnpmCommand = Get-Command pnpm -ErrorAction SilentlyContinue
     if ($null -eq $pnpmCommand) {
         Write-Log "Error: 'pnpm' is not installed."
-        Write-Log 'Please install pnpm 11.9.0 (for example via corepack).'
+        Write-Log 'Please install pnpm 11.17.0 (for example via corepack).'
         Write-Log 'Alternatively, use Docker to run the containerized application.'
         exit 1
     }

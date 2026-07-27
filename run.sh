@@ -34,7 +34,7 @@ ensure_pnpm() {
 
     if ! command -v corepack >/dev/null 2>&1; then
         log "Error: neither 'pnpm' nor 'corepack' is installed."
-        log "Please install pnpm 11.9.0 or enable corepack for Node.js 24.18.0."
+        log "Please install pnpm 11.17.0 or enable corepack for Node.js 24.18.0."
         log "Alternatively, use Docker to run the containerized application."
         exit 1
     fi
@@ -50,7 +50,7 @@ EOF
 
     if ! pnpm --version >/dev/null 2>&1; then
         log "Error: failed to start pnpm via corepack."
-        log "Try: corepack enable && corepack prepare pnpm@11.9.0 --activate"
+        log "Try: corepack enable && corepack prepare pnpm@11.17.0 --activate"
         exit 1
     fi
 
