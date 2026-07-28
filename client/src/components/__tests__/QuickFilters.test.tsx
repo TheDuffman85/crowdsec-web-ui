@@ -387,9 +387,11 @@ describe('QuickFilters', () => {
     });
 
     const trigger = screen.getByRole('button', { name: 'Filters' });
+    const clearAll = screen.getByRole('button', { name: 'Clear all filters' });
     expect(trigger).toHaveTextContent('2');
+    expect(clearAll).toHaveClass('rounded-r-md');
 
-    await user.click(screen.getByRole('button', { name: 'Clear all filters' }));
+    await user.click(clearAll);
 
     expect(onClearAll).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('dialog', { name: 'Quick filters' })).not.toBeInTheDocument();
@@ -436,6 +438,8 @@ describe('QuickFilters', () => {
 
     const last24Hours = screen.getByRole('button', { name: 'Last 24 hours' });
     expect(last24Hours).toHaveClass('min-h-11');
+    expect(last24Hours).toHaveClass('dark:bg-gray-800');
+    expect(last24Hours).not.toHaveClass('dark:bg-gray-900');
     expect(last24Hours).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByRole('button', { name: 'Last 48 hours' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Last 30 days' })).not.toBeInTheDocument();

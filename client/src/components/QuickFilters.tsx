@@ -215,7 +215,7 @@ export function QuickFilters({
                     <button
                         type="button"
                         onClick={onClearAll}
-                        className="absolute inset-y-0 right-0 inline-flex w-7 items-center justify-center rounded-r-[inherit] text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:z-10 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-gray-100"
+                        className="absolute inset-y-0 right-0 inline-flex w-7 items-center justify-center rounded-r-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:z-10 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-gray-100"
                         aria-label={t('components.quickFilters.clearAll')}
                         title={t('components.quickFilters.clearAll')}
                     >
@@ -659,7 +659,7 @@ function DateTimeFilterGroup({
                                         className={`min-h-11 rounded-md border px-3 py-2 text-sm font-medium transition-colors ${
                                             selected
                                                 ? 'border-primary-600 bg-primary-50 text-primary-700 dark:border-primary-400 dark:bg-primary-900 dark:text-primary-100'
-                                                : 'border-gray-300 bg-white text-gray-700 hover:border-primary-400 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-200 dark:hover:border-primary-500 dark:hover:bg-gray-700'
+                                                : 'border-gray-300 bg-white text-gray-700 hover:border-primary-400 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:border-primary-500 dark:hover:bg-gray-700'
                                         }`}
                                     >
                                         {formatDateTimePresetLabel(preset, language, t)}
