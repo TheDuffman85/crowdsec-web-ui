@@ -147,7 +147,6 @@ export function createSyncService(dependencies: SyncServiceDependencies) {
     instanceLastUpdates,
     instanceNetworkWaiters,
     instanceSyncStatuses,
-    invalidateDashboardStatsCache,
     invalidateFacetResponses,
     isAlertSimulated,
     lapiClient,
@@ -1421,9 +1420,6 @@ async function initializeSingleInstanceCache(options: { showOverlay?: boolean } 
         await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
         console.log(`Decision duplicate index refreshed in ${formatElapsedTime(Date.now() - duplicateRefreshStartedAt)}.`);
       }
-      if (syncSummary.changed) {
-        invalidateDashboardStatsCache();
-      }
       cache.lastUpdate = syncSummary.syncedThrough;
       instanceLastUpdates.set(primaryInstance.id, syncSummary.syncedThrough);
       cache.isInitialized = syncSummary.state !== 'failed';
@@ -1432,13 +1428,22 @@ async function initializeSingleInstanceCache(options: { showOverlay?: boolean } 
         seedReconcileWindowState(Date.parse(syncSummary.syncedThrough));
       }
       lapiClient.updateStatus(syncSummary.state === 'complete', syncSummary.errors[0] ? { message: syncSummary.errors[0] } : null);
-      if (syncStatus.isSyncing && cache.isInitialized) {
-        updateSyncStatus({
-          progress: 99,
-          message: t('components.syncOverlay.statusPreparingDashboard'),
-        });
+      if (cache.isInitialized) {
+        if (syncStatus.isSyncing) {
+          updateSyncStatus({
+            progress: 99,
+            message: t('components.syncOverlay.statusPreparingDashboard'),
+          });
+        }
         try {
-          await getDashboardStatsIndex(config.instances.length > 1 ? primaryInstance.id : 'all');
+          const prepared = await prepareDashboardStatsAfterRefresh(
+            syncSummary.changed,
+            undefined,
+            { force: true },
+          );
+          if (!prepared) {
+            await getDashboardStatsIndex('all', true);
+          }
         } catch (error: any) {
           console.error('Failed to prepare dashboard data before completing initial sync:', error.message);
         }
@@ -1567,7 +1572,6 @@ async function initializeMultiInstanceCache(options: { showOverlay?: boolean } =
       indexesRebuilt = true;
       await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
 
-      invalidateDashboardStatsCache();
       const anyUsable = summaries.some((summary) => summary.state !== 'failed');
       cache.isInitialized = anyUsable;
       cache.isComplete = summaries.every((summary) => summary.state === 'complete');
@@ -1588,7 +1592,17 @@ async function initializeMultiInstanceCache(options: { showOverlay?: boolean } =
       }
       if (cache.isInitialized) {
         try {
-          await getDashboardStatsIndex('all');
+          // Multi-instance initialization has always invalidated the combined
+          // dashboard after rebuilding shared indexes, even when LAPI rows did
+          // not change. Keep that boundary while warming the active response.
+          const prepared = await prepareDashboardStatsAfterRefresh(
+            true,
+            undefined,
+            { force: true },
+          );
+          if (!prepared) {
+            await getDashboardStatsIndex('all', true);
+          }
         } catch (error: any) {
           console.error('Failed to prepare Combined dashboard data before completing initial sync:', error.message);
         }

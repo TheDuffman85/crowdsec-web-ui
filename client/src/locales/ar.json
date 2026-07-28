@@ -212,7 +212,7 @@
   "components.syncOverlay.statusComplete": "مكتمل",
   "components.syncOverlay.statusFetchingWindow": "جارٍ الجلب: {window} (تم تخزين {alerts} تنبيهًا و{decisions} قرارًا حتى الآن)",
   "components.syncOverlay.statusFinalizingDecisions": "جارٍ إنهاء بيانات القرارات...",
-  "components.syncOverlay.statusPreparingDashboard": "جارٍ إعداد بيانات لوحة المعلومات...",
+  "components.syncOverlay.statusPreparingDashboard": "جارٍ إعداد بيانات لوحة المعلومات لتسريع التحميل...",
   "components.syncOverlay.statusProcessingWindow": "جارٍ معالجة {alerts} تنبيهًا و{decisions} قرارًا من {window}...",
   "components.syncOverlay.statusRemovedStale": "تمت إزالة {alerts} تنبيهات مخزنة مؤقتًا قديمة و{decisions} قرارات مخزنة مؤقتًا قديمة قبل المزامنة.",
   "components.syncOverlay.statusStarting": "جارٍت بدء مزامنة البيانات التاريخية...",

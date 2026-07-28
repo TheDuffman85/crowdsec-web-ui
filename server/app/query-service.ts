@@ -1893,6 +1893,7 @@ function warmDashboardStatsCache(filters: DashboardStatsFilters): void {
 async function prepareDashboardStatsAfterRefresh(
   dataChanged: boolean,
   instanceId?: string,
+  options: { force?: boolean } = {},
 ): Promise<boolean> {
   if (dataChanged) {
     // Preserve the last complete response while the new analytics generation
@@ -1939,7 +1940,10 @@ async function prepareDashboardStatsAfterRefresh(
   // inactive dashboard builds synchronously from the published database
   // revision on its next request, so it cannot expose a mixed revision.
   const dashboardActivityWindowMs = Math.max(10_000, state.refreshIntervalMs * 2);
-  if (Date.now() - state.lastDashboardStatsRequestedAt > dashboardActivityWindowMs) {
+  if (
+    !options.force
+    && Date.now() - state.lastDashboardStatsRequestedAt > dashboardActivityWindowMs
+  ) {
     return false;
   }
   // Build the shared row index first. The user may change dashboard filters

@@ -212,7 +212,7 @@
   "components.syncOverlay.statusComplete": "Complete",
   "components.syncOverlay.statusFetchingWindow": "Fetching: {window} ({alerts} alerts and {decisions} decisions cached so far)",
   "components.syncOverlay.statusFinalizingDecisions": "Finalizing decision data...",
-  "components.syncOverlay.statusPreparingDashboard": "Preparing dashboard data...",
+  "components.syncOverlay.statusPreparingDashboard": "Preparing dashboard data for faster loading...",
   "components.syncOverlay.statusProcessingWindow": "Processing {alerts} alerts and {decisions} decisions from {window}...",
   "components.syncOverlay.statusRemovedStale": "Removed {alerts} stale cached alerts and {decisions} stale cached decisions before sync.",
   "components.syncOverlay.statusStarting": "Starting historical data sync...",

@@ -212,7 +212,7 @@
   "components.syncOverlay.statusComplete": "पूर्ण",
   "components.syncOverlay.statusFetchingWindow": "प्राप्त हो रहा है: {window} (अब तक {alerts} अलर्ट और {decisions} निर्णय कैश किए गए)",
   "components.syncOverlay.statusFinalizingDecisions": "निर्णय डेटा को अंतिम रूप दिया जा रहा है...",
-  "components.syncOverlay.statusPreparingDashboard": "डैशबोर्ड डेटा तैयार किया जा रहा है...",
+  "components.syncOverlay.statusPreparingDashboard": "तेज़ लोडिंग के लिए डैशबोर्ड डेटा तैयार किया जा रहा है...",
   "components.syncOverlay.statusProcessingWindow": "{window} से {alerts} अलर्ट और {decisions} निर्णय प्रोसेस किए जा रहे हैं...",
   "components.syncOverlay.statusRemovedStale": "सिंक से पहले {alerts} पुराने कैश किए गए अलर्ट और {decisions} पुराने कैश किए गए निर्णय हटाए गए।",
   "components.syncOverlay.statusStarting": "ऐतिहासिक डेटा सिंक शुरू हो रहा है...",

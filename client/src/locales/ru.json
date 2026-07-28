@@ -212,7 +212,7 @@
   "components.syncOverlay.statusComplete": "Завершено",
   "components.syncOverlay.statusFetchingWindow": "Получение: {window} (в кэше уже {alerts} оповещений и {decisions} решений)",
   "components.syncOverlay.statusFinalizingDecisions": "Завершение обработки данных решений...",
-  "components.syncOverlay.statusPreparingDashboard": "Подготовка данных панели...",
+  "components.syncOverlay.statusPreparingDashboard": "Подготовка данных панели для более быстрой загрузки...",
   "components.syncOverlay.statusProcessingWindow": "Обработка: {alerts} оповещений и {decisions} решений за {window}...",
   "components.syncOverlay.statusRemovedStale": "Перед синхронизацией удалено устаревших записей из кэша: оповещения — {alerts}, решения — {decisions}.",
   "components.syncOverlay.statusStarting": "Запуск синхронизации исторических данных...",

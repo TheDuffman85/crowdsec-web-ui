@@ -212,7 +212,7 @@
   "components.syncOverlay.statusComplete": "Completado",
   "components.syncOverlay.statusFetchingWindow": "Obteniendo: {window} ({alerts} alertas y {decisions} decisiones almacenadas hasta ahora)",
   "components.syncOverlay.statusFinalizingDecisions": "Finalizando los datos de decisiones...",
-  "components.syncOverlay.statusPreparingDashboard": "Preparando los datos del panel...",
+  "components.syncOverlay.statusPreparingDashboard": "Preparando los datos del panel para una carga más rápida...",
   "components.syncOverlay.statusProcessingWindow": "Procesando {alerts} alertas y {decisions} decisiones de {window}...",
   "components.syncOverlay.statusRemovedStale": "Se eliminaron {alerts} alertas obsoletas en caché y {decisions} decisiones obsoletas en caché antes de sincronizar.",
   "components.syncOverlay.statusStarting": "Iniciando sincronización de datos históricos...",

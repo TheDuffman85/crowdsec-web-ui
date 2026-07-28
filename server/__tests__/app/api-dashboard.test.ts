@@ -517,6 +517,90 @@ describe('createApp dashboard API', () => {
     destroyTempDir();
   });
 
+  test('keeps initial history sync active until the requested dashboard is warmed', async () => {
+    const alert = sampleAlert({
+      id: 303,
+      uuid: 'dashboard-alert-303',
+      created_at: new Date().toISOString(),
+    });
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const analyticsQueryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath });
+    const realAll = analyticsQueryWorker.all.bind(analyticsQueryWorker);
+    let releaseHistory!: () => void;
+    const historyGate = new Promise<void>((resolve) => {
+      releaseHistory = resolve;
+    });
+    let releaseWarmup!: () => void;
+    const warmupGate = new Promise<void>((resolve) => {
+      releaseWarmup = resolve;
+    });
+    let warmupStarted!: () => void;
+    const warmupStart = new Promise<void>((resolve) => {
+      warmupStarted = resolve;
+    });
+    let historyReleased = false;
+    let dateNowSpy: { mockRestore: () => void } | null = null;
+    vi.spyOn(analyticsQueryWorker, 'all').mockImplementation(async (sql, params, options) => {
+      if (historyReleased && options?.label === 'dashboard alert totals') {
+        warmupStarted();
+        await warmupGate;
+      }
+      return realAll(sql, params, options);
+    });
+    const { controller } = createController({
+      database,
+      analyticsQueryWorker,
+      env: { CROWDSEC_REFRESH_INTERVAL: '5s' },
+      fetchResolver: (url) => {
+        if (!url.includes('/v1/alerts?')) return undefined;
+        return historyGate.then(() => Response.json([alert]));
+      },
+    });
+
+    try {
+      controller.startBackgroundTasks();
+      await vi.waitFor(() => expect(controller.getSyncStatus().isSyncing).toBe(true));
+
+      const initialDashboardResponse = await controller.fetch(new Request(
+        'http://localhost/crowdsec/api/dashboard/stats?granularity=hour',
+      ));
+      expect(initialDashboardResponse.status).toBe(200);
+
+      const requestTime = Date.now();
+      dateNowSpy = vi.spyOn(Date, 'now').mockReturnValue(requestTime + 11_000);
+      historyReleased = true;
+      releaseHistory();
+      await warmupStart;
+      expect(controller.getSyncStatus()).toEqual(expect.objectContaining({
+        isSyncing: true,
+        progress: 99,
+        message: 'Preparing dashboard data for faster loading...',
+        completedAt: null,
+      }));
+
+      releaseWarmup();
+      await vi.waitFor(() => expect(controller.getSyncStatus()).toEqual(expect.objectContaining({
+        isSyncing: false,
+        progress: 100,
+        completedAt: expect.any(String),
+      })));
+
+      const readyResponse = await controller.fetch(new Request(
+        'http://localhost/crowdsec/api/dashboard/stats?granularity=hour',
+      ));
+      const readyDashboard = await readyResponse.json() as DashboardStatsResponse;
+      expect(readyDashboard.pending).toBeUndefined();
+      expect(readyDashboard.totals.alerts).toBe(1);
+    } finally {
+      dateNowSpy?.mockRestore();
+      releaseHistory();
+      releaseWarmup();
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
   test('serves a fresh dashboard snapshot on the first request after invalidation', async () => {
     const alert = sampleAlert({
       id: 302,

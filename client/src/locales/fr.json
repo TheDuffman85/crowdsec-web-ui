@@ -212,7 +212,7 @@
   "components.syncOverlay.statusComplete": "Terminé",
   "components.syncOverlay.statusFetchingWindow": "Récupération : {window} ({alerts} alertes et {decisions} décisions en cache jusqu’ici)",
   "components.syncOverlay.statusFinalizingDecisions": "Finalisation des données de décision...",
-  "components.syncOverlay.statusPreparingDashboard": "Préparation des données du tableau de bord...",
+  "components.syncOverlay.statusPreparingDashboard": "Préparation des données du tableau de bord pour un chargement plus rapide...",
   "components.syncOverlay.statusProcessingWindow": "Traitement de {alerts} alertes et {decisions} décisions pour {window}...",
   "components.syncOverlay.statusRemovedStale": "{alerts} alertes en cache obsolètes et {decisions} décisions en cache obsolètes supprimées avant la synchronisation.",
   "components.syncOverlay.statusStarting": "Démarrage de la synchronisation des données historiques...",

@@ -20,7 +20,7 @@ function translateSyncMessage(message: string | undefined, t: (key: string, valu
     const fixedMessages: Record<string, string> = {
         'Finalizing decision data...': 'components.syncOverlay.statusFinalizingDecisions',
         'Building search indexes...': 'components.syncOverlay.statusBuildingIndexes',
-        'Preparing dashboard data...': 'components.syncOverlay.statusPreparingDashboard',
+        'Preparing dashboard data for faster loading...': 'components.syncOverlay.statusPreparingDashboard',
     };
     if (fixedMessages[message]) {
         return t(fixedMessages[message]);
