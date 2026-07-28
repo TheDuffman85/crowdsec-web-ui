@@ -58,18 +58,14 @@ describe('Dashboard filters and drilldowns', () => {
     expect(statisticsHeading.compareDocumentPosition(searchButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(searchButton.compareDocumentPosition(filtersButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     await waitFor(() => expect(chartSpy).toHaveBeenCalled());
-    const chartProps = chartSpy.mock.calls.at(-1)?.[0] as {
-      percentageBasis: 'filtered' | 'global';
-      setPercentageBasis: (basis: 'filtered' | 'global') => void;
-    };
-    expect(chartProps.percentageBasis).toBe('global');
-    act(() => chartProps.setPercentageBasis('filtered'));
-    await waitFor(() => {
-      const latestChartProps = chartSpy.mock.calls.at(-1)?.[0] as {
-        percentageBasis: 'filtered' | 'global';
-      };
-      expect(latestChartProps.percentageBasis).toBe('filtered');
-    });
+    const topCountriesHeading = screen.getByRole('heading', { name: 'Top Countries' });
+    const basisGroup = screen.getByRole('group', { name: 'Percentage basis' });
+    expect(topCountriesHeading.parentElement).toContainElement(basisGroup);
+    expect(basisGroup).toHaveTextContent('%');
+    expect(screen.getByRole('button', { name: 'Global' })).toHaveAttribute('aria-pressed', 'true');
+    expect(chartSpy.mock.calls.at(-1)?.[0]).not.toHaveProperty('percentageBasis');
+    await userEvent.click(screen.getByRole('button', { name: 'Filtered' }));
+    expect(screen.getByRole('button', { name: 'Filtered' })).toHaveAttribute('aria-pressed', 'true');
     expect(localStorage.getItem('dashboard_percentage_basis')).toBe('filtered');
     expect(screen.queryByRole('button', { name: 'Simulation' })).not.toBeInTheDocument();
     await openSimulationQuickFilter();

@@ -85,6 +85,7 @@ const DASHBOARD_UNAVAILABLE_QUICK_FILTER_FIELDS: FacetField[] = [
     'alert',
 ];
 const DASHBOARD_SEARCH_FEATURES = { machineEnabled: true, originEnabled: true };
+const PERCENTAGE_BASES: PercentageBasis[] = ['filtered', 'global'];
 
 const DASHBOARD_ALL_QUICK_FILTER_FIELDS = new Set<FacetField>([
     ...DASHBOARD_QUICK_FILTER_FIELDS,
@@ -1581,8 +1582,6 @@ export function Dashboard() {
                                 setGranularity={handleGranularityChange}
                                 scaleMode={scaleMode}
                                 setScaleMode={setScaleMode}
-                                percentageBasis={percentageBasis}
-                                setPercentageBasis={setPercentageBasis}
                             />
                         </Suspense>
                     </div>
@@ -1622,6 +1621,35 @@ export function Dashboard() {
                         )}
                         total={percentageBasis === 'global' ? dashboardData.globalTotal : filteredTotals.alerts}
                         selectionDisabledReason={quickFilterDisabledReason}
+                        headerAction={(
+                            <div
+                                className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-lg"
+                                role="group"
+                                aria-label={t('pages.dashboard.percentageBasis')}
+                                title={t('pages.dashboard.percentageBasis')}
+                            >
+                                <span
+                                    className="flex items-center px-2 text-xs font-medium text-gray-500 dark:text-gray-400"
+                                    aria-hidden="true"
+                                >
+                                    %
+                                </span>
+                                {PERCENTAGE_BASES.map((basis) => (
+                                    <button
+                                        key={basis}
+                                        type="button"
+                                        onClick={() => setPercentageBasis(basis)}
+                                        className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${percentageBasis === basis
+                                            ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
+                                            : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-300'
+                                            }`}
+                                        aria-pressed={percentageBasis === basis}
+                                    >
+                                        {t(`pages.dashboard.${basis}`)}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
                     />
                     <StatCard
                         title={t('pages.dashboard.topScenarios')}

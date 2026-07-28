@@ -19,6 +19,7 @@ interface StatCardProps<TItem extends StatListItem> {
     getExternalLink?: (item: TItem) => string | null;
     total?: number;
     selectionDisabledReason?: string;
+    headerAction?: ReactNode;
 }
 
 /**
@@ -36,6 +37,7 @@ export function StatCard<TItem extends StatListItem>({
     getExternalLink,
     total, // Optional total count to calculate percentages against global total instead of visible items
     selectionDisabledReason,
+    headerAction,
 }: StatCardProps<TItem>) {
     const { t } = useI18n();
     const resolvedEmptyMessage = emptyMessage ?? t('common.noDataAvailable');
@@ -48,11 +50,12 @@ export function StatCard<TItem extends StatListItem>({
 
     return (
         <Card className="h-full">
-            <CardHeader>
+            <CardHeader className="flex flex-wrap items-center justify-between gap-2">
                 <CardTitle className="flex items-center gap-2 text-lg">
                     {Icon && <Icon className="w-5 h-5 text-primary-600 dark:text-primary-400" />}
                     {title}
                 </CardTitle>
+                {headerAction}
             </CardHeader>
             <CardContent>
                 {items.length === 0 ? (

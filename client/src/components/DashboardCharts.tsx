@@ -24,7 +24,6 @@ import {
 
 type Granularity = 'day' | 'hour';
 type ScaleMode = 'linear' | 'symlog';
-type PercentageBasis = 'filtered' | 'global';
 
 interface ChartDatum {
     date: string;
@@ -154,8 +153,6 @@ interface ActivityBarChartProps {
     setGranularity: (value: Granularity) => void;
     scaleMode?: ScaleMode;
     setScaleMode?: (value: ScaleMode) => void;
-    percentageBasis?: PercentageBasis;
-    setPercentageBasis?: (value: PercentageBasis) => void;
     onDateRangeSelect?: (dateRange: DateRangeSelection | null, isAtEnd: boolean) => void;
     selectedDateRange: DateRangeSelection | null;
     isSticky: boolean;
@@ -228,8 +225,6 @@ export function ActivityBarChart({
     setGranularity,
     scaleMode,
     setScaleMode,
-    percentageBasis,
-    setPercentageBasis,
     onDateRangeSelect,
     selectedDateRange,
     isSticky,
@@ -621,7 +616,6 @@ export function ActivityBarChart({
 
     const granularities: Granularity[] = ['day', 'hour'];
     const scaleModes: ScaleMode[] = ['linear', 'symlog'];
-    const percentageBases: PercentageBasis[] = ['filtered', 'global'];
     const resolvedScaleMode = scaleMode ?? internalScaleMode;
     const handleScaleModeChange = setScaleMode ?? setInternalScaleMode;
     const isSymlogScale = resolvedScaleMode === 'symlog';
@@ -647,73 +641,40 @@ export function ActivityBarChart({
                             </span>
                         )}
                     </CardTitle>
-                    <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:flex-nowrap sm:justify-start sm:gap-3">
-                        {percentageBasis && setPercentageBasis && (
-                            <div
-                                className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-lg"
-                                role="group"
-                                aria-label={t('pages.dashboard.percentageBasis')}
-                                title={t('pages.dashboard.percentageBasis')}
-                            >
-                                <span
-                                    className="flex items-center px-2 text-xs font-medium text-gray-500 dark:text-gray-400"
-                                    aria-hidden="true"
+                    <div className="flex w-full flex-nowrap items-center gap-2 sm:w-auto sm:gap-3">
+                        <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-lg" role="group" aria-label={t('components.dashboardCharts.scaleAria')}>
+                            {scaleModes.map((mode) => (
+                                <button
+                                    key={mode}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleScaleModeChange(mode);
+                                    }}
+                                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${resolvedScaleMode === mode
+                                        ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
+                                        : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-300'
+                                        }`}
                                 >
-                                    %
-                                </span>
-                                {percentageBases.map((basis) => (
-                                    <button
-                                        key={basis}
-                                        onClick={(event) => {
-                                            event.stopPropagation();
-                                            setPercentageBasis(basis);
-                                        }}
-                                        className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${percentageBasis === basis
-                                            ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
-                                            : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-300'
-                                            }`}
-                                        aria-pressed={percentageBasis === basis}
-                                    >
-                                        {t(`pages.dashboard.${basis}`)}
-                                    </button>
-                                ))}
-                            </div>
-                        )}
-                        <div className="flex flex-nowrap items-center gap-2 sm:gap-3">
-                            <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-lg" role="group" aria-label={t('components.dashboardCharts.scaleAria')}>
-                                {scaleModes.map((mode) => (
-                                    <button
-                                        key={mode}
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            handleScaleModeChange(mode);
-                                        }}
-                                        className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${resolvedScaleMode === mode
-                                            ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
-                                            : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-300'
-                                            }`}
-                                    >
-                                        {t(mode === 'linear' ? 'components.dashboardCharts.linear' : 'components.dashboardCharts.symlog')}
-                                    </button>
-                                ))}
-                            </div>
-                            <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-lg" role="group" aria-label={t('components.dashboardCharts.granularityAria')}>
-                                {granularities.map((g) => (
-                                    <button
-                                        key={g}
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            setGranularity(g);
-                                        }}
-                                        className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${granularity === g
-                                            ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
-                                            : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-300'
-                                            }`}
-                                    >
-                                        {t(g === 'day' ? 'components.dashboardCharts.day' : 'components.dashboardCharts.hour')}
-                                    </button>
-                                ))}
-                            </div>
+                                    {t(mode === 'linear' ? 'components.dashboardCharts.linear' : 'components.dashboardCharts.symlog')}
+                                </button>
+                            ))}
+                        </div>
+                        <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-lg" role="group" aria-label={t('components.dashboardCharts.granularityAria')}>
+                            {granularities.map((g) => (
+                                <button
+                                    key={g}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setGranularity(g);
+                                    }}
+                                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${granularity === g
+                                        ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
+                                        : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-300'
+                                        }`}
+                                >
+                                    {t(g === 'day' ? 'components.dashboardCharts.day' : 'components.dashboardCharts.hour')}
+                                </button>
+                            ))}
                         </div>
                     </div>
                 </div>
