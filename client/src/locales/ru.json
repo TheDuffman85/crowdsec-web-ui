@@ -4,6 +4,7 @@
   "common.active": "Активно",
   "common.all": "Все",
   "common.and": "и",
+  "common.backToTop": "Наверх",
   "common.cancel": "Отмена",
   "common.delete": "Удалить",
   "common.deleteAllForIp": "Удалить все оповещения и решения для {value}",

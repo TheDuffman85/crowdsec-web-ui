@@ -4,6 +4,7 @@
   "common.active": "活跃",
   "common.all": "全部",
   "common.and": "和",
+  "common.backToTop": "返回顶部",
   "common.cancel": "取消",
   "common.delete": "删除",
   "common.deleteAllForIp": "删除 {value} 的所有告警和决策",

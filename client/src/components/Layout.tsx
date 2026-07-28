@@ -1,13 +1,15 @@
 import { Outlet, useLocation } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Toast } from "./Toast";
+import { BackToTop } from "./BackToTop";
 import { useToast } from "../contexts/useToast";
 import { useI18n } from "../lib/i18n";
 
 export function Layout() {
     const { t } = useI18n();
     const { toasts, removeToast } = useToast();
+    const pageTopRef = useRef<HTMLDivElement | null>(null);
     const [theme, setTheme] = useState<'light' | 'dark'>(() => {
         if (typeof window !== 'undefined') {
             const savedTheme = localStorage.getItem("theme");
@@ -89,7 +91,11 @@ export function Layout() {
                 toggleTheme={toggleTheme}
             />
 
-            <main className={`flex-1 relative w-full z-0 isolate overflow-auto transition-[padding] duration-300 ease-in-out ${isMenuOpen ? 'lg:pl-[340px]' : 'lg:pl-16'} ${isMenuOpen ? 'lg:overflow-auto overflow-hidden touch-none lg:touch-auto' : ''}`}>
+            <main
+                data-scroll-container
+                className={`flex-1 relative w-full z-0 isolate overflow-auto transition-[padding] duration-300 ease-in-out ${isMenuOpen ? 'lg:pl-[340px]' : 'lg:pl-16'} ${isMenuOpen ? 'lg:overflow-auto overflow-hidden touch-none lg:touch-auto' : ''}`}
+            >
+                <div ref={pageTopRef} className="pointer-events-none absolute left-0 top-80 h-px w-px" aria-hidden="true" />
                 <div className="sticky top-0 z-30 bg-gray-50 dark:bg-gray-950 border-b border-gray-200 dark:border-gray-800">
                     <div className="container mx-auto px-4 lg:px-8 max-w-[1920px]">
                         <div className="flex items-center gap-4 h-16">
@@ -111,6 +117,7 @@ export function Layout() {
                 <div className="container mx-auto p-4 lg:p-8 max-w-[1920px]">
                     <Outlet />
                 </div>
+                <BackToTop visibilityTargetRef={pageTopRef} />
             </main>
             <div className="fixed bottom-4 right-4 z-50 flex w-[calc(100vw-2rem)] max-w-sm flex-col gap-2">
                 {toasts.map((toast) => (

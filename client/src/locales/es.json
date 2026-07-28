@@ -4,6 +4,7 @@
   "common.active": "Activo",
   "common.all": "Todo",
   "common.and": "y",
+  "common.backToTop": "Volver arriba",
   "common.cancel": "Cancelar",
   "common.delete": "Eliminar",
   "common.deleteAllForIp": "Eliminar todas las alertas y decisiones para {value}",

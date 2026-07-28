@@ -4,6 +4,7 @@
   "common.active": "有効",
   "common.all": "すべて",
   "common.and": "および",
+  "common.backToTop": "トップへ戻る",
   "common.cancel": "キャンセル",
   "common.delete": "削除",
   "common.deleteAllForIp": "{value} のすべてのアラートと決定を削除",
