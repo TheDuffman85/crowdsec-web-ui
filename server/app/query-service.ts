@@ -92,6 +92,7 @@ export function createQueryService(dependencies: QueryServiceDependencies) {
     getAlertListFiltersFromValues,
     getAlertSourceValue,
     getAlertTargetSummary,
+    getDashboardBucketKey,
     getDashboardBucketKeys,
     getDecisionListFiltersFromValues,
     getDecisionPageIndexHint,
@@ -147,6 +148,19 @@ export function createQueryService(dependencies: QueryServiceDependencies) {
     DASHBOARD_LOOP_YIELD_INTERVAL,
     FACET_MAX_LIMIT,
   } = dependencies;
+  const decisionListCountCache = new Map<string, {
+    validUntil: number;
+    promise: Promise<{ unfilteredTotal: number; total: number }>;
+  }>();
+  const DECISION_LIST_COUNT_CACHE_MAX_ENTRIES = 100;
+  const activeDashboardStatsResponses = new Map<string, Set<Promise<DashboardStatsResponse>>>();
+  const activeDashboardStatsResponseControllers = new Map<string, Set<{
+    key: string;
+    controller: AbortController;
+  }>>();
+  const requestedDashboardStatsResponseKeys = new Map<string, string>();
+  const queuedDashboardStatsWarmFilters = new Map<string, DashboardStatsFilters>();
+  const dashboardStatsWarmRunners = new Map<string, Promise<void>>();
 
 function hydrateAlertWithDecisions(alert: AlertRecord): AlertRecord {
   const clone: AlertRecord = { ...alert };
@@ -385,9 +399,15 @@ async function queryPaginatedDecisions(
   const query = buildDecisionListQuery(filters, searchAst, includeExpired, now);
 
   const offset = (pageRequest.page - 1) * pageRequest.pageSize;
-  const [unfilteredTotal, total, rows] = await Promise.all([
-    queryCount('decisions', query.baseWhere),
-    queryDecisionListCount(query),
+  const countCacheKey = includeExpired
+    ? null
+    : JSON.stringify({
+      filters,
+      search: searchAst ? serializeSearchNode(searchAst) : '',
+      simulationsEnabled: config.simulationsEnabled,
+    });
+  const [counts, rows] = await Promise.all([
+    queryDecisionListCounts(query, now, countCacheKey),
     queryWorker.all<NormalizedDecisionRow & {
       is_duplicate?: number;
       latitude?: number | null;
@@ -399,7 +419,7 @@ async function queryPaginatedDecisions(
         (SELECT longitude FROM alerts WHERE alerts.id = decisions.alert_id) AS longitude
       FROM ${query.fromSql}
       ${query.outerWhereSql}
-      ORDER BY created_at DESC, id DESC
+      ORDER BY decisions.created_at DESC, decisions.id DESC
       LIMIT ? OFFSET ?
     `, [...query.params, pageRequest.pageSize, offset]),
   ]);
@@ -423,9 +443,9 @@ async function queryPaginatedDecisions(
     pagination: {
       page: pageRequest.page,
       page_size: pageRequest.pageSize,
-      total,
-      total_pages: Math.ceil(total / pageRequest.pageSize),
-      unfiltered_total: unfilteredTotal,
+      total: counts.total,
+      total_pages: Math.ceil(counts.total / pageRequest.pageSize),
+      unfiltered_total: counts.unfilteredTotal,
     },
     selectable_ids: data
       .filter((decision) => !isDecisionListItemExpired(decision))
@@ -447,6 +467,7 @@ function buildDecisionListQuery(
   baseWhere: SqlWhere;
   cteSql: string;
   fromSql: string;
+  countFromSql: string;
   outerWhereSql: string;
   params: unknown[];
   dynamicDedup: boolean;
@@ -480,6 +501,9 @@ function buildDecisionListQuery(
       baseWhere,
       cteSql: '',
       fromSql: `decisions AS decisions ${getDecisionPageIndexHint(filters, searchAst)}`.trim(),
+      countFromSql: filters.showDuplicates
+        ? 'decisions AS decisions'
+        : 'decisions AS decisions INDEXED BY idx_decisions_duplicate_filters',
       outerWhereSql: filteredWhere.toSql(),
       params: filteredWhere.params,
       dynamicDedup: false,
@@ -506,6 +530,7 @@ function buildDecisionListQuery(
       )
     `,
     fromSql: 'ranked_filtered_decisions AS decisions',
+    countFromSql: 'ranked_filtered_decisions AS decisions',
     outerWhereSql: 'WHERE filtered_duplicate_rank = 1',
     params: [now, ...filteredWhere.params],
     dynamicDedup: true,
@@ -531,23 +556,91 @@ function decisionFiltersCanSplitDuplicateGroup(
 
 async function queryDecisionListCount(query: {
   cteSql: string;
-  fromSql: string;
+  countFromSql: string;
   outerWhereSql: string;
   params: unknown[];
-}): Promise<number> {
-  const row = await queryWorker.get<{ count: number }>(`
+}): Promise<{ count: number; nextExpiration: string | null }> {
+  const row = await queryWorker.get<{ count: number; next_expiration: string | null }>(`
     ${query.cteSql}
-    SELECT COUNT(*) AS count
-    FROM ${query.fromSql}
+    SELECT COUNT(*) AS count, MIN(stop_at) AS next_expiration
+    FROM ${query.countFromSql}
     ${query.outerWhereSql}
   `, query.params);
-  return row.count;
+  return {
+    count: Number(row.count || 0),
+    nextExpiration: row.next_expiration || null,
+  };
+}
+
+async function queryDecisionListCounts(
+  query: {
+    baseWhere: SqlWhere;
+    cteSql: string;
+    countFromSql: string;
+    outerWhereSql: string;
+    params: unknown[];
+  },
+  now: string,
+  cacheKey: string | null,
+): Promise<{ unfilteredTotal: number; total: number }> {
+  const nowTimestamp = Date.parse(now);
+  if (cacheKey) {
+    const cached = decisionListCountCache.get(cacheKey);
+    if (cached && cached.validUntil > nowTimestamp) {
+      decisionListCountCache.delete(cacheKey);
+      decisionListCountCache.set(cacheKey, cached);
+      return cached.promise;
+    }
+    decisionListCountCache.delete(cacheKey);
+  }
+
+  const promise = Promise.all([
+    queryWorker.get<{ count: number; next_expiration: string | null }>(`
+      SELECT COUNT(*) AS count, MIN(stop_at) AS next_expiration
+      FROM decisions
+      ${query.baseWhere.toSql()}
+    `, query.baseWhere.params),
+    queryDecisionListCount(query),
+  ]).then(([unfiltered, filtered]) => {
+    if (cacheKey) {
+      const expirationTimestamps = [unfiltered.next_expiration, filtered.nextExpiration]
+        .map((value) => value ? Date.parse(value) : Number.POSITIVE_INFINITY)
+        .filter((value) => Number.isFinite(value) && value > nowTimestamp);
+      const entry = decisionListCountCache.get(cacheKey);
+      if (entry) {
+        entry.validUntil = expirationTimestamps.length > 0
+          ? Math.min(...expirationTimestamps)
+          : Number.POSITIVE_INFINITY;
+      }
+    }
+    return {
+      unfilteredTotal: Number(unfiltered.count || 0),
+      total: filtered.count,
+    };
+  }).catch((error) => {
+    if (cacheKey) decisionListCountCache.delete(cacheKey);
+    throw error;
+  });
+
+  if (cacheKey) {
+    decisionListCountCache.set(cacheKey, {
+      validUntil: Number.POSITIVE_INFINITY,
+      promise,
+    });
+    while (decisionListCountCache.size > DECISION_LIST_COUNT_CACHE_MAX_ENTRIES) {
+      const oldestKey = decisionListCountCache.keys().next().value;
+      if (oldestKey) decisionListCountCache.delete(oldestKey);
+      else break;
+    }
+  }
+  return promise;
 }
 
 async function queryDashboardFilteredListTotals(
   filters: DashboardStatsFilters,
   alertSearchAst: SearchNode | null,
   decisionSearchAst: SearchNode | null,
+  signal?: AbortSignal,
 ): Promise<{
   alerts: number;
   decisions: number;
@@ -614,14 +707,14 @@ async function queryDashboardFilteredListTotals(
       FROM alerts ${getAlertCountIndexHint(alertFilters, alertSearchAst)}
       ${alertWhere.toSql()}
       GROUP BY simulated
-    `, alertWhere.params, { label: 'dashboard alert totals' }),
+    `, alertWhere.params, { label: 'dashboard alert totals', signal }),
     analyticsQueryWorker.all<{ simulated: number; count: number }>(`
       ${decisionQuery.cteSql}
       SELECT simulated, COUNT(*) AS count
-      FROM ${decisionQuery.fromSql}
+      FROM ${decisionQuery.countFromSql}
       ${decisionQuery.outerWhereSql}
       GROUP BY simulated
-    `, decisionQuery.params, { label: 'dashboard decision totals' }),
+    `, decisionQuery.params, { label: 'dashboard decision totals', signal }),
   ]);
 
   const alerts = alertRows.reduce((sum, row) => sum + Number(row.count || 0), 0);
@@ -1110,7 +1203,9 @@ function setCachedFacetResponse(key: string, response: FacetResponse): void {
 async function queryCount(
   tableName: 'alerts' | 'decisions',
   where: SqlWhere,
-  indexHint: '' | 'INDEXED BY idx_alerts_filters' = '',
+  indexHint:
+    | ''
+    | 'INDEXED BY idx_alerts_filters' = '',
 ): Promise<number> {
   const row = await queryWorker.get<{ count: number }>(
     `SELECT COUNT(*) AS count FROM ${tableName} ${indexHint} ${where.toSql()}`,
@@ -1342,8 +1437,23 @@ function compileDecisionSearchSql(
   });
 }
 
-async function getDashboardStatsIndex(instanceId: string): Promise<DashboardStatsCache> {
-  const cacheKey = getDashboardStatsCacheKey(instanceId);
+function dashboardFiltersUseStoredActiveDecisionPrimaries(filters: DashboardStatsFilters): boolean {
+  return !filters.dateStart
+    && !filters.dateEnd
+    && !filters.q
+    && !filters.decisionQ
+    && !filters.country
+    && !filters.scenario
+    && !filters.as
+    && !filters.ip
+    && !filters.target;
+}
+
+async function getDashboardStatsIndex(
+  instanceId: string,
+  primaryOnly: boolean,
+): Promise<DashboardStatsCache> {
+  const cacheKey = getDashboardStatsCacheKey(instanceId, primaryOnly);
   const cached = state.dashboardStatsCaches.get(cacheKey);
   if (cached) {
     state.dashboardStatsCaches.delete(cacheKey);
@@ -1356,14 +1466,18 @@ async function getDashboardStatsIndex(instanceId: string): Promise<DashboardStat
     return pending;
   }
 
-  const promise = buildDashboardStatsIndex(cacheKey, instanceId).finally(() => {
+  const promise = buildDashboardStatsIndex(cacheKey, instanceId, primaryOnly).finally(() => {
     state.dashboardStatsIndexPromises.delete(cacheKey);
   });
   state.dashboardStatsIndexPromises.set(cacheKey, promise);
   return promise;
 }
 
-async function buildDashboardStatsIndex(cacheKey: string, instanceId: string): Promise<DashboardStatsCache> {
+async function buildDashboardStatsIndex(
+  cacheKey: string,
+  instanceId: string,
+  primaryOnly: boolean,
+): Promise<DashboardStatsCache> {
   const since = new Date(Date.now() - config.lookbackMs).toISOString();
   const nowIso = new Date().toISOString();
   const nowTimestamp = Date.now();
@@ -1472,6 +1586,11 @@ async function buildDashboardStatsIndex(cacheKey: string, instanceId: string): P
   if (!config.simulationsEnabled) {
     decisionWhere.add('simulated = 0');
   }
+  if (primaryOnly) {
+    // Expired rows remain available for history, while active duplicate
+    // candidates are unnecessary for an unfiltered dashboard.
+    decisionWhere.add('(stop_at <= ? OR is_duplicate = 0)', nowIso);
+  }
   const decisions: DashboardDecisionStatsRecord[] = [];
   let activeDecisions = 0;
   let activeSimulatedDecisions = 0;
@@ -1522,6 +1641,7 @@ async function buildDashboardStatsIndex(cacheKey: string, instanceId: string): P
         continue;
       }
 
+      const extraData = parseRecordExtras(row.extra_data);
       const stopAt = row.stop_at || undefined;
       const stopTimestamp = stopAt ? Date.parse(stopAt) : Number.NaN;
       const normalizedStopTimestamp = Number.isFinite(stopTimestamp) ? stopTimestamp : 0;
@@ -1549,12 +1669,12 @@ async function buildDashboardStatsIndex(cacheKey: string, instanceId: string): P
         scenario: row.scenario || undefined,
         asName: row.as_name || undefined,
         target: row.target || undefined,
-        targets: readExtraStringArray(row.extra_data, 'targets', row.target),
+        targets: readExtraStringArray(extraData, 'targets', row.target),
         type: row.type || undefined,
         origin: row.origin || undefined,
         machine: row.machine || undefined,
-        machineId: readExtraString(row.extra_data, 'machine_id'),
-        machineAlias: readExtraString(row.extra_data, 'machine_alias'),
+        machineId: readExtraString(extraData, 'machine_id'),
+        machineAlias: readExtraString(extraData, 'machine_alias'),
         duration: row.duration || undefined,
         isDuplicate: row.is_duplicate === 1,
         simulated,
@@ -1572,8 +1692,18 @@ async function buildDashboardStatsIndex(cacheKey: string, instanceId: string): P
     simulatedDecisions: activeSimulatedDecisions,
   };
 
-  const statsCache = { key: cacheKey, scope: instanceId, alerts, decisions, totals };
-  if (cacheKey === getDashboardStatsCacheKey(instanceId)) {
+  const statsCache = {
+    key: cacheKey,
+    scope: instanceId,
+    primaryOnly,
+    alerts,
+    decisions,
+    totals,
+  };
+  if (cacheKey === getDashboardStatsCacheKey(instanceId, primaryOnly)) {
+    for (const [existingKey, cached] of state.dashboardStatsCaches) {
+      if (cached.scope === instanceId) state.dashboardStatsCaches.delete(existingKey);
+    }
     state.dashboardStatsCaches.set(cacheKey, statsCache);
     while (state.dashboardStatsCaches.size > Math.max(4, config.instances.length + 1)) {
       const oldest = state.dashboardStatsCaches.keys().next().value;
@@ -1584,20 +1714,27 @@ async function buildDashboardStatsIndex(cacheKey: string, instanceId: string): P
   return statsCache;
 }
 
-async function buildDashboardStats(filters: DashboardStatsFilters): Promise<DashboardStatsResponse> {
+async function buildDashboardStats(
+  filters: DashboardStatsFilters,
+  requestSignal?: AbortSignal,
+): Promise<DashboardStatsResponse> {
   // A secondary sync can finish while a large Combined index or response is
   // being assembled. Scope generations make that work obsolete. Retry here
   // so a response that completes after the commit can never expose the old
   // generation or put it back into a current cache entry.
   while (true) {
-    const statsIndex = await getDashboardStatsIndex(filters.instanceId);
-    if (statsIndex.key !== getDashboardStatsCacheKey(filters.instanceId)) continue;
+    const primaryOnly = dashboardFiltersUseStoredActiveDecisionPrimaries(filters);
+    const statsIndex = await getDashboardStatsIndex(filters.instanceId, primaryOnly);
+    if (statsIndex.key !== getDashboardStatsCacheKey(filters.instanceId, primaryOnly)) continue;
+    if (requestSignal?.aborted || isDashboardStatsResponseSuperseded(filters)) {
+      return createEmptyDashboardStatsResponse({ pending: true });
+    }
 
     const responseCacheKey = getDashboardStatsResponseCacheKey(statsIndex.key, filters);
     const cachedResponse = state.dashboardStatsResponseCache.get(responseCacheKey);
     const cachedResponseValidUntil = state.dashboardStatsResponseValidUntil.get(responseCacheKey) || 0;
     if (cachedResponse && cachedResponseValidUntil > Date.now()) {
-      if (statsIndex.key === getDashboardStatsCacheKey(filters.instanceId)) return cachedResponse;
+      if (statsIndex.key === getDashboardStatsCacheKey(filters.instanceId, primaryOnly)) return cachedResponse;
       continue;
     }
     state.dashboardStatsResponseCache.delete(responseCacheKey);
@@ -1606,16 +1743,53 @@ async function buildDashboardStats(filters: DashboardStatsFilters): Promise<Dash
     const pending = state.dashboardStatsResponsePromises.get(responseCacheKey);
     if (pending) {
       const response = await pending;
-      if (statsIndex.key === getDashboardStatsCacheKey(filters.instanceId)) return response;
+      if (statsIndex.key === getDashboardStatsCacheKey(filters.instanceId, primaryOnly)) return response;
       continue;
     }
 
-    const promise = buildDashboardStatsResponse(statsIndex, filters, responseCacheKey).finally(() => {
+    const responseScopeKey = getDashboardStatsResponseScopeKey(filters);
+    const responseRequestKey = getDashboardStatsRequestKey(filters);
+    const activeResponses = activeDashboardStatsResponses.get(responseScopeKey) || new Set();
+    const controller = new AbortController();
+    const abortFromRequest = () => controller.abort();
+    requestSignal?.addEventListener('abort', abortFromRequest, { once: true });
+    if (requestSignal?.aborted) controller.abort();
+    const activeControllers = activeDashboardStatsResponseControllers.get(responseScopeKey) || new Set();
+    const activeController = { key: responseRequestKey, controller };
+    activeControllers.add(activeController);
+    activeDashboardStatsResponseControllers.set(responseScopeKey, activeControllers);
+    let promise!: Promise<DashboardStatsResponse>;
+    promise = buildDashboardStatsResponse(
+      statsIndex,
+      filters,
+      responseCacheKey,
+      controller.signal,
+    ).finally(() => {
+      requestSignal?.removeEventListener('abort', abortFromRequest);
       state.dashboardStatsResponsePromises.delete(responseCacheKey);
+      activeResponses.delete(promise);
+      if (activeResponses.size === 0) {
+        activeDashboardStatsResponses.delete(responseScopeKey);
+      }
+      activeControllers.delete(activeController);
+      if (activeControllers.size === 0) {
+        activeDashboardStatsResponseControllers.delete(responseScopeKey);
+      }
     });
+    activeResponses.add(promise);
+    activeDashboardStatsResponses.set(responseScopeKey, activeResponses);
     state.dashboardStatsResponsePromises.set(responseCacheKey, promise);
     const response = await promise;
-    if (statsIndex.key === getDashboardStatsCacheKey(filters.instanceId)) return response;
+    if (statsIndex.key === getDashboardStatsCacheKey(filters.instanceId, primaryOnly)) return response;
+  }
+}
+
+function noteDashboardStatsRequest(filters: DashboardStatsFilters): void {
+  const responseScopeKey = getDashboardStatsResponseScopeKey(filters);
+  const requestKey = getDashboardStatsRequestKey(filters);
+  requestedDashboardStatsResponseKeys.set(responseScopeKey, requestKey);
+  for (const active of activeDashboardStatsResponseControllers.get(responseScopeKey) || []) {
+    if (active.key !== requestKey) active.controller.abort();
   }
 }
 
@@ -1655,33 +1829,65 @@ function createEmptyDashboardStatsResponse(options: { pending?: boolean } = {}):
 }
 
 function isDashboardStatsBuildInProgress(filters: DashboardStatsFilters): boolean {
-  const indexKey = getDashboardStatsCacheKey(filters.instanceId);
+  const responseScopeKey = getDashboardStatsResponseScopeKey(filters);
+  const indexKey = getDashboardStatsCacheKey(
+    filters.instanceId,
+    dashboardFiltersUseStoredActiveDecisionPrimaries(filters),
+  );
   if (!state.dashboardStatsCaches.has(indexKey)) {
-    return state.dashboardStatsIndexPromises.has(indexKey);
+    return state.dashboardStatsIndexPromises.has(indexKey)
+      || Boolean(activeDashboardStatsResponses.get(responseScopeKey)?.size)
+      || dashboardStatsWarmRunners.has(responseScopeKey);
   }
 
-  return state.dashboardStatsResponsePromises.has(getDashboardStatsResponseCacheKey(indexKey, filters));
+  return Boolean(activeDashboardStatsResponses.get(responseScopeKey)?.size)
+    || dashboardStatsWarmRunners.has(responseScopeKey);
 }
 
 function warmDashboardStatsCache(filters: DashboardStatsFilters): void {
-  const warmingKey = getDashboardStatsCacheKey(filters.instanceId);
-  void buildDashboardStats(filters).then(() => {
-    if (
-      warmingKey !== getDashboardStatsCacheKey(filters.instanceId) ||
-      state.dashboardStatsReadyPublishedKeys.has(warmingKey) ||
-      !state.cacheRefreshCompletedAt
-    ) {
-      return;
-    }
+  const responseScopeKey = getDashboardStatsResponseScopeKey(filters);
+  queuedDashboardStatsWarmFilters.set(responseScopeKey, { ...filters });
+  if (dashboardStatsWarmRunners.has(responseScopeKey)) return;
 
-    // A cold dashboard request initially receives the previous response with
-    // pending=true. Notify clients again when the new index and response are
-    // read-visible so a superseded retry cannot leave the page stale.
-    state.dashboardStatsReadyPublishedKeys.add(warmingKey);
-    publishCacheUpdate(state.cacheRefreshCompletedAt);
-  }).catch((error: any) => {
-    console.error('Failed to warm dashboard statistics cache:', error.message);
+  const runner = (async () => {
+    while (true) {
+      const activeResponses = activeDashboardStatsResponses.get(responseScopeKey);
+      if (activeResponses?.size) {
+        await Promise.allSettled([...activeResponses]);
+      }
+
+      const nextFilters = queuedDashboardStatsWarmFilters.get(responseScopeKey);
+      if (!nextFilters) return;
+      queuedDashboardStatsWarmFilters.delete(responseScopeKey);
+
+      const primaryOnly = dashboardFiltersUseStoredActiveDecisionPrimaries(nextFilters);
+      const warmingKey = getDashboardStatsCacheKey(nextFilters.instanceId, primaryOnly);
+      try {
+        const response = await buildDashboardStats(nextFilters);
+        if (response.pending) continue;
+        if (
+          warmingKey !== getDashboardStatsCacheKey(nextFilters.instanceId, primaryOnly)
+          || state.dashboardStatsReadyPublishedKeys.has(warmingKey)
+          || !state.cacheRefreshCompletedAt
+        ) {
+          continue;
+        }
+
+        // A cold dashboard request initially receives the previous response
+        // with pending=true. Notify clients when the newest queued response is
+        // read-visible; intermediate range changes are deliberately skipped.
+        state.dashboardStatsReadyPublishedKeys.add(warmingKey);
+        publishCacheUpdate(state.cacheRefreshCompletedAt);
+      } catch (error: any) {
+        console.error('Failed to warm dashboard statistics cache:', error.message);
+      }
+    }
+  })().finally(() => {
+    dashboardStatsWarmRunners.delete(responseScopeKey);
+    const queuedFilters = queuedDashboardStatsWarmFilters.get(responseScopeKey);
+    if (queuedFilters) warmDashboardStatsCache(queuedFilters);
   });
+  dashboardStatsWarmRunners.set(responseScopeKey, runner);
 }
 
 async function prepareDashboardStatsAfterRefresh(
@@ -1703,7 +1909,10 @@ async function prepareDashboardStatsAfterRefresh(
     ) {
       return false;
     }
-    const indexKey = getDashboardStatsCacheKey(state.lastDashboardStatsFilters.instanceId);
+    const indexKey = getDashboardStatsCacheKey(
+      state.lastDashboardStatsFilters.instanceId,
+      dashboardFiltersUseStoredActiveDecisionPrimaries(state.lastDashboardStatsFilters),
+    );
     const responseKey = getDashboardStatsResponseCacheKey(indexKey, state.lastDashboardStatsFilters);
     if (
       state.dashboardStatsResponseCache.has(responseKey)
@@ -1738,7 +1947,10 @@ async function prepareDashboardStatsAfterRefresh(
   // prepare the latest requested response instead of finishing an obsolete
   // filter and then scanning the same rows again.
   const indexFilters = { ...state.lastDashboardStatsFilters };
-  await getDashboardStatsIndex(indexFilters.instanceId);
+  await getDashboardStatsIndex(
+    indexFilters.instanceId,
+    dashboardFiltersUseStoredActiveDecisionPrimaries(indexFilters),
+  );
   const responseFilters = state.lastDashboardStatsFilters;
   if (
     instanceId
@@ -1747,8 +1959,8 @@ async function prepareDashboardStatsAfterRefresh(
   ) {
     return true;
   }
-  await buildDashboardStats(responseFilters);
-  return true;
+  const response = await buildDashboardStats(responseFilters);
+  return response.pending !== true;
 }
 
 function prepareDashboardStatsAfterRefreshInBackground(
@@ -1778,7 +1990,11 @@ async function buildDashboardStatsResponse(
   statsIndex: DashboardStatsCache,
   filters: DashboardStatsFilters,
   responseCacheKey: string,
+  signal: AbortSignal,
 ): Promise<DashboardStatsResponse> {
+  if (signal.aborted || isDashboardStatsResponseSuperseded(filters)) {
+    return createEmptyDashboardStatsResponse({ pending: true });
+  }
   const nowTimestamp = Date.now();
   let responseValidUntil = nowTimestamp + 60 * 60_000;
   const lookbackDays = Math.max(1, Math.round(lookbackHours(config.lookbackPeriod) / 24));
@@ -1786,6 +2002,23 @@ async function buildDashboardStatsResponse(
     if (timestamp > nowTimestamp && timestamp < responseValidUntil) {
       responseValidUntil = timestamp;
     }
+  };
+  // Dashboard buckets only have hour/day precision. Reuse the result for
+  // records in the same UTC minute so timezone conversion stays correct at
+  // offset transitions without formatting hundreds of thousands of nearly
+  // identical timestamps.
+  const dashboardBucketKeysByMinute = new Map<number, string>();
+  const resolveDashboardBucketKey = (isoString: string): string => {
+    const timestamp = Date.parse(isoString);
+    if (!Number.isFinite(timestamp)) {
+      return getDashboardBucketKey(isoString, filters);
+    }
+    const minute = Math.floor(timestamp / 60_000);
+    const cached = dashboardBucketKeysByMinute.get(minute);
+    if (cached !== undefined) return cached;
+    const bucketKey = getDashboardBucketKey(isoString, filters);
+    dashboardBucketKeysByMinute.set(minute, bucketKey);
+    return bucketKey;
   };
   const instanceNameById = new Map(
     config.instances.map((instance) => [instance.id, instance.name]),
@@ -1875,6 +2108,7 @@ async function buildDashboardStatsResponse(
     filters,
     compiledDashboardSearch.ok ? compiledDashboardSearch.ast : null,
     compiledDashboardDecisionSearch.ok ? compiledDashboardDecisionSearch.ast : null,
+    signal,
   ).then(
     (value) => ({ value, error: null as Error | null }),
     (error: unknown) => ({
@@ -1882,6 +2116,33 @@ async function buildDashboardStatsResponse(
       error: error instanceof Error ? error : new Error(String(error)),
     }),
   );
+  const currentActiveDecisionTotalsPromise = statsIndex.primaryOnly
+    ? (() => {
+      const where = createSqlWhere();
+      where.add('stop_at > ?', new Date(nowTimestamp).toISOString());
+      if (filters.instanceId === 'all') {
+        where.add(
+          `instance_id IN (${config.instances.map(() => '?').join(',')})`,
+          ...config.instances.map((instance) => instance.id),
+        );
+      } else {
+        where.add('instance_id = ?', filters.instanceId);
+      }
+      if (!config.simulationsEnabled) where.add('simulated = 0');
+      return analyticsQueryWorker.all<{ simulated: number; count: number }>(`
+        SELECT simulated, COUNT(*) AS count
+        FROM decisions
+        ${where.toSql()}
+        GROUP BY simulated
+      `, where.params, { label: 'dashboard active decision totals', signal }).then(
+        (rows) => ({ rows, error: null as Error | null }),
+        (error: unknown) => ({
+          rows: [] as Array<{ simulated: number; count: number }>,
+          error: error instanceof Error ? error : new Error(String(error)),
+        }),
+      );
+    })()
+    : null;
 
   const filteredAlertAccumulator = createDashboardStatsAccumulator();
   const chartAlertAccumulator = createDashboardStatsAccumulator();
@@ -1889,10 +2150,15 @@ async function buildDashboardStatsResponse(
   const alertCountryByIp = new Map<string, string>();
   const filteredAlertIps = new Set<string>();
   const sliderAlertIps = new Set<string>();
+  let globalTotal = 0;
+  const dashboardHasDateRange = Boolean(filters.dateStart || filters.dateEnd);
 
   for (let index = 0; index < statsIndex.alerts.length; index += 1) {
     if (index > 0 && index % DASHBOARD_LOOP_YIELD_INTERVAL === 0) {
       await delay(0);
+      if (signal.aborted || isDashboardStatsResponseSuperseded(filters)) {
+        return createEmptyDashboardStatsResponse({ pending: true });
+      }
     }
     const alert = statsIndex.alerts[index];
     if (filters.instanceId !== 'all' && alert.instanceId !== filters.instanceId) continue;
@@ -1904,18 +2170,39 @@ async function buildDashboardStatsResponse(
     if (!matchesDashboardSimulationFilter(alert.simulated, filters.simulation)) {
       continue;
     }
+    globalTotal += 1;
+    const dateTimeKey = dashboardHasDateRange
+      ? resolveDashboardBucketKey(alert.createdAt)
+      : undefined;
 
-    if (matchesDashboardAlertFilters(alert, filters, dashboardSearchPredicate, false)) {
-      addDashboardAlert(sliderAlertAccumulator, alert, filters);
+    const matchesSlider = matchesDashboardAlertFilters(
+      alert,
+      filters,
+      dashboardSearchPredicate,
+      false,
+      dateTimeKey,
+    );
+    const matchesFiltered = matchesDashboardAlertFilters(
+      alert,
+      filters,
+      dashboardSearchPredicate,
+      true,
+      dateTimeKey,
+    );
+    const bucketKey = matchesSlider || matchesFiltered
+      ? dateTimeKey ?? resolveDashboardBucketKey(alert.createdAt)
+      : '';
+    if (matchesSlider) {
+      addDashboardAlert(sliderAlertAccumulator, alert, filters, bucketKey);
       if (alert.ip) {
         sliderAlertIps.add(alert.ip);
       }
     }
 
-    if (matchesDashboardAlertFilters(alert, filters, dashboardSearchPredicate, true)) {
-      addDashboardAlert(filteredAlertAccumulator, alert, filters);
+    if (matchesFiltered) {
+      addDashboardAlert(filteredAlertAccumulator, alert, filters, bucketKey);
       addDashboardAttackLocation(filteredAlertAccumulator.attackLocations, alert);
-      addDashboardAlert(chartAlertAccumulator, alert, filters);
+      addDashboardAlert(chartAlertAccumulator, alert, filters, bucketKey);
       if (alert.ip) {
         filteredAlertIps.add(alert.ip);
       }
@@ -1926,14 +2213,51 @@ async function buildDashboardStatsResponse(
   const chartDecisionAccumulator = createDashboardDecisionAccumulator();
   const sliderDecisionAccumulator = createDashboardDecisionAccumulator();
   const filteredActiveDecisionPrimaries = new Map<string, DashboardDecisionStatsRecord>();
-  const sliderActiveDecisionPrimaries = new Map<string, DashboardDecisionStatsRecord>();
+  // Without an explicit date window, slider and filtered decision membership
+  // are identical. Share the primary map so a blocklist is ranked and bucketed
+  // once instead of twice.
+  const sharedActiveDecisionPrimaries = !filters.dateStart && !filters.dateEnd;
+  const sliderActiveDecisionPrimaries = sharedActiveDecisionPrimaries
+    ? filteredActiveDecisionPrimaries
+    : new Map<string, DashboardDecisionStatsRecord>();
+  // The persisted duplicate flag already identifies the active primary when
+  // no dashboard filter can split a duplicate group. Aggregate those rows
+  // directly instead of allocating a short-lived map with hundreds of
+  // thousands of composite string keys.
+  const useStoredActiveDecisionPrimaries = statsIndex.primaryOnly;
+  // The slider deliberately ignores the selected date window. For a
+  // date-only dashboard request its membership therefore still matches the
+  // persisted duplicate groups, even though the filtered chart must rerank
+  // decisions inside that date window.
+  const useStoredSliderActiveDecisionPrimaries = !filters.q
+    && !filters.decisionQ
+    && !filters.country
+    && !filters.scenario
+    && !filters.as
+    && !filters.ip
+    && !filters.target;
   let currentActiveDecisions = 0;
   let currentActiveSimulatedDecisions = 0;
+  const addSharedActiveDecision = (decision: DashboardDecisionStatsRecord): void => {
+    const bucketKey = resolveDashboardBucketKey(decision.createdAt);
+    addDashboardDecision(sliderDecisionAccumulator, decision, filters, true, bucketKey);
+    addDashboardDecision(chartDecisionAccumulator, decision, filters, true, bucketKey);
+    const country = normalizeDashboardCountryCode(decision.country)
+      || (decision.value ? alertCountryByIp.get(decision.value) : undefined);
+    addDashboardDecisionCountry(filteredDecisionAccumulator, decision, country, true);
+    if (decision.simulated) {
+      filteredDecisionAccumulator.simulatedDecisions += 1;
+    } else {
+      filteredDecisionAccumulator.decisions += 1;
+    }
+  };
 
-  let globalTotal = 0;
   for (let index = 0; index < statsIndex.decisions.length; index += 1) {
     if (index > 0 && index % DASHBOARD_LOOP_YIELD_INTERVAL === 0) {
       await delay(0);
+      if (signal.aborted || isDashboardStatsResponseSuperseded(filters)) {
+        return createEmptyDashboardStatsResponse({ pending: true });
+      }
     }
     const decision = statsIndex.decisions[index];
     if (filters.instanceId !== 'all' && decision.instanceId !== filters.instanceId) continue;
@@ -1943,7 +2267,7 @@ async function buildDashboardStatsResponse(
     } else {
       includeTimeBoundary(decision.timestamp + config.lookbackMs);
     }
-    if (isActive) {
+    if (isActive && !useStoredActiveDecisionPrimaries) {
       if (decision.simulated) {
         currentActiveSimulatedDecisions += 1;
       } else {
@@ -1954,71 +2278,160 @@ async function buildDashboardStatsResponse(
       continue;
     }
 
-    if (matchesDashboardDecisionFilters(
+    const matchesSlider = matchesDashboardDecisionFilters(
       decision,
       filters,
       dashboardDecisionSearchPredicate,
       sliderAlertIps,
       false,
-    )) {
-      if (isActive) {
-        selectDashboardDecisionPrimary(sliderActiveDecisionPrimaries, decision);
-      } else {
-        addDashboardDecision(sliderDecisionAccumulator, decision, filters, false);
-      }
-    }
-
-    if (
-      matchesDashboardDecisionFilters(
+    );
+    const dateTimeKey = dashboardHasDateRange
+      ? resolveDashboardBucketKey(decision.createdAt)
+      : undefined;
+    const matchesFiltered = sharedActiveDecisionPrimaries
+      ? matchesSlider
+      : matchesDashboardDecisionFilters(
         decision,
         filters,
         dashboardDecisionSearchPredicate,
         filteredAlertIps,
         true,
-      )
+        dateTimeKey,
+      );
+    if (isActive && useStoredActiveDecisionPrimaries) {
+      if (matchesSlider && !decision.isDuplicate) {
+        addSharedActiveDecision(decision);
+      }
+      continue;
+    }
+    if (
+      isActive
+      && useStoredSliderActiveDecisionPrimaries
+      && matchesSlider
+      && !decision.isDuplicate
     ) {
+      addDashboardDecision(
+        sliderDecisionAccumulator,
+        decision,
+        filters,
+        true,
+        dateTimeKey ?? resolveDashboardBucketKey(decision.createdAt),
+      );
+    }
+    let bucketKey = '';
+    if (matchesSlider) {
       if (isActive) {
-        selectDashboardDecisionPrimary(filteredActiveDecisionPrimaries, decision);
+        if (!useStoredSliderActiveDecisionPrimaries) {
+          selectDashboardDecisionPrimary(sliderActiveDecisionPrimaries, decision);
+        }
       } else {
-        addDashboardDecision(chartDecisionAccumulator, decision, filters, false);
+        bucketKey = dateTimeKey ?? resolveDashboardBucketKey(decision.createdAt);
+        addDashboardDecision(sliderDecisionAccumulator, decision, filters, false, bucketKey);
+      }
+    }
+
+    if (matchesFiltered) {
+      if (isActive) {
+        if (!sharedActiveDecisionPrimaries) {
+          selectDashboardDecisionPrimary(filteredActiveDecisionPrimaries, decision);
+        }
+      } else {
+        bucketKey ||= dateTimeKey ?? resolveDashboardBucketKey(decision.createdAt);
+        addDashboardDecision(chartDecisionAccumulator, decision, filters, false, bucketKey);
         const country = normalizeDashboardCountryCode(decision.country)
           || (decision.value ? alertCountryByIp.get(decision.value) : undefined);
         addDashboardDecisionCountry(filteredDecisionAccumulator, decision, country, false);
       }
     }
   }
-  for (const decision of sliderActiveDecisionPrimaries.values()) {
-    addDashboardDecision(sliderDecisionAccumulator, decision, filters, true);
-  }
-  for (const decision of filteredActiveDecisionPrimaries.values()) {
-    addDashboardDecision(chartDecisionAccumulator, decision, filters, true);
-    const country = normalizeDashboardCountryCode(decision.country)
-      || (decision.value ? alertCountryByIp.get(decision.value) : undefined);
-    addDashboardDecisionCountry(filteredDecisionAccumulator, decision, country, true);
-    if (decision.simulated) {
-      filteredDecisionAccumulator.simulatedDecisions += 1;
-    } else {
-      filteredDecisionAccumulator.decisions += 1;
+
+  if (sharedActiveDecisionPrimaries) {
+    let processed = 0;
+    for (const decision of filteredActiveDecisionPrimaries.values()) {
+      if (processed > 0 && processed % DASHBOARD_LOOP_YIELD_INTERVAL === 0) {
+        await delay(0);
+        if (signal.aborted || isDashboardStatsResponseSuperseded(filters)) {
+          return createEmptyDashboardStatsResponse({ pending: true });
+        }
+      }
+      processed += 1;
+      addSharedActiveDecision(decision);
     }
-  }
-  for (let index = 0; index < statsIndex.alerts.length; index += 1) {
-    if (index > 0 && index % DASHBOARD_LOOP_YIELD_INTERVAL === 0) {
-      await delay(0);
+  } else {
+    let processed = 0;
+    for (const decision of sliderActiveDecisionPrimaries.values()) {
+      if (processed > 0 && processed % DASHBOARD_LOOP_YIELD_INTERVAL === 0) {
+        await delay(0);
+        if (signal.aborted || isDashboardStatsResponseSuperseded(filters)) {
+          return createEmptyDashboardStatsResponse({ pending: true });
+        }
+      }
+      processed += 1;
+      addDashboardDecision(
+        sliderDecisionAccumulator,
+        decision,
+        filters,
+        true,
+        resolveDashboardBucketKey(decision.createdAt),
+      );
     }
-    if (
-      (filters.instanceId === 'all' || statsIndex.alerts[index].instanceId === filters.instanceId)
-      && matchesDashboardSimulationFilter(statsIndex.alerts[index].simulated, filters.simulation)
-    ) {
-      globalTotal += 1;
+    processed = 0;
+    for (const decision of filteredActiveDecisionPrimaries.values()) {
+      if (processed > 0 && processed % DASHBOARD_LOOP_YIELD_INTERVAL === 0) {
+        await delay(0);
+        if (signal.aborted || isDashboardStatsResponseSuperseded(filters)) {
+          return createEmptyDashboardStatsResponse({ pending: true });
+        }
+      }
+      processed += 1;
+      addDashboardDecision(
+        chartDecisionAccumulator,
+        decision,
+        filters,
+        true,
+        resolveDashboardBucketKey(decision.createdAt),
+      );
+      const country = normalizeDashboardCountryCode(decision.country)
+        || (decision.value ? alertCountryByIp.get(decision.value) : undefined);
+      addDashboardDecisionCountry(filteredDecisionAccumulator, decision, country, true);
+      if (decision.simulated) {
+        filteredDecisionAccumulator.simulatedDecisions += 1;
+      } else {
+        filteredDecisionAccumulator.decisions += 1;
+      }
     }
   }
 
   const attackLocations = await attackLocationResolver.resolve(
     dashboardAttackLocationData(filteredAlertAccumulator.attackLocations),
   );
+  if (signal.aborted || isDashboardStatsResponseSuperseded(filters)) {
+    return createEmptyDashboardStatsResponse({ pending: true });
+  }
   const exactListTotalsResult = await exactListTotalsResultPromise;
-  if (exactListTotalsResult.error) throw exactListTotalsResult.error;
+  if (exactListTotalsResult.error) {
+    if (signal.aborted && exactListTotalsResult.error.name === 'AbortError') {
+      return createEmptyDashboardStatsResponse({ pending: true });
+    }
+    throw exactListTotalsResult.error;
+  }
   const exactListTotals = exactListTotalsResult.value!;
+  if (currentActiveDecisionTotalsPromise) {
+    const currentActiveDecisionTotals = await currentActiveDecisionTotalsPromise;
+    if (currentActiveDecisionTotals.error) {
+      if (signal.aborted && currentActiveDecisionTotals.error.name === 'AbortError') {
+        return createEmptyDashboardStatsResponse({ pending: true });
+      }
+      throw currentActiveDecisionTotals.error;
+    }
+    for (const row of currentActiveDecisionTotals.rows) {
+      if (row.simulated === 1) {
+        currentActiveSimulatedDecisions += Number(row.count || 0);
+      } else {
+        currentActiveDecisions += Number(row.count || 0);
+      }
+    }
+  }
 
   const response: DashboardStatsResponse = {
     totals: {
@@ -2055,7 +2468,9 @@ async function buildDashboardStatsResponse(
   };
 
   if (
-    statsIndex.key === getDashboardStatsCacheKey(filters.instanceId)
+    !signal.aborted
+    && !isDashboardStatsResponseSuperseded(filters)
+    && statsIndex.key === getDashboardStatsCacheKey(filters.instanceId, statsIndex.primaryOnly)
     && responseCacheKey === getDashboardStatsResponseCacheKey(statsIndex.key, filters)
   ) {
     state.dashboardStatsResponseCache.set(responseCacheKey, response);
@@ -2080,13 +2495,27 @@ async function buildDashboardStatsResponse(
   return response;
 }
 
-function getDashboardStatsCacheKey(instanceId = 'all'): string {
+function getDashboardStatsCacheKey(instanceId = 'all', primaryOnly = false): string {
   const scopeVersion = state.dashboardStatsScopeVersions.get(instanceId) || 0;
-  return `${state.dashboardStatsCacheVersion}:${scopeVersion}:${config.lookbackMs}:${config.simulationsEnabled ? 'sim' : 'live'}:${instanceId}`;
+  return `${state.dashboardStatsCacheVersion}:${scopeVersion}:${config.lookbackMs}:${config.simulationsEnabled ? 'sim' : 'live'}:${instanceId}:${primaryOnly ? 'primary' : 'dynamic'}`;
+}
+
+function getDashboardStatsResponseScopeKey(filters: DashboardStatsFilters): string {
+  return `${filters.instanceId}:${dashboardFiltersUseStoredActiveDecisionPrimaries(filters) ? 'primary' : 'dynamic'}`;
+}
+
+function getDashboardStatsRequestKey(filters: DashboardStatsFilters): string {
+  return JSON.stringify(filters);
+}
+
+function isDashboardStatsResponseSuperseded(filters: DashboardStatsFilters): boolean {
+  const requestedKey = requestedDashboardStatsResponseKeys.get(getDashboardStatsResponseScopeKey(filters));
+  return requestedKey !== undefined && requestedKey !== getDashboardStatsRequestKey(filters);
 }
 
 function invalidateFacetResponses(): void {
   state.facetResponseCache.clear();
+  decisionListCountCache.clear();
   state.facetCacheVersion += 1;
 }
 
@@ -2162,6 +2591,7 @@ function normalizeAlertDetail(input: unknown, alertId: string): AlertRecord | nu
     buildDashboardStats,
     getDashboardStatsIndex,
     createEmptyDashboardStatsResponse,
+    noteDashboardStatsRequest,
     isDashboardStatsBuildInProgress,
     warmDashboardStatsCache,
     prepareDashboardStatsAfterRefresh,

@@ -119,6 +119,7 @@ import {
   dashboardBuckets,
   dashboardCountryList,
   dashboardWorldMapData,
+  getDashboardBucketKey,
   getDashboardBucketKeys,
   matchesDashboardAlertFilters,
   matchesDashboardDecisionFilters,
@@ -274,9 +275,12 @@ interface ReconcileWindowState {
 }
 
 const API_BODY_LIMIT_BYTES = 1024 * 1024;
-const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-const DASHBOARD_LOOP_YIELD_INTERVAL = 5_000;
-const DASHBOARD_INDEX_BATCH_SIZE = 5_000;
+const delay = (ms: number): Promise<void> => new Promise((resolve) => {
+  if (ms === 0) setImmediate(resolve);
+  else setTimeout(resolve, ms);
+});
+const DASHBOARD_LOOP_YIELD_INTERVAL = 250;
+const DASHBOARD_INDEX_BATCH_SIZE = 250;
 // Keep worker-message overhead reasonable while bounding each transaction so
 // interactive writes do not sit behind a long cache batch in the shared queue.
 const SYNC_WRITE_BATCH_SIZE = 100;
@@ -616,6 +620,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   const persistedConfig = loadPersistedConfig(database);
   let refreshIntervalMs = persistedConfig.refresh_interval_ms ?? config.refreshIntervalMs;
   let manualRefreshEnabled = persistedConfig.manual_refresh_enabled ?? config.manualRefreshEnabled;
+  // The config endpoint stays available while a fresh cache builds its large
+  // SQLite indexes. Keep this tiny preference in memory so startup polling
+  // never contends with the index writer (notably when WAL is disabled).
+  let metricsSidebarVisible = loadMetricsSidebarVisible(database);
   const reconcileConfigFingerprint = crypto.createHash('sha256').update(JSON.stringify({
     lookbackMs: config.lookbackMs,
     reconcileWindowMs: config.reconcileWindowMs,
@@ -857,6 +865,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     buildDashboardStats,
     getDashboardStatsIndex,
     createEmptyDashboardStatsResponse,
+    noteDashboardStatsRequest,
     isDashboardStatsBuildInProgress,
     warmDashboardStatsCache,
     prepareDashboardStatsAfterRefresh,
@@ -906,6 +915,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     getAlertListFiltersFromValues,
     getAlertSourceValue,
     getAlertTargetSummary,
+    getDashboardBucketKey,
     getDashboardBucketKeys,
     getDecisionListFiltersFromValues,
     getDecisionPageIndexHint,
@@ -1211,6 +1221,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     set refreshIntervalMs(value: number) { refreshIntervalMs = value; },
     get manualRefreshEnabled() { return manualRefreshEnabled; },
     set manualRefreshEnabled(value: boolean) { manualRefreshEnabled = value; },
+    get metricsSidebarVisible() { return metricsSidebarVisible; },
+    set metricsSidebarVisible(value: boolean) { metricsSidebarVisible = value; },
     get cacheRefreshCompletedAt() { return cacheRefreshCompletedAt; },
     set cacheRefreshCompletedAt(value: string | null) { cacheRefreshCompletedAt = value; },
     cache,
@@ -1284,7 +1296,6 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     isValidIpOrRange,
     lapiClient,
     lapiClients,
-    loadMetricsSidebarVisible,
     lookbackHours,
     markDuplicateDecisions,
     normalizeAlertDetail,
@@ -1324,6 +1335,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     updateCache,
     updateCacheDelta,
     validateInstanceEntityRefs,
+    noteDashboardStatsRequest,
     warmDashboardStatsCache,
     withAlertTargetSummary,
     withInstanceName,

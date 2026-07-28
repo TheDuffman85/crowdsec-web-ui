@@ -336,6 +336,26 @@ describe('CrowdsecDatabase duplicates and indexes', () => {
     expect(filteredDecisionCountPlan.map((step) => step.detail).join('\n')).toContain(
       'USING COVERING INDEX idx_decisions_duplicate_filters (is_duplicate=? AND instance_id=? AND stop_at>?)',
     );
+    const decisionPagingPlan = db.db.prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT COALESCE(upstream_id, CAST(id AS TEXT)) AS id, id AS internal_id, created_at
+      FROM decisions AS decisions INDEXED BY idx_decisions_duplicate_paging
+      WHERE instance_id IN (?, ?)
+        AND stop_at > ?
+        AND is_duplicate = 0
+      ORDER BY decisions.created_at DESC, decisions.id DESC
+      LIMIT ? OFFSET ?
+    `).all(
+      'primary',
+      'secondary',
+      '2026-01-01T00:00:00.000Z',
+      50,
+      0,
+    ) as Array<{ detail: string }>;
+    expect(decisionPagingPlan.map((step) => step.detail).join('\n')).toContain(
+      'USING INDEX idx_decisions_duplicate_paging (is_duplicate=?)',
+    );
+    expect(decisionPagingPlan.map((step) => step.detail).join('\n')).not.toContain('USE TEMP B-TREE');
     const filteredDuplicateRankingPlan = db.db.prepare(`
       EXPLAIN QUERY PLAN
       WITH ranked_filtered_decisions AS (

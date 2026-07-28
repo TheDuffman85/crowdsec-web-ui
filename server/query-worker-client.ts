@@ -14,6 +14,8 @@ type PendingQuery = {
   reject: (error: Error) => void;
   timeout: ReturnType<typeof setTimeout> | null;
   worker?: WorkerSlot;
+  signal?: AbortSignal;
+  abortListener?: () => void;
 };
 
 type WorkerResponse = {
@@ -25,6 +27,11 @@ type WorkerResponse = {
 type WorkerSlot = {
   worker: Worker;
   currentId: number | null;
+};
+
+type QueryOptions = {
+  label?: string;
+  signal?: AbortSignal;
 };
 
 export class QueryWorkerTimeoutError extends Error {
@@ -65,12 +72,12 @@ export class DatabaseQueryWorker {
     this.maxWorkers = Math.max(1, options.maxWorkers ?? 3);
   }
 
-  all<T>(sql: string, params: unknown[] = [], options: { label?: string } = {}): Promise<T[]> {
-    return this.execute<T[]>('all', sql, params, options.label);
+  all<T>(sql: string, params: unknown[] = [], options: QueryOptions = {}): Promise<T[]> {
+    return this.execute<T[]>('all', sql, params, options);
   }
 
-  get<T>(sql: string, params: unknown[] = [], options: { label?: string } = {}): Promise<T> {
-    return this.execute<T>('get', sql, params, options.label);
+  get<T>(sql: string, params: unknown[] = [], options: QueryOptions = {}): Promise<T> {
+    return this.execute<T>('get', sql, params, options);
   }
 
   close(): void {
@@ -82,15 +89,20 @@ export class DatabaseQueryWorker {
     this.queue.length = 0;
   }
 
-  private execute<T>(method: QueryMethod, sql: string, params: unknown[], requestedLabel?: string): Promise<T> {
+  private execute<T>(method: QueryMethod, sql: string, params: unknown[], options: QueryOptions): Promise<T> {
     const id = this.nextId++;
-    const label = requestedLabel?.trim() || describeQuery(sql);
+    const label = options.label?.trim() || describeQuery(sql);
 
     return new Promise<T>((resolve, reject) => {
+      if (options.signal?.aborted) {
+        reject(createAbortError());
+        return;
+      }
       const timeout = setTimeout(() => {
         const pending = this.pending.get(id);
         if (!pending || pending.worker) return;
         this.pending.delete(id);
+        this.removeAbortListener(pending);
         const queueIndex = this.queue.indexOf(pending);
         if (queueIndex !== -1) {
           this.queue.splice(queueIndex, 1);
@@ -116,10 +128,19 @@ export class DatabaseQueryWorker {
         resolve: (value) => resolve(value as T),
         reject,
         timeout,
+        signal: options.signal,
       };
+      if (options.signal) {
+        pending.abortListener = () => this.abortPending(id);
+        options.signal.addEventListener('abort', pending.abortListener, { once: true });
+      }
 
       this.pending.set(id, pending);
       this.queue.push(pending);
+      if (options.signal?.aborted) {
+        this.abortPending(id);
+        return;
+      }
       this.dispatch();
     });
   }
@@ -141,6 +162,7 @@ export class DatabaseQueryWorker {
       if (pending.timeout) clearTimeout(pending.timeout);
       pending.timeout = setTimeout(() => {
         if (!this.pending.delete(pending.id)) return;
+        this.removeAbortListener(pending);
         const executedMs = Date.now() - (pending.startedAt || pending.queuedAt);
         console.warn(
           `[query-worker] ${pending.label} timed out during execution after ${executedMs}ms `
@@ -214,6 +236,7 @@ export class DatabaseQueryWorker {
     }
     this.pending.delete(message.id);
     if (pending.timeout) clearTimeout(pending.timeout);
+    this.removeAbortListener(pending);
     if (slot.currentId === message.id) {
       slot.currentId = null;
     }
@@ -233,6 +256,7 @@ export class DatabaseQueryWorker {
       if (pending) {
         this.pending.delete(slot.currentId);
         if (pending.timeout) clearTimeout(pending.timeout);
+        this.removeAbortListener(pending);
         pending.reject(error);
       }
       slot.currentId = null;
@@ -250,8 +274,39 @@ export class DatabaseQueryWorker {
   private rejectPending(error: Error): void {
     for (const [id, pending] of this.pending) {
       if (pending.timeout) clearTimeout(pending.timeout);
+      this.removeAbortListener(pending);
       pending.reject(error);
       this.pending.delete(id);
+    }
+  }
+
+  private abortPending(id: number): void {
+    const pending = this.pending.get(id);
+    if (!pending) return;
+    this.pending.delete(id);
+    if (pending.timeout) clearTimeout(pending.timeout);
+    this.removeAbortListener(pending);
+
+    if (pending.worker) {
+      const slot = pending.worker;
+      if (slot.currentId === id) {
+        this.workers.delete(slot);
+        slot.currentId = null;
+        void slot.worker.terminate();
+      }
+    } else {
+      const queueIndex = this.queue.indexOf(pending);
+      if (queueIndex !== -1) this.queue.splice(queueIndex, 1);
+    }
+
+    pending.reject(createAbortError());
+    this.dispatch();
+  }
+
+  private removeAbortListener(pending: PendingQuery): void {
+    if (pending.signal && pending.abortListener) {
+      pending.signal.removeEventListener('abort', pending.abortListener);
+      pending.abortListener = undefined;
     }
   }
 
@@ -262,6 +317,12 @@ export class DatabaseQueryWorker {
     }
     return active;
   }
+}
+
+function createAbortError(): Error {
+  const error = new Error('Database query aborted');
+  error.name = 'AbortError';
+  return error;
 }
 
 function describeQuery(sql: string): string {

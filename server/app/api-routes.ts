@@ -33,6 +33,7 @@ type AnyError = Error & {
 export interface ApiRouteState {
   refreshIntervalMs: number;
   manualRefreshEnabled: boolean;
+  metricsSidebarVisible: boolean;
   cacheRefreshCompletedAt: string | null;
   cache: { isInitialized: boolean; isComplete: boolean; lastUpdate: string | null };
   initialHistorySyncs: Set<string>;
@@ -115,13 +116,13 @@ export function registerApiRoutes(dependencies: ApiRouteDependencies): void {
     isValidIpOrRange,
     lapiClient,
     lapiClients,
-    loadMetricsSidebarVisible,
     lookbackHours,
     markDuplicateDecisions,
     normalizeAlertDetail,
     normalizeDeleteIds,
     normalizeLanguagePreference,
     normalizeNotificationIds,
+    noteDashboardStatsRequest,
     notificationService,
     options,
     prepareOnDemandRefresh,
@@ -524,7 +525,7 @@ app.get(`${config.basePath}/api/config`, ensureAuth, (context) => {
     time_zone: config.timeZone,
     time_format: config.timeFormat,
     metrics_enabled: config.instances.some((instance) => instance.prometheus.length > 0),
-    metrics_sidebar_visible: loadMetricsSidebarVisible(database),
+    metrics_sidebar_visible: state.metricsSidebarVisible,
     ...(config.deploymentMode === 'load-test' ? { deployment_mode: config.deploymentMode } : {}),
     ...(config.loadTestProfile ? { load_test_profile: config.loadTestProfile } : {}),
     permissions: dashboardAuth.getPermissions(context),
@@ -594,6 +595,7 @@ app.put(`${config.basePath}/api/config/metrics-sidebar`, ensureAuth, async (cont
     }
 
     await syncWorker.runExclusive(() => saveMetricsSidebarVisible(database, body.visible));
+    state.metricsSidebarVisible = body.visible;
 
     return context.json({
       success: true,
@@ -1048,6 +1050,7 @@ app.get(`${config.basePath}/api/dashboard/stats`, ensureAuth, ensurePublishedRev
 
     await prepareReadCache('dashboard stats request');
     const filters = getDashboardStatsFilters(context, config.timeZone);
+    noteDashboardStatsRequest(filters);
     state.lastDashboardStatsFilters = { ...filters };
     state.lastDashboardStatsRequestedAt = Date.now();
     const initialScopePending = filters.instanceId === 'all'
@@ -1070,7 +1073,7 @@ app.get(`${config.basePath}/api/dashboard/stats`, ensureAuth, ensurePublishedRev
       return context.json(createEmptyDashboardStatsResponse({ pending: true }));
     }
 
-    return context.json(await buildDashboardStats(filters));
+    return context.json(await buildDashboardStats(filters, context.req.raw.signal));
   } catch (error: any) {
     if (error instanceof QueryWorkerTimeoutError) {
       console.warn('Timed out serving dashboard statistics from database:', error.message);

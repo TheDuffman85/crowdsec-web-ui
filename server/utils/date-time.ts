@@ -6,6 +6,30 @@ const TIMESTAMP_KEYS = new Set([
   'offline_since',
   'last_check',
 ]);
+const DATE_TIME_KEY_FORMATTER_CACHE_MAX_ENTRIES = 32;
+const dateTimeKeyFormatters = new Map<string, Intl.DateTimeFormat>();
+const timeZoneOffsetFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function getCachedFormatter(
+  cache: Map<string, Intl.DateTimeFormat>,
+  key: string,
+  options: Intl.DateTimeFormatOptions,
+): Intl.DateTimeFormat {
+  const cached = cache.get(key);
+  if (cached) {
+    cache.delete(key);
+    cache.set(key, cached);
+    return cached;
+  }
+
+  const formatter = new Intl.DateTimeFormat('en', options);
+  cache.set(key, formatter);
+  if (cache.size > DATE_TIME_KEY_FORMATTER_CACHE_MAX_ENTRIES) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey) cache.delete(oldestKey);
+  }
+  return formatter;
+}
 
 export function normalizeIsoTimestamp(value: string): string {
   const timestamp = Date.parse(value);
@@ -76,16 +100,26 @@ export function getDateTimeKey(
 ): string {
   const source = new Date(isoString);
   if (timeZone) {
-    const parts = new Intl.DateTimeFormat('en', {
+    const formatterKey = `${timeZone}\u0000${includeHour ? 'hour' : 'day'}`;
+    const parts = getCachedFormatter(dateTimeKeyFormatters, formatterKey, {
       timeZone,
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
       ...(includeHour ? { hour: '2-digit' as const, hourCycle: 'h23' as const } : {}),
     }).formatToParts(source);
-    const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((entry) => entry.type === type)?.value || '';
-    const dateKey = `${part('year')}-${part('month')}-${part('day')}`;
-    return includeHour ? `${dateKey}T${part('hour')}` : dateKey;
+    let year = '';
+    let month = '';
+    let day = '';
+    let hour = '';
+    for (const part of parts) {
+      if (part.type === 'year') year = part.value;
+      else if (part.type === 'month') month = part.value;
+      else if (part.type === 'day') day = part.value;
+      else if (part.type === 'hour') hour = part.value;
+    }
+    const dateKey = `${year}-${month}-${day}`;
+    return includeHour ? `${dateKey}T${hour}` : dateKey;
   }
 
   const localDate = new Date(source.getTime() - timezoneOffsetMinutes * 60_000);
@@ -98,7 +132,7 @@ export function getDateTimeKey(
 }
 
 export function getTimeZoneOffsetMs(date: Date, timeZone: string): number {
-  const parts = new Intl.DateTimeFormat('en', {
+  const parts = getCachedFormatter(timeZoneOffsetFormatters, timeZone, {
     timeZone,
     year: 'numeric',
     month: '2-digit',

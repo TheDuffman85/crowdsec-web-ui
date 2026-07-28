@@ -58,6 +58,7 @@ export function matchesDashboardAlertFilters(
   filters: DashboardStatsFilters,
   searchPredicate: ((alert: DashboardAlertStatsRecord) => boolean) | null,
   includeDateRange: boolean,
+  dateTimeKey?: string,
 ): boolean {
   if (searchPredicate && !searchPredicate(alert)) return false;
   if (filters.country && alert.country !== filters.country) return false;
@@ -66,7 +67,7 @@ export function matchesDashboardAlertFilters(
   if (filters.ip && !matchesIpSearchValue(alert.ip, filters.ip)) return false;
   if (filters.target && alert.target !== filters.target) return false;
 
-  if (includeDateRange && !matchesDashboardDateRange(alert.createdAt, filters)) {
+  if (includeDateRange && !matchesDashboardDateRange(alert.createdAt, filters, dateTimeKey)) {
     return false;
   }
 
@@ -79,6 +80,7 @@ export function matchesDashboardDecisionFilters(
   searchPredicate: ((decision: DashboardDecisionStatsRecord) => boolean) | null,
   alertIps: Set<string>,
   includeDateRange: boolean,
+  dateTimeKey?: string,
 ): boolean {
   if (searchPredicate && !searchPredicate(decision)) return false;
   if (filters.ip && !matchesIpSearchValue(decision.value, filters.ip)) return false;
@@ -97,7 +99,7 @@ export function matchesDashboardDecisionFilters(
     return false;
   }
 
-  if (includeDateRange && !matchesDashboardDateRange(decision.createdAt, filters)) {
+  if (includeDateRange && !matchesDashboardDateRange(decision.createdAt, filters, dateTimeKey)) {
     return false;
   }
 
@@ -108,28 +110,37 @@ export function requiresDashboardAlertIpJoin(filters: DashboardStatsFilters): bo
   return Boolean(filters.q || filters.country || filters.scenario || filters.as || filters.target);
 }
 
-export function matchesDashboardDateRange(isoString: string, filters: DashboardStatsFilters): boolean {
+export function matchesDashboardDateRange(
+  isoString: string,
+  filters: DashboardStatsFilters,
+  dateTimeKey?: string,
+): boolean {
   if (!filters.dateStart && !filters.dateEnd) {
     return true;
   }
 
-  const itemKey = getDateTimeKey(
-    isoString,
-    filters.granularity === 'hour' || filters.dateStart.includes('T') || filters.dateEnd.includes('T'),
-    filters.timezoneOffsetMinutes,
-    filters.timeZone,
-  );
+  const itemKey = dateTimeKey ?? getDateTimeKey(
+      isoString,
+      filters.granularity === 'hour' || filters.dateStart.includes('T') || filters.dateEnd.includes('T'),
+      filters.timezoneOffsetMinutes,
+      filters.timeZone,
+    );
 
   if (filters.dateStart && itemKey < filters.dateStart) return false;
   if (filters.dateEnd && itemKey > filters.dateEnd) return false;
   return true;
 }
 
-export function addDashboardAlert(accumulator: DashboardStatsAccumulator, alert: DashboardAlertStatsRecord, filters: DashboardStatsFilters): void {
+export function addDashboardAlert(
+  accumulator: DashboardStatsAccumulator,
+  alert: DashboardAlertStatsRecord,
+  filters: DashboardStatsFilters,
+  bucketKey = getDashboardBucketKey(alert.createdAt, filters),
+): void {
   accumulator.alerts += 1;
 
   const bucketMap = alert.simulated ? accumulator.simulatedAlertBuckets : accumulator.liveAlertBuckets;
-  incrementCount(bucketMap, getDashboardBucketKey(alert.createdAt, filters));
+  incrementCount(bucketMap, bucketKey);
 
   if (alert.simulated) {
     accumulator.simulatedAlerts += 1;
@@ -166,9 +177,9 @@ export function addDashboardDecision(
   decision: DashboardDecisionStatsRecord,
   filters: DashboardStatsFilters,
   isActive: boolean,
+  bucketKey = getDashboardBucketKey(decision.createdAt, filters),
 ): void {
   const bucketMap = decision.simulated ? accumulator.simulatedDecisionBuckets : accumulator.liveDecisionBuckets;
-  const bucketKey = getDashboardBucketKey(decision.createdAt, filters);
   incrementCount(bucketMap, bucketKey);
   if (isActive) {
     const activeBucketMap = decision.simulated

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import {
   formatDateTime,
   getDateTimeKey,
@@ -30,6 +30,28 @@ describe('server date and time helpers', () => {
 
   test('retains numeric browser-offset behavior without TZ', () => {
     expect(getDateTimeKey('2026-03-29T01:30:00.000Z', true, -120)).toBe('2026-03-29T03');
+  });
+
+  test('reuses timezone formatters across large dashboard aggregations', () => {
+    const OriginalDateTimeFormat = Intl.DateTimeFormat;
+    function MockDateTimeFormat(
+      locales?: Intl.LocalesArgument,
+      options?: Intl.DateTimeFormatOptions,
+    ): Intl.DateTimeFormat {
+      return new OriginalDateTimeFormat(locales, options);
+    }
+    const formatterSpy = vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(
+      MockDateTimeFormat as typeof Intl.DateTimeFormat,
+    );
+    try {
+      expect(getDateTimeKey('2026-07-28T09:00:00.000Z', true, 0, 'Pacific/Auckland')).toBe('2026-07-28T21');
+      expect(getDateTimeKey('2026-07-28T10:00:00.000Z', true, 0, 'Pacific/Auckland')).toBe('2026-07-28T22');
+      expect(formatterSpy.mock.calls.filter(([, options]) => (
+        options?.timeZone === 'Pacific/Auckland' && options?.hour === '2-digit'
+      ))).toHaveLength(1);
+    } finally {
+      formatterSpy.mockRestore();
+    }
   });
 
   test('applies the configured hour cycle to server-generated timestamps', () => {

@@ -241,8 +241,11 @@ export function sanitizeRequestTimeZone(value: string | undefined): string | nul
   }
 }
 
-export function parseRecordExtras(value: string | null | undefined): Record<string, unknown> {
+type RecordExtrasInput = string | Record<string, unknown> | null | undefined;
+
+export function parseRecordExtras(value: RecordExtrasInput): Record<string, unknown> {
   if (!value) return {};
+  if (typeof value === 'object') return value;
   try {
     const parsed = JSON.parse(value) as unknown;
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
@@ -253,13 +256,13 @@ export function parseRecordExtras(value: string | null | undefined): Record<stri
   }
 }
 
-export function readExtraString(value: string | null | undefined, key: string): string | undefined {
+export function readExtraString(value: RecordExtrasInput, key: string): string | undefined {
   const candidate = parseRecordExtras(value)[key];
   return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : undefined;
 }
 
 export function readExtraStringArray(
-  value: string | null | undefined,
+  value: RecordExtrasInput,
   key: string,
   fallback?: string | null,
 ): string[] | undefined {

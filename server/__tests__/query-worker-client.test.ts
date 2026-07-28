@@ -85,4 +85,35 @@ describe('DatabaseQueryWorker', () => {
 
     database.close();
   });
+
+  test('aborts an executing query and replaces its worker for subsequent reads', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-query-worker-'));
+    tempDirs.push(dir);
+    const dbPath = path.join(dir, 'test.db');
+    const database = new CrowdsecDatabase({ dbPath });
+    const worker = new DatabaseQueryWorker({
+      dbPath,
+      maxWorkers: 1,
+      timeoutMs: 30_000,
+    });
+    workers.push(worker);
+    const controller = new AbortController();
+    const slowQuery = worker.get(`
+      WITH RECURSIVE counter(value) AS (
+        SELECT 1
+        UNION ALL
+        SELECT value + 1 FROM counter WHERE value < 100000000
+      )
+      SELECT SUM(value) AS total FROM counter
+    `, [], { label: 'abortable regression query', signal: controller.signal });
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    controller.abort();
+    await expect(slowQuery).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(worker.get<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM alerts',
+    )).resolves.toEqual({ count: 0 });
+
+    database.close();
+  });
 });

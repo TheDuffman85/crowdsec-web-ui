@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { generate } from 'otplib';
 import { resolveOidcClaims, resolveOidcRole } from '../../app-auth';
 import {
@@ -127,7 +127,7 @@ test('config endpoint identifies the load-test deployment mode', async () => {
 });
 
 test('CrowdSec metrics endpoint proxies and summarizes Prometheus metrics', async () => {
-  const { controller } = createController({
+  const { controller, database } = createController({
     env: {
       CROWDSEC_PROMETHEUS_URL: 'http://crowdsec:6060/metrics',
     },
@@ -145,6 +145,11 @@ cs_node_wl_hits_total{name="crowdsecurity/whitelists",source="/var/log/auth.log"
 cs_node_wl_hits_ok_total{name="crowdsecurity/whitelists",source="/var/log/auth.log",type="syslog",reason="private",stage="s02-enrich",acquis_type="file"} 3
 `, { status: 200 });
     },
+  });
+  const originalGetMeta = database.getMeta.bind(database);
+  const getMetaSpy = vi.spyOn(database, 'getMeta').mockImplementation((key) => {
+    if (key === 'metrics_sidebar_visible') throw new Error('database is locked');
+    return originalGetMeta(key);
   });
 
   const configResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
@@ -183,6 +188,7 @@ cs_node_wl_hits_ok_total{name="crowdsecurity/whitelists",source="/var/log/auth.l
 
   const updatedConfigResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
   expect(await updatedConfigResponse.json()).toEqual(expect.objectContaining({ metrics_sidebar_visible: false }));
+  expect(getMetaSpy.mock.calls.some(([key]) => key === 'metrics_sidebar_visible')).toBe(false);
 });
 
 test('dashboard auth exposes account settings and password changes', async () => {

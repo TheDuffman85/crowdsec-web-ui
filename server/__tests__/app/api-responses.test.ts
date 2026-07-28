@@ -1,7 +1,14 @@
 import { describe, expect, test, vi } from 'vitest';
 import path from 'path';
-import type { AlertRecord, DashboardStatsResponse, PaginatedResponse, SlimAlert } from '../../../shared/contracts';
+import type {
+  AlertRecord,
+  DashboardStatsResponse,
+  DecisionListItem,
+  PaginatedResponse,
+  SlimAlert,
+} from '../../../shared/contracts';
 import { CrowdsecDatabase } from '../../database';
+import { DatabaseQueryWorker } from '../../query-worker-client';
 import {
   createController,
   dashboardDateKey,
@@ -13,6 +20,57 @@ import {
 } from './harness';
 
 describe('createApp API responses', () => {
+  test('reuses active decision totals while paging until data or expiration changes', async () => {
+    const alert = sampleAlert({
+      id: 901,
+      uuid: 'decision-count-cache-alert',
+      decisions: [
+        { id: 9011, value: '198.51.100.1', stop_at: new Date(Date.now() + 30 * 60_000).toISOString(), type: 'ban', origin: 'lists' },
+        { id: 9012, value: '198.51.100.2', stop_at: new Date(Date.now() + 30 * 60_000).toISOString(), type: 'ban', origin: 'lists' },
+      ],
+    });
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    seedAlert(database, alert);
+    const queryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath });
+    const countQuerySpy = vi.spyOn(queryWorker, 'get');
+    const { controller } = createController({
+      database,
+      queryWorker,
+      env: { CROWDSEC_REFRESH_INTERVAL: '1m' },
+      initialCacheState: {
+        isInitialized: true,
+        isComplete: true,
+        lastUpdate: new Date().toISOString(),
+      },
+      fetchResolver: (url) => url.includes('/v1/alerts?') ? Response.json([alert]) : undefined,
+    });
+
+    try {
+      const firstResponse = await controller.fetch(new Request(
+        'http://localhost/crowdsec/api/decisions?page=1&page_size=1',
+      ));
+      expect(firstResponse.status).toBe(200);
+      expect((await firstResponse.json() as PaginatedResponse<DecisionListItem>).pagination.total).toBe(2);
+      const firstCountQueries = countQuerySpy.mock.calls.filter(([sql]) => (
+        sql.includes('COUNT(*) AS count') && sql.includes('MIN(stop_at) AS next_expiration')
+      )).length;
+      expect(firstCountQueries).toBe(2);
+
+      const secondResponse = await controller.fetch(new Request(
+        'http://localhost/crowdsec/api/decisions?page=2&page_size=1',
+      ));
+      expect(secondResponse.status).toBe(200);
+      expect((await secondResponse.json() as PaginatedResponse<DecisionListItem>).pagination.total).toBe(2);
+      expect(countQuerySpy.mock.calls.filter(([sql]) => (
+        sql.includes('COUNT(*) AS count') && sql.includes('MIN(stop_at) AS next_expiration')
+      ))).toHaveLength(firstCountQueries);
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
   test('adds resolved city and region to paginated alerts and linked decisions', async () => {
     const alert = sampleAlert({
       source: {

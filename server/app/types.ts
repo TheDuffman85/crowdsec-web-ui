@@ -72,6 +72,7 @@ export interface DashboardStatsFilters {
 export interface DashboardStatsCache {
   key: string;
   scope: string;
+  primaryOnly: boolean;
   alerts: DashboardAlertStatsRecord[];
   decisions: DashboardDecisionStatsRecord[];
   totals: DashboardStatsTotals;
