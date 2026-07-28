@@ -7,6 +7,7 @@ import { useRefresh } from "../contexts/useRefresh";
 import { useState, useEffect, useRef } from "react";
 import { apiUrl, assetUrl } from "../lib/basePath";
 import { fetchConfig } from "../lib/api";
+import { sessionFetch } from "../lib/sessionFetch";
 import type { InstanceSummary, UpdateCheckResponse } from '../types';
 import { useI18n } from "../lib/i18n";
 import { useDateTime } from "../lib/dateTime";
@@ -161,7 +162,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                 if (import.meta.env.VITE_VERSION) params.set('version', import.meta.env.VITE_VERSION);
                 if (import.meta.env.VITE_BRANCH) params.set('branch', import.meta.env.VITE_BRANCH);
                 if (import.meta.env.VITE_COMMIT_HASH) params.set('commit_hash', import.meta.env.VITE_COMMIT_HASH);
-                const response = await fetch(apiUrl(`/api/update-check${params.size ? `?${params.toString()}` : ''}`), { cache: 'no-store' });
+                const response = await sessionFetch(apiUrl(`/api/update-check${params.size ? `?${params.toString()}` : ''}`), { cache: 'no-store' });
                 if (!response.ok || cancelled) {
                     return;
                 }
@@ -250,7 +251,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
             if (refreshNow) {
                 await refreshNow(mode);
             } else {
-                const response = await fetch(apiUrl('/api/cache/refresh'), {
+                const response = await sessionFetch(apiUrl('/api/cache/refresh'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ mode }),

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { fetchConfig } from '../lib/api';
 import { apiUrl } from '../lib/basePath';
+import { sessionFetch } from '../lib/sessionFetch';
 import type { ManualRefreshMode, RefreshContextValue, SyncStatus, WithChildren } from '../types';
 import { RefreshContext } from './refresh-context';
 
@@ -84,7 +85,7 @@ export function RefreshProvider({ children }: WithChildren) {
         else if (newIntervalMs === 300000) intervalName = '5m';
 
         try {
-            const response = await fetch(apiUrl('/api/config/refresh-interval'), {
+            const response = await sessionFetch(apiUrl('/api/config/refresh-interval'), {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ interval: intervalName })
@@ -134,7 +135,7 @@ export function RefreshProvider({ children }: WithChildren) {
         }
 
         try {
-            const response = await fetch(apiUrl('/api/cache/refresh'), {
+            const response = await sessionFetch(apiUrl('/api/cache/refresh'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mode }),

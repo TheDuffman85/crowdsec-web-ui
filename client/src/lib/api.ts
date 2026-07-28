@@ -27,6 +27,7 @@ import type {
   UpsertNotificationRuleRequest,
 } from '../types';
 import { apiUrl } from './basePath';
+import { sessionFetch } from './sessionFetch';
 
 const inFlightGetRequests = new Map<string, Promise<unknown>>();
 const recentGetResponses = new Map<string, { expiresAt: number; value: unknown }>();
@@ -48,7 +49,7 @@ function clearGetCaches(): void {
 }
 
 async function requestJson<T>(url: string, init: RequestInit | undefined, defaultMsg: string | undefined): Promise<T> {
-    const response = await fetch(url, init);
+    const response = await sessionFetch(url, init);
     if (!response.ok) {
         throw new Error(defaultMsg || 'Request failed');
     }
@@ -197,7 +198,7 @@ export async function deleteAlert(id: string | number, instanceId?: string): Pro
   const path = instanceId
     ? `/api/instances/${encodeURIComponent(instanceId)}/alerts/${encodeURIComponent(String(id))}`
     : `/api/alerts/${encodeURIComponent(String(id))}`;
-  const res = await fetch(apiUrl(path), { method: 'DELETE' });
+  const res = await sessionFetch(apiUrl(path), { method: 'DELETE' });
   await handleApiError(res, 'Failed to delete alert');
   clearGetCaches();
   if (res.status === 204) return null;
@@ -205,7 +206,7 @@ export async function deleteAlert(id: string | number, instanceId?: string): Pro
 }
 
 async function postDestructiveJson<TResponse, TBody>(input: string, body: TBody, defaultMsg: string): Promise<TResponse> {
-  const res = await fetch(apiUrl(input), {
+  const res = await sessionFetch(apiUrl(input), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -253,7 +254,7 @@ export async function deleteDecision(id: string | number, instanceId?: string): 
   const path = instanceId
     ? `/api/instances/${encodeURIComponent(instanceId)}/decisions/${encodeURIComponent(String(id))}`
     : `/api/decisions/${encodeURIComponent(String(id))}`;
-  const res = await fetch(apiUrl(path), { method: 'DELETE' });
+  const res = await sessionFetch(apiUrl(path), { method: 'DELETE' });
   await handleApiError(res, 'Failed to delete decision');
   clearGetCaches();
   if (res.status === 204) return null;
@@ -306,7 +307,7 @@ export async function cleanupByIp(request: CleanupByIpRequest | string): Promise
 }
 
 export async function addDecision(data: AddDecisionRequest): Promise<unknown> {
-    const res = await fetch(apiUrl('/api/decisions'), {
+    const res = await sessionFetch(apiUrl('/api/decisions'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
@@ -364,7 +365,7 @@ export async function updateLanguagePreference(language: string): Promise<{
 }
 
 async function sendJson<T>(input: string, init: RequestInit, defaultMsg: string): Promise<T> {
-    const response = await fetch(apiUrl(input), init);
+    const response = await sessionFetch(apiUrl(input), init);
     if (!response.ok) {
         let errorMessage = defaultMsg;
         try {

@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { apiUrl } from '../lib/basePath';
+import { AUTH_SESSION_INVALIDATED_EVENT } from '../lib/sessionFetch';
 
 export type AuthRole = 'admin' | 'read-only';
 
@@ -74,6 +75,21 @@ async function readJson<T>(path: string, init?: RequestInit): Promise<T> {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>(DEFAULT_STATUS);
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const invalidateSession = () => {
+      setStatus((current) => ({
+        ...current,
+        authenticated: false,
+        user: null,
+        authMethod: null,
+      }));
+      setLoading(false);
+    };
+
+    window.addEventListener(AUTH_SESSION_INVALIDATED_EVENT, invalidateSession);
+    return () => window.removeEventListener(AUTH_SESSION_INVALIDATED_EVENT, invalidateSession);
+  }, []);
 
   const refresh = useCallback(async () => {
     const nextStatus = await readJson<AuthStatus>('/api/auth/status', { cache: 'no-store' });

@@ -10,6 +10,7 @@ import { useRefresh } from "../contexts/useRefresh";
 import { useOptionalToast } from "../contexts/useToast";
 import { fetchConfig, updateManualRefreshSetting, updateMetricsSidebarPreference } from "../lib/api";
 import { apiUrl } from "../lib/basePath";
+import { sessionFetch } from "../lib/sessionFetch";
 import { useAuth } from "../contexts/AuthContext";
 import {
     serializeRegistrationCredential,
@@ -148,7 +149,7 @@ export function Settings() {
             });
 
         if (authEnabled) {
-            void fetch(apiUrl('/api/auth/settings'))
+            void sessionFetch(apiUrl('/api/auth/settings'))
                 .then(async (response) => {
                     if (!response.ok) throw new Error('Failed to load authentication settings');
                     return response.json() as Promise<AuthSettings>;
@@ -157,7 +158,7 @@ export function Settings() {
                     if (!cancelled) {
                         setAuthSettings(payload);
                         if (payload.passkeysAvailable !== false) {
-                            void fetch(apiUrl('/api/auth/passkeys'))
+                            void sessionFetch(apiUrl('/api/auth/passkeys'))
                                 .then(async (response) => {
                                     if (!response.ok) throw new Error('Failed to load passkeys');
                                     return response.json() as Promise<{ passkeys: PasskeySummary[] }>;
@@ -294,13 +295,13 @@ export function Settings() {
                 throw new Error('Passkeys require HTTPS or localhost');
             }
             const name = passkeyName.trim() || null;
-            const optionsResponse = await fetch(apiUrl('/api/auth/webauthn/register/options'), { method: 'POST' });
+            const optionsResponse = await sessionFetch(apiUrl('/api/auth/webauthn/register/options'), { method: 'POST' });
             if (!optionsResponse.ok) throw new Error('Failed to start passkey registration');
             const options = toPublicKeyCredentialCreationOptions(await optionsResponse.json() as Record<string, unknown>);
             const credential = await navigator.credentials.create({ publicKey: options }) as PublicKeyCredential | null;
             if (!credential) throw new Error('No passkey credential returned');
 
-            const verifyResponse = await fetch(apiUrl('/api/auth/webauthn/register/verify'), {
+            const verifyResponse = await sessionFetch(apiUrl('/api/auth/webauthn/register/verify'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(serializeRegistrationCredential(credential, name)),
@@ -309,7 +310,7 @@ export function Settings() {
                 const payload = await verifyResponse.json().catch(() => ({})) as { error?: string };
                 throw new Error(payload.error || 'Failed to register passkey');
             }
-            const listResponse = await fetch(apiUrl('/api/auth/passkeys'));
+            const listResponse = await sessionFetch(apiUrl('/api/auth/passkeys'));
             const payload = await listResponse.json() as { passkeys: PasskeySummary[] };
             setPasskeys(payload.passkeys);
             setPasskeyModalOpen(false);
@@ -323,7 +324,7 @@ export function Settings() {
     };
 
     const removePasskey = async (id: number) => {
-        const response = await fetch(apiUrl(`/api/auth/passkeys/${id}`), { method: 'DELETE' });
+        const response = await sessionFetch(apiUrl(`/api/auth/passkeys/${id}`), { method: 'DELETE' });
         if (!response.ok) {
             console.error("Failed to remove passkey");
             showToast(t("pages.settings.failedToRemovePasskey"), "danger");
@@ -343,7 +344,7 @@ export function Settings() {
 
         setIsLoadingTotpSetup(true);
         try {
-            const response = await fetch(apiUrl('/api/auth/totp/setup'), { method: 'POST' });
+            const response = await sessionFetch(apiUrl('/api/auth/totp/setup'), { method: 'POST' });
             const payload = await response.json().catch(() => ({})) as { error?: string; secret?: string; otpauthUrl?: string };
             if (!response.ok || !payload.secret || !payload.otpauthUrl) {
                 throw new Error(payload.error || t("pages.settings.failedToStartTotpSetup"));
@@ -367,7 +368,7 @@ export function Settings() {
     const enableTotp = async () => {
         setIsSavingTotp(true);
         try {
-            const response = await fetch(apiUrl('/api/auth/totp/enable'), {
+            const response = await sessionFetch(apiUrl('/api/auth/totp/enable'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ code: totpCode }),
@@ -390,11 +391,11 @@ export function Settings() {
     const disableTotp = async () => {
         setIsSavingTotp(true);
         try {
-            const response = await fetch(apiUrl('/api/auth/totp'), {
+            const response = await sessionFetch(apiUrl('/api/auth/totp'), {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ currentPassword: totpDisablePassword }),
-            });
+            }, { ignoredUnauthorizedErrors: ['Current password is incorrect'] });
             const payload = await response.json().catch(() => ({})) as { error?: string; totpEnabled?: boolean };
             if (!response.ok) {
                 throw new Error(payload.error || t("pages.settings.failedToDisableTotp"));
@@ -419,7 +420,7 @@ export function Settings() {
     const savePasswordLoginSetting = async () => {
         setIsSavingPasswordLogin(true);
         try {
-            const response = await fetch(apiUrl('/api/auth/settings'), {
+            const response = await sessionFetch(apiUrl('/api/auth/settings'), {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ disablePasswordLogin }),
@@ -449,14 +450,14 @@ export function Settings() {
             showToast(t("pages.settings.passwordsDoNotMatch"), "danger");
             return;
         }
-        const response = await fetch(apiUrl('/api/auth/change-password'), {
+        const response = await sessionFetch(apiUrl('/api/auth/change-password'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 currentPassword: passwordForm.currentPassword,
                 newPassword: passwordForm.newPassword,
             }),
-        });
+        }, { ignoredUnauthorizedErrors: ['Current password is incorrect'] });
         const payload = await response.json().catch(() => ({})) as { error?: string };
         if (!response.ok) {
             console.error(payload.error || 'Failed to change password');
@@ -473,7 +474,7 @@ export function Settings() {
         const adminGroups = serializeCsvList(oidcForm.adminGroups);
         const readOnlyGroups = serializeCsvList(oidcForm.readOnlyGroups);
         try {
-            const response = await fetch(apiUrl('/api/auth/settings'), {
+            const response = await sessionFetch(apiUrl('/api/auth/settings'), {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
