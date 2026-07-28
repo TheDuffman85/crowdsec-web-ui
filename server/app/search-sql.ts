@@ -50,6 +50,48 @@ const ALERT_COVERED_SEARCH_FIELDS = new Set([
   'target', 'date', 'sim', 'machine', 'origin', 'decision',
 ]);
 
+// These fields are part of the duplicate-group identity. Applying predicates
+// that only reference them cannot hide the persisted primary while leaving
+// another member of the same group visible, so the precomputed duplicate
+// flags remain correct for any boolean combination of these predicates.
+const DECISION_DUPLICATE_GROUP_INVARIANT_FIELDS = new Set([
+  'instance',
+  'ip',
+  'sim',
+]);
+
+export function decisionSearchCanSplitDuplicateGroup(
+  node: SearchNode | null,
+  includeExpired: boolean,
+  scopedField?: string,
+): boolean {
+  if (!node) return false;
+
+  if (node.kind === 'term') {
+    if (!scopedField) return true;
+    if (DECISION_DUPLICATE_GROUP_INVARIANT_FIELDS.has(scopedField)) return false;
+    // The active-only base predicate has already removed every expired row.
+    // A status expression can therefore only retain all candidates or none.
+    return scopedField !== 'status' || includeExpired;
+  }
+
+  if (node.kind === 'comparison') {
+    if (DECISION_DUPLICATE_GROUP_INVARIANT_FIELDS.has(node.field)) return false;
+    return node.field !== 'status' || includeExpired;
+  }
+
+  if (node.kind === 'field') {
+    return decisionSearchCanSplitDuplicateGroup(node.expression, includeExpired, node.field);
+  }
+
+  if (node.kind === 'not') {
+    return decisionSearchCanSplitDuplicateGroup(node.expression, includeExpired, scopedField);
+  }
+
+  return decisionSearchCanSplitDuplicateGroup(node.left, includeExpired, scopedField)
+    || decisionSearchCanSplitDuplicateGroup(node.right, includeExpired, scopedField);
+}
+
 export function getAlertCountIndexHint(
   filters: AlertListFilters,
   searchAst: SearchNode | null,

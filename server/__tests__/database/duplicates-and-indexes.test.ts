@@ -71,6 +71,50 @@ describe('CrowdsecDatabase duplicates and indexes', () => {
     db.close();
   });
 
+  test('journals dashboard-relevant deltas and brackets bulk rebuilds with epochs', () => {
+    const db = createTestDatabase();
+    const alert = {
+      $id: 41,
+      $uuid: 'dashboard-change-alert',
+      $created_at: '2026-07-28T12:00:00.000Z',
+      $scenario: 'crowdsecurity/http-probing',
+      $source_ip: '192.0.2.41',
+      $message: 'alert',
+      $raw_data: JSON.stringify({ id: 41, scenario: 'crowdsecurity/http-probing' }),
+    };
+
+    expect(db.insertAlert(alert)).toBe(true);
+    expect((db.db.prepare(`
+      SELECT COUNT(*) AS count FROM dashboard_record_changes WHERE table_name = 'alerts'
+    `).get() as { count: number }).count).toBe(1);
+    db.db.exec('DELETE FROM dashboard_record_changes');
+
+    expect(db.insertAlert(alert)).toBe(false);
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM dashboard_record_changes').get() as { count: number }).count).toBe(0);
+    expect(db.insertAlert({
+      ...alert,
+      $scenario: 'crowdsecurity/ssh-bf',
+      $raw_data: JSON.stringify({ id: 41, scenario: 'crowdsecurity/ssh-bf' }),
+    })).toBe(true);
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM dashboard_record_changes').get() as { count: number }).count).toBe(1);
+
+    const epochBefore = Number(db.getMeta('dashboard_change_epoch')?.value);
+    db.beginDeferredSearchIndexUpdates();
+    expect(db.getMeta('dashboard_change_tracking_enabled')?.value).toBe('false');
+    expect(db.insertAlert({
+      ...alert,
+      $id: 42,
+      $uuid: 'dashboard-change-alert-bulk',
+    })).toBe(true);
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM dashboard_record_changes').get() as { count: number }).count).toBe(0);
+    db.rebuildSearchIndexes();
+
+    expect(db.getMeta('dashboard_change_tracking_enabled')?.value).toBe('true');
+    expect(Number(db.getMeta('dashboard_change_epoch')?.value)).toBe(epochBefore + 2);
+    expect(db.getMeta('dashboard_change_floor')?.value).toBe('0');
+    db.close();
+  });
+
   test('updates duplicate flags differentially and skips unchanged rows', () => {
     const db = createTestDatabase();
     const insertDecision = (id: string, stopAt: string) => db.insertDecision({

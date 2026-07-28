@@ -1,6 +1,12 @@
 import { describe, expect, test, vi } from 'vitest';
 import path from 'path';
-import type { AlertRecord, DashboardStatsResponse, PaginatedResponse, SlimAlert } from '../../../shared/contracts';
+import type {
+  AlertRecord,
+  DashboardStatsResponse,
+  DecisionListItem,
+  PaginatedResponse,
+  SlimAlert,
+} from '../../../shared/contracts';
 import { CrowdsecDatabase } from '../../database';
 import {
   createController,
@@ -291,6 +297,113 @@ describe('createApp search API', () => {
         ]),
       }),
     );
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('promotes the matching duplicate across a combined predicate for every decision filter family', async () => {
+    const value = '198.51.100.91';
+    const createdAt = new Date().toISOString();
+    const matchingAlert = sampleAlert({
+      id: 910,
+      uuid: 'combined-filter-match',
+      created_at: createdAt,
+      scenario: 'crowdsecurity/combined-match',
+      machine_id: 'machine-combined',
+      machine_alias: 'host-combined',
+      source: {
+        ip: value,
+        value,
+        cn: 'DE',
+        region: 'State of Berlin',
+        city: 'Berlin',
+        as_name: 'Hetzner Online',
+      },
+      target: 'ssh',
+      decisions: [{
+        id: 9101,
+        value,
+        created_at: createdAt,
+        stop_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+        type: 'ban',
+        origin: 'lists',
+        scenario: 'crowdsecurity/combined-match',
+        simulated: false,
+      }],
+    });
+    const excludedPrimaryAlert = sampleAlert({
+      id: 911,
+      uuid: 'combined-filter-primary',
+      created_at: createdAt,
+      scenario: 'crowdsecurity/excluded-primary',
+      machine_alias: 'other-host',
+      source: {
+        ip: value,
+        value,
+        cn: 'US',
+        region: 'Virginia',
+        city: 'Ashburn',
+        as_name: 'Other Network',
+      },
+      target: 'http',
+      decisions: [{
+        id: 9111,
+        value,
+        created_at: createdAt,
+        stop_at: new Date(Date.now() + 60 * 60_000).toISOString(),
+        type: 'ban',
+        origin: 'crowdsec',
+        scenario: 'crowdsecurity/excluded-primary',
+        simulated: false,
+      }],
+    });
+    const { controller, database } = createController({
+      initialCacheState: {
+        isInitialized: true,
+        isComplete: true,
+        lastUpdate: new Date().toISOString(),
+      },
+    });
+    seedAlert(database, matchingAlert);
+    seedAlert(database, excludedPrimaryAlert);
+    database.refreshDecisionDuplicateFlags(new Date().toISOString());
+
+    const dateStart = new Date(Date.now() - 60_000).toISOString();
+    const query = [
+      `id:${9101}`,
+      'instance:default',
+      `alert:${matchingAlert.id}`,
+      'scenario:crowdsecurity/combined-match',
+      `ip:${value}`,
+      'country:DE',
+      'region:"State of Berlin"',
+      'city:Berlin',
+      'as:"Hetzner Online"',
+      'target:ssh',
+      `date>=${dateStart}`,
+      'action:ban',
+      'status:active',
+      'sim:live',
+      'machine:host-combined',
+      'origin:lists',
+    ].join(' AND ');
+    const response = await controller.fetch(new Request(
+      `http://localhost/crowdsec/api/decisions?page=1&page_size=10&q=${encodeURIComponent(query)}`,
+    ));
+    expect(response.status).toBe(200);
+    expect((await response.json()) as PaginatedResponse<DecisionListItem>).toEqual(expect.objectContaining({
+      data: [
+        expect.objectContaining({
+          id: 9101,
+          is_duplicate: false,
+        }),
+      ],
+      pagination: expect.objectContaining({
+        total: 1,
+      }),
+    }));
 
     controller.stopBackgroundTasks();
     database.close();

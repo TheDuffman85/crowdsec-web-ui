@@ -550,7 +550,8 @@ describe('createApp refresh API', () => {
 
       const currentDashboard = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats'));
       expect(((await currentDashboard.json()) as DashboardStatsResponse).totals.alerts).toBe(2);
-      expect(decisionIndexQueryCount()).toBeGreaterThan(initialDecisionIndexQueries);
+      expect(decisionIndexQueryCount()).toBe(initialDecisionIndexQueries);
+      expect(queryAllSpy.mock.calls.some(([sql]) => sql.includes('dashboard_record_changes'))).toBe(true);
     } finally {
       nowSpy.mockRestore();
       controller.stopBackgroundTasks();

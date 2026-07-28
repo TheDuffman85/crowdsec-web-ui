@@ -20,6 +20,197 @@ import {
 } from './harness';
 
 describe('createApp API responses', () => {
+  test('reuses alert totals and a narrow ID window across consecutive pages', async () => {
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const now = Date.now();
+    for (let index = 0; index < 25; index += 1) {
+      seedAlert(database, sampleAlert({
+        id: 8_000 + index,
+        uuid: `alert-page-window-${index}`,
+        created_at: new Date(now - index * 1_000).toISOString(),
+        decisions: [],
+      }));
+    }
+    const queryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath });
+    const getSpy = vi.spyOn(queryWorker, 'get');
+    const { controller } = createController({
+      database,
+      queryWorker,
+      env: {
+        CROWDSEC_LOOKBACK_PERIOD: '1h',
+        CROWDSEC_REFRESH_INTERVAL: '1m',
+      },
+      initialCacheState: {
+        isInitialized: true,
+        isComplete: true,
+        lastUpdate: new Date().toISOString(),
+      },
+    });
+    const combinedFilters = new URLSearchParams({
+      country: 'DE',
+      scenario: 'crowdsecurity/ssh-bf',
+      as: 'Hetzner',
+      ip: '1.2.3.4',
+      target: 'ssh',
+      dateStart: new Date(now - 60_000).toISOString(),
+      simulation: 'live',
+      q: 'country:DE AND (scenario:crowdsecurity/ssh-bf OR target:ssh) AND ip:1.2.3.4 AND sim:live',
+    }).toString();
+
+    try {
+      const firstResponse = await controller.fetch(new Request(
+        `http://localhost/crowdsec/api/alerts?page=1&page_size=10&${combinedFilters}`,
+      ));
+      const firstPage = await firstResponse.json() as PaginatedResponse<SlimAlert>;
+      expect(firstResponse.status).toBe(200);
+      expect(firstPage.data).toHaveLength(10);
+      expect(firstPage.pagination.total).toBe(25);
+
+      const countCalls = () => getSpy.mock.calls.filter(([sql]) => (
+        sql.includes('COUNT(*) AS count') && sql.includes('MIN(created_at) AS oldest_created_at')
+      ));
+      const windowCalls = () => getSpy.mock.calls.filter(([sql]) => sql.includes('json_group_array(id) AS ids'));
+      expect(countCalls()).toHaveLength(2);
+      expect(windowCalls()).toHaveLength(1);
+      expect(windowCalls()[0]?.[0]).not.toContain('raw_data');
+
+      const secondResponse = await controller.fetch(new Request(
+        `http://localhost/crowdsec/api/alerts?page=2&page_size=10&${combinedFilters}`,
+      ));
+      const secondPage = await secondResponse.json() as PaginatedResponse<SlimAlert>;
+      expect(secondResponse.status).toBe(200);
+      expect(secondPage.data).toHaveLength(10);
+      expect(secondPage.pagination.total).toBe(25);
+      expect(secondPage.data.map((alert) => alert.id)).not.toEqual(firstPage.data.map((alert) => alert.id));
+      expect(countCalls()).toHaveLength(2);
+      expect(windowCalls()).toHaveLength(1);
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
+  test('reuses one narrow dynamic ranking window across consecutive decision pages', async () => {
+    const alert = sampleAlert({
+      id: 902,
+      uuid: 'decision-page-window-alert',
+      scenario: 'crowdsecurity/page-window',
+      decisions: Array.from({ length: 25 }, (_, index) => ({
+        id: 9020 + index,
+        value: `198.51.100.${index + 1}`,
+        stop_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+        type: 'ban',
+        origin: 'lists',
+        scenario: 'crowdsecurity/page-window',
+      })),
+    });
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    seedAlert(database, alert);
+    const queryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath });
+    const getSpy = vi.spyOn(queryWorker, 'get');
+    const { controller } = createController({
+      database,
+      queryWorker,
+      env: { CROWDSEC_REFRESH_INTERVAL: '1m' },
+      initialCacheState: {
+        isInitialized: true,
+        isComplete: true,
+        lastUpdate: new Date().toISOString(),
+      },
+      fetchResolver: (url) => url.includes('/v1/alerts?') ? Response.json([alert]) : undefined,
+    });
+
+    try {
+      const query = 'q=scenario%3Dcrowdsecurity%2Fpage-window';
+      const firstResponse = await controller.fetch(new Request(
+        `http://localhost/crowdsec/api/decisions?page=1&page_size=10&${query}`,
+      ));
+      const firstPage = await firstResponse.json() as PaginatedResponse<DecisionListItem>;
+      expect(firstResponse.status).toBe(200);
+      expect(firstPage.data).toHaveLength(10);
+      expect(firstPage.pagination.total).toBe(25);
+
+      const rankingCalls = () => getSpy.mock.calls.filter(([sql]) => sql.includes('ranked_filtered_decisions'));
+      expect(rankingCalls()).toHaveLength(1);
+      expect(rankingCalls()[0]?.[0]).toContain('SELECT id, created_at, stop_at');
+      expect(rankingCalls()[0]?.[0]).not.toContain('SELECT decisions.*');
+
+      const secondResponse = await controller.fetch(new Request(
+        `http://localhost/crowdsec/api/decisions?page=2&page_size=10&${query}`,
+      ));
+      const secondPage = await secondResponse.json() as PaginatedResponse<DecisionListItem>;
+      expect(secondResponse.status).toBe(200);
+      expect(secondPage.data).toHaveLength(10);
+      expect(secondPage.pagination.total).toBe(25);
+      expect(secondPage.data.map((decision) => decision.id)).not.toEqual(firstPage.data.map((decision) => decision.id));
+      expect(rankingCalls()).toHaveLength(1);
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
+  test('keeps duplicate-group-invariant filter combinations on indexed paging', async () => {
+    const value = '198.51.100.77';
+    const alert = sampleAlert({
+      id: 903,
+      uuid: 'decision-invariant-filter-alert',
+      decisions: [
+        {
+          id: 9031,
+          value,
+          stop_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+          type: 'ban',
+          origin: 'lists',
+          simulated: false,
+        },
+        {
+          id: 9032,
+          value,
+          stop_at: new Date(Date.now() + 60 * 60_000).toISOString(),
+          type: 'ban',
+          origin: 'lists',
+          simulated: false,
+        },
+      ],
+    });
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    seedAlert(database, alert);
+    database.refreshDecisionDuplicateFlags(new Date().toISOString());
+    const queryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath });
+    const getSpy = vi.spyOn(queryWorker, 'get');
+    const allSpy = vi.spyOn(queryWorker, 'all');
+    const { controller } = createController({
+      database,
+      queryWorker,
+      env: { CROWDSEC_REFRESH_INTERVAL: '1m' },
+      initialCacheState: {
+        isInitialized: true,
+        isComplete: true,
+        lastUpdate: new Date().toISOString(),
+      },
+      fetchResolver: (url) => url.includes('/v1/alerts?') ? Response.json([alert]) : undefined,
+    });
+
+    try {
+      const response = await controller.fetch(new Request(
+        `http://localhost/crowdsec/api/decisions?page=1&page_size=10&simulation=live&q=${encodeURIComponent(`ip:${value} AND sim:live AND status:active`)}`,
+      ));
+      const page = await response.json() as PaginatedResponse<DecisionListItem>;
+      expect(response.status).toBe(200);
+      expect(page.data).toEqual([
+        expect.objectContaining({ id: 9032, is_duplicate: false }),
+      ]);
+      expect([...getSpy.mock.calls, ...allSpy.mock.calls].some(([sql]) => sql.includes('ROW_NUMBER()'))).toBe(false);
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
   test('reuses active decision totals while paging until data or expiration changes', async () => {
     const alert = sampleAlert({
       id: 901,

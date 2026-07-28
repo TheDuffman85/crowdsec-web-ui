@@ -7,10 +7,21 @@ const samplesPerRun = Number(process.env.LOADTEST_BENCHMARK_SAMPLES || 5);
 const runs = 3;
 const warmFacetLimitMs = 500;
 const coldFacetLimitMs = 2_000;
+const coldFilteredAlertLimitMs = Number(process.env.LOADTEST_FILTERED_ALERTS_COLD_LIMIT_MS || 2_000);
+const warmFilteredAlertPageLimitMs = Number(process.env.LOADTEST_FILTERED_ALERTS_WARM_PAGE_LIMIT_MS || 500);
+const coldFilteredDecisionLimitMs = Number(process.env.LOADTEST_FILTERED_DECISIONS_COLD_LIMIT_MS || 5_000);
+const warmFilteredDecisionPageLimitMs = Number(process.env.LOADTEST_FILTERED_DECISIONS_WARM_PAGE_LIMIT_MS || 500);
+const decisionDateStart = new Date(Date.now() - 30 * 24 * 60 * 60_000).toISOString().slice(0, 16);
+const filteredAlertQuery = `date>=${decisionDateStart} AND scenario:ssh`;
+const filteredAlertPath = `/api/alerts?paginated=true&page=1&page_size=50&include_decisions=false&instance=${encodeURIComponent(scopeId)}&q=${encodeURIComponent(filteredAlertQuery)}`;
+const filteredDecisionQuery = `date>=${decisionDateStart}`;
+const filteredDecisionPath = `/api/decisions?paginated=true&page=1&page_size=50&instance=${encodeURIComponent(scopeId)}&q=${encodeURIComponent(filteredDecisionQuery)}`;
 
 const listRequests = [
   [`${scopeName} alerts`, `/api/alerts?paginated=true&page=1&page_size=50&include_decisions=false&instance=${encodeURIComponent(scopeId)}`],
+  [`${scopeName} filtered alerts`, filteredAlertPath],
   [`${scopeName} decisions`, `/api/decisions?paginated=true&page=1&page_size=50&instance=${encodeURIComponent(scopeId)}`],
+  [`${scopeName} filtered decisions`, filteredDecisionPath],
   [`${scopeName} search`, `/api/alerts?paginated=true&page=1&page_size=50&instance=${encodeURIComponent(scopeId)}&q=scenario%3Assh`],
   [`${scopeName} dashboard`, `/api/dashboard/stats?instance=${encodeURIComponent(scopeId)}`],
   ['Combined alerts', '/api/alerts?paginated=true&page=1&page_size=50&include_decisions=false&instance=all'],
@@ -65,7 +76,45 @@ for (const [name, path] of facetRequests) {
   }
 }
 
+const coldFilteredDecisionElapsed = await timedRequest(filteredDecisionPath);
+console.log(`\nCold filtered decision page window | ${coldFilteredDecisionElapsed.toFixed(1)} ms`);
+if (coldFilteredDecisionElapsed > coldFilteredDecisionLimitMs) {
+  failures.push(
+    `cold filtered decision latency ${coldFilteredDecisionElapsed.toFixed(1)} ms exceeds ${coldFilteredDecisionLimitMs} ms`,
+  );
+}
+
+const coldFilteredAlertElapsed = await timedRequest(filteredAlertPath);
+console.log(`Cold filtered alert page window | ${coldFilteredAlertElapsed.toFixed(1)} ms`);
+if (coldFilteredAlertElapsed > coldFilteredAlertLimitMs) {
+  failures.push(
+    `cold filtered alert latency ${coldFilteredAlertElapsed.toFixed(1)} ms exceeds ${coldFilteredAlertLimitMs} ms`,
+  );
+}
+
 for (const [, path] of listRequests) await timedRequest(path);
+
+console.log('\nCached filtered alert paging');
+for (let page = 2; page <= 4; page += 1) {
+  const elapsed = await timedRequest(filteredAlertPath.replace('page=1', `page=${page}`));
+  console.log(`page ${page} | ${elapsed.toFixed(1)} ms`);
+  if (elapsed > warmFilteredAlertPageLimitMs) {
+    failures.push(
+      `cached filtered alert page ${page} latency ${elapsed.toFixed(1)} ms exceeds ${warmFilteredAlertPageLimitMs} ms`,
+    );
+  }
+}
+
+console.log('\nCached filtered decision paging');
+for (let page = 2; page <= 4; page += 1) {
+  const elapsed = await timedRequest(filteredDecisionPath.replace('page=1', `page=${page}`));
+  console.log(`page ${page} | ${elapsed.toFixed(1)} ms`);
+  if (elapsed > warmFilteredDecisionPageLimitMs) {
+    failures.push(
+      `cached filtered decision page ${page} latency ${elapsed.toFixed(1)} ms exceeds ${warmFilteredDecisionPageLimitMs} ms`,
+    );
+  }
+}
 
 const measurements = new Map(requests.map(([name]) => [name, []]));
 for (let run = 1; run <= runs; run += 1) {
@@ -91,7 +140,7 @@ for (const [name, values] of measurements) {
 
 const mixedPaths = {
   list: listRequests[0][1],
-  search: listRequests[2][1],
+  search: listRequests[4][1],
   facet: facetRequests[2][1],
 };
 const mixedMeasurements = { list: [], search: [], facet: [] };
@@ -107,9 +156,29 @@ for (let sample = 0; sample < runs * samplesPerRun; sample += 1) {
   mixedMeasurements.facet.push(facet);
 }
 
+const filteredDecisionConcurrency = [];
+for (let sample = 0; sample < runs; sample += 1) {
+  const absentIp = `203.0.113.${200 + sample}`;
+  const uncachedQuery = `${filteredDecisionQuery} AND ip<>${absentIp}`;
+  const uncachedListPath = `/api/decisions?paginated=true&page=1&page_size=50&instance=${encodeURIComponent(scopeId)}&q=${encodeURIComponent(uncachedQuery)}`;
+  const dashboardPath = `/api/dashboard/stats?instance=${encodeURIComponent(scopeId)}&decision_q=${encodeURIComponent(uncachedQuery)}`;
+  const [list] = await Promise.all([
+    timedRequest(uncachedListPath),
+    timedRequest(dashboardPath),
+  ]);
+  filteredDecisionConcurrency.push(list);
+}
+
 console.log('\nMixed concurrency results');
 for (const [name, values] of Object.entries(mixedMeasurements)) {
   console.log(`${name} | p50 ${percentile(values, 0.5).toFixed(1)} ms | p95 ${percentile(values, 0.95).toFixed(1)} ms`);
+}
+console.log(
+  `filtered decisions + dashboard | p50 ${percentile(filteredDecisionConcurrency, 0.5).toFixed(1)} ms`
+  + ` | p95 ${percentile(filteredDecisionConcurrency, 0.95).toFixed(1)} ms`,
+);
+if (percentile(filteredDecisionConcurrency, 0.95) > coldFilteredDecisionLimitMs) {
+  failures.push('filtered decision paging exceeded its cold limit while dashboard analytics ran concurrently');
 }
 
 for (const [mixedName, baselineName] of [

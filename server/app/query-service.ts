@@ -76,6 +76,7 @@ export function createQueryService(dependencies: QueryServiceDependencies) {
     createDashboardDecisionAccumulator,
     createDashboardStatsAccumulator,
     createSqlWhere,
+    decisionSearchCanSplitDuplicateGroup,
     dashboardBuckets,
     dashboardCountryList,
     dashboardWorldMapData,
@@ -153,6 +154,25 @@ export function createQueryService(dependencies: QueryServiceDependencies) {
     promise: Promise<{ unfilteredTotal: number; total: number }>;
   }>();
   const DECISION_LIST_COUNT_CACHE_MAX_ENTRIES = 100;
+  const decisionListPageWindowCache = new Map<string, {
+    validUntil: number;
+    promise: Promise<DecisionPageWindow>;
+  }>();
+  const alertListCountCache = new Map<string, {
+    validUntil: number;
+    promise: Promise<AlertListCounts>;
+  }>();
+  const alertListPageWindowCache = new Map<string, {
+    validUntil: number;
+    promise: Promise<number[]>;
+  }>();
+  const ALERT_LIST_CACHE_MAX_ENTRIES = 100;
+  const ALERT_LIST_PAGE_WINDOW_PAGES = 20;
+  const DECISION_LIST_PAGE_WINDOW_CACHE_MAX_ENTRIES = 100;
+  const DECISION_LIST_PAGE_WINDOW_PAGES = 20;
+  const DASHBOARD_CHANGE_JOURNAL_MAX_ENTRIES = 250_000;
+  let activeAlertListQueries = 0;
+  let activeDecisionListQueries = 0;
   const activeDashboardStatsResponses = new Map<string, Set<Promise<DashboardStatsResponse>>>();
   const activeDashboardStatsResponseControllers = new Map<string, Set<{
     key: string;
@@ -161,6 +181,14 @@ export function createQueryService(dependencies: QueryServiceDependencies) {
   const requestedDashboardStatsResponseKeys = new Map<string, string>();
   const queuedDashboardStatsWarmFilters = new Map<string, DashboardStatsFilters>();
   const dashboardStatsWarmRunners = new Map<string, Promise<void>>();
+
+function trimMap<K, V>(map: Map<K, V>, maxEntries: number): void {
+  while (map.size > maxEntries) {
+    const oldest = map.keys().next().value;
+    if (oldest === undefined) break;
+    map.delete(oldest);
+  }
+}
 
 function hydrateAlertWithDecisions(alert: AlertRecord): AlertRecord {
   const clone: AlertRecord = { ...alert };
@@ -239,57 +267,199 @@ async function queryPaginatedAlerts(
   searchAst: SearchNode | null,
   includeDecisions: boolean,
 ): Promise<PaginatedResponse<SlimAlert>> {
-  const since = new Date(Date.now() - config.lookbackMs).toISOString();
-  const baseWhere = createSqlWhere();
-  baseWhere.add('created_at >= ?', since);
-  if (filters.instanceId !== 'all') {
-    baseWhere.add('instance_id = ?', filters.instanceId);
-  } else {
-    baseWhere.add(`instance_id IN (${config.instances.map(() => '?').join(',')})`, ...config.instances.map((instance) => instance.id));
-  }
-  if (!config.simulationsEnabled) {
-    baseWhere.add('simulated = 0');
-  }
+  activeAlertListQueries += 1;
+  try {
+    const since = new Date(Date.now() - config.lookbackMs).toISOString();
+    const baseWhere = createSqlWhere();
+    baseWhere.add('created_at >= ?', since);
+    if (filters.instanceId !== 'all') {
+      baseWhere.add('instance_id = ?', filters.instanceId);
+    } else {
+      baseWhere.add(`instance_id IN (${config.instances.map(() => '?').join(',')})`, ...config.instances.map((instance) => instance.id));
+    }
+    if (!config.simulationsEnabled) {
+      baseWhere.add('simulated = 0');
+    }
 
-  const filteredWhere = baseWhere.clone();
-  addAlertSqlFilters(filteredWhere, filters);
-  const searchWhere = compileAlertSearchSql(searchAst, filters);
-  if (searchWhere) {
-    filteredWhere.add(searchWhere.sql, ...searchWhere.params);
-  }
+    const filteredWhere = baseWhere.clone();
+    addAlertSqlFilters(filteredWhere, filters);
+    const searchWhere = compileAlertSearchSql(searchAst, filters);
+    if (searchWhere) {
+      filteredWhere.add(searchWhere.sql, ...searchWhere.params);
+    }
 
-  const offset = (pageRequest.page - 1) * pageRequest.pageSize;
-  const filteredCountIndexHint = getAlertCountIndexHint(filters, searchAst);
-  const [unfilteredTotal, total, rows] = await Promise.all([
-    queryCount('alerts', baseWhere),
-    queryCount('alerts', filteredWhere, filteredCountIndexHint),
-    queryWorker.all<NormalizedAlertRow>(`
+    const listCacheKey = JSON.stringify({
+      filters,
+      search: searchAst ? serializeSearchNode(searchAst) : '',
+      simulationsEnabled: config.simulationsEnabled,
+    });
+    const windowNumber = Math.floor((pageRequest.page - 1) / ALERT_LIST_PAGE_WINDOW_PAGES);
+    const windowOffset = windowNumber * ALERT_LIST_PAGE_WINDOW_PAGES * pageRequest.pageSize;
+    const windowLimit = ALERT_LIST_PAGE_WINDOW_PAGES * pageRequest.pageSize;
+    const countsPromise = queryAlertListCounts(
+      listCacheKey,
+      baseWhere,
+      filteredWhere,
+      getAlertCountIndexHint(filters, searchAst),
+    );
+    const internalIds = await queryAlertPageWindow(
+      `${listCacheKey}:${pageRequest.pageSize}:${windowNumber}`,
+      filteredWhere,
+      windowLimit,
+      windowOffset,
+      countsPromise,
+    );
+    const counts = await countsPromise;
+    const pageIndex = (pageRequest.page - 1) % ALERT_LIST_PAGE_WINDOW_PAGES;
+    const pageInternalIds = internalIds.slice(
+      pageIndex * pageRequest.pageSize,
+      (pageIndex + 1) * pageRequest.pageSize,
+    );
+    const rows = await queryAlertRowsByInternalIds(pageInternalIds);
+    const data = includeDecisions
+      ? await buildFullSlimAlertList(rows)
+      : await buildSlimAlertList(rows);
+
+    return {
+      data,
+      pagination: {
+        page: pageRequest.page,
+        page_size: pageRequest.pageSize,
+        total: counts.total,
+        total_pages: Math.ceil(counts.total / pageRequest.pageSize),
+        unfiltered_total: counts.unfilteredTotal,
+      },
+      selectable_ids: data.map((alert) => alert.id),
+      ...(config.instances.length > 1 ? {
+        selectable_refs: data.map((alert) => ({ instance_id: alert.instance_id || primaryInstance.id, id: alert.id })),
+      } : {}),
+    };
+  } finally {
+    activeAlertListQueries = Math.max(0, activeAlertListQueries - 1);
+  }
+}
+
+type AlertListCounts = {
+  total: number;
+  unfilteredTotal: number;
+  validUntil: number;
+};
+
+async function queryAlertListCounts(
+  cacheKey: string,
+  baseWhere: SqlWhere,
+  filteredWhere: SqlWhere,
+  filteredIndexHint: '' | 'INDEXED BY idx_alerts_filters',
+): Promise<AlertListCounts> {
+  const now = Date.now();
+  const cached = alertListCountCache.get(cacheKey);
+  if (cached && cached.validUntil > now) return cached.promise;
+  if (cached) alertListCountCache.delete(cacheKey);
+
+  const sameQuery = baseWhere.toSql() === filteredWhere.toSql()
+    && JSON.stringify(baseWhere.params) === JSON.stringify(filteredWhere.params);
+  const basePromise = queryAlertCountAndOldest(baseWhere);
+  const promise = Promise.all([
+    basePromise,
+    sameQuery ? basePromise : queryAlertCountAndOldest(filteredWhere, filteredIndexHint),
+  ]).then(([base, filtered]) => {
+    const oldest = [base.oldestCreatedAt, filtered.oldestCreatedAt]
+      .filter((value): value is string => Boolean(value))
+      .map(Date.parse)
+      .filter(Number.isFinite);
+    const validUntil = oldest.length > 0
+      ? Math.max(Date.now() + 1, Math.min(...oldest) + config.lookbackMs)
+      : Number.POSITIVE_INFINITY;
+    const result = {
+      unfilteredTotal: base.count,
+      total: filtered.count,
+      validUntil,
+    };
+    const entry = alertListCountCache.get(cacheKey);
+    if (entry?.promise === promise) entry.validUntil = validUntil;
+    return result;
+  }).catch((error) => {
+    if (alertListCountCache.get(cacheKey)?.promise === promise) {
+      alertListCountCache.delete(cacheKey);
+    }
+    throw error;
+  });
+  alertListCountCache.set(cacheKey, { validUntil: Number.POSITIVE_INFINITY, promise });
+  trimMap(alertListCountCache, ALERT_LIST_CACHE_MAX_ENTRIES);
+  return promise;
+}
+
+async function queryAlertCountAndOldest(
+  where: SqlWhere,
+  indexHint: '' | 'INDEXED BY idx_alerts_filters' = '',
+): Promise<{ count: number; oldestCreatedAt: string | null }> {
+  const row = await queryWorker.get<{ count: number; oldest_created_at: string | null }>(
+    `SELECT COUNT(*) AS count, MIN(created_at) AS oldest_created_at FROM alerts ${indexHint} ${where.toSql()}`,
+    where.params,
+  );
+  return {
+    count: Number(row.count) || 0,
+    oldestCreatedAt: row.oldest_created_at || null,
+  };
+}
+
+async function queryAlertPageWindow(
+  cacheKey: string,
+  where: SqlWhere,
+  limit: number,
+  offset: number,
+  countsPromise: Promise<AlertListCounts>,
+): Promise<number[]> {
+  const now = Date.now();
+  const cached = alertListPageWindowCache.get(cacheKey);
+  if (cached && cached.validUntil > now) return cached.promise;
+  if (cached) alertListPageWindowCache.delete(cacheKey);
+
+  const promise = Promise.all([
+    countsPromise,
+    queryWorker.get<{ ids: string | null }>(`
+      SELECT json_group_array(id) AS ids
+      FROM (
+        SELECT id
+        FROM alerts
+        ${where.toSql()}
+        ORDER BY created_at DESC, id DESC
+        LIMIT ? OFFSET ?
+      )
+    `, [...where.params, limit, offset]),
+  ]).then(([counts, row]) => {
+    const ids = JSON.parse(row.ids || '[]') as number[];
+    const entry = alertListPageWindowCache.get(cacheKey);
+    if (entry?.promise === promise) entry.validUntil = counts.validUntil;
+    return ids;
+  }).catch((error) => {
+    if (alertListPageWindowCache.get(cacheKey)?.promise === promise) {
+      alertListPageWindowCache.delete(cacheKey);
+    }
+    throw error;
+  });
+  alertListPageWindowCache.set(cacheKey, { validUntil: Number.POSITIVE_INFINITY, promise });
+  trimMap(alertListPageWindowCache, ALERT_LIST_CACHE_MAX_ENTRIES);
+  return promise;
+}
+
+async function queryAlertRowsByInternalIds(internalIds: number[]): Promise<NormalizedAlertRow[]> {
+  if (internalIds.length === 0) return [];
+  const rows: NormalizedAlertRow[] = [];
+  for (let offset = 0; offset < internalIds.length; offset += 900) {
+    const chunk = internalIds.slice(offset, offset + 900);
+    rows.push(...await queryWorker.all<NormalizedAlertRow>(`
       SELECT ${ALERT_RECORD_COLUMNS}
       FROM alerts
-      ${filteredWhere.toSql()}
-      ORDER BY created_at DESC, id DESC
-      LIMIT ? OFFSET ?
-    `, [...filteredWhere.params, pageRequest.pageSize, offset]),
-  ]);
-
-  const data = includeDecisions
-    ? await buildFullSlimAlertList(rows)
-    : await buildSlimAlertList(rows);
-
-  return {
-    data,
-    pagination: {
-      page: pageRequest.page,
-      page_size: pageRequest.pageSize,
-      total,
-      total_pages: Math.ceil(total / pageRequest.pageSize),
-      unfiltered_total: unfilteredTotal,
-    },
-    selectable_ids: data.map((alert) => alert.id),
-    ...(config.instances.length > 1 ? {
-      selectable_refs: data.map((alert) => ({ instance_id: alert.instance_id || primaryInstance.id, id: alert.id })),
-    } : {}),
-  };
+      WHERE id IN (${chunk.map(() => '?').join(',')})
+    `, chunk));
+  }
+  const order = new Map(internalIds.map((id, index) => [String(id), index]));
+  rows.sort((left, right) => (
+    (order.get(String(left.internal_id)) ?? Number.MAX_SAFE_INTEGER)
+    - (order.get(String(right.internal_id)) ?? Number.MAX_SAFE_INTEGER)
+  ));
+  return rows;
 }
 
 async function buildFullSlimAlertList(rows: NormalizedAlertRow[]): Promise<SlimAlert[]> {
@@ -389,73 +559,249 @@ async function queryAlertDecisionSummaries(alertIds: Array<string | number>): Pr
   return summaries;
 }
 
+type DecisionQueryRow = NormalizedDecisionRow & {
+  is_duplicate?: number;
+  latitude?: number | null;
+  longitude?: number | null;
+};
+
+type DecisionPageWindow = {
+  internalIds: string[];
+  total: number;
+  unfilteredTotal: number;
+  validUntil: number;
+};
+
 async function queryPaginatedDecisions(
   pageRequest: PageRequest,
   filters: DecisionListFilters,
   searchAst: SearchNode | null,
   includeExpired: boolean,
 ): Promise<PaginatedResponse<DecisionListItem>> {
-  const now = new Date().toISOString();
-  const query = buildDecisionListQuery(filters, searchAst, includeExpired, now);
+  activeDecisionListQueries += 1;
+  try {
+    const now = new Date().toISOString();
+    const query = buildDecisionListQuery(filters, searchAst, includeExpired, now);
+    const countCacheKey = includeExpired
+      ? null
+      : JSON.stringify({
+        filters,
+        search: searchAst ? serializeSearchNode(searchAst) : '',
+        simulationsEnabled: config.simulationsEnabled,
+      });
 
-  const offset = (pageRequest.page - 1) * pageRequest.pageSize;
-  const countCacheKey = includeExpired
-    ? null
-    : JSON.stringify({
-      filters,
-      search: searchAst ? serializeSearchNode(searchAst) : '',
-      simulationsEnabled: config.simulationsEnabled,
-    });
-  const [counts, rows] = await Promise.all([
-    queryDecisionListCounts(query, now, countCacheKey),
-    queryWorker.all<NormalizedDecisionRow & {
-      is_duplicate?: number;
-      latitude?: number | null;
-      longitude?: number | null;
-    }>(`
-      ${query.cteSql}
-      SELECT ${DECISION_RECORD_COLUMNS}, ${query.dynamicDedup ? '0' : '(is_duplicate = 1)'} AS is_duplicate,
-        (SELECT latitude FROM alerts WHERE alerts.id = decisions.alert_id) AS latitude,
-        (SELECT longitude FROM alerts WHERE alerts.id = decisions.alert_id) AS longitude
-      FROM ${query.fromSql}
-      ${query.outerWhereSql}
-      ORDER BY decisions.created_at DESC, decisions.id DESC
-      LIMIT ? OFFSET ?
-    `, [...query.params, pageRequest.pageSize, offset]),
-  ]);
-
-  const alertCoordinates = new Map<string, { latitude: number; longitude: number }>();
-  const decisions = rows.map((row) => {
-    const decision = decisionFromRow(row);
-    decision.instance_name = instanceName(String(decision.instance_id || primaryInstance.id));
-    const latitude = normalizeDashboardCoordinate(row.latitude, -90, 90);
-    const longitude = normalizeDashboardCoordinate(row.longitude, -180, 180);
-    if (row.alert_id !== undefined && row.alert_id !== null && latitude !== undefined && longitude !== undefined) {
-      alertCoordinates.set(String(row.alert_id), { latitude, longitude });
+    let counts: { unfilteredTotal: number; total: number };
+    let rows: DecisionQueryRow[];
+    if (query.dynamicDedup) {
+      const window = await queryDynamicDecisionPageWindow(
+        query,
+        pageRequest,
+        now,
+        countCacheKey,
+      );
+      const pageIndex = (pageRequest.page - 1) % DECISION_LIST_PAGE_WINDOW_PAGES;
+      const pageInternalIds = window.internalIds.slice(
+        pageIndex * pageRequest.pageSize,
+        (pageIndex + 1) * pageRequest.pageSize,
+      );
+      rows = await queryPromotedDecisionRowsByInternalIds(pageInternalIds);
+      counts = {
+        total: window.total,
+        unfilteredTotal: window.unfilteredTotal,
+      };
+    } else {
+      const offset = (pageRequest.page - 1) * pageRequest.pageSize;
+      [counts, rows] = await Promise.all([
+        queryDecisionListCounts(query, now, countCacheKey),
+        queryWorker.all<DecisionQueryRow>(`
+          SELECT ${DECISION_RECORD_COLUMNS}, (is_duplicate = 1) AS is_duplicate,
+            (SELECT latitude FROM alerts WHERE alerts.id = decisions.alert_id) AS latitude,
+            (SELECT longitude FROM alerts WHERE alerts.id = decisions.alert_id) AS longitude
+          FROM ${query.fromSql}
+          ${query.outerWhereSql}
+          ORDER BY decisions.created_at DESC, decisions.id DESC
+          LIMIT ? OFFSET ?
+        `, [...query.params, pageRequest.pageSize, offset]),
+      ]);
     }
-    decision.is_duplicate = row.is_duplicate === 1;
-    return toDecisionListItem(decision, includeExpired);
-  });
-  const data = await enrichDecisionLocations(decisions, alertCoordinates);
 
-  return {
-    data,
-    pagination: {
-      page: pageRequest.page,
-      page_size: pageRequest.pageSize,
-      total: counts.total,
-      total_pages: Math.ceil(counts.total / pageRequest.pageSize),
-      unfiltered_total: counts.unfilteredTotal,
-    },
-    selectable_ids: data
-      .filter((decision) => !isDecisionListItemExpired(decision))
-      .map((decision) => decision.id),
-    ...(config.instances.length > 1 ? {
-      selectable_refs: data
+    const alertCoordinates = new Map<string, { latitude: number; longitude: number }>();
+    const decisions = rows.map((row) => {
+      const decision = decisionFromRow(row);
+      decision.instance_name = instanceName(String(decision.instance_id || primaryInstance.id));
+      const latitude = normalizeDashboardCoordinate(row.latitude, -90, 90);
+      const longitude = normalizeDashboardCoordinate(row.longitude, -180, 180);
+      if (row.alert_id !== undefined && row.alert_id !== null && latitude !== undefined && longitude !== undefined) {
+        alertCoordinates.set(String(row.alert_id), { latitude, longitude });
+      }
+      decision.is_duplicate = row.is_duplicate === 1;
+      return toDecisionListItem(decision, includeExpired);
+    });
+    const data = await enrichDecisionLocations(decisions, alertCoordinates);
+
+    return {
+      data,
+      pagination: {
+        page: pageRequest.page,
+        page_size: pageRequest.pageSize,
+        total: counts.total,
+        total_pages: Math.ceil(counts.total / pageRequest.pageSize),
+        unfiltered_total: counts.unfilteredTotal,
+      },
+      selectable_ids: data
         .filter((decision) => !isDecisionListItemExpired(decision))
-        .map((decision) => ({ instance_id: decision.instance_id || primaryInstance.id, id: decision.id })),
-    } : {}),
-  };
+        .map((decision) => decision.id),
+      ...(config.instances.length > 1 ? {
+        selectable_refs: data
+          .filter((decision) => !isDecisionListItemExpired(decision))
+          .map((decision) => ({ instance_id: decision.instance_id || primaryInstance.id, id: decision.id })),
+      } : {}),
+    };
+  } finally {
+    activeDecisionListQueries = Math.max(0, activeDecisionListQueries - 1);
+  }
+}
+
+async function queryPromotedDecisionRowsByInternalIds(internalIds: string[]): Promise<DecisionQueryRow[]> {
+  if (internalIds.length === 0) return [];
+  const placeholders = internalIds.map(() => '?').join(',');
+  return queryWorker.all<DecisionQueryRow>(`
+    SELECT ${DECISION_RECORD_COLUMNS}, 0 AS is_duplicate,
+      (SELECT latitude FROM alerts WHERE alerts.id = decisions.alert_id) AS latitude,
+      (SELECT longitude FROM alerts WHERE alerts.id = decisions.alert_id) AS longitude
+    FROM decisions AS decisions
+    WHERE decisions.id IN (${placeholders})
+    ORDER BY decisions.created_at DESC, decisions.id DESC
+  `, internalIds);
+}
+
+async function queryDynamicDecisionPageWindow(
+  query: ReturnType<typeof buildDecisionListQuery>,
+  pageRequest: PageRequest,
+  now: string,
+  countCacheKey: string | null,
+): Promise<DecisionPageWindow> {
+  const nowTimestamp = Date.parse(now);
+  const windowStartPage = Math.floor((pageRequest.page - 1) / DECISION_LIST_PAGE_WINDOW_PAGES)
+    * DECISION_LIST_PAGE_WINDOW_PAGES + 1;
+  const windowOffset = (windowStartPage - 1) * pageRequest.pageSize;
+  const windowLimit = DECISION_LIST_PAGE_WINDOW_PAGES * pageRequest.pageSize;
+  const windowCacheKey = JSON.stringify({
+    countCacheKey,
+    pageSize: pageRequest.pageSize,
+    windowStartPage,
+    includeExpired: countCacheKey === null,
+  });
+
+  if (countCacheKey) {
+    const cached = decisionListPageWindowCache.get(windowCacheKey);
+    if (cached && cached.validUntil > nowTimestamp) {
+      decisionListPageWindowCache.delete(windowCacheKey);
+      decisionListPageWindowCache.set(windowCacheKey, cached);
+      return cached.promise;
+    }
+    decisionListPageWindowCache.delete(windowCacheKey);
+  }
+
+  const promise = Promise.all([
+    queryWorker.get<{
+      count: number;
+      next_expiration: string | null;
+      internal_ids_json: string;
+    }>(`
+      ${query.pageCteSql},
+      filtered_decisions AS MATERIALIZED (
+        SELECT id, created_at, stop_at
+        FROM ranked_filtered_decisions
+        WHERE filtered_duplicate_rank = 1
+      )
+      SELECT
+        (SELECT COUNT(*) FROM filtered_decisions) AS count,
+        (SELECT MIN(stop_at) FROM filtered_decisions) AS next_expiration,
+        COALESCE((
+          SELECT json_group_array(id)
+          FROM (
+            SELECT id
+            FROM filtered_decisions
+            ORDER BY created_at DESC, id DESC
+            LIMIT ? OFFSET ?
+          )
+        ), '[]') AS internal_ids_json
+    `, [...query.params, windowLimit, windowOffset], { label: 'filtered decision page window' }),
+    queryWorker.get<{ count: number; next_expiration: string | null }>(`
+      SELECT COUNT(*) AS count, MIN(stop_at) AS next_expiration
+      FROM decisions
+      ${query.baseWhere.toSql()}
+    `, query.baseWhere.params, { label: 'unfiltered decision count' }),
+  ]).then(([filtered, unfiltered]) => {
+    const expirationTimestamps = [filtered.next_expiration, unfiltered.next_expiration]
+      .map((value) => value ? Date.parse(value) : Number.POSITIVE_INFINITY)
+      .filter((value) => Number.isFinite(value) && value > nowTimestamp);
+    const validUntil = countCacheKey && expirationTimestamps.length > 0
+      ? Math.min(...expirationTimestamps)
+      : countCacheKey ? Number.POSITIVE_INFINITY : nowTimestamp;
+    let parsedIds: unknown = [];
+    try {
+      parsedIds = JSON.parse(filtered.internal_ids_json || '[]');
+    } catch {
+      parsedIds = [];
+    }
+    const result = {
+      internalIds: Array.isArray(parsedIds)
+        ? parsedIds
+          .filter((id): id is string | number => typeof id === 'string' || typeof id === 'number')
+          .map(String)
+        : [],
+      total: Number(filtered.count || 0),
+      unfilteredTotal: Number(unfiltered.count || 0),
+      validUntil,
+    };
+    if (countCacheKey) {
+      decisionListCountCache.set(countCacheKey, {
+        validUntil,
+        promise: Promise.resolve({
+          total: result.total,
+          unfilteredTotal: result.unfilteredTotal,
+        }),
+      });
+      trimDecisionListCaches();
+    }
+    return result;
+  }).catch((error) => {
+    if (countCacheKey) {
+      decisionListPageWindowCache.delete(windowCacheKey);
+      decisionListCountCache.delete(countCacheKey);
+    }
+    throw error;
+  });
+
+  if (countCacheKey) {
+    const entry = {
+      validUntil: Number.POSITIVE_INFINITY,
+      promise,
+    };
+    decisionListPageWindowCache.set(windowCacheKey, entry);
+    void promise.then((result) => {
+      if (decisionListPageWindowCache.get(windowCacheKey) === entry) {
+        entry.validUntil = result.validUntil;
+      }
+    });
+    trimDecisionListCaches();
+  }
+  return promise;
+}
+
+function trimDecisionListCaches(): void {
+  while (decisionListCountCache.size > DECISION_LIST_COUNT_CACHE_MAX_ENTRIES) {
+    const oldestKey = decisionListCountCache.keys().next().value;
+    if (oldestKey) decisionListCountCache.delete(oldestKey);
+    else break;
+  }
+  while (decisionListPageWindowCache.size > DECISION_LIST_PAGE_WINDOW_CACHE_MAX_ENTRIES) {
+    const oldestKey = decisionListPageWindowCache.keys().next().value;
+    if (oldestKey) decisionListPageWindowCache.delete(oldestKey);
+    else break;
+  }
 }
 
 function buildDecisionListQuery(
@@ -466,6 +812,7 @@ function buildDecisionListQuery(
 ): {
   baseWhere: SqlWhere;
   cteSql: string;
+  pageCteSql: string;
   fromSql: string;
   countFromSql: string;
   outerWhereSql: string;
@@ -488,7 +835,8 @@ function buildDecisionListQuery(
     baseWhere.add('simulated = 0');
   }
 
-  const dynamicDedup = !filters.showDuplicates && decisionFiltersCanSplitDuplicateGroup(filters, searchAst);
+  const dynamicDedup = !filters.showDuplicates
+    && decisionFiltersCanSplitDuplicateGroup(filters, searchAst, includeExpired);
   const filteredWhere = baseWhere.clone();
   addDecisionSqlFilters(filteredWhere, filters, !dynamicDedup);
   const searchWhere = compileDecisionSearchSql(searchAst, filters, now);
@@ -500,6 +848,7 @@ function buildDecisionListQuery(
     return {
       baseWhere,
       cteSql: '',
+      pageCteSql: '',
       fromSql: `decisions AS decisions ${getDecisionPageIndexHint(filters, searchAst)}`.trim(),
       countFromSql: filters.showDuplicates
         ? 'decisions AS decisions'
@@ -514,7 +863,7 @@ function buildDecisionListQuery(
     baseWhere,
     cteSql: `
       WITH ranked_filtered_decisions AS (
-        SELECT decisions.*,
+        SELECT decisions.id AS ranked_id,
           CASE
             WHEN stop_at <= ? THEN 1
             ELSE ROW_NUMBER() OVER (
@@ -529,9 +878,32 @@ function buildDecisionListQuery(
         ${filteredWhere.toSql()}
       )
     `,
-    fromSql: 'ranked_filtered_decisions AS decisions',
-    countFromSql: 'ranked_filtered_decisions AS decisions',
-    outerWhereSql: 'WHERE filtered_duplicate_rank = 1',
+    pageCteSql: `
+      WITH ranked_filtered_decisions AS (
+        SELECT id, created_at, stop_at,
+          CASE
+            WHEN stop_at <= ? THEN 1
+            ELSE ROW_NUMBER() OVER (
+              PARTITION BY instance_id, value, simulated
+              ORDER BY
+                stop_at DESC,
+                CASE WHEN id GLOB '[0-9]*' THEN CAST(id AS INTEGER) ELSE -1 END DESC,
+                id DESC
+            )
+          END AS filtered_duplicate_rank
+        FROM decisions
+        ${filteredWhere.toSql()}
+      )
+    `,
+    fromSql: `
+      ranked_filtered_decisions AS ranked_decisions
+      INNER JOIN decisions AS decisions ON decisions.id = ranked_decisions.ranked_id
+    `.trim(),
+    countFromSql: `
+      ranked_filtered_decisions AS ranked_decisions
+      INNER JOIN decisions AS decisions ON decisions.id = ranked_decisions.ranked_id
+    `.trim(),
+    outerWhereSql: 'WHERE ranked_decisions.filtered_duplicate_rank = 1',
     params: [now, ...filteredWhere.params],
     dynamicDedup: true,
   };
@@ -540,14 +912,14 @@ function buildDecisionListQuery(
 function decisionFiltersCanSplitDuplicateGroup(
   filters: DecisionListFilters,
   searchAst: SearchNode | null,
+  includeExpired: boolean,
 ): boolean {
   return Boolean(
-    searchAst
+    decisionSearchCanSplitDuplicateGroup(searchAst, includeExpired)
     || filters.alertId
     || filters.country
     || filters.scenario
     || filters.as
-    || filters.ip
     || filters.target
     || filters.dateStart
     || filters.dateEnd
@@ -627,11 +999,7 @@ async function queryDecisionListCounts(
       validUntil: Number.POSITIVE_INFINITY,
       promise,
     });
-    while (decisionListCountCache.size > DECISION_LIST_COUNT_CACHE_MAX_ENTRIES) {
-      const oldestKey = decisionListCountCache.keys().next().value;
-      if (oldestKey) decisionListCountCache.delete(oldestKey);
-      else break;
-    }
+    trimDecisionListCaches();
   }
   return promise;
 }
@@ -1449,6 +1817,62 @@ function dashboardFiltersUseStoredActiveDecisionPrimaries(filters: DashboardStat
     && !filters.target;
 }
 
+type DashboardChangePosition = {
+  epoch: number;
+  floor: number;
+  revision: number;
+};
+
+type DashboardAlertIndexRow = {
+  changed_id?: string;
+  id: string | null;
+  internal_id: number | null;
+  instance_id: string | null;
+  created_at: string | null;
+  country?: string | null;
+  region?: string | null;
+  city?: string | null;
+  scenario?: string | null;
+  as_name?: string | null;
+  source_ip?: string | null;
+  source_value?: string | null;
+  source_range?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  target?: string | null;
+  machine_id?: string | null;
+  machine_alias?: string | null;
+  machine?: string | null;
+  extra_data?: string | null;
+  origins?: string | null;
+  simulated?: number | null;
+};
+
+type DashboardDecisionIndexRow = {
+  changed_id?: string;
+  rowid: number | null;
+  internal_id: string | null;
+  upstream_id?: string | null;
+  instance_id: string | null;
+  alert_upstream_id?: string | null;
+  created_at: string | null;
+  stop_at?: string | null;
+  value?: string | null;
+  country?: string | null;
+  region?: string | null;
+  city?: string | null;
+  scenario?: string | null;
+  as_name?: string | null;
+  target?: string | null;
+  type?: string | null;
+  origin?: string | null;
+  machine?: string | null;
+  extra_data?: string | null;
+  duration?: string | null;
+  is_duplicate?: number | null;
+  simulated?: number | null;
+};
+
 async function getDashboardStatsIndex(
   instanceId: string,
   primaryOnly: boolean,
@@ -1466,7 +1890,12 @@ async function getDashboardStatsIndex(
     return pending;
   }
 
-  const promise = buildDashboardStatsIndex(cacheKey, instanceId, primaryOnly).finally(() => {
+  const stale = [...state.dashboardStatsCaches.values()]
+    .reverse()
+    .find((candidate) => candidate.scope === instanceId && candidate.primaryOnly === primaryOnly);
+  const promise = (stale
+    ? updateDashboardStatsIndex(cacheKey, stale, instanceId, primaryOnly)
+    : buildDashboardStatsIndex(cacheKey, instanceId, primaryOnly)).finally(() => {
     state.dashboardStatsIndexPromises.delete(cacheKey);
   });
   state.dashboardStatsIndexPromises.set(cacheKey, promise);
@@ -1478,6 +1907,7 @@ async function buildDashboardStatsIndex(
   instanceId: string,
   primaryOnly: boolean,
 ): Promise<DashboardStatsCache> {
+  const changePosition = await getDashboardChangePosition();
   const since = new Date(Date.now() - config.lookbackMs).toISOString();
   const nowIso = new Date().toISOString();
   const nowTimestamp = Date.now();
@@ -1496,31 +1926,10 @@ async function buildDashboardStatsIndex(
   let simulatedAlerts = 0;
   let lastAlertId = Number.MIN_SAFE_INTEGER;
   while (true) {
+    await yieldDashboardWarmupToDecisionLists();
     const batchWhere = alertWhere.clone();
     batchWhere.add('id > ?', lastAlertId);
-    const alertRows = await analyticsQueryWorker.all<{
-    id: string;
-    internal_id: number;
-    instance_id: string;
-    created_at: string;
-    country?: string | null;
-    region?: string | null;
-    city?: string | null;
-    scenario?: string | null;
-    as_name?: string | null;
-    source_ip?: string | null;
-    source_value?: string | null;
-    source_range?: string | null;
-    latitude?: number | null;
-    longitude?: number | null;
-    target?: string | null;
-    machine_id?: string | null;
-    machine_alias?: string | null;
-    machine?: string | null;
-    extra_data?: string | null;
-    origins?: string | null;
-    simulated?: number | null;
-  }>(`
+    const alertRows = await analyticsQueryWorker.all<DashboardAlertIndexRow>(`
     SELECT COALESCE(upstream_id, CAST(id AS TEXT)) AS id, id AS internal_id,
       instance_id, created_at, country, region, city, scenario, as_name,
       source_ip, source_value, source_range, latitude, longitude, target,
@@ -1536,7 +1945,7 @@ async function buildDashboardStatsIndex(
 
     for (let index = 0; index < alertRows.length; index += 1) {
       const row = alertRows[index];
-      const createdAt = row.created_at;
+      const createdAt = row.created_at || '';
       const timestamp = Date.parse(createdAt);
       if (!Number.isFinite(timestamp)) {
         continue;
@@ -1548,8 +1957,9 @@ async function buildDashboardStatsIndex(
       }
 
       alerts.push({
-        id: row.id,
-        instanceId: row.instance_id,
+        internalId: row.internal_id as number,
+        id: row.id as string,
+        instanceId: row.instance_id as string,
         createdAt,
         timestamp,
         country: row.country || undefined,
@@ -1596,31 +2006,11 @@ async function buildDashboardStatsIndex(
   let activeSimulatedDecisions = 0;
   let lastDecisionRowId = 0;
   while (true) {
+    await yieldDashboardWarmupToDecisionLists();
     const batchWhere = decisionWhere.clone();
     batchWhere.add('rowid > ?', lastDecisionRowId);
-    const decisionRows = await analyticsQueryWorker.all<{
-    rowid: number;
-    upstream_id?: string | null;
-    instance_id: string;
-    alert_upstream_id?: string | null;
-    created_at: string;
-    stop_at?: string | null;
-    value?: string | null;
-    country?: string | null;
-    region?: string | null;
-    city?: string | null;
-    scenario?: string | null;
-    as_name?: string | null;
-    target?: string | null;
-    type?: string | null;
-    origin?: string | null;
-    machine?: string | null;
-    extra_data?: string | null;
-    duration?: string | null;
-    is_duplicate?: number | null;
-    simulated?: number | null;
-  }>(`
-    SELECT rowid, COALESCE(upstream_id, CAST(id AS TEXT)) AS upstream_id,
+    const decisionRows = await analyticsQueryWorker.all<DashboardDecisionIndexRow>(`
+    SELECT rowid, id AS internal_id, COALESCE(upstream_id, CAST(id AS TEXT)) AS upstream_id,
       instance_id, alert_upstream_id, created_at, stop_at, value, country,
       region, city, scenario, as_name, target, type, origin, machine, duration,
       is_duplicate, simulated, extra_data
@@ -1635,7 +2025,7 @@ async function buildDashboardStatsIndex(
 
     for (let index = 0; index < decisionRows.length; index += 1) {
       const row = decisionRows[index];
-      const createdAt = row.created_at;
+      const createdAt = row.created_at || '';
       const timestamp = Date.parse(createdAt);
       if (!Number.isFinite(timestamp)) {
         continue;
@@ -1655,8 +2045,9 @@ async function buildDashboardStatsIndex(
       }
 
       decisions.push({
-        id: row.upstream_id || row.rowid,
-        instanceId: row.instance_id,
+        internalId: row.internal_id as string,
+        id: row.upstream_id || row.rowid as number,
+        instanceId: row.instance_id as string,
         alertId: row.alert_upstream_id || undefined,
         createdAt,
         stopAt,
@@ -1696,22 +2087,274 @@ async function buildDashboardStatsIndex(
     key: cacheKey,
     scope: instanceId,
     primaryOnly,
+    changeEpoch: changePosition.epoch,
+    changeRevision: changePosition.revision,
     alerts,
     decisions,
     totals,
   };
   if (cacheKey === getDashboardStatsCacheKey(instanceId, primaryOnly)) {
-    for (const [existingKey, cached] of state.dashboardStatsCaches) {
-      if (cached.scope === instanceId) state.dashboardStatsCaches.delete(existingKey);
-    }
-    state.dashboardStatsCaches.set(cacheKey, statsCache);
-    while (state.dashboardStatsCaches.size > Math.max(4, config.instances.length + 1)) {
-      const oldest = state.dashboardStatsCaches.keys().next().value;
-      if (oldest) state.dashboardStatsCaches.delete(oldest);
-      else break;
-    }
+    storeDashboardStatsCache(statsCache);
   }
   return statsCache;
+}
+
+async function getDashboardChangePosition(): Promise<DashboardChangePosition> {
+  const row = await analyticsQueryWorker.get<{
+    epoch: string | number | null;
+    floor: string | number | null;
+    revision: string | number | null;
+  }>(`
+    SELECT
+      COALESCE((SELECT value FROM meta WHERE key = 'dashboard_change_epoch'), '1') AS epoch,
+      COALESCE((SELECT value FROM meta WHERE key = 'dashboard_change_floor'), '0') AS floor,
+      COALESCE((SELECT MAX(revision) FROM dashboard_record_changes), 0) AS revision
+  `);
+  return {
+    epoch: Number(row.epoch) || 1,
+    floor: Number(row.floor) || 0,
+    revision: Math.max(Number(row.revision) || 0, Number(row.floor) || 0),
+  };
+}
+
+async function updateDashboardStatsIndex(
+  cacheKey: string,
+  stale: DashboardStatsCache,
+  instanceId: string,
+  primaryOnly: boolean,
+): Promise<DashboardStatsCache> {
+  const position = await getDashboardChangePosition();
+  if (
+    stale.changeEpoch !== position.epoch
+    || stale.changeRevision < position.floor
+    || stale.changeRevision > position.revision
+  ) {
+    return buildDashboardStatsIndex(cacheKey, instanceId, primaryOnly);
+  }
+
+  const changeParams = [stale.changeRevision, position.revision];
+  const [changedAlerts, changedDecisions] = await Promise.all([
+    analyticsQueryWorker.all<DashboardAlertIndexRow>(`
+      WITH changed(record_id) AS (
+        SELECT record_id
+        FROM dashboard_record_changes
+        WHERE revision > ? AND revision <= ? AND table_name = 'alerts'
+        GROUP BY record_id
+      )
+      SELECT changed.record_id AS changed_id,
+        COALESCE(alerts.upstream_id, CAST(alerts.id AS TEXT)) AS id,
+        alerts.id AS internal_id, alerts.instance_id, alerts.created_at,
+        alerts.country, alerts.region, alerts.city, alerts.scenario, alerts.as_name,
+        alerts.source_ip, alerts.source_value, alerts.source_range,
+        alerts.latitude, alerts.longitude, alerts.target, alerts.machine_id,
+        alerts.machine_alias, alerts.machine, alerts.origins, alerts.simulated,
+        alerts.extra_data
+      FROM changed
+      LEFT JOIN alerts ON alerts.id = CAST(changed.record_id AS INTEGER)
+    `, changeParams, { label: 'dashboard alert delta' }),
+    analyticsQueryWorker.all<DashboardDecisionIndexRow>(`
+      WITH changed(record_id) AS (
+        SELECT record_id
+        FROM dashboard_record_changes
+        WHERE revision > ? AND revision <= ? AND table_name = 'decisions'
+        GROUP BY record_id
+      )
+      SELECT changed.record_id AS changed_id, decisions.rowid,
+        decisions.id AS internal_id,
+        COALESCE(decisions.upstream_id, CAST(decisions.id AS TEXT)) AS upstream_id,
+        decisions.instance_id, decisions.alert_upstream_id, decisions.created_at,
+        decisions.stop_at, decisions.value, decisions.country, decisions.region,
+        decisions.city, decisions.scenario, decisions.as_name, decisions.target,
+        decisions.type, decisions.origin, decisions.machine, decisions.duration,
+        decisions.is_duplicate, decisions.simulated, decisions.extra_data
+      FROM changed
+      LEFT JOIN decisions ON decisions.id = changed.record_id
+    `, changeParams, { label: 'dashboard decision delta' }),
+  ]);
+
+  const sinceTimestamp = Date.now() - config.lookbackMs;
+  const nowTimestamp = Date.now();
+  const alerts = new Map(stale.alerts
+    .filter((alert) => alert.timestamp >= sinceTimestamp)
+    .map((alert) => [String(alert.internalId), alert]));
+  for (const row of changedAlerts) {
+    const internalId = String(row.changed_id);
+    alerts.delete(internalId);
+    const record = dashboardAlertRecordFromRow(row, instanceId, sinceTimestamp);
+    if (record) alerts.set(internalId, record);
+  }
+  const decisions = new Map(stale.decisions
+    .filter((decision) => (
+      decision.timestamp >= sinceTimestamp || decision.stopTimestamp > nowTimestamp
+    ))
+    .filter((decision) => (
+      !primaryOnly || decision.stopTimestamp <= nowTimestamp || !decision.isDuplicate
+    ))
+    .map((decision) => [String(decision.internalId), decision]));
+  for (const row of changedDecisions) {
+    const internalId = String(row.changed_id);
+    decisions.delete(internalId);
+    const record = dashboardDecisionRecordFromRow(
+      row,
+      instanceId,
+      primaryOnly,
+      sinceTimestamp,
+      nowTimestamp,
+    );
+    if (record) decisions.set(internalId, record);
+  }
+
+  const alertRecords = [...alerts.values()];
+  const decisionRecords = [...decisions.values()];
+  const statsCache: DashboardStatsCache = {
+    key: cacheKey,
+    scope: instanceId,
+    primaryOnly,
+    changeEpoch: position.epoch,
+    changeRevision: position.revision,
+    alerts: alertRecords,
+    decisions: decisionRecords,
+    totals: dashboardIndexTotals(alertRecords, decisionRecords, nowTimestamp),
+  };
+  if (cacheKey === getDashboardStatsCacheKey(instanceId, primaryOnly)) {
+    storeDashboardStatsCache(statsCache);
+  }
+  return statsCache;
+}
+
+function dashboardAlertRecordFromRow(
+  row: DashboardAlertIndexRow,
+  instanceId: string,
+  sinceTimestamp: number,
+): DashboardAlertStatsRecord | null {
+  if (row.internal_id === null || !row.instance_id || !row.created_at || row.id === null) return null;
+  const timestamp = Date.parse(row.created_at);
+  if (
+    !Number.isFinite(timestamp)
+    || timestamp < sinceTimestamp
+    || (instanceId !== 'all' && row.instance_id !== instanceId)
+    || (instanceId === 'all' && !config.instances.some((instance) => instance.id === row.instance_id))
+    || (!config.simulationsEnabled && row.simulated === 1)
+  ) return null;
+  const simulated = row.simulated === 1;
+  return {
+    internalId: row.internal_id,
+    id: row.id,
+    instanceId: row.instance_id,
+    createdAt: row.created_at,
+    timestamp,
+    country: row.country || undefined,
+    region: row.region || undefined,
+    city: row.city || undefined,
+    scenario: row.scenario || undefined,
+    asName: row.as_name || undefined,
+    ip: row.source_ip || undefined,
+    sourceValue: row.source_value || undefined,
+    sourceRange: row.source_range || undefined,
+    latitude: normalizeDashboardCoordinate(row.latitude, -90, 90),
+    longitude: normalizeDashboardCoordinate(row.longitude, -180, 180),
+    target: row.target || undefined,
+    targets: readExtraStringArray(row.extra_data, 'targets', row.target),
+    machine: row.machine || undefined,
+    machineId: row.machine_id || undefined,
+    machineAlias: row.machine_alias || undefined,
+    origins: row.origins?.split(/\s+/).filter(Boolean),
+    simulated,
+  };
+}
+
+function dashboardDecisionRecordFromRow(
+  row: DashboardDecisionIndexRow,
+  instanceId: string,
+  primaryOnly: boolean,
+  sinceTimestamp: number,
+  nowTimestamp: number,
+): DashboardDecisionStatsRecord | null {
+  if (row.internal_id === null || !row.instance_id || !row.created_at) return null;
+  const timestamp = Date.parse(row.created_at);
+  const stopTimestamp = row.stop_at ? Date.parse(row.stop_at) : Number.NaN;
+  const normalizedStopTimestamp = Number.isFinite(stopTimestamp) ? stopTimestamp : 0;
+  if (
+    !Number.isFinite(timestamp)
+    || (timestamp < sinceTimestamp && normalizedStopTimestamp <= nowTimestamp)
+    || (instanceId !== 'all' && row.instance_id !== instanceId)
+    || (instanceId === 'all' && !config.instances.some((instance) => instance.id === row.instance_id))
+    || (!config.simulationsEnabled && row.simulated === 1)
+    || (primaryOnly && normalizedStopTimestamp > nowTimestamp && row.is_duplicate === 1)
+  ) return null;
+  const extraData = parseRecordExtras(row.extra_data);
+  return {
+    internalId: row.internal_id,
+    id: row.upstream_id || row.rowid || row.internal_id,
+    instanceId: row.instance_id,
+    alertId: row.alert_upstream_id || undefined,
+    createdAt: row.created_at,
+    stopAt: row.stop_at || undefined,
+    timestamp,
+    stopTimestamp: normalizedStopTimestamp,
+    value: row.value || undefined,
+    country: row.country || undefined,
+    region: row.region || undefined,
+    city: row.city || undefined,
+    scenario: row.scenario || undefined,
+    asName: row.as_name || undefined,
+    target: row.target || undefined,
+    targets: readExtraStringArray(extraData, 'targets', row.target),
+    type: row.type || undefined,
+    origin: row.origin || undefined,
+    machine: row.machine || undefined,
+    machineId: readExtraString(extraData, 'machine_id'),
+    machineAlias: readExtraString(extraData, 'machine_alias'),
+    duration: row.duration || undefined,
+    isDuplicate: row.is_duplicate === 1,
+    simulated: row.simulated === 1,
+  };
+}
+
+function dashboardIndexTotals(
+  alerts: DashboardAlertStatsRecord[],
+  decisions: DashboardDecisionStatsRecord[],
+  nowTimestamp: number,
+): DashboardStatsTotals {
+  let decisionsCount = 0;
+  let simulatedDecisions = 0;
+  for (const decision of decisions) {
+    if (decision.stopTimestamp <= nowTimestamp) continue;
+    if (decision.simulated) simulatedDecisions += 1;
+    else decisionsCount += 1;
+  }
+  return {
+    alerts: alerts.length,
+    decisions: decisionsCount,
+    simulatedAlerts: alerts.reduce((count, alert) => count + (alert.simulated ? 1 : 0), 0),
+    simulatedDecisions,
+  };
+}
+
+function storeDashboardStatsCache(statsCache: DashboardStatsCache): void {
+  for (const [existingKey, cached] of state.dashboardStatsCaches) {
+    if (cached.scope === statsCache.scope && cached.primaryOnly === statsCache.primaryOnly) {
+      state.dashboardStatsCaches.delete(existingKey);
+    }
+  }
+  state.dashboardStatsCaches.set(statsCache.key, statsCache);
+  while (state.dashboardStatsCaches.size > Math.max(4, (config.instances.length + 1) * 2)) {
+    const oldest = state.dashboardStatsCaches.keys().next().value;
+    if (oldest) state.dashboardStatsCaches.delete(oldest);
+    else break;
+  }
+  const sameEpoch = [...state.dashboardStatsCaches.values()]
+    .filter((cached) => cached.changeEpoch === statsCache.changeEpoch);
+  const pruneThrough = sameEpoch.length > 0
+    ? Math.min(...sameEpoch.map((cached) => cached.changeRevision))
+    : statsCache.changeRevision;
+  database.pruneDashboardRecordChanges(statsCache.changeEpoch, pruneThrough);
+}
+
+async function yieldDashboardWarmupToDecisionLists(): Promise<void> {
+  while (activeAlertListQueries > 0 || activeDecisionListQueries > 0) {
+    await delay(10);
+  }
 }
 
 async function buildDashboardStats(
@@ -2519,7 +3162,10 @@ function isDashboardStatsResponseSuperseded(filters: DashboardStatsFilters): boo
 
 function invalidateFacetResponses(): void {
   state.facetResponseCache.clear();
+  alertListCountCache.clear();
+  alertListPageWindowCache.clear();
   decisionListCountCache.clear();
+  decisionListPageWindowCache.clear();
   state.facetCacheVersion += 1;
 }
 
@@ -2548,13 +3194,16 @@ function invalidateDashboardStatsCache(
     for (const scope of affectedScopes) {
       state.dashboardStatsScopeVersions.set(scope, (state.dashboardStatsScopeVersions.get(scope) || 0) + 1);
     }
-    for (const [key, cached] of state.dashboardStatsCaches) {
-      if (affectedScopes.has(cached.scope)) state.dashboardStatsCaches.delete(key);
-    }
-    return;
+  } else {
+    state.dashboardStatsCacheVersion += 1;
   }
-  state.dashboardStatsCaches.clear();
-  state.dashboardStatsCacheVersion += 1;
+  if (
+    state.dashboardStatsCaches.size === 0
+    || database.countDashboardRecordChanges() > DASHBOARD_CHANGE_JOURNAL_MAX_ENTRIES
+  ) {
+    state.dashboardStatsCaches.clear();
+    database.resetDashboardRecordChanges();
+  }
 }
 
 function getDashboardStatsResponseCacheKey(indexKey: string, filters: DashboardStatsFilters): string {

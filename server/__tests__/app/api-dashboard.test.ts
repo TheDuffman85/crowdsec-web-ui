@@ -607,7 +607,12 @@ describe('createApp dashboard API', () => {
       uuid: 'dashboard-alert-302',
       created_at: new Date().toISOString(),
     });
-    const { controller, database } = createController({
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const analyticsQueryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath });
+    const analyticsAllSpy = vi.spyOn(analyticsQueryWorker, 'all');
+    const { controller } = createController({
+      database,
+      analyticsQueryWorker,
       initialCacheState: {
         isInitialized: true,
         isComplete: true,
@@ -619,6 +624,7 @@ describe('createApp dashboard API', () => {
 
     const initialResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats'));
     expect((await initialResponse.json() as DashboardStatsResponse).totals.alerts).toBe(1);
+    analyticsAllSpy.mockClear();
 
     const deleteResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts/302', {
       method: 'DELETE',
@@ -632,6 +638,10 @@ describe('createApp dashboard API', () => {
     expect(readyPayload).toEqual(expect.objectContaining({
       totals: expect.objectContaining({ alerts: 0 }),
     }));
+    expect(analyticsAllSpy.mock.calls.some(([, , options]) => options?.label === 'dashboard alert delta')).toBe(true);
+    expect(analyticsAllSpy.mock.calls.some(([, , options]) => (
+      options?.label === 'dashboard alert index' || options?.label === 'dashboard decision index'
+    ))).toBe(false);
 
     controller.stopBackgroundTasks();
     database.close();

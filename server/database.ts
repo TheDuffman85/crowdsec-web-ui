@@ -262,6 +262,7 @@ export class CrowdsecDatabase {
   public readonly dbPath: string;
   public readonly searchIndexAvailable: boolean;
   private searchIndexUpdatesDeferred = false;
+  private dashboardChangeTrackingDeferred = false;
   private decisionDuplicateFlagsDirty = true;
   private decisionDuplicateFlagsInitialized = false;
   private lastDecisionDuplicateRefreshAt: string | null = null;
@@ -788,26 +789,59 @@ export class CrowdsecDatabase {
   }
 
   clearSyncData(): void {
-    this.db.exec('DELETE FROM alerts');
-    this.db.exec('DELETE FROM decisions');
-    this.decisionDuplicateFlagsDirty = true;
-    this.decisionDuplicateFlagsInitialized = false;
-    this.lastDecisionDuplicateRefreshAt = null;
-    this.ownsDecisionDuplicateDirtyMarker = false;
-    this.decisionDuplicateDirtyKeys.clear();
-    this.db.prepare(`
-      DELETE FROM meta
-      WHERE key IN (
-        'decision_duplicate_refresh_at',
-        'decision_duplicate_flags_dirty',
-        'decision_duplicate_rank_version'
-      )
-    `).run();
-    this.clearSearchIndexes();
+    const dashboardTrackingEnabled = this.getMeta('dashboard_change_tracking_enabled')?.value !== 'false';
+    if (dashboardTrackingEnabled) this.setMeta('dashboard_change_tracking_enabled', 'false');
+    try {
+      this.db.exec('DELETE FROM alerts');
+      this.db.exec('DELETE FROM decisions');
+      this.decisionDuplicateFlagsDirty = true;
+      this.decisionDuplicateFlagsInitialized = false;
+      this.lastDecisionDuplicateRefreshAt = null;
+      this.ownsDecisionDuplicateDirtyMarker = false;
+      this.decisionDuplicateDirtyKeys.clear();
+      this.db.prepare(`
+        DELETE FROM meta
+        WHERE key IN (
+          'decision_duplicate_refresh_at',
+          'decision_duplicate_flags_dirty',
+          'decision_duplicate_rank_version'
+        )
+      `).run();
+      this.clearSearchIndexes();
+    } finally {
+      if (dashboardTrackingEnabled) {
+        this.resetDashboardRecordChanges();
+        this.setMeta('dashboard_change_tracking_enabled', 'true');
+      } else {
+        this.db.exec('DELETE FROM dashboard_record_changes');
+      }
+    }
   }
 
   beginDeferredSearchIndexUpdates(dropSecondaryIndexes = true, clearSearchIndexes = true): void {
     this.searchIndexUpdatesDeferred = true;
+    if (dropSecondaryIndexes) {
+      const deferDashboardChanges = this.db.transaction(() => {
+        this.db.prepare(`
+          INSERT INTO meta(key, value)
+          VALUES ('dashboard_change_tracking_enabled', 'false')
+          ON CONFLICT(key) DO UPDATE SET value = 'false'
+        `).run();
+        this.db.prepare(`
+          INSERT INTO meta(key, value)
+          VALUES ('dashboard_change_epoch', '2')
+          ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1
+        `).run();
+        this.db.prepare(`
+          INSERT INTO meta(key, value)
+          VALUES ('dashboard_change_floor', '0')
+          ON CONFLICT(key) DO UPDATE SET value = '0'
+        `).run();
+        this.db.exec('DELETE FROM dashboard_record_changes');
+      });
+      deferDashboardChanges();
+      this.dashboardChangeTrackingDeferred = true;
+    }
     if (this.searchIndexAvailable && clearSearchIndexes) this.clearSearchIndexes();
     if (dropSecondaryIndexes) {
       for (const indexName of SYNC_SECONDARY_INDEX_NAMES) {
@@ -829,6 +863,83 @@ export class CrowdsecDatabase {
       }
     } finally {
       this.searchIndexUpdatesDeferred = false;
+      if (this.dashboardChangeTrackingDeferred) {
+        const publishDashboardChanges = this.db.transaction(() => {
+          this.db.prepare(`
+            INSERT INTO meta(key, value)
+            VALUES ('dashboard_change_epoch', '2')
+            ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1
+          `).run();
+          this.db.prepare(`
+            INSERT INTO meta(key, value)
+            VALUES ('dashboard_change_floor', '0')
+            ON CONFLICT(key) DO UPDATE SET value = '0'
+          `).run();
+          this.db.exec('DELETE FROM dashboard_record_changes');
+          this.db.prepare(`
+            INSERT INTO meta(key, value)
+            VALUES ('dashboard_change_tracking_enabled', 'true')
+            ON CONFLICT(key) DO UPDATE SET value = 'true'
+          `).run();
+        });
+        publishDashboardChanges();
+        this.dashboardChangeTrackingDeferred = false;
+      }
+    }
+  }
+
+  pruneDashboardRecordChanges(changeEpoch: number, throughRevision: number): void {
+    const currentEpoch = Number(this.getMeta('dashboard_change_epoch')?.value || 0);
+    if (currentEpoch !== changeEpoch || !Number.isFinite(throughRevision) || throughRevision <= 0) return;
+    this.runNonBlockingDashboardMaintenance(() => {
+      const prune = this.db.transaction(() => {
+        this.db.prepare(`
+          INSERT INTO meta(key, value)
+          VALUES ('dashboard_change_floor', ?)
+          ON CONFLICT(key) DO UPDATE SET value = MAX(CAST(value AS INTEGER), CAST(excluded.value AS INTEGER))
+        `).run(String(throughRevision));
+        this.db.prepare('DELETE FROM dashboard_record_changes WHERE revision <= ?').run(throughRevision);
+      });
+      prune();
+    });
+  }
+
+  countDashboardRecordChanges(): number {
+    return Number((
+      this.db.prepare('SELECT COUNT(*) AS count FROM dashboard_record_changes').get() as CountRow
+    ).count) || 0;
+  }
+
+  resetDashboardRecordChanges(): void {
+    this.runNonBlockingDashboardMaintenance(() => {
+      const reset = this.db.transaction(() => {
+        this.db.prepare(`
+          INSERT INTO meta(key, value)
+          VALUES ('dashboard_change_epoch', '2')
+          ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1
+        `).run();
+        this.db.prepare(`
+          INSERT INTO meta(key, value)
+          VALUES ('dashboard_change_floor', '0')
+          ON CONFLICT(key) DO UPDATE SET value = '0'
+        `).run();
+        this.db.exec('DELETE FROM dashboard_record_changes');
+      });
+      reset();
+    });
+  }
+
+  private runNonBlockingDashboardMaintenance(action: () => void): void {
+    const row = this.db.prepare('PRAGMA busy_timeout').get() as { timeout?: number } | undefined;
+    const busyTimeout = Math.max(0, Number(row?.timeout) || 0);
+    this.db.exec('PRAGMA busy_timeout = 0');
+    try {
+      action();
+    } catch (error) {
+      const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+      if (!message.includes('database is locked') && !message.includes('database is busy')) throw error;
+    } finally {
+      this.db.exec(`PRAGMA busy_timeout = ${busyTimeout}`);
     }
   }
 
@@ -2566,7 +2677,92 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
   if (searchIndexAvailable) {
     backfillSearchIndexes(db);
   }
+  initDashboardChangeTracking(db);
   return searchIndexAvailable;
+}
+
+function initDashboardChangeTracking(db: Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS dashboard_record_changes (
+      revision INTEGER PRIMARY KEY AUTOINCREMENT,
+      table_name TEXT NOT NULL CHECK(table_name IN ('alerts', 'decisions')),
+      record_id TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_dashboard_record_changes_record
+      ON dashboard_record_changes(table_name, record_id, revision DESC);
+    INSERT OR IGNORE INTO meta(key, value) VALUES ('dashboard_change_epoch', '1');
+    INSERT OR IGNORE INTO meta(key, value) VALUES ('dashboard_change_floor', '0');
+    INSERT OR IGNORE INTO meta(key, value) VALUES ('dashboard_change_tracking_enabled', 'true');
+    DROP TRIGGER IF EXISTS dashboard_alert_update;
+    DROP TRIGGER IF EXISTS dashboard_decision_update;
+
+    CREATE TRIGGER IF NOT EXISTS dashboard_alert_insert
+    AFTER INSERT ON alerts
+    WHEN COALESCE((SELECT value FROM meta WHERE key = 'dashboard_change_tracking_enabled'), 'true') = 'true'
+    BEGIN
+      INSERT INTO dashboard_record_changes(table_name, record_id)
+      VALUES ('alerts', CAST(NEW.id AS TEXT));
+    END;
+    CREATE TRIGGER IF NOT EXISTS dashboard_alert_update
+    AFTER UPDATE ON alerts
+    WHEN COALESCE((SELECT value FROM meta WHERE key = 'dashboard_change_tracking_enabled'), 'true') = 'true'
+      AND (
+        OLD.instance_id IS NOT NEW.instance_id OR OLD.upstream_id IS NOT NEW.upstream_id
+        OR OLD.created_at IS NOT NEW.created_at OR OLD.country IS NOT NEW.country
+        OR OLD.region IS NOT NEW.region OR OLD.city IS NOT NEW.city
+        OR OLD.scenario IS NOT NEW.scenario OR OLD.as_name IS NOT NEW.as_name
+        OR OLD.source_ip IS NOT NEW.source_ip OR OLD.source_value IS NOT NEW.source_value
+        OR OLD.source_range IS NOT NEW.source_range OR OLD.latitude IS NOT NEW.latitude
+        OR OLD.longitude IS NOT NEW.longitude OR OLD.target IS NOT NEW.target
+        OR OLD.machine_id IS NOT NEW.machine_id OR OLD.machine_alias IS NOT NEW.machine_alias
+        OR OLD.machine IS NOT NEW.machine OR OLD.origins IS NOT NEW.origins
+        OR OLD.simulated IS NOT NEW.simulated OR OLD.extra_data IS NOT NEW.extra_data
+      )
+    BEGIN
+      INSERT INTO dashboard_record_changes(table_name, record_id)
+      VALUES ('alerts', CAST(NEW.id AS TEXT));
+    END;
+    CREATE TRIGGER IF NOT EXISTS dashboard_alert_delete
+    AFTER DELETE ON alerts
+    WHEN COALESCE((SELECT value FROM meta WHERE key = 'dashboard_change_tracking_enabled'), 'true') = 'true'
+    BEGIN
+      INSERT INTO dashboard_record_changes(table_name, record_id)
+      VALUES ('alerts', CAST(OLD.id AS TEXT));
+    END;
+    CREATE TRIGGER IF NOT EXISTS dashboard_decision_insert
+    AFTER INSERT ON decisions
+    WHEN COALESCE((SELECT value FROM meta WHERE key = 'dashboard_change_tracking_enabled'), 'true') = 'true'
+    BEGIN
+      INSERT INTO dashboard_record_changes(table_name, record_id)
+      VALUES ('decisions', CAST(NEW.id AS TEXT));
+    END;
+    CREATE TRIGGER IF NOT EXISTS dashboard_decision_update
+    AFTER UPDATE ON decisions
+    WHEN COALESCE((SELECT value FROM meta WHERE key = 'dashboard_change_tracking_enabled'), 'true') = 'true'
+      AND (
+        OLD.instance_id IS NOT NEW.instance_id OR OLD.upstream_id IS NOT NEW.upstream_id
+        OR OLD.alert_upstream_id IS NOT NEW.alert_upstream_id
+        OR OLD.created_at IS NOT NEW.created_at OR OLD.stop_at IS NOT NEW.stop_at
+        OR OLD.value IS NOT NEW.value OR OLD.country IS NOT NEW.country
+        OR OLD.region IS NOT NEW.region OR OLD.city IS NOT NEW.city
+        OR OLD.scenario IS NOT NEW.scenario OR OLD.as_name IS NOT NEW.as_name
+        OR OLD.target IS NOT NEW.target OR OLD.type IS NOT NEW.type
+        OR OLD.origin IS NOT NEW.origin OR OLD.machine IS NOT NEW.machine
+        OR OLD.duration IS NOT NEW.duration OR OLD.is_duplicate IS NOT NEW.is_duplicate
+        OR OLD.simulated IS NOT NEW.simulated OR OLD.extra_data IS NOT NEW.extra_data
+      )
+    BEGIN
+      INSERT INTO dashboard_record_changes(table_name, record_id)
+      VALUES ('decisions', CAST(NEW.id AS TEXT));
+    END;
+    CREATE TRIGGER IF NOT EXISTS dashboard_decision_delete
+    AFTER DELETE ON decisions
+    WHEN COALESCE((SELECT value FROM meta WHERE key = 'dashboard_change_tracking_enabled'), 'true') = 'true'
+    BEGIN
+      INSERT INTO dashboard_record_changes(table_name, record_id)
+      VALUES ('decisions', CAST(OLD.id AS TEXT));
+    END;
+  `);
 }
 
 function migrateInstanceIdentityColumns(db: Database): void {

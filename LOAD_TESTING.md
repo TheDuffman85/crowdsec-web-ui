@@ -81,8 +81,12 @@ The benchmark measures cold and warm low-cardinality, alert-decision-state, and 
 | `LOADTEST_BENCHMARK_SAMPLES` | `5` | Samples collected per run. |
 | `LOADTEST_ALERTS_BASELINE_P95_MS` | unset | Existing no-facet Alerts p95; when set, fail above a 10% regression. |
 | `LOADTEST_SEARCH_BASELINE_P95_MS` | unset | Existing no-facet search p95; when set, fail above a 10% regression. |
+| `LOADTEST_FILTERED_ALERTS_COLD_LIMIT_MS` | `2000` | Maximum cold filtered Alerts page latency, including exact totals. |
+| `LOADTEST_FILTERED_ALERTS_WARM_PAGE_LIMIT_MS` | `500` | Maximum latency for Alerts pages 2–4 served from the bounded ID window. |
+| `LOADTEST_FILTERED_DECISIONS_COLD_LIMIT_MS` | `5000` | Maximum cold date-filtered Decisions page latency, including exact totals and duplicate promotion. |
+| `LOADTEST_FILTERED_DECISIONS_WARM_PAGE_LIMIT_MS` | `500` | Maximum latency for pages 2–4 served from the bounded filtered-page window. |
 
-Warm facets fail above 500ms, cold facets fail above two seconds, and list/search fail when one concurrent facet raises p95 by more than 25%. Set the two historical baseline variables to enforce the no-facet 10% regression gates. Compare Primary-only results, bootstrap logs, and process RSS with the existing 300k baseline; the script deliberately does not combine them into one score.
+Warm facets fail above 500ms, cold facets fail above two seconds, and list/search fail when one concurrent facet raises p95 by more than 25%. Filtered Alerts fail when the cold ID window exceeds two seconds or cached pages 2–4 exceed 500ms. Date-filtered Decisions fail when the cold ranking window exceeds five seconds, cached pages 2–4 exceed 500ms, or concurrent Dashboard analytics pushes paging beyond the cold limit. Set the two historical baseline variables to enforce the no-facet 10% regression gates. Compare Primary-only results, bootstrap logs, and process RSS with the existing 300k baseline; the script deliberately does not combine them into one score.
 
 ## Dataset Overrides
 
