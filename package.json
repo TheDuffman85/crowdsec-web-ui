@@ -80,7 +80,7 @@
     "eslint-plugin-react-refresh": "^0.5.3",
     "flag-icons": "^7.5.0",
     "globals": "^17.7.0",
-    "jsdom": "^29.1.1",
+    "jsdom": "^30.0.1",
     "lucide-react": "^1.27.0",
     "react": "19.2.7",
     "react-dom": "19.2.7",
