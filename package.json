@@ -75,7 +75,7 @@
     "@vitest/coverage-v8": "4.1.10",
     "clsx": "^2.1.1",
     "d3-geo": "1.12.1",
-    "eslint": "^10.6.0",
+    "eslint": "^10.8.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.3",
     "flag-icons": "^7.5.0",
