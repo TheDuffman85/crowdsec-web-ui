@@ -45,7 +45,7 @@
     "@types/sortablejs": "^1.15.9",
     "better-sqlite3": "12.11.1",
     "hono": "4.12.27",
-    "i18next": "^26.3.4",
+    "i18next": "^26.3.6",
     "local-reverse-geocoder": "0.16.8",
     "mqtt": "^5.15.2",
     "openid-client": "^6.8.4",
