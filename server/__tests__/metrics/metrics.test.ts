@@ -11,10 +11,10 @@ cs_lapi_bouncer_requests_total{bouncer="firewall",route="/v1/decisions/stream",m
 cs_lapi_bouncer_requests_total{bouncer="nginx",route="/v1/decisions",method="GET"} 6
 cs_lapi_decisions_ok_total{bouncer="firewall"} 10
 cs_lapi_decisions_ko_total{bouncer="firewall"} 2
-cs_lapi_machine_requests_total{machine="edge-1",route="/v1/alerts",method="GET"} 5
+cs_lapi_machine_requests_total{machine="edge-1",route="/v1/alerts",method="POST"} 5
 cs_lapi_machine_requests_total{machine="edge-1",route="/v1/watchers/login",method="POST"} 1
-cs_lapi_request_duration_seconds_count{endpoint="/v1/alerts",method="GET"} 4
-cs_lapi_request_duration_seconds_sum{endpoint="/v1/alerts",method="GET"} 0.8
+cs_lapi_request_duration_seconds_count{endpoint="/v1/alerts",method="POST"} 4
+cs_lapi_request_duration_seconds_sum{endpoint="/v1/alerts",method="POST"} 0.8
 cs_appsec_reqs_total{source="0.0.0.0:7422",appsec_engine="appsec"} 100
 cs_appsec_block_total{source="0.0.0.0:7422",appsec_engine="appsec"} 7
 cs_filesource_hits_total{source="/var/log/auth.log"} 110
@@ -61,7 +61,7 @@ cs_parsing_time_seconds_sum{source="/var/log/auth.log",type="syslog"} 0.25
       name: 'edge-1',
       requests: 6,
       topRoute: '/v1/alerts',
-      topMethod: 'GET',
+      topMethod: 'POST',
     });
     expect(summary.parserSources[0]).toMatchObject({
       source: '/var/log/auth.log',
@@ -104,7 +104,7 @@ cs_parsing_time_seconds_sum{source="/var/log/auth.log",type="syslog"} 0.25
       averageSeconds: 0.0025,
     });
     expect(summary.lapiRoutes?.[0]).toMatchObject({
-      method: 'GET',
+      method: 'POST',
       route: '/v1/alerts',
       requests: 4,
       averageSeconds: 0.2,
@@ -116,6 +116,98 @@ cs_parsing_time_seconds_sum{source="/var/log/auth.log",type="syslog"} 0.25
       blocked: 7,
       blockRate: 0.07,
     });
+  });
+
+  test('separates log processor activity, identifies bouncer mode, and includes scenarios', () => {
+    const summary = summarizeCrowdsecMetrics(parsePrometheusText(`
+cs_info{version="v1.7.8"} 1
+process_start_time_seconds 1782813600
+cs_active_decisions{reason="ssh",origin="crowdsec",action="ban"} 4
+cs_alerts{reason="ssh"} 3
+cs_lapi_bouncer_requests_total{bouncer="stream-firewall",route="/v1/decisions/stream",method="GET"} 20
+cs_lapi_machine_requests_total{machine="processor-1",route="/v1/alerts",method="POST"} 7
+cs_lapi_machine_requests_total{machine="processor-1",route="/v1/heartbeat",method="GET"} 5
+cs_lapi_machine_requests_total{machine="processor-1",route="/v1/watchers/login",method="POST"} 1
+cs_machines_last_heartbeat_timestamp{machine="processor-1"} 1782813660
+cs_lapi_route_requests_total{route="/v1/alerts",method="POST"} 7
+cs_lapi_request_duration_seconds_count{endpoint="/v1/alerts",method="POST"} 7
+cs_lapi_request_duration_seconds_sum{endpoint="/v1/alerts",method="POST"} 0.7
+cs_buckets{name="crowdsecurity/ssh-bf"} 2
+cs_bucket_instantiation_total{name="crowdsecurity/ssh-bf"} 8
+cs_bucket_overflowed_total{name="crowdsecurity/ssh-bf"} 3
+cs_bucket_underflowed_total{name="crowdsecurity/ssh-bf"} 1
+cs_bucket_canceled_total{name="crowdsecurity/ssh-bf"} 1
+cs_bucket_poured_total{name="crowdsecurity/ssh-bf",source="/var/log/auth.log",type="syslog"} 12
+`));
+
+    expect(summary.crowdsecVersion).toBe('v1.7.8');
+    expect(summary.crowdsecStartedAt).toBe(new Date(1782813600 * 1000).toISOString());
+    expect(summary.totals).toMatchObject({
+      machineRequests: 13,
+      machineAlertRequests: 7,
+      machineHeartbeatRequests: 5,
+      activeDecisions: 4,
+      alerts: 3,
+    });
+    expect(summary.bouncers[0]).toMatchObject({
+      name: 'stream-firewall',
+      mode: 'stream',
+      requests: 20,
+    });
+    expect(summary.machines[0]).toMatchObject({
+      name: 'processor-1',
+      requests: 13,
+      alertRequests: 7,
+      heartbeatRequests: 5,
+      lastHeartbeatAt: new Date(1782813660 * 1000).toISOString(),
+      otherRequests: 1,
+    });
+    expect(summary.lapiRoutes?.[0]).toMatchObject({
+      method: 'POST',
+      route: '/v1/alerts',
+      requests: 7,
+    });
+    expect(summary.lapiRoutes?.[0].averageSeconds).toBeCloseTo(0.1);
+    expect(summary.scenarios?.[0]).toMatchObject({
+      name: 'crowdsecurity/ssh-bf',
+      current: 2,
+      instantiations: 8,
+      overflows: 3,
+      underflows: 1,
+      canceled: 1,
+      poured: 12,
+    });
+  });
+
+  test('supports legacy scenario metrics, preserves totals beyond the display limit, and joins invalid routes', () => {
+    const machineSamples = Array.from({ length: 13 }, (_, index) => {
+      const requests = index + 1;
+      return `cs_lapi_machine_requests_total{machine="machine-${index}",route="/v1/alerts",method="POST"} ${requests}`;
+    });
+    const summary = summarizeCrowdsecMetrics(parsePrometheusText(`
+cs_bucket_created_total{name="crowdsecurity/ssh-bf"} 8
+${machineSamples.join('\n')}
+cs_lapi_route_requests_total{route="invalid-endpoint",method="GET"} 1
+cs_lapi_request_duration_seconds_count{endpoint="",method="GET"} 1
+cs_lapi_request_duration_seconds_sum{endpoint="",method="GET"} 0.1
+`));
+
+    expect(summary.scenarios).toEqual([expect.objectContaining({
+      name: 'crowdsecurity/ssh-bf',
+      instantiations: 8,
+    })]);
+    expect(summary.machines).toHaveLength(12);
+    expect(summary.totals).toMatchObject({
+      machineRequests: 91,
+      machineAlertRequests: 91,
+      machineHeartbeatRequests: 0,
+    });
+    expect(summary.lapiRoutes).toEqual([{
+      method: 'GET',
+      route: 'invalid-endpoint',
+      requests: 1,
+      averageSeconds: 0.1,
+    }]);
   });
 
 });

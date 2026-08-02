@@ -21,6 +21,7 @@ import type { LucideIcon } from 'lucide-react';
 import { fetchConfig, fetchCrowdsecMetrics } from '../lib/api';
 import { useRefresh } from '../contexts/useRefresh';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
+import { Badge } from '../components/ui/Badge';
 import { Switch } from '../components/ui/Switch';
 import { DropdownSelect } from '../components/ui/DropdownSelect';
 import { InstanceIcon } from '../components/InstanceIcon';
@@ -28,10 +29,13 @@ import { useI18n } from '../lib/i18n';
 import type {
   CrowdsecMetricsApiEntity,
   CrowdsecMetricsAppsecEngine,
+  CrowdsecMetricsBouncerMode,
   CrowdsecMetricsLapiRoute,
   CrowdsecMetricsParserNode,
   CrowdsecMetricsParserSource,
   CrowdsecMetricsResponse,
+  CrowdsecMetricsRouteActivity,
+  CrowdsecMetricsScenario,
   CrowdsecMetricsTiming,
   CrowdsecMetricsWhitelist,
   InstanceSummary,
@@ -44,6 +48,7 @@ type MetricsState =
   | { status: 'ready'; data: CrowdsecMetricsResponse };
 
 const SHOW_CHILD_PARSER_NODES_STORAGE_KEY = 'crowdsec-web-ui:metrics:show-child-parser-nodes';
+const MACHINE_ONLINE_WINDOW_MS = 2 * 60 * 1_000;
 
 function formatNumber(value: number): string {
   return Math.round(value).toLocaleString();
@@ -61,8 +66,31 @@ function formatDuration(value: number | null, notAvailable = 'n/a'): string {
   return `${value.toFixed(2)} s`;
 }
 
+function formatDateTime(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'n/a' : date.toLocaleString();
+}
+
 function formatOptionalNumber(value: number | null): string {
   return value === null ? '-' : formatNumber(value);
+}
+
+type MachineHeartbeatStatus = 'online' | 'stale' | 'observed' | 'missing';
+
+function machineHeartbeatStatus(
+  lastHeartbeatAt: string | null | undefined,
+  heartbeatRequests: number,
+  fetchedAt: string,
+): MachineHeartbeatStatus {
+  if (!lastHeartbeatAt) return heartbeatRequests > 0 ? 'observed' : 'missing';
+
+  const heartbeatTime = new Date(lastHeartbeatAt).getTime();
+  const fetchedTime = new Date(fetchedAt).getTime();
+  if (Number.isNaN(heartbeatTime) || Number.isNaN(fetchedTime)) {
+    return heartbeatRequests > 0 ? 'observed' : 'missing';
+  }
+
+  return fetchedTime - heartbeatTime <= MACHINE_ONLINE_WINDOW_MS ? 'online' : 'stale';
 }
 
 function getErrorMessage(error: unknown, fallback: string): string {
@@ -288,24 +316,59 @@ function TimingValue({ value, tooltip, fallback }: { value: number | null; toolt
   );
 }
 
+function RouteActivityList({ routes, emptyMessage }: { routes?: CrowdsecMetricsRouteActivity[]; emptyMessage: string }) {
+  if (!routes || routes.length === 0) {
+    return <p className="text-xs text-gray-500 dark:text-gray-400">{emptyMessage}</p>;
+  }
+
+  return (
+    <div className="mt-3 space-y-1.5 border-t border-gray-100 pt-3 dark:border-gray-700/70">
+      {routes.slice(0, 4).map((route) => (
+        <div key={`${route.method}-${route.route}`} className="flex items-center justify-between gap-3 text-xs">
+          <span className="min-w-0 truncate font-mono text-gray-500 dark:text-gray-400" title={`${route.method} ${route.route}`}>
+            <span className="font-semibold text-gray-700 dark:text-gray-300">{route.method}</span>{' '}{route.route}
+          </span>
+          <span className="shrink-0 font-mono font-semibold text-gray-700 dark:text-gray-200">{formatNumber(route.requests)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function bouncerModeVariant(mode: CrowdsecMetricsBouncerMode | undefined): 'success' | 'info' | 'warning' | 'secondary' {
+  if (mode === 'live') return 'success';
+  if (mode === 'stream') return 'info';
+  if (mode === 'mixed') return 'warning';
+  return 'secondary';
+}
+
 function EntityList({
   title,
   icon: Icon,
   items,
   emptyMessage,
   description,
+  entityType,
+  fetchedAt,
 }: {
   title: string;
   icon: LucideIcon;
   items: CrowdsecMetricsApiEntity[];
   emptyMessage: string;
   description: string;
+  entityType: 'bouncer' | 'machine';
+  fetchedAt: string;
 }) {
   const { t } = useI18n();
+  const isMachine = entityType === 'machine';
 
   return (
     <Card className="h-full">
-      <SectionHeader icon={Icon} title={title} description={description} />
+      <SectionHeader
+        icon={Icon}
+        title={title}
+        description={description}
+      />
       <CardContent>
         {items.length === 0 ? (
           <EmptyState message={emptyMessage} />
@@ -315,22 +378,83 @@ function EntityList({
               const nonEmptyDecisions = item.decisionsOk || 0;
               const emptyDecisions = item.decisionsKo || 0;
               const decisionTotal = nonEmptyDecisions + emptyDecisions;
+              const machineAlertRequests = item.alertRequests ?? item.routes
+                ?.filter((route) => route.method === 'POST' && route.route === '/v1/alerts')
+                .reduce((sum, route) => sum + route.requests, 0)
+                ?? item.requests;
+              const heartbeatRequests = item.heartbeatRequests ?? item.routes
+                ?.filter((route) => route.route === '/v1/heartbeat')
+                .reduce((sum, route) => sum + route.requests, 0)
+                ?? 0;
+              const otherRequests = item.otherRequests ?? Math.max(item.requests - machineAlertRequests - heartbeatRequests, 0);
+              const mode = item.mode || (decisionTotal > 0 ? 'live' : undefined);
+              const showDecisionResponses = !isMachine && mode !== 'stream' && decisionTotal > 0;
+              const heartbeatStatus = machineHeartbeatStatus(item.lastHeartbeatAt, heartbeatRequests, fetchedAt);
+              const heartbeatVariant = heartbeatStatus === 'online'
+                ? 'success'
+                : heartbeatStatus === 'observed'
+                  ? 'info'
+                  : 'warning';
+              const heartbeatLabel = heartbeatStatus === 'online'
+                ? t('pages.metrics.heartbeatOnline')
+                : heartbeatStatus === 'stale'
+                  ? t('pages.metrics.heartbeatStale')
+                  : heartbeatStatus === 'observed'
+                    ? t('pages.metrics.heartbeatObserved')
+                    : t('pages.metrics.heartbeatNotObserved');
+              const heartbeatTitle = item.lastHeartbeatAt && (heartbeatStatus === 'online' || heartbeatStatus === 'stale')
+                ? t('pages.metrics.heartbeatLastSeenDescription', { time: formatDateTime(item.lastHeartbeatAt) })
+                : heartbeatStatus === 'observed'
+                  ? t('pages.metrics.heartbeatObservedDescription')
+                  : undefined;
 
               return (
                 <div key={item.name} className="rounded-lg border border-gray-100 p-3 dark:border-gray-700/70">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0">
-                      <p className="truncate font-semibold text-gray-900 dark:text-white" title={item.name}>{item.name}</p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="truncate font-semibold text-gray-900 dark:text-white" title={item.name}>{item.name}</p>
+                        {!isMachine && (
+                          <Badge variant={bouncerModeVariant(mode)}>
+                            {t(`pages.metrics.modes.${mode || 'unknown'}`)}
+                          </Badge>
+                        )}
+                        {isMachine && (
+                          <Badge
+                            variant={heartbeatVariant}
+                            title={heartbeatTitle}
+                          >
+                            {heartbeatLabel}
+                          </Badge>
+                        )}
+                      </div>
                       <p className="mt-1 truncate text-xs text-gray-500 dark:text-gray-400">
                         {item.topMethod && item.topRoute ? `${item.topMethod} ${item.topRoute}` : t('pages.metrics.noRouteActivity')}
                       </p>
                     </div>
                     <div className="text-left sm:text-right">
-                      <p className="font-mono text-lg font-semibold text-gray-900 dark:text-white">{formatNumber(item.requests)}</p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.requests')}</p>
+                      <p className="font-mono text-lg font-semibold text-gray-900 dark:text-white">{formatNumber(isMachine ? machineAlertRequests : item.requests)}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        {isMachine ? t('pages.metrics.labels.alertPosts') : t('pages.metrics.labels.requests')}
+                      </p>
                     </div>
                   </div>
-                  {decisionTotal > 0 && (
+                  {isMachine ? (
+                    <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
+                      <div>
+                        <p className="font-mono text-sm font-semibold text-gray-900 dark:text-white">{formatNumber(machineAlertRequests)}</p>
+                        <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.alertPosts')}</p>
+                      </div>
+                      <div>
+                        <p className="font-mono text-sm font-semibold text-emerald-700 dark:text-emerald-300">{formatNumber(heartbeatRequests)}</p>
+                        <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.heartbeats')}</p>
+                      </div>
+                      <div>
+                        <p className="font-mono text-sm font-semibold text-gray-700 dark:text-gray-200">{formatNumber(otherRequests)}</p>
+                        <p className="text-gray-500 dark:text-gray-400">{t('pages.metrics.labels.otherApi')}</p>
+                      </div>
+                    </div>
+                  ) : showDecisionResponses ? (
                     <div className="mt-3">
                       <DecisionResponseBar empty={emptyDecisions} nonEmpty={nonEmptyDecisions} />
                       <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs">
@@ -352,11 +476,21 @@ function EntityList({
                         </div>
                       </div>
                     </div>
-                  )}
+                  ) : mode === 'stream' ? (
+                    <p className="mt-3 rounded-md bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800 dark:bg-blue-950/30 dark:text-blue-200">
+                      {t('pages.metrics.streamModeDescription')}
+                    </p>
+                  ) : null}
+                  <RouteActivityList routes={item.routes} emptyMessage={t('pages.metrics.noRouteActivity')} />
                 </div>
               );
             })}
           </div>
+        )}
+        {!isMachine && (
+          <p className="mt-3 rounded-md bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800 dark:bg-blue-950/30 dark:text-blue-200">
+            {t('pages.metrics.remediationMetricsNote')}
+          </p>
         )}
       </CardContent>
     </Card>
@@ -443,6 +577,53 @@ function AppsecActivityBar({ requests, blocked }: { requests: number; blocked: n
         style={{ width: `${blockedPercent}%` }}
       />
     </div>
+  );
+}
+
+function ScenarioList({ items }: { items?: CrowdsecMetricsScenario[] }) {
+  const { t } = useI18n();
+  const scenarios = items || [];
+
+  return (
+    <Card>
+      <SectionHeader
+        icon={Activity}
+        title={t('pages.metrics.scenarios')}
+        description={t('pages.metrics.scenariosDescription')}
+      />
+      <CardContent>
+        {scenarios.length === 0 ? (
+          <EmptyState message={t('pages.metrics.emptyScenarios')} />
+        ) : (
+          <div className="overflow-x-auto rounded-lg border border-gray-100 dark:border-gray-700/70">
+            <div className="min-w-[780px]">
+              <div className="grid grid-cols-[minmax(0,2fr)_100px_110px_100px_100px_100px_100px] gap-3 border-b border-gray-100 bg-gray-50 px-4 py-2 text-xs font-semibold uppercase text-gray-500 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-400">
+                <span>{t('pages.metrics.columns.scenario')}</span>
+                <span className="text-right">{t('pages.metrics.columns.current')}</span>
+                <span className="text-right">{t('pages.metrics.columns.instantiated')}</span>
+                <span className="text-right">{t('pages.metrics.columns.overflowed')}</span>
+                <span className="text-right">{t('pages.metrics.columns.poured')}</span>
+                <span className="text-right">{t('pages.metrics.columns.expired')}</span>
+                <span className="text-right">{t('pages.metrics.columns.canceled')}</span>
+              </div>
+              <div className="divide-y divide-gray-100 dark:divide-gray-700/70">
+                {scenarios.map((item) => (
+                  <div key={item.name} className="grid grid-cols-[minmax(0,2fr)_100px_110px_100px_100px_100px_100px] gap-3 px-4 py-3">
+                    <div className="min-w-0 truncate font-medium text-gray-900 dark:text-white" title={item.name}>{item.name}</div>
+                    <div className="font-mono text-sm text-gray-700 dark:text-gray-200 text-right">{formatNumber(item.current)}</div>
+                    <div className="font-mono text-sm text-gray-700 dark:text-gray-200 text-right">{formatNumber(item.instantiations)}</div>
+                    <div className="font-mono text-sm text-amber-700 dark:text-amber-300 text-right">{formatNumber(item.overflows)}</div>
+                    <div className="font-mono text-sm text-gray-700 dark:text-gray-200 text-right">{formatNumber(item.poured)}</div>
+                    <div className="font-mono text-sm text-gray-700 dark:text-gray-200 text-right">{formatNumber(item.underflows)}</div>
+                    <div className="font-mono text-sm text-gray-700 dark:text-gray-200 text-right">{formatNumber(item.canceled)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -686,6 +867,90 @@ function AppsecEngineList({ items }: { items?: CrowdsecMetricsAppsecEngine[] }) 
   );
 }
 
+type MetricsSourceSummaryItem = {
+  key: string;
+  label: string;
+  value: ReactNode;
+  title?: string;
+  valueClassName: string;
+};
+
+function MetricsSourceSummary({ data }: { data: CrowdsecMetricsResponse }) {
+  const { t } = useI18n();
+  const activeDecisions = data.totals.activeDecisions;
+  const alerts = data.totals.alerts;
+  const summaryMetricCandidates: Array<MetricsSourceSummaryItem | null> = [
+    data.crowdsecVersion
+      ? {
+        key: 'version',
+        label: t('pages.metrics.version'),
+        value: data.crowdsecVersion,
+        valueClassName: 'text-sm text-gray-900 dark:text-white',
+      }
+      : null,
+    data.crowdsecStartedAt
+      ? {
+        key: 'started',
+        label: t('pages.metrics.started'),
+        value: <time dateTime={data.crowdsecStartedAt}>{formatDateTime(data.crowdsecStartedAt)}</time>,
+        title: data.crowdsecStartedAt,
+        valueClassName: 'text-sm text-gray-900 dark:text-white',
+      }
+      : null,
+    activeDecisions === undefined
+      ? null
+      : {
+        key: 'active-decisions',
+        label: t('pages.metrics.activeDecisions', { count: '' }).trim(),
+        value: formatNumber(activeDecisions),
+        valueClassName: 'text-xl text-primary-700 dark:text-primary-300',
+      },
+    alerts === undefined
+      ? null
+      : {
+        key: 'alerts',
+        label: t('pages.metrics.alerts', { count: '' }).trim(),
+        value: formatNumber(alerts),
+        valueClassName: 'text-xl text-gray-900 dark:text-white',
+      },
+  ];
+  const summaryMetrics = summaryMetricCandidates.filter((metric): metric is MetricsSourceSummaryItem => metric !== null);
+  const summaryMetricLayout = summaryMetrics.length === 1
+    ? 'grid-cols-1 2xl:w-[13rem] 2xl:grid-cols-1'
+    : summaryMetrics.length === 2
+      ? 'grid-cols-2 2xl:w-[24rem] 2xl:grid-cols-2'
+      : summaryMetrics.length === 3
+        ? 'grid-cols-2 2xl:w-[38rem] 2xl:grid-cols-3'
+        : 'grid-cols-2 2xl:w-[50rem] 2xl:grid-cols-[minmax(0,1fr)_minmax(0,1.45fr)_minmax(0,1.15fr)_minmax(0,0.85fr)]';
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+      <div className={summaryMetrics.length > 0 ? 'grid 2xl:grid-cols-[minmax(0,1fr)_auto]' : undefined}>
+        <div className="flex items-center gap-3 px-4 py-3.5 sm:px-5">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-50 text-primary-600 dark:bg-primary-900/30 dark:text-primary-400">
+            <DatabaseZap className="h-4 w-4" aria-hidden="true" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm leading-6 text-gray-600 dark:text-gray-300">{t('pages.metrics.counterScope')}</p>
+          </div>
+        </div>
+        {summaryMetrics.length > 0 && (
+          <dl
+            className={`grid gap-2 border-t border-gray-100 p-2 dark:border-gray-700/70 2xl:border-t-0 ${summaryMetricLayout}`}
+          >
+            {summaryMetrics.map((metric) => (
+              <div key={metric.key} className="min-w-0 rounded-lg border border-gray-100 bg-gray-50 px-4 py-2.5 dark:border-gray-700/70 dark:bg-gray-900/30 sm:px-5">
+                <dt className="text-xs font-medium text-gray-500 dark:text-gray-400">{metric.label}</dt>
+                <dd className={`mt-1 truncate font-mono font-semibold tabular-nums ${metric.valueClassName}`} title={metric.title}>{metric.value}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function Metrics() {
   const { t } = useI18n();
   const { refreshSignal } = useRefresh();
@@ -832,12 +1097,25 @@ export function Metrics() {
     }
 
     const { data } = state;
+    const machineAlertRequests = data.totals.machineAlertRequests ?? data.machines.reduce(
+      (sum, machine) => sum + (machine.alertRequests ?? machine.routes
+        ?.filter((route) => route.method === 'POST' && route.route === '/v1/alerts')
+        .reduce((routeSum, route) => routeSum + route.requests, 0) ?? machine.requests),
+      0,
+    );
+    const machineHeartbeatRequests = data.totals.machineHeartbeatRequests ?? data.machines.reduce(
+      (sum, machine) => sum + (machine.heartbeatRequests ?? machine.routes
+        ?.filter((route) => route.route === '/v1/heartbeat')
+        .reduce((routeSum, route) => routeSum + route.requests, 0) ?? 0),
+      0,
+    );
 
     return (
       <div className="space-y-6">
+        <MetricsSourceSummary data={data} />
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 min-[1800px]:grid-cols-6">
-          <MetricTile title={t('pages.metrics.bouncerApiRequests')} value={formatNumber(data.totals.bouncerRequests)} detail={t('pages.metrics.groupedByBouncer')} icon={ShieldCheck} />
-          <MetricTile title={t('pages.metrics.machineApiRequests')} value={formatNumber(data.totals.machineRequests)} detail={t('pages.metrics.groupedByMachine')} icon={Server} />
+          <MetricTile title={t('pages.metrics.remediationComponentApiRequests')} value={formatNumber(data.totals.bouncerRequests)} detail={t('pages.metrics.groupedByBouncer')} icon={ShieldCheck} />
+          <MetricTile title={t('pages.metrics.machineAlertPosts')} value={formatNumber(machineAlertRequests)} detail={t('pages.metrics.machineAlertPostsDetail', { calls: formatNumber(data.totals.machineRequests), heartbeats: formatNumber(machineHeartbeatRequests) })} icon={Server} />
           <MetricTile title={t('pages.metrics.appsecRequests')} value={formatNumber(data.totals.appsecRequests)} detail={t('pages.metrics.blockedCount', { count: formatNumber(data.totals.appsecBlocked) })} icon={ShieldOff} />
           <MetricTile title={t('pages.metrics.whitelistHits')} value={formatNumber(data.totals.whitelistHits)} detail={t('pages.metrics.whitelistedCount', { count: formatNumber(data.totals.whitelisted) })} icon={ListChecks} />
           <MetricTile title={t('pages.metrics.parserEvents')} value={formatNumber(data.totals.parserProcessed)} detail={t('pages.metrics.unparsedCount', { count: formatNumber(data.totals.parserKo) })} icon={Activity} />
@@ -845,12 +1123,13 @@ export function Metrics() {
         </div>
 
         <div className="grid gap-6 xl:grid-cols-2">
-          <EntityList title={t('pages.metrics.bouncers')} icon={ShieldCheck} items={data.bouncers} emptyMessage={t('pages.metrics.emptyBouncers')} description={t('pages.metrics.bouncersDescription')} />
-          <EntityList title={t('pages.metrics.machines')} icon={Bot} items={data.machines} emptyMessage={t('pages.metrics.emptyMachines')} description={t('pages.metrics.machinesDescription')} />
+          <EntityList title={t('pages.metrics.remediationComponents')} icon={ShieldCheck} items={data.bouncers} emptyMessage={t('pages.metrics.emptyBouncers')} description={t('pages.metrics.bouncersDescription')} entityType="bouncer" fetchedAt={data.fetched_at} />
+          <EntityList title={t('pages.metrics.logProcessors')} icon={Bot} items={data.machines} emptyMessage={t('pages.metrics.emptyMachines')} description={t('pages.metrics.machinesDescription')} entityType="machine" fetchedAt={data.fetched_at} />
         </div>
 
         <AppsecEngineList items={data.appsecEngines} />
         <ParserSourceList items={data.parserSources} />
+        <ScenarioList items={data.scenarios} />
         <TimingList items={data.parserTimings} />
         <LapiLatencyList items={data.lapiRoutes} />
         <ParserNodeList items={data.parserNodes} showChildNodes={showChildParserNodes} onShowChildNodesChange={handleShowChildParserNodesChange} />

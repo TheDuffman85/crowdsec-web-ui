@@ -135,7 +135,7 @@ test('CrowdSec metrics endpoint proxies and summarizes Prometheus metrics', asyn
       expect(url).toBe('http://crowdsec:6060/metrics');
       return new Response(`
 cs_lapi_bouncer_requests_total{bouncer="firewall",route="/v1/decisions",method="GET"} 7
-cs_lapi_machine_requests_total{machine="edge-1",route="/v1/alerts",method="GET"} 3
+cs_lapi_machine_requests_total{machine="edge-1",route="/v1/alerts",method="POST"} 3
 cs_appsec_reqs_total{source="0.0.0.0:7422",appsec_engine="appsec"} 11
 cs_appsec_block_total{source="0.0.0.0:7422",appsec_engine="appsec"} 2
 cs_parser_hits_total{source="/var/log/auth.log",type="syslog"} 20
@@ -164,6 +164,7 @@ cs_node_wl_hits_ok_total{name="crowdsecurity/whitelists",source="/var/log/auth.l
     totals: expect.objectContaining({
       bouncerRequests: 7,
       machineRequests: 3,
+      machineAlertRequests: 3,
       appsecRequests: 11,
       appsecBlocked: 2,
       parserProcessed: 20,

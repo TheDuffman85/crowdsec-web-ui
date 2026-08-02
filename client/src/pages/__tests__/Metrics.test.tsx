@@ -31,6 +31,7 @@ vi.mock('../../lib/api', () => ({
 function buildMetricsResponse(): CrowdsecMetricsResponse {
   return {
     fetched_at: '2026-06-30T10:00:00.000Z',
+    crowdsecStartedAt: '2026-06-30T09:00:00.000Z',
     totals: {
       bouncerRequests: 10,
       machineRequests: 5,
@@ -256,6 +257,9 @@ describe('Metrics page', () => {
 
     await waitFor(() => expect(screen.getByText('LAPI latency')).toBeInTheDocument());
     expect(screen.getByText('LAPI latency')).toBeInTheDocument();
+    expect(document.querySelector('time[datetime="2026-06-30T09:00:00.000Z"]')).toBeInTheDocument();
+    expect(screen.getByText('Started')).toBeInTheDocument();
+    expect(screen.queryByText(/CrowdSec started:/)).not.toBeInTheDocument();
     expect(screen.getByText('/v1/alerts')).toBeInTheDocument();
     expect(screen.getByText('AppSec engines')).toBeInTheDocument();
     expect(screen.getByText('appsec')).toBeInTheDocument();
@@ -270,6 +274,97 @@ describe('Metrics page', () => {
     expect(screen.getByLabelText(/AppSec activity bar: green shows allowed requests/)).toBeInTheDocument();
   });
 
+  test('presents log processors and stream bouncers without implying live-mode health', async () => {
+    const response = buildMetricsResponse();
+    response.totals.machineRequests = 13;
+    response.totals.machineAlertRequests = 7;
+    response.totals.machineHeartbeatRequests = 5;
+    response.totals.activeDecisions = 4;
+    response.totals.alerts = 3;
+    response.crowdsecVersion = 'v1.7.8';
+    response.bouncers = [{
+      name: 'stream-firewall',
+      requests: 20,
+      topRoute: '/v1/decisions/stream',
+      topMethod: 'GET',
+      mode: 'stream',
+      routes: [{ method: 'GET', route: '/v1/decisions/stream', requests: 20 }],
+    }];
+    response.machines = [{
+      name: 'processor-1',
+      requests: 13,
+      topRoute: '/v1/alerts',
+      topMethod: 'POST',
+      alertRequests: 7,
+      heartbeatRequests: 5,
+      lastHeartbeatAt: '2026-06-30T09:59:30.000Z',
+      otherRequests: 1,
+      routes: [
+        { method: 'POST', route: '/v1/alerts', requests: 7 },
+        { method: 'GET', route: '/v1/heartbeat', requests: 5 },
+      ],
+    }, {
+      name: 'processor-stale',
+      requests: 6,
+      topRoute: '/v1/alerts',
+      topMethod: 'POST',
+      alertRequests: 1,
+      heartbeatRequests: 5,
+      lastHeartbeatAt: '2026-06-30T09:50:00.000Z',
+      otherRequests: 0,
+      routes: [{ method: 'GET', route: '/v1/heartbeat', requests: 5 }],
+    }, {
+      name: 'processor-legacy',
+      requests: 2,
+      topRoute: '/v1/heartbeat',
+      topMethod: 'GET',
+      alertRequests: 1,
+      heartbeatRequests: 1,
+      otherRequests: 0,
+      routes: [{ method: 'GET', route: '/v1/heartbeat', requests: 1 }],
+    }, {
+      name: 'processor-without-heartbeat',
+      requests: 1,
+      topRoute: '/v1/alerts',
+      topMethod: 'POST',
+      alertRequests: 1,
+      heartbeatRequests: 0,
+      otherRequests: 0,
+      routes: [{ method: 'POST', route: '/v1/alerts', requests: 1 }],
+    }];
+    response.scenarios = [{
+      name: 'crowdsecurity/ssh-bf',
+      current: 2,
+      instantiations: 8,
+      overflows: 3,
+      underflows: 1,
+      canceled: 1,
+      poured: 12,
+    }];
+    fetchCrowdsecMetricsMock.mockResolvedValue(response);
+
+    renderMetrics();
+
+    await waitFor(() => expect(screen.getByText('stream-firewall')).toBeInTheDocument());
+    expect(screen.getByText('Stream mode')).toBeInTheDocument();
+    expect(screen.getByText('Log processor alert posts')).toBeInTheDocument();
+    expect(screen.getByText('Online')).toBeInTheDocument();
+    expect(screen.getByText('Stale heartbeat')).toBeInTheDocument();
+    expect(screen.getByText('Heartbeat observed')).toBeInTheDocument();
+    expect(screen.getByText('No heartbeat observed')).not.toHaveAttribute('title');
+    expect(screen.getByText('Version')).toBeInTheDocument();
+    expect(screen.getByText('Started')).toBeInTheDocument();
+    expect(screen.getByText('v1.7.8')).toBeInTheDocument();
+    expect(screen.getByText('Active decisions')).toBeInTheDocument();
+    expect(screen.getByText('Alerts')).toBeInTheDocument();
+    expect(screen.getByText('Scenarios')).toBeInTheDocument();
+    expect(screen.getByText('crowdsecurity/ssh-bf')).toBeInTheDocument();
+    expect(screen.getByText(/Stream mode uses \/v1\/decisions\/stream/)).toBeInTheDocument();
+    const remediationNote = screen.getByText(/These are LAPI API counters/);
+    expect(remediationNote).toHaveClass('bg-blue-50', 'mt-3');
+    expect(remediationNote.compareDocumentPosition(screen.getByText('stream-firewall')) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+  });
+
   test('handles missing optional runtime sections', async () => {
     const response = buildMetricsResponse();
     delete response.lapiRoutes;
@@ -278,7 +373,7 @@ describe('Metrics page', () => {
 
     renderMetrics();
 
-    await waitFor(() => expect(screen.getByText('No LAPI duration histogram data was exposed by CrowdSec.')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('No LAPI route or duration metrics were exposed by CrowdSec.')).toBeInTheDocument());
     expect(screen.getByText('No AppSec engine metrics were exposed by CrowdSec.')).toBeInTheDocument();
   });
 

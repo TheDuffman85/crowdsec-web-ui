@@ -1,10 +1,12 @@
 import type {
   CrowdsecMetricsAppsecEngine,
   CrowdsecMetricsApiEntity,
+  CrowdsecMetricsBouncerMode,
   CrowdsecMetricsLapiRoute,
   CrowdsecMetricsParserNode,
   CrowdsecMetricsParserSource,
   CrowdsecMetricsResponse,
+  CrowdsecMetricsScenario,
   CrowdsecMetricsTiming,
   CrowdsecMetricsWhitelist,
 } from '../shared/contracts';
@@ -35,6 +37,7 @@ interface ApiEntityAccumulator {
   routes: Map<string, number>;
   decisionsOk: number;
   decisionsKo: number;
+  lastHeartbeatAt: string | null;
 }
 
 interface ParserSourceAccumulator {
@@ -77,8 +80,19 @@ interface AppsecEngineAccumulator {
 interface LapiRouteAccumulator {
   method: string;
   route: string;
-  requests: number;
+  requestCount: number;
+  durationCount: number;
   sum: number;
+}
+
+interface ScenarioAccumulator {
+  name: string;
+  current: number;
+  instantiations: number;
+  overflows: number;
+  underflows: number;
+  canceled: number;
+  poured: number;
 }
 
 interface WhitelistAccumulator {
@@ -187,10 +201,23 @@ function routeKey(labels: Record<string, string>): string {
   return `${labels.method || 'GET'} ${labels.route || labels.endpoint || 'unknown'}`;
 }
 
+function splitRouteKey(key: string): { method: string; route: string } {
+  const separator = key.indexOf(' ');
+  return separator < 0
+    ? { method: 'GET', route: key }
+    : { method: key.slice(0, separator), route: key.slice(separator + 1) };
+}
+
 function successRate(successful: number, failed: number, processed: number): number | null {
   const denominator = successful + failed || processed;
   if (denominator <= 0) return null;
   return successful / denominator;
+}
+
+function prometheusTimestampToIso(sample: PrometheusSample | undefined): string | null {
+  if (!sample || sample.value <= 0) return null;
+  const date = new Date(sample.value * 1_000);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
 function ratio(numerator: number, denominator: number): number | null {
@@ -211,6 +238,7 @@ function aggregateApiEntities(
   entityLabel: 'bouncer' | 'machine',
   decisionOkSamples: PrometheusSample[] = [],
   decisionKoSamples: PrometheusSample[] = [],
+  heartbeatSamples: PrometheusSample[] = [],
 ): CrowdsecMetricsApiEntity[] {
   const entities = new Map<string, ApiEntityAccumulator>();
 
@@ -218,7 +246,14 @@ function aggregateApiEntities(
     const normalizedName = name || 'unknown';
     let entity = entities.get(normalizedName);
     if (!entity) {
-      entity = { name: normalizedName, requests: 0, routes: new Map(), decisionsOk: 0, decisionsKo: 0 };
+      entity = {
+        name: normalizedName,
+        requests: 0,
+        routes: new Map(),
+        decisionsOk: 0,
+        decisionsKo: 0,
+        lastHeartbeatAt: null,
+      };
       entities.set(normalizedName, entity);
     }
     return entity;
@@ -238,17 +273,62 @@ function aggregateApiEntities(
     getEntity(sample.labels.bouncer).decisionsKo += sample.value;
   }
 
-  return sortedTop(Array.from(entities.values()), (entity) => entity.requests + entity.decisionsOk + entity.decisionsKo)
+  if (entityLabel === 'machine') {
+    for (const sample of heartbeatSamples) {
+      const lastHeartbeatAt = prometheusTimestampToIso(sample);
+      if (!lastHeartbeatAt) continue;
+      const entity = getEntity(sample.labels.machine);
+      if (!entity.lastHeartbeatAt || lastHeartbeatAt > entity.lastHeartbeatAt) {
+        entity.lastHeartbeatAt = lastHeartbeatAt;
+      }
+    }
+  }
+
+  return Array.from(entities.values())
     .map((entity) => {
       const topRouteEntry = Array.from(entity.routes.entries()).sort((left, right) => right[1] - left[1])[0];
-      const [topMethod, ...topRouteParts] = topRouteEntry?.[0].split(' ') || [];
+      const topRoute = topRouteEntry ? splitRouteKey(topRouteEntry[0]) : null;
+      const allRouteActivity = Array.from(entity.routes.entries())
+        .sort((left, right) => right[1] - left[1])
+        .map(([key, requests]) => ({ ...splitRouteKey(key), requests }));
+      const routeActivity = allRouteActivity.slice(0, MAX_ROWS);
+      const alertRequests = entityLabel === 'machine'
+        ? allRouteActivity
+          .filter((route) => route.method === 'POST' && route.route === '/v1/alerts')
+          .reduce((sum, route) => sum + route.requests, 0)
+        : undefined;
+      const heartbeatRequests = entityLabel === 'machine'
+        ? allRouteActivity
+          .filter((route) => route.route === '/v1/heartbeat')
+          .reduce((sum, route) => sum + route.requests, 0)
+        : undefined;
+      const otherRequests = entityLabel === 'machine'
+        ? Math.max(entity.requests - (alertRequests || 0) - (heartbeatRequests || 0), 0)
+        : undefined;
+      const hasLiveDecisionRoute = entityLabel === 'bouncer'
+        && Array.from(entity.routes.keys()).some((key) => splitRouteKey(key).route === '/v1/decisions');
+      const hasStreamDecisionRoute = entityLabel === 'bouncer'
+        && Array.from(entity.routes.keys()).some((key) => splitRouteKey(key).route === '/v1/decisions/stream');
+      const mode: CrowdsecMetricsBouncerMode | undefined = entityLabel === 'bouncer'
+        ? hasLiveDecisionRoute && hasStreamDecisionRoute
+          ? 'mixed'
+          : hasStreamDecisionRoute
+            ? 'stream'
+            : hasLiveDecisionRoute
+              ? 'live'
+              : 'unknown'
+        : undefined;
       return {
         name: entity.name,
         requests: entity.requests,
-        topRoute: topRouteParts.length > 0 ? topRouteParts.join(' ') : null,
-        topMethod: topMethod || null,
+        topRoute: topRoute?.route || null,
+        topMethod: topRoute?.method || null,
         decisionsOk: entity.decisionsOk || undefined,
         decisionsKo: entity.decisionsKo || undefined,
+        routes: routeActivity,
+        ...(entityLabel === 'machine'
+          ? { alertRequests, heartbeatRequests, lastHeartbeatAt: entity.lastHeartbeatAt, otherRequests }
+          : { mode }),
       };
     });
 }
@@ -432,30 +512,35 @@ function aggregateLapiRoutes(samples: PrometheusSample[]): CrowdsecMetricsLapiRo
 
   const getRoute = (sample: PrometheusSample): LapiRouteAccumulator => {
     const method = sample.labels.method || 'GET';
-    const route = sample.labels.route || sample.labels.endpoint || 'unknown';
+    const rawRoute = sample.labels.route ?? sample.labels.endpoint;
+    const route = rawRoute === '' ? 'invalid-endpoint' : rawRoute || 'unknown';
     const key = `${method}\u0000${route}`;
     let accumulator = routes.get(key);
     if (!accumulator) {
-      accumulator = { method, route, requests: 0, sum: 0 };
+      accumulator = { method, route, requestCount: 0, durationCount: 0, sum: 0 };
       routes.set(key, accumulator);
     }
     return accumulator;
   };
 
+  for (const sample of metric(samples, 'cs_lapi_route_requests_total')) {
+    getRoute(sample).requestCount += sample.value;
+  }
+
   for (const sample of metric(samples, 'cs_lapi_request_duration_seconds_count')) {
-    getRoute(sample).requests += sample.value;
+    getRoute(sample).durationCount += sample.value;
   }
 
   for (const sample of metric(samples, 'cs_lapi_request_duration_seconds_sum')) {
     getRoute(sample).sum += sample.value;
   }
 
-  return sortedTop(Array.from(routes.values()), (route) => route.requests)
+  return sortedTop(Array.from(routes.values()), (route) => route.requestCount || route.durationCount)
     .map((route) => ({
       method: route.method,
       route: route.route,
-      requests: route.requests,
-      averageSeconds: route.requests > 0 ? route.sum / route.requests : null,
+      requests: route.requestCount || route.durationCount,
+      averageSeconds: route.durationCount > 0 ? route.sum / route.durationCount : null,
     }));
 }
 
@@ -464,6 +549,55 @@ function mapAppsecEngines(engines: AppsecEngineAccumulator[]): CrowdsecMetricsAp
     ...engine,
     blockRate: ratio(engine.blocked, engine.requests),
   }));
+}
+
+function aggregateScenarios(samples: PrometheusSample[]): CrowdsecMetricsScenario[] {
+  const scenarios = new Map<string, ScenarioAccumulator>();
+
+  const getScenario = (sample: PrometheusSample): ScenarioAccumulator => {
+    const name = sample.labels.name || sample.labels.scenario || 'unknown';
+    let accumulator = scenarios.get(name);
+    if (!accumulator) {
+      accumulator = {
+        name,
+        current: 0,
+        instantiations: 0,
+        overflows: 0,
+        underflows: 0,
+        canceled: 0,
+        poured: 0,
+      };
+      scenarios.set(name, accumulator);
+    }
+    return accumulator;
+  };
+
+  for (const sample of metric(samples, 'cs_buckets')) {
+    getScenario(sample).current += sample.value;
+  }
+  const instantiationSamples = metric(samples, 'cs_bucket_instantiation_total');
+  for (const sample of instantiationSamples.length > 0
+    ? instantiationSamples
+    : metric(samples, 'cs_bucket_created_total')) {
+    getScenario(sample).instantiations += sample.value;
+  }
+  for (const sample of metric(samples, 'cs_bucket_overflowed_total')) {
+    getScenario(sample).overflows += sample.value;
+  }
+  for (const sample of metric(samples, 'cs_bucket_underflowed_total')) {
+    getScenario(sample).underflows += sample.value;
+  }
+  for (const sample of metric(samples, 'cs_bucket_canceled_total')) {
+    getScenario(sample).canceled += sample.value;
+  }
+  for (const sample of metric(samples, 'cs_bucket_poured_total')) {
+    getScenario(sample).poured += sample.value;
+  }
+
+  return sortedTop(
+    Array.from(scenarios.values()),
+    (scenario) => scenario.current + scenario.instantiations + scenario.overflows + scenario.underflows + scenario.canceled + scenario.poured,
+  );
 }
 
 function aggregateWhitelists(samples: PrometheusSample[]): CrowdsecMetricsWhitelist[] {
@@ -498,24 +632,54 @@ export function summarizeCrowdsecMetrics(samples: PrometheusSample[]): CrowdsecM
   const parserProcessed = metric(samples, 'cs_parser_hits_total').reduce((sum, sample) => sum + sample.value, 0);
   const parserTimingCount = metric(samples, 'cs_parsing_time_seconds_count').reduce((sum, sample) => sum + sample.value, 0);
   const parserTimingSum = metric(samples, 'cs_parsing_time_seconds_sum').reduce((sum, sample) => sum + sample.value, 0);
+  const activeDecisionSamples = metric(samples, 'cs_active_decisions');
+  const alertSamples = metric(samples, 'cs_alerts');
+  const activeDecisions = activeDecisionSamples.length > 0
+    ? activeDecisionSamples.reduce((sum, sample) => sum + sample.value, 0)
+    : undefined;
+  const alerts = alertSamples.length > 0
+    ? alertSamples.reduce((sum, sample) => sum + sample.value, 0)
+    : undefined;
+  const versionSample = metric(samples, 'cs_info')[0];
+  const crowdsecStartedAt = prometheusTimestampToIso(metric(samples, 'process_start_time_seconds')[0]);
 
-  const bouncers = aggregateApiEntities(
+  const allBouncers = aggregateApiEntities(
     metric(samples, 'cs_lapi_bouncer_requests_total'),
     'bouncer',
     metric(samples, 'cs_lapi_decisions_ok_total'),
     metric(samples, 'cs_lapi_decisions_ko_total'),
   );
-  const machines = aggregateApiEntities(metric(samples, 'cs_lapi_machine_requests_total'), 'machine');
+  const allMachines = aggregateApiEntities(
+    metric(samples, 'cs_lapi_machine_requests_total'),
+    'machine',
+    [],
+    [],
+    metric(samples, 'cs_machines_last_heartbeat_timestamp'),
+  );
+  const bouncers = sortedTop(
+    allBouncers,
+    (entity) => entity.requests + (entity.decisionsOk || 0) + (entity.decisionsKo || 0),
+  );
+  const machines = sortedTop(allMachines, (entity) => entity.requests);
   const appsecEngines = aggregateAppsecEngines(samples);
   const whitelists = aggregateWhitelists(samples);
+  const scenarios = aggregateScenarios(samples);
+  const machineAlertRequests = allMachines.reduce((sum, machine) => sum + (machine.alertRequests || 0), 0);
+  const machineHeartbeatRequests = allMachines.reduce((sum, machine) => sum + (machine.heartbeatRequests || 0), 0);
 
   return {
     fetched_at: new Date().toISOString(),
+    crowdsecVersion: versionSample?.labels.version || versionSample?.labels.Version || null,
+    crowdsecStartedAt,
     totals: {
-      bouncerRequests: bouncers.reduce((sum, entity) => sum + entity.requests, 0),
-      machineRequests: machines.reduce((sum, entity) => sum + entity.requests, 0),
+      bouncerRequests: allBouncers.reduce((sum, entity) => sum + entity.requests, 0),
+      machineRequests: allMachines.reduce((sum, entity) => sum + entity.requests, 0),
+      machineAlertRequests,
+      machineHeartbeatRequests,
       appsecRequests: appsecEngines.reduce((sum, engine) => sum + engine.requests, 0),
       appsecBlocked: appsecEngines.reduce((sum, engine) => sum + engine.blocked, 0),
+      activeDecisions,
+      alerts,
       parserProcessed,
       parserOk,
       parserKo,
@@ -529,6 +693,7 @@ export function summarizeCrowdsecMetrics(samples: PrometheusSample[]): CrowdsecM
     parserSources: aggregateParserSources(samples),
     parserNodes: aggregateParserNodes(samples),
     whitelists,
+    scenarios,
     parserTimings: aggregateParserTimings(samples),
     lapiRoutes: aggregateLapiRoutes(samples),
     appsecEngines: mapAppsecEngines(appsecEngines),

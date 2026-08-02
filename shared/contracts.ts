@@ -579,6 +579,14 @@ export interface UpdateManualRefreshSettingRequest {
   enabled: boolean;
 }
 
+export type CrowdsecMetricsBouncerMode = 'live' | 'stream' | 'mixed' | 'unknown';
+
+export interface CrowdsecMetricsRouteActivity {
+  method: string;
+  route: string;
+  requests: number;
+}
+
 export interface CrowdsecMetricsApiEntity {
   name: string;
   requests: number;
@@ -586,6 +594,12 @@ export interface CrowdsecMetricsApiEntity {
   topMethod: string | null;
   decisionsOk?: number;
   decisionsKo?: number;
+  routes?: CrowdsecMetricsRouteActivity[];
+  alertRequests?: number;
+  heartbeatRequests?: number;
+  lastHeartbeatAt?: string | null;
+  otherRequests?: number;
+  mode?: CrowdsecMetricsBouncerMode;
 }
 
 export interface CrowdsecMetricsParserSource {
@@ -643,13 +657,29 @@ export interface CrowdsecMetricsAppsecEngine {
   blockRate: number | null;
 }
 
+export interface CrowdsecMetricsScenario {
+  name: string;
+  current: number;
+  instantiations: number;
+  overflows: number;
+  underflows: number;
+  canceled: number;
+  poured: number;
+}
+
 export interface CrowdsecMetricsResponse {
   fetched_at: string;
+  crowdsecVersion?: string | null;
+  crowdsecStartedAt?: string | null;
   totals: {
     bouncerRequests: number;
     machineRequests: number;
+    machineAlertRequests?: number;
+    machineHeartbeatRequests?: number;
     appsecRequests: number;
     appsecBlocked: number;
+    activeDecisions?: number;
+    alerts?: number;
     parserProcessed: number;
     parserOk: number;
     parserKo: number;
@@ -663,6 +693,7 @@ export interface CrowdsecMetricsResponse {
   parserSources: CrowdsecMetricsParserSource[];
   parserNodes: CrowdsecMetricsParserNode[];
   whitelists: CrowdsecMetricsWhitelist[];
+  scenarios?: CrowdsecMetricsScenario[];
   parserTimings: CrowdsecMetricsTiming[];
   lapiRoutes?: CrowdsecMetricsLapiRoute[];
   appsecEngines?: CrowdsecMetricsAppsecEngine[];

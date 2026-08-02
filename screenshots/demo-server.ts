@@ -7,7 +7,11 @@ import { CrowdsecDatabase } from '../server/database';
 const dbDir = process.env.DB_DIR || path.join(process.env.TMPDIR || '/tmp', 'crowdsec-web-ui-screenshots');
 const configFile = path.join(dbDir, 'screenshot-config.yaml');
 const port = Number(process.env.CROWDSEC_SCREENSHOT_BACKEND_PORT || process.env.PORT || 3001);
+const demoHeartbeatTimestamp = Math.floor(Date.now() / 1_000);
 const demoPrometheusMetrics = `
+# HELP cs_info Information about CrowdSec
+cs_info{version="v1.7.8"} 1
+process_start_time_seconds ${demoHeartbeatTimestamp - 3_600}
 # HELP cs_lapi_bouncer_requests_total number of calls
 # TYPE cs_lapi_bouncer_requests_total counter
 cs_lapi_bouncer_requests_total{bouncer="edge-firewall",route="/v1/decisions",method="GET"} 1842
@@ -17,10 +21,16 @@ cs_lapi_decisions_ok_total{bouncer="edge-firewall"} 721
 cs_lapi_decisions_ko_total{bouncer="edge-firewall"} 38
 cs_lapi_decisions_ok_total{bouncer="nginx-bouncer"} 318
 cs_lapi_decisions_ko_total{bouncer="nginx-bouncer"} 14
-cs_lapi_machine_requests_total{machine="edge-gateway-01",route="/v1/alerts",method="GET"} 312
+cs_lapi_machine_requests_total{machine="edge-gateway-01",route="/v1/alerts",method="POST"} 312
+cs_lapi_machine_requests_total{machine="edge-gateway-01",route="/v1/heartbeat",method="GET"} 120
 cs_lapi_machine_requests_total{machine="edge-gateway-01",route="/v1/watchers/login",method="POST"} 18
-cs_lapi_machine_requests_total{machine="proxy-01",route="/v1/alerts",method="GET"} 244
-cs_lapi_machine_requests_total{machine="appsec-01",route="/v1/alerts",method="GET"} 126
+cs_lapi_machine_requests_total{machine="proxy-01",route="/v1/alerts",method="POST"} 244
+cs_lapi_machine_requests_total{machine="proxy-01",route="/v1/heartbeat",method="GET"} 118
+cs_lapi_machine_requests_total{machine="appsec-01",route="/v1/alerts",method="POST"} 126
+cs_lapi_machine_requests_total{machine="appsec-01",route="/v1/heartbeat",method="GET"} 116
+cs_machines_last_heartbeat_timestamp{machine="edge-gateway-01"} ${demoHeartbeatTimestamp}
+cs_machines_last_heartbeat_timestamp{machine="proxy-01"} ${demoHeartbeatTimestamp - 20}
+cs_machines_last_heartbeat_timestamp{machine="appsec-01"} ${demoHeartbeatTimestamp - 45}
 cs_appsec_reqs_total{source="0.0.0.0:7422",appsec_engine="public-web"} 4821
 cs_appsec_block_total{source="0.0.0.0:7422",appsec_engine="public-web"} 143
 cs_filesource_hits_total{source="/var/log/auth.log"} 12844

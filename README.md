@@ -710,7 +710,7 @@ docker inspect --format='{{.State.Health.Status}}' crowdsec_web_ui
 ### Prometheus Metrics Page
 
 - Reads a configured raw CrowdSec Prometheus endpoint. The Web UI does not configure one by default; CrowdSec normally exposes its local scrape at `http://127.0.0.1:6060/metrics`.
-- Shows bouncer and machine LAPI activity, AppSec, parsers and datasources, LAPI latency, parsing time, and whitelist hits.
+- Shows remediation-component and log-processor LAPI activity, AppSec, parsers and datasources, scenarios, LAPI latency, parsing time, and whitelist hits. Log-processor activity uses `POST /v1/alerts`; CrowdSec builds that expose an exact last-heartbeat timestamp also provide the processor health badge.
 - Alert and decision analytics remain on the main dashboard.
 
 Enable full metrics in CrowdSec's `/etc/crowdsec/config.yaml`.
