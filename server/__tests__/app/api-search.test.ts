@@ -615,40 +615,32 @@ describe('createApp search API', () => {
       env: {
         CROWDSEC_LOOKBACK_PERIOD: '168h',
       },
+      initialCacheState: {
+        isInitialized: true,
+        isComplete: true,
+        lastUpdate: new Date().toISOString(),
+      },
     });
-    const bootstrap = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
-    expect(bootstrap.status).toBe(200);
     const now = Date.now();
-    const insert = database.db.prepare(`
-      INSERT INTO alerts (
-        id, uuid, created_at, scenario, source_ip, message, raw_data,
-        country, country_name, region, city, as_name, target, machine, meta_search, origins, simulated, search_text
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    const insertSearch = database.db.prepare('INSERT INTO alerts_fts(rowid, alert_id, search_text) VALUES (?, ?, ?)');
-    const insertMany = database.db.transaction((count: number) => {
-      for (let index = 1; index <= count; index += 1) {
-        const createdAt = new Date(now - index * 1_000).toISOString();
-        const ip = `10.42.${Math.floor(index / 256) % 256}.${index % 256}`;
-        const searchText = `perf scenario ${ip} germany ssh`;
-        insert.run(
-          index,
-          `perf-alert-${index}`,
-          createdAt,
+    const seedLargeCache = database.db.transaction(() => {
+      database.db.prepare(`
+        WITH RECURSIVE row_numbers(value) AS (
+          VALUES(1)
+          UNION ALL
+          SELECT value + 1 FROM row_numbers WHERE value < 100000
+        )
+        INSERT INTO alerts (
+          id, uuid, created_at, scenario, source_ip, message, raw_data,
+          country, country_name, region, city, as_name, target, machine, meta_search, origins, simulated, search_text
+        )
+        SELECT
+          value,
+          'perf-alert-' || value,
+          ?,
           'perf/scenario',
-          ip,
+          '10.42.0.1',
           'perf alert',
-          JSON.stringify({
-            id: index,
-            uuid: `perf-alert-${index}`,
-            created_at: createdAt,
-            scenario: 'perf/scenario',
-            source: { ip, value: ip, cn: 'DE', region: 'State of Berlin', city: 'Berlin', as_name: 'Perf AS' },
-            target: 'ssh',
-            decisions: [],
-            simulated: false,
-          }),
+          NULL,
           'DE',
           'Germany',
           'State of Berlin',
@@ -659,12 +651,15 @@ describe('createApp search API', () => {
           'perf',
           '',
           0,
-          searchText,
-        );
-        insertSearch.run(index, String(index), searchText);
-      }
+          'perf scenario 10.42.0.1 germany ssh'
+        FROM row_numbers
+      `).run(new Date(now).toISOString());
+      database.db.prepare(`
+        INSERT INTO alerts_fts(rowid, alert_id, search_text)
+        SELECT id, CAST(id AS TEXT), search_text FROM alerts
+      `).run();
     });
-    insertMany(100_000);
+    seedLargeCache();
 
     const response = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=50&q=perf'));
     expect(response.status).toBe(200);
