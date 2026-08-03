@@ -914,9 +914,9 @@ Use `POST /api/cache/clear` for a full cache reset. Synchronization internals ar
 | [Development guide](DEVELOPMENT.md) | Local setup, builds, tests, metadata, translations, and synchronization internals |
 | [Load testing guide](LOAD_TESTING.md) | Synthetic profiles, overrides, benchmarks, and container workflow |
 
-## Star History
+### Star History
 
-[![Star History Chart](https://api.star-history.com/chart?repos=TheDuffman85/crowdsec-web-ui&type=date&legend=top-left&sealed_token=sIZgMEsvAELrAcobilkaKTbofrchv0xMb7iRiIfxjDZWY44Qt7QkWhQje7Y8KV0jT1Bta4U_DQIN9H000PGFXvPmmEPblq9_j3GwwGq4dzsvRyJfa-MHZEbBO0BIqwzEZn46x-LjQUdE6FCjgGqUJAkAPX4pfK0rsV0aysAc9-GAKcAdKSHCG_sGXD0s)](https://www.star-history.com/?type=date&repos=TheDuffman85%2Fcrowdsec-web-ui)
+[![Star History Chart](https://api.star-history.com/chart?repos=TheDuffman85/crowdsec-web-ui&type=date&legend=top-left&sealed_token=9ExrBj959SHoYDVrUI2c-akdPv5Zyoz6uNjLtcB6zzaGFgbK82L19SN4RUbpWRpWB97X3DthMUv9EoqwSrVA9r-jdTRcE0Dudybq-lXBlytL5phHpuYGvQ)](https://www.star-history.com/?repos=TheDuffman85%2Fcrowdsec-web-ui&type=date&legend=top-left)
 
 ## Related Projects
 
