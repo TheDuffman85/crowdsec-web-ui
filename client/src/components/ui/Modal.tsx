@@ -1,5 +1,5 @@
 import type { PropsWithChildren } from 'react';
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 
@@ -12,6 +12,11 @@ interface ModalProps extends PropsWithChildren {
 }
 
 export function Modal({ isOpen, onClose, title, children, maxWidth = "max-w-md", showCloseButton = true }: ModalProps) {
+    // Pressing inside the dialog and releasing over the backdrop (for example
+    // while selecting text in an input) dispatches the click on the backdrop,
+    // so the backdrop click only closes when the press also started on it.
+    const pressStartedOnBackdrop = useRef<boolean | null>(null);
+
     useEffect(() => {
         if (isOpen) {
             document.body.style.overflow = "hidden";
@@ -26,7 +31,17 @@ export function Modal({ isOpen, onClose, title, children, maxWidth = "max-w-md",
     if (!isOpen) return null;
 
     return createPortal(
-        <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={onClose}>
+        <div
+            className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+            onPointerDown={(event) => {
+                pressStartedOnBackdrop.current = event.target === event.currentTarget;
+            }}
+            onClick={() => {
+                const pressStartedInsideDialog = pressStartedOnBackdrop.current === false;
+                pressStartedOnBackdrop.current = null;
+                if (!pressStartedInsideDialog) onClose();
+            }}
+        >
             <div
                 className={`bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full ${maxWidth} flex flex-col max-h-[90vh]`}
                 onClick={(event) => event.stopPropagation()}
