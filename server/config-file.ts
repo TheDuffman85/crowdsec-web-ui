@@ -154,7 +154,7 @@ function applySecretReference(
 
 export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.ProcessEnv): ParsedConfigFile {
   const root = record(parsed, 'config');
-  knownKeys(root, ['server', 'storage', 'ui', 'auth', 'notifications', 'updates', 'crowdsec', 'instances'], 'root');
+  knownKeys(root, ['server', 'storage', 'ui', 'auth', 'notifications', 'audit', 'updates', 'crowdsec', 'instances'], 'root');
 
   const env: NodeJS.ProcessEnv = {};
   for (const name of RETAINED_METADATA_ENV) {
@@ -204,6 +204,11 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
   applySecretReference(notifications.secretKey, 'notifications.secretKey', env, sourceEnv, 'NOTIFICATION_SECRET_KEY');
   setBoolean(env, notifications, 'allowPrivateAddresses', 'NOTIFICATION_ALLOW_PRIVATE_ADDRESSES', 'notifications');
   setBoolean(env, notifications, 'debugPayloads', 'NOTIFICATION_DEBUG_PAYLOADS', 'notifications');
+
+  const audit = section(root, 'audit');
+  knownKeys(audit, ['enabled', 'logFile'], 'audit');
+  setBoolean(env, audit, 'enabled', 'AUDIT_ENABLED', 'audit');
+  setString(env, audit, 'logFile', 'AUDIT_LOG_FILE', 'audit', true);
 
   const updates = section(root, 'updates');
   knownKeys(updates, ['enabled'], 'updates');
@@ -294,7 +299,7 @@ const INITIAL_CONFIG_HEADER = [
 ] as const;
 
 export const CONFIG_KEY_ORDER = new Map<string, readonly string[]>([
-  ['', ['server', 'storage', 'ui', 'updates', 'auth', 'notifications', 'crowdsec', 'instances']],
+  ['', ['server', 'storage', 'ui', 'updates', 'auth', 'notifications', 'audit', 'crowdsec', 'instances']],
   ['server', ['port', 'basePath']],
   ['storage', ['dataDir', 'geonamesDir', 'walEnabled']],
   ['ui', ['timeZone', 'timeFormat', 'readOnly']],
@@ -302,6 +307,7 @@ export const CONFIG_KEY_ORDER = new Map<string, readonly string[]>([
   ['auth', ['enabled', 'sessionSecret', 'totpSecret', 'totpSeed', 'oidc']],
   ['auth.oidc', ['issuerUrl', 'clientId', 'clientSecret', 'scope', 'groupsClaim', 'adminGroups', 'readOnlyGroups', 'unmatchedRole']],
   ['notifications', ['secretKey', 'allowPrivateAddresses', 'debugPayloads']],
+  ['audit', ['enabled', 'logFile']],
   ['crowdsec', ['simulationsEnabled', 'alertFilters', 'sync']],
   ['crowdsec.alertFilters', ['includeOrigins', 'excludeOrigins', 'includeCapi', 'includeOriginEmpty', 'excludeOriginEmpty', 'legacy']],
   ['crowdsec.alertFilters.legacy', ['origins', 'extraScenarios']],
@@ -512,6 +518,10 @@ export function generateApplicationConfig(env: NodeJS.ProcessEnv, config: Runtim
       allowPrivateAddresses: config.notificationAllowPrivateAddresses,
       debugPayloads: config.notificationDebugPayloads,
     },
+    audit: {
+      enabled: config.auditEnabled,
+      ...(config.auditLogFile ? { logFile: config.auditLogFile } : {}),
+    },
     updates: { enabled: config.updateCheckEnabled },
     crowdsec: {
       simulationsEnabled: config.simulationsEnabled,
@@ -563,6 +573,7 @@ const CONFIG_SECTION_ENV = [
   ['CONFIG_UI', ['ui']],
   ['CONFIG_AUTH', ['auth']],
   ['CONFIG_NOTIFICATIONS', ['notifications']],
+  ['CONFIG_AUDIT', ['audit']],
   ['CONFIG_UPDATES', ['updates']],
   ['CONFIG_CROWDSEC', ['crowdsec']],
   ['CONFIG_INSTANCES', ['instances']],
@@ -587,6 +598,8 @@ const CONFIG_VALUE_ENV = [
   ['CONFIG_AUTH_OIDC_UNMATCHED_ROLE', ['auth', 'oidc', 'unmatchedRole']],
   ['CONFIG_NOTIFICATIONS_ALLOW_PRIVATE_ADDRESSES', ['notifications', 'allowPrivateAddresses']],
   ['CONFIG_NOTIFICATIONS_DEBUG_PAYLOADS', ['notifications', 'debugPayloads']],
+  ['CONFIG_AUDIT_ENABLED', ['audit', 'enabled']],
+  ['CONFIG_AUDIT_LOG_FILE', ['audit', 'logFile']],
   ['CONFIG_UPDATES_ENABLED', ['updates', 'enabled']],
   ['CONFIG_CROWDSEC_SIMULATIONS_ENABLED', ['crowdsec', 'simulationsEnabled']],
   ['CONFIG_CROWDSEC_ALERT_FILTERS_INCLUDE_ORIGINS', ['crowdsec', 'alertFilters', 'includeOrigins']],
@@ -1211,6 +1224,7 @@ function initialConfigReference(document: UnknownRecord): UnknownRecord {
   const auth = record(document.auth, 'auth');
   const oidc = record(auth.oidc, 'auth.oidc');
   const notifications = record(document.notifications, 'notifications');
+  const audit = record(document.audit, 'audit');
   const crowdsec = record(document.crowdsec, 'crowdsec');
   const sync = record(crowdsec.sync, 'crowdsec.sync');
   const filters = crowdsec.alertFilters === undefined ? {} : record(crowdsec.alertFilters, 'crowdsec.alertFilters');
@@ -1310,6 +1324,10 @@ function initialConfigReference(document: UnknownRecord): UnknownRecord {
     notifications: {
       secretKey: { file: '/run/secrets/notification_secret_key' },
       ...notifications,
+    },
+    audit: {
+      logFile: '/app/data/audit.log',
+      ...audit,
     },
     crowdsec: {
       ...crowdsec,

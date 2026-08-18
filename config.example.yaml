@@ -56,6 +56,13 @@
 #   allowPrivateAddresses: true
 #   debugPayloads: false
 
+# audit:
+#   enabled: true
+#   Audit entries describe user actions (added and removed decisions and
+#   alerts) as single JSON lines in the application log. Set logFile to also
+#   append them to a dedicated file.
+#   logFile: /app/data/audit.log
+
 # crowdsec:
 #   simulationsEnabled: false
 #   Uncomment alertFilters to override the default non-CAPI feed.

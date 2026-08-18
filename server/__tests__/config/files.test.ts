@@ -40,6 +40,9 @@ notifications:
     env: YAML_NOTIFICATION_KEY
   allowPrivateAddresses: false
   debugPayloads: true
+audit:
+  enabled: false
+  logFile: /var/log/crowdsec-web-ui/audit.log
 updates:
   enabled: false
 crowdsec:
@@ -113,6 +116,8 @@ instances:
         notificationSecretKey: 'notification-secret',
         notificationAllowPrivateAddresses: false,
         notificationDebugPayloads: true,
+        auditEnabled: false,
+        auditLogFile: '/var/log/crowdsec-web-ui/audit.log',
         updateCheckEnabled: false,
       });
       expect(config.dashboardAuth.sessionSecret).toBe('auth-secret');
@@ -416,6 +421,64 @@ instances:
     const persisted = parseYaml(readFileSync(generatedConfigFile, 'utf8'));
     expect(persisted.instances[0].lapi.auth.type).toBeUndefined();
     expect(persisted.instances[0].metrics[0].auth.type).toBeUndefined();
+  });
+
+  test('keeps audit logging enabled without a file by default', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfig({});
+      expect(config.auditEnabled).toBe(true);
+      expect(config.auditLogFile).toBeUndefined();
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test('treats an empty audit logFile as unset', () => {
+    const configFile = createTempConfig(`
+audit:
+  logFile: ""
+instances:
+  - id: default
+    name: CrowdSec
+    lapi:
+      url: http://crowdsec:8080
+      auth: { type: none }
+`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfig({ CONFIG_FILE: configFile });
+      expect(config.auditEnabled).toBe(true);
+      expect(config.auditLogFile).toBeUndefined();
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test('rejects invalid audit settings', () => {
+    const invalidEnabled = createTempConfig(`
+audit:
+  enabled: please
+instances:
+  - id: default
+    name: CrowdSec
+    lapi:
+      url: http://crowdsec:8080
+      auth: { type: none }
+`);
+    expect(() => createRuntimeConfig({ CONFIG_FILE: invalidEnabled })).toThrow(/audit\.enabled must be a boolean/i);
+
+    const unknownKey = createTempConfig(`
+audit:
+  file: /var/log/audit.log
+instances:
+  - id: default
+    name: CrowdSec
+    lapi:
+      url: http://crowdsec:8080
+      auth: { type: none }
+`);
+    expect(() => createRuntimeConfig({ CONFIG_FILE: unknownKey })).toThrow(/unknown audit setting.*file/i);
   });
 
   test('prefers CONFIG_ setup values over deprecated values during initial generation', () => {

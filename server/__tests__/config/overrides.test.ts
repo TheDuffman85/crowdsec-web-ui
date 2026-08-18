@@ -29,6 +29,26 @@ describe('configuration overrides', () => {
     }
   });
 
+  test('applies CONFIG_AUDIT_ overrides', () => {
+    const generatedConfigFile = createMissingConfigPath();
+    createRuntimeConfigImpl({}, { defaultConfigFile: generatedConfigFile });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfigImpl({
+        CONFIG_AUDIT_ENABLED: 'false',
+        CONFIG_AUDIT_LOG_FILE: '/var/log/crowdsec-web-ui/audit.log',
+      }, { defaultConfigFile: generatedConfigFile });
+      expect(config.auditEnabled).toBe(false);
+      expect(config.auditLogFile).toBe('/var/log/crowdsec-web-ui/audit.log');
+      expect(log).toHaveBeenCalledWith('  CONFIG_AUDIT_ENABLED -> audit.enabled: <unset> -> false');
+      expect(log).toHaveBeenCalledWith(
+        '  CONFIG_AUDIT_LOG_FILE -> audit.logFile: <unset> -> "/var/log/crowdsec-web-ui/audit.log"',
+      );
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   test('persists CONFIG_ values to an existing YAML when explicitly enabled', () => {
     const generatedConfigFile = createMissingConfigPath();
     createRuntimeConfigImpl({ CONFIG_SERVER_PORT: '4100' }, { defaultConfigFile: generatedConfigFile });
