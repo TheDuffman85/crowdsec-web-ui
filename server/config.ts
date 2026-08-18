@@ -94,6 +94,8 @@ export interface RuntimeConfig {
   timeZone: string | null;
   timeFormat: TimeFormat;
   readOnly: boolean;
+  auditEnabled: boolean;
+  auditLogFile?: string;
   dashboardAuth: DashboardAuthConfig;
   instances: CrowdsecInstanceConfig[];
 }
@@ -429,6 +431,8 @@ function createRuntimeConfigFromEnvironment(env: NodeJS.ProcessEnv): RuntimeConf
     timeZone: parseTimeZone(env.TZ),
     timeFormat: parseTimeFormat(resolveRenamedEnv(env, 'TIME_FORMAT', 'CROWDSEC_TIME_FORMAT')),
     readOnly: parseBooleanEnv(env.PERMISSION_READ_ONLY, false),
+    auditEnabled: parseBooleanEnv(env.AUDIT_ENABLED, true),
+    auditLogFile: env.AUDIT_LOG_FILE?.trim() || undefined,
     dashboardAuth: parseDashboardAuthConfig(env),
     instances: [],
   };

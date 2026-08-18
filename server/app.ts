@@ -41,6 +41,7 @@ import {
 } from './normalized-record';
 import { LapiClient } from './lapi';
 import { createDashboardAuth } from './app-auth';
+import { createAuditLogger } from './audit-log';
 import { createNotificationService } from './notifications';
 import type { MqttPublishConfig } from './notifications/mqtt-client';
 import { createNotificationOutboundGuard } from './notifications/outbound-guard';
@@ -469,6 +470,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     instanceReadOnly: config.readOnly,
     writeDatabase: (operation) => syncWorker.runExclusive(operation),
   });
+  const auditLog = createAuditLogger({
+    enabled: config.auditEnabled,
+    logFile: config.auditLogFile,
+    getActor: (context) => dashboardAuth.getSession(context),
+  });
 
   const app = new Hono();
   const distRoot = options.distRoot || path.resolve(process.cwd(), 'dist/client');
@@ -823,6 +829,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   Dashboard Auth: ${dashboardAuth.enabled ? 'Enabled' : 'Disabled'}
   Dashboard OIDC: ${dashboardAuth.oidcEnabled ? 'Enabled' : 'Disabled'}
   Read-only Mode: ${config.readOnly ? 'Enabled' : 'Disabled'}
+  Audit Log: ${config.auditEnabled ? `Enabled${config.auditLogFile ? ` (file: ${config.auditLogFile})` : ''}` : 'Disabled'}
 `);
 
   if (!lapiClient.hasAuthConfig()) {
@@ -1251,6 +1258,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     aggregateHistoricalSyncStatus,
     aggregateLapiStatus,
     applySimulationModeToAlert,
+    auditLog,
     buildDashboardStats,
     checkForUpdates,
     compileAlertSearch,

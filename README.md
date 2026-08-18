@@ -203,7 +203,7 @@ Use `CONFIG_FILE` only to select another existing file. [`config.example.yaml`](
 
 - Values are parsed as YAML and validated.
 - Arrays use zero-based contiguous indexes: `CONFIG_AUTH_OIDC_ADMIN_GROUPS_0`, `CONFIG_INSTANCES_0_ID`, `CONFIG_INSTANCES_0_METRICS_0_URL`.
-- Whole sections accept YAML through `CONFIG_SERVER`, `CONFIG_STORAGE`, `CONFIG_UI`, `CONFIG_AUTH`, `CONFIG_NOTIFICATIONS`, `CONFIG_UPDATES`, `CONFIG_CROWDSEC`, or `CONFIG_INSTANCES`.
+- Whole sections accept YAML through `CONFIG_SERVER`, `CONFIG_STORAGE`, `CONFIG_UI`, `CONFIG_AUTH`, `CONFIG_NOTIFICATIONS`, `CONFIG_AUDIT`, `CONFIG_UPDATES`, `CONFIG_CROWDSEC`, or `CONFIG_INSTANCES`.
 - `CONFIG_INSTANCE_*` addresses instance `0`: `CONFIG_INSTANCE_NAME` equals `CONFIG_INSTANCES_0_NAME`. Metrics index `0` may also be omitted: `CONFIG_INSTANCES_0_METRICS_URL` equals `CONFIG_INSTANCES_0_METRICS_0_URL`, and `CONFIG_INSTANCE_METRICS_URL` applies both shorthands. Do not set equivalent forms together.
 - Secrets accept a direct string or exactly one `env: NAME` / `file: PATH` reference. Secret overrides also accept `_FILE`.
 - Initial direct secret overrides are stored as environment references, never plaintext. Persisted secret references still require their environment variable.
@@ -246,6 +246,19 @@ Use `CONFIG_FILE` only to select another existing file. [`config.example.yaml`](
 | `notifications.secretKey` | Generated and stored | Encrypts saved notification credentials. | `CONFIG_NOTIFICATIONS_SECRET_KEY` or `CONFIG_NOTIFICATIONS_SECRET_KEY_FILE` |
 | `notifications.allowPrivateAddresses` | `true` | Allows private, loopback, and link-local notification destinations. | `CONFIG_NOTIFICATIONS_ALLOW_PRIVATE_ADDRESSES` |
 | `notifications.debugPayloads` | `false` | Logs truncated rendered payloads after failed notification delivery. | `CONFIG_NOTIFICATIONS_DEBUG_PAYLOADS` |
+
+### Audit log
+
+User actions that change CrowdSec state (adding decisions, deleting decisions and alerts, and per-IP cleanup) are recorded as single `[audit]` lines in the application log. Each entry is a JSON object with the timestamp, acting user and role, action, target (IP, range, or entity IDs), and outcome:
+
+```
+[audit] {"time":"2026-08-17T01:30:00.000Z","user":"tommy","role":"admin","action":"decision.add","ip":"192.0.2.10","type":"ban","duration":"4h","reason":"manual","instances":["CrowdSec"],"outcome":"success"}
+```
+
+| YAML field | Default | Purpose | Environment override |
+| --- | --- | --- | --- |
+| `audit.enabled` | `true` | Writes audit entries for user actions to the application log. | `CONFIG_AUDIT_ENABLED` |
+| `audit.logFile` | Unset | Also appends audit entries as JSON lines to this file. | `CONFIG_AUDIT_LOG_FILE` |
 
 ### Alert handling
 
