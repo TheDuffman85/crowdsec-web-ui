@@ -117,6 +117,229 @@ ensureLoadTestSourceTable(database);
 
 const dynamicAlerts = new Map<string, AlertRecord>();
 const loadTestStartedAt = Date.now();
+
+// This is a raw Prometheus scrape reconstructed from a representative
+// /api/metrics/crowdsec response. Keep the fixture complete so every metrics
+// card is populated when the multi-instance loadtest is used.
+const loadTestPrometheusMetrics = `
+# HELP cs_info Information about CrowdSec
+cs_info{version="v1.7.8-63227459"} 1
+process_start_time_seconds 1787773549.790
+cs_active_decisions{reason="ssh-bf",origin="crowdsecurity",action="ban"} 22760
+cs_alerts{reason="ssh-bf"} 1664
+cs_lapi_bouncer_requests_total{bouncer="firewall",route="/v1/decisions/stream",method="GET"} 9176
+cs_lapi_bouncer_requests_total{bouncer="traefik",route="/v1/decisions",method="GET"} 734
+cs_lapi_bouncer_requests_total{bouncer="traefik",route="/v1/decisions/stream",method="HEAD"} 329
+cs_lapi_decisions_ok_total{bouncer="traefik"} 9
+cs_lapi_decisions_ko_total{bouncer="traefik"} 725
+cs_lapi_machine_requests_total{machine="crowdsec-web-ui",route="/v1/alerts",method="GET"} 5782
+cs_lapi_machine_requests_total{machine="crowdsec-web-ui",route="/v1/heartbeat",method="GET"} 3113
+cs_lapi_machine_requests_total{machine="crowdsec-web-ui",route="/v1/alerts/:alert_id",method="DELETE"} 2
+cs_lapi_machine_requests_total{machine="crowdsec-web-ui",route="/v1/alerts/:alert_id",method="GET"} 2
+cs_lapi_machine_requests_total{machine="crowdsec-web-ui",route="/v1/alerts",method="POST"} 1
+cs_lapi_machine_requests_total{machine="localhost",route="/v1/allowlists",method="GET"} 1530
+cs_lapi_machine_requests_total{machine="localhost",route="/v1/heartbeat",method="GET"} 1529
+cs_lapi_machine_requests_total{machine="localhost",route="/v1/alerts",method="POST"} 142
+cs_lapi_route_requests_total{route="/v1/decisions/stream",method="GET"} 9176
+cs_lapi_route_requests_total{route="/v1/watchers/login",method="POST"} 9040
+cs_lapi_route_requests_total{route="/v1/alerts",method="GET"} 5790
+cs_lapi_route_requests_total{route="/v1/heartbeat",method="GET"} 4666
+cs_lapi_route_requests_total{route="/v1/usage-metrics",method="POST"} 3418
+cs_lapi_route_requests_total{route="/v1/allowlists",method="GET"} 1530
+cs_lapi_route_requests_total{route="/v1/decisions",method="GET"} 734
+cs_lapi_route_requests_total{route="/v1/decisions/stream",method="HEAD"} 329
+cs_lapi_route_requests_total{route="/v1/alerts",method="POST"} 143
+cs_lapi_route_requests_total{route="/v1/alerts/:alert_id",method="DELETE"} 2
+cs_lapi_route_requests_total{route="/v1/alerts/:alert_id",method="GET"} 2
+cs_lapi_request_duration_seconds_count{endpoint="/v1/decisions/stream",method="GET"} 9176
+cs_lapi_request_duration_seconds_sum{endpoint="/v1/decisions/stream",method="GET"} 121.308714354
+cs_lapi_request_duration_seconds_count{endpoint="/v1/watchers/login",method="POST"} 9040
+cs_lapi_request_duration_seconds_sum{endpoint="/v1/watchers/login",method="POST"} 582.58310527000106
+cs_lapi_request_duration_seconds_count{endpoint="/v1/alerts",method="GET"} 5790
+cs_lapi_request_duration_seconds_sum{endpoint="/v1/alerts",method="GET"} 42.308836045999996
+cs_lapi_request_duration_seconds_count{endpoint="/v1/heartbeat",method="GET"} 4666
+cs_lapi_request_duration_seconds_sum{endpoint="/v1/heartbeat",method="GET"} 8.7932330399999863
+cs_lapi_request_duration_seconds_count{endpoint="/v1/usage-metrics",method="POST"} 3418
+cs_lapi_request_duration_seconds_sum{endpoint="/v1/usage-metrics",method="POST"} 10.615660191000003
+cs_lapi_request_duration_seconds_count{endpoint="/v1/allowlists",method="GET"} 1530
+cs_lapi_request_duration_seconds_sum{endpoint="/v1/allowlists",method="GET"} 1.2220103250000007
+cs_lapi_request_duration_seconds_count{endpoint="/v1/decisions",method="GET"} 734
+cs_lapi_request_duration_seconds_sum{endpoint="/v1/decisions",method="GET"} 83.701690631000005
+cs_lapi_request_duration_seconds_count{endpoint="/v1/decisions/stream",method="HEAD"} 329
+cs_lapi_request_duration_seconds_sum{endpoint="/v1/decisions/stream",method="HEAD"} 0.34036777500000009
+cs_lapi_request_duration_seconds_count{endpoint="/v1/alerts",method="POST"} 143
+cs_lapi_request_duration_seconds_sum{endpoint="/v1/alerts",method="POST"} 1.7635086800000006
+cs_lapi_request_duration_seconds_count{endpoint="/v1/alerts/:alert_id",method="DELETE"} 2
+cs_lapi_request_duration_seconds_sum{endpoint="/v1/alerts/:alert_id",method="DELETE"} 0.068242130999999998
+cs_lapi_request_duration_seconds_count{endpoint="/v1/alerts/:alert_id",method="GET"} 2
+cs_lapi_request_duration_seconds_sum{endpoint="/v1/alerts/:alert_id",method="GET"} 0.0056899819999999997
+cs_appsec_reqs_total{source="172.18.0.1",appsec_engine="0.0.0.0:7422/"} 6074
+cs_appsec_block_total{source="172.18.0.1",appsec_engine="0.0.0.0:7422/"} 217
+cs_journalctlsource_hits_total{source="journalctl-_TRANSPORT=kernel"} 30095
+cs_parser_hits_total{source="journalctl-_TRANSPORT=kernel",type="journalctl"} 30095
+cs_parser_hits_ok_total{source="journalctl-_TRANSPORT=kernel",type="journalctl",acquis_type="syslog"} 8507
+cs_parser_hits_ko_total{source="journalctl-_TRANSPORT=kernel",type="journalctl",acquis_type="syslog"} 21588
+cs_filesource_hits_total{source="/var/log/traefik/access.log"} 6261
+cs_parser_hits_total{source="/var/log/traefik/access.log",type="file"} 6261
+cs_parser_hits_ok_total{source="/var/log/traefik/access.log",type="file",acquis_type="traefik"} 6261
+cs_parser_hits_ko_total{source="/var/log/traefik/access.log",type="file",acquis_type="traefik"} 0
+cs_parser_hits_total{source="appsec",type="appsec"} 4707
+cs_parser_hits_ok_total{source="appsec",type="appsec",acquis_type="appsec"} 4707
+cs_parser_hits_ko_total{source="appsec",type="appsec",acquis_type="appsec"} 0
+cs_filesource_hits_total{source="/var/log/postfix.log"} 605
+cs_parser_hits_total{source="/var/log/postfix.log",type="file"} 605
+cs_parser_hits_ok_total{source="/var/log/postfix.log",type="file",acquis_type="syslog"} 135
+cs_parser_hits_ko_total{source="/var/log/postfix.log",type="file",acquis_type="syslog"} 470
+cs_journalctlsource_hits_total{source="journalctl-_SYSTEMD_UNIT=ssh.service"} 12
+cs_parser_hits_total{source="journalctl-_SYSTEMD_UNIT=ssh.service",type="journalctl"} 12
+cs_parser_hits_ok_total{source="journalctl-_SYSTEMD_UNIT=ssh.service",type="journalctl",acquis_type="syslog"} 2
+cs_parser_hits_ko_total{source="journalctl-_SYSTEMD_UNIT=ssh.service",type="journalctl",acquis_type="syslog"} 10
+cs_bucket_poured_total{name="crowdsecurity/iptables-scan-multi_ports",source="journalctl-_TRANSPORT=kernel",type="journalctl"} 16
+cs_bucket_poured_total{name="crowdsecurity/http-crawl-non_statics",source="/var/log/traefik/access.log",type="file"} 3863
+cs_bucket_poured_total{name="crowdsecurity/http-probing",source="/var/log/traefik/access.log",type="file"} 1329
+cs_bucket_poured_total{name="crowdsecurity/http-sensitive-files",source="/var/log/traefik/access.log",type="file"} 300
+cs_bucket_poured_total{name="crowdsecurity/http-wordpress-scan",source="/var/log/traefik/access.log",type="file"} 152
+cs_bucket_poured_total{name="crowdsecurity/http-admin-interface-probing",source="/var/log/traefik/access.log",type="file"} 85
+cs_bucket_poured_total{name="crowdsecurity/http-backdoors-attempts",source="/var/log/traefik/access.log",type="file"} 65
+cs_bucket_poured_total{name="crowdsecurity/http-bad-user-agent",source="/var/log/traefik/access.log",type="file"} 13
+cs_bucket_poured_total{name="crowdsecurity/http-path-traversal-probing",source="/var/log/traefik/access.log",type="file"} 12
+cs_bucket_poured_total{name="loadtest/low-volume-traefik",source="/var/log/traefik/access.log",type="file"} 1
+cs_bucket_poured_total{name="crowdsecurity/appsec-vpatch",source="appsec",type="appsec"} 56
+cs_bucket_poured_total{name="crowdsecurity/postfix-spam",source="/var/log/postfix.log",type="file"} 132
+cs_bucket_poured_total{name="crowdsecurity/postfix-relay-denied",source="/var/log/postfix.log",type="file"} 39
+cs_bucket_poured_total{name="loadtest/low-volume-ssh",source="journalctl-_SYSTEMD_UNIT=ssh.service",type="journalctl"} 9
+cs_node_wl_hits_total{name="crowdsecurity/public-dns-allowlist",source="journalctl-_TRANSPORT=kernel",type="journalctl",reason="public DNS server",stage="s02-enrich",acquis_type="syslog"} 19612
+cs_node_wl_hits_ok_total{name="crowdsecurity/public-dns-allowlist",source="journalctl-_TRANSPORT=kernel",type="journalctl",reason="public DNS server",stage="s02-enrich",acquis_type="syslog"} 0
+cs_node_wl_hits_total{name="crowdsecurity/whitelists",source="journalctl-_TRANSPORT=kernel",type="journalctl",reason="private ipv4/ipv6 ip/ranges",stage="s02-enrich",acquis_type="syslog"} 19612
+cs_node_wl_hits_ok_total{name="crowdsecurity/whitelists",source="journalctl-_TRANSPORT=kernel",type="journalctl",reason="private ipv4/ipv6 ip/ranges",stage="s02-enrich",acquis_type="syslog"} 3117
+cs_node_wl_hits_total{name="crowdsecurity/cdn-whitelist",source="journalctl-_TRANSPORT=kernel",type="journalctl",reason="CDN provider",stage="s02-enrich",acquis_type="syslog"} 322
+cs_node_wl_hits_ok_total{name="crowdsecurity/cdn-whitelist",source="journalctl-_TRANSPORT=kernel",type="journalctl",reason="CDN provider",stage="s02-enrich",acquis_type="syslog"} 0
+cs_node_wl_hits_total{name="crowdsecurity/google-special-crawlers-whitelist",source="journalctl-_TRANSPORT=kernel",type="journalctl",reason="Google special crawlers ip range",stage="s02-enrich",acquis_type="syslog"} 322
+cs_node_wl_hits_ok_total{name="crowdsecurity/google-special-crawlers-whitelist",source="journalctl-_TRANSPORT=kernel",type="journalctl",reason="Google special crawlers ip range",stage="s02-enrich",acquis_type="syslog"} 0
+cs_node_wl_hits_total{name="crowdsecurity/seo-bots-whitelist",source="journalctl-_TRANSPORT=kernel",type="journalctl",reason="good bots (search engine crawlers)",stage="s02-enrich",acquis_type="syslog"} 322
+cs_node_wl_hits_ok_total{name="crowdsecurity/seo-bots-whitelist",source="journalctl-_TRANSPORT=kernel",type="journalctl",reason="good bots (search engine crawlers)",stage="s02-enrich",acquis_type="syslog"} 0
+cs_node_hits_total{name="child-crowdsecurity/syslog-logs",source="journalctl-_TRANSPORT=kernel",type="journalctl",stage="s00-raw",acquis_type="syslog"} 30095
+cs_node_hits_ok_total{name="child-crowdsecurity/syslog-logs",source="journalctl-_TRANSPORT=kernel",type="journalctl",stage="s00-raw",acquis_type="syslog"} 30095
+cs_node_hits_ko_total{name="child-crowdsecurity/syslog-logs",source="journalctl-_TRANSPORT=kernel",type="journalctl",stage="s00-raw",acquis_type="syslog"} 0
+cs_node_hits_total{name="crowdsecurity/syslog-logs",source="journalctl-_TRANSPORT=kernel",type="journalctl",stage="s00-raw",acquis_type="syslog"} 30095
+cs_node_hits_ok_total{name="crowdsecurity/syslog-logs",source="journalctl-_TRANSPORT=kernel",type="journalctl",stage="s00-raw",acquis_type="syslog"} 30095
+cs_node_hits_ko_total{name="crowdsecurity/syslog-logs",source="journalctl-_TRANSPORT=kernel",type="journalctl",stage="s00-raw",acquis_type="syslog"} 0
+cs_node_hits_total{name="child-crowdsecurity/http-logs",source="/var/log/traefik/access.log",type="file",stage="s02-enrich",acquis_type="traefik"} 18783
+cs_node_hits_ok_total{name="child-crowdsecurity/http-logs",source="/var/log/traefik/access.log",type="file",stage="s02-enrich",acquis_type="traefik"} 13412
+cs_node_hits_ko_total{name="child-crowdsecurity/http-logs",source="/var/log/traefik/access.log",type="file",stage="s02-enrich",acquis_type="traefik"} 5371
+cs_node_hits_total{name="child-child-crowdsecurity/traefik-logs",source="/var/log/traefik/access.log",type="file",stage="s01-parse",acquis_type="traefik"} 12522
+cs_node_hits_ok_total{name="child-child-crowdsecurity/traefik-logs",source="/var/log/traefik/access.log",type="file",stage="s01-parse",acquis_type="traefik"} 6261
+cs_node_hits_ko_total{name="child-child-crowdsecurity/traefik-logs",source="/var/log/traefik/access.log",type="file",stage="s01-parse",acquis_type="traefik"} 6261
+cs_node_hits_total{name="child-crowdsecurity/traefik-logs",source="/var/log/traefik/access.log",type="file",stage="s01-parse",acquis_type="traefik"} 12522
+cs_node_hits_ok_total{name="child-crowdsecurity/traefik-logs",source="/var/log/traefik/access.log",type="file",stage="s01-parse",acquis_type="traefik"} 6261
+cs_node_hits_ko_total{name="child-crowdsecurity/traefik-logs",source="/var/log/traefik/access.log",type="file",stage="s01-parse",acquis_type="traefik"} 6261
+cs_node_hits_total{name="crowdsecurity/dateparse-enrich",source="journalctl-_TRANSPORT=kernel",type="journalctl",stage="s02-enrich",acquis_type="syslog"} 8507
+cs_node_hits_ok_total{name="crowdsecurity/dateparse-enrich",source="journalctl-_TRANSPORT=kernel",type="journalctl",stage="s02-enrich",acquis_type="syslog"} 8507
+cs_node_hits_ko_total{name="crowdsecurity/dateparse-enrich",source="journalctl-_TRANSPORT=kernel",type="journalctl",stage="s02-enrich",acquis_type="syslog"} 0
+cs_node_hits_total{name="crowdsecurity/iptables-logs",source="journalctl-_TRANSPORT=kernel",type="journalctl",stage="s01-parse",acquis_type="syslog"} 8507
+cs_node_hits_ok_total{name="crowdsecurity/iptables-logs",source="journalctl-_TRANSPORT=kernel",type="journalctl",stage="s01-parse",acquis_type="syslog"} 8507
+cs_node_hits_ko_total{name="crowdsecurity/iptables-logs",source="journalctl-_TRANSPORT=kernel",type="journalctl",stage="s01-parse",acquis_type="syslog"} 0
+cs_node_hits_total{name="crowdsecurity/public-dns-allowlist",source="journalctl-_TRANSPORT=kernel",type="journalctl",stage="s02-enrich",acquis_type="syslog"} 8507
+cs_node_hits_ok_total{name="crowdsecurity/public-dns-allowlist",source="journalctl-_TRANSPORT=kernel",type="journalctl",stage="s02-enrich",acquis_type="syslog"} 8507
+cs_node_hits_ko_total{name="crowdsecurity/public-dns-allowlist",source="journalctl-_TRANSPORT=kernel",type="journalctl",stage="s02-enrich",acquis_type="syslog"} 0
+cs_node_hits_total{name="crowdsecurity/whitelists",source="journalctl-_TRANSPORT=kernel",type="journalctl",stage="s02-enrich",acquis_type="syslog"} 8507
+cs_node_hits_ok_total{name="crowdsecurity/whitelists",source="journalctl-_TRANSPORT=kernel",type="journalctl",stage="s02-enrich",acquis_type="syslog"} 8507
+cs_node_hits_ko_total{name="crowdsecurity/whitelists",source="journalctl-_TRANSPORT=kernel",type="journalctl",stage="s02-enrich",acquis_type="syslog"} 0
+cs_node_hits_total{name="crowdsecurity/dateparse-enrich",source="/var/log/traefik/access.log",type="file",stage="s02-enrich",acquis_type="traefik"} 6261
+cs_node_hits_ok_total{name="crowdsecurity/dateparse-enrich",source="/var/log/traefik/access.log",type="file",stage="s02-enrich",acquis_type="traefik"} 6261
+cs_node_hits_ko_total{name="crowdsecurity/dateparse-enrich",source="/var/log/traefik/access.log",type="file",stage="s02-enrich",acquis_type="traefik"} 0
+cs_node_hits_total{name="crowdsecurity/geoip-enrich",source="/var/log/traefik/access.log",type="file",stage="s02-enrich",acquis_type="traefik"} 6261
+cs_node_hits_ok_total{name="crowdsecurity/geoip-enrich",source="/var/log/traefik/access.log",type="file",stage="s02-enrich",acquis_type="traefik"} 6261
+cs_node_hits_ko_total{name="crowdsecurity/geoip-enrich",source="/var/log/traefik/access.log",type="file",stage="s02-enrich",acquis_type="traefik"} 0
+cs_node_hits_total{name="crowdsecurity/http-logs",source="/var/log/traefik/access.log",type="file",stage="s02-enrich",acquis_type="traefik"} 6261
+cs_node_hits_ok_total{name="crowdsecurity/http-logs",source="/var/log/traefik/access.log",type="file",stage="s02-enrich",acquis_type="traefik"} 6261
+cs_node_hits_ko_total{name="crowdsecurity/http-logs",source="/var/log/traefik/access.log",type="file",stage="s02-enrich",acquis_type="traefik"} 0
+cs_parsing_time_seconds_count{source="journalctl-_TRANSPORT=kernel",type="journalctl"} 30095
+cs_parsing_time_seconds_sum{source="journalctl-_TRANSPORT=kernel",type="journalctl"} 10.372560402000003
+cs_parsing_time_seconds_count{source="/var/log/traefik/access.log",type="file"} 6261
+cs_parsing_time_seconds_sum{source="/var/log/traefik/access.log",type="file"} 9.2090642240000058
+cs_parsing_time_seconds_count{source="appsec",type="appsec"} 4707
+cs_parsing_time_seconds_sum{source="appsec",type="appsec"} 1.4326255349999977
+cs_parsing_time_seconds_count{source="/var/log/postfix.log",type="file"} 605
+cs_parsing_time_seconds_sum{source="/var/log/postfix.log",type="file"} 0.51925000399999977
+cs_parsing_time_seconds_count{source="journalctl-_SYSTEMD_UNIT=ssh.service",type="journalctl"} 12
+cs_parsing_time_seconds_sum{source="journalctl-_SYSTEMD_UNIT=ssh.service",type="journalctl"} 0.12569829200000002
+cs_buckets{name="crowdsecurity/http-crawl-non_statics"} 1
+cs_bucket_instantiation_total{name="crowdsecurity/http-crawl-non_statics"} 404
+cs_bucket_overflowed_total{name="crowdsecurity/http-crawl-non_statics"} 12
+cs_bucket_underflowed_total{name="crowdsecurity/http-crawl-non_statics"} 391
+cs_bucket_canceled_total{name="crowdsecurity/http-crawl-non_statics"} 0
+cs_bucket_poured_total{name="crowdsecurity/http-crawl-non_statics",source="/var/log/traefik/access.log",type="file"} 3863
+cs_buckets{name="crowdsecurity/http-probing"} 1
+cs_bucket_instantiation_total{name="crowdsecurity/http-probing"} 225
+cs_bucket_overflowed_total{name="crowdsecurity/http-probing"} 88
+cs_bucket_underflowed_total{name="crowdsecurity/http-probing"} 136
+cs_bucket_canceled_total{name="crowdsecurity/http-probing"} 0
+cs_bucket_poured_total{name="crowdsecurity/http-probing",source="/var/log/traefik/access.log",type="file"} 1329
+cs_buckets{name="crowdsecurity/http-sensitive-files"} 0
+cs_bucket_instantiation_total{name="crowdsecurity/http-sensitive-files"} 79
+cs_bucket_overflowed_total{name="crowdsecurity/http-sensitive-files"} 49
+cs_bucket_underflowed_total{name="crowdsecurity/http-sensitive-files"} 30
+cs_bucket_canceled_total{name="crowdsecurity/http-sensitive-files"} 0
+cs_bucket_poured_total{name="crowdsecurity/http-sensitive-files",source="/var/log/traefik/access.log",type="file"} 300
+cs_buckets{name="crowdsecurity/http-wordpress-scan"} 1
+cs_bucket_instantiation_total{name="crowdsecurity/http-wordpress-scan"} 68
+cs_bucket_overflowed_total{name="crowdsecurity/http-wordpress-scan"} 15
+cs_bucket_underflowed_total{name="crowdsecurity/http-wordpress-scan"} 52
+cs_bucket_canceled_total{name="crowdsecurity/http-wordpress-scan"} 0
+cs_bucket_poured_total{name="crowdsecurity/http-wordpress-scan",source="/var/log/traefik/access.log",type="file"} 152
+cs_buckets{name="crowdsecurity/postfix-spam"} 0
+cs_bucket_instantiation_total{name="crowdsecurity/postfix-spam"} 49
+cs_bucket_overflowed_total{name="crowdsecurity/postfix-spam"} 8
+cs_bucket_underflowed_total{name="crowdsecurity/postfix-spam"} 41
+cs_bucket_canceled_total{name="crowdsecurity/postfix-spam"} 0
+cs_bucket_poured_total{name="crowdsecurity/postfix-spam",source="/var/log/postfix.log",type="file"} 132
+cs_buckets{name="crowdsecurity/http-admin-interface-probing"} 1
+cs_bucket_instantiation_total{name="crowdsecurity/http-admin-interface-probing"} 53
+cs_bucket_overflowed_total{name="crowdsecurity/http-admin-interface-probing"} 12
+cs_bucket_underflowed_total{name="crowdsecurity/http-admin-interface-probing"} 40
+cs_bucket_canceled_total{name="crowdsecurity/http-admin-interface-probing"} 0
+cs_bucket_poured_total{name="crowdsecurity/http-admin-interface-probing",source="/var/log/traefik/access.log",type="file"} 85
+cs_buckets{name="crowdsecurity/http-backdoors-attempts"} 0
+cs_bucket_instantiation_total{name="crowdsecurity/http-backdoors-attempts"} 54
+cs_bucket_overflowed_total{name="crowdsecurity/http-backdoors-attempts"} 7
+cs_bucket_underflowed_total{name="crowdsecurity/http-backdoors-attempts"} 47
+cs_bucket_canceled_total{name="crowdsecurity/http-backdoors-attempts"} 0
+cs_bucket_poured_total{name="crowdsecurity/http-backdoors-attempts",source="/var/log/traefik/access.log",type="file"} 65
+cs_buckets{name="crowdsecurity/appsec-vpatch"} 1
+cs_bucket_instantiation_total{name="crowdsecurity/appsec-vpatch"} 48
+cs_bucket_overflowed_total{name="crowdsecurity/appsec-vpatch"} 7
+cs_bucket_underflowed_total{name="crowdsecurity/appsec-vpatch"} 40
+cs_bucket_canceled_total{name="crowdsecurity/appsec-vpatch"} 0
+cs_bucket_poured_total{name="crowdsecurity/appsec-vpatch",source="appsec",type="appsec"} 56
+cs_buckets{name="crowdsecurity/postfix-relay-denied"} 0
+cs_bucket_instantiation_total{name="crowdsecurity/postfix-relay-denied"} 27
+cs_bucket_overflowed_total{name="crowdsecurity/postfix-relay-denied"} 12
+cs_bucket_underflowed_total{name="crowdsecurity/postfix-relay-denied"} 15
+cs_bucket_canceled_total{name="crowdsecurity/postfix-relay-denied"} 0
+cs_bucket_poured_total{name="crowdsecurity/postfix-relay-denied",source="/var/log/postfix.log",type="file"} 39
+cs_buckets{name="crowdsecurity/iptables-scan-multi_ports"} 0
+cs_bucket_instantiation_total{name="crowdsecurity/iptables-scan-multi_ports"} 16
+cs_bucket_overflowed_total{name="crowdsecurity/iptables-scan-multi_ports"} 0
+cs_bucket_underflowed_total{name="crowdsecurity/iptables-scan-multi_ports"} 16
+cs_bucket_canceled_total{name="crowdsecurity/iptables-scan-multi_ports"} 0
+cs_bucket_poured_total{name="crowdsecurity/iptables-scan-multi_ports",source="journalctl-_TRANSPORT=kernel",type="journalctl"} 16
+cs_buckets{name="crowdsecurity/http-bad-user-agent"} 0
+cs_bucket_instantiation_total{name="crowdsecurity/http-bad-user-agent"} 11
+cs_bucket_overflowed_total{name="crowdsecurity/http-bad-user-agent"} 2
+cs_bucket_underflowed_total{name="crowdsecurity/http-bad-user-agent"} 9
+cs_bucket_canceled_total{name="crowdsecurity/http-bad-user-agent"} 0
+cs_bucket_poured_total{name="crowdsecurity/http-bad-user-agent",source="/var/log/traefik/access.log",type="file"} 13
+cs_buckets{name="crowdsecurity/http-path-traversal-probing"} 0
+cs_bucket_instantiation_total{name="crowdsecurity/http-path-traversal-probing"} 5
+cs_bucket_overflowed_total{name="crowdsecurity/http-path-traversal-probing"} 2
+cs_bucket_underflowed_total{name="crowdsecurity/http-path-traversal-probing"} 3
+cs_bucket_canceled_total{name="crowdsecurity/http-path-traversal-probing"} 0
+cs_bucket_poured_total{name="crowdsecurity/http-path-traversal-probing",source="/var/log/traefik/access.log",type="file"} 12
+cs_bucket_poured_total{name="loadtest/low-volume-traefik",source="/var/log/traefik/access.log",type="file"} 1
+cs_bucket_poured_total{name="loadtest/low-volume-ssh",source="journalctl-_SYSTEMD_UNIT=ssh.service",type="journalctl"} 9
+`;
+
 let generatedBatches = 0;
 let nextGeneratedAlertId = initialAlertCount + 1;
 let nextGeneratedDecisionId = initialDecisionCount + 1;
@@ -948,7 +1171,16 @@ const controller = createApp({
     lastUpdate: null,
   },
   notificationFetchImpl: async () => new Response('ok', { status: 200 }),
-  metricsFetchImpl: async () => new Response('cs_lapi_requests_total{route="/v1/alerts",method="GET"} 100\n', { status: 200 }),
+  metricsFetchImpl: async () => {
+    if (!multiInstanceProfile) {
+      return new Response('cs_lapi_requests_total{route="/v1/alerts",method="GET"} 100\n', { status: 200 });
+    }
+
+    return new Response(loadTestPrometheusMetrics, {
+      status: 200,
+      headers: { 'content-type': 'text/plain; version=0.0.4' },
+    });
+  },
   mqttPublishImpl: async () => {},
 });
 

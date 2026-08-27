@@ -52,6 +52,7 @@ Load-test mode logs seed timings, synchronization progress, `/api` requests, and
 - `blocklist` splits refresh decisions across LISTS and CAPI alerts and enables the CAPI filter.
 - `blocklists-mixed` also creates 1,000 alerts without decisions, 500 alerts with expired decisions, and 8,000 decisions that expire 5–15 minutes after seeding. Each refresh adds three blocklist alerts with 1,000–25,000 decisions per alert and alternating LISTS/CAPI origins.
 - In multi-instance profiles, IDs start at `1` independently for each fake LAPI. Primary exposes two metrics endpoints, Secondary one, and Edge none.
+- Multi-instance metrics endpoints return a representative Prometheus snapshot for API, parser, AppSec, scenario, whitelist, timing, and heartbeat views.
 - Set `LOADTEST_FAILING_LAPI=true` to make Edge fail for partial-availability and partial-write tests.
 
 Defaults live in `scripts/load-test-profiles/`. Explicit `LOADTEST_*` and `CONFIG_*` environment variables take precedence.
