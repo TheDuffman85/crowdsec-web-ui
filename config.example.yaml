@@ -123,6 +123,7 @@ instances:
     #   # and Metrics <METRIC_INDEX>, respectively.
     #   - id: lapi
     #     name: CrowdSec
+    #     icon: 📊
     #     url: http://crowdsec:6060/metrics
     #     requestTimeout: 5s
     #     auth:

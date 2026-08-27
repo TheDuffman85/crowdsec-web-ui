@@ -8,10 +8,12 @@ import { I18nContext } from '../../lib/i18n';
 
 const {
   fetchConfigMock,
+  fetchCombinedCrowdsecMetricsMock,
   fetchCrowdsecMetricsMock,
   setLastUpdatedMock,
 } = vi.hoisted(() => ({
   fetchConfigMock: vi.fn(),
+  fetchCombinedCrowdsecMetricsMock: vi.fn(),
   fetchCrowdsecMetricsMock: vi.fn(),
   setLastUpdatedMock: vi.fn(),
 }));
@@ -25,6 +27,7 @@ vi.mock('../../contexts/useRefresh', () => ({
 
 vi.mock('../../lib/api', () => ({
   fetchConfig: fetchConfigMock,
+  fetchCombinedCrowdsecMetrics: fetchCombinedCrowdsecMetricsMock,
   fetchCrowdsecMetrics: fetchCrowdsecMetricsMock,
 }));
 
@@ -94,11 +97,13 @@ function InstanceSwitcher() {
 
 beforeEach(() => {
   fetchConfigMock.mockReset();
+  fetchCombinedCrowdsecMetricsMock.mockReset();
   fetchCrowdsecMetricsMock.mockReset();
   setLastUpdatedMock.mockReset();
   window.localStorage.clear();
   window.history.replaceState({}, '', '/metrics');
   fetchConfigMock.mockResolvedValue({ metrics_enabled: true });
+  fetchCombinedCrowdsecMetricsMock.mockResolvedValue(buildMetricsResponse());
 });
 
 describe('Metrics page', () => {
@@ -136,13 +141,20 @@ describe('Metrics page', () => {
       instances: [{
         id: 'primary',
         name: 'Primary',
-        prometheus: [{ id: 'lapi', name: 'LAPI' }, { id: 'engine', name: 'Engine' }],
+        prometheus: [{ id: 'lapi', name: 'LAPI', icon: '🧠' }, { id: 'engine', name: 'Engine', icon: '🛡️' }],
       }],
     });
     fetchCrowdsecMetricsMock.mockResolvedValue(buildMetricsResponse());
 
     const { unmount } = renderMetrics();
-    await waitFor(() => expect(screen.getByLabelText('Metrics endpoint')).toBeInTheDocument());
+    const selector = await screen.findByLabelText('Metrics endpoint');
+    await waitFor(() => expect(fetchCombinedCrowdsecMetricsMock).toHaveBeenCalledWith('primary'));
+    expect(new URLSearchParams(window.location.search).get('endpoint')).toBe('_combined');
+    expect(selector.querySelector('.lucide-blend')).toBeInTheDocument();
+    await userEvent.click(selector);
+    expect(screen.getByRole('option', { name: 'Combined' }).querySelector('.lucide-blend')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'LAPI' })).toHaveTextContent('🧠');
+    expect(screen.getByRole('option', { name: 'Engine' })).toHaveTextContent('🛡️');
     expect(screen.queryByLabelText('Instance')).not.toBeInTheDocument();
     unmount();
   });
@@ -151,8 +163,8 @@ describe('Metrics page', () => {
     fetchConfigMock.mockResolvedValue({
       metrics_enabled: true,
       instances: [
-        { id: 'primary', name: 'Primary', icon: '🟦', prometheus: [{ id: 'lapi', name: 'Primary LAPI' }] },
-        { id: 'secondary', name: 'Secondary', icon: '🟩', prometheus: [{ id: 'lapi', name: 'Secondary LAPI' }] },
+        { id: 'primary', name: 'Primary', icon: '🟦', prometheus: [{ id: 'lapi', name: 'Primary LAPI', icon: '🧠' }] },
+        { id: 'secondary', name: 'Secondary', icon: '🟩', prometheus: [{ id: 'lapi', name: 'Secondary LAPI', icon: '🛰️' }] },
       ],
     });
     fetchCrowdsecMetricsMock.mockResolvedValue(buildMetricsResponse());
@@ -161,15 +173,92 @@ describe('Metrics page', () => {
     renderMetrics();
 
     const endpointSelector = await screen.findByLabelText('Metrics endpoint');
+    await waitFor(() => expect(fetchCombinedCrowdsecMetricsMock).toHaveBeenCalledWith('all'));
     expect(screen.queryByLabelText('Instance')).not.toBeInTheDocument();
     await userEvent.click(endpointSelector);
+    expect(screen.getByRole('option', { name: 'Combined' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Primary — Primary LAPI' })).toBeInTheDocument();
     const secondaryOption = screen.getByRole('option', { name: 'Secondary — Secondary LAPI' });
-    expect(secondaryOption).toHaveTextContent('🟩');
+    expect(screen.getByRole('option', { name: 'Primary — Primary LAPI' })).toHaveTextContent('🧠');
+    expect(secondaryOption).toHaveTextContent('🛰️');
+    expect(secondaryOption).not.toHaveTextContent('🟩');
 
     await userEvent.click(secondaryOption);
     await waitFor(() => expect(fetchCrowdsecMetricsMock).toHaveBeenLastCalledWith('secondary', 'lapi'));
     expect(new URLSearchParams(window.location.search).get('instance')).toBe('all');
+  });
+
+  test('shows source-qualified rows and a warning for partial combined data', async () => {
+    fetchConfigMock.mockResolvedValue({
+      metrics_enabled: true,
+      instances: [
+        { id: 'primary', name: 'Primary', prometheus: [{ id: 'lapi', name: 'LAPI' }] },
+        { id: 'secondary', name: 'Secondary', prometheus: [{ id: 'agent', name: 'Agent' }] },
+      ],
+    });
+    const response = buildMetricsResponse();
+    response.machines = [{
+      source_id: 'primary:lapi',
+      name: 'node-1',
+      requests: 3,
+      topRoute: '/v1/alerts',
+      topMethod: 'POST',
+      alertRequests: 3,
+      heartbeatRequests: 0,
+    }];
+    response.aggregation = {
+      partial: true,
+      sources: [
+        {
+          id: 'primary:lapi',
+          instance_id: 'primary',
+          instance_name: 'Primary',
+          endpoint_id: 'lapi',
+          endpoint_name: 'LAPI',
+          endpoint_icon: '🧠',
+          status: 'available',
+          fetched_at: '2026-06-30T10:00:00.000Z',
+          crowdsecVersion: 'v1.7.8',
+        },
+        {
+          id: 'secondary:agent',
+          instance_id: 'secondary',
+          instance_name: 'Secondary',
+          endpoint_id: 'agent',
+          endpoint_name: 'Agent',
+          status: 'unavailable',
+          error: 'Prometheus endpoint returned HTTP 503',
+        },
+      ],
+    };
+    fetchCombinedCrowdsecMetricsMock.mockResolvedValue(response);
+    window.history.replaceState({}, '', '/metrics?instance=all');
+
+    renderMetrics();
+
+    expect(await screen.findByText(/Some metrics sources are unavailable: Secondary — Agent/)).toBeInTheDocument();
+    expect(screen.getAllByText('Primary — LAPI').length).toBeGreaterThan(1);
+    expect(screen.getAllByText('🧠').length).toBeGreaterThan(0);
+    expect(screen.getByText('Prometheus endpoint returned HTTP 503')).toBeInTheDocument();
+    expect(screen.getByText('Available')).toBeInTheDocument();
+    expect(screen.getByText('Unavailable')).toBeInTheDocument();
+  });
+
+  test('shows the retry state when a combined request fails completely', async () => {
+    fetchConfigMock.mockResolvedValue({
+      metrics_enabled: true,
+      instances: [{
+        id: 'primary',
+        name: 'Primary',
+        prometheus: [{ id: 'lapi', name: 'LAPI' }, { id: 'agent', name: 'Agent' }],
+      }],
+    });
+    fetchCombinedCrowdsecMetricsMock.mockRejectedValue(new Error('Failed to fetch combined CrowdSec metrics'));
+
+    renderMetrics();
+
+    expect(await screen.findByText('Metrics unavailable')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
   });
 
   test('shows the setup hint when the sidebar-selected instance has no metrics', async () => {

@@ -18,6 +18,7 @@ type MetricsRequestInit = RequestInit & { dispatcher?: Dispatcher };
 type FetchLike = (input: string | URL | Request, init?: MetricsRequestInit) => Promise<Response>;
 
 export interface PrometheusSample {
+  source_id?: string;
   name: string;
   labels: Record<string, string>;
   value: number;
@@ -32,6 +33,7 @@ export interface FetchCrowdsecMetricsOptions {
 }
 
 interface ApiEntityAccumulator {
+  source_id?: string;
   name: string;
   requests: number;
   routes: Map<string, number>;
@@ -41,6 +43,7 @@ interface ApiEntityAccumulator {
 }
 
 interface ParserSourceAccumulator {
+  source_id?: string;
   source: string;
   type: string;
   acquisTypes: Set<string>;
@@ -53,6 +56,7 @@ interface ParserSourceAccumulator {
 }
 
 interface ParserNodeAccumulator {
+  source_id?: string;
   name: string;
   stage: string;
   source: string;
@@ -64,6 +68,7 @@ interface ParserNodeAccumulator {
 }
 
 interface TimingAccumulator {
+  source_id?: string;
   source: string;
   type: string;
   count: number;
@@ -71,6 +76,7 @@ interface TimingAccumulator {
 }
 
 interface AppsecEngineAccumulator {
+  source_id?: string;
   engine: string;
   source: string;
   requests: number;
@@ -78,6 +84,7 @@ interface AppsecEngineAccumulator {
 }
 
 interface LapiRouteAccumulator {
+  source_id?: string;
   method: string;
   route: string;
   requestCount: number;
@@ -86,6 +93,7 @@ interface LapiRouteAccumulator {
 }
 
 interface ScenarioAccumulator {
+  source_id?: string;
   name: string;
   current: number;
   instantiations: number;
@@ -96,6 +104,7 @@ interface ScenarioAccumulator {
 }
 
 interface WhitelistAccumulator {
+  source_id?: string;
   name: string;
   reason: string;
   hits: number;
@@ -225,12 +234,13 @@ function ratio(numerator: number, denominator: number): number | null {
   return numerator / denominator;
 }
 
-function sourceKey(source: string, type: string): string {
-  return `${source}\u0000${type}`;
+function sourceKey(sourceId: string | undefined, source: string, type: string): string {
+  return `${sourceId || ''}\u0000${source}\u0000${type}`;
 }
 
-function sourceMatches(sampleSource: string, source: ParserSourceAccumulator): boolean {
-  return sampleSource === source.source || `${source.type}:${sampleSource}` === source.source;
+function sourceMatches(sample: PrometheusSample, sampleSource: string, source: ParserSourceAccumulator): boolean {
+  return sample.source_id === source.source_id
+    && (sampleSource === source.source || `${source.type}:${sampleSource}` === source.source);
 }
 
 function aggregateApiEntities(
@@ -242,11 +252,13 @@ function aggregateApiEntities(
 ): CrowdsecMetricsApiEntity[] {
   const entities = new Map<string, ApiEntityAccumulator>();
 
-  const getEntity = (name: string): ApiEntityAccumulator => {
+  const getEntity = (name: string, sourceId?: string): ApiEntityAccumulator => {
     const normalizedName = name || 'unknown';
-    let entity = entities.get(normalizedName);
+    const key = `${sourceId || ''}\u0000${normalizedName}`;
+    let entity = entities.get(key);
     if (!entity) {
       entity = {
+        source_id: sourceId,
         name: normalizedName,
         requests: 0,
         routes: new Map(),
@@ -254,30 +266,30 @@ function aggregateApiEntities(
         decisionsKo: 0,
         lastHeartbeatAt: null,
       };
-      entities.set(normalizedName, entity);
+      entities.set(key, entity);
     }
     return entity;
   };
 
   for (const sample of requestSamples) {
-    const entity = getEntity(sample.labels[entityLabel]);
+    const entity = getEntity(sample.labels[entityLabel], sample.source_id);
     entity.requests += sample.value;
     mapValue(entity.routes, routeKey(sample.labels), sample.value);
   }
 
   for (const sample of decisionOkSamples) {
-    getEntity(sample.labels.bouncer).decisionsOk += sample.value;
+    getEntity(sample.labels.bouncer, sample.source_id).decisionsOk += sample.value;
   }
 
   for (const sample of decisionKoSamples) {
-    getEntity(sample.labels.bouncer).decisionsKo += sample.value;
+    getEntity(sample.labels.bouncer, sample.source_id).decisionsKo += sample.value;
   }
 
   if (entityLabel === 'machine') {
     for (const sample of heartbeatSamples) {
       const lastHeartbeatAt = prometheusTimestampToIso(sample);
       if (!lastHeartbeatAt) continue;
-      const entity = getEntity(sample.labels.machine);
+      const entity = getEntity(sample.labels.machine, sample.source_id);
       if (!entity.lastHeartbeatAt || lastHeartbeatAt > entity.lastHeartbeatAt) {
         entity.lastHeartbeatAt = lastHeartbeatAt;
       }
@@ -319,6 +331,7 @@ function aggregateApiEntities(
               : 'unknown'
         : undefined;
       return {
+        ...(entity.source_id ? { source_id: entity.source_id } : {}),
         name: entity.name,
         requests: entity.requests,
         topRoute: topRoute?.route || null,
@@ -339,10 +352,11 @@ function aggregateParserSources(samples: PrometheusSample[]): CrowdsecMetricsPar
   const getSource = (sample: PrometheusSample): ParserSourceAccumulator => {
     const source = sample.labels.source || 'unknown';
     const type = sample.labels.type || 'unknown';
-    const key = sourceKey(source, type);
+    const key = sourceKey(sample.source_id, source, type);
     let accumulator = sources.get(key);
     if (!accumulator) {
       accumulator = {
+        source_id: sample.source_id,
         source,
         type,
         acquisTypes: new Set(),
@@ -377,7 +391,7 @@ function aggregateParserSources(samples: PrometheusSample[]): CrowdsecMetricsPar
       if (!sampleSource) continue;
 
       for (const source of sources.values()) {
-        if (sourceMatches(sampleSource, source)) {
+        if (sourceMatches(sample, sampleSource, source)) {
           source.linesRead = (source.linesRead || 0) + sample.value;
         }
       }
@@ -394,6 +408,7 @@ function aggregateParserSources(samples: PrometheusSample[]): CrowdsecMetricsPar
 
   return sortedTop(Array.from(sources.values()), (source) => source.linesRead ?? (source.processed || source.parsedOk + source.parsedKo))
     .map((source) => ({
+      ...(source.source_id ? { source_id: source.source_id } : {}),
       source: source.source,
       type: source.type,
       acquisTypes: Array.from(source.acquisTypes).sort(),
@@ -416,10 +431,10 @@ function aggregateParserNodes(samples: PrometheusSample[]): CrowdsecMetricsParse
     const source = sample.labels.source || 'unknown';
     const type = sample.labels.type || 'unknown';
     const acquisType = sample.labels.acquis_type || null;
-    const key = `${name}\u0000${stage}\u0000${source}\u0000${type}\u0000${acquisType || ''}`;
+    const key = `${sample.source_id || ''}\u0000${name}\u0000${stage}\u0000${source}\u0000${type}\u0000${acquisType || ''}`;
     let accumulator = nodes.get(key);
     if (!accumulator) {
-      accumulator = { name, stage, source, type, acquisType, processed: 0, parsedOk: 0, parsedKo: 0 };
+      accumulator = { source_id: sample.source_id, name, stage, source, type, acquisType, processed: 0, parsedOk: 0, parsedKo: 0 };
       nodes.set(key, accumulator);
     }
     return accumulator;
@@ -439,8 +454,16 @@ function aggregateParserNodes(samples: PrometheusSample[]): CrowdsecMetricsParse
 
   return sortedTop(Array.from(nodes.values()), (node) => node.processed || node.parsedOk + node.parsedKo)
     .map((node) => ({
-      ...node,
+      ...(node.source_id ? { source_id: node.source_id } : {}),
+      name: node.name,
+      stage: node.stage,
+      source: node.source,
+      type: node.type,
+      acquisType: node.acquisType,
       isChild: isChildParserNodeName(node.name),
+      processed: node.processed,
+      parsedOk: node.parsedOk,
+      parsedKo: node.parsedKo,
       successRate: successRate(node.parsedOk, node.parsedKo, node.processed),
     }));
 }
@@ -455,10 +478,10 @@ function aggregateParserTimings(samples: PrometheusSample[]): CrowdsecMetricsTim
   const getTiming = (sample: PrometheusSample): TimingAccumulator => {
     const source = sample.labels.source || 'unknown';
     const type = sample.labels.type || 'unknown';
-    const key = `${source}\u0000${type}`;
+    const key = sourceKey(sample.source_id, source, type);
     let accumulator = timings.get(key);
     if (!accumulator) {
-      accumulator = { source, type, count: 0, sum: 0 };
+      accumulator = { source_id: sample.source_id, source, type, count: 0, sum: 0 };
       timings.set(key, accumulator);
     }
     return accumulator;
@@ -474,6 +497,7 @@ function aggregateParserTimings(samples: PrometheusSample[]): CrowdsecMetricsTim
 
   return sortedTop(Array.from(timings.values()), (timing) => timing.count)
     .map((timing) => ({
+      ...(timing.source_id ? { source_id: timing.source_id } : {}),
       source: timing.source,
       type: timing.type,
       count: timing.count,
@@ -487,10 +511,10 @@ function aggregateAppsecEngines(samples: PrometheusSample[]): AppsecEngineAccumu
   const getEngine = (sample: PrometheusSample): AppsecEngineAccumulator => {
     const engine = sample.labels.appsec_engine || 'unknown';
     const source = sample.labels.source || 'unknown';
-    const key = `${engine}\u0000${source}`;
+    const key = `${sample.source_id || ''}\u0000${engine}\u0000${source}`;
     let accumulator = engines.get(key);
     if (!accumulator) {
-      accumulator = { engine, source, requests: 0, blocked: 0 };
+      accumulator = { source_id: sample.source_id, engine, source, requests: 0, blocked: 0 };
       engines.set(key, accumulator);
     }
     return accumulator;
@@ -514,10 +538,10 @@ function aggregateLapiRoutes(samples: PrometheusSample[]): CrowdsecMetricsLapiRo
     const method = sample.labels.method || 'GET';
     const rawRoute = sample.labels.route ?? sample.labels.endpoint;
     const route = rawRoute === '' ? 'invalid-endpoint' : rawRoute || 'unknown';
-    const key = `${method}\u0000${route}`;
+    const key = `${sample.source_id || ''}\u0000${method}\u0000${route}`;
     let accumulator = routes.get(key);
     if (!accumulator) {
-      accumulator = { method, route, requestCount: 0, durationCount: 0, sum: 0 };
+      accumulator = { source_id: sample.source_id, method, route, requestCount: 0, durationCount: 0, sum: 0 };
       routes.set(key, accumulator);
     }
     return accumulator;
@@ -537,6 +561,7 @@ function aggregateLapiRoutes(samples: PrometheusSample[]): CrowdsecMetricsLapiRo
 
   return sortedTop(Array.from(routes.values()), (route) => route.requestCount || route.durationCount)
     .map((route) => ({
+      ...(route.source_id ? { source_id: route.source_id } : {}),
       method: route.method,
       route: route.route,
       requests: route.requestCount || route.durationCount,
@@ -546,7 +571,11 @@ function aggregateLapiRoutes(samples: PrometheusSample[]): CrowdsecMetricsLapiRo
 
 function mapAppsecEngines(engines: AppsecEngineAccumulator[]): CrowdsecMetricsAppsecEngine[] {
   return engines.map((engine) => ({
-    ...engine,
+    ...(engine.source_id ? { source_id: engine.source_id } : {}),
+    engine: engine.engine,
+    source: engine.source,
+    requests: engine.requests,
+    blocked: engine.blocked,
     blockRate: ratio(engine.blocked, engine.requests),
   }));
 }
@@ -556,9 +585,11 @@ function aggregateScenarios(samples: PrometheusSample[]): CrowdsecMetricsScenari
 
   const getScenario = (sample: PrometheusSample): ScenarioAccumulator => {
     const name = sample.labels.name || sample.labels.scenario || 'unknown';
-    let accumulator = scenarios.get(name);
+    const key = `${sample.source_id || ''}\u0000${name}`;
+    let accumulator = scenarios.get(key);
     if (!accumulator) {
       accumulator = {
+        source_id: sample.source_id,
         name,
         current: 0,
         instantiations: 0,
@@ -567,7 +598,7 @@ function aggregateScenarios(samples: PrometheusSample[]): CrowdsecMetricsScenari
         canceled: 0,
         poured: 0,
       };
-      scenarios.set(name, accumulator);
+      scenarios.set(key, accumulator);
     }
     return accumulator;
   };
@@ -576,9 +607,10 @@ function aggregateScenarios(samples: PrometheusSample[]): CrowdsecMetricsScenari
     getScenario(sample).current += sample.value;
   }
   const instantiationSamples = metric(samples, 'cs_bucket_instantiation_total');
-  for (const sample of instantiationSamples.length > 0
-    ? instantiationSamples
-    : metric(samples, 'cs_bucket_created_total')) {
+  const currentInstantiationSources = new Set(instantiationSamples.map((sample) => sample.source_id || ''));
+  const legacyInstantiationSamples = metric(samples, 'cs_bucket_created_total')
+    .filter((sample) => !currentInstantiationSources.has(sample.source_id || ''));
+  for (const sample of [...instantiationSamples, ...legacyInstantiationSamples]) {
     getScenario(sample).instantiations += sample.value;
   }
   for (const sample of metric(samples, 'cs_bucket_overflowed_total')) {
@@ -597,7 +629,16 @@ function aggregateScenarios(samples: PrometheusSample[]): CrowdsecMetricsScenari
   return sortedTop(
     Array.from(scenarios.values()),
     (scenario) => scenario.current + scenario.instantiations + scenario.overflows + scenario.underflows + scenario.canceled + scenario.poured,
-  );
+  ).map((scenario) => ({
+    ...(scenario.source_id ? { source_id: scenario.source_id } : {}),
+    name: scenario.name,
+    current: scenario.current,
+    instantiations: scenario.instantiations,
+    overflows: scenario.overflows,
+    underflows: scenario.underflows,
+    canceled: scenario.canceled,
+    poured: scenario.poured,
+  }));
 }
 
 function aggregateWhitelists(samples: PrometheusSample[]): CrowdsecMetricsWhitelist[] {
@@ -606,10 +647,10 @@ function aggregateWhitelists(samples: PrometheusSample[]): CrowdsecMetricsWhitel
   const getWhitelist = (sample: PrometheusSample): WhitelistAccumulator => {
     const name = sample.labels.name || 'unknown';
     const reason = sample.labels.reason || 'unknown';
-    const key = `${name}\u0000${reason}`;
+    const key = `${sample.source_id || ''}\u0000${name}\u0000${reason}`;
     let accumulator = whitelists.get(key);
     if (!accumulator) {
-      accumulator = { name, reason, hits: 0, whitelisted: 0 };
+      accumulator = { source_id: sample.source_id, name, reason, hits: 0, whitelisted: 0 };
       whitelists.set(key, accumulator);
     }
     return accumulator;
@@ -623,7 +664,14 @@ function aggregateWhitelists(samples: PrometheusSample[]): CrowdsecMetricsWhitel
     getWhitelist(sample).whitelisted += sample.value;
   }
 
-  return sortedTop(Array.from(whitelists.values()), (whitelist) => whitelist.hits || whitelist.whitelisted);
+  return sortedTop(Array.from(whitelists.values()), (whitelist) => whitelist.hits || whitelist.whitelisted)
+    .map((whitelist) => ({
+      ...(whitelist.source_id ? { source_id: whitelist.source_id } : {}),
+      name: whitelist.name,
+      reason: whitelist.reason,
+      hits: whitelist.hits,
+      whitelisted: whitelist.whitelisted,
+    }));
 }
 
 export function summarizeCrowdsecMetrics(samples: PrometheusSample[]): CrowdsecMetricsResponse {
@@ -700,7 +748,7 @@ export function summarizeCrowdsecMetrics(samples: PrometheusSample[]): CrowdsecM
   };
 }
 
-export async function fetchCrowdsecMetrics(options: FetchCrowdsecMetricsOptions): Promise<CrowdsecMetricsResponse> {
+export async function fetchCrowdsecMetricsSamples(options: FetchCrowdsecMetricsOptions): Promise<PrometheusSample[]> {
   const fetchImpl = options.fetchImpl || ((input, init) => undiciFetch(
     input as Parameters<typeof undiciFetch>[0],
     init as Parameters<typeof undiciFetch>[1],
@@ -735,7 +783,7 @@ export async function fetchCrowdsecMetrics(options: FetchCrowdsecMetricsOptions)
     }
 
     const text = await response.text();
-    return summarizeCrowdsecMetrics(parsePrometheusText(text));
+    return parsePrometheusText(text);
   } catch (error: any) {
     if (error?.name === 'AbortError') {
       throw new Error(`Prometheus endpoint timed out after ${options.timeoutMs}ms`);
@@ -745,4 +793,8 @@ export async function fetchCrowdsecMetrics(options: FetchCrowdsecMetricsOptions)
     clearTimeout(timeout);
     await dispatcher?.close();
   }
+}
+
+export async function fetchCrowdsecMetrics(options: FetchCrowdsecMetricsOptions): Promise<CrowdsecMetricsResponse> {
+  return summarizeCrowdsecMetrics(await fetchCrowdsecMetricsSamples(options));
 }

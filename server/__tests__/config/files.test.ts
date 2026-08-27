@@ -242,6 +242,7 @@ instances:
       CONFIG_INSTANCE_LAPI_AUTH_USERNAME: 'watcher',
       CONFIG_INSTANCE_LAPI_AUTH_PASSWORD: 'do-not-write-this-password',
       CONFIG_INSTANCE_METRICS_URL: 'https://primary.example.com:6060/metrics',
+      CONFIG_INSTANCE_METRICS_ICON: '🧠',
       CONFIG_INSTANCE_METRICS_AUTH_TOKEN: 'do-not-write-this-token',
       CONFIG_INSTANCE_METRICS_REQUEST_TIMEOUT: '10s',
       CONFIG_INSTANCE_METRICS_1_URL: 'https://primary.example.com:6061/metrics',
@@ -279,6 +280,7 @@ instances:
       expect(config.instances[0].prometheus[0]).toMatchObject({
         id: '0',
         name: 'Metrics 0',
+        icon: '🧠',
         url: 'https://primary.example.com:6060/metrics',
         auth: { type: 'bearer', token: 'do-not-write-this-token' },
         requestTimeoutMs: 10_000,
@@ -307,6 +309,7 @@ instances:
       expect(document.instances[0].lapi.auth.type).toBeUndefined();
       expect(document.instances[0].metrics[0].id).toBeUndefined();
       expect(document.instances[0].metrics[0].name).toBeUndefined();
+      expect(document.instances[0].metrics[0].icon).toBe('🧠');
       expect(document.instances[0].metrics[0].auth.type).toBeUndefined();
       expect(document.instances[0].metrics[1].id).toBeUndefined();
       expect(document.instances[0].metrics[1].name).toBeUndefined();

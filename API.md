@@ -214,9 +214,10 @@ Supported dashboard filters: `instance`, `q`, `decision_q`, `country`, `scenario
 | Method | Endpoint | Description |
 | --- | --- | --- |
 | GET | `/api/metrics/crowdsec` | Fetch and normalize the primary instance's first metrics endpoint. Returns `404` when it is not configured and `502` when the metrics fetch fails. |
+| GET | `/api/metrics/crowdsec/combined?instance=<id\|all>` | Fetch and normalize every metrics endpoint in one instance or all instances. Successful sources are aggregated concurrently; partial success returns `200` with source statuses, while total failure returns `502`. |
 | GET | `/api/instances/:instanceId/metrics/:endpointId` | Fetch and normalize a specific instance metrics endpoint. Returns `404` for an unknown instance or endpoint and `502` when the fetch fails. |
 
-The response includes `fetched_at`, `totals`, `bouncers`, `machines`, `parserSources`, `parserNodes`, `whitelists`, and `parserTimings`. It can also include runtime-only observability sections: `lapiRoutes` and `appsecEngines`.
+The response includes `fetched_at`, `totals`, `bouncers`, `machines`, `parserSources`, `parserNodes`, `whitelists`, and `parserTimings`. It can also include runtime-only observability sections: `lapiRoutes` and `appsecEngines`. Combined responses add `aggregation.partial` and an `aggregation.sources` entry for each configured endpoint, including its optional `endpoint_icon`; detailed rows include `source_id` so matching labels remain attributable.
 
 Parser node entries include `isChild`, which is `true` for CrowdSec child parser nodes emitted with the `child-` prefix.
 

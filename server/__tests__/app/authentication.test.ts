@@ -192,6 +192,109 @@ cs_node_wl_hits_ok_total{name="crowdsecurity/whitelists",source="/var/log/auth.l
   expect(getMetaSpy.mock.calls.some(([key]) => key === 'metrics_sidebar_visible')).toBe(false);
 });
 
+test('combined metrics fetches sources concurrently and preserves source-aware rows', async () => {
+  let started = 0;
+  let resolveBothStarted!: () => void;
+  let releaseFetches!: () => void;
+  const bothStarted = new Promise<void>((resolve) => { resolveBothStarted = resolve; });
+  const fetchGate = new Promise<void>((resolve) => { releaseFetches = resolve; });
+  const { controller } = createController({
+    env: {
+      CONFIG_INSTANCE_ID: 'primary',
+      CONFIG_INSTANCE_NAME: 'Primary',
+      CONFIG_INSTANCE_METRICS_0_ID: 'lapi',
+      CONFIG_INSTANCE_METRICS_0_NAME: 'LAPI',
+      CONFIG_INSTANCE_METRICS_0_ICON: '🧠',
+      CONFIG_INSTANCE_METRICS_0_URL: 'http://lapi:6060/metrics',
+      CONFIG_INSTANCE_METRICS_1_ID: 'appsec',
+      CONFIG_INSTANCE_METRICS_1_NAME: 'AppSec',
+      CONFIG_INSTANCE_METRICS_1_ICON: '🛡️',
+      CONFIG_INSTANCE_METRICS_1_URL: 'http://appsec:6060/metrics',
+    },
+    metricsFetchResolver: async (url) => {
+      started += 1;
+      if (started === 2) resolveBothStarted();
+      await fetchGate;
+      return new Response(url.includes('lapi')
+        ? 'cs_active_decisions{reason="ssh"} 4\ncs_lapi_machine_requests_total{machine="agent",route="/v1/alerts",method="POST"} 3'
+        : 'cs_appsec_reqs_total{source="listener",appsec_engine="engine"} 11\ncs_appsec_block_total{source="listener",appsec_engine="engine"} 2',
+      { status: 200 });
+    },
+  });
+
+  const responsePromise = controller.fetch(new Request('http://localhost/crowdsec/api/metrics/crowdsec/combined?instance=all'));
+  await bothStarted;
+  expect(started).toBe(2);
+  releaseFetches();
+  const response = await responsePromise;
+  const payload = await response.json();
+
+  expect(response.status).toBe(200);
+  expect(payload).toMatchObject({
+    totals: { activeDecisions: 4, machineRequests: 3, appsecRequests: 11, appsecBlocked: 2 },
+    aggregation: {
+      partial: false,
+      sources: [
+        expect.objectContaining({ id: 'primary:lapi', endpoint_icon: '🧠', status: 'available' }),
+        expect.objectContaining({ id: 'primary:appsec', endpoint_icon: '🛡️', status: 'available' }),
+      ],
+    },
+  });
+  expect(payload.machines).toEqual([expect.objectContaining({ source_id: 'primary:lapi', name: 'agent' })]);
+  expect(payload.appsecEngines).toEqual([expect.objectContaining({ source_id: 'primary:appsec', engine: 'engine' })]);
+  expect(payload).not.toHaveProperty('crowdsecVersion');
+  expect(payload).not.toHaveProperty('crowdsecStartedAt');
+});
+
+test('combined metrics returns partial data and reports scope errors', async () => {
+  const { controller } = createController({
+    env: {
+      CONFIG_INSTANCE_ID: 'primary',
+      CONFIG_INSTANCE_METRICS_0_ID: 'lapi',
+      CONFIG_INSTANCE_METRICS_0_URL: 'http://lapi:6060/metrics',
+      CONFIG_INSTANCE_METRICS_1_ID: 'appsec',
+      CONFIG_INSTANCE_METRICS_1_URL: 'http://appsec:6060/metrics',
+    },
+    metricsFetchResolver: async (url) => url.includes('appsec')
+      ? new Response('unavailable', { status: 503 })
+      : new Response('cs_active_decisions{reason="ssh"} 2', { status: 200 }),
+  });
+
+  const partial = await controller.fetch(new Request('http://localhost/crowdsec/api/metrics/crowdsec/combined?instance=primary'));
+  expect(partial.status).toBe(200);
+  expect(await partial.json()).toMatchObject({
+    totals: { activeDecisions: 2 },
+    aggregation: {
+      partial: true,
+      sources: [
+        expect.objectContaining({ id: 'primary:lapi', status: 'available' }),
+        expect.objectContaining({ id: 'primary:appsec', status: 'unavailable', error: 'Prometheus endpoint returned HTTP 503' }),
+      ],
+    },
+  });
+
+  const unknown = await controller.fetch(new Request('http://localhost/crowdsec/api/metrics/crowdsec/combined?instance=missing'));
+  expect(unknown.status).toBe(404);
+});
+
+test('combined metrics returns 502 when every source fails', async () => {
+  const failing = createController({
+    env: { CONFIG_INSTANCE_METRICS_URL: 'http://lapi:6060/metrics' },
+    metricsFetchResolver: async () => new Response('unavailable', { status: 503 }),
+  });
+  const failed = await failing.controller.fetch(new Request('http://localhost/crowdsec/api/metrics/crowdsec/combined?instance=all'));
+  expect(failed.status).toBe(502);
+  expect(await failed.json()).toMatchObject({
+    sources: [expect.objectContaining({ status: 'unavailable' })],
+  });
+});
+
+test('combined metrics returns 404 when the scope has no metrics sources', async () => {
+  const empty = createController();
+  const missing = await empty.controller.fetch(new Request('http://localhost/crowdsec/api/metrics/crowdsec/combined?instance=all'));
+  expect(missing.status).toBe(404);
+});
+
 test('dashboard auth exposes account settings and password changes', async () => {
   const { controller, database } = createController({
     env: {

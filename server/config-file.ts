@@ -322,7 +322,7 @@ export const CONFIG_KEY_ORDER = new Map<string, readonly string[]>([
   ['instances[].lapi', ['url', 'auth', 'tls']],
   ['instances[].lapi.auth', ['type', 'username', 'password', 'certFile', 'keyFile']],
   ['instances[].lapi.tls', ['caFile']],
-  ['instances[].metrics[]', ['id', 'name', 'url', 'requestTimeout', 'auth', 'tls']],
+  ['instances[].metrics[]', ['id', 'name', 'icon', 'url', 'requestTimeout', 'auth', 'tls']],
   ['instances[].metrics[].auth', ['type', 'username', 'password', 'token']],
   ['instances[].metrics[].tls', ['caFile', 'certFile', 'keyFile']],
   ['instances[].sync', [
@@ -685,6 +685,7 @@ const CONFIG_INSTANCE_VALUE_SUFFIX = new Map<string, readonly string[]>([
 const CONFIG_METRICS_VALUE_SUFFIX = new Map<string, readonly string[]>([
   ['ID', ['id']],
   ['NAME', ['name']],
+  ['ICON', ['icon']],
   ['URL', ['url']],
   ['REQUEST_TIMEOUT', ['requestTimeout']],
   ['AUTH', ['auth']],
@@ -1182,6 +1183,7 @@ function initialRequiredInstancePaths(document: UnknownRecord): ConfigPath[] {
       const endpointPath: ConfigPath = [...instancePath, 'metrics', metricsIndex];
       if (endpoint.id !== String(metricsIndex)) paths.push([...endpointPath, 'id']);
       if (endpoint.name !== `Metrics ${metricsIndex}`) paths.push([...endpointPath, 'name']);
+      if (endpoint.icon !== undefined) paths.push([...endpointPath, 'icon']);
       paths.push([...endpointPath, 'url']);
       const metricsAuth = endpoint.auth === undefined
         ? {}
@@ -1246,6 +1248,7 @@ function initialConfigReference(document: UnknownRecord): UnknownRecord {
       return {
         id: String(metricsIndex),
         name: `Metrics ${metricsIndex}`,
+        icon: '📊',
         url: 'http://crowdsec:6060/metrics',
         requestTimeout: sync.metricsRequestTimeout,
         ...endpoint,

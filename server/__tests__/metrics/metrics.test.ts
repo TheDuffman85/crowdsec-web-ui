@@ -210,4 +210,40 @@ cs_lapi_request_duration_seconds_sum{endpoint="",method="GET"} 0.1
     }]);
   });
 
+  test('aggregates totals while preserving source identity and source-local fallbacks', () => {
+    const sourceOne = parsePrometheusText(`
+cs_parser_hits_total{source="journalctl",type="syslog"} 10
+cs_parser_hits_ok_total{source="journalctl",type="syslog"} 9
+cs_parsing_time_seconds_count{source="journalctl",type="syslog"} 10
+cs_parsing_time_seconds_sum{source="journalctl",type="syslog"} 0.1
+cs_bucket_instantiation_total{name="crowdsecurity/ssh-bf"} 3
+cs_active_decisions{reason="ssh"} 2
+`).map((sample) => ({ ...sample, source_id: 'primary:agent-1' }));
+    const sourceTwo = parsePrometheusText(`
+cs_parser_hits_total{source="journalctl",type="syslog"} 30
+cs_parser_hits_ok_total{source="journalctl",type="syslog"} 24
+cs_parsing_time_seconds_count{source="journalctl",type="syslog"} 30
+cs_parsing_time_seconds_sum{source="journalctl",type="syslog"} 0.6
+cs_bucket_created_total{name="crowdsecurity/ssh-bf"} 7
+cs_active_decisions{reason="ssh"} 5
+`).map((sample) => ({ ...sample, source_id: 'secondary:agent-2' }));
+
+    const summary = summarizeCrowdsecMetrics([...sourceOne, ...sourceTwo]);
+
+    expect(summary.totals).toMatchObject({
+      activeDecisions: 7,
+      parserProcessed: 40,
+      parserOk: 33,
+    });
+    expect(summary.totals.parserAverageSeconds).toBeCloseTo(0.0175);
+    expect(summary.parserSources).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source_id: 'primary:agent-1', source: 'journalctl', processed: 10 }),
+      expect.objectContaining({ source_id: 'secondary:agent-2', source: 'journalctl', processed: 30 }),
+    ]));
+    expect(summary.scenarios).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source_id: 'primary:agent-1', instantiations: 3 }),
+      expect.objectContaining({ source_id: 'secondary:agent-2', instantiations: 7 }),
+    ]));
+  });
+
 });

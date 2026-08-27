@@ -343,12 +343,14 @@ Synchronization durations accept `ms`, `s`, `m`, `h`, or `d`, for example `500ms
 
 - `<INDEX>` selects the instance; zero-based `<METRIC_INDEX>` selects its endpoint.
 - Endpoint ID defaults to `<METRIC_INDEX>` and name to `Metrics <METRIC_INDEX>`.
+- Endpoint icons are optional short text or emoji values and appear in the metrics source selector.
 - Inferred values appear as comments in initial YAML.
 
 | YAML field | Default | Purpose | Environment override |
 | --- | --- | --- | --- |
 | `instances[].metrics[].id` | Zero-based metrics index | Stable identifier unique within the instance. | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_ID` |
 | `instances[].metrics[].name` | `Metrics <METRIC_INDEX>` | Display name. | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_NAME` |
+| `instances[].metrics[].icon` | Unset | Optional short text or emoji icon. | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_ICON` |
 | `instances[].metrics[].url` | Required | Absolute HTTP(S) Prometheus endpoint URL. | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_URL` |
 | `instances[].metrics[].requestTimeout` | Global `5s` | Request timeout for this endpoint. | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_REQUEST_TIMEOUT` |
 | `instances[].metrics[].auth` | `type: none` | Complete metrics authentication object. | `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_AUTH` |
@@ -449,6 +451,7 @@ instances:
     metrics:
       - id: lapi
         name: EU LAPI
+        icon: 🧠
         url: http://crowdsec-eu:6060/metrics
         auth:
           type: bearer
@@ -457,6 +460,7 @@ instances:
 
       - id: edge-engine
         name: EU Edge Engine
+        icon: 🛡️
         url: http://crowdsec-edge:6060/metrics
 
     sync:
@@ -497,7 +501,7 @@ instances:
 | Area | Behavior |
 | --- | --- |
 | Dashboard, Alerts, Decisions | Support one instance or Combined scope |
-| Metrics | Always uses one instance and endpoint; process-local counters are not summed |
+| Metrics | Defaults to a source-aware Combined view when the selected scope has multiple endpoints; individual endpoints remain selectable |
 | Add decision / clean IP | Runs against every LAPI in Combined scope and reports partial failures |
 | Row deletion | Uses the row's owning instance; numeric upstream IDs are never broadcast |
 
@@ -726,6 +730,8 @@ docker inspect --format='{{.State.Health.Status}}' crowdsec_web_ui
 
 - Reads a configured raw CrowdSec Prometheus endpoint. The Web UI does not configure one by default; CrowdSec normally exposes its local scrape at `http://127.0.0.1:6060/metrics`.
 - Shows remediation-component and log-processor LAPI activity, AppSec, parsers and datasources, scenarios, LAPI latency, parsing time, and whitelist hits. Log-processor activity uses `POST /v1/alerts`; CrowdSec builds that expose an exact last-heartbeat timestamp also provide the processor health badge.
+- When the current instance scope has multiple endpoints, **Combined** is selected by default. Headline totals sum successful sources, detailed rows retain their instance and endpoint, and unavailable endpoints produce a partial-data warning instead of hiding healthy sources.
+- Combined counters are cumulative across processes that may have different start times. Configuring the same Prometheus scrape more than once counts it more than once; endpoint roles and automatic duplicate detection are not applied.
 - Alert and decision analytics remain on the main dashboard.
 
 Enable full metrics in CrowdSec's `/etc/crowdsec/config.yaml`.

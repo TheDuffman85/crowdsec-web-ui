@@ -28,6 +28,7 @@ instances:
     metrics:
       - id: lapi
         name: EU LAPI
+        icon: 🧠
         url: https://crowdsec-eu:6060/metrics
         auth:
           type: bearer
@@ -68,6 +69,7 @@ instances:
     expect(config.instances[0].prometheus[0]).toMatchObject({
       id: 'lapi',
       name: 'EU LAPI',
+      icon: '🧠',
       auth: { type: 'bearer', token: 'metrics-secret' },
       tls: { caFile },
     });
@@ -161,6 +163,20 @@ instances:
       auth: { type: password, username: watcher, password: { file: ${passwordSecretFile} } }
 `);
     expect(() => createRuntimeConfig({ CROWDSEC_INSTANCES_CONFIG_FILE: configFile })).toThrow(/short text or emoji icon/i);
+
+    const metricsConfigFile = createTempConfig(`
+instances:
+  - id: first
+    name: Production
+    lapi:
+      url: https://first.example:8080
+      auth: { type: password, username: watcher, password: { file: ${passwordSecretFile} } }
+    metrics:
+      - name: LAPI
+        icon: this-icon-is-too-long
+        url: https://first.example:6060/metrics
+`);
+    expect(() => createRuntimeConfig({ CROWDSEC_INSTANCES_CONFIG_FILE: metricsConfigFile })).toThrow(/metrics\[0\]\.icon.*short text or emoji/i);
   });
 
   test('createRuntimeConfig translates deprecated alert origin settings', () => {

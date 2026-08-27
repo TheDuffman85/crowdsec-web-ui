@@ -7,6 +7,7 @@ import type {
   CleanupByIpRequest,
   ConfigResponse,
   CrowdsecMetricsResponse,
+  CrowdsecMetricsSource,
   InstanceEntityRef,
   StatsAlert,
   StatsDecision,
@@ -20,6 +21,7 @@ import type { RuntimeConfig } from '../config';
 import type { CrowdsecDatabase } from '../database';
 import type { LapiClient } from '../lapi';
 import type { DatabaseQueryWorker } from '../query-worker-client';
+import type { PrometheusSample } from '../metrics';
 import type { DashboardStatsFilters } from './types';
 
 type HonoContext = any;
@@ -96,6 +98,7 @@ export function registerApiRoutes(dependencies: ApiRouteDependencies): void {
     ensureCanManageSettings,
     ensurePublishedRevisionRead,
     fetchCrowdsecMetrics,
+    fetchCrowdsecMetricsSamples,
     getAlertCoordinatesByIds,
     getAlertListFilters,
     getDashboardStatsFilters,
@@ -150,6 +153,7 @@ export function registerApiRoutes(dependencies: ApiRouteDependencies): void {
     syncStatus,
     syncInstanceDelta,
     syncWorker,
+    summarizeCrowdsecMetrics,
     toDecisionListItem,
     toFailure,
     toPaginatedResponse,
@@ -645,7 +649,7 @@ app.get(`${config.basePath}/api/config`, ensureAuth, (context) => {
       icon: instance.icon,
       lapi_status: lapiClients.get(instance.id)!.getStatus(),
       sync_status: { ...(instanceSyncStatuses.get(instance.id) || syncStatus) },
-      prometheus: instance.prometheus.map((endpoint) => ({ id: endpoint.id, name: endpoint.name })),
+      prometheus: instance.prometheus.map((endpoint) => ({ id: endpoint.id, name: endpoint.name, icon: endpoint.icon })),
       sync_overrides: { ...instance.sync },
     })),
     aggregate_lapi_status: aggregateLapiStatus(),
@@ -674,7 +678,7 @@ app.get(`${config.basePath}/api/instances`, ensureAuth, (context) => context.jso
     icon: instance.icon,
     lapi_status: lapiClients.get(instance.id)!.getStatus(),
     sync_status: { ...(instanceSyncStatuses.get(instance.id) || syncStatus) },
-    prometheus: instance.prometheus.map((endpoint) => ({ id: endpoint.id, name: endpoint.name })),
+    prometheus: instance.prometheus.map((endpoint) => ({ id: endpoint.id, name: endpoint.name, icon: endpoint.icon })),
     sync_overrides: { ...instance.sync },
   })),
   aggregate_status: aggregateLapiStatus(),
@@ -701,6 +705,86 @@ app.get(`${config.basePath}/api/metrics/crowdsec`, ensureAuth, async (context) =
     console.error('Error fetching CrowdSec Prometheus metrics:', message);
     return context.json({ error: message }, 502);
   }
+});
+
+app.get(`${config.basePath}/api/metrics/crowdsec/combined`, ensureAuth, async (context) => {
+  const requestedScope = context.req.query('instance') || primaryInstance.id;
+  const selectedInstances = requestedScope === 'all'
+    ? config.instances
+    : config.instances.filter((instance) => instance.id === requestedScope);
+  if (selectedInstances.length === 0) {
+    return context.json({ error: `Unknown CrowdSec instance scope "${requestedScope}"` }, 404);
+  }
+
+  const configuredSources = selectedInstances.flatMap((instance) => instance.prometheus.map((endpoint) => ({
+    instance,
+    endpoint,
+    id: `${instance.id}:${endpoint.id}`,
+  })));
+  if (configuredSources.length === 0) {
+    return context.json({ error: 'No CrowdSec Prometheus metrics endpoints are configured for this scope' }, 404);
+  }
+
+  const results = await Promise.allSettled(configuredSources.map(async ({ instance, endpoint, id }) => {
+    const samples = await fetchCrowdsecMetricsSamples({
+      url: endpoint.url,
+      timeoutMs: endpoint.requestTimeoutMs || config.prometheusRequestTimeoutMs,
+      auth: endpoint.auth,
+      tls: endpoint.tls,
+      fetchImpl: options.metricsFetchImpl,
+    });
+    const sourceSummary = summarizeCrowdsecMetrics(samples);
+    return {
+      samples: samples.map((sample: PrometheusSample) => ({ ...sample, source_id: id })),
+      source: {
+        id,
+        instance_id: instance.id,
+        instance_name: instance.name,
+        ...(instance.icon ? { instance_icon: instance.icon } : {}),
+        endpoint_id: endpoint.id,
+        endpoint_name: endpoint.name,
+        ...(endpoint.icon ? { endpoint_icon: endpoint.icon } : {}),
+        status: 'available' as const,
+        fetched_at: sourceSummary.fetched_at,
+        crowdsecVersion: sourceSummary.crowdsecVersion,
+        crowdsecStartedAt: sourceSummary.crowdsecStartedAt,
+      },
+    };
+  }));
+
+  const sources: CrowdsecMetricsSource[] = results.map((result, index) => {
+    if (result.status === 'fulfilled') return result.value.source;
+    const { instance, endpoint, id } = configuredSources[index];
+    return {
+      id,
+      instance_id: instance.id,
+      instance_name: instance.name,
+      ...(instance.icon ? { instance_icon: instance.icon } : {}),
+      endpoint_id: endpoint.id,
+      endpoint_name: endpoint.name,
+      ...(endpoint.icon ? { endpoint_icon: endpoint.icon } : {}),
+      status: 'unavailable',
+      error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+    };
+  });
+  const successfulResults = results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
+
+  if (successfulResults.length === 0) {
+    return context.json({
+      error: 'Failed to read every CrowdSec Prometheus metrics endpoint in this scope',
+      sources,
+    }, 502);
+  }
+
+  const summary = summarizeCrowdsecMetrics(successfulResults.flatMap((result) => result.samples));
+  const { crowdsecVersion: _combinedVersion, crowdsecStartedAt: _combinedStartedAt, ...combinedSummary } = summary;
+  return context.json({
+    ...combinedSummary,
+    aggregation: {
+      partial: successfulResults.length !== configuredSources.length,
+      sources,
+    },
+  });
 });
 
 app.get(`${config.basePath}/api/instances/:instanceId/metrics/:endpointId`, ensureAuth, async (context) => {

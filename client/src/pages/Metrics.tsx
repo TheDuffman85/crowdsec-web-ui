@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Activity,
   AlertCircle,
+  Blend,
   Bot,
   CheckCircle2,
   Clock3,
@@ -18,7 +19,7 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
-import { fetchConfig, fetchCrowdsecMetrics } from '../lib/api';
+import { fetchCombinedCrowdsecMetrics, fetchConfig, fetchCrowdsecMetrics } from '../lib/api';
 import { useRefresh } from '../contexts/useRefresh';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
@@ -36,6 +37,7 @@ import type {
   CrowdsecMetricsResponse,
   CrowdsecMetricsRouteActivity,
   CrowdsecMetricsScenario,
+  CrowdsecMetricsSource,
   CrowdsecMetricsTiming,
   CrowdsecMetricsWhitelist,
   InstanceSummary,
@@ -49,6 +51,32 @@ type MetricsState =
 
 const SHOW_CHILD_PARSER_NODES_STORAGE_KEY = 'crowdsec-web-ui:metrics:show-child-parser-nodes';
 const MACHINE_ONLINE_WINDOW_MS = 2 * 60 * 1_000;
+const COMBINED_ENDPOINT_ID = '_combined';
+
+const MetricsSourcesContext = createContext<{
+  sources: Map<string, CrowdsecMetricsSource>;
+  includeInstance: boolean;
+}>({ sources: new Map(), includeInstance: false });
+
+function MetricsSourceBadge({ sourceId }: { sourceId?: string }) {
+  const { sources, includeInstance } = useContext(MetricsSourcesContext);
+  if (!sourceId) return null;
+  const source = sources.get(sourceId);
+  if (!source) return null;
+  const label = includeInstance
+    ? `${source.instance_name} — ${source.endpoint_name}`
+    : source.endpoint_name;
+  return (
+    <Badge variant="outline" title={label}>
+      {source.endpoint_icon && (
+        <span className="mr-1 inline-flex h-3.5 min-w-3.5 items-center justify-center leading-none" aria-hidden="true">
+          {source.endpoint_icon}
+        </span>
+      )}
+      {label}
+    </Badge>
+  );
+}
 
 function formatNumber(value: number): string {
   return Math.round(value).toLocaleString();
@@ -409,11 +437,12 @@ function EntityList({
                   : undefined;
 
               return (
-                <div key={item.name} className="rounded-lg border border-gray-100 p-3 dark:border-gray-700/70">
+                <div key={`${item.source_id || ''}-${item.name}`} className="rounded-lg border border-gray-100 p-3 dark:border-gray-700/70">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="truncate font-semibold text-gray-900 dark:text-white" title={item.name}>{item.name}</p>
+                        <MetricsSourceBadge sourceId={item.source_id} />
                         {!isMachine && (
                           <Badge variant={bouncerModeVariant(mode)}>
                             {t(`pages.metrics.modes.${mode || 'unknown'}`)}
@@ -513,13 +542,14 @@ function ParserSourceList({ items }: { items: CrowdsecMetricsParserSource[] }) {
         ) : (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {items.map((item) => (
-              <div key={`${item.source}-${item.type}`} className="rounded-lg border border-gray-100 p-4 dark:border-gray-700/70">
+              <div key={`${item.source_id || ''}-${item.source}-${item.type}`} className="rounded-lg border border-gray-100 p-4 dark:border-gray-700/70">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate font-semibold text-gray-900 dark:text-white" title={item.source}>{item.source}</p>
                     <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                       {item.type}{item.acquisTypes.length > 0 ? ` / ${item.acquisTypes.join(', ')}` : ''}
                     </p>
+                    <div className="mt-2"><MetricsSourceBadge sourceId={item.source_id} /></div>
                   </div>
                   <ParserSuccessBadge
                     value={item.successRate}
@@ -608,8 +638,11 @@ function ScenarioList({ items }: { items?: CrowdsecMetricsScenario[] }) {
               </div>
               <div className="divide-y divide-gray-100 dark:divide-gray-700/70">
                 {scenarios.map((item) => (
-                  <div key={item.name} className="grid grid-cols-[minmax(0,2fr)_100px_110px_100px_100px_100px_100px] gap-3 px-4 py-3">
-                    <div className="min-w-0 truncate font-medium text-gray-900 dark:text-white" title={item.name}>{item.name}</div>
+                  <div key={`${item.source_id || ''}-${item.name}`} className="grid grid-cols-[minmax(0,2fr)_100px_110px_100px_100px_100px_100px] gap-3 px-4 py-3">
+                    <div className="min-w-0">
+                      <div className="truncate font-medium text-gray-900 dark:text-white" title={item.name}>{item.name}</div>
+                      <div className="mt-1"><MetricsSourceBadge sourceId={item.source_id} /></div>
+                    </div>
                     <div className="font-mono text-sm text-gray-700 dark:text-gray-200 text-right">{formatNumber(item.current)}</div>
                     <div className="font-mono text-sm text-gray-700 dark:text-gray-200 text-right">{formatNumber(item.instantiations)}</div>
                     <div className="font-mono text-sm text-amber-700 dark:text-amber-300 text-right">{formatNumber(item.overflows)}</div>
@@ -664,12 +697,13 @@ function ParserNodeList({ items, showChildNodes, onShowChildNodesChange }: { ite
             </div>
             <div className="divide-y divide-gray-100 dark:divide-gray-700/70">
               {visibleItems.map((item) => (
-                <div key={`${item.name}-${item.stage}-${item.source}-${item.acquisType || ''}`} className="grid gap-2 px-4 py-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_110px_110px] lg:items-center lg:gap-3">
+                <div key={`${item.source_id || ''}-${item.name}-${item.stage}-${item.source}-${item.acquisType || ''}`} className="grid gap-2 px-4 py-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_110px_110px] lg:items-center lg:gap-3">
                   <div className="min-w-0">
                     <p className="truncate font-medium text-gray-900 dark:text-white" title={item.name}>{item.name}</p>
                     <p className="mt-1 truncate text-xs text-gray-500 dark:text-gray-400" title={item.source}>
                       {item.type} / {item.source}
                     </p>
+                    <div className="mt-1"><MetricsSourceBadge sourceId={item.source_id} /></div>
                   </div>
                   <div className="text-sm text-gray-600 dark:text-gray-300">{item.stage}</div>
                   <div className="font-mono text-sm font-semibold text-gray-900 dark:text-white lg:text-right">{formatNumber(item.processed)}</div>
@@ -711,9 +745,10 @@ function WhitelistList({ items }: { items: CrowdsecMetricsWhitelist[] }) {
           </div>
           <div className="divide-y divide-gray-100 dark:divide-gray-700/70">
             {items.map((item) => (
-              <div key={`${item.name}-${item.reason}`} className="grid gap-2 px-4 py-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,2fr)_100px_120px] lg:items-center lg:gap-3">
+              <div key={`${item.source_id || ''}-${item.name}-${item.reason}`} className="grid gap-2 px-4 py-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,2fr)_100px_120px] lg:items-center lg:gap-3">
                 <div className="min-w-0">
                   <p className="truncate font-medium text-gray-900 dark:text-white" title={item.name}>{item.name}</p>
+                  <div className="mt-1"><MetricsSourceBadge sourceId={item.source_id} /></div>
                 </div>
                 <div className="truncate text-sm text-gray-600 dark:text-gray-300" title={item.reason}>{item.reason}</div>
                 <div className="font-mono text-sm font-semibold text-gray-900 dark:text-white lg:text-right">{formatNumber(item.hits)}</div>
@@ -745,11 +780,12 @@ function TimingList({ items }: { items: CrowdsecMetricsTiming[] }) {
         ) : (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {items.map((item) => (
-              <div key={`${item.source}-${item.type}`} className="rounded-lg bg-gray-50 p-4 dark:bg-gray-900/40">
+              <div key={`${item.source_id || ''}-${item.source}-${item.type}`} className="rounded-lg bg-gray-50 p-4 dark:bg-gray-900/40">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate font-semibold text-gray-900 dark:text-white" title={item.source}>{item.source}</p>
                     <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{item.type}</p>
+                    <div className="mt-2"><MetricsSourceBadge sourceId={item.source_id} /></div>
                   </div>
                   <TimingValue value={item.averageSeconds} tooltip={timingTooltip} fallback={notAvailable} />
                 </div>
@@ -791,9 +827,12 @@ function LapiLatencyList({ items }: { items?: CrowdsecMetricsLapiRoute[] }) {
                 const tone = latencyTone(item.averageSeconds);
 
                 return (
-                  <div key={`${item.method}-${item.route}`} className="grid gap-2 px-4 py-3 lg:grid-cols-[90px_minmax(0,2fr)_110px_130px] lg:items-center lg:gap-3">
+                  <div key={`${item.source_id || ''}-${item.method}-${item.route}`} className="grid gap-2 px-4 py-3 lg:grid-cols-[90px_minmax(0,2fr)_110px_130px] lg:items-center lg:gap-3">
                     <div className="font-mono text-xs font-semibold text-gray-600 dark:text-gray-300">{item.method}</div>
-                    <div className="truncate text-sm font-medium text-gray-900 dark:text-white" title={item.route}>{item.route}</div>
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium text-gray-900 dark:text-white" title={item.route}>{item.route}</div>
+                      <div className="mt-1"><MetricsSourceBadge sourceId={item.source_id} /></div>
+                    </div>
                     <div className="font-mono text-sm font-semibold text-gray-900 dark:text-white lg:text-right">{formatNumber(item.requests)}</div>
                     <div className={`font-mono text-sm font-semibold lg:text-right ${toneClasses[tone].text}`}>{formatDuration(item.averageSeconds, notAvailable)}</div>
                   </div>
@@ -830,11 +869,12 @@ function AppsecEngineList({ items }: { items?: CrowdsecMetricsAppsecEngine[] }) 
               const allowed = Math.max(item.requests - item.blocked, 0);
 
               return (
-                <div key={`${item.engine}-${item.source}`} className="rounded-lg border border-gray-100 p-4 dark:border-gray-700/70">
+                <div key={`${item.source_id || ''}-${item.engine}-${item.source}`} className="rounded-lg border border-gray-100 p-4 dark:border-gray-700/70">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="truncate font-semibold text-gray-900 dark:text-white" title={item.engine}>{item.engine}</p>
                       <p className="mt-1 truncate text-xs text-gray-500 dark:text-gray-400" title={item.source}>{item.source}</p>
+                      <div className="mt-2"><MetricsSourceBadge sourceId={item.source_id} /></div>
                     </div>
                     <TooltipValue tone={blockTone} tooltip={blockRateTooltip} className="text-xs font-semibold">
                       {formatPercent(item.blockRate, notAvailable)}
@@ -951,6 +991,55 @@ function MetricsSourceSummary({ data }: { data: CrowdsecMetricsResponse }) {
   );
 }
 
+function CombinedSourcesSummary({ sources, includeInstance }: { sources: CrowdsecMetricsSource[]; includeInstance: boolean }) {
+  const { t } = useI18n();
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t('pages.metrics.combinedSources')}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {sources.map((source, index) => {
+            const label = includeInstance
+              ? `${source.instance_name} — ${source.endpoint_name}`
+              : source.endpoint_name;
+            return (
+              <div key={source.id} className="rounded-lg border border-gray-100 p-3 dark:border-gray-700/70">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <InstanceIcon
+                      icon={source.endpoint_icon || (includeInstance ? source.instance_icon : undefined)}
+                      colorIndex={index}
+                    />
+                    <p className="min-w-0 truncate font-semibold text-gray-900 dark:text-white" title={label}>{label}</p>
+                  </div>
+                  <Badge variant={source.status === 'available' ? 'success' : 'warning'}>
+                    {t(source.status === 'available'
+                      ? 'pages.metrics.sourceAvailable'
+                      : 'pages.metrics.sourceUnavailable')}
+                  </Badge>
+                </div>
+                {source.status === 'available' ? (
+                  <div className="mt-2 space-y-1 text-xs text-gray-500 dark:text-gray-400">
+                    {source.crowdsecVersion && <p>{t('pages.metrics.version')}: {source.crowdsecVersion}</p>}
+                    {source.crowdsecStartedAt && (
+                      <p>{t('pages.metrics.started')}: {formatDateTime(source.crowdsecStartedAt)}</p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="mt-2 break-words text-xs text-amber-800 dark:text-amber-200">{source.error}</p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function Metrics() {
   const { t } = useI18n();
   const { refreshSignal } = useRefresh();
@@ -1008,19 +1097,31 @@ export function Metrics() {
       const selectedChoice = endpointChoices.find(({ instance, endpoint }) =>
         endpoint.id === requestedEndpointId
         && (instanceScope !== 'all' || instance.id === requestedMetricsInstanceId),
-      ) || endpointChoices.find(({ endpoint }) => endpoint.id === requestedEndpointId)
-        || endpointChoices[0];
+      );
+      const combinedSelected = endpointChoices.length > 1
+        && (requestedEndpointId === COMBINED_ENDPOINT_ID || !selectedChoice);
       const nextParams = new URLSearchParams(searchParams);
-      nextParams.set('endpoint', selectedChoice.endpoint.id);
-      if (instanceScope === 'all') {
-        nextParams.set('metrics_instance', selectedChoice.instance.id);
-      } else {
+      if (combinedSelected) {
+        nextParams.set('endpoint', COMBINED_ENDPOINT_ID);
         nextParams.delete('metrics_instance');
+      } else {
+        const effectiveChoice = selectedChoice || endpointChoices[0];
+        nextParams.set('endpoint', effectiveChoice.endpoint.id);
+        if (instanceScope === 'all') {
+          nextParams.set('metrics_instance', effectiveChoice.instance.id);
+        } else {
+          nextParams.delete('metrics_instance');
+        }
       }
       if (nextParams.toString() !== searchParams.toString()) {
         setSearchParams(nextParams, { replace: true });
       }
-      const data = await fetchCrowdsecMetrics(selectedChoice.instance.id, selectedChoice.endpoint.id);
+      const data = combinedSelected
+        ? await fetchCombinedCrowdsecMetrics(instanceScope)
+        : await fetchCrowdsecMetrics(
+          (selectedChoice || endpointChoices[0]).instance.id,
+          (selectedChoice || endpointChoices[0]).endpoint.id,
+        );
       setState({ status: 'ready', data });
     } catch (error: unknown) {
       setState({ status: 'error', message: getErrorMessage(error, t('pages.metrics.fetchFailed')) });
@@ -1097,6 +1198,13 @@ export function Metrics() {
     }
 
     const { data } = state;
+    const aggregation = data.aggregation;
+    const currentInstanceScope = requestedInstanceId || (instances.length > 1 ? 'all' : instances[0]?.id);
+    const includeInstanceInSource = currentInstanceScope === 'all';
+    const metricsSourcesContext = {
+      sources: new Map((aggregation?.sources || []).map((source) => [source.id, source])),
+      includeInstance: includeInstanceInSource,
+    };
     const machineAlertRequests = data.totals.machineAlertRequests ?? data.machines.reduce(
       (sum, machine) => sum + (machine.alertRequests ?? machine.routes
         ?.filter((route) => route.method === 'POST' && route.route === '/v1/alerts')
@@ -1111,8 +1219,21 @@ export function Metrics() {
     );
 
     return (
+      <MetricsSourcesContext.Provider value={metricsSourcesContext}>
       <div className="space-y-6">
+        {aggregation?.partial && (
+          <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-100">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{t('pages.metrics.partialWarning', {
+              sources: aggregation.sources
+                .filter((source) => source.status === 'unavailable')
+                .map((source) => includeInstanceInSource ? `${source.instance_name} — ${source.endpoint_name}` : source.endpoint_name)
+                .join(', '),
+            })}</span>
+          </div>
+        )}
         <MetricsSourceSummary data={data} />
+        {aggregation && <CombinedSourcesSummary sources={aggregation.sources} includeInstance={includeInstanceInSource} />}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 min-[1800px]:grid-cols-6">
           <MetricTile title={t('pages.metrics.remediationComponentApiRequests')} value={formatNumber(data.totals.bouncerRequests)} detail={t('pages.metrics.groupedByBouncer')} icon={ShieldCheck} />
           <MetricTile title={t('pages.metrics.machineAlertPosts')} value={formatNumber(machineAlertRequests)} detail={t('pages.metrics.machineAlertPostsDetail', { calls: formatNumber(data.totals.machineRequests), heartbeats: formatNumber(machineHeartbeatRequests) })} icon={Server} />
@@ -1135,8 +1256,9 @@ export function Metrics() {
         <ParserNodeList items={data.parserNodes} showChildNodes={showChildParserNodes} onShowChildNodesChange={handleShowChildParserNodesChange} />
         <WhitelistList items={data.whitelists} />
       </div>
+      </MetricsSourcesContext.Provider>
     );
-  }, [handleShowChildParserNodesChange, load, showChildParserNodes, state, t]);
+  }, [handleShowChildParserNodesChange, instances, load, requestedInstanceId, showChildParserNodes, state, t]);
 
   const instanceScope = requestedInstanceId || (instances.length > 1 ? 'all' : instances[0]?.id);
   const scopedInstances = instanceScope === 'all'
@@ -1148,13 +1270,14 @@ export function Metrics() {
   const selectedChoice = endpointChoices.find(({ instance, endpoint }) =>
     endpoint.id === requestedEndpointId
     && (instanceScope !== 'all' || instance.id === requestedMetricsInstanceId),
-  ) || endpointChoices.find(({ endpoint }) => endpoint.id === requestedEndpointId)
-    || endpointChoices[0];
+  );
   const showEndpointSelector = endpointChoices.length > 1;
+  const combinedSelected = showEndpointSelector
+    && (requestedEndpointId === COMBINED_ENDPOINT_ID || !selectedChoice);
 
   return (
     <div className="space-y-6">
-      {showEndpointSelector && selectedChoice && (
+      {showEndpointSelector && (
         <div className="flex flex-wrap gap-3 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
           <div className="w-64 max-w-full">
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500" htmlFor="metrics-endpoint-selector">
@@ -1163,13 +1286,21 @@ export function Metrics() {
             <DropdownSelect
               id="metrics-endpoint-selector"
               label={t('pages.metrics.metricsEndpoint')}
-              value={`${selectedChoice.instance.id}:${selectedChoice.endpoint.id}`}
+              value={combinedSelected
+                ? COMBINED_ENDPOINT_ID
+                : `${selectedChoice!.instance.id}:${selectedChoice!.endpoint.id}`}
               onChange={(value) => {
+                const next = new URLSearchParams(searchParams);
+                if (value === COMBINED_ENDPOINT_ID) {
+                  next.set('endpoint', COMBINED_ENDPOINT_ID);
+                  next.delete('metrics_instance');
+                  setSearchParams(next);
+                  return;
+                }
                 const choice = endpointChoices.find(({ instance, endpoint }) =>
                   `${instance.id}:${endpoint.id}` === value,
                 );
                 if (!choice) return;
-                const next = new URLSearchParams(searchParams);
                 next.set('endpoint', choice.endpoint.id);
                 if (instanceScope === 'all') {
                   next.set('metrics_instance', choice.instance.id);
@@ -1178,13 +1309,23 @@ export function Metrics() {
                 }
                 setSearchParams(next);
               }}
-              options={endpointChoices.map(({ instance, endpoint }) => ({
-                value: `${instance.id}:${endpoint.id}`,
-                label: instanceScope === 'all' ? `${instance.name} — ${endpoint.name}` : endpoint.name,
-                icon: instanceScope === 'all'
-                  ? <InstanceIcon icon={instance.icon} colorIndex={instances.findIndex((candidate) => candidate.id === instance.id)} />
-                  : undefined,
-              }))}
+              options={[
+                {
+                  value: COMBINED_ENDPOINT_ID,
+                  label: t('pages.metrics.combined'),
+                  icon: <Blend className="h-4 w-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />,
+                },
+                ...endpointChoices.map(({ instance, endpoint }, choiceIndex) => ({
+                  value: `${instance.id}:${endpoint.id}`,
+                  label: instanceScope === 'all' ? `${instance.name} — ${endpoint.name}` : endpoint.name,
+                  icon: <InstanceIcon
+                    icon={endpoint.icon || (instanceScope === 'all' ? instance.icon : undefined)}
+                    colorIndex={instanceScope === 'all'
+                      ? instances.findIndex((candidate) => candidate.id === instance.id)
+                      : choiceIndex}
+                  />,
+                })),
+              ]}
             />
           </div>
         </div>

@@ -56,7 +56,7 @@ import {
 import { createAttackLocationResolver, type AttackLocationResolver } from './attack-location-geocoder';
 import { getAlertSourceValue, getAlertTargets, getAlertTargetSummary, resolveAlertHistoryAt, resolveAlertReason, resolveAlertScenario, toSlimAlert, withAlertTargetSummary } from './utils/alerts';
 import { parseGoDuration, toDuration } from './utils/duration';
-import { fetchCrowdsecMetrics } from './metrics';
+import { fetchCrowdsecMetrics, fetchCrowdsecMetricsSamples, summarizeCrowdsecMetrics } from './metrics';
 import { DatabaseQueryWorker, QueryWorkerTimeoutError } from './query-worker-client';
 import { registerApiRoutes } from './app/api-routes';
 import { createQueryService } from './app/query-service';
@@ -1284,6 +1284,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     ensureCanManageSettings,
     ensurePublishedRevisionRead,
     fetchCrowdsecMetrics,
+    fetchCrowdsecMetricsSamples,
     getAlertCoordinatesByIds,
     getAlertListFilters,
     getDashboardStatsFilters,
@@ -1337,6 +1338,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     syncStatus,
     syncInstanceDelta,
     syncWorker,
+    summarizeCrowdsecMetrics,
     toDecisionListItem,
     toFailure,
     toPaginatedResponse,

@@ -32,6 +32,7 @@ export type {
   CrowdsecMetricsParserNode,
   CrowdsecMetricsParserSource,
   CrowdsecMetricsResponse,
+  CrowdsecMetricsSource,
   CrowdsecMetricsRouteActivity,
   CrowdsecMetricsScenario,
   CrowdsecMetricsTiming,

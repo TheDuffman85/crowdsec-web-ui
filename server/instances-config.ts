@@ -16,6 +16,7 @@ export type PrometheusAuthConfig =
 export interface PrometheusEndpointConfig {
   id: string;
   name: string;
+  icon?: string;
   url: string;
   auth: PrometheusAuthConfig;
   tls: EndpointTlsConfig;
@@ -323,6 +324,7 @@ export function parseInstancesConfig(parsed: unknown, env: NodeJS.ProcessEnv): C
       return {
         id: endpointIdValue,
         name: endpoint.name === undefined ? `Metrics ${endpointIndex}` : string(endpoint.name, `${endpointLabel}.name`),
+        icon: optionalIcon(endpoint.icon, `${endpointLabel}.icon`),
         url: endpointUrl(endpoint.url, `${endpointLabel}.url`, { allowPath: true }),
         auth: parsePrometheusAuth(endpoint.auth, env, `${endpointLabel}.auth`),
         tls: parseTls(endpoint.tls, `${endpointLabel}.tls`),

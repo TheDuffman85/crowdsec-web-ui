@@ -331,6 +331,14 @@ export async function fetchCrowdsecMetrics(instanceId?: string, endpointId?: str
     return fetchJson<CrowdsecMetricsResponse>(path, undefined, 'Failed to fetch CrowdSec metrics');
 }
 
+export async function fetchCombinedCrowdsecMetrics(instanceScope: string): Promise<CrowdsecMetricsResponse> {
+    return fetchJson<CrowdsecMetricsResponse>(
+        `/api/metrics/crowdsec/combined?instance=${encodeURIComponent(instanceScope)}`,
+        undefined,
+        'Failed to fetch combined CrowdSec metrics',
+    );
+}
+
 export async function updateMetricsSidebarPreference(data: UpdateMetricsSidebarPreferenceRequest): Promise<{
     success: boolean;
     metrics_sidebar_visible: boolean;

@@ -18,6 +18,7 @@ import {
   fetchAlertsPaginated,
   fetchAlertsForStats,
   fetchConfig,
+  fetchCombinedCrowdsecMetrics,
   fetchCrowdsecMetrics,
   fetchDashboardStats,
   fetchDecisions,
@@ -107,6 +108,7 @@ describe('api helpers', () => {
     await expect(deleteDecision('decision/id', 'eu west')).resolves.toEqual({ ok: true });
     await expect(fetchCrowdsecMetrics('eu west', 'lapi/main')).resolves.toEqual({ ok: true });
     await expect(fetchCrowdsecMetrics()).resolves.toEqual({ ok: true });
+    await expect(fetchCombinedCrowdsecMetrics('eu west')).resolves.toEqual({ ok: true });
     await expect(bulkDeleteAlerts([{ instance_id: 'eu-west', id: 'alert-1' }])).resolves.toEqual({ ok: true });
     await expect(bulkDeleteDecisions([{ instance_id: 'eu-west', id: 'decision-1' }])).resolves.toEqual({ ok: true });
 
@@ -115,6 +117,7 @@ describe('api helpers', () => {
       '/api/instances/eu%20west/decisions/decision%2Fid',
       '/api/instances/eu%20west/metrics/lapi%2Fmain',
       '/api/metrics/crowdsec',
+      '/api/metrics/crowdsec/combined?instance=eu%20west',
     ]));
     expect(fetchMock.mock.calls.map(([, init]) => init?.body)).toEqual(expect.arrayContaining([
       JSON.stringify({ refs: [{ instance_id: 'eu-west', id: 'alert-1' }] }),
