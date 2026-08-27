@@ -41,12 +41,18 @@ export function ScenarioName({
     return (
         <div className={`flex flex-col items-start leading-tight min-w-0 ${className}`}>
             {namespace && (
-                <span className={`${size === "lg" ? "text-sm" : "text-xs"} text-gray-500 dark:text-gray-400 font-normal leading-none`}>
+                <span
+                    className={`${size === "lg" ? "text-sm" : "text-xs"} max-w-full truncate text-gray-500 dark:text-gray-400 font-normal leading-none`}
+                    title={namespace}
+                >
                     {namespace}
                 </span>
             )}
             <div className="flex items-center gap-1 min-w-0 w-full">
-                <span className={`font-medium truncate text-gray-900 dark:text-gray-100 ${size === "lg" ? "text-lg leading-snug" : "text-sm leading-tight"} min-w-0`}>
+                <span
+                    className={`font-medium truncate text-gray-900 dark:text-gray-100 ${size === "lg" ? "text-lg leading-snug" : "text-sm leading-tight"} min-w-0`}
+                    title={shortName}
+                >
                     {shortName}
                 </span>
                 {simulated && (

@@ -67,10 +67,10 @@ type AlertDeleteAction =
     | { kind: "selected"; refs: InstanceEntityRef[] }
     | { kind: "ip"; ip: string };
 
-const ALERT_DETAIL_CARD_CLASS_NAME = "p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50";
+const ALERT_DETAIL_CARD_CLASS_NAME = "min-w-0 overflow-hidden p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50";
 const ALERT_DETAIL_LABEL_CLASS_NAME = "text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2";
-const ALERT_DETAIL_PRIMARY_CLASS_NAME = "text-lg font-medium text-gray-900 dark:text-gray-100";
-const ALERT_DETAIL_SECONDARY_CLASS_NAME = "text-sm text-gray-500 dark:text-gray-400";
+const ALERT_DETAIL_PRIMARY_CLASS_NAME = "min-w-0 text-lg font-medium text-gray-900 dark:text-gray-100";
+const ALERT_DETAIL_SECONDARY_CLASS_NAME = "min-w-0 text-sm text-gray-500 dark:text-gray-400";
 
 function alertKey(alert: Pick<AlertListItem, 'id' | 'instance_id'>): string {
     return `${alert.instance_id || 'default'}\u0000${String(alert.id)}`;
@@ -1811,7 +1811,10 @@ export function Alerts() {
                                     <h4 className={ALERT_DETAIL_LABEL_CLASS_NAME}>
                                         {t('tableColumns.instance', { defaultValue: 'Instance' })}
                                     </h4>
-                                    <div className={`${ALERT_DETAIL_PRIMARY_CLASS_NAME} break-words`}>
+                                    <div
+                                        className={`${ALERT_DETAIL_PRIMARY_CLASS_NAME} truncate`}
+                                        title={selectedAlert.instance_name || selectedAlert.instance_id || '-'}
+                                    >
                                         {selectedAlert.instance_name || selectedAlert.instance_id || '-'}
                                     </div>
                                 </div>
@@ -1819,14 +1822,17 @@ export function Alerts() {
                             {isAlertColumnVisible('machine') && (
                                 <div className={ALERT_DETAIL_CARD_CLASS_NAME}>
                                     <h4 className={ALERT_DETAIL_LABEL_CLASS_NAME}>{t('tableColumns.machine')}</h4>
-                                    <div className={ALERT_DETAIL_PRIMARY_CLASS_NAME}>
+                                    <div
+                                        className={`${ALERT_DETAIL_PRIMARY_CLASS_NAME} truncate`}
+                                        title={resolveMachineName(selectedAlert) || '-'}
+                                    >
                                         {resolveMachineName(selectedAlert) || "-"}
                                     </div>
                                 </div>
                             )}
                             <div className={ALERT_DETAIL_CARD_CLASS_NAME}>
                                 <h4 className={ALERT_DETAIL_LABEL_CLASS_NAME}>{t('tableColumns.scenario')}</h4>
-                                <div className="break-words">
+                                <div className="min-w-0 overflow-hidden">
                                     <ScenarioName
                                         name={selectedAlert.scenario}
                                         reason={selectedAlert.reason}
@@ -1843,61 +1849,80 @@ export function Alerts() {
                                     {selectedAlert.source?.cn && (
                                         <CountryFlag code={selectedAlert.source.cn} />
                                     )}
-                                    {getCountryName(selectedAlert.source?.cn, language) || "-"}
+                                    <span
+                                        className="truncate"
+                                        title={getCountryName(selectedAlert.source?.cn, language) || '-'}
+                                    >
+                                        {getCountryName(selectedAlert.source?.cn, language) || "-"}
+                                    </span>
                                 </div>
                                 {selectedAlert.source?.latitude && selectedAlert.source?.longitude && (
-                                    <div className={`${ALERT_DETAIL_SECONDARY_CLASS_NAME} font-mono mt-1`}>
+                                    <div className={`${ALERT_DETAIL_SECONDARY_CLASS_NAME} font-mono mt-1 overflow-hidden`}>
                                         <a
                                             href={`https://www.google.com/maps?q=${encodeURIComponent(String(selectedAlert.source.latitude))},${encodeURIComponent(String(selectedAlert.source.longitude))}`}
                                             target="_blank"
                                             rel="noopener noreferrer"
-                                            className="hover:text-primary-600 dark:hover:text-primary-400 transition-colors inline-flex items-center gap-1"
+                                            className="flex min-w-0 max-w-full items-center gap-1 hover:text-primary-600 dark:hover:text-primary-400 transition-colors"
                                             title={t('pages.alerts.viewOnGoogleMaps')}
                                         >
-                                            {t('pages.alerts.coordinates', { latitude: selectedAlert.source.latitude, longitude: selectedAlert.source.longitude })}
-                                            <ExternalLink size={10} />
+                                            <span className="truncate">
+                                                {t('pages.alerts.coordinates', { latitude: selectedAlert.source.latitude, longitude: selectedAlert.source.longitude })}
+                                            </span>
+                                            <ExternalLink size={10} className="shrink-0" />
                                         </a>
                                     </div>
                                 )}
                             </div>
                             <div className={ALERT_DETAIL_CARD_CLASS_NAME}>
                                 <h4 className={ALERT_DETAIL_LABEL_CLASS_NAME}>{t('tableColumns.source')}</h4>
-                                <div className="flex items-center gap-2">
+                                <div className="flex min-w-0 items-center gap-2">
                                     {selectedAlertSourceValue ? (
                                         <a
                                             href={`https://app.crowdsec.net/cti/${encodeURIComponent(String(selectedAlertSourceValue))}`}
                                             target="_blank"
                                             rel="noopener noreferrer"
-                                            className={`${ALERT_DETAIL_PRIMARY_CLASS_NAME} font-mono hover:text-primary-600 dark:hover:text-primary-400 transition-colors inline-flex items-center gap-1`}
+                                            className={`${ALERT_DETAIL_PRIMARY_CLASS_NAME} flex max-w-full items-center gap-1 overflow-hidden font-mono hover:text-primary-600 dark:hover:text-primary-400 transition-colors`}
                                             title={t('pages.alerts.viewOnCti')}
                                         >
-                                            {selectedAlertSourceValue}
-                                            <ExternalLink size={14} />
+                                            <span className="truncate" title={String(selectedAlertSourceValue)}>
+                                                {selectedAlertSourceValue}
+                                            </span>
+                                            <ExternalLink size={14} className="shrink-0" />
                                         </a>
                                     ) : (
                                         <span className={`${ALERT_DETAIL_PRIMARY_CLASS_NAME} font-mono`}>-</span>
                                     )}
                                 </div>
                                 {selectedAlert.source?.range && selectedAlert.source.range !== selectedAlertSourceValue && (
-                                    <div className={`${ALERT_DETAIL_SECONDARY_CLASS_NAME} font-mono mt-1`}>
+                                    <div
+                                        className={`${ALERT_DETAIL_SECONDARY_CLASS_NAME} font-mono mt-1 truncate`}
+                                        title={t('pages.alerts.range', { range: selectedAlert.source.range })}
+                                    >
                                         {t('pages.alerts.range', { range: selectedAlert.source.range })}
                                     </div>
                                 )}
-                                <div className={`${ALERT_DETAIL_SECONDARY_CLASS_NAME} mt-1`}>
+                                <div className={`${ALERT_DETAIL_SECONDARY_CLASS_NAME} mt-1 overflow-hidden`}>
                                     {selectedAlert.source?.as_number && (
                                         <a
                                             href={`https://bgp.he.net/AS${encodeURIComponent(selectedAlert.source.as_number)}`}
                                             target="_blank"
                                             rel="noopener noreferrer"
-                                            className="hover:text-primary-600 dark:hover:text-primary-400 transition-colors inline-flex items-center gap-1"
+                                            className="flex min-w-0 max-w-full items-center gap-1 hover:text-primary-600 dark:hover:text-primary-400 transition-colors"
                                             title={t('pages.alerts.viewAsInfo')}
                                         >
-                                            {selectedAlert.source?.as_name} (AS{selectedAlert.source.as_number})
-                                            <ExternalLink size={12} />
+                                            <span
+                                                className="truncate"
+                                                title={`${selectedAlert.source?.as_name || ''} (AS${selectedAlert.source.as_number})`.trim()}
+                                            >
+                                                {selectedAlert.source?.as_name} (AS{selectedAlert.source.as_number})
+                                            </span>
+                                            <ExternalLink size={12} className="shrink-0" />
                                         </a>
                                     )}
                                     {!selectedAlert.source?.as_number && selectedAlert.source?.as_name && (
-                                        <span>{selectedAlert.source.as_name}</span>
+                                        <span className="block truncate" title={selectedAlert.source.as_name}>
+                                            {selectedAlert.source.as_name}
+                                        </span>
                                     )}
                                 </div>
                             </div>

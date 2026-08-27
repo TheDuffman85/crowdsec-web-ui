@@ -226,6 +226,15 @@ describe('Alerts page presentation and columns', () => {
     const sourceHeading = within(detailsDialog).getByText('IP / Range');
     const targetHeading = within(detailsDialog).getByText('Target');
     expect(sourceHeading.compareDocumentPosition(targetHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    const sourceCard = sourceHeading.parentElement;
+    const sourceLink = within(detailsDialog).getByRole('link', { name: '203.0.113.91' });
+    const targetDisplay = within(detailsDialog).getByTitle('api.example.test · 3 distinct targets');
+    expect(sourceCard).toHaveClass('min-w-0', 'overflow-hidden');
+    expect(sourceLink).toHaveClass('min-w-0', 'max-w-full', 'overflow-hidden');
+    expect(sourceLink.querySelector('span')).toHaveClass('truncate');
+    expect(targetHeading.parentElement).toHaveClass('min-w-0', 'overflow-hidden');
+    expect(targetDisplay.querySelector('span')).toHaveClass('truncate');
   });
 
   test('keeps saved order for hidden alert columns when they are enabled later', async () => {
