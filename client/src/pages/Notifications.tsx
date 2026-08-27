@@ -71,7 +71,14 @@ type RuleFormState = {
   enabled: boolean;
   severity: NotificationSeverity;
   channel_ids: string[];
-  filters: { scenario: string; target: string; include_simulated: boolean; values: string };
+  filters: {
+    scenario: string;
+    target: string;
+    include_simulated: boolean;
+    values: string;
+    countries: string;
+    exclude_countries: boolean;
+  };
   config: Record<string, string>;
 };
 
@@ -133,7 +140,14 @@ const defaultRuleForm = (type: NotificationRuleType = 'alert-spike'): RuleFormSt
   enabled: true,
   severity: 'warning',
   channel_ids: [],
-  filters: { scenario: '', target: '', include_simulated: false, values: '' },
+  filters: {
+    scenario: '',
+    target: '',
+    include_simulated: false,
+    values: '',
+    countries: '',
+    exclude_countries: false,
+  },
   config: { ...RULE_DEFAULTS[type] },
 });
 
@@ -391,6 +405,10 @@ function splitIpRangeFilterValues(value: string): string[] {
   return value.split(/[\s,]+/).map((entry) => entry.trim()).filter(Boolean);
 }
 
+function splitCountryFilterValues(value: string): string[] {
+  return value.split(/[\s,]+/).map((entry) => entry.trim().toUpperCase()).filter(Boolean);
+}
+
 function buildRulePayload(ruleForm: RuleFormState): UpsertNotificationRuleRequest {
   const basePayload = {
     name: ruleForm.name,
@@ -464,6 +482,8 @@ function buildRulePayload(ruleForm: RuleFormState): UpsertNotificationRuleReques
         filters: {
           ...filters,
           values: splitIpRangeFilterValues(ruleForm.filters.values),
+          countries: splitCountryFilterValues(ruleForm.filters.countries),
+          exclude_countries: ruleForm.filters.exclude_countries,
         },
       },
     };
@@ -779,6 +799,8 @@ export function Notifications() {
         target: filters?.target || '',
         include_simulated: filters?.include_simulated === true,
         values: Array.isArray(filters?.values) ? filters.values.join(', ') : '',
+        countries: Array.isArray(filters?.countries) ? filters.countries.join(', ') : '',
+        exclude_countries: filters?.exclude_countries === true,
       },
       config: Object.fromEntries(
         Object.entries(rule.config)
@@ -1605,12 +1627,21 @@ function RuleModal({
             {(form.type === 'ip-ban' || form.type === 'new-alert-decision') && (
               <LabeledInput label={t('pages.notifications.ipRangeFilter')} value={form.filters.values} onChange={(value) => onSetForm((current) => ({ ...current, filters: { ...current.filters, values: value } }))} />
             )}
+            {form.type === 'ip-ban' && (
+              <LabeledInput label={t('pages.notifications.countryFilter')} value={form.filters.countries} onChange={(value) => onSetForm((current) => ({ ...current, filters: { ...current.filters, countries: value } }))} />
+            )}
             <LabeledInput label={t('pages.notifications.scenarioContains')} value={form.filters.scenario} onChange={(value) => onSetForm((current) => ({ ...current, filters: { ...current.filters, scenario: value } }))} />
             <LabeledInput label={t('pages.notifications.targetContains')} value={form.filters.target} onChange={(value) => onSetForm((current) => ({ ...current, filters: { ...current.filters, target: value } }))} />
             {form.type !== 'new-alert-decision' && (
               <div className="flex items-center gap-3 pt-7">
                 <Switch id="rule-include-simulated" checked={form.filters.include_simulated} onCheckedChange={(checked) => onSetForm((current) => ({ ...current, filters: { ...current.filters, include_simulated: checked } }))} />
                 <label htmlFor="rule-include-simulated" className="text-sm font-medium">{simulatedFilterLabel}</label>
+              </div>
+            )}
+            {form.type === 'ip-ban' && (
+              <div className="flex items-center gap-3 pt-7">
+                <Switch id="rule-exclude-countries" checked={form.filters.exclude_countries} onCheckedChange={(checked) => onSetForm((current) => ({ ...current, filters: { ...current.filters, exclude_countries: checked } }))} />
+                <label htmlFor="rule-exclude-countries" className="text-sm font-medium">{t('pages.notifications.excludeCountries')}</label>
               </div>
             )}
           </div>

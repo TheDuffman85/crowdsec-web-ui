@@ -422,6 +422,8 @@ export interface NotificationFilter {
   target?: string;
   include_simulated?: boolean;
   values?: string[];
+  countries?: string[];
+  exclude_countries?: boolean;
 }
 
 export interface AlertSpikeRuleConfig {

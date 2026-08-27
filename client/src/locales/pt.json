@@ -661,6 +661,8 @@
   "pages.notifications.includeSimulatedAlertsAndDecisions": "Incluir alertas e decisões simulados",
   "pages.notifications.includeSimulatedDecisions": "Incluir decisões simuladas",
   "pages.notifications.ipRangeFilter": "Filtro de IP / intervalo",
+  "pages.notifications.countryFilter": "Filtro de países (códigos ISO)",
+  "pages.notifications.excludeCountries": "Excluir países selecionados",
   "pages.notifications.eventType": "Notificar sobre",
   "pages.notifications.eventTypes.alerts": "Alertas",
   "pages.notifications.eventTypes.decisions": "Decisões",

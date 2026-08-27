@@ -661,6 +661,8 @@
   "pages.notifications.includeSimulatedAlertsAndDecisions": "包含模拟告警和决策",
   "pages.notifications.includeSimulatedDecisions": "包含模拟决策",
   "pages.notifications.ipRangeFilter": "IP / 范围过滤",
+  "pages.notifications.countryFilter": "国家/地区过滤（ISO 代码）",
+  "pages.notifications.excludeCountries": "排除所选国家/地区",
   "pages.notifications.eventType": "通知对象",
   "pages.notifications.eventTypes.alerts": "告警",
   "pages.notifications.eventTypes.decisions": "决策",

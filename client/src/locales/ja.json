@@ -661,6 +661,8 @@
   "pages.notifications.includeSimulatedAlertsAndDecisions": "シミュレーションアラートと決定を含める",
   "pages.notifications.includeSimulatedDecisions": "シミュレーション決定を含める",
   "pages.notifications.ipRangeFilter": "IP / 範囲フィルター",
+  "pages.notifications.countryFilter": "国フィルター（ISOコード）",
+  "pages.notifications.excludeCountries": "選択した国を除外",
   "pages.notifications.eventType": "通知対象",
   "pages.notifications.eventTypes.alerts": "アラート",
   "pages.notifications.eventTypes.decisions": "決定",

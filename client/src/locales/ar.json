@@ -661,6 +661,8 @@
   "pages.notifications.includeSimulatedAlertsAndDecisions": "تضمين التنبيهات والقرارات المحاكاة",
   "pages.notifications.includeSimulatedDecisions": "تضمين القرارات المحاكاة",
   "pages.notifications.ipRangeFilter": "فلتر IP / النطاق",
+  "pages.notifications.countryFilter": "فلتر البلد (رموز ISO)",
+  "pages.notifications.excludeCountries": "استبعاد البلدان المحددة",
   "pages.notifications.eventType": "الإشعار عن",
   "pages.notifications.eventTypes.alerts": "التنبيهات",
   "pages.notifications.eventTypes.decisions": "القرارات",

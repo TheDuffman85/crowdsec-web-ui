@@ -154,7 +154,7 @@ describe('notification per-record incidents', () => {
     database.close();
   });
 
-  test('IP ban rules respect window, decision type, simulation, scenario, target, exact IP, and CIDR filters', async () => {
+  test('IP ban rules respect window, decision type, simulation, scenario, target, IP, CIDR, and country filters', async () => {
     const { database, service } = createService();
     await service.createRule({
       name: 'Filtered bans',
@@ -169,18 +169,20 @@ describe('notification per-record incidents', () => {
           target: 'ssh',
           include_simulated: true,
           values: ['203.0.113.10', '10.0.0.0/24', '2001:db8::/32'],
+          countries: ['us', 'DE'],
         },
       },
     });
 
-    insertDecision(database, createDecision('exact', '2026-03-28T11:50:00.000Z', { value: '203.0.113.10' }));
-    insertDecision(database, createDecision('cidr-v4', '2026-03-28T11:51:00.000Z', { value: '10.0.0.42' }));
-    insertDecision(database, createDecision('cidr-v6', '2026-03-28T11:52:00.000Z', { value: '2001:db8::42', simulated: true }));
-    insertDecision(database, createDecision('captcha', '2026-03-28T11:53:00.000Z', { value: '10.0.0.43', type: 'captcha' }));
-    insertDecision(database, createDecision('outside-cidr', '2026-03-28T11:54:00.000Z', { value: '10.0.1.42' }));
-    insertDecision(database, createDecision('wrong-scenario', '2026-03-28T11:55:00.000Z', { value: '10.0.0.44', scenario: 'crowdsecurity/http-probing' }));
-    insertDecision(database, createDecision('wrong-target', '2026-03-28T11:56:00.000Z', { value: '10.0.0.45', target: 'http' }));
-    insertDecision(database, createDecision('old-ban', '2026-03-28T11:20:00.000Z', { value: '10.0.0.46' }));
+    insertDecision(database, createDecision('exact', '2026-03-28T11:50:00.000Z', { value: '203.0.113.10', country: 'US' }));
+    insertDecision(database, createDecision('cidr-v4', '2026-03-28T11:51:00.000Z', { value: '10.0.0.42', country: 'DE' }));
+    insertDecision(database, createDecision('cidr-v6', '2026-03-28T11:52:00.000Z', { value: '2001:db8::42', simulated: true, country: 'US' }));
+    insertDecision(database, createDecision('captcha', '2026-03-28T11:53:00.000Z', { value: '10.0.0.43', type: 'captcha', country: 'US' }));
+    insertDecision(database, createDecision('outside-cidr', '2026-03-28T11:54:00.000Z', { value: '10.0.1.42', country: 'US' }));
+    insertDecision(database, createDecision('wrong-scenario', '2026-03-28T11:55:00.000Z', { value: '10.0.0.44', scenario: 'crowdsecurity/http-probing', country: 'US' }));
+    insertDecision(database, createDecision('wrong-target', '2026-03-28T11:56:00.000Z', { value: '10.0.0.45', target: 'http', country: 'US' }));
+    insertDecision(database, createDecision('wrong-country', '2026-03-28T11:57:00.000Z', { value: '10.0.0.47', country: 'FR' }));
+    insertDecision(database, createDecision('old-ban', '2026-03-28T11:20:00.000Z', { value: '10.0.0.46', country: 'US' }));
 
     await service.evaluateRules(new Date('2026-03-28T12:00:00.000Z'));
 
@@ -189,6 +191,65 @@ describe('notification per-record incidents', () => {
       'cidr-v6',
       'exact',
     ]);
+
+    database.close();
+  });
+
+  test('IP ban country filters can exclude multiple countries while retaining unknown countries', async () => {
+    const { database, service } = createService();
+    const rule = await service.createRule({
+      name: 'Exclude local bans',
+      type: 'ip-ban',
+      enabled: true,
+      severity: 'warning',
+      channel_ids: [],
+      config: {
+        window_minutes: 30,
+        filters: {
+          countries: ['de, fr', 'DE'],
+          exclude_countries: true,
+        },
+      },
+    });
+
+    expect(rule.config).toEqual({
+      window_minutes: 30,
+      filters: {
+        include_simulated: false,
+        countries: ['DE', 'FR'],
+        exclude_countries: true,
+      },
+    });
+
+    insertDecision(database, createDecision('allowed', '2026-03-28T11:50:00.000Z', { country: 'US' }));
+    insertDecision(database, createDecision('excluded-de', '2026-03-28T11:51:00.000Z', { country: 'DE', value: '1.2.3.5' }));
+    insertDecision(database, createDecision('excluded-fr', '2026-03-28T11:52:00.000Z', { country: 'FR', value: '1.2.3.6' }));
+    insertDecision(database, createDecision('unknown', '2026-03-28T11:53:00.000Z', { value: '1.2.3.7' }));
+
+    await service.evaluateRules(new Date('2026-03-28T12:00:00.000Z'));
+
+    expect(service.listNotifications().data.map((notification) => notification.metadata.decision_id).sort()).toEqual([
+      'allowed',
+      'unknown',
+    ]);
+
+    database.close();
+  });
+
+  test('IP ban country filters reject values that are not two-letter ISO codes', async () => {
+    const { database, service } = createService();
+
+    await expect(service.createRule({
+      name: 'Invalid countries',
+      type: 'ip-ban',
+      enabled: true,
+      severity: 'warning',
+      channel_ids: [],
+      config: {
+        window_minutes: 30,
+        filters: { countries: ['USA'] },
+      },
+    })).rejects.toThrow('Invalid country filter value: USA');
 
     database.close();
   });

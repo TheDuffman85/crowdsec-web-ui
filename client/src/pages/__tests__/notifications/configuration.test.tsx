@@ -305,7 +305,7 @@ describe('Notifications page configuration', () => {
     }));
   });
 
-  test('shows and submits the IP ban rule with IP range filters', async () => {
+  test('shows and submits the IP ban rule with IP range and country filters', async () => {
     const user = userEvent.setup();
     render(<Notifications />);
 
@@ -315,13 +315,17 @@ describe('Notifications page configuration', () => {
 
     expect(screen.getByLabelText('Window Minutes')).toHaveValue('60');
     expect(screen.getByLabelText('IP / Range Filter')).toBeInTheDocument();
+    expect(screen.getByLabelText('Country Filter (ISO Codes)')).toBeInTheDocument();
     expect(screen.getByText(/include simulated decisions/i)).toBeInTheDocument();
+    expect(screen.getByText(/exclude selected countries/i)).toBeInTheDocument();
 
     await user.type(screen.getByLabelText('Name'), 'Ban watch');
     await user.type(screen.getByLabelText('IP / Range Filter'), '203.0.113.10, 10.0.0.0/24');
+    await user.type(screen.getByLabelText('Country Filter (ISO Codes)'), 'us, DE');
     await user.type(screen.getByLabelText('Scenario Contains'), 'ssh');
     await user.type(screen.getByLabelText('Target Contains'), 'sshd');
     await user.click(screen.getAllByRole('switch')[1]);
+    await user.click(screen.getAllByRole('switch')[2]);
     await user.click(screen.getByRole('button', { name: /save rule/i }));
 
     expect(createNotificationRule).toHaveBeenCalledWith(expect.objectContaining({
@@ -334,6 +338,8 @@ describe('Notifications page configuration', () => {
           target: 'sshd',
           include_simulated: true,
           values: ['203.0.113.10', '10.0.0.0/24'],
+          countries: ['US', 'DE'],
+          exclude_countries: true,
         },
       },
     }));

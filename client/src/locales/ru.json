@@ -661,6 +661,8 @@
   "pages.notifications.includeSimulatedAlertsAndDecisions": "Включать симулированные алерты и решения",
   "pages.notifications.includeSimulatedDecisions": "Включать симулированные решения",
   "pages.notifications.ipRangeFilter": "Фильтр IP / диапазона",
+  "pages.notifications.countryFilter": "Фильтр стран (коды ISO)",
+  "pages.notifications.excludeCountries": "Исключить выбранные страны",
   "pages.notifications.eventType": "Уведомлять о",
   "pages.notifications.eventTypes.alerts": "Алертах",
   "pages.notifications.eventTypes.decisions": "Решениях",

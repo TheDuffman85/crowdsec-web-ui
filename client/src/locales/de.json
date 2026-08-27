@@ -661,6 +661,8 @@
   "pages.notifications.includeSimulatedAlertsAndDecisions": "Simulierte Alarme und Entscheidungen einschließen",
   "pages.notifications.includeSimulatedDecisions": "Simulierte Entscheidungen einschließen",
   "pages.notifications.ipRangeFilter": "IP-/Bereichsfilter",
+  "pages.notifications.countryFilter": "Länderfilter (ISO-Codes)",
+  "pages.notifications.excludeCountries": "Ausgewählte Länder ausschließen",
   "pages.notifications.eventType": "Benachrichtigen bei",
   "pages.notifications.eventTypes.alerts": "Alarmen",
   "pages.notifications.eventTypes.decisions": "Entscheidungen",

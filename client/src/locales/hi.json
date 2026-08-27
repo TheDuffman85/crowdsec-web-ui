@@ -661,6 +661,8 @@
   "pages.notifications.includeSimulatedAlertsAndDecisions": "सिम्युलेटेड अलर्ट और निर्णय शामिल करें",
   "pages.notifications.includeSimulatedDecisions": "सिम्युलेटेड निर्णय शामिल करें",
   "pages.notifications.ipRangeFilter": "IP / रेंज फ़िल्टर",
+  "pages.notifications.countryFilter": "देश फ़िल्टर (ISO कोड)",
+  "pages.notifications.excludeCountries": "चुने गए देशों को बाहर रखें",
   "pages.notifications.eventType": "इनके लिए सूचित करें",
   "pages.notifications.eventTypes.alerts": "अलर्ट",
   "pages.notifications.eventTypes.decisions": "निर्णय",

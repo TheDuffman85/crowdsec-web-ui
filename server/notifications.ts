@@ -820,6 +820,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
         const scenario = typeof decision.scenario === 'string' ? decision.scenario : null;
         const origin = typeof decision.origin === 'string' ? decision.origin : null;
         const target = typeof decision.target === 'string' ? decision.target : null;
+        const country = typeof decision.country === 'string' ? decision.country : null;
         const alertId = typeof decision.alert_id === 'string' || typeof decision.alert_id === 'number' ? decision.alert_id : null;
 
         return withInstanceContext({
@@ -838,6 +839,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
             origin,
             scenario,
             target,
+            country,
             alert_id: alertId,
             created_at: typeof decision.created_at === 'string' ? decision.created_at : null,
             stop_at: stopAt,
@@ -1052,6 +1054,13 @@ export function createNotificationService(options: NotificationServiceOptions): 
       clauses.push(`(${filters.values.map(() => `matches_ip_search_value(${valueColumn}, ?) = 1`).join(' OR ')})`);
       params.push(...filters.values);
     }
+    if (filters?.countries && filters.countries.length > 0) {
+      const placeholders = filters.countries.map(() => '?').join(', ');
+      clauses.push(filters.exclude_countries === true
+        ? `(country IS NULL OR country NOT IN (${placeholders}))`
+        : `country IN (${placeholders})`);
+      params.push(...filters.countries);
+    }
     if (table === 'decisions' && activeAt) {
       clauses.push('stop_at > ?');
       params.push(activeAt.toISOString());
@@ -1247,7 +1256,8 @@ function normalizeFilters(filters: NotificationFilter | undefined): Notification
   const scenario = typeof rawFilters.scenario === 'string' ? rawFilters.scenario.trim() : '';
   const target = typeof rawFilters.target === 'string' ? rawFilters.target.trim() : '';
   const values = normalizeIpRangeFilterValues(rawFilters.values);
-  if (!scenario && !target && filters.include_simulated !== true && values.length === 0) {
+  const countries = normalizeCountryFilterValues(rawFilters.countries);
+  if (!scenario && !target && filters.include_simulated !== true && values.length === 0 && countries.length === 0) {
     return undefined;
   }
   return {
@@ -1255,6 +1265,8 @@ function normalizeFilters(filters: NotificationFilter | undefined): Notification
     target: target || undefined,
     include_simulated: filters.include_simulated === true,
     values: values.length > 0 ? values : undefined,
+    countries: countries.length > 0 ? countries : undefined,
+    exclude_countries: countries.length > 0 && filters.exclude_countries === true,
   };
 }
 
@@ -1269,6 +1281,9 @@ function matchesAlertFilters(alert: AlertRecord, filters?: NotificationFilter): 
     return false;
   }
   if (filters?.values && filters.values.length > 0 && !matchesIpRangeFilters(getAlertSourceValue(alert), filters.values)) {
+    return false;
+  }
+  if (!matchesCountryFilters(String(alert.source?.cn || ''), filters)) {
     return false;
   }
   return true;
@@ -1291,7 +1306,18 @@ function matchesDecisionFilters(decision: AlertDecision & Record<string, unknown
   if (filters?.values && filters.values.length > 0 && !matchesIpRangeFilters(String(decision.value || ''), filters.values)) {
     return false;
   }
+  if (!matchesCountryFilters(String(decision.country || ''), filters)) {
+    return false;
+  }
   return true;
+}
+
+function matchesCountryFilters(country: string, filters?: NotificationFilter): boolean {
+  if (!filters?.countries || filters.countries.length === 0) {
+    return true;
+  }
+  const matches = filters.countries.includes(country.trim().toUpperCase());
+  return filters.exclude_countries === true ? !matches : matches;
 }
 
 function normalizeDecisionType(decision: AlertDecision & Record<string, unknown>): string {
@@ -1372,6 +1398,24 @@ function normalizeIpRangeFilterValues(value: unknown): string[] {
     throw new Error(`Invalid IP/range filter value: ${invalidValue}`);
   }
   return values;
+}
+
+function normalizeCountryFilterValues(value: unknown): string[] {
+  const rawEntries = Array.isArray(value)
+    ? value.flatMap((entry) => (typeof entry === 'string' ? splitCountryFilterValue(entry) : []))
+    : typeof value === 'string'
+      ? splitCountryFilterValue(value)
+      : [];
+  const countries = [...new Set(rawEntries.map((entry) => entry.trim().toUpperCase()).filter(Boolean))];
+  const invalidCountry = countries.find((entry) => !/^[A-Z]{2}$/.test(entry));
+  if (invalidCountry) {
+    throw new Error(`Invalid country filter value: ${invalidCountry}`);
+  }
+  return countries;
+}
+
+function splitCountryFilterValue(value: string): string[] {
+  return value.split(/[\s,]+/).map((entry) => entry.trim()).filter(Boolean);
 }
 
 function splitIpRangeFilterValue(value: string): string[] {
