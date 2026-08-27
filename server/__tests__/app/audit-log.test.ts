@@ -5,6 +5,7 @@ import {
   createController,
   destroyTempDir,
   sampleAlert,
+  sampleSimulatedAlert,
   seedAlert,
   tempDir,
 } from './harness';
@@ -50,6 +51,7 @@ describe('audit log', () => {
         duration: '4h',
         reason: 'manual',
         instances: ['CrowdSec'],
+        instance_results: [{ instance_id: 'default', instance: 'CrowdSec', outcome: 'success' }],
         outcome: 'success',
       })]);
     } finally {
@@ -76,6 +78,7 @@ describe('audit log', () => {
         user: 'disabled-auth',
         action: 'decision.delete',
         decision_ids: ['10'],
+        target_results: [{ id: '10', value: '1.2.3.4', outcome: 'success' }],
         values: ['1.2.3.4'],
         outcome: 'success',
       })]);
@@ -104,6 +107,7 @@ describe('audit log', () => {
       expect(auditEntries(logSpy)).toEqual([expect.objectContaining({
         action: 'decision.delete',
         decision_ids: ['10'],
+        target_results: [{ id: '10', value: '1.2.3.4', outcome: 'success' }],
         values: ['1.2.3.4'],
         requested_decisions: 1,
         deleted_decisions: 1,
@@ -132,9 +136,12 @@ describe('audit log', () => {
       expect(auditEntries(logSpy)).toEqual([expect.objectContaining({
         action: 'alert.delete',
         alert_ids: ['1'],
+        target_results: [{ id: '1', outcome: 'queued' }],
+        requested_alerts: 1,
+        requested_decisions: 1,
         deleted_alerts: 1,
         deleted_decisions: 1,
-        outcome: 'success',
+        outcome: 'queued',
       })]);
     } finally {
       controller.stopBackgroundTasks();
@@ -161,6 +168,7 @@ describe('audit log', () => {
       expect(auditEntries(logSpy)).toEqual([expect.objectContaining({
         action: 'alert.delete',
         alert_ids: ['default:1'],
+        target_results: [{ id: 'default:1', outcome: 'success' }],
         requested_alerts: 1,
         deleted_alerts: 1,
         outcome: 'success',
@@ -191,11 +199,85 @@ describe('audit log', () => {
         action: 'cleanup.by-ip',
         ip: '1.2.3.4',
         instances: ['CrowdSec'],
+        instance_results: [{ instance_id: 'default', instance: 'CrowdSec', outcome: 'queued' }],
         deleted_alerts: 1,
         deleted_decisions: 1,
-        outcome: 'success',
+        outcome: 'queued',
       })]);
     } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      logSpy.mockRestore();
+      destroyTempDir();
+    }
+  });
+
+  test('identifies successful and failed targets in partial bulk deletions', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { controller, database, lapiClient } = createController({
+      fetchResolver: (url, init) => {
+        if (url.endsWith('/v1/decisions/20') && init?.method === 'DELETE') {
+          return Response.json({ error: 'boom' }, { status: 500 });
+        }
+        return undefined;
+      },
+    });
+    try {
+      seedAlert(database, sampleAlert());
+      seedAlert(database, sampleSimulatedAlert());
+      await lapiClient.login();
+
+      const response = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: ['10', '20'] }),
+      }));
+      expect(response.status).toBe(200);
+
+      expect(auditEntries(logSpy)).toEqual([expect.objectContaining({
+        action: 'decision.delete',
+        decision_ids: ['10', '20'],
+        target_results: [
+          { id: '10', value: '1.2.3.4', outcome: 'success' },
+          { id: '20', value: '5.6.7.8', outcome: 'failure' },
+        ],
+        requested_decisions: 2,
+        deleted_decisions: 1,
+        outcome: 'partial',
+      })]);
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      logSpy.mockRestore();
+      destroyTempDir();
+    }
+  });
+
+  test('records an upstream deletion when the local cache update fails', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { controller, database, lapiClient } = createController();
+    const deleteSpy = vi.spyOn(database, 'deleteDecision').mockImplementationOnce(() => {
+      throw new Error('local database write failed');
+    });
+    try {
+      seedAlert(database, sampleAlert());
+      await lapiClient.login();
+
+      const response = await controller.fetch(new Request('http://localhost/crowdsec/api/decisions/10', {
+        method: 'DELETE',
+      }));
+      expect(response.status).toBe(500);
+
+      expect(auditEntries(logSpy)).toEqual([expect.objectContaining({
+        action: 'decision.delete',
+        decision_ids: ['10'],
+        target_results: [{ id: '10', value: '1.2.3.4', outcome: 'partial' }],
+        remote_deleted: true,
+        local_cache_updated: false,
+        outcome: 'partial',
+      })]);
+    } finally {
+      deleteSpy.mockRestore();
       controller.stopBackgroundTasks();
       database.close();
       logSpy.mockRestore();

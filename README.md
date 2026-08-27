@@ -255,6 +255,8 @@ User actions that change CrowdSec state (adding decisions, deleting decisions an
 [audit] {"time":"2026-08-17T01:30:00.000Z","user":"tommy","role":"admin","action":"decision.add","ip":"192.0.2.10","type":"ban","duration":"4h","reason":"manual","instances":["CrowdSec"],"outcome":"success"}
 ```
 
+Outcomes are `success`, `partial`, `failure`, or `queued`. Alert deletions handled by the persistent deletion queue are recorded as `queued`, because CrowdSec may complete them after the HTTP request returns. Multi-target actions include `target_results` or `instance_results` so successful, failed, and queued targets remain distinguishable.
+
 | YAML field | Default | Purpose | Environment override |
 | --- | --- | --- | --- |
 | `audit.enabled` | `true` | Writes audit entries for user actions to the application log. | `CONFIG_AUDIT_ENABLED` |

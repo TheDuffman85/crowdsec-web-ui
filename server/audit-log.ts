@@ -4,7 +4,7 @@ import path from 'node:path';
 type HonoContext = any;
 
 export type AuditAction = 'decision.add' | 'decision.delete' | 'alert.delete' | 'cleanup.by-ip';
-export type AuditOutcome = 'success' | 'partial' | 'failure';
+export type AuditOutcome = 'success' | 'partial' | 'failure' | 'queued';
 
 export interface AuditActor {
   username: string;

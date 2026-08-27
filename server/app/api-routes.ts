@@ -168,27 +168,38 @@ export function registerApiRoutes(dependencies: ApiRouteDependencies): void {
   // unusable log line; the requested/deleted counters remain exact.
   const AUDIT_LIST_LIMIT = 100;
 
-  function capAuditEntries(entries: string[]): { entries: string[]; truncated: boolean } {
+  function capAuditEntries<T>(entries: T[]): { entries: T[]; truncated: boolean } {
     return entries.length > AUDIT_LIST_LIMIT
       ? { entries: entries.slice(0, AUDIT_LIST_LIMIT), truncated: true }
       : { entries, truncated: false };
   }
 
-  function auditOutcome(succeeded: number, failed: number): AuditOutcome {
-    if (failed === 0) return 'success';
-    return succeeded > 0 ? 'partial' : 'failure';
+  function auditTargetOutcome(outcomes: AuditOutcome[]): AuditOutcome {
+    if (outcomes.length === 0) return 'success';
+    if (outcomes.every((outcome) => outcome === 'success' || outcome === 'queued')) {
+      return outcomes.includes('queued') ? 'queued' : 'success';
+    }
+    if (outcomes.every((outcome) => outcome === 'failure')) return 'failure';
+    return 'partial';
   }
 
   // Deletions are requested by decision ID, so the banned value (IP or range)
   // is resolved from the local cache while the rows still exist.
-  function resolveDecisionValues(refs: Array<{ id: string | number; instance_id?: string }>): string[] {
-    const values = new Set<string>();
+  function resolveDecisionAuditTargets(refs: Array<{ id: string | number; instance_id?: string }>): Array<{ id: string; value?: string }> {
+    const targets: Array<{ id: string; value?: string }> = [];
     for (const ref of refs) {
       const internalId = ref.instance_id ? database.getDecisionInternalId(ref.instance_id, ref.id) : String(ref.id);
       const value = internalId === null ? undefined : database.getDecisionById(internalId)?.value;
-      if (typeof value === 'string' && value) values.add(value);
+      targets.push({
+        id: ref.instance_id ? `${ref.instance_id}:${ref.id}` : String(ref.id),
+        ...(typeof value === 'string' && value ? { value } : {}),
+      });
     }
-    return Array.from(values);
+    return targets;
+  }
+
+  function decisionAuditValues(targets: Array<{ value?: string }>): string[] {
+    return Array.from(new Set(targets.flatMap((target) => target.value ? [target.value] : [])));
   }
 
 app.get(`${config.basePath}/api/alerts`, ensureAuth, ensurePublishedRevisionRead, async (context) => {
@@ -280,27 +291,38 @@ app.post(`${config.basePath}/api/alerts/bulk-delete`, ensureAuth, async (context
       if ('error' in validated) return context.json({ error: validated.error }, 400);
       const result = createDeleteResult({ requested_alerts: validated.length });
       const groups = groupInstanceEntityRefs(validated);
+      const targetOutcomes = new Map<string, AuditOutcome>();
       await Promise.all(Array.from(groups, async ([instanceId, ids]) => {
         const client = lapiClients.get(instanceId)!;
         for (const id of ids) {
+          const targetId = `${instanceId}:${id}`;
+          let upstreamDeleted = false;
           try {
             await client.deleteAlert(id);
+            upstreamDeleted = true;
             await syncWorker.runExclusive(() => database.deleteAlertByInstanceId(instanceId, id));
             result.deleted_alerts += 1;
+            targetOutcomes.set(targetId, 'success');
           } catch (error) {
-            result.failed.push(toFailure('alert', `${instanceId}:${id}`, error as AnyError));
+            result.failed.push(toFailure('alert', targetId, error as AnyError));
+            targetOutcomes.set(targetId, upstreamDeleted ? 'partial' : 'failure');
           }
         }
       }));
       invalidateDashboardStatsCache();
       const alertIds = capAuditEntries(validated.map((ref: InstanceEntityRef) => `${ref.instance_id}:${ref.id}`));
+      const targetResults = capAuditEntries(validated.map((ref: InstanceEntityRef) => {
+        const id = `${ref.instance_id}:${ref.id}`;
+        return { id, outcome: targetOutcomes.get(id) || 'failure' };
+      }));
       auditLog.record(context, {
         action: 'alert.delete',
         alert_ids: alertIds.entries,
-        ...(alertIds.truncated ? { truncated: true } : {}),
+        target_results: targetResults.entries,
+        ...(alertIds.truncated || targetResults.truncated ? { truncated: true } : {}),
         requested_alerts: result.requested_alerts,
         deleted_alerts: result.deleted_alerts,
-        outcome: auditOutcome(result.deleted_alerts, result.failed.length),
+        outcome: auditTargetOutcome(Array.from(targetOutcomes.values())),
       });
       return context.json(result);
     }
@@ -317,13 +339,17 @@ app.post(`${config.basePath}/api/alerts/bulk-delete`, ensureAuth, async (context
 
     const result = await deleteAlertsByIds(ids);
     const alertIds = capAuditEntries(ids);
+    const targetResults = capAuditEntries(ids.map((id: string) => ({ id, outcome: 'queued' as const })));
     auditLog.record(context, {
       action: 'alert.delete',
       alert_ids: alertIds.entries,
-      ...(alertIds.truncated ? { truncated: true } : {}),
+      target_results: targetResults.entries,
+      ...(alertIds.truncated || targetResults.truncated ? { truncated: true } : {}),
+      requested_alerts: result.requested_alerts,
+      requested_decisions: result.requested_decisions,
       deleted_alerts: result.deleted_alerts,
       deleted_decisions: result.deleted_decisions,
-      outcome: auditOutcome(result.deleted_alerts + result.deleted_decisions, result.failed.length),
+      outcome: 'queued',
     });
     if (result.deleted_decisions > 0) {
       void runNotificationEvaluation('bulk alert delete');
@@ -394,9 +420,12 @@ app.delete(`${config.basePath}/api/alerts/:id`, ensureAuth, async (context) => {
     auditLog.record(context, {
       action: 'alert.delete',
       alert_ids: [alertId],
+      target_results: [{ id: alertId, outcome: 'queued' }],
+      requested_alerts: result.requested_alerts,
+      requested_decisions: result.requested_decisions,
       deleted_alerts: result.deleted_alerts,
       deleted_decisions: result.deleted_decisions,
-      outcome: auditOutcome(result.deleted_alerts + result.deleted_decisions, result.failed.length),
+      outcome: 'queued',
     });
     if (result.deleted_decisions > 0) {
       void runNotificationEvaluation('alert decision delete');
@@ -521,12 +550,28 @@ app.delete(`${config.basePath}/api/instances/:instanceId/alerts/:id`, ensureAuth
   try {
     const alertId = String(context.req.param('id'));
     await lapiClients.get(instanceId)!.deleteAlert(alertId);
-    await syncWorker.runExclusive(() => database.deleteAlertByInstanceId(instanceId, alertId));
+    try {
+      await syncWorker.runExclusive(() => database.deleteAlertByInstanceId(instanceId, alertId));
+    } catch (error) {
+      auditLog.record(context, {
+        action: 'alert.delete',
+        alert_ids: [alertId],
+        target_results: [{ id: `${instanceId}:${alertId}`, outcome: 'partial' }],
+        instance: instance.name,
+        instance_id: instance.id,
+        remote_deleted: true,
+        local_cache_updated: false,
+        outcome: 'partial',
+      });
+      throw error;
+    }
     invalidateDashboardStatsCache();
     auditLog.record(context, {
       action: 'alert.delete',
       alert_ids: [alertId],
+      target_results: [{ id: `${instanceId}:${alertId}`, outcome: 'success' }],
       instance: instance.name,
+      instance_id: instance.id,
       outcome: 'success',
     });
     return context.json({
@@ -549,15 +594,33 @@ app.delete(`${config.basePath}/api/instances/:instanceId/decisions/:id`, ensureA
   if (!instance) return context.json({ error: 'Unknown CrowdSec instance' }, 404);
   try {
     const decisionId = String(context.req.param('id'));
-    const values = resolveDecisionValues([{ id: decisionId, instance_id: instanceId }]);
+    const targets = resolveDecisionAuditTargets([{ id: decisionId, instance_id: instanceId }]);
+    const values = decisionAuditValues(targets);
     await lapiClients.get(instanceId)!.deleteDecision(decisionId);
-    await syncWorker.runExclusive(() => database.deleteDecisionByInstanceId(instanceId, decisionId));
+    try {
+      await syncWorker.runExclusive(() => database.deleteDecisionByInstanceId(instanceId, decisionId));
+    } catch (error) {
+      auditLog.record(context, {
+        action: 'decision.delete',
+        decision_ids: [decisionId],
+        target_results: targets.map((target) => ({ ...target, outcome: 'partial' })),
+        ...(values.length > 0 ? { values } : {}),
+        instance: instance.name,
+        instance_id: instance.id,
+        remote_deleted: true,
+        local_cache_updated: false,
+        outcome: 'partial',
+      });
+      throw error;
+    }
     invalidateDashboardStatsCache();
     auditLog.record(context, {
       action: 'decision.delete',
       decision_ids: [decisionId],
+      target_results: targets.map((target) => ({ ...target, outcome: 'success' })),
       ...(values.length > 0 ? { values } : {}),
       instance: instance.name,
+      instance_id: instance.id,
       outcome: 'success',
     });
     return context.json({ message: 'Deleted' });
@@ -835,13 +898,24 @@ app.post(`${config.basePath}/api/cleanup/by-ip`, ensureAuth, async (context) => 
     }));
     const succeeded = results.filter((result) => result.success).length;
     const payload = { results, succeeded, failed: results.length - succeeded };
+    const instanceResultEntries = results.map((result) => ({
+      instance_id: result.instance_id,
+      instance: result.instance_name,
+      outcome: result.success
+        ? ('result' in result && result.result?.deleted_alerts > 0 ? 'queued' as const : 'success' as const)
+        : ('result' in result && result.result
+          && result.result.deleted_alerts + result.result.deleted_decisions > 0 ? 'partial' as const : 'failure' as const),
+    }));
+    const instanceResults = capAuditEntries(instanceResultEntries);
     auditLog.record(context, {
       action: 'cleanup.by-ip',
       ip,
       instances: results.map((result) => result.instance_name),
+      instance_results: instanceResults.entries,
+      ...(instanceResults.truncated ? { truncated: true } : {}),
       deleted_alerts: results.reduce((total, entry) => total + ('result' in entry && entry.result ? entry.result.deleted_alerts : 0), 0),
       deleted_decisions: results.reduce((total, entry) => total + ('result' in entry && entry.result ? entry.result.deleted_decisions : 0), 0),
-      outcome: auditOutcome(succeeded, results.length - succeeded),
+      outcome: auditTargetOutcome(instanceResultEntries.map((result) => result.outcome)),
     });
     if (succeeded > 0) void runNotificationEvaluation('cleanup by ip');
     if (results.length === 1 && body.scope === undefined && results[0].success && 'result' in results[0]) {
@@ -1192,14 +1266,19 @@ app.post(`${config.basePath}/api/decisions`, ensureAuth, async (context) => {
 
     const targets = resolveOperationInstances(body.scope, body.instance_id);
     if ('error' in targets) return context.json({ error: targets.error }, 400);
+    const targetOutcomes = new Map<string, AuditOutcome>();
     const results = await Promise.all(targets.map(async (instance: RuntimeConfig['instances'][number]) => {
       const client = lapiClients.get(instance.id)!;
+      let upstreamAdded = false;
       try {
         const result = await client.addDecision(ip, type, duration, reason.slice(0, 256));
+        upstreamAdded = true;
         if (instance.id === primaryInstance.id) await updateCacheDelta();
         else await syncInstanceDelta(instance.id);
+        targetOutcomes.set(instance.id, 'success');
         return { instance_id: instance.id, instance_name: instance.name, success: true, result };
       } catch (error: any) {
+        targetOutcomes.set(instance.id, upstreamAdded ? 'partial' : 'failure');
         return { instance_id: instance.id, instance_name: instance.name, success: false, error: error?.message || String(error) };
       }
     }));
@@ -1208,6 +1287,12 @@ app.post(`${config.basePath}/api/decisions`, ensureAuth, async (context) => {
     for (const result of results) {
       if (result.success) console.log(`[decisions] Added ${type} decision for ${ip} (${duration}). Instance: ${result.instance_name}.`);
     }
+    const instanceResultEntries = results.map((result) => ({
+      instance_id: result.instance_id,
+      instance: result.instance_name,
+      outcome: targetOutcomes.get(result.instance_id) || 'failure',
+    }));
+    const instanceResults = capAuditEntries(instanceResultEntries);
     auditLog.record(context, {
       action: 'decision.add',
       ip,
@@ -1215,7 +1300,9 @@ app.post(`${config.basePath}/api/decisions`, ensureAuth, async (context) => {
       duration,
       reason: reason.slice(0, 256),
       instances: results.map((result) => result.instance_name),
-      outcome: auditOutcome(succeeded, results.length - succeeded),
+      instance_results: instanceResults.entries,
+      ...(instanceResults.truncated ? { truncated: true } : {}),
+      outcome: auditTargetOutcome(instanceResultEntries.map((result) => result.outcome)),
     });
     if (succeeded > 0) void runNotificationEvaluation('manual decision add');
     if (results.length === 1 && body.scope === undefined && results[0].success) {
@@ -1240,32 +1327,44 @@ app.post(`${config.basePath}/api/decisions/bulk-delete`, ensureAuth, async (cont
     if (Array.isArray(body.refs) && body.refs.length > 0) {
       const validated = validateInstanceEntityRefs(body.refs);
       if ('error' in validated) return context.json({ error: validated.error }, 400);
-      const auditValues = capAuditEntries(resolveDecisionValues(validated));
+      const resolvedTargets = resolveDecisionAuditTargets(validated);
+      const auditValues = capAuditEntries(decisionAuditValues(resolvedTargets));
       const result = createDeleteResult({ requested_decisions: validated.length });
       const groups = groupInstanceEntityRefs(validated);
+      const targetOutcomes = new Map<string, AuditOutcome>();
       await Promise.all(Array.from(groups, async ([instanceId, ids]) => {
         const client = lapiClients.get(instanceId)!;
         for (const id of ids) {
+          const targetId = `${instanceId}:${id}`;
+          let upstreamDeleted = false;
           try {
             await client.deleteDecision(id);
+            upstreamDeleted = true;
             await syncWorker.runExclusive(() => database.deleteDecisionByInstanceId(instanceId, id));
             result.deleted_decisions += 1;
+            targetOutcomes.set(targetId, 'success');
           } catch (error) {
-            result.failed.push(toFailure('decision', `${instanceId}:${id}`, error as AnyError));
+            result.failed.push(toFailure('decision', targetId, error as AnyError));
+            targetOutcomes.set(targetId, upstreamDeleted ? 'partial' : 'failure');
           }
         }
       }));
       await syncWorker.runExclusive(() => database.refreshDecisionDuplicateFlags(new Date().toISOString()));
       invalidateDashboardStatsCache();
       const decisionIds = capAuditEntries(validated.map((ref: InstanceEntityRef) => `${ref.instance_id}:${ref.id}`));
+      const targetResults = capAuditEntries(resolvedTargets.map((target) => ({
+        ...target,
+        outcome: targetOutcomes.get(target.id) || 'failure',
+      })));
       auditLog.record(context, {
         action: 'decision.delete',
         decision_ids: decisionIds.entries,
+        target_results: targetResults.entries,
         ...(auditValues.entries.length > 0 ? { values: auditValues.entries } : {}),
-        ...(decisionIds.truncated || auditValues.truncated ? { truncated: true } : {}),
+        ...(decisionIds.truncated || auditValues.truncated || targetResults.truncated ? { truncated: true } : {}),
         requested_decisions: result.requested_decisions,
         deleted_decisions: result.deleted_decisions,
-        outcome: auditOutcome(result.deleted_decisions, result.failed.length),
+        outcome: auditTargetOutcome(Array.from(targetOutcomes.values())),
       });
       if (result.deleted_decisions > 0) void runNotificationEvaluation('bulk decision delete');
       return context.json(result);
@@ -1281,17 +1380,25 @@ app.post(`${config.basePath}/api/decisions/bulk-delete`, ensureAuth, async (cont
       return context.json({ error: 'Decision IDs must be numeric' }, 400);
     }
 
-    const auditValues = capAuditEntries(resolveDecisionValues(ids.map((id: string) => ({ id }))));
+    const resolvedTargets = resolveDecisionAuditTargets(ids.map((id: string) => ({ id })));
+    const auditValues = capAuditEntries(decisionAuditValues(resolvedTargets));
     const result = await deleteDecisionsByIdsInChunks(ids);
     const decisionIds = capAuditEntries(ids);
+    const failedIds = new Set(result.failed.map((failure: { id: string }) => failure.id));
+    const targetResultEntries = resolvedTargets.map((target) => ({
+      ...target,
+      outcome: failedIds.has(target.id) ? 'failure' as const : 'success' as const,
+    }));
+    const targetResults = capAuditEntries(targetResultEntries);
     auditLog.record(context, {
       action: 'decision.delete',
       decision_ids: decisionIds.entries,
+      target_results: targetResults.entries,
       ...(auditValues.entries.length > 0 ? { values: auditValues.entries } : {}),
-      ...(decisionIds.truncated || auditValues.truncated ? { truncated: true } : {}),
+      ...(decisionIds.truncated || auditValues.truncated || targetResults.truncated ? { truncated: true } : {}),
       requested_decisions: result.requested_decisions,
       deleted_decisions: result.deleted_decisions,
-      outcome: auditOutcome(result.deleted_decisions, result.failed.length),
+      outcome: auditTargetOutcome(targetResultEntries.map((target) => target.outcome)),
     });
     if (result.deleted_decisions > 0) {
       void runNotificationEvaluation('bulk decision delete');
@@ -1317,17 +1424,32 @@ app.delete(`${config.basePath}/api/decisions/:id`, ensureAuth, async (context) =
   }
 
   const doRequest = async () => {
-    const values = resolveDecisionValues([{ id: decisionId }]);
+    const targets = resolveDecisionAuditTargets([{ id: decisionId }]);
+    const values = decisionAuditValues(targets);
     const result = await deleteDecisionFromLapi(decisionId);
     console.log(`Removing decision ${decisionId} from local cache...`);
-    await syncWorker.runExclusive(() => {
-      database.deleteDecision(decisionId);
-      database.refreshDecisionDuplicateFlags(new Date().toISOString());
-    });
+    try {
+      await syncWorker.runExclusive(() => {
+        database.deleteDecision(decisionId);
+        database.refreshDecisionDuplicateFlags(new Date().toISOString());
+      });
+    } catch (error) {
+      auditLog.record(context, {
+        action: 'decision.delete',
+        decision_ids: [decisionId],
+        target_results: targets.map((target) => ({ ...target, outcome: 'partial' })),
+        ...(values.length > 0 ? { values } : {}),
+        remote_deleted: true,
+        local_cache_updated: false,
+        outcome: 'partial',
+      });
+      throw error;
+    }
     invalidateDashboardStatsCache();
     auditLog.record(context, {
       action: 'decision.delete',
       decision_ids: [decisionId],
+      target_results: targets.map((target) => ({ ...target, outcome: 'success' })),
       ...(values.length > 0 ? { values } : {}),
       outcome: 'success',
     });
