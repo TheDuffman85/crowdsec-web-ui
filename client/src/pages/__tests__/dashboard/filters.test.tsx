@@ -115,6 +115,31 @@ describe('Dashboard filters and drilldowns', () => {
     expect(decisionsCard).toHaveAttribute('href', '/decisions?q=country%3ADE');
   });
 
+  test('applies the kind quick filter to alert and decision dashboard data', async () => {
+    localStorage.setItem(QUICK_FILTERS_STORAGE_KEY, JSON.stringify({
+      selections: {
+        kind: { included: ['waf'], excluded: [] },
+      },
+      dateRange: { start: '', end: '' },
+      simulation: 'all',
+    }));
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Top Countries');
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        q: 'kind=waf',
+        decision_q: 'kind=waf',
+      }),
+      expect.any(Object),
+    ));
+  });
+
   test('preserves the query order while a dashboard search is being typed', async () => {
     const user = userEvent.setup();
     render(

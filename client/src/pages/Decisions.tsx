@@ -351,6 +351,7 @@ export function Decisions() {
             id: 'id',
             instance: 'instance',
             scenario: 'scenario',
+            kind: 'kind',
             country: 'country',
             region: 'region',
             city: 'city',
@@ -1591,6 +1592,12 @@ export function Decisions() {
                                                         return (
                                                             <td key={columnId} className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[120px] truncate" title={decision.detail.origin}>
                                                                 {decision.detail.origin || "-"}
+                                                            </td>
+                                                        );
+                                                    case 'kind':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 align-middle">
+                                                                {decision.kind || "-"}
                                                             </td>
                                                         );
                                                     case 'alert':

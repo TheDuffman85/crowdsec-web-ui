@@ -84,6 +84,7 @@ describe('Decisions page presentation and columns', () => {
     expect(screen.queryByRole('columnheader', { name: 'ID' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Machine' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Origin' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Kind' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Region' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'City' })).not.toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Target' })).toBeInTheDocument();
@@ -177,6 +178,7 @@ describe('Decisions page presentation and columns', () => {
     await userEvent.click(screen.getByLabelText('City'));
     await userEvent.click(screen.getByLabelText('Machine'));
     await userEvent.click(screen.getByLabelText('Origin'));
+    await userEvent.click(screen.getByLabelText('Kind'));
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(screen.getByRole('columnheader', { name: 'ID' })).toBeInTheDocument());
@@ -188,6 +190,8 @@ describe('Decisions page presentation and columns', () => {
     expect(screen.getByText('Berlin')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Machine' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Origin' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Kind' })).toBeInTheDocument();
+    expect(screen.getByText('crowdsec')).toBeInTheDocument();
   });
 
   test('uses saved decision column order', async () => {

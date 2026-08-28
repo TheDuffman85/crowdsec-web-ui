@@ -178,8 +178,8 @@ const COMMON_FACET_FIELDS = [
   'machine',
   'origin',
 ] as const;
-const ALERT_FACET_FIELDS = [...COMMON_FACET_FIELDS, 'decision'] as const;
-const DECISION_FACET_FIELDS = [...COMMON_FACET_FIELDS, 'alert', 'action', 'status'] as const;
+const ALERT_FACET_FIELDS = [...COMMON_FACET_FIELDS, 'kind', 'decision'] as const;
+const DECISION_FACET_FIELDS = [...COMMON_FACET_FIELDS, 'kind', 'alert', 'action', 'status'] as const;
 const FACET_DEFAULT_LIMIT = 10;
 const FACET_MAX_LIMIT = 50;
 const FACET_MAX_OFFSET = 500;
@@ -870,6 +870,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     enrichAlertRecordLocations,
     enrichDecisionLocations,
     getAlertCoordinatesByIds,
+    getAlertKindsByIds,
     buildDashboardStats,
     getDashboardStatsIndex,
     createEmptyDashboardStatsResponse,
@@ -1286,6 +1287,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     fetchCrowdsecMetrics,
     fetchCrowdsecMetricsSamples,
     getAlertCoordinatesByIds,
+    getAlertKindsByIds,
     getAlertListFilters,
     getDashboardStatsFilters,
     getDecisionListFilters,

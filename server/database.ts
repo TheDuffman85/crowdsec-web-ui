@@ -45,6 +45,7 @@ const SYNC_SECONDARY_INDEX_NAMES = [
   'idx_alerts_region',
   'idx_alerts_city',
   'idx_alerts_scenario',
+  'idx_alerts_kind',
   'idx_alerts_as_name',
   'idx_alerts_target',
   'idx_alerts_source_ip',
@@ -84,6 +85,7 @@ const CREATE_SYNC_SECONDARY_INDEXES_SQL = `
   CREATE INDEX IF NOT EXISTS idx_alerts_region ON alerts(region);
   CREATE INDEX IF NOT EXISTS idx_alerts_city ON alerts(city);
   CREATE INDEX IF NOT EXISTS idx_alerts_scenario ON alerts(scenario);
+  CREATE INDEX IF NOT EXISTS idx_alerts_kind ON alerts(kind, created_at DESC, id DESC);
   CREATE INDEX IF NOT EXISTS idx_alerts_as_name ON alerts(as_name);
   CREATE INDEX IF NOT EXISTS idx_alerts_target ON alerts(target);
   CREATE INDEX IF NOT EXISTS idx_alerts_source_ip ON alerts(source_ip);
@@ -92,7 +94,7 @@ const CREATE_SYNC_SECONDARY_INDEXES_SQL = `
   CREATE INDEX IF NOT EXISTS idx_alerts_country_created_at ON alerts(country, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_alerts_scenario_created_at ON alerts(scenario, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_alerts_filters ON alerts(
-    instance_id, country, scenario, as_name, source_ip, target, country_name,
+    instance_id, country, scenario, kind, as_name, source_ip, target, country_name,
     region, city, machine, origins, message, upstream_id, simulated, created_at DESC, id DESC
   );
   CREATE INDEX IF NOT EXISTS idx_alerts_instance_created ON alerts(instance_id, created_at DESC, id DESC);
@@ -352,13 +354,13 @@ export class CrowdsecDatabase {
 
     this.insertAlertStatement = this.db.query(`
       INSERT INTO alerts (
-        id, instance_id, upstream_id, uuid, created_at, start_at, stop_at, scenario, record_scenario, reason,
+        id, instance_id, upstream_id, uuid, created_at, start_at, stop_at, scenario, record_scenario, kind, reason,
         source_ip, source_value, source_scope, source_range, source_as_number, source_extra_data,
         message, machine_id, machine_alias, events_count, extra_data, metadata_hash, raw_data,
         latitude, longitude, country, country_name, region, city, as_name, target, machine, meta_search, origins, simulated, search_text
       )
       VALUES (
-        $internal_id, $instance_id, $id, $uuid, $created_at, $start_at, $stop_at, $scenario, $record_scenario, $reason,
+        $internal_id, $instance_id, $id, $uuid, $created_at, $start_at, $stop_at, $scenario, $record_scenario, $kind, $reason,
         $source_ip, $source_value, $source_scope, $source_range, $source_as_number, $source_extra_data,
         $message, $machine_id, $machine_alias, $events_count, $extra_data, $metadata_hash, NULL,
         $latitude, $longitude, $country, $country_name, $region, $city, $as_name, $target, $machine, $meta_search, $origins, $simulated, $search_text
@@ -370,6 +372,7 @@ export class CrowdsecDatabase {
         stop_at = excluded.stop_at,
         scenario = excluded.scenario,
         record_scenario = excluded.record_scenario,
+        kind = excluded.kind,
         reason = excluded.reason,
         source_ip = excluded.source_ip,
         source_value = excluded.source_value,
@@ -403,6 +406,7 @@ export class CrowdsecDatabase {
         OR alerts.stop_at IS NOT excluded.stop_at
         OR alerts.scenario IS NOT excluded.scenario
         OR alerts.record_scenario IS NOT excluded.record_scenario
+        OR alerts.kind IS NOT excluded.kind
         OR alerts.reason IS NOT excluded.reason
         OR alerts.source_ip IS NOT excluded.source_ip
         OR alerts.source_value IS NOT excluded.source_value
@@ -1027,6 +1031,7 @@ export class CrowdsecDatabase {
       $start_at: normalizeOptionalTimestamp(alert?.start_at),
       $stop_at: normalizeOptionalTimestamp(alert?.stop_at),
       $record_scenario: readOptionalString(alert?.scenario),
+      $kind: index.kind,
       $reason: readOptionalString(alert?.reason),
       $source_value: readOptionalString(source?.value),
       $source_scope: readOptionalString(source?.scope),
@@ -2410,6 +2415,7 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
       stop_at TEXT,
       scenario TEXT,
       record_scenario TEXT,
+      kind TEXT,
       reason TEXT,
       source_ip TEXT,
       source_value TEXT,
@@ -2666,6 +2672,7 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
   migrateRecordIndexColumns(db);
   migrateNormalizedDecisionPayloads(db);
   migrateNormalizedAlertPayloads(db);
+  migrateAlertKindColumn(db);
   migrateAlertContextSearch(db);
   initDecisionDuplicateDirtyTracking(db);
   migrateNotificationRulesTable(db, createNotificationRulesTable);
@@ -2710,7 +2717,8 @@ function initDashboardChangeTracking(db: Database): void {
         OLD.instance_id IS NOT NEW.instance_id OR OLD.upstream_id IS NOT NEW.upstream_id
         OR OLD.created_at IS NOT NEW.created_at OR OLD.country IS NOT NEW.country
         OR OLD.region IS NOT NEW.region OR OLD.city IS NOT NEW.city
-        OR OLD.scenario IS NOT NEW.scenario OR OLD.as_name IS NOT NEW.as_name
+        OR OLD.scenario IS NOT NEW.scenario OR OLD.kind IS NOT NEW.kind
+        OR OLD.as_name IS NOT NEW.as_name
         OR OLD.source_ip IS NOT NEW.source_ip OR OLD.source_value IS NOT NEW.source_value
         OR OLD.source_range IS NOT NEW.source_range OR OLD.latitude IS NOT NEW.latitude
         OR OLD.longitude IS NOT NEW.longitude OR OLD.target IS NOT NEW.target
@@ -2949,6 +2957,7 @@ function migrateRecordIndexColumns(db: Database): void {
     ['start_at', 'TEXT'],
     ['stop_at', 'TEXT'],
     ['record_scenario', 'TEXT'],
+    ['kind', 'TEXT'],
     ['reason', 'TEXT'],
     ['source_value', 'TEXT'],
     ['source_scope', 'TEXT'],
@@ -3006,6 +3015,7 @@ function migrateRecordIndexColumns(db: Database): void {
   db.exec('DROP INDEX IF EXISTS idx_decisions_duplicate_created_at');
   db.exec('DROP INDEX IF EXISTS idx_decisions_duplicate_active');
   migrateDecisionDuplicateFilterIndex(db);
+  migrateAlertFilterIndex(db);
   db.exec(CREATE_SYNC_SECONDARY_INDEXES_SQL);
 
   backfillRecordIndexes(db);
@@ -3017,6 +3027,15 @@ function migrateDecisionDuplicateFilterIndex(db: Database): void {
   ).map((column) => column.name);
   if (columns.length > 0 && columns[1] !== 'instance_id') {
     db.exec('DROP INDEX idx_decisions_duplicate_filters');
+  }
+}
+
+function migrateAlertFilterIndex(db: Database): void {
+  const columns = (
+    db.query("PRAGMA index_info('idx_alerts_filters')").all() as Array<{ name: string }>
+  ).map((column) => column.name);
+  if (columns.length > 0 && !columns.includes('kind')) {
+    db.exec('DROP INDEX idx_alerts_filters');
   }
 }
 
@@ -3075,6 +3094,7 @@ function migrateNormalizedAlertPayloads(db: Database): void {
     SET start_at = $start_at,
         stop_at = $stop_at,
         record_scenario = $record_scenario,
+        kind = $kind,
         reason = $reason,
         source_value = $source_value,
         source_scope = $source_scope,
@@ -3098,6 +3118,7 @@ function migrateNormalizedAlertPayloads(db: Database): void {
         $start_at: normalizeOptionalTimestamp(alert?.start_at),
         $stop_at: normalizeOptionalTimestamp(alert?.stop_at),
         $record_scenario: readOptionalString(alert?.scenario),
+        $kind: readOptionalString(alert?.kind)?.toLowerCase() || null,
         $reason: readOptionalString(alert?.reason),
         $source_value: readOptionalString(source?.value),
         $source_scope: readOptionalString(source?.scope),
@@ -3119,6 +3140,32 @@ function migrateNormalizedAlertPayloads(db: Database): void {
     rows = selectRows.all() as typeof rows;
   }
   db.query('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(migrationKey, '1');
+}
+
+function migrateAlertKindColumn(db: Database): void {
+  const migrationKey = 'alert_kind_column_version';
+  const currentVersion = db.query('SELECT value FROM meta WHERE key = ?').get(migrationKey) as MetaRow | null;
+  if (currentVersion?.value === '1') return;
+
+  const migrate = db.transaction(() => {
+    db.exec(`
+      UPDATE alerts
+      SET kind = LOWER(TRIM(CAST(json_extract(extra_data, '$.kind') AS TEXT)))
+      WHERE COALESCE(TRIM(kind), '') = ''
+        AND json_valid(extra_data) = 1
+        AND json_type(extra_data, '$.kind') = 'text'
+        AND COALESCE(TRIM(CAST(json_extract(extra_data, '$.kind') AS TEXT)), '') <> '';
+
+      UPDATE alerts
+      SET search_text = TRIM(COALESCE(search_text, '') || ' ' || kind)
+      WHERE COALESCE(TRIM(kind), '') <> ''
+        AND (' ' || LOWER(COALESCE(search_text, '')) || ' ') NOT LIKE
+          ('% ' || LOWER(kind) || ' %');
+    `);
+    db.query('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(migrationKey, '1');
+    db.exec('DROP TABLE IF EXISTS alerts_fts');
+  });
+  migrate();
 }
 
 function migrateAlertContextSearch(db: Database): void {
@@ -3239,6 +3286,7 @@ function backfillRecordIndexes(db: Database): void {
     UPDATE alerts
     SET created_at = $created_at,
         scenario = $scenario,
+        kind = $kind,
         source_ip = $source_ip,
         latitude = $latitude,
         longitude = $longitude,
@@ -3279,6 +3327,7 @@ function backfillRecordIndexes(db: Database): void {
           $id: row.id,
           $created_at: index.historyAt,
           $scenario: index.scenario ?? row.scenario,
+          $kind: index.kind,
           $source_ip: index.sourceIp ?? row.source_ip,
           $latitude: index.latitude,
           $longitude: index.longitude,

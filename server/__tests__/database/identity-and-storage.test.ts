@@ -362,13 +362,15 @@ describe('CrowdsecDatabase identity and storage', () => {
       $record: decision,
     });
 
-    const storedAlert = db.db.prepare('SELECT raw_data, extra_data, source_extra_data FROM alerts WHERE id = 42').get() as {
+    const storedAlert = db.db.prepare('SELECT kind, raw_data, extra_data, source_extra_data FROM alerts WHERE id = 42').get() as {
+      kind: string;
       raw_data: string | null;
       extra_data: string;
       source_extra_data: string;
     };
     expect(storedAlert.raw_data).toBeNull();
-    expect(JSON.parse(storedAlert.extra_data)).toEqual({ kind: 'capi', events: alert.events });
+    expect(storedAlert.kind).toBe('capi');
+    expect(JSON.parse(storedAlert.extra_data)).toEqual({ events: alert.events });
     expect(JSON.parse(storedAlert.source_extra_data)).toEqual({ provider: 'example' });
 
     const storedDecision = db.db.prepare('SELECT raw_data, extra_data FROM decisions WHERE id = ?').get('420') as {
@@ -389,6 +391,47 @@ describe('CrowdsecDatabase identity and storage', () => {
       source: expect.objectContaining({ provider: 'example', scope: 'ip' }),
     }));
     db.close();
+  });
+
+  test('backfills normalized alert kinds from legacy extra data and rebuilds search text', () => {
+    const dbPath = createTestDatabasePath();
+    const original = new CrowdsecDatabase({ dbPath });
+    original.insertAlert({
+      $id: 77,
+      $uuid: 'legacy-kind-alert',
+      $created_at: '2026-08-28T10:00:00.000Z',
+      $scenario: 'crowdsecurity/appsec-rule',
+      $source_ip: '192.0.2.77',
+      $message: '',
+      $record: {
+        id: 77,
+        uuid: 'legacy-kind-alert',
+        created_at: '2026-08-28T10:00:00.000Z',
+        scenario: 'crowdsecurity/appsec-rule',
+        kind: 'waf',
+        source: { ip: '192.0.2.77' },
+      },
+    });
+    original.db.prepare(`
+      UPDATE alerts
+      SET kind = NULL,
+          extra_data = json_set(COALESCE(extra_data, '{}'), '$.kind', 'waf'),
+          search_text = 'legacy appsec alert'
+      WHERE upstream_id = '77'
+    `).run();
+    original.db.prepare("DELETE FROM meta WHERE key = 'alert_kind_column_version'").run();
+    original.close();
+
+    const migrated = new CrowdsecDatabase({ dbPath });
+    const row = migrated.db.prepare('SELECT kind, search_text FROM alerts WHERE upstream_id = ?').get('77') as {
+      kind: string;
+      search_text: string;
+    };
+    expect(row.kind).toBe('waf');
+    expect(row.search_text.split(/\s+/)).toContain('waf');
+    expect(JSON.parse(migrated.getAllAlerts()[0].raw_data)).toEqual(expect.objectContaining({ kind: 'waf' }));
+    expect((migrated.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts WHERE alerts_fts MATCH ?').get('waf') as { count: number }).count).toBe(1);
+    migrated.close();
   });
 
   test('normalizes timestamps already stored by earlier versions', () => {

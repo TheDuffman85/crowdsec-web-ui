@@ -14,6 +14,7 @@ describe('createApp facet API', () => {
       sampleAlert({
         id: 1,
         uuid: 'facet-alert-1',
+        kind: 'crowdsec',
         scenario: 'ssh',
         target: 'ssh',
         source: { ip: '1.1.1.1', cn: 'DE', as_name: 'Hetzner' },
@@ -21,6 +22,7 @@ describe('createApp facet API', () => {
       sampleAlert({
         id: 2,
         uuid: 'facet-alert-2',
+        kind: 'waf',
         scenario: 'ssh',
         target: 'http',
         events: [{ meta: [{ key: 'service', value: 'http' }] }],
@@ -29,6 +31,7 @@ describe('createApp facet API', () => {
       sampleAlert({
         id: 3,
         uuid: 'facet-alert-3',
+        kind: 'crowdsec',
         scenario: 'nginx',
         target: 'nginx',
         events: [{ meta: [{ key: 'service', value: 'nginx' }] }],
@@ -69,6 +72,19 @@ describe('createApp facet API', () => {
       values: [
         { value: 'ssh', count: 1 },
         { value: 'http', count: 1 },
+      ],
+      offset: 0,
+      has_more: false,
+    });
+
+    const kindResponse = await controller.fetch(new Request(
+      'http://localhost/crowdsec/api/alerts/facets?field=kind',
+    ));
+    expect(await kindResponse.json() as FacetResponse).toEqual({
+      field: 'kind',
+      values: [
+        { value: 'crowdsec', count: 2 },
+        { value: 'waf', count: 1 },
       ],
       offset: 0,
       has_more: false,

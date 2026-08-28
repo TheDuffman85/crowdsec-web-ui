@@ -154,6 +154,7 @@ export function toSlimAlert(alert: AlertRecord): SlimAlert {
     instance_name: alert.instance_name,
     created_at: resolveAlertHistoryAt(alert),
     scenario: resolveAlertScenario(alert),
+    kind: typeof alert.kind === 'string' ? alert.kind : undefined,
     reason: resolveAlertReason(alert),
     message: typeof alert.message === 'string' ? alert.message : undefined,
     events_count: typeof alert.events_count === 'number' ? alert.events_count : undefined,

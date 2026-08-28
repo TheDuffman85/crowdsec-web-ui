@@ -131,6 +131,7 @@ describe('alert helpers', () => {
       id: 1,
       created_at: '2025-01-01T00:00:00.000Z',
       scenario: 'crowdsecurity/ssh-bf',
+      kind: 'waf',
       message: 'hello',
       source: { ip: '1.2.3.4', cn: 'DE' },
       target: 'ssh',
@@ -142,6 +143,7 @@ describe('alert helpers', () => {
     expect(slim.meta_search).toBe('ssh example.test');
     expect(slim.decisions).toHaveLength(1);
     expect(slim.source?.ip).toBe('1.2.3.4');
+    expect(slim.kind).toBe('waf');
     expect(slim.simulated).toBe(false);
   });
 

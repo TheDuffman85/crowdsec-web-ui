@@ -8,6 +8,27 @@ import { Alerts } from '../../Alerts';
 import { type DecisionListItem, type SlimAlert } from '../../../types';
 
 describe('Alerts page details and actions', () => {
+  test('recognizes eventless AppSec alerts from their first-class kind', async () => {
+    vi.mocked(api.fetchAlert).mockResolvedValueOnce({
+      id: 1,
+      created_at: '2026-03-23T11:00:00.000Z',
+      scenario: 'crowdsecurity/appsec-native',
+      kind: 'waf',
+      source: { ip: '1.2.3.4' },
+      message: '',
+      decisions: [],
+      events: [],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/alerts?id=1']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('AppSec / WAF')).toBeInTheDocument();
+  });
+
   test('shows alert contexts as an expanded metadata section', async () => {
     vi.mocked(api.fetchAlert).mockResolvedValueOnce({
       id: 1,

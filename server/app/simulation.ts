@@ -141,6 +141,7 @@ export function toDecisionListItem(
     machine_id: typeof decision.machine_id === 'string' ? decision.machine_id : undefined,
     machine_alias: typeof decision.machine_alias === 'string' ? decision.machine_alias : undefined,
     scenario: typeof decision.scenario === 'string' ? decision.scenario : undefined,
+    kind: typeof decision.kind === 'string' ? decision.kind : undefined,
     value: typeof decision.value === 'string' ? decision.value : undefined,
     expired,
     is_duplicate: decision.is_duplicate === true,

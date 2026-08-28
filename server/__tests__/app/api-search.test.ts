@@ -54,6 +54,63 @@ describe('createApp search API', () => {
     destroyTempDir();
   });
 
+  test('matches alert kinds in fielded and free-text searches', async () => {
+    const wafAlert = sampleAlert({ id: 1, uuid: 'kind-waf', kind: 'waf', message: '' });
+    const crowdsecAlert = sampleAlert({
+      id: 2,
+      uuid: 'kind-crowdsec',
+      kind: 'crowdsec',
+      message: '',
+      source: { ip: '5.6.7.8', value: '5.6.7.8' },
+      decisions: (sampleAlert().decisions || []).map((decision) => ({
+        ...decision,
+        id: 20,
+        value: '5.6.7.8',
+      })),
+    });
+    const { controller, database } = createController({
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+    });
+    seedAlert(database, wafAlert);
+    seedAlert(database, crowdsecAlert);
+
+    for (const query of ['kind=waf', 'waf']) {
+      const response = await controller.fetch(new Request(
+        `http://localhost/crowdsec/api/alerts?page=1&page_size=10&q=${encodeURIComponent(query)}`,
+      ));
+      expect(response.status).toBe(200);
+      expect((await response.json()) as PaginatedResponse<SlimAlert>).toEqual(expect.objectContaining({
+        data: [expect.objectContaining({ id: 1, kind: 'waf' })],
+        pagination: expect.objectContaining({ total: 1 }),
+      }));
+    }
+
+    const decisionsResponse = await controller.fetch(new Request(
+      'http://localhost/crowdsec/api/decisions?page=1&page_size=10&hide_duplicates=false&q=kind%3Dwaf',
+    ));
+    expect(decisionsResponse.status).toBe(200);
+    expect((await decisionsResponse.json()) as PaginatedResponse<DecisionListItem>).toEqual(expect.objectContaining({
+      data: [expect.objectContaining({ id: 10, kind: 'waf' })],
+      pagination: expect.objectContaining({ total: 1 }),
+    }));
+
+    const decisionFacetResponse = await controller.fetch(new Request(
+      'http://localhost/crowdsec/api/decisions/facets?field=kind&hide_duplicates=false',
+    ));
+    expect(decisionFacetResponse.status).toBe(200);
+    expect(await decisionFacetResponse.json()).toEqual(expect.objectContaining({
+      field: 'kind',
+      values: [
+        { value: 'crowdsec', count: 1 },
+        { value: 'waf', count: 1 },
+      ],
+    }));
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
   test('matches alert search queries against decision origins', async () => {
     const searchAlerts = [
       sampleAlert({

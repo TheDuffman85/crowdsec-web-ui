@@ -29,8 +29,8 @@ export type CommonFacetField =
   | 'target'
   | 'machine'
   | 'origin';
-export type AlertFacetField = CommonFacetField | 'decision';
-export type DecisionFacetField = CommonFacetField | 'alert' | 'action' | 'status';
+export type AlertFacetField = CommonFacetField | 'kind' | 'decision';
+export type DecisionFacetField = CommonFacetField | 'kind' | 'alert' | 'action' | 'status';
 export type FacetField = AlertFacetField | DecisionFacetField;
 
 export interface FacetValue {
@@ -68,8 +68,8 @@ export interface InstanceSummary {
 }
 
 export type TableColumnPreferenceTable = 'alerts' | 'decisions';
-export type AlertTableColumnId = 'id' | 'instance' | 'time' | 'scenario' | 'target' | 'country' | 'region' | 'city' | 'as' | 'source' | 'machine' | 'origin' | 'decisions';
-export type DecisionTableColumnId = 'id' | 'instance' | 'time' | 'scenario' | 'target' | 'country' | 'region' | 'city' | 'as' | 'source' | 'action' | 'expiration' | 'machine' | 'origin' | 'alert';
+export type AlertTableColumnId = 'id' | 'instance' | 'time' | 'scenario' | 'kind' | 'target' | 'country' | 'region' | 'city' | 'as' | 'source' | 'machine' | 'origin' | 'decisions';
+export type DecisionTableColumnId = 'id' | 'instance' | 'time' | 'scenario' | 'kind' | 'target' | 'country' | 'region' | 'city' | 'as' | 'source' | 'action' | 'expiration' | 'machine' | 'origin' | 'alert';
 export type TableColumnId = AlertTableColumnId | DecisionTableColumnId;
 
 export interface TableColumnDefinition {
@@ -86,6 +86,7 @@ export const TABLE_COLUMN_DEFINITIONS: Record<TableColumnPreferenceTable, TableC
     { id: 'instance', label: 'Instance', defaultVisible: false },
     { id: 'time', label: 'Time', defaultVisible: true },
     { id: 'scenario', label: 'Scenario', defaultVisible: true },
+    { id: 'kind', label: 'Kind', defaultVisible: false },
     { id: 'country', label: 'Country', defaultVisible: true },
     { id: 'region', label: 'Region', defaultVisible: false },
     { id: 'city', label: 'City', defaultVisible: false },
@@ -101,6 +102,7 @@ export const TABLE_COLUMN_DEFINITIONS: Record<TableColumnPreferenceTable, TableC
     { id: 'instance', label: 'Instance', defaultVisible: false },
     { id: 'time', label: 'Time', defaultVisible: true },
     { id: 'scenario', label: 'Scenario', defaultVisible: true },
+    { id: 'kind', label: 'Kind', defaultVisible: false },
     { id: 'country', label: 'Country', defaultVisible: true },
     { id: 'region', label: 'Region', defaultVisible: false },
     { id: 'city', label: 'City', defaultVisible: false },
@@ -217,6 +219,7 @@ export interface AlertRecord {
   start_at?: string;
   stop_at?: string;
   scenario?: string;
+  kind?: string;
   reason?: string;
   source?: AlertSource | null;
   message?: string;
@@ -259,6 +262,7 @@ export interface SlimAlert {
   instance_name?: string;
   created_at: string;
   scenario?: string;
+  kind?: string;
   reason?: string;
   message?: string;
   events_count?: number;
@@ -302,6 +306,7 @@ export interface DecisionListItem {
   machine_id?: string;
   machine_alias?: string;
   scenario?: string;
+  kind?: string;
   value?: string;
   expired: boolean;
   is_duplicate: boolean;

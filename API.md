@@ -51,11 +51,11 @@ Alert and decision list pagination uses `page` and `page_size` and is enabled on
 
 `:` performs a case-insensitive contains match and `=` matches the complete normalized field value. The browser's Quick Filters use exact `=` predicates for selected facet values, so a selection such as `target=tausend.me` does not also match `bw.tausend.me`. Multiple selected values are joined with `OR`; exclusions use `<>`.
 
-Alert search fields: `id`, `instance`, `scenario`, `message`, `ip`/`source`, `country`, `region`, `city`, `as`, `target`, `date`/`created`/`created_at`/`time`, `sim`/`simulation`, `machine`, `origin`, `decision`/`decisions`.
+Alert search fields: `id`, `instance`, `scenario`, `kind`, `message`, `ip`/`source`, `country`, `region`, `city`, `as`, `target`, `date`/`created`/`created_at`/`time`, `sim`/`simulation`, `machine`, `origin`, `decision`/`decisions`.
 
 Use a quoted empty value to match an empty field, such as `origin:""`. Use `origin<>""` or `-origin:""` to require a non-empty value.
 
-Decision search fields: `id`, `instance`, `alert`/`alert_id`, `scenario`/`reason`, `ip`/`value`, `country`, `region`, `city`, `as`, `target`, `date`/`created`/`created_at`/`time`, `action`, `type`, `status`, `duplicate`, `sim`/`simulation`, `machine`, `origin`.
+Decision search fields: `id`, `instance`, `alert`/`alert_id`, `scenario`/`reason`, `kind`, `ip`/`value`, `country`, `region`, `city`, `as`, `target`, `date`/`created`/`created_at`/`time`, `action`, `type`, `status`, `duplicate`, `sim`/`simulation`, `machine`, `origin`. Decision `kind` is inherited from the linked alert.
 
 Date range filters use `dateStart` and `dateEnd`. Use `YYYY-MM-DD` for day buckets or values containing `T` for hour-level comparisons. `tz_offset` is an offset in minutes; `browser_tz` accepts an IANA timezone. They control local bucket comparisons when the server has no fixed timezone configured.
 
@@ -133,7 +133,7 @@ Alert records expose the most frequent event target as `target` and the total nu
 
 Set `include_decisions=false` to omit decision hydration from paginated lists or single-instance alert details. Bulk deletion accepts `ids` in single-instance deployments or instance-qualified `refs` as described above.
 
-Alert facets require `field=id|instance|scenario|country|region|city|as|ip|target|machine|origin|decision`. The `decision` facet returns `active`, `expired`, and an empty value for alerts without decisions. Facets accept the same filters as the paginated alert endpoint, plus optional case-insensitive `search`, `offset` (clamped to `0–500`), and `limit` (default `10`, maximum `50`). A facet value can include a `label`; the browser displays that label while applying `value` as the exact `=` predicate. Instance and machine facets therefore retain stable IDs while showing configured names or aliases, and `search` matches both values and labels. Multi-origin and multi-target alerts contribute once to each distinct origin or target bucket. The requested field's own predicates are removed so counts remain disjunctive. Facet requests return `400` for unsupported fields and `504` when their isolated five-second query budget is exhausted.
+Alert facets require `field=id|instance|scenario|kind|country|region|city|as|ip|target|machine|origin|decision`. The `decision` facet returns `active`, `expired`, and an empty value for alerts without decisions. Facets accept the same filters as the paginated alert endpoint, plus optional case-insensitive `search`, `offset` (clamped to `0–500`), and `limit` (default `10`, maximum `50`). A facet value can include a `label`; the browser displays that label while applying `value` as the exact `=` predicate. Instance and machine facets therefore retain stable IDs while showing configured names or aliases, and `search` matches both values and labels. Multi-origin and multi-target alerts contribute once to each distinct origin or target bucket. The requested field's own predicates are removed so counts remain disjunctive. Facet requests return `400` for unsupported fields and `504` when their isolated five-second query budget is exhausted.
 
 ## Decisions
 
@@ -153,7 +153,7 @@ Supported decision query parameters: `instance`, `include_expired`, `page`, `pag
 - `simulation` accepts `all`, `live`, or `simulated`; unknown values behave like `all`.
 - Bulk deletion accepts `ids` in single-instance deployments or instance-qualified `refs` as described above.
 
-Decision facets require `field=id|instance|alert|scenario|country|region|city|as|ip|target|action|status|machine|origin` and support the same value/label, pagination, and search behavior as alert facets. Status faceting considers both active and expired values within the configured lookback window even when the list is currently active-only.
+Decision facets require `field=id|instance|alert|scenario|kind|country|region|city|as|ip|target|action|status|machine|origin` and support the same value/label, pagination, and search behavior as alert facets. Status faceting considers both active and expired values within the configured lookback window even when the list is currently active-only.
 
 Both facet endpoints return at most the requested limit and use an empty string for missing raw values:
 
@@ -310,7 +310,7 @@ curl -b cookie.txt 'http://localhost:3000/api/decisions?page=1&page_size=50'
 Search alerts with structured syntax:
 
 ```bash
-curl -b cookie.txt 'http://localhost:3000/api/alerts?page=1&page_size=50&q=origin:(manual%20OR%20CAPI)%20AND%20-country:us'
+curl -b cookie.txt 'http://localhost:3000/api/alerts?page=1&page_size=50&q=kind=waf%20AND%20-country:us'
 ```
 
 Add a manual ban:

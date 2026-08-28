@@ -90,6 +90,7 @@ export interface DashboardAlertStatsRecord {
   region?: string;
   city?: string;
   scenario?: string;
+  kind?: string;
   asName?: string;
   ip?: string;
   sourceValue?: string;

@@ -781,7 +781,7 @@ Instance and machine options use stable IDs for filtering while displaying their
 - Facet selections use exact equality. Selecting the target `tausend.me` generates `target=tausend.me` and does not include `bw.tausend.me`. Manually entering `target:tausend.me` remains a broader contains search.
 - Each facet reports counts after the other active filters have been applied. Use the facet search control to find values beyond the initially loaded list.
 
-Dashboard applies the shared fields `Country`, `Scenario`, `AS`, `IP / Range`, `Target`, `ID`, `Instance`, `Region`, `City`, `Machine`, and `Origin`. Filters that depend on decision-only or alert-list-only data are retained in **Unavailable** instead of being silently discarded.
+Dashboard applies the shared fields `Country`, `Scenario`, `Kind`, `AS`, `IP / Range`, `Target`, `ID`, `Instance`, `Region`, `City`, `Machine`, and `Origin`. Filters that depend on decision-only or alert-list-only data are retained in **Unavailable** instead of being silently discarded.
 
 Active decisions are deduplicated by instance, value, and simulation mode. When filters exclude the globally preferred decision, the best matching decision is promoted so enabling **Hide duplicates** cannot make an otherwise matching duplicate group disappear.
 
@@ -805,10 +805,12 @@ The `:` operator performs a case-insensitive contains match, while `=` matches t
 | Alerts | `country:germany ssh` |
 | Alerts | `date>=2026-03-24 AND date<2026-03-25` |
 | Alerts | `country:(germany OR france) AND -sim:simulated` |
+| Alerts | `kind=waf` |
 | Alerts | `origin:""` |
 | Decisions | `status:active AND action:ban` |
 | Decisions | `date>=2026-03-24 AND action:ban` |
 | Decisions | `alert:123 OR ip:"192.168.5.0/24"` |
+| Decisions | `kind=waf` |
 
 ### Alert Source Filtering
 

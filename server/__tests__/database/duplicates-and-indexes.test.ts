@@ -438,7 +438,7 @@ describe('CrowdsecDatabase duplicates and indexes', () => {
     expect(
       (db.db.prepare("PRAGMA index_info('idx_alerts_filters')").all() as Array<{ name: string }>).map((column) => column.name),
     ).toEqual([
-      'instance_id', 'country', 'scenario', 'as_name', 'source_ip', 'target', 'country_name',
+      'instance_id', 'country', 'scenario', 'kind', 'as_name', 'source_ip', 'target', 'country_name',
       'region', 'city', 'machine', 'origins', 'message', 'upstream_id', 'simulated', 'created_at', 'id',
     ]);
     const filteredAlertCountPlan = db.db.prepare(`

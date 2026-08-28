@@ -440,6 +440,7 @@ export function Alerts() {
             id: 'id',
             instance: 'instance',
             scenario: 'scenario',
+            kind: 'kind',
             country: 'country',
             region: 'region',
             city: 'city',
@@ -1353,7 +1354,12 @@ export function Alerts() {
     const selectedAlertContext = selectedAlert && 'meta' in selectedAlert
         ? getDisplayMetadata(selectedAlert.meta)
         : [];
-    const selectedAlertIsAppSec = selectedAlertEvents.some(isAppSecEvent);
+    const selectedAlertKind = typeof selectedAlert?.kind === 'string'
+        ? selectedAlert.kind.trim().toLowerCase()
+        : '';
+    const selectedAlertIsAppSec = selectedAlertKind === 'waf'
+        || selectedAlertKind === 'bot-detection'
+        || selectedAlertEvents.some(isAppSecEvent);
     const selectedAlertIsSimulated = selectedAlert ? isSimulatedAlert(selectedAlert) : false;
     const selectedAlertSourceValue = getAlertSourceValue(selectedAlert?.source);
     const alertSummaryGridColumns = multipleInstances
@@ -1638,6 +1644,12 @@ export function Alerts() {
                                                                     showLink={true}
                                                                     simulated={simulationsEnabled && isSimulatedAlert(alert)}
                                                                 />
+                                                            </td>
+                                                        );
+                                                    case 'kind':
+                                                        return (
+                                                            <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                                                                {alert.kind || "-"}
                                                             </td>
                                                         );
                                                     case 'target':

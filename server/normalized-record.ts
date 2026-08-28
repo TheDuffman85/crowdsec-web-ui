@@ -10,6 +10,7 @@ export type NormalizedAlertRow = {
   start_at?: string | null;
   stop_at?: string | null;
   scenario?: string | null;
+  kind?: string | null;
   record_scenario?: string | null;
   reason?: string | null;
   source_ip?: string | null;
@@ -36,7 +37,7 @@ export type NormalizedAlertRow = {
 };
 
 const NORMALIZED_ALERT_KEYS = new Set([
-  'id', 'uuid', 'created_at', 'start_at', 'stop_at', 'scenario', 'reason',
+  'id', 'uuid', 'created_at', 'start_at', 'stop_at', 'scenario', 'kind', 'reason',
   'source', 'message', 'machine_id', 'machine_alias', 'events_count',
   'decisions', 'target', 'meta_search', 'simulated',
 ]);
@@ -47,7 +48,7 @@ const NORMALIZED_SOURCE_KEYS = new Set([
 ]);
 
 export const ALERT_RECORD_COLUMNS = [
-  'COALESCE(upstream_id, CAST(id AS TEXT)) AS id', 'id AS internal_id', 'instance_id', 'uuid', 'created_at', 'start_at', 'stop_at', 'scenario', 'record_scenario', 'reason',
+  'COALESCE(upstream_id, CAST(id AS TEXT)) AS id', 'id AS internal_id', 'instance_id', 'uuid', 'created_at', 'start_at', 'stop_at', 'scenario', 'record_scenario', 'kind', 'reason',
   'source_ip', 'source_value', 'source_scope', 'source_range', 'source_as_number',
   'source_extra_data', 'message', 'machine_id', 'machine_alias', 'events_count',
   'latitude', 'longitude', 'country', 'region', 'city', 'as_name', 'target',
@@ -175,6 +176,7 @@ export function alertFromRow(row: NormalizedAlertRow): AlertRecord {
   assignDefined(alert, 'start_at', row.start_at);
   assignDefined(alert, 'stop_at', row.stop_at);
   assignDefined(alert, 'scenario', row.record_scenario ?? row.scenario);
+  assignDefined(alert, 'kind', row.kind);
   assignDefined(alert, 'reason', row.reason);
   assignDefined(alert, 'message', row.message);
   assignDefined(alert, 'machine_id', row.machine_id);

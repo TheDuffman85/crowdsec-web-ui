@@ -84,6 +84,7 @@ describe('Alerts page presentation and columns', () => {
     expect(screen.queryByRole('columnheader', { name: 'ID' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Machine' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Origin' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Kind' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Region' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'City' })).not.toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Target' })).toBeInTheDocument();
@@ -186,7 +187,7 @@ describe('Alerts page presentation and columns', () => {
 
     await waitFor(() => expect(getVisibleColumnHeaderNames()).toEqual(['Time', 'Scenario', 'Country', 'AS', 'IP / Range', 'Target', 'Decisions', 'Actions']));
     expect(JSON.parse(window.localStorage.getItem('crowdsec-web-ui:alerts:table-column-order') || '[]'))
-      .toEqual(['id', 'instance', 'time', 'scenario', 'country', 'region', 'city', 'as', 'source', 'target', 'machine', 'origin', 'decisions']);
+      .toEqual(['id', 'instance', 'time', 'scenario', 'kind', 'country', 'region', 'city', 'as', 'source', 'target', 'machine', 'origin', 'decisions']);
   });
 
   test('shows the primary target, distinct target count, and target detail card', async () => {

@@ -15,6 +15,40 @@ import {
 } from './harness';
 
 describe('createApp dashboard API', () => {
+  test('filters cached dashboard alerts by first-class kind', async () => {
+    const { controller, database } = createController({
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+    });
+    seedAlert(database, sampleAlert({ id: 1, uuid: 'dashboard-kind-waf', kind: 'waf' }));
+    seedAlert(database, sampleAlert({
+      id: 2,
+      uuid: 'dashboard-kind-crowdsec',
+      kind: 'crowdsec',
+      source: { ip: '5.6.7.8', value: '5.6.7.8' },
+      decisions: (sampleAlert().decisions || []).map((decision) => ({
+        ...decision,
+        id: 20,
+        value: '5.6.7.8',
+      })),
+    }));
+
+    try {
+      const params = new URLSearchParams({ q: 'kind=waf', decision_q: 'kind=waf' });
+      const response = await controller.fetch(new Request(
+        `http://localhost/crowdsec/api/dashboard/stats?${params}`,
+      ));
+      expect(response.status).toBe(200);
+      expect((await response.json() as DashboardStatsResponse).filteredTotals).toEqual(expect.objectContaining({
+        alerts: 1,
+        decisions: 1,
+      }));
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
   test('serializes changing dashboard ranges and only warms the newest pending response', async () => {
     const createdAt = new Date().toISOString();
     const dateKey = dashboardDateKey(createdAt, 0);

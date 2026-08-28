@@ -67,6 +67,7 @@ type DashboardStatListItem = DashboardStatsResponse['topCountries'][number];
 const DASHBOARD_QUICK_FILTER_FIELDS: FacetField[] = [
     'country',
     'scenario',
+    'kind',
     'as',
     'ip',
     'target',
@@ -1264,6 +1265,7 @@ export function Dashboard() {
 
     const quickFilterFields = useMemo<QuickFilterDefinition[]>(() => [
         { field: 'scenario', label: t('tableColumns.scenario') },
+        { field: 'kind', label: t('tableColumns.kind') },
         { field: 'country', label: t('tableColumns.country') },
         { field: 'as', label: t('tableColumns.as') },
         { field: 'ip', label: t('tableColumns.source') },

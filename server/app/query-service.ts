@@ -561,6 +561,7 @@ async function queryAlertDecisionSummaries(alertIds: Array<string | number>): Pr
 
 type DecisionQueryRow = NormalizedDecisionRow & {
   is_duplicate?: number;
+  alert_kind?: string | null;
   latitude?: number | null;
   longitude?: number | null;
 };
@@ -615,6 +616,7 @@ async function queryPaginatedDecisions(
         queryDecisionListCounts(query, now, countCacheKey),
         queryWorker.all<DecisionQueryRow>(`
           SELECT ${DECISION_RECORD_COLUMNS}, (is_duplicate = 1) AS is_duplicate,
+            (SELECT kind FROM alerts WHERE alerts.id = decisions.alert_id) AS alert_kind,
             (SELECT latitude FROM alerts WHERE alerts.id = decisions.alert_id) AS latitude,
             (SELECT longitude FROM alerts WHERE alerts.id = decisions.alert_id) AS longitude
           FROM ${query.fromSql}
@@ -628,6 +630,7 @@ async function queryPaginatedDecisions(
     const alertCoordinates = new Map<string, { latitude: number; longitude: number }>();
     const decisions = rows.map((row) => {
       const decision = decisionFromRow(row);
+      if (row.alert_kind) decision.kind = row.alert_kind;
       decision.instance_name = instanceName(String(decision.instance_id || primaryInstance.id));
       const latitude = normalizeDashboardCoordinate(row.latitude, -90, 90);
       const longitude = normalizeDashboardCoordinate(row.longitude, -180, 180);
@@ -667,6 +670,7 @@ async function queryPromotedDecisionRowsByInternalIds(internalIds: string[]): Pr
   const placeholders = internalIds.map(() => '?').join(',');
   return queryWorker.all<DecisionQueryRow>(`
     SELECT ${DECISION_RECORD_COLUMNS}, 0 AS is_duplicate,
+      (SELECT kind FROM alerts WHERE alerts.id = decisions.alert_id) AS alert_kind,
       (SELECT latitude FROM alerts WHERE alerts.id = decisions.alert_id) AS latitude,
       (SELECT longitude FROM alerts WHERE alerts.id = decisions.alert_id) AS longitude
     FROM decisions AS decisions
@@ -1139,6 +1143,7 @@ async function queryAlertFacet(
     id: "COALESCE(TRIM(CAST(upstream_id AS TEXT)), '')",
     instance: "COALESCE(TRIM(instance_id), '')",
     scenario: "COALESCE(TRIM(scenario), '')",
+    kind: "COALESCE(TRIM(kind), '')",
     country: "COALESCE(TRIM(country), '')",
     region: "COALESCE(TRIM(region), '')",
     city: "COALESCE(TRIM(city), '')",
@@ -1331,6 +1336,7 @@ async function queryDecisionFacet(
         instance: "COALESCE(TRIM(instance_id), '')",
         alert: "COALESCE(TRIM(CAST(alert_upstream_id AS TEXT)), '')",
         scenario: "COALESCE(TRIM(scenario), '')",
+        kind: "COALESCE(TRIM((SELECT kind FROM alerts WHERE alerts.id = decisions.alert_id)), '')",
         country: "COALESCE(TRIM(country), '')",
         region: "COALESCE(TRIM(region), '')",
         city: "COALESCE(TRIM(city), '')",
@@ -1687,6 +1693,25 @@ async function getAlertCoordinatesByIds(
   return coordinates;
 }
 
+async function getAlertKindsByIds(
+  alertIds: Array<string | number | null | undefined>,
+): Promise<Map<string, string>> {
+  const uniqueIds = [...new Set(alertIds.filter((id): id is string | number => id !== null && id !== undefined).map(String))];
+  const kinds = new Map<string, string>();
+  for (let offset = 0; offset < uniqueIds.length; offset += 800) {
+    const ids = uniqueIds.slice(offset, offset + 800);
+    const placeholders = ids.map(() => '?').join(', ');
+    const rows = await queryWorker.all<{ id: string | number; kind?: string | null }>(
+      `SELECT id, kind FROM alerts WHERE id IN (${placeholders})`,
+      ids,
+    );
+    for (const row of rows) {
+      if (row.kind) kinds.set(String(row.id), row.kind);
+    }
+  }
+  return kinds;
+}
+
 function addAlertSqlFilters(where: SqlWhere, filters: AlertListFilters): void {
   if (filters.ip) addIpCondition(where, 'source_ip', filters.ip);
   if (filters.country) {
@@ -1833,6 +1858,7 @@ type DashboardAlertIndexRow = {
   region?: string | null;
   city?: string | null;
   scenario?: string | null;
+  kind?: string | null;
   as_name?: string | null;
   source_ip?: string | null;
   source_value?: string | null;
@@ -1931,7 +1957,7 @@ async function buildDashboardStatsIndex(
     batchWhere.add('id > ?', lastAlertId);
     const alertRows = await analyticsQueryWorker.all<DashboardAlertIndexRow>(`
     SELECT COALESCE(upstream_id, CAST(id AS TEXT)) AS id, id AS internal_id,
-      instance_id, created_at, country, region, city, scenario, as_name,
+      instance_id, created_at, country, region, city, scenario, kind, as_name,
       source_ip, source_value, source_range, latitude, longitude, target,
       machine_id, machine_alias, machine, origins, simulated, extra_data
     FROM alerts
@@ -1966,6 +1992,7 @@ async function buildDashboardStatsIndex(
         region: row.region || undefined,
         city: row.city || undefined,
         scenario: row.scenario || undefined,
+        kind: row.kind || undefined,
         asName: row.as_name || undefined,
         ip: row.source_ip || undefined,
         sourceValue: row.source_value || undefined,
@@ -2144,7 +2171,7 @@ async function updateDashboardStatsIndex(
       SELECT changed.record_id AS changed_id,
         COALESCE(alerts.upstream_id, CAST(alerts.id AS TEXT)) AS id,
         alerts.id AS internal_id, alerts.instance_id, alerts.created_at,
-        alerts.country, alerts.region, alerts.city, alerts.scenario, alerts.as_name,
+        alerts.country, alerts.region, alerts.city, alerts.scenario, alerts.kind, alerts.as_name,
         alerts.source_ip, alerts.source_value, alerts.source_range,
         alerts.latitude, alerts.longitude, alerts.target, alerts.machine_id,
         alerts.machine_alias, alerts.machine, alerts.origins, alerts.simulated,
@@ -2247,6 +2274,7 @@ function dashboardAlertRecordFromRow(
     region: row.region || undefined,
     city: row.city || undefined,
     scenario: row.scenario || undefined,
+    kind: row.kind || undefined,
     asName: row.as_name || undefined,
     ip: row.source_ip || undefined,
     sourceValue: row.source_value || undefined,
@@ -2686,6 +2714,11 @@ async function buildDashboardStatsResponse(
       timeZone: filters.timeZone,
     },
   );
+  const dashboardAlertKindByRef = new Map(
+    statsIndex.alerts.flatMap((alert) => alert.kind
+      ? [[`${alert.instanceId}\u0000${String(alert.id)}`, alert.kind] as const]
+      : []),
+  );
   const dashboardSearchPredicate = compiledDashboardSearch.ok
     ? (alert: DashboardAlertStatsRecord) => compiledDashboardSearch.predicate({
       id: alert.id,
@@ -2693,6 +2726,7 @@ async function buildDashboardStatsResponse(
       instance_name: instanceNameById.get(alert.instanceId),
       created_at: alert.createdAt,
       scenario: alert.scenario,
+      kind: alert.kind,
       machine_id: alert.machineId,
       machine_alias: alert.machineAlias || alert.machine,
       source: {
@@ -2724,6 +2758,9 @@ async function buildDashboardStatsResponse(
       machine_id: decision.machineId,
       machine_alias: decision.machineAlias,
       scenario: decision.scenario,
+      kind: decision.alertId === undefined
+        ? undefined
+        : dashboardAlertKindByRef.get(`${decision.instanceId}\u0000${String(decision.alertId)}`),
       value: decision.value,
       expired: decision.stopTimestamp <= nowTimestamp,
       is_duplicate: decision.isDuplicate,
@@ -3241,6 +3278,7 @@ function normalizeAlertDetail(input: unknown, alertId: string): AlertRecord | nu
     enrichAlertRecordLocations,
     enrichDecisionLocations,
     getAlertCoordinatesByIds,
+    getAlertKindsByIds,
     buildDashboardStats,
     getDashboardStatsIndex,
     createEmptyDashboardStatsResponse,

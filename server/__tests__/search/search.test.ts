@@ -17,6 +17,7 @@ const baseAlert: SlimAlert = {
   id: 1,
   created_at: '2026-03-24T10:00:00.000Z',
   scenario: 'crowdsecurity/ssh-bf',
+  kind: 'crowdsec',
   message: 'SSH brute force detected',
   machine_id: 'machine-1',
   machine_alias: 'host-a',
@@ -42,6 +43,7 @@ const baseDecision: DecisionListItem = {
   created_at: '2026-03-24T10:00:00.000Z',
   machine: 'host-a',
   machine_id: 'machine-1',
+  kind: 'crowdsec',
   machine_alias: 'host-a',
   value: '1.2.3.4',
   expired: false,
@@ -138,6 +140,22 @@ describe('shared search compiler', () => {
     expect(compiled.predicate({ ...baseAlert, simulated: true })).toBe(false);
   });
 
+  test('matches alert kinds with broad, exact, empty, and free-text searches', () => {
+    const broad = compileAlertSearch('kind:WAF');
+    const exact = compileAlertSearch('kind=waf');
+    const empty = compileAlertSearch('kind:""');
+    const freeText = compileAlertSearch('waf');
+    const wafAlert = { ...baseAlert, kind: 'waf' };
+    const legacyAlert = { ...baseAlert, kind: undefined };
+
+    expect(broad.ok && broad.predicate(wafAlert)).toBe(true);
+    expect(exact.ok && exact.predicate(wafAlert)).toBe(true);
+    expect(exact.ok && exact.predicate(baseAlert)).toBe(false);
+    expect(empty.ok && empty.predicate(legacyAlert)).toBe(true);
+    expect(empty.ok && empty.predicate(wafAlert)).toBe(false);
+    expect(freeText.ok && freeText.predicate(wafAlert)).toBe(true);
+  });
+
   test('matches stable machine ids and every represented target', () => {
     const alertSearch = compileAlertSearch('machine=machine-1 AND target=admin.example.test', {
       machineEnabled: true,
@@ -224,6 +242,18 @@ describe('shared search compiler', () => {
     expect(emptyOrigin.predicate(baseDecision)).toBe(false);
     expect(nonEmptyOrigin.predicate(baseDecision)).toBe(true);
     expect(nonEmptyOrigin.predicate(decisionWithoutOrigin)).toBe(false);
+  });
+
+  test('matches decisions by their linked alert kind', () => {
+    const exactKind = compileDecisionSearch('kind=waf');
+    const emptyKind = compileDecisionSearch('kind:""');
+    expect(exactKind.ok).toBe(true);
+    expect(emptyKind.ok).toBe(true);
+    if (!exactKind.ok || !emptyKind.ok) return;
+
+    expect(exactKind.predicate({ ...baseDecision, kind: 'waf' })).toBe(true);
+    expect(exactKind.predicate(baseDecision)).toBe(false);
+    expect(emptyKind.predicate({ ...baseDecision, kind: undefined })).toBe(true);
   });
 
   test('supports simulation inequality without broadening invalid values', () => {

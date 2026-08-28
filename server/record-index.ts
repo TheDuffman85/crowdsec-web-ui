@@ -7,6 +7,7 @@ import { normalizeIsoTimestamp } from './utils/date-time';
 export interface AlertIndexValues {
   historyAt: string;
   scenario: string | null;
+  kind: string | null;
   sourceIp: string | null;
   latitude: number | null;
   longitude: number | null;
@@ -59,6 +60,7 @@ export function deriveAlertIndexValuesFromRecord(alert: AlertRecord | null | und
     resolvedHistoryAt && Number.isFinite(Date.parse(resolvedHistoryAt)) ? resolvedHistoryAt : fallback.createdAt,
   );
   const scenario = alert ? resolveAlertScenario(alert) || fallback.scenario || null : fallback.scenario || null;
+  const kind = normalizeText(alert?.kind)?.toLowerCase() || null;
   const sourceIp = alert ? getAlertSourceValue(alert.source) || null : fallback.sourceIp || null;
   const latitude = normalizeCoordinate(alert?.source?.latitude, -90, 90);
   const longitude = normalizeCoordinate(alert?.source?.longitude, -180, 180);
@@ -76,6 +78,7 @@ export function deriveAlertIndexValuesFromRecord(alert: AlertRecord | null | und
   return {
     historyAt,
     scenario,
+    kind,
     sourceIp,
     latitude,
     longitude,
@@ -92,6 +95,7 @@ export function deriveAlertIndexValuesFromRecord(alert: AlertRecord | null | und
     searchText: normalizeSearchText([
       alert?.id,
       scenario,
+      kind,
       fallback.message,
       alert?.message,
       sourceIp,

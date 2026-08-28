@@ -42,12 +42,12 @@ export function createSqlWhere(): SqlWhere {
 
 const DECISION_COVERED_SEARCH_FIELDS = new Set([
   'id', 'instance', 'alert', 'scenario', 'ip', 'country', 'region', 'city', 'as', 'target',
-  'date', 'action', 'type', 'status', 'duplicate', 'sim', 'machine', 'origin',
+  'kind', 'date', 'action', 'type', 'status', 'duplicate', 'sim', 'machine', 'origin',
 ]);
 
 const ALERT_COVERED_SEARCH_FIELDS = new Set([
   'id', 'instance', 'scenario', 'message', 'ip', 'country', 'region', 'city', 'as',
-  'target', 'date', 'sim', 'machine', 'origin', 'decision',
+  'kind', 'target', 'date', 'sim', 'machine', 'origin', 'decision',
 ]);
 
 // These fields are part of the duplicate-group identity. Applying predicates
@@ -365,6 +365,8 @@ export function alertFieldCondition(
       return instanceFieldCondition(value, instances, exact);
     case 'scenario':
       return textCondition('LOWER(scenario)', value, exact);
+    case 'kind':
+      return textCondition('LOWER(kind)', value, exact);
     case 'message':
       return textCondition('LOWER(message)', value, exact);
     case 'ip':
@@ -418,6 +420,8 @@ export function decisionFieldCondition(
       return { sql: 'alert_upstream_id = ?', params: [value] };
     case 'scenario':
       return textCondition('LOWER(scenario)', value, exact);
+    case 'kind':
+      return textCondition('LOWER((SELECT kind FROM alerts WHERE alerts.id = decisions.alert_id))', value, exact);
     case 'ip':
       return ipCondition('value', value, exact);
     case 'country':
@@ -487,6 +491,7 @@ export function alertEmptyFieldCondition(field: string, simulationsEnabled = tru
   }
   switch (field) {
     case 'scenario':
+    case 'kind':
     case 'message':
     case 'ip':
     case 'country':
@@ -496,6 +501,7 @@ export function alertEmptyFieldCondition(field: string, simulationsEnabled = tru
     case 'origin':
       return emptyTextCondition({
         scenario: 'scenario',
+        kind: 'kind',
         message: 'message',
         ip: 'source_ip',
         country: 'country',
@@ -556,6 +562,7 @@ export function decisionEmptyFieldCondition(field: string): SqlCondition {
   switch (field) {
     case 'alert':
     case 'scenario':
+    case 'kind':
     case 'ip':
     case 'country':
     case 'region':
@@ -567,6 +574,7 @@ export function decisionEmptyFieldCondition(field: string): SqlCondition {
       return emptyTextCondition({
         alert: 'alert_id',
         scenario: 'scenario',
+        kind: '(SELECT kind FROM alerts WHERE alerts.id = decisions.alert_id)',
         ip: 'value',
         country: 'country',
         region: 'region',

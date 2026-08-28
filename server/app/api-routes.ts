@@ -100,6 +100,7 @@ export function registerApiRoutes(dependencies: ApiRouteDependencies): void {
     fetchCrowdsecMetrics,
     fetchCrowdsecMetricsSamples,
     getAlertCoordinatesByIds,
+    getAlertKindsByIds,
     getAlertListFilters,
     getDashboardStatsFilters,
     getDecisionListFilters,
@@ -473,9 +474,19 @@ app.get(`${config.basePath}/api/decisions`, ensureAuth, ensurePublishedRevisionR
       ? database.getDecisionsSince(since, now)
       : database.getActiveDecisions(now);
 
-    const alertCoordinates = await getAlertCoordinatesByIds(rows.map((row) => row.alert_id));
+    const [alertCoordinates, alertKinds] = await Promise.all([
+      getAlertCoordinatesByIds(rows.map((row) => row.alert_id)),
+      getAlertKindsByIds(rows.map((row) => row.alert_id)),
+    ]);
 
-    let decisions = rows.map((row) => toDecisionListItem(decisionFromRow(row), includeExpired));
+    let decisions = rows.map((row) => {
+      const decision = decisionFromRow(row);
+      const kind = row.alert_id === undefined || row.alert_id === null
+        ? undefined
+        : alertKinds.get(String(row.alert_id));
+      if (kind) decision.kind = kind;
+      return toDecisionListItem(decision, includeExpired);
+    });
     if (!config.simulationsEnabled) {
       decisions = decisions.filter((decision) => !decision.simulated);
     }
@@ -1197,19 +1208,21 @@ app.get(`${config.basePath}/api/stats/alerts`, ensureAuth, ensurePublishedRevisi
     const alerts = (await analyticsQueryWorker.all<{
       created_at: string;
       scenario?: string | null;
+      kind?: string | null;
       source_ip?: string | null;
       country?: string | null;
       as_name?: string | null;
       target?: string | null;
       simulated?: number | null;
     }>(`
-      SELECT created_at, scenario, source_ip, country, as_name, target, simulated
+      SELECT created_at, scenario, kind, source_ip, country, as_name, target, simulated
       FROM alerts
       ${where.toSql()}
       ORDER BY created_at DESC, id DESC
     `, where.params, { label: 'alert statistics' })).map((row): StatsAlert => ({
       created_at: row.created_at,
       scenario: row.scenario || undefined,
+      kind: row.kind || undefined,
       source: row.source_ip || row.country || row.as_name
         ? {
             ip: row.source_ip && !row.source_ip.includes('/') ? row.source_ip : undefined,
