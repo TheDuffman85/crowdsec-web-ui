@@ -49,7 +49,7 @@
     "local-reverse-geocoder": "0.16.8",
     "mqtt": "^5.15.2",
     "openid-client": "^6.8.4",
-    "otplib": "^13.4.1",
+    "otplib": "^13.5.0",
     "qrcode": "^1.5.4",
     "react-i18next": "^17.0.8",
     "sortablejs": "^1.15.7",
