@@ -51,7 +51,7 @@
     "openid-client": "^6.8.4",
     "otplib": "^13.4.1",
     "qrcode": "^1.5.4",
-    "react-i18next": "^17.0.8",
+    "react-i18next": "^17.0.12",
     "sortablejs": "^1.15.7",
     "undici": "8.5.0",
     "ws": "8.21.1",
