@@ -1,6 +1,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { Worker } from 'node:worker_threads';
-import type { AlertInsertParams, DecisionInsertParams, SearchIndexRebuildScope } from './database';
+import type {
+  AlertInsertParams,
+  DecisionInsertParams,
+  IncrementalVacuumOptions,
+  IncrementalVacuumResult,
+  SearchIndexRebuildScope,
+} from './database';
 
 export type DatabaseWrite = <T>(operation: () => T | Promise<T>) => Promise<T>;
 
@@ -50,6 +56,7 @@ type SyncWorkerRequest =
   | { type: 'rebuild-search-indexes'; scope?: SearchIndexRebuildScope }
   | { type: 'refresh-duplicate-flags'; now: string }
   | { type: 'cleanup-old-data'; cutoff: string }
+  | ({ type: 'incremental-vacuum' } & IncrementalVacuumOptions)
   | { type: 'begin-transaction' }
   | { type: 'commit-transaction' }
   | { type: 'rollback-transaction' }
@@ -72,6 +79,8 @@ type PendingRequest = {
 export class DatabaseSyncWorker {
   private readonly dbPath: string;
   private readonly walEnabled: boolean;
+  private readonly incrementalVacuumEnabled: boolean;
+  private readonly journalSizeLimitBytes: number;
   private readonly timeoutMs: number;
   private worker: Worker | null = null;
   private nextId = 1;
@@ -79,9 +88,17 @@ export class DatabaseSyncWorker {
   private operationQueue: Promise<void> = Promise.resolve();
   private readonly transactionContext = new AsyncLocalStorage<boolean>();
 
-  constructor(options: { dbPath: string; walEnabled?: boolean; timeoutMs?: number }) {
+  constructor(options: {
+    dbPath: string;
+    walEnabled?: boolean;
+    incrementalVacuumEnabled?: boolean;
+    journalSizeLimitBytes?: number;
+    timeoutMs?: number;
+  }) {
     this.dbPath = options.dbPath;
     this.walEnabled = options.walEnabled ?? true;
+    this.incrementalVacuumEnabled = options.incrementalVacuumEnabled ?? true;
+    this.journalSizeLimitBytes = options.journalSizeLimitBytes ?? 128 * 1024 * 1024;
     this.timeoutMs = options.timeoutMs ?? 10 * 60_000;
   }
 
@@ -126,6 +143,10 @@ export class DatabaseSyncWorker {
 
   cleanupOldData(cutoff: string): Promise<{ alerts: number; decisions: number }> {
     return this.execute({ type: 'cleanup-old-data', cutoff });
+  }
+
+  runIncrementalVacuum(options: IncrementalVacuumOptions): Promise<IncrementalVacuumResult> {
+    return this.execute({ type: 'incremental-vacuum', ...options });
   }
 
   clearSyncData(): Promise<void> {
@@ -200,7 +221,12 @@ export class DatabaseSyncWorker {
     if (this.worker) return this.worker;
     const isTsRuntime = import.meta.url.endsWith('.ts');
     const worker = new Worker(new URL(`./sync-worker.${isTsRuntime ? 'ts' : 'js'}`, import.meta.url), {
-      workerData: { dbPath: this.dbPath, walEnabled: this.walEnabled },
+      workerData: {
+        dbPath: this.dbPath,
+        walEnabled: this.walEnabled,
+        incrementalVacuumEnabled: this.incrementalVacuumEnabled,
+        journalSizeLimitBytes: this.journalSizeLimitBytes,
+      },
       execArgv: isTsRuntime ? ['--import', 'tsx'] : [],
     });
     worker.on('message', (message: SyncWorkerResponse) => this.handleMessage(message));

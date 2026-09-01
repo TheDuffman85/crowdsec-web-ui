@@ -72,7 +72,12 @@ const config = createRuntimeConfig({
   VITE_BRANCH: process.env.VITE_BRANCH || 'main',
   VITE_COMMIT_HASH: process.env.VITE_COMMIT_HASH || 'screenshot',
 }, { defaultConfigFile: configFile });
-const database = new CrowdsecDatabase({ dbDir, walEnabled: config.sqliteWalEnabled });
+const database = new CrowdsecDatabase({
+  dbDir,
+  walEnabled: config.sqliteWalEnabled,
+  incrementalVacuumEnabled: config.sqliteIncrementalVacuumEnabled,
+  journalSizeLimitBytes: config.sqliteJournalSizeLimitBytes,
+});
 
 const primaryInstance = config.instances[0];
 config.instances = [

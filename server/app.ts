@@ -29,7 +29,12 @@ import {
 } from '../shared/search';
 import { createRuntimeConfig, getIntervalName, parseLookbackToMs, parseRefreshInterval, type RuntimeConfig } from './config';
 import { getDateTimeKey, getTimeZoneOffsetMs, getZonedHourlyBucketKeys } from './utils/date-time';
-import { CrowdsecDatabase, type AlertInsertParams, type DecisionInsertParams } from './database';
+import {
+  CrowdsecDatabase,
+  getSqliteMaintenanceWarning,
+  type AlertInsertParams,
+  type DecisionInsertParams,
+} from './database';
 import {
   ALERT_RECORD_COLUMNS,
   DECISION_RECORD_COLUMNS,
@@ -214,7 +219,7 @@ export interface CreateAppOptions {
     | 'clearSyncData'
     | 'runExclusive'
     | 'close'
-  > & Partial<Pick<DatabaseSyncWorker, 'compareAlertDecisions' | 'runTransaction'>>;
+  > & Partial<Pick<DatabaseSyncWorker, 'compareAlertDecisions' | 'runTransaction' | 'runIncrementalVacuum'>>;
   attackLocationResolver?: AttackLocationResolver;
 }
 
@@ -364,7 +369,13 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   const database = options.database || new CrowdsecDatabase({
     dbDir: config.dbDir,
     walEnabled: config.sqliteWalEnabled,
+    incrementalVacuumEnabled: config.sqliteIncrementalVacuumEnabled,
+    journalSizeLimitBytes: config.sqliteJournalSizeLimitBytes,
   });
+  if (config.sqliteIncrementalVacuumEnabled && !database.wasFresh) {
+    const warning = getSqliteMaintenanceWarning(database.getStorageStats());
+    if (warning) console.warn(warning);
+  }
   if (config.instances.length > 1 && database.getMeta('multi_instance_cache_schema_ready')?.value !== 'true') {
     const pendingDeletions = database.getPendingAlertDeletions();
     if (pendingDeletions.length > 0) {
@@ -436,6 +447,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   const syncWorker = options.syncWorker || new DatabaseSyncWorker({
     dbPath: database.dbPath,
     walEnabled: config.sqliteWalEnabled,
+    incrementalVacuumEnabled: config.sqliteIncrementalVacuumEnabled,
+    journalSizeLimitBytes: config.sqliteJournalSizeLimitBytes,
   });
   const attackLocationResolver = options.attackLocationResolver || createAttackLocationResolver({
     dumpDirectory: config.geonamesDumpDir,

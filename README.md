@@ -217,6 +217,8 @@ Use `CONFIG_FILE` only to select another existing file. [`config.example.yaml`](
 | `storage.dataDir` | `/app/data` | SQLite database and persistent application state. | `CONFIG_STORAGE_DATA_DIR` |
 | `storage.geonamesDir` | `/app/geonames` in Docker; `./geonames` locally | Local GeoNames snapshot used for location labels. | `CONFIG_STORAGE_GEONAMES_DIR` |
 | `storage.walEnabled` | `true` | Enables SQLite write-ahead logging. Set to `false` for filesystems that do not support WAL. | `CONFIG_STORAGE_WAL_ENABLED` |
+| `storage.incrementalVacuumEnabled` | `true` | Uses bounded incremental vacuum while idle on compatible databases. Existing databases are not migrated automatically. | `CONFIG_STORAGE_INCREMENTAL_VACUUM_ENABLED` |
+| `storage.journalSizeLimit` | `128MiB` | Retained WAL size after checkpoints. This does not cap transactions; use `unlimited` to disable trimming. Ignored when WAL is disabled. | `CONFIG_STORAGE_JOURNAL_SIZE_LIMIT` |
 | `ui.timeZone` | `browser` | Browser timezone or an IANA zone such as `Europe/Berlin` or `UTC`. | `CONFIG_UI_TIME_ZONE` |
 | `ui.timeFormat` | `browser` | Clock format: `browser`, `12h`, or `24h`. | `CONFIG_UI_TIME_FORMAT` |
 | `ui.readOnly` | `false` | Hides management actions and rejects mutating API operations. | `CONFIG_UI_READ_ONLY` |
@@ -927,6 +929,24 @@ volumes:
 - During LAPI outages, the application serves its available cache and retries in the background; partial imports are marked.
 
 Use `POST /api/cache/clear` for a full cache reset. Synchronization internals are documented in [DEVELOPMENT.md](DEVELOPMENT.md#cache-and-synchronization-internals).
+
+### SQLite database maintenance
+
+New databases use SQLite incremental auto-vacuum by default. Existing databases keep their current format to avoid a potentially long, disk-intensive migration. If startup reports reclaimable space, migrate during a maintenance window:
+
+1. Back up the entire data directory, including `crowdsec.db`, `crowdsec.db-wal`, and `crowdsec.db-shm` when present.
+2. Stop CrowdSec Web UI and confirm that no process is using the database. Ensure free disk space is at least the current database size.
+3. Open `crowdsec.db` with SQLite and run:
+
+   ```sql
+   PRAGMA wal_checkpoint(TRUNCATE);
+   PRAGMA auto_vacuum = INCREMENTAL;
+   VACUUM;
+   ```
+
+4. Close SQLite, restart the app, and verify the migration with `PRAGMA auto_vacuum;`. A result of `2` means incremental auto-vacuum is enabled.
+
+`VACUUM` rewrites the database and may take significant time for large installations. Do not interrupt it. The application never runs this migration automatically.
 
 ## Documentation
 

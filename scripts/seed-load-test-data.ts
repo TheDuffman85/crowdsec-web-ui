@@ -1,6 +1,7 @@
 import { rmSync } from 'node:fs';
 import path from 'node:path';
-import { parseLookbackToMs } from '../server/config';
+import { parseBooleanEnv, parseLookbackToMs } from '../server/config';
+import { DEFAULT_SQLITE_JOURNAL_SIZE_LIMIT_BYTES, parseByteSize } from '../server/config-file';
 import { CrowdsecDatabase } from '../server/database';
 import { installTimestampedConsole } from '../server/logging';
 import {
@@ -34,6 +35,9 @@ interface LoadTestConfig {
   expiredAlerts: number;
   expiringSoonDecisions: number;
   lookbackMs: number;
+  sqliteWalEnabled: boolean;
+  sqliteIncrementalVacuumEnabled: boolean;
+  sqliteJournalSizeLimitBytes: number;
 }
 
 interface AlertTemplate {
@@ -194,6 +198,14 @@ function readConfig(): LoadTestConfig {
       Math.max(0, decisions - blocklistDecisionTotal),
     ),
     lookbackMs: parseLookbackToMs(process.env.CONFIG_CROWDSEC_SYNC_LOOKBACK || '30d'),
+    sqliteWalEnabled: parseBooleanEnv(process.env.CONFIG_STORAGE_WAL_ENABLED, true),
+    sqliteIncrementalVacuumEnabled: parseBooleanEnv(
+      process.env.CONFIG_STORAGE_INCREMENTAL_VACUUM_ENABLED,
+      true,
+    ),
+    sqliteJournalSizeLimitBytes: process.env.CONFIG_STORAGE_JOURNAL_SIZE_LIMIT === undefined
+      ? DEFAULT_SQLITE_JOURNAL_SIZE_LIMIT_BYTES
+      : parseByteSize(process.env.CONFIG_STORAGE_JOURNAL_SIZE_LIMIT, 'CONFIG_STORAGE_JOURNAL_SIZE_LIMIT'),
   };
 }
 
@@ -449,7 +461,12 @@ if (config.alerts === 0 && config.decisions > 0) {
 
 removeExistingDatabase(config.dbDir);
 
-const database = new CrowdsecDatabase({ dbDir: config.dbDir });
+const database = new CrowdsecDatabase({
+  dbDir: config.dbDir,
+  walEnabled: config.sqliteWalEnabled,
+  incrementalVacuumEnabled: config.sqliteIncrementalVacuumEnabled,
+  journalSizeLimitBytes: config.sqliteJournalSizeLimitBytes,
+});
 const multiInstance = process.env.LOADTEST_MULTI_INSTANCE === 'true';
 const instanceSeeds: Array<{ table: string; name: string; config: LoadTestConfig }> = multiInstance
   ? [

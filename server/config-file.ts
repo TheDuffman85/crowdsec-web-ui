@@ -12,8 +12,12 @@ export interface ParsedConfigFile {
   environment: NodeJS.ProcessEnv;
   instances: CrowdsecInstanceConfig[];
   sqliteWalEnabled: boolean;
+  sqliteIncrementalVacuumEnabled: boolean;
+  sqliteJournalSizeLimitBytes: number;
   updateCheckEnabled?: boolean;
 }
+
+export const DEFAULT_SQLITE_JOURNAL_SIZE_LIMIT_BYTES = 128 * 1024 * 1024;
 
 // These values describe the build or bootstrap the process. They intentionally
 // remain environment variables and are never treated as application settings.
@@ -88,6 +92,31 @@ function positiveInteger(value: unknown, label: string): number {
     throw new Error(`Configuration error: ${label} must be a positive integer.`);
   }
   return Number(value);
+}
+
+export function parseByteSize(value: unknown, label: string): number {
+  if (typeof value === 'string' && value.trim().toLowerCase() === 'unlimited') return -1;
+  if (Number.isSafeInteger(value) && Number(value) >= 0) return Number(value);
+  if (typeof value === 'string') {
+    const match = value.trim().match(/^(\d+)\s*(b|kib|mib|gib)$/i);
+    if (match) {
+      const multiplier = match[2].toLowerCase() === 'gib' ? 1024 ** 3
+        : match[2].toLowerCase() === 'mib' ? 1024 ** 2
+          : match[2].toLowerCase() === 'kib' ? 1024
+            : 1;
+      const bytes = Number(match[1]) * multiplier;
+      if (Number.isSafeInteger(bytes)) return bytes;
+    }
+  }
+  throw new Error(`Configuration error: ${label} must be a byte size (for example 128MiB) or unlimited.`);
+}
+
+function formatByteSize(bytes: number): string {
+  if (bytes < 0) return 'unlimited';
+  for (const [suffix, divisor] of [['GiB', 1024 ** 3], ['MiB', 1024 ** 2], ['KiB', 1024]] as const) {
+    if (bytes > 0 && bytes % divisor === 0) return `${bytes / divisor}${suffix}`;
+  }
+  return `${bytes}B`;
 }
 
 function stringArray(value: unknown, label: string): string[] {
@@ -167,12 +196,18 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
   setString(env, server, 'basePath', 'BASE_PATH', 'server', true);
 
   const storage = section(root, 'storage');
-  knownKeys(storage, ['dataDir', 'geonamesDir', 'walEnabled'], 'storage');
+  knownKeys(storage, ['dataDir', 'geonamesDir', 'walEnabled', 'incrementalVacuumEnabled', 'journalSizeLimit'], 'storage');
   setString(env, storage, 'dataDir', 'DB_DIR', 'storage');
   setString(env, storage, 'geonamesDir', 'GEONAMES_DUMP_DIR', 'storage');
   const sqliteWalEnabled = storage.walEnabled === undefined
     ? true
     : boolean(storage.walEnabled, 'storage.walEnabled');
+  const sqliteIncrementalVacuumEnabled = storage.incrementalVacuumEnabled === undefined
+    ? true
+    : boolean(storage.incrementalVacuumEnabled, 'storage.incrementalVacuumEnabled');
+  const sqliteJournalSizeLimitBytes = storage.journalSizeLimit === undefined
+    ? DEFAULT_SQLITE_JOURNAL_SIZE_LIMIT_BYTES
+    : parseByteSize(storage.journalSizeLimit, 'storage.journalSizeLimit');
 
   const ui = section(root, 'ui');
   knownKeys(ui, ['timeZone', 'timeFormat', 'readOnly'], 'ui');
@@ -259,6 +294,8 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
     environment: env,
     instances: parseInstancesConfig({ instances: root.instances }, sourceEnv),
     sqliteWalEnabled,
+    sqliteIncrementalVacuumEnabled,
+    sqliteJournalSizeLimitBytes,
     updateCheckEnabled,
   };
 }
@@ -301,7 +338,7 @@ const INITIAL_CONFIG_HEADER = [
 export const CONFIG_KEY_ORDER = new Map<string, readonly string[]>([
   ['', ['server', 'storage', 'ui', 'updates', 'auth', 'notifications', 'audit', 'crowdsec', 'instances']],
   ['server', ['port', 'basePath']],
-  ['storage', ['dataDir', 'geonamesDir', 'walEnabled']],
+  ['storage', ['dataDir', 'geonamesDir', 'walEnabled', 'incrementalVacuumEnabled', 'journalSizeLimit']],
   ['ui', ['timeZone', 'timeFormat', 'readOnly']],
   ['updates', ['enabled']],
   ['auth', ['enabled', 'sessionSecret', 'totpSecret', 'totpSeed', 'oidc']],
@@ -495,6 +532,8 @@ export function generateApplicationConfig(env: NodeJS.ProcessEnv, config: Runtim
       dataDir: config.dbDir,
       geonamesDir: config.geonamesDumpDir,
       walEnabled: config.sqliteWalEnabled,
+      incrementalVacuumEnabled: config.sqliteIncrementalVacuumEnabled,
+      journalSizeLimit: formatByteSize(config.sqliteJournalSizeLimitBytes),
     },
     ui: { timeZone: config.timeZone || 'browser', timeFormat: config.timeFormat, readOnly: config.readOnly },
     auth: {
@@ -585,6 +624,8 @@ const CONFIG_VALUE_ENV = [
   ['CONFIG_STORAGE_DATA_DIR', ['storage', 'dataDir']],
   ['CONFIG_STORAGE_GEONAMES_DIR', ['storage', 'geonamesDir']],
   ['CONFIG_STORAGE_WAL_ENABLED', ['storage', 'walEnabled']],
+  ['CONFIG_STORAGE_INCREMENTAL_VACUUM_ENABLED', ['storage', 'incrementalVacuumEnabled']],
+  ['CONFIG_STORAGE_JOURNAL_SIZE_LIMIT', ['storage', 'journalSizeLimit']],
   ['CONFIG_UI_TIME_ZONE', ['ui', 'timeZone']],
   ['CONFIG_UI_TIME_FORMAT', ['ui', 'timeFormat']],
   ['CONFIG_UI_READ_ONLY', ['ui', 'readOnly']],

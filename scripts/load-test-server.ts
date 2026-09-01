@@ -74,7 +74,12 @@ const config = createRuntimeConfig({
   VITE_BRANCH: process.env.VITE_BRANCH || 'loadtest',
   VITE_COMMIT_HASH: process.env.VITE_COMMIT_HASH || 'loadtest',
 }, { defaultConfigFile: path.join(dbDir, 'config.yaml') });
-const database = new CrowdsecDatabase({ dbDir, walEnabled: config.sqliteWalEnabled });
+const database = new CrowdsecDatabase({
+  dbDir,
+  walEnabled: config.sqliteWalEnabled,
+  incrementalVacuumEnabled: config.sqliteIncrementalVacuumEnabled,
+  journalSizeLimitBytes: config.sqliteJournalSizeLimitBytes,
+});
 const multiInstanceProfile = process.env.LOADTEST_MULTI_INSTANCE === 'true';
 if (multiInstanceProfile) {
   const common = config.instances[0];

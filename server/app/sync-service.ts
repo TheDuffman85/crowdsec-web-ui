@@ -87,6 +87,11 @@ interface ReconcilePlan {
   currentKeys: Set<string>;
 }
 
+const SQLITE_INCREMENTAL_VACUUM_MIN_BYTES = 128 * 1024 * 1024;
+const SQLITE_INCREMENTAL_VACUUM_MIN_RATIO = 0.25;
+const SQLITE_INCREMENTAL_VACUUM_MAX_PAGES = 4096;
+const SQLITE_INCREMENTAL_VACUUM_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
 export interface SyncServiceState extends Record<string, any> {
   reconcileWindowState: ReconcileWindowState;
   initializationPromise: Promise<SyncHistorySummary | null> | null;
@@ -1719,6 +1724,7 @@ async function updateCacheDelta(options: { throwOnError?: boolean; reconcile?: b
       deltaSummary: WindowSyncSummary;
       reconcileSummary: WindowSyncSummary;
       dataChanged: boolean;
+      cleanupSucceeded: boolean;
     };
     let releasePublishedRevision: (() => void) | null = null;
     try {
@@ -1745,7 +1751,7 @@ async function updateCacheDelta(options: { throwOnError?: boolean; reconcile?: b
         const duplicateRefreshStartedAt = Date.now();
         await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
         console.log(`Decision duplicate index refreshed in ${formatElapsedTime(Date.now() - duplicateRefreshStartedAt)}.`);
-        return { deltaSummary, reconcileSummary, dataChanged };
+        return { deltaSummary, reconcileSummary, dataChanged, cleanupSucceeded: removed.succeeded };
       });
       refreshResult = committedRefresh.result;
       releasePublishedRevision = committedRefresh.releasePublishedRevision;
@@ -1775,6 +1781,7 @@ async function updateCacheDelta(options: { throwOnError?: boolean; reconcile?: b
       releasePublishedRevision?.();
     }
     if (publishedRevision) publishCacheUpdate(publishedRevision);
+    if (refreshResult.cleanupSucceeded) await maybeRunIncrementalVacuum();
   } catch (error: any) {
     console.error('Failed to update cache delta:', error.message);
     lapiClient.updateStatus(false, error);
@@ -1802,7 +1809,7 @@ async function refreshLatestWindow(): Promise<void> {
       const removed = await cleanupOldData();
       const dataChanged = summary.changed || removed.alerts > 0 || removed.decisions > 0;
       await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
-      return { summary, dataChanged };
+      return { summary, dataChanged, cleanupSucceeded: removed.succeeded };
     });
     let publishedRevision: string | null = null;
     try {
@@ -1820,6 +1827,7 @@ async function refreshLatestWindow(): Promise<void> {
       committedRefresh.releasePublishedRevision();
     }
     if (publishedRevision) publishCacheUpdate(publishedRevision);
+    if (committedRefresh.result.cleanupSucceeded) await maybeRunIncrementalVacuum();
     await runNotificationEvaluation('manual latest-window refresh');
   });
 }
@@ -1830,19 +1838,44 @@ async function refreshFullHistory(): Promise<void> {
     if (!summary || summary.state === 'failed') {
       throw new Error(summary?.errors[0] || 'Full historical refresh failed');
     }
-    await cleanupOldData();
+    const removed = await cleanupOldData();
+    if (removed.succeeded) await maybeRunIncrementalVacuum();
   });
 }
 
-async function cleanupOldData(): Promise<{ alerts: number; decisions: number }> {
+async function cleanupOldData(): Promise<{ alerts: number; decisions: number; succeeded: boolean }> {
   const cutoff = new Date(Date.now() - config.lookbackMs).toISOString();
   try {
     const removed = await syncWorker.cleanupOldData(cutoff);
     console.log(`Cleanup: Removed ${removed.alerts} old alerts, ${removed.decisions} old decisions`);
-    return removed;
+    return { ...removed, succeeded: true };
   } catch (error: any) {
     console.error('Cleanup failed:', error.message);
-    return { alerts: 0, decisions: 0 };
+    return { alerts: 0, decisions: 0, succeeded: false };
+  }
+}
+
+async function maybeRunIncrementalVacuum(): Promise<void> {
+  if (!config.sqliteIncrementalVacuumEnabled || typeof syncWorker.runIncrementalVacuum !== 'function') return;
+  const now = Date.now();
+  if (now - state.lastRequestTime <= config.idleThresholdMs) return;
+  try {
+    const result = await syncWorker.runIncrementalVacuum({
+      now,
+      minFreeRatio: SQLITE_INCREMENTAL_VACUUM_MIN_RATIO,
+      minFreeBytes: SQLITE_INCREMENTAL_VACUUM_MIN_BYTES,
+      maxPages: SQLITE_INCREMENTAL_VACUUM_MAX_PAGES,
+      cooldownMs: SQLITE_INCREMENTAL_VACUUM_COOLDOWN_MS,
+    });
+    if (result.performed) {
+      const reclaimed = Math.max(0, result.before.reclaimableBytes - result.after.reclaimableBytes);
+      console.log(`SQLite incremental vacuum completed (${reclaimed} bytes reclaimed).`);
+    }
+  } catch (error) {
+    console.warn(
+      'SQLite incremental vacuum failed; it will be retried after a future cleanup:',
+      error instanceof Error ? error.message : String(error),
+    );
   }
 }
 

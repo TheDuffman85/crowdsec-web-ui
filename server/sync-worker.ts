@@ -16,10 +16,17 @@ type WorkerRequest = {
 };
 
 installTimestampedConsole();
-const workerOptions = workerData as { dbPath: string; walEnabled?: boolean };
+const workerOptions = workerData as {
+  dbPath: string;
+  walEnabled?: boolean;
+  incrementalVacuumEnabled?: boolean;
+  journalSizeLimitBytes?: number;
+};
 const database = new CrowdsecDatabase({
   dbPath: String(workerOptions.dbPath),
   walEnabled: workerOptions.walEnabled ?? true,
+  incrementalVacuumEnabled: workerOptions.incrementalVacuumEnabled ?? true,
+  journalSizeLimitBytes: workerOptions.journalSizeLimitBytes,
 });
 
 parentPort?.on('message', (message: WorkerRequest) => {
@@ -114,6 +121,15 @@ function execute(request: WorkerRequest['request']): unknown {
       alerts: database.deleteOldAlerts(cutoff),
       decisions: database.deleteOldDecisions(cutoff),
     };
+  }
+  if (request.type === 'incremental-vacuum') {
+    return database.runIncrementalVacuum({
+      now: Number(request.now),
+      minFreeRatio: Number(request.minFreeRatio),
+      minFreeBytes: Number(request.minFreeBytes),
+      maxPages: Number(request.maxPages),
+      cooldownMs: Number(request.cooldownMs),
+    });
   }
   if (request.type === 'clear-sync-data') {
     database.clearSyncData();

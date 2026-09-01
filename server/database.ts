@@ -38,6 +38,11 @@ type Database = {
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DECISION_DUPLICATE_RANK_VERSION = '2';
+const DEFAULT_JOURNAL_SIZE_LIMIT_BYTES = 128 * 1024 * 1024;
+const INCREMENTAL_VACUUM_META_KEY = 'sqlite_incremental_vacuum_at';
+const SQLITE_RECLAIM_WARNING_MIN_BYTES = 128 * 1024 * 1024;
+const SQLITE_RECLAIM_WARNING_MIN_RATIO = 0.25;
+const SQLITE_MAINTENANCE_GUIDE_URL = 'https://github.com/TheDuffman85/crowdsec-web-ui#sqlite-database-maintenance';
 
 const SYNC_SECONDARY_INDEX_NAMES = [
   'idx_alerts_created_at',
@@ -171,6 +176,45 @@ export interface DatabaseOptions {
   dbDir?: string;
   dbPath?: string;
   walEnabled?: boolean;
+  incrementalVacuumEnabled?: boolean;
+  journalSizeLimitBytes?: number;
+}
+
+export interface SqliteStorageStats {
+  autoVacuum: number;
+  pageSize: number;
+  pageCount: number;
+  freelistCount: number;
+  reclaimableBytes: number;
+  freeRatio: number;
+  journalMode: string;
+}
+
+export interface IncrementalVacuumOptions {
+  now: number;
+  minFreeRatio: number;
+  minFreeBytes: number;
+  maxPages: number;
+  cooldownMs: number;
+}
+
+export interface IncrementalVacuumResult {
+  performed: boolean;
+  reason: 'completed' | 'disabled' | 'below-threshold' | 'cooldown';
+  before: SqliteStorageStats;
+  after: SqliteStorageStats;
+}
+
+export function getSqliteMaintenanceWarning(storage: SqliteStorageStats): string | null {
+  if (
+    storage.autoVacuum !== 0
+    || storage.freeRatio < SQLITE_RECLAIM_WARNING_MIN_RATIO
+    || storage.reclaimableBytes < SQLITE_RECLAIM_WARNING_MIN_BYTES
+  ) return null;
+  const size = storage.reclaimableBytes >= 1024 ** 3
+    ? `${(storage.reclaimableBytes / 1024 ** 3).toFixed(1).replace(/\.0$/, '')} GiB`
+    : `${Math.round(storage.reclaimableBytes / 1024 ** 2)} MiB`;
+  return `SQLite can reclaim ~${size}. Stop the app and enable incremental vacuum: ${SQLITE_MAINTENANCE_GUIDE_URL}`;
 }
 
 type RowWithRawData = { raw_data: string; created_at?: string; stop_at?: string; alert_id?: string | number | null };
@@ -262,6 +306,7 @@ export interface WebAuthnCredentialRow {
 export class CrowdsecDatabase {
   public readonly db: Database;
   public readonly dbPath: string;
+  public readonly wasFresh: boolean;
   public readonly searchIndexAvailable: boolean;
   private searchIndexUpdatesDeferred = false;
   private dashboardChangeTrackingDeferred = false;
@@ -346,9 +391,15 @@ export class CrowdsecDatabase {
   constructor(options: DatabaseOptions = {}) {
     const resolvedPath = resolveDatabasePath(options);
     this.dbPath = resolvedPath;
-    this.db = openDatabase(resolvedPath, options.walEnabled ?? true);
-    const freshDatabase = isDatabaseFresh(this.db);
-    this.searchIndexAvailable = initSchema(this.db, freshDatabase);
+    const opened = openDatabase(
+      resolvedPath,
+      options.walEnabled ?? true,
+      options.journalSizeLimitBytes ?? DEFAULT_JOURNAL_SIZE_LIMIT_BYTES,
+      options.incrementalVacuumEnabled ?? true,
+    );
+    this.db = opened.database;
+    this.wasFresh = opened.wasFresh;
+    this.searchIndexAvailable = initSchema(this.db, this.wasFresh);
     this.loadDecisionDuplicateRefreshState();
     this.refreshAlertDeletionTombstones();
 
@@ -790,6 +841,41 @@ export class CrowdsecDatabase {
     } finally {
       this.db.close();
     }
+  }
+
+  getStorageStats(): SqliteStorageStats {
+    const pageSize = pragmaNumber(this.db, 'page_size');
+    const pageCount = pragmaNumber(this.db, 'page_count');
+    const freelistCount = pragmaNumber(this.db, 'freelist_count');
+    return {
+      autoVacuum: pragmaNumber(this.db, 'auto_vacuum'),
+      pageSize,
+      pageCount,
+      freelistCount,
+      reclaimableBytes: freelistCount * pageSize,
+      freeRatio: pageCount > 0 ? freelistCount / pageCount : 0,
+      journalMode: pragmaString(this.db, 'journal_mode'),
+    };
+  }
+
+  runIncrementalVacuum(options: IncrementalVacuumOptions): IncrementalVacuumResult {
+    const before = this.getStorageStats();
+    if (before.autoVacuum !== 2) {
+      return { performed: false, reason: 'disabled', before, after: before };
+    }
+    if (before.freeRatio < options.minFreeRatio || before.reclaimableBytes < options.minFreeBytes) {
+      return { performed: false, reason: 'below-threshold', before, after: before };
+    }
+
+    const lastRun = Date.parse(this.getMeta(INCREMENTAL_VACUUM_META_KEY)?.value || '');
+    if (Number.isFinite(lastRun) && options.now - lastRun < options.cooldownMs) {
+      return { performed: false, reason: 'cooldown', before, after: before };
+    }
+
+    const maxPages = Math.max(1, Math.floor(options.maxPages));
+    this.db.exec(`PRAGMA incremental_vacuum(${maxPages})`);
+    this.setMeta(INCREMENTAL_VACUUM_META_KEY, new Date(options.now).toISOString());
+    return { performed: true, reason: 'completed', before, after: this.getStorageStats() };
   }
 
   clearSyncData(): void {
@@ -2335,19 +2421,44 @@ function ensureDirectory(dirPath: string): void {
   }
 }
 
-function openDatabase(dbPath: string, walEnabled: boolean): Database {
+function openDatabase(
+  dbPath: string,
+  walEnabled: boolean,
+  journalSizeLimitBytes: number,
+  incrementalVacuumEnabled: boolean,
+): { database: Database; wasFresh: boolean } {
   try {
-    return configureDatabase(createDatabase(dbPath), walEnabled);
+    return prepareDatabase(createDatabase(dbPath), walEnabled, journalSizeLimitBytes, incrementalVacuumEnabled);
   } catch (error: any) {
     if (dbPath.startsWith('/app/data') && error?.code === 'EACCES') {
-      return configureDatabase(createDatabase('crowdsec.db'), walEnabled);
+      return prepareDatabase(createDatabase('crowdsec.db'), walEnabled, journalSizeLimitBytes, incrementalVacuumEnabled);
     }
     throw error;
   }
 }
 
-function configureDatabase(database: Database, walEnabled: boolean): Database {
+function prepareDatabase(
+  database: Database,
+  walEnabled: boolean,
+  journalSizeLimitBytes: number,
+  incrementalVacuumEnabled: boolean,
+): { database: Database; wasFresh: boolean } {
+  const wasFresh = isDatabaseFresh(database);
+  if (wasFresh && incrementalVacuumEnabled) database.exec('PRAGMA auto_vacuum = INCREMENTAL');
+  return {
+    database: configureDatabase(database, walEnabled, journalSizeLimitBytes),
+    wasFresh,
+  };
+}
+
+function configureDatabase(database: Database, walEnabled: boolean, journalSizeLimitBytes: number): Database {
   database.exec(`PRAGMA journal_mode = ${walEnabled ? 'WAL' : 'DELETE'}`);
+  if (walEnabled) {
+    const limit = Number.isSafeInteger(journalSizeLimitBytes) && journalSizeLimitBytes >= -1
+      ? journalSizeLimitBytes
+      : DEFAULT_JOURNAL_SIZE_LIMIT_BYTES;
+    database.exec(`PRAGMA journal_size_limit = ${limit}`);
+  }
   database.exec('PRAGMA foreign_keys = ON');
   database.exec('PRAGMA synchronous = NORMAL');
   database.exec('PRAGMA cache_size = -32000');
@@ -2356,6 +2467,18 @@ function configureDatabase(database: Database, walEnabled: boolean): Database {
   database.exec('PRAGMA mmap_size = 268435456');
   registerDatabaseFunctions(database);
   return database;
+}
+
+function pragmaNumber(database: Database, name: string): number {
+  const row = database.prepare(`PRAGMA ${name}`).get() as Record<string, unknown> | undefined;
+  const value = row ? Object.values(row)[0] : 0;
+  return Number(value) || 0;
+}
+
+function pragmaString(database: Database, name: string): string {
+  const row = database.prepare(`PRAGMA ${name}`).get() as Record<string, unknown> | undefined;
+  const value = row ? Object.values(row)[0] : '';
+  return String(value || '').toLowerCase();
 }
 
 function registerDatabaseFunctions(database: Database): void {

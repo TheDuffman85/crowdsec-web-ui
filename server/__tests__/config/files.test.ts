@@ -17,6 +17,8 @@ storage:
   dataDir: /tmp/yaml-data
   geonamesDir: /tmp/yaml-geonames
   walEnabled: false
+  incrementalVacuumEnabled: false
+  journalSizeLimit: unlimited
 ui:
   timeZone: UTC
   timeFormat: 12h
@@ -105,6 +107,8 @@ instances:
         dbDir: '/tmp/yaml-data',
         geonamesDumpDir: '/tmp/yaml-geonames',
         sqliteWalEnabled: false,
+        sqliteIncrementalVacuumEnabled: false,
+        sqliteJournalSizeLimitBytes: -1,
         timeZone: 'UTC',
         timeFormat: '12h',
         readOnly: true,
@@ -230,6 +234,8 @@ instances:
       CONFIG_SERVER_BASE_PATH: '/security',
       CONFIG_STORAGE_DATA_DIR: '/tmp/config-data',
       CONFIG_STORAGE_WAL_ENABLED: 'false',
+      CONFIG_STORAGE_INCREMENTAL_VACUUM_ENABLED: 'false',
+      CONFIG_STORAGE_JOURNAL_SIZE_LIMIT: '64MiB',
       CONFIG_UI: '{ timeZone: UTC, timeFormat: 24h, readOnly: false }',
       CONFIG_UI_READ_ONLY: 'true',
       CONFIG_AUTH_SESSION_SECRET: 'do-not-write-this-auth-secret',
@@ -262,6 +268,8 @@ instances:
         basePath: '/security',
         dbDir: '/tmp/config-data',
         sqliteWalEnabled: false,
+        sqliteIncrementalVacuumEnabled: false,
+        sqliteJournalSizeLimitBytes: 64 * 1024 * 1024,
         timeZone: 'UTC',
         readOnly: true,
         refreshIntervalMs: 120_000,
@@ -298,10 +306,14 @@ instances:
       expect(saved).toContain('  basePath: /security');
       expect(saved).toContain('  # enabled: auto');
       expect(saved).toContain('  walEnabled: false');
+      expect(saved).toContain('  incrementalVacuumEnabled: false');
+      expect(saved).toContain('  journalSizeLimit: 64MiB');
       expect(saved).toContain('  # geonamesDir:');
       const document = parseYaml(saved);
       expect(document.server).toEqual({ port: 4200, basePath: '/security' });
       expect(document.storage.walEnabled).toBe(false);
+      expect(document.storage.incrementalVacuumEnabled).toBe(false);
+      expect(document.storage.journalSizeLimit).toBe('64MiB');
       expect(document.auth.sessionSecret).toEqual({ env: 'CONFIG_AUTH_SESSION_SECRET' });
       expect(document.instances).toHaveLength(2);
       expect(document.instances[0].id).toBeUndefined();

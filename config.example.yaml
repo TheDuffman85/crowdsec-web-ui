@@ -19,6 +19,8 @@
 #   dataDir: /app/data
 #   geonamesDir: /app/geonames
 #   walEnabled: true # Set to false for filesystems that do not support SQLite WAL.
+#   incrementalVacuumEnabled: true # Enables bounded idle maintenance for compatible databases.
+#   journalSizeLimit: 128MiB # Retained WAL size after checkpoints; use unlimited to disable trimming.
 
 # ui:
 #   timeZone: browser # Or an IANA zone such as Europe/Berlin or UTC.

@@ -18,16 +18,26 @@ describe('DatabaseSyncWorker', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-sync-worker-'));
     tempDirs.push(dir);
     const dbPath = path.join(dir, 'test.db');
+    const initializer = new CrowdsecDatabase({ dbPath });
+    initializer.close();
     const database = new CrowdsecDatabase({ dbPath, walEnabled: false });
     const worker = new DatabaseSyncWorker({ dbPath, walEnabled: false });
     workers.push(worker);
 
     await worker.clearSyncData();
+    const maintenance = await worker.runIncrementalVacuum({
+      now: Date.parse('2026-09-01T00:00:00.000Z'),
+      minFreeRatio: 0,
+      minFreeBytes: 0,
+      maxPages: 1,
+      cooldownMs: 24 * 60 * 60 * 1000,
+    });
 
     expect(database.db.prepare('PRAGMA journal_mode').get()).toEqual({ journal_mode: 'delete' });
+    expect(maintenance).toEqual(expect.objectContaining({ performed: true, reason: 'completed' }));
     worker.close();
     database.close();
-  });
+  }, 10_000);
 
   test('serializes authentication, settings, and notification writes with alert sync', async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-sync-worker-'));
