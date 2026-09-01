@@ -41,7 +41,7 @@
   },
   "dependencies": {
     "@hono/node-server": "2.0.12",
-    "@simplewebauthn/server": "^13.3.0",
+    "@simplewebauthn/server": "^13.3.3",
     "@types/sortablejs": "^1.15.9",
     "better-sqlite3": "13.0.2",
     "hono": "4.12.27",
