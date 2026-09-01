@@ -62,7 +62,7 @@
     "@nivo/core": "^0.99.0",
     "@nivo/geo": "^0.99.0",
     "@tailwindcss/vite": "^4.3.2",
-    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.1",
     "@types/d3-geo": "1.12.7",
