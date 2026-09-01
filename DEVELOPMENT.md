@@ -10,7 +10,7 @@ Contributor setup, build metadata, verification, and implementation notes for Cr
 
 | Tool | Version |
 | --- | --- |
-| Node.js | `24.18.0` |
+| Node.js | `24.20.0` |
 | pnpm | `11.9.0` |
 | CrowdSec | A reachable LAPI for normal development |
 
