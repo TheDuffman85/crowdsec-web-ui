@@ -85,6 +85,7 @@ export function registerApiRoutes(dependencies: ApiRouteDependencies): void {
     database,
     deleteAlertFromLapi,
     deleteAlertsByIds,
+    deleteAlertsByRefs,
     deleteDecisionFromLapi,
     deleteDecisionsByIdsInChunks,
     deleteEntriesByIp,
@@ -294,31 +295,12 @@ app.post(`${config.basePath}/api/alerts/bulk-delete`, ensureAuth, async (context
     if (Array.isArray(body.refs) && body.refs.length > 0) {
       const validated = validateInstanceEntityRefs(body.refs);
       if ('error' in validated) return context.json({ error: validated.error }, 400);
-      const result = createDeleteResult({ requested_alerts: validated.length });
-      const groups = groupInstanceEntityRefs(validated);
-      const targetOutcomes = new Map<string, AuditOutcome>();
-      await Promise.all(Array.from(groups, async ([instanceId, ids]) => {
-        const client = lapiClients.get(instanceId)!;
-        for (const id of ids) {
-          const targetId = `${instanceId}:${id}`;
-          let upstreamDeleted = false;
-          try {
-            await client.deleteAlert(id);
-            upstreamDeleted = true;
-            await syncWorker.runExclusive(() => database.deleteAlertByInstanceId(instanceId, id));
-            result.deleted_alerts += 1;
-            targetOutcomes.set(targetId, 'success');
-          } catch (error) {
-            result.failed.push(toFailure('alert', targetId, error as AnyError));
-            targetOutcomes.set(targetId, upstreamDeleted ? 'partial' : 'failure');
-          }
-        }
-      }));
-      invalidateDashboardStatsCache();
+      const result = await deleteAlertsByRefs(validated);
+      const failedIds = new Set(result.failed.map((failure: { id: string }) => failure.id));
       const alertIds = capAuditEntries(validated.map((ref: InstanceEntityRef) => `${ref.instance_id}:${ref.id}`));
       const targetResults = capAuditEntries(validated.map((ref: InstanceEntityRef) => {
         const id = `${ref.instance_id}:${ref.id}`;
-        return { id, outcome: targetOutcomes.get(id) || 'failure' };
+        return { id, outcome: failedIds.has(id) ? 'failure' as const : 'queued' as const };
       }));
       auditLog.record(context, {
         action: 'alert.delete',
@@ -327,7 +309,9 @@ app.post(`${config.basePath}/api/alerts/bulk-delete`, ensureAuth, async (context
         ...(alertIds.truncated || targetResults.truncated ? { truncated: true } : {}),
         requested_alerts: result.requested_alerts,
         deleted_alerts: result.deleted_alerts,
-        outcome: auditTargetOutcome(Array.from(targetOutcomes.values())),
+        requested_decisions: result.requested_decisions,
+        deleted_decisions: result.deleted_decisions,
+        outcome: result.failed.length === 0 ? 'queued' : result.deleted_alerts > 0 ? 'partial' : 'failure',
       });
       return context.json(result);
     }
@@ -564,38 +548,18 @@ app.delete(`${config.basePath}/api/instances/:instanceId/alerts/:id`, ensureAuth
   if (!instance) return context.json({ error: 'Unknown CrowdSec instance' }, 404);
   try {
     const alertId = String(context.req.param('id'));
-    await lapiClients.get(instanceId)!.deleteAlert(alertId);
-    try {
-      await syncWorker.runExclusive(() => database.deleteAlertByInstanceId(instanceId, alertId));
-    } catch (error) {
-      auditLog.record(context, {
-        action: 'alert.delete',
-        alert_ids: [alertId],
-        target_results: [{ id: `${instanceId}:${alertId}`, outcome: 'partial' }],
-        instance: instance.name,
-        instance_id: instance.id,
-        remote_deleted: true,
-        local_cache_updated: false,
-        outcome: 'partial',
-      });
-      throw error;
-    }
-    invalidateDashboardStatsCache();
+    if (!/^\d+$/.test(alertId)) return context.json({ error: 'Invalid alert ID' }, 400);
+    const result = await deleteAlertsByRefs([{ instance_id: instanceId, id: alertId }]);
+    if (result.failed.length > 0) return context.json({ error: result.failed[0].error }, 502);
     auditLog.record(context, {
       action: 'alert.delete',
       alert_ids: [alertId],
-      target_results: [{ id: `${instanceId}:${alertId}`, outcome: 'success' }],
+      target_results: [{ id: `${instanceId}:${alertId}`, outcome: 'queued' }],
       instance: instance.name,
       instance_id: instance.id,
-      outcome: 'success',
+      outcome: 'queued',
     });
-    return context.json({
-      requested_alerts: 1,
-      requested_decisions: 0,
-      deleted_alerts: 1,
-      deleted_decisions: 0,
-      failed: [],
-    } satisfies BulkDeleteResult);
+    return context.json(result);
   } catch (error: any) {
     return context.json({ error: error?.message || 'Failed to delete alert' }, 502);
   }
@@ -613,7 +577,10 @@ app.delete(`${config.basePath}/api/instances/:instanceId/decisions/:id`, ensureA
     const values = decisionAuditValues(targets);
     await lapiClients.get(instanceId)!.deleteDecision(decisionId);
     try {
-      await syncWorker.runExclusive(() => database.deleteDecisionByInstanceId(instanceId, decisionId));
+      await syncWorker.runExclusive(() => {
+        database.deleteDecisionByInstanceId(instanceId, decisionId);
+        database.refreshDecisionDuplicateFlags(new Date().toISOString());
+      });
     } catch (error) {
       auditLog.record(context, {
         action: 'decision.delete',

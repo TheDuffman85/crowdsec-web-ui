@@ -1244,7 +1244,6 @@ export class CrowdsecDatabase {
     const instanceId = params.$instance_id || 'default';
     const tombstoneId = `${instanceId}\u0000${params.$alert_id}`;
     if (this.alertDeletionTombstones.has(tombstoneId) || (instanceId === 'default' && this.alertDeletionTombstones.has(String(params.$alert_id)))) return false;
-    if (this.alertDeletionTombstones.has(String(params.$alert_id))) return false;
     const rawData = params.$raw_data || '{}';
     const decision = params.$record || parseDecisionPayload(rawData);
     const fallback = {

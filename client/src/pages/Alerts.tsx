@@ -313,7 +313,8 @@ export function Alerts() {
     const modalSelectedAlertIdRef = useRef<string | null>(null);
     const alertsRef = useRef<AlertListItem[]>([]);
     const currentPageRef = useRef(1);
-    const inFlightLoadKeysRef = useRef(new Set<string>());
+    const inFlightLoadKeysRef = useRef(new Map<string, number>());
+    const loadRequestSequenceRef = useRef(0);
     const lastCompletedLoadRef = useRef<{ key: string; completedAt: number } | null>(null);
     const modalDecisionsLoadRef = useRef<{ alertId: string | null; page: number | null }>({ alertId: null, page: null });
     const modalDecisionsPageRef = useRef(1);
@@ -765,7 +766,10 @@ export function Alerts() {
             return;
         }
 
-        inFlightLoadKeysRef.current.add(loadKey);
+        const requestId = ++loadRequestSequenceRef.current;
+        const isCurrentRequest = () => requestId === loadRequestSequenceRef.current;
+        inFlightLoadKeysRef.current.set(loadKey, requestId);
+        if (!append) setLoadingMore(false);
         let completedSuccessfully = false;
         const shouldBlockWithInitialLoading = !append && !isBackground && !hasLoadedAlertsRef.current;
 
@@ -778,6 +782,7 @@ export function Alerts() {
                 setBackgroundLoading(true);
             }
             const configData = await loadConfig(refreshConfig || !configRef.current);
+            if (!isCurrentRequest()) return;
             const requestedSimulationFilter = configData.simulationsEnabled === true
                 ? parseSimulationFilter(searchParams.get("simulation"))
                 : 'all';
@@ -787,6 +792,7 @@ export function Alerts() {
                 ? Math.min(MAX_ALERT_REFRESH_SIZE, loadedPageCount * PAGE_SIZE)
                 : PAGE_SIZE;
             const alertsResult = await fetchAlertsPaginated(page, requestedPageSize, filters);
+            if (!isCurrentRequest()) return;
             let alertsData = alertsResult.data;
             let nextPage = alertsResult.pagination.page;
             const totalPagesAtDefaultSize = Math.ceil(alertsResult.pagination.total / PAGE_SIZE);
@@ -826,12 +832,14 @@ export function Alerts() {
                 // Always fetch full alert data since list now returns slim payloads
                 try {
                     const alertData = await fetchAlert(alertIdParam, searchParams.get('instance') === 'all' ? undefined : searchParams.get('instance') || undefined);
+                    if (!isCurrentRequest()) return;
                     setSelectedAlert(alertData);
                     setModalDecisionsRefreshToken((current) => current + 1);
                 } catch (err) {
                     console.error("Alert not found", err);
                     // Fallback to slim data from list if fetch fails
                     const requestedInstance = searchParams.get('instance');
+                    if (!isCurrentRequest()) return;
                     const existingAlert = alertsData.find((alert) => String(alert.id) === alertIdParam
                         && (!requestedInstance || requestedInstance === 'all' || alert.instance_id === requestedInstance));
                     if (existingAlert) {
@@ -844,6 +852,7 @@ export function Alerts() {
                 if (selectedAlertIdRef.current) {
                     try {
                         const fullAlert = await fetchAlert(selectedAlertIdRef.current, selectedAlertInstanceIdRef.current);
+                        if (!isCurrentRequest()) return;
                         setSelectedAlert(fullAlert);
                         setModalDecisionsRefreshToken((current) => current + 1);
                     } catch (err) {
@@ -858,18 +867,26 @@ export function Alerts() {
         } catch (err) {
             console.error(err);
         } finally {
-            inFlightLoadKeysRef.current.delete(loadKey);
-            if (completedSuccessfully) {
-                lastCompletedLoadRef.current = { key: loadKey, completedAt: Date.now() };
-            }
-            if (append) setLoadingMore(false);
-            if (shouldBlockWithInitialLoading) {
-                setInitialLoading(false);
-            } else {
-                setBackgroundLoading(false);
+            if (inFlightLoadKeysRef.current.get(loadKey) === requestId) inFlightLoadKeysRef.current.delete(loadKey);
+            if (isCurrentRequest()) {
+                if (completedSuccessfully) {
+                    lastCompletedLoadRef.current = { key: loadKey, completedAt: Date.now() };
+                }
+                if (append) setLoadingMore(false);
+                if (shouldBlockWithInitialLoading) {
+                    setInitialLoading(false);
+                } else {
+                    setBackgroundLoading(false);
+                }
             }
         }
     }, [alertIdParam, appliedQuery, buildServerFilters, loadConfig, searchParams]);
+
+    useLayoutEffect(() => () => {
+        loadRequestSequenceRef.current += 1;
+        inFlightLoadKeysRef.current.clear();
+        lastCompletedLoadRef.current = null;
+    }, [loadAlerts]);
 
     useEffect(() => {
         loadAlertsRef.current = loadAlerts;

@@ -228,7 +228,8 @@ export function Decisions() {
     const observer = useRef<IntersectionObserver | null>(null);
     const selectAllDecisionsRef = useRef<HTMLInputElement | null>(null);
     const currentPageRef = useRef(1);
-    const inFlightLoadKeysRef = useRef(new Set<string>());
+    const inFlightLoadKeysRef = useRef(new Map<string, number>());
+    const loadRequestSequenceRef = useRef(0);
     const lastCompletedLoadRef = useRef<{ key: string; completedAt: number } | null>(null);
     const loadDecisionsRef = useRef<(options?: {
         isBackground?: boolean;
@@ -718,7 +719,10 @@ export function Decisions() {
             return;
         }
 
-        inFlightLoadKeysRef.current.add(loadKey);
+        const requestId = ++loadRequestSequenceRef.current;
+        const isCurrentRequest = () => requestId === loadRequestSequenceRef.current;
+        inFlightLoadKeysRef.current.set(loadKey, requestId);
+        if (!append) setLoadingMore(false);
         let completedSuccessfully = false;
         const shouldBlockWithInitialLoading = !append && !isBackground && !hasLoadedDecisionsRef.current;
         if (append) {
@@ -730,11 +734,13 @@ export function Decisions() {
         }
         try {
             const configData = await loadConfig(refreshConfig || !configRef.current);
+            if (!isCurrentRequest()) return;
             const requestedSimulationFilter = configData.simulationsEnabled === true
                 ? parseSimulationFilter(searchParams.get("simulation"))
                 : 'all';
             const filters = buildServerFilters(requestedSimulationFilter);
             const decisionsResult = await fetchDecisionsPaginated(page, PAGE_SIZE, filters);
+            if (!isCurrentRequest()) return;
             let decisionsData = decisionsResult.data;
             let nextPage = decisionsResult.pagination.page;
 
@@ -752,6 +758,7 @@ export function Decisions() {
                 nextPage = maxPageToRefresh;
             }
 
+            if (!isCurrentRequest()) return;
             setDecisions((current) => append ? [...current, ...decisionsData] : decisionsData);
             currentPageRef.current = append ? decisionsResult.pagination.page : nextPage;
             setCurrentPage(currentPageRef.current);
@@ -774,18 +781,26 @@ export function Decisions() {
         } catch (error) {
             console.error(error);
         } finally {
-            inFlightLoadKeysRef.current.delete(loadKey);
-            if (completedSuccessfully) {
-                lastCompletedLoadRef.current = { key: loadKey, completedAt: Date.now() };
-            }
-            if (append) setLoadingMore(false);
-            if (shouldBlockWithInitialLoading) {
-                setInitialLoading(false);
-            } else {
-                setBackgroundLoading(false);
+            if (inFlightLoadKeysRef.current.get(loadKey) === requestId) inFlightLoadKeysRef.current.delete(loadKey);
+            if (isCurrentRequest()) {
+                if (completedSuccessfully) {
+                    lastCompletedLoadRef.current = { key: loadKey, completedAt: Date.now() };
+                }
+                if (append) setLoadingMore(false);
+                if (shouldBlockWithInitialLoading) {
+                    setInitialLoading(false);
+                } else {
+                    setBackgroundLoading(false);
+                }
             }
         }
     }, [appliedQuery, buildServerFilters, loadConfig, searchParams]);
+
+    useLayoutEffect(() => () => {
+        loadRequestSequenceRef.current += 1;
+        inFlightLoadKeysRef.current.clear();
+        lastCompletedLoadRef.current = null;
+    }, [loadDecisions]);
 
     useEffect(() => {
         loadDecisionsRef.current = loadDecisions;

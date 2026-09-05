@@ -648,3 +648,117 @@ describe('multi-instance API', () => {
     }
   });
 });
+
+function seedDeletionAlert(database: CrowdsecDatabase, instanceId: string, alertId = 7, decisionId = 9, lifetime = 3_600_000) {
+  const createdAt = new Date().toISOString();
+  const stopAt = new Date(Date.now() + lifetime).toISOString();
+  const alert = { id: alertId, uuid: `${instanceId}-${alertId}`, created_at: createdAt, source: { ip: '1.2.3.4', value: '1.2.3.4' }, decisions: [{ id: decisionId, value: '1.2.3.4', type: 'ban', stop_at: stopAt }] };
+  database.insertAlert({ $id: alertId, $instance_id: instanceId, $uuid: alert.uuid, $created_at: createdAt, $message: 'Test alert', $record: alert });
+  database.insertDecision({ $id: String(decisionId), $instance_id: instanceId, $uuid: `${instanceId}-${decisionId}`, $alert_id: alertId, $created_at: createdAt, $stop_at: stopAt, $value: '1.2.3.4', $record: alert.decisions[0] });
+  return alert;
+}
+
+test.each(['single', 'bulk', 'cleanup'])('%s scoped alert deletion waits for propagation and isolates colliding IDs', async (operation) => {
+  const { controller, database, primary, secondary } = createMultiController();
+  controller.config.instances[1].sync = { ...controller.config.instances[1].sync, bouncerPropagationDelayMs: 15_000 };
+  seedDeletionAlert(database, 'primary');
+  const alert = seedDeletionAlert(database, 'secondary');
+  secondary.fetchAlerts.mockResolvedValue([alert]);
+  database.refreshDecisionDuplicateFlags(new Date().toISOString());
+  vi.useFakeTimers();
+  try {
+    const request = operation === 'single'
+      ? new Request('http://localhost/api/instances/secondary/alerts/7', { method: 'DELETE' })
+      : new Request(`http://localhost/api/${operation === 'bulk' ? 'alerts/bulk-delete' : 'cleanup/by-ip'}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(operation === 'bulk' ? { refs: [{ instance_id: 'secondary', id: 7 }] } : { ip: '1.2.3.4', scope: 'instance', instance_id: 'secondary' }),
+      });
+    const response = await controller.fetch(request);
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => expect(database.getAlertDeletionTombstone('secondary\u00007')?.decisions_deleted_at).toBeTruthy());
+    expect(secondary.deleteDecision).toHaveBeenCalledExactlyOnceWith('9');
+    expect(secondary.deleteAlert).not.toHaveBeenCalled();
+    expect(primary.deleteDecision).not.toHaveBeenCalled();
+    expect(primary.deleteAlert).not.toHaveBeenCalled();
+    expect(database.getAlertInternalId('secondary', 7)).toBeNull();
+    expect(database.getAlertInternalId('primary', 7)).not.toBeNull();
+    seedDeletionAlert(database, 'secondary');
+    expect(database.getAlertInternalId('secondary', 7)).toBeNull();
+    expect(database.getDecisionInternalId('secondary', 9)).toBeNull();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(secondary.deleteAlert).toHaveBeenCalledExactlyOnceWith('7');
+    expect(database.getAlertDeletionTombstone('secondary\u00007')?.completed_at).toBeTruthy();
+  } finally {
+    controller.stopBackgroundTasks();
+    database.close();
+    vi.useRealTimers();
+  }
+});
+
+test.each(['decision', 'alert'])('scoped %s deletion promotes the remaining active duplicate immediately', async (kind) => {
+  const { controller, database } = createMultiController();
+  seedDeletionAlert(database, 'secondary', 7, 9);
+  seedDeletionAlert(database, 'secondary', 8, 10, 1_800_000);
+  database.refreshDecisionDuplicateFlags(new Date().toISOString());
+  try {
+    const response = await controller.fetch(new Request(`http://localhost/api/instances/secondary/${kind}s/${kind === 'alert' ? 7 : 9}`, { method: 'DELETE' }));
+    expect(response.status).toBe(200);
+    const list = await controller.fetch(new Request('http://localhost/api/decisions?page=1&instance=secondary'));
+    expect((await list.json() as any).data).toEqual([expect.objectContaining({ id: 10, is_duplicate: false })]);
+    if (kind === 'alert') await vi.waitFor(() => expect(database.getAlertDeletionTombstone('secondary\u00007')?.completed_at).toBeTruthy());
+  } finally {
+    controller.stopBackgroundTasks();
+    database.close();
+  }
+});
+
+test('resumes persisted instance deletion on restart without repeating completed decision removal', async () => {
+  const original = createMultiController();
+  const { controller, database, primary, secondary } = original;
+  const key = 'secondary\u00007';
+  database.queueAlertDeletion(key, ['9'], new Date(Date.now() - 60_000).toISOString());
+  database.markAlertDeletionDecisionsExpired(key, new Date(Date.now() - 30_000).toISOString(), new Date(Date.now() - 15_000).toISOString());
+  const dbPath = database.dbPath;
+  controller.stopBackgroundTasks();
+  database.close();
+  const reopened = new CrowdsecDatabase({ dbPath });
+  controller.config.lookbackPeriod = '1m';
+  controller.config.lookbackMs = 60_000;
+  controller.config.heartbeatIntervalMs = 0;
+  const restarted = createApp({
+    config: controller.config, database: reopened,
+    lapiClients: new Map([['primary', primary as never], ['secondary', secondary as never]]),
+  });
+  try {
+    restarted.startBackgroundTasks();
+    await vi.waitFor(() => expect(reopened.getAlertDeletionTombstone(key)?.completed_at).toBeTruthy());
+    await vi.waitFor(() => expect(restarted.getSyncStatus().state).toBe('complete'), { timeout: 5_000 });
+    expect(secondary.deleteAlert).toHaveBeenCalledExactlyOnceWith('7');
+    expect(secondary.deleteDecision).not.toHaveBeenCalled();
+    expect(primary.deleteAlert).not.toHaveBeenCalled();
+    seedDeletionAlert(reopened, 'secondary');
+    expect(reopened.getAlertInternalId('secondary', 7)).toBeNull();
+  } finally {
+    restarted.stopBackgroundTasks();
+    reopened.close();
+  }
+});
+
+test('queues reachable bulk targets while reporting an uncached target lookup failure', async () => {
+  const { controller, database, primary, secondary } = createMultiController();
+  secondary.getAlertById.mockRejectedValue(new Error('Secondary unavailable'));
+  try {
+    const response = await controller.fetch(new Request('http://localhost/api/alerts/bulk-delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refs: [{ instance_id: 'primary', id: 7 }, { instance_id: 'secondary', id: 7 }] }),
+    }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ requested_alerts: 2, deleted_alerts: 1, failed: [{ kind: 'alert', id: 'secondary:7', error: 'Secondary unavailable' }] });
+    await vi.waitFor(() => expect(database.getAlertDeletionTombstone('primary\u00007')?.completed_at).toBeTruthy());
+    expect(primary.deleteAlert).toHaveBeenCalledExactlyOnceWith('7');
+    expect(secondary.deleteAlert).not.toHaveBeenCalled();
+  } finally {
+    controller.stopBackgroundTasks();
+    database.close();
+  }
+});

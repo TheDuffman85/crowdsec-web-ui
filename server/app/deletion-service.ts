@@ -57,6 +57,7 @@ export function createDeletionService(dependencies: DeletionServiceDependencies)
     getIntervalName,
     invalidateDashboardStatsCache,
     lapiClient,
+    lapiClients,
     normalizeAlertDetail,
     prepareOnDemandRefresh,
     queryWorker,
@@ -157,9 +158,9 @@ function toFailure(kind: 'alert' | 'decision', id: string, error: AnyError): Bul
   };
 }
 
-async function deleteAlertFromLapi(id: string): Promise<unknown> {
+async function deleteAlertFromLapi(id: string, client: LapiClient = lapiClient): Promise<unknown> {
   try {
-    return await lapiClient.deleteAlert(id);
+    return await client.deleteAlert(id);
   } catch (error) {
     const typedError = error as AnyError;
     if (isAlreadyGoneError(typedError)) {
@@ -170,9 +171,9 @@ async function deleteAlertFromLapi(id: string): Promise<unknown> {
   }
 }
 
-async function deleteDecisionFromLapi(id: string): Promise<unknown> {
+async function deleteDecisionFromLapi(id: string, client: LapiClient = lapiClient): Promise<unknown> {
   try {
-    return await lapiClient.deleteDecision(id);
+    return await client.deleteDecision(id);
   } catch (error) {
     const typedError = error as AnyError;
     if (isAlreadyGoneError(typedError)) {
@@ -224,7 +225,14 @@ function createDeleteResult(overrides: Partial<BulkDeleteResult> = {}): BulkDele
 }
 
 function getLinkedDecisionIds(alert: CachedAlertRecord): string[] {
-  return getDecisionIdsForAlertIds([alert.id]);
+  const cachedIds = getDecisionIdsForAlertIds([alert.id]);
+  // Uncached alerts are fetched from LAPI and still carry their decision list.
+  try {
+    const record = JSON.parse(alert.raw_data) as AlertRecord;
+    return Array.from(new Set([...cachedIds, ...(record.decisions || []).map((decision) => String(decision.id)).filter((id) => /^\d+$/.test(id))]));
+  } catch {
+    return cachedIds;
+  }
 }
 
 async function getAlertForDeletion(id: string): Promise<CachedAlertRecord | null> {
@@ -366,6 +374,16 @@ async function processPendingAlertDeletions(source: string): Promise<void> {
         continue;
       }
 
+      // Legacy queue keys are primary-instance upstream IDs; new keys include the instance.
+      const separator = row.alert_id.indexOf('\u0000');
+      const instanceId = separator < 0 ? config.instances[0].id : row.alert_id.slice(0, separator);
+      const upstreamId = separator < 0 ? row.alert_id : row.alert_id.slice(separator + 1);
+      const instance = config.instances.find((candidate) => candidate.id === instanceId);
+      const client: LapiClient | undefined = lapiClients?.get(instanceId) ?? (separator < 0 ? lapiClient : undefined);
+      if (!instance || !client) {
+        await syncWorker.runExclusive(() => database.recordAlertDeletionFailure(row.alert_id, new Date().toISOString(), `Instance ${instanceId} is not configured`));
+        continue;
+      }
       let decisionsDeletedAt = row.decisions_deleted_at;
       let deleteAfter = row.delete_after;
 
@@ -373,10 +391,10 @@ async function processPendingAlertDeletions(source: string): Promise<void> {
         try {
           const decisionIds = parsePendingDecisionIds(row.decision_ids_json);
           for (const decisionId of decisionIds) {
-            await deleteDecisionFromLapi(decisionId);
+            await deleteDecisionFromLapi(decisionId, client);
           }
           const deletedAt = new Date().toISOString();
-          const delayMs = decisionIds.length > 0 ? config.bouncerPropagationDelayMs : 0;
+          const delayMs = decisionIds.length > 0 ? (instance.sync.bouncerPropagationDelayMs ?? config.bouncerPropagationDelayMs) : 0;
           const dueAt = new Date(Date.now() + delayMs).toISOString();
           await syncWorker.runExclusive(() => {
             database.markAlertDeletionDecisionsExpired(row.alert_id, deletedAt, dueAt);
@@ -385,7 +403,7 @@ async function processPendingAlertDeletions(source: string): Promise<void> {
           deleteAfter = dueAt;
         } catch (error) {
           const typedError = error as AnyError;
-          if (typedError.response?.status === 401 && await lapiClient.login('pending alert decision deletion')) {
+          if (typedError.response?.status === 401 && await client.login('pending alert decision deletion')) {
             state.pendingAlertDeletionRerunRequested = true;
           }
           const attemptedAt = new Date().toISOString();
@@ -402,7 +420,7 @@ async function processPendingAlertDeletions(source: string): Promise<void> {
       }
 
       try {
-        await deleteAlertFromLapi(row.alert_id);
+        await deleteAlertFromLapi(upstreamId, client);
         const completedAt = new Date().toISOString();
         await syncWorker.runExclusive(() => {
           database.completeAlertDeletion(row.alert_id, completedAt);
@@ -411,7 +429,7 @@ async function processPendingAlertDeletions(source: string): Promise<void> {
         console.log(`[deletion-queue] Deleted alert ${row.alert_id} and ${decisionCount} linked decision(s).`);
       } catch (error) {
         const typedError = error as AnyError;
-        if (typedError.response?.status === 401 && await lapiClient.login('pending alert deletion')) {
+        if (typedError.response?.status === 401 && await client.login('pending alert deletion')) {
           state.pendingAlertDeletionRerunRequested = true;
         }
         const attemptedAt = new Date().toISOString();
@@ -468,6 +486,47 @@ async function queueAlertsForDeletion(linkedDecisionIdsByAlert: Map<string, stri
   );
   invalidateDashboardStatsCache();
   processPendingAlertDeletionsInBackground('new deletion request');
+}
+
+async function deleteAlertsByRefs(refs: InstanceEntityRef[], knownAlerts?: Map<string, AlertRecord>): Promise<BulkDeleteResult> {
+  const result = createDeleteResult({ requested_alerts: refs.length });
+  const entries: Array<{ key: string; ref: InstanceEntityRef; decisionIds: string[] }> = [];
+  for (const ref of refs) {
+    const key = `${ref.instance_id}\u0000${ref.id}`;
+    const existing = database.getAlertDeletionTombstone(key);
+    let decisionIds = existing ? parsePendingDecisionIds(existing.decision_ids_json) : database.getDecisionIdsByAlertId(ref.id, ref.instance_id);
+    if (!existing && database.getAlertInternalId(ref.instance_id, ref.id) === null) {
+      try {
+        const alert = knownAlerts?.get(String(ref.id)) ?? await lapiClients.get(ref.instance_id)!.getAlertById(ref.id) as AlertRecord;
+        decisionIds = (alert?.decisions || []).map((decision) => String(decision.id)).filter((id) => /^\d+$/.test(id));
+      } catch (error) {
+        if (!isAlreadyGoneError(error as AnyError)) {
+          result.failed.push(toFailure('alert', `${ref.instance_id}:${ref.id}`, error as AnyError));
+          continue;
+        }
+      }
+    }
+    const knownDecisionIds = (knownAlerts?.get(String(ref.id))?.decisions || []).map((decision) => String(decision.id)).filter((id) => /^\d+$/.test(id));
+    entries.push({ key, ref, decisionIds: Array.from(new Set([...decisionIds, ...knownDecisionIds])) });
+  }
+  await syncWorker.runExclusive(() => {
+    try {
+      database.transaction<void>(() => {
+        for (const { key, ref, decisionIds } of entries) {
+          database.queueAlertDeletion(key, decisionIds, new Date().toISOString());
+          database.deleteAlertByInstanceId(ref.instance_id, ref.id);
+        }
+        database.refreshDecisionDuplicateFlags(new Date().toISOString());
+      })(undefined);
+    } finally {
+      database.refreshAlertDeletionTombstones();
+    }
+  });
+  result.deleted_alerts = entries.length;
+  result.requested_decisions = result.deleted_decisions = new Set(entries.flatMap(({ ref, decisionIds }) => decisionIds.map((id) => `${ref.instance_id}\u0000${id}`))).size;
+  invalidateDashboardStatsCache();
+  processPendingAlertDeletionsInBackground('instance deletion request');
+  return result;
 }
 
 async function deleteAlertsByIds(ids: string[]): Promise<BulkDeleteResult> {
@@ -649,6 +708,7 @@ async function handleApiError(
     clearPendingAlertDeletionTimeout,
     processPendingAlertDeletions,
     deleteAlertsByIds,
+    deleteAlertsByRefs,
     deleteDecisionsByIdsInChunks,
     deleteEntriesByIp,
     handleApiError,

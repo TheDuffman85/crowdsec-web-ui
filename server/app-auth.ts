@@ -600,6 +600,39 @@ export function createDashboardAuth(options: {
   const writeDatabase: DatabaseWrite = options.writeDatabase
     ?? (async (operation) => operation());
   let activePasswordVerifications = 0;
+  const webAuthnChallenges = new Map<string, {
+    challenge: string; purpose: 'register' | 'login'; userId?: number; origin: string; expiresAt: number;
+  }>();
+
+  function issueWebAuthnChallenge(context: HonoContext, challenge: string, purpose: 'register' | 'login', userId?: number): void {
+    const now = Date.now();
+    for (const [id, entry] of webAuthnChallenges) {
+      if (entry.expiresAt <= now) webAuthnChallenges.delete(id);
+    }
+    // Bound anonymous challenge storage. Evicting a pending ceremony only requires retrying it.
+    if (webAuthnChallenges.size >= 10_000) webAuthnChallenges.delete(webAuthnChallenges.keys().next().value!);
+    const id = crypto.randomBytes(32).toString('base64url');
+    webAuthnChallenges.set(id, { challenge, purpose, userId, origin: getPublicOrigin(context), expiresAt: now + 300_000 });
+    setShortCookie(context, CHALLENGE_COOKIE, id);
+  }
+
+  function consumeWebAuthnChallenge(context: HonoContext, purpose: 'register' | 'login', userId?: number): string | null {
+    const id = getCookie(context, CHALLENGE_COOKIE);
+    const entry = id ? webAuthnChallenges.get(id) : undefined;
+    if (id) webAuthnChallenges.delete(id);
+    deleteCookie(context, CHALLENGE_COOKIE, { path: cookiePath });
+    if (!entry || entry.expiresAt <= Date.now() || entry.purpose !== purpose
+      || entry.userId !== userId || entry.origin !== getPublicOrigin(context)) return null;
+    return entry.challenge;
+  }
+
+  function hasUsablePasskey(excludingId?: number): boolean {
+    return Boolean(database.db.prepare(`
+      SELECT 1 FROM webauthn_credentials c JOIN auth_users u ON u.id = c.user_id
+      WHERE (u.auth_provider <> 'oidc' OR (u.password_hash IS NOT NULL AND u.password_hash <> ''))
+        AND c.id <> ? LIMIT 1
+    `).get(excludingId ?? -1));
+  }
 
   function getEffectiveConfig(): EffectiveAuthConfig {
     const encryptedClientSecret = readAuthSetting(database, 'oidc_client_secret');
@@ -623,10 +656,6 @@ export function createDashboardAuth(options: {
 
   function isPasswordLoginDisabled(): boolean {
     return readAuthSetting(database, 'disable_password_login') === 'true';
-  }
-
-  function persistAuthSetting(key: MutableAuthSettingKey, value: string): Promise<void> {
-    return writeDatabase(() => writeAuthSetting(database, key, value));
   }
 
   const oidc = new OidcRuntime(getEffectiveConfig);
@@ -923,82 +952,51 @@ export function createDashboardAuth(options: {
       const body = asObject(await context.req.json().catch(() => null));
       if (!body) return context.json({ error: 'Invalid request body' }, 400);
 
-      if ('disablePasswordLogin' in body) {
-        const nextDisabled = body.disablePasswordLogin === true;
-        if (nextDisabled) {
-          const hasPasskeys = database.countWebAuthnCredentials() > 0;
-          const effectiveConfig = getEffectiveConfig();
-          const hasOidc = Boolean(effectiveConfig.oidcIssuerUrl && effectiveConfig.oidcClientId);
-          if (!hasPasskeys && !hasOidc) {
-            return context.json({ error: 'Register a passkey or configure OIDC before disabling password login' }, 400);
-          }
-        }
-        await persistAuthSetting('disable_password_login', nextDisabled ? 'true' : 'false');
-      }
-
-      if ('oidcGroupsClaim' in body) {
-        const groupsClaim = typeof body.oidcGroupsClaim === 'string' && body.oidcGroupsClaim.trim()
-          ? body.oidcGroupsClaim.trim()
-          : 'groups';
-        await persistAuthSetting('oidc_groups_claim', groupsClaim);
-      }
-
+      const updates = new Map<MutableAuthSettingKey, string>();
+      if ('disablePasswordLogin' in body) updates.set('disable_password_login', body.disablePasswordLogin === true ? 'true' : 'false');
+      if ('oidcGroupsClaim' in body) updates.set('oidc_groups_claim', typeof body.oidcGroupsClaim === 'string' && body.oidcGroupsClaim.trim() ? body.oidcGroupsClaim.trim() : 'groups');
       if ('oidcScope' in body) {
-        let scope: string;
         try {
-          const scopeInput = typeof body.oidcScope === 'string' && body.oidcScope.trim()
-            ? body.oidcScope
-            : config.oidcScope;
-          scope = parseOidcScope(scopeInput);
+          updates.set('oidc_scope', parseOidcScope(typeof body.oidcScope === 'string' && body.oidcScope.trim() ? body.oidcScope : config.oidcScope));
         } catch {
           return context.json({ error: 'OIDC scopes must include openid' }, 400);
         }
-        await persistAuthSetting('oidc_scope', scope);
       }
-
-      if ('oidcAdminGroups' in body) {
-        const adminGroups = typeof body.oidcAdminGroups === 'string' ? formatCsvList(body.oidcAdminGroups) : '';
-        await persistAuthSetting('oidc_admin_groups', adminGroups);
+      for (const [field, key] of [['oidcAdminGroups', 'oidc_admin_groups'], ['oidcReadOnlyGroups', 'oidc_read_only_groups']] as const) {
+        if (field in body) updates.set(key, typeof body[field] === 'string' ? formatCsvList(body[field]) : '');
       }
-
-      if ('oidcReadOnlyGroups' in body) {
-        const readOnlyGroups = typeof body.oidcReadOnlyGroups === 'string' ? formatCsvList(body.oidcReadOnlyGroups) : '';
-        await persistAuthSetting('oidc_read_only_groups', readOnlyGroups);
-      }
-
       if ('oidcUnmatchedRole' in body) {
-        if (typeof body.oidcUnmatchedRole !== 'string') {
-          return context.json({ error: 'Invalid OIDC unmatched role' }, 400);
-        }
-        let unmatchedRole: OidcUnmatchedRole;
         try {
-          unmatchedRole = parseOidcUnmatchedRole(body.oidcUnmatchedRole);
+          if (typeof body.oidcUnmatchedRole !== 'string') throw new Error('Invalid role');
+          updates.set('oidc_unmatched_role', parseOidcUnmatchedRole(body.oidcUnmatchedRole));
         } catch {
           return context.json({ error: 'Invalid OIDC unmatched role' }, 400);
         }
-        await persistAuthSetting('oidc_unmatched_role', unmatchedRole);
       }
-
-      if ('oidcIssuerUrl' in body || 'oidcClientId' in body || 'oidcClientSecret' in body) {
-        const currentConfig = getEffectiveConfig();
-        const issuer = typeof body.oidcIssuerUrl === 'string' ? body.oidcIssuerUrl.trim() : (currentConfig.oidcIssuerUrl || '');
-        const clientId = typeof body.oidcClientId === 'string' ? body.oidcClientId.trim() : (currentConfig.oidcClientId || '');
-        const clientSecretInput = typeof body.oidcClientSecret === 'string' ? body.oidcClientSecret.trim() : undefined;
-
-        await persistAuthSetting('oidc_issuer_url', issuer);
-        await persistAuthSetting('oidc_client_id', clientId);
-        if (clientSecretInput !== undefined && clientSecretInput !== '') {
-          await persistAuthSetting('oidc_client_secret', encryptSecret(clientSecretInput, sessionSecret));
-        } else if (!issuer && !clientId) {
-          await persistAuthSetting('oidc_client_secret', '');
-        }
-
-        if (issuer && clientId) {
+      if (typeof body.oidcIssuerUrl === 'string') updates.set('oidc_issuer_url', body.oidcIssuerUrl.trim());
+      if (typeof body.oidcClientId === 'string') updates.set('oidc_client_id', body.oidcClientId.trim());
+      if (typeof body.oidcClientSecret === 'string' && body.oidcClientSecret.trim()) {
+        updates.set('oidc_client_secret', encryptSecret(body.oidcClientSecret.trim(), sessionSecret));
+      }
+      const saved = await writeDatabase(() => {
+        const current = getEffectiveConfig();
+        const issuer = updates.get('oidc_issuer_url') ?? current.oidcIssuerUrl;
+        const clientId = updates.get('oidc_client_id') ?? current.oidcClientId;
+        const passwordDisabled = (updates.get('disable_password_login') ?? String(isPasswordLoginDisabled())) === 'true';
+        if (passwordDisabled && !hasUsablePasskey() && !(issuer && clientId)) return false;
+        if (!issuer && !clientId && (updates.has('oidc_issuer_url') || updates.has('oidc_client_id'))) updates.set('oidc_client_secret', '');
+        database.transaction<void>(() => {
+          for (const [key, value] of updates) writeAuthSetting(database, key, value);
+        })(undefined);
+        return true;
+      });
+      if (!saved) return context.json({ error: 'Register a passkey or configure OIDC before disabling password login' }, 400);
+      if (updates.has('oidc_issuer_url') || updates.has('oidc_client_id') || updates.has('oidc_client_secret')) {
+        if (oidc.enabled) {
           try {
             await oidc.getConfiguration();
           } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            return context.json({ status: 'ok', oidcError: message });
+            return context.json({ status: 'ok', oidcError: error instanceof Error ? error.message : String(error) });
           }
         }
       }
@@ -1154,9 +1152,14 @@ export function createDashboardAuth(options: {
         return context.json({ error: 'Passkeys are unavailable for OIDC-only accounts' }, 403);
       }
       const id = Number(context.req.param('id'));
-      if (!Number.isInteger(id) || !await writeDatabase(() => database.deleteWebAuthnCredential(id, session.userId))) {
-        return context.json({ error: 'Passkey not found' }, 404);
-      }
+      const result = await writeDatabase(() => {
+        if (!Number.isInteger(id) || !database.listWebAuthnCredentialsByUser(session.userId).some((credential) => credential.id === id)) return 'missing';
+        if (isPasswordLoginDisabled() && !oidc.enabled && !hasUsablePasskey(id)) return 'last';
+        database.deleteWebAuthnCredential(id, session.userId);
+        return 'deleted';
+      });
+      if (result === 'missing') return context.json({ error: 'Passkey not found' }, 404);
+      if (result === 'last') return context.json({ error: 'Enable password login or configure OIDC before deleting the last passkey' }, 400);
       return context.json({ status: 'ok' });
     });
 
@@ -1169,7 +1172,7 @@ export function createDashboardAuth(options: {
       }
       const origin = getPublicOrigin(context);
       const options = await createRegistrationOptions(session, database, new URL(origin).hostname);
-      setShortCookie(context, CHALLENGE_COOKIE, options.challenge);
+      issueWebAuthnChallenge(context, options.challenge, 'register', session.userId);
       return context.json(options);
     });
 
@@ -1181,7 +1184,7 @@ export function createDashboardAuth(options: {
         return context.json({ error: 'Passkeys cannot be registered for OIDC-only accounts' }, 403);
       }
       const body = asObject(await context.req.json().catch(() => null));
-      const challenge = getCookie(context, CHALLENGE_COOKIE);
+      const challenge = consumeWebAuthnChallenge(context, 'register', session.userId);
       if (!body || !challenge) return context.json({ error: 'No registration challenge found' }, 400);
 
       try {
@@ -1215,14 +1218,14 @@ export function createDashboardAuth(options: {
       const username = typeof body?.username === 'string' ? body.username.trim() : undefined;
       const origin = getPublicOrigin(context);
       const options = await createAuthenticationOptions(database, username, new URL(origin).hostname);
-      setShortCookie(context, CHALLENGE_COOKIE, options.challenge);
+      issueWebAuthnChallenge(context, options.challenge, 'login');
       return context.json(options);
     });
 
     auth.post('/webauthn/login/verify', async (context) => {
       if (!enabled) return context.json({ error: 'Authentication is disabled' }, 400);
       const body = asObject(await context.req.json().catch(() => null));
-      const challenge = getCookie(context, CHALLENGE_COOKIE);
+      const challenge = consumeWebAuthnChallenge(context, 'login');
       const credentialId = typeof body?.id === 'string' ? body.id : '';
       const credential = credentialId ? database.getWebAuthnCredentialByCredentialId(credentialId) : null;
       if (!body || !challenge || !credential) return context.json({ error: 'Credential not found' }, 400);

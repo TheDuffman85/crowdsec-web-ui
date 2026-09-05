@@ -168,11 +168,12 @@ describe('audit log', () => {
       expect(auditEntries(logSpy)).toEqual([expect.objectContaining({
         action: 'alert.delete',
         alert_ids: ['default:1'],
-        target_results: [{ id: 'default:1', outcome: 'success' }],
+        target_results: [{ id: 'default:1', outcome: 'queued' }],
         requested_alerts: 1,
         deleted_alerts: 1,
-        outcome: 'success',
+        outcome: 'queued',
       })]);
+      await vi.waitFor(() => expect(database.getAlertDeletionTombstone('default\u00001')?.completed_at).toBeTruthy());
     } finally {
       controller.stopBackgroundTasks();
       database.close();

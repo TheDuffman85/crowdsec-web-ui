@@ -12,42 +12,53 @@ export interface SmtpMessage {
   to: string[];
   subject: string;
   text: string;
+  timeoutMs?: number;
 }
 
 export type SmtpTlsMode = 'plain' | 'starttls' | 'tls';
 
 export async function sendSmtpMail(message: SmtpMessage): Promise<void> {
-  let socket = await connectSmtp(message.host, message.port, message.tlsMode, message.allowInsecureTls === true);
-  let reader = createSmtpResponseReader(socket);
-
-  try {
-    await readExpectedResponse(reader, [220]);
-    await smtpCommand(socket, reader, 'EHLO localhost', [250]);
+  let activeSocket: net.Socket | tls.TLSSocket | undefined;
+  let reader: ReturnType<typeof createSmtpResponseReader> | undefined;
+  let deadline: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    deadline = setTimeout(() => {
+      const error = new Error('SMTP delivery timed out');
+      reject(error);
+      activeSocket?.destroy(error);
+    }, message.timeoutMs ?? 30_000);
+  });
+  const deliver = async () => {
+    let socket = await connectSmtp(message.host, message.port, message.tlsMode, message.allowInsecureTls === true, (next) => { activeSocket = next; });
+    reader = createSmtpResponseReader(socket);
+    await readExpectedResponse(reader.read, [220]);
+    await smtpCommand(socket, reader.read, 'EHLO localhost', [250]);
 
     if (message.tlsMode === 'starttls') {
-      await smtpCommand(socket, reader, 'STARTTLS', [220]);
-      socket = await upgradeToTls(socket, message.host, message.allowInsecureTls === true);
+      await smtpCommand(socket, reader.read, 'STARTTLS', [220]);
+      reader.dispose();
+      socket = await upgradeToTls(socket, message.host, message.allowInsecureTls === true, (next) => { activeSocket = next; });
       reader = createSmtpResponseReader(socket);
-      await smtpCommand(socket, reader, 'EHLO localhost', [250]);
+      await smtpCommand(socket, reader.read, 'EHLO localhost', [250]);
     }
 
     if (message.username && message.password) {
       try {
         const authPlain = Buffer.from(`\u0000${message.username}\u0000${message.password}`).toString('base64');
-        await smtpCommand(socket, reader, `AUTH PLAIN ${authPlain}`, [235]);
+        await smtpCommand(socket, reader.read, `AUTH PLAIN ${authPlain}`, [235]);
       } catch {
-        await smtpCommand(socket, reader, 'AUTH LOGIN', [334]);
-        await smtpCommand(socket, reader, Buffer.from(message.username).toString('base64'), [334]);
-        await smtpCommand(socket, reader, Buffer.from(message.password).toString('base64'), [235]);
+        await smtpCommand(socket, reader.read, 'AUTH LOGIN', [334]);
+        await smtpCommand(socket, reader.read, Buffer.from(message.username).toString('base64'), [334]);
+        await smtpCommand(socket, reader.read, Buffer.from(message.password).toString('base64'), [235]);
       }
     }
 
-    await smtpCommand(socket, reader, `MAIL FROM:<${message.from}>`, [250]);
+    await smtpCommand(socket, reader.read, `MAIL FROM:<${message.from}>`, [250]);
     for (const recipient of message.to) {
-      await smtpCommand(socket, reader, `RCPT TO:<${recipient}>`, [250, 251]);
+      await smtpCommand(socket, reader.read, `RCPT TO:<${recipient}>`, [250, 251]);
     }
 
-    await smtpCommand(socket, reader, 'DATA', [354]);
+    await smtpCommand(socket, reader.read, 'DATA', [354]);
 
     const payload = [
       `From: ${message.from}`,
@@ -60,10 +71,15 @@ export async function sendSmtpMail(message: SmtpMessage): Promise<void> {
     ].join('\r\n');
 
     socket.write(`${payload}\r\n.\r\n`);
-    await readExpectedResponse(reader, [250]);
-    await smtpCommand(socket, reader, 'QUIT', [221]);
+    await readExpectedResponse(reader.read, [250]);
+    await smtpCommand(socket, reader.read, 'QUIT', [221]);
+  };
+  try {
+    await Promise.race([deliver(), timeout]);
   } finally {
-    socket.destroy();
+    clearTimeout(deadline!);
+    reader?.dispose();
+    activeSocket?.destroy();
   }
 }
 
@@ -72,35 +88,38 @@ function connectSmtp(
   port: number,
   tlsMode: SmtpTlsMode,
   allowInsecureTls: boolean,
+  onSocket: (socket: net.Socket | tls.TLSSocket) => void,
 ): Promise<net.Socket | tls.TLSSocket> {
   return new Promise((resolve, reject) => {
     const socket = tlsMode === 'tls'
-      ? tls.connect({ host, port, servername: host, rejectUnauthorized: !allowInsecureTls }, () => resolve(socket))
+      ? tls.connect({ host, port, servername: net.isIP(host) ? undefined : host, rejectUnauthorized: !allowInsecureTls }, () => resolve(socket))
       : net.createConnection({ host, port }, () => resolve(socket));
 
     socket.once('error', reject);
+    onSocket(socket);
   });
 }
 
-function upgradeToTls(socket: net.Socket, host: string, allowInsecureTls: boolean): Promise<tls.TLSSocket> {
+function upgradeToTls(socket: net.Socket, host: string, allowInsecureTls: boolean, onSocket: (socket: tls.TLSSocket) => void): Promise<tls.TLSSocket> {
   return new Promise((resolve, reject) => {
     const secureSocket = tls.connect({
       socket,
-      servername: host,
+      servername: net.isIP(host) ? undefined : host,
       rejectUnauthorized: !allowInsecureTls,
     }, () => resolve(secureSocket));
 
     secureSocket.once('error', reject);
+    onSocket(secureSocket);
   });
 }
 
-function createSmtpResponseReader(socket: net.Socket | tls.TLSSocket): () => Promise<string> {
+function createSmtpResponseReader(socket: net.Socket | tls.TLSSocket): { read: () => Promise<string>; dispose: () => void } {
   let buffer = '';
   let lines: string[] = [];
   const waiters: Array<(value: string) => void> = [];
   let failure: Error | null = null;
 
-  socket.on('data', (chunk) => {
+  const onData = (chunk: Buffer) => {
     buffer += chunk.toString('utf8');
     let newlineIndex = buffer.indexOf('\n');
     while (newlineIndex >= 0) {
@@ -117,17 +136,23 @@ function createSmtpResponseReader(socket: net.Socket | tls.TLSSocket): () => Pro
 
       newlineIndex = buffer.indexOf('\n');
     }
-  });
+  };
 
-  socket.on('error', (error) => {
-    failure = error as Error;
+  const onError = (error: Error) => {
+    failure = error;
     while (waiters.length > 0) {
       const waiter = waiters.shift();
       waiter?.('');
     }
-  });
+  };
+  const onClose = () => onError(new Error('SMTP connection closed before delivery completed'));
+  socket.on('data', onData);
+  socket.on('error', onError);
+  socket.on('end', onClose);
+  socket.on('close', onClose);
+  if (socket.destroyed || socket.readableEnded) onClose();
 
-  return async () =>
+  const read = async () =>
     new Promise<string>((resolve, reject) => {
       if (failure) {
         reject(failure);
@@ -149,6 +174,15 @@ function createSmtpResponseReader(socket: net.Socket | tls.TLSSocket): () => Pro
         resolve(response);
       });
     });
+  return {
+    read,
+    dispose: () => {
+      socket.off('data', onData);
+      socket.off('error', onError);
+      socket.off('end', onClose);
+      socket.off('close', onClose);
+    },
+  };
 }
 
 async function smtpCommand(

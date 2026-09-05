@@ -1022,6 +1022,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     clearPendingAlertDeletionTimeout,
     processPendingAlertDeletions,
     deleteAlertsByIds,
+    deleteAlertsByRefs,
     deleteDecisionsByIdsInChunks,
     deleteEntriesByIp,
     handleApiError,
@@ -1036,6 +1037,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     getIntervalName,
     invalidateDashboardStatsCache,
     lapiClient,
+    lapiClients,
     normalizeAlertDetail,
     queryWorker,
     runNotificationEvaluation: (...args: any[]) => syncService.runNotificationEvaluation(...args),
@@ -1285,6 +1287,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     database,
     deleteAlertFromLapi,
     deleteAlertsByIds,
+    deleteAlertsByRefs,
     deleteDecisionFromLapi,
     deleteDecisionsByIdsInChunks,
     deleteEntriesByIp,
@@ -1555,32 +1558,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
     const alerts = (await client.fetchAlerts(instance.sync.lookbackPeriod || config.lookbackPeriod)) as AlertRecord[];
     const matching = alerts.filter((alert) => getAlertSourceValue(alert.source) === ip);
-    const result: BulkDeleteResult = {
-      requested_alerts: matching.length,
-      requested_decisions: matching.reduce((count, alert) => count + (alert.decisions?.length || 0), 0),
-      deleted_alerts: 0,
-      deleted_decisions: 0,
-      failed: [],
-      ip,
-    };
-    for (const alert of matching) {
-      for (const decision of alert.decisions || []) {
-        try {
-          await client.deleteDecision(String(decision.id));
-          result.deleted_decisions += 1;
-        } catch (error: any) {
-          result.failed.push({ kind: 'decision', id: String(decision.id), error: error?.message || String(error) });
-        }
-      }
-      try {
-        await client.deleteAlert(String(alert.id));
-        result.deleted_alerts += 1;
-      } catch (error: any) {
-        result.failed.push({ kind: 'alert', id: String(alert.id), error: error?.message || String(error) });
-      }
-    }
-    await syncInstanceDelta(instanceId);
-    return result;
+    const result = await deleteAlertsByRefs(
+      matching.map((alert) => ({ instance_id: instanceId, id: String(alert.id) })),
+      new Map(matching.map((alert) => [String(alert.id), alert])),
+    );
+    return { ...result, ip };
   }
 
   function scheduleInstanceRefresh(instanceId: string): void {
