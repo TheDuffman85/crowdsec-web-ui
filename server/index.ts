@@ -18,7 +18,7 @@ try {
   });
   cacheUpdateWebSocket = attachCacheUpdateWebSocket(server, controller);
 
-  console.log(`CrowdSec Web UI backend running at http://localhost:${controller.config.port}${controller.config.basePath || ''}/`);
+  console.log(`CrowdSec Web UI backend running at http://0.0.0.0:${controller.config.port}${controller.config.basePath || ''}/`);
   if (controller.config.basePath) {
     console.log(`BASE_PATH configured: ${controller.config.basePath}`);
   }
