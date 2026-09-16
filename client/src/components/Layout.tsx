@@ -5,23 +5,13 @@ import { Toast } from "./Toast";
 import { BackToTop } from "./BackToTop";
 import { useToast } from "../contexts/useToast";
 import { useI18n } from "../lib/i18n";
+import { useTheme } from "../lib/theme";
 
 export function Layout() {
     const { t } = useI18n();
     const { toasts, removeToast } = useToast();
     const pageTopRef = useRef<HTMLDivElement | null>(null);
-    const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-        if (typeof window !== 'undefined') {
-            const savedTheme = localStorage.getItem("theme");
-            if (savedTheme === 'light' || savedTheme === 'dark') {
-                return savedTheme;
-            }
-            if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-                return "dark";
-            }
-        }
-        return "light";
-    });
+    const [theme, setTheme] = useTheme();
     const [isMenuOpen, setIsMenuOpen] = useState(() => {
         if (typeof window !== 'undefined') {
             const saved = localStorage.getItem("menuOpen");
@@ -34,21 +24,8 @@ export function Layout() {
     });
 
     useEffect(() => {
-        if (theme === "dark") {
-            document.documentElement.classList.add("dark");
-        } else {
-            document.documentElement.classList.remove("dark");
-        }
-        localStorage.setItem("theme", theme);
-    }, [theme]);
-
-    useEffect(() => {
         localStorage.setItem("menuOpen", String(isMenuOpen));
     }, [isMenuOpen]);
-
-    const toggleTheme = () => {
-        setTheme(theme === "light" ? "dark" : "light");
-    };
 
     const toggleMenu = () => {
         setIsMenuOpen(!isMenuOpen);
@@ -88,7 +65,7 @@ export function Layout() {
                 onClose={() => setIsMenuOpen(false)}
                 onToggle={toggleMenu}
                 theme={theme}
-                toggleTheme={toggleTheme}
+                setTheme={setTheme}
             />
 
             <main

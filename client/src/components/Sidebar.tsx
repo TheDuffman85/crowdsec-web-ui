@@ -1,5 +1,5 @@
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { LayoutDashboard, ShieldAlert, Gavel, Bell, X, Sun, Moon, ArrowUpCircle, BarChart3, Menu, PanelLeftClose, Settings as SettingsIcon, LogOut, RefreshCw, ChevronDown, Boxes } from "lucide-react";
+import { LayoutDashboard, ShieldAlert, Gavel, Bell, X, Sun, Moon, Monitor, ArrowUpCircle, BarChart3, Menu, PanelLeftClose, Settings as SettingsIcon, LogOut, RefreshCw, ChevronDown, Boxes } from "lucide-react";
 import { Badge } from "./ui/Badge";
 import { useAuth } from "../contexts/AuthContext";
 import { useNotificationUnreadCount } from "../contexts/useNotificationUnreadCount";
@@ -17,8 +17,13 @@ import { DropdownSelect } from "./ui/DropdownSelect";
 import { InstanceIcon } from "./InstanceIcon";
 import type { ManualRefreshMode } from "../types";
 import { compileAlertSearch, compileDecisionSearch } from "../../../shared/search";
+import type { ThemeMode } from "../lib/theme";
 
-type ThemeMode = 'light' | 'dark';
+const THEME_OPTIONS = [
+    { mode: 'light', Icon: Sun, labelKey: 'components.sidebar.lightMode' },
+    { mode: 'system', Icon: Monitor, labelKey: 'components.sidebar.systemMode' },
+    { mode: 'dark', Icon: Moon, labelKey: 'components.sidebar.darkMode' },
+] as const;
 const METRICS_SIDEBAR_PREFERENCE_EVENT = 'metrics-sidebar-preference-changed';
 const MANUAL_REFRESH_SETTING_EVENT = 'manual-refresh-setting-changed';
 
@@ -27,7 +32,7 @@ interface SidebarProps {
     onClose: () => void;
     onToggle: () => void;
     theme: ThemeMode;
-    toggleTheme: () => void;
+    setTheme: (mode: ThemeMode) => void;
 }
 
 function normalizeUpdateStatus(status: UpdateCheckResponse): UpdateCheckResponse {
@@ -68,7 +73,7 @@ function compareReleaseVersions(left: string, right: string): number {
     return 0;
 }
 
-export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: SidebarProps) {
+export function Sidebar({ isOpen, onClose, onToggle, theme, setTheme }: SidebarProps) {
     const { authEnabled, logout, user } = useAuth();
     const { lastUpdated, refreshSignal, syncStatus, refreshNow } = useRefresh();
     const { unreadCount } = useNotificationUnreadCount();
@@ -392,6 +397,25 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                 ))}
             </nav>
             <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex flex-col gap-4">
+                <div role="radiogroup" aria-label={t('components.sidebar.theme')} className="grid grid-cols-3 rounded-lg bg-gray-50 p-1 dark:bg-gray-900/50">
+                    {THEME_OPTIONS.map(({ mode, Icon, labelKey }) => (
+                        <button
+                            key={mode}
+                            type="button"
+                            role="radio"
+                            aria-checked={theme === mode}
+                            onClick={() => setTheme(mode)}
+                            className={`flex min-h-9 items-center justify-center rounded-md transition-colors ${theme === mode
+                                ? "bg-white text-gray-900 shadow-sm dark:bg-gray-700 dark:text-white"
+                                : "text-gray-500 hover:bg-gray-200 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"}`}
+                            aria-label={t(labelKey)}
+                            title={t(labelKey)}
+                        >
+                            <Icon size={16} />
+                        </button>
+                    ))}
+                </div>
+
                 <div className="flex items-center justify-between gap-3 rounded-lg bg-gray-50 p-3 dark:bg-gray-900/50">
                     <div className="min-w-0">
                         <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">
@@ -451,14 +475,6 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, toggleTheme }: Sideb
                                 </div>
                             )}
                         </div>}
-                        <button
-                            onClick={toggleTheme}
-                            className="flex min-h-11 min-w-9 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-white"
-                            aria-label={theme === "light" ? t('components.sidebar.darkMode') : t('components.sidebar.lightMode')}
-                            title={theme === "light" ? t('components.sidebar.darkMode') : t('components.sidebar.lightMode')}
-                        >
-                            {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
-                        </button>
                     </div>
                 </div>
 

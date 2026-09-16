@@ -177,6 +177,8 @@
   "components.sidebar.loadTest": "Load test",
   "components.sidebar.language": "Language",
   "components.sidebar.languageBrowser": "Browser default",
+  "components.sidebar.systemMode": "System",
+  "components.sidebar.theme": "Theme",
   "components.sidebar.lightMode": "Light mode",
   "components.sidebar.logoAlt": "CrowdSec logo",
   "components.sidebar.nav.alerts": "Alerts",

@@ -6,7 +6,7 @@ import { Sidebar } from '../Sidebar';
 import { useNotificationUnreadCount } from '../../contexts/useNotificationUnreadCount';
 import { I18nContext } from '../../lib/i18n';
 
-const { refreshNowMock } = vi.hoisted(() => ({ refreshNowMock: vi.fn() }));
+const { refreshNowMock, setThemeMock } = vi.hoisted(() => ({ refreshNowMock: vi.fn(), setThemeMock: vi.fn() }));
 
 vi.mock('../../contexts/useRefresh', () => ({
   useRefresh: () => ({
@@ -35,7 +35,7 @@ function renderSidebar(
         onClose={vi.fn()}
         onToggle={vi.fn()}
         theme="dark"
-        toggleTheme={vi.fn()}
+        setTheme={setThemeMock}
       />
     </MemoryRouter>
   );
@@ -60,6 +60,7 @@ describe('Sidebar', () => {
 
   beforeEach(() => {
     refreshNowMock.mockReset();
+    setThemeMock.mockReset();
     refreshNowMock.mockResolvedValue(undefined);
     vi.stubEnv('VITE_VERSION', '2026.5.2');
     vi.stubEnv('VITE_BRANCH', 'main');
@@ -77,6 +78,22 @@ describe('Sidebar', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
+  });
+
+  test('renders a light / system / dark switcher and reports the chosen mode', async () => {
+    vi.mocked(useNotificationUnreadCount).mockReturnValue({
+      unreadCount: 0,
+      setUnreadCount: vi.fn(),
+      refreshUnreadCount: vi.fn(),
+    });
+    renderSidebar();
+
+    const dark = screen.getByRole('radio', { name: 'Dark mode' });
+    expect(dark).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Light mode' })).not.toBeChecked();
+
+    await userEvent.click(screen.getByRole('radio', { name: 'System' }));
+    expect(setThemeMock).toHaveBeenCalledWith('system');
   });
 
   test('shows unread notification badges when unread notifications exist', async () => {
