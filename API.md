@@ -67,6 +67,21 @@ Date range filters use `dateStart` and `dateEnd`. Use `YYYY-MM-DD` for day bucke
 - Decision creation and cleanup accept `scope: "all"` or `scope: "instance"`. The latter also requires `instance_id`; omitting `scope` targets the primary instance.
 - Multi-instance writes return per-instance `results`, `succeeded`, and `failed`. Partial success returns HTTP `207`.
 
+### Saved and Recent Search Filters
+
+Saved and recent filter queries are stored in SQLite for the current session user. When authentication is disabled, all clients share one installation-wide list. Read-only users may manage their own filters. Queries are validated against the alert or decision search syntax before storage; each page only applies queries compatible with its search.
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| GET | `/api/search-filters` | Return `{ saved, recent, shared }` for the current owner. |
+| POST | `/api/search-filters/saved` | Create a named filter with `{ "name": string, "query": string }`; returns the entry. Names are unique per owner (case-insensitive). |
+| PATCH | `/api/search-filters/saved/:id` | Rename an owned filter with `{ "name": string }`. |
+| DELETE | `/api/search-filters/saved/:id` | Delete an owned filter. |
+| POST | `/api/search-filters/recent` | Record a used query with `{ "query": string }`; returns the latest five distinct queries. |
+| DELETE | `/api/search-filters/recent` | Clear the current owner's recent queries. |
+
+Names are limited to 80 characters, queries to 4096 characters, and named filters to 100 per owner. Invalid input returns `400`, duplicate names or a full named list return `409`, and missing or unowned IDs return `404`.
+
 ## Health
 
 | Method | Endpoint | Description |

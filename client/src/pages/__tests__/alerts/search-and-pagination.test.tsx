@@ -41,10 +41,12 @@ describe('Alerts page search and pagination', () => {
 
     const searchButton = screen.getByRole('button', { name: 'Expand search' });
     const filtersButton = screen.getByRole('button', { name: 'Filters' });
+    const savedFiltersButton = screen.getByRole('button', { name: 'Saved filters' });
     const columnsButton = screen.getByRole('button', { name: 'Choose alert table columns' });
     expect(columnsButton.parentElement!.firstElementChild).toBe(columnsButton);
     expect(Array.from(columnsButton.nextElementSibling!.children)).toEqual([
       searchButton.parentElement!.parentElement!,
+      savedFiltersButton,
       filtersButton.parentElement!,
     ]);
     expect(columnsButton.nextElementSibling).toHaveClass('ml-auto');
@@ -63,6 +65,32 @@ describe('Alerts page search and pagination', () => {
     const highlightLayer = document.querySelector('[data-search-highlight-layer="true"]');
     expect(highlightLayer?.querySelector('[data-search-highlight-kind="field"]')).toHaveTextContent('country');
     expect(highlightLayer?.querySelector('[data-search-highlight-kind="comparator"]')).toHaveTextContent(':');
+  });
+
+  test('applies a saved query while an earlier edit is debouncing', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (!init?.method) return Response.json({
+        saved: [{ id: 'saved-1', name: 'US alerts', query: 'country=US', created_at: '', updated_at: '' }],
+        recent: [],
+        shared: false,
+      });
+      return Response.json({ recent: [] });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(
+      <MemoryRouter initialEntries={['/alerts?q=country%3DDE']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+    const input = await expandAlertSearch();
+    fireEvent.change(input, { target: { value: 'target:ssh' } });
+    await userEvent.click(screen.getByRole('button', { name: 'Saved filters' }));
+    const entry = await screen.findByText('US alerts');
+    await userEvent.click(within(entry.closest('div.rounded-md') as HTMLElement).getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(vi.mocked(api.fetchAlertsPaginated).mock.calls.at(-1)?.[2]?.q).toBe('country=US'));
+    await flushAlertSearchDebounce();
+    expect(vi.mocked(api.fetchAlertsPaginated).mock.calls.at(-1)?.[2]?.q).toBe('country=US');
+    expect(screen.getByPlaceholderText('Filter alerts...')).toHaveValue('country=US');
   });
 
   test('applies an initial advanced search URL query on the first alert load', async () => {
@@ -96,6 +124,24 @@ describe('Alerts page search and pagination', () => {
 
     await waitFor(() => expect(screen.getByText('date>=2026-03-24')).toBeInTheDocument());
     expect(screen.queryByText(/Search syntax error/i)).not.toBeInTheDocument();
+  });
+
+  test('records a Quick Filter query only after the drawer closes', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({ recent: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<MemoryRouter initialEntries={['/alerts']}><Alerts /></MemoryRouter>);
+    await userEvent.click(await screen.findByRole('button', { name: 'Filters' }));
+    const drawer = screen.getByRole('dialog', { name: 'Quick filters' });
+    await userEvent.click(within(drawer).getByRole('button', { name: 'Date and time' }));
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: '2026-03-24T10:30' } });
+    await waitFor(() => expect(vi.mocked(api.fetchAlertsPaginated).mock.calls.at(-1)?.[2]?.q).toBeTruthy());
+    await new Promise((resolve) => setTimeout(resolve, 1700));
+    expect(fetchMock).not.toHaveBeenCalled();
+    await userEvent.click(within(drawer).getByRole('button', { name: 'Close filters' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1), { timeout: 2500 });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).query).toBe(
+      vi.mocked(api.fetchAlertsPaginated).mock.calls.at(-1)?.[2]?.q,
+    );
   });
 
   test('uses advanced-search date-time comparisons from quick filters', async () => {
@@ -378,8 +424,6 @@ describe('Alerts page search and pagination', () => {
         <Alerts />
       </MemoryRouter>,
     );
-
-    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
 
     await expandAlertSearch();
     fireEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));

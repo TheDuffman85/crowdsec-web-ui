@@ -37,6 +37,7 @@ type Database = {
 };
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+export const RECENT_FILTER_LIMIT = 5;
 const DECISION_DUPLICATE_RANK_VERSION = '2';
 const DEFAULT_JOURNAL_SIZE_LIMIT_BYTES = 128 * 1024 * 1024;
 const INCREMENTAL_VACUUM_META_KEY = 'sqlite_incremental_vacuum_at';
@@ -2734,6 +2735,35 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
     VALUES ('auth_existing_install_default_disabled', '${freshDatabase ? 'false' : 'true'}')
   `);
   db.exec(createAuthUsersTable);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS saved_search_filters (
+      id TEXT PRIMARY KEY,
+      owner_id INTEGER NOT NULL,
+      name TEXT NOT NULL COLLATE NOCASE,
+      query TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(owner_id, name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_saved_search_filters_owner
+      ON saved_search_filters(owner_id, name);
+    CREATE TABLE IF NOT EXISTS recent_search_filters (
+      owner_id INTEGER NOT NULL,
+      query TEXT NOT NULL,
+      used_at_ms INTEGER NOT NULL,
+      PRIMARY KEY(owner_id, query)
+    );
+    CREATE INDEX IF NOT EXISTS idx_recent_search_filters_owner_used
+      ON recent_search_filters(owner_id, used_at_ms DESC);
+    DELETE FROM recent_search_filters WHERE rowid IN (
+      SELECT rowid FROM (
+        SELECT rowid, ROW_NUMBER() OVER (
+          PARTITION BY owner_id ORDER BY used_at_ms DESC, rowid DESC
+        ) AS position
+        FROM recent_search_filters
+      ) WHERE position > ${RECENT_FILTER_LIMIT}
+    );
+  `);
   db.exec(createWebAuthnCredentialsTable);
   db.exec(createNotificationChannelsTable);
   db.exec(createNotificationRulesTable);

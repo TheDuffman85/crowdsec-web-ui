@@ -8,6 +8,8 @@ import { StatCard } from "../components/StatCard";
 import { ScenarioName } from "../components/ScenarioName";
 import { QuickFilterDisabledNotice, QuickFilters, type QuickFilterDefinition, type QuickFilterSectionId } from "../components/QuickFilters";
 import { CollapsibleSearchControls } from "../components/CollapsibleSearchControls";
+import { SavedFiltersMenu } from "../components/SavedFiltersMenu";
+import { useRecentFilter } from "../lib/savedFilters";
 import { HighlightedSearchInput } from "../components/HighlightedSearchInput";
 import { SearchSyntaxModal } from "../components/SearchSyntaxModal";
 import {
@@ -593,6 +595,8 @@ function scopeStaleStatItemsToSelected<TItem extends DashboardStatListItem>(
 
 export function Dashboard() {
     const [searchParams, setSearchParams] = useSearchParams();
+    const [quickFiltersOpen, setQuickFiltersOpen] = useState(false);
+    useRecentFilter(searchParams.get('q') ?? '', 'dashboard', quickFiltersOpen);
     const { language, t } = useI18n();
     const { formatDate, formatTime } = useDateTime();
     const { refreshSignal } = useRefresh();
@@ -1521,6 +1525,7 @@ export function Dashboard() {
                                     aria-describedby={dashboardSearchError ? 'dashboard-search-error' : undefined}
                                 />
                             </CollapsibleSearchControls>
+                            <SavedFiltersMenu page="dashboard" query={dashboardSearchDraft} onApply={updateDashboardSearchDraftFromUser} />
                             <QuickFilters
                                 page="alerts"
                                 fields={quickFilterFields}
@@ -1542,6 +1547,7 @@ export function Dashboard() {
                                 busy={filterApplying}
                                 refreshKey={refreshSignal}
                                 disabledReason={quickFilterDisabledReason}
+                                onOpenChange={setQuickFiltersOpen}
                             />
                         </div>
                     </div>

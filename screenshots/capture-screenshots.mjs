@@ -350,6 +350,13 @@ async function main() {
       await navigate(cdp, "/alerts?instance=primary");
       await screenshot(cdp, "alerts.png");
 
+      await navigate(cdp, "/alerts?instance=primary&q=country%3DNL");
+      await clickFirst(cdp, "button[aria-label='Saved filters']");
+      await waitForText(cdp, "German alerts");
+      await screenshot(cdp, "saved_filters.png");
+      await closeModal(cdp);
+      await navigate(cdp, "/alerts?instance=primary");
+
       await clickFirst(cdp, "button[aria-label='Filters']");
       await clickByText(cdp, "Country");
       await waitForText(cdp, "Netherlands");

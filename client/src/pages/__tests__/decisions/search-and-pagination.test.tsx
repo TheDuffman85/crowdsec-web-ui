@@ -40,10 +40,12 @@ describe('Decisions page search and pagination', () => {
 
     const searchButton = screen.getByRole('button', { name: 'Expand search' });
     const filtersButton = screen.getByRole('button', { name: 'Filters' });
+    const savedFiltersButton = screen.getByRole('button', { name: 'Saved filters' });
     const columnsButton = screen.getByRole('button', { name: 'Choose decision table columns' });
     expect(columnsButton.parentElement!.firstElementChild).toBe(columnsButton);
     expect(Array.from(columnsButton.nextElementSibling!.children)).toEqual([
       searchButton.parentElement!.parentElement!,
+      savedFiltersButton,
       filtersButton.parentElement!,
     ]);
     expect(columnsButton.nextElementSibling).toHaveClass('ml-auto');
@@ -295,6 +297,23 @@ describe('Decisions page search and pagination', () => {
     expect(fetchDecisionsPaginatedMock.mock.calls.at(-1)?.[2]?.q).toBe('country=DE');
   });
 
+  test('applies a decision-only saved query', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (!init?.method) return Response.json({
+        saved: [{ id: 'one', name: 'Bans', query: 'action=ban', created_at: '', updated_at: '' }],
+        recent: [],
+        shared: false,
+      });
+      return Response.json({ recent: [] });
+    }));
+    render(<MemoryRouter initialEntries={['/decisions']}><Decisions /></MemoryRouter>);
+    await screen.findByText('1.2.3.4');
+    await userEvent.click(screen.getByRole('button', { name: 'Saved filters' }));
+    const entry = await screen.findByText('Bans');
+    await userEvent.click(within(entry.closest('div.rounded-md') as HTMLElement).getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(vi.mocked(api.fetchDecisionsPaginated).mock.calls.at(-1)?.[2]?.q).toBe('action=ban'));
+  });
+
   test('applies an initial advanced search URL query on the first decision load', async () => {
     const fetchDecisionsPaginatedMock = vi.mocked(api.fetchDecisionsPaginated);
     fetchDecisionsPaginatedMock.mockClear();
@@ -343,8 +362,6 @@ describe('Decisions page search and pagination', () => {
         <Decisions />
       </MemoryRouter>,
     );
-
-    await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
 
     await expandDecisionSearch();
     fireEvent.click(screen.getByRole('button', { name: 'Search syntax help' }));

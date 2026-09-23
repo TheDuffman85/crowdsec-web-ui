@@ -39,6 +39,7 @@ function renderFilters(
     sectionOrder?: QuickFilterSectionId[];
     hiddenSectionOrder?: QuickFilterSectionId[];
     disabledReason?: string;
+    onOpenChange?: Mock<(open: boolean) => void>;
   } = {},
 ) {
   const onSelectionChange = options.onSelectionChange
@@ -66,6 +67,7 @@ function renderFilters(
         hiddenSectionOrder={options.hiddenSectionOrder}
         busy={options.busy}
         disabledReason={options.disabledReason}
+        onOpenChange={options.onOpenChange}
       />
     </I18nContext.Provider>,
   );
@@ -89,6 +91,23 @@ describe('QuickFilters', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
+  });
+
+  test('reports drawer opening and every close action', async () => {
+    const user = userEvent.setup();
+    const onOpenChange = vi.fn<(open: boolean) => void>();
+    renderFilters({ onOpenChange });
+    await user.click(screen.getByRole('button', { name: 'Filters' }));
+    expect(onOpenChange).toHaveBeenLastCalledWith(true);
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onOpenChange).toHaveBeenLastCalledWith(false);
+    await user.click(screen.getByRole('button', { name: 'Filters' }));
+    await user.click(within(screen.getByRole('dialog', { name: 'Quick filters' })).getByRole('button', { name: 'Close filters' }));
+    expect(onOpenChange).toHaveBeenLastCalledWith(false);
+    await user.click(screen.getByRole('button', { name: 'Filters' }));
+    await user.click(screen.getAllByRole('button', { name: 'Close filters' })[0]);
+    expect(onOpenChange).toHaveBeenLastCalledWith(false);
+    expect(onOpenChange.mock.calls.map(([open]) => open)).toEqual([true, false, true, false, true, false]);
   });
 
   test('shows a clearly disabled trigger without exposing destructive clear actions', () => {

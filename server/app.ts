@@ -64,6 +64,7 @@ import { parseGoDuration, toDuration } from './utils/duration';
 import { fetchCrowdsecMetrics, fetchCrowdsecMetricsSamples, summarizeCrowdsecMetrics } from './metrics';
 import { DatabaseQueryWorker, QueryWorkerTimeoutError } from './query-worker-client';
 import { registerApiRoutes } from './app/api-routes';
+import { registerSavedFilterRoutes } from './app/saved-filters';
 import { createQueryService } from './app/query-service';
 import { createDeletionService } from './app/deletion-service';
 import { createSyncService } from './app/sync-service';
@@ -1219,6 +1220,13 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     app.get(`${config.basePath}/api/health`, healthHandler);
   }
   dashboardAuth.registerRoutes(app);
+  registerSavedFilterRoutes({
+    app,
+    basePath: config.basePath,
+    database,
+    auth: dashboardAuth,
+    writeDatabase: (operation) => syncWorker.runExclusive(operation),
+  });
 
   const ensureCanManageEnforcement = (context: HonoContext) => {
     if (dashboardAuth.getPermissions(context).can_manage_enforcement) return null;

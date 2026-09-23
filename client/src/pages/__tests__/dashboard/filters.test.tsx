@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { Dashboard } from '../../Dashboard';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { QUICK_FILTERS_STORAGE_KEY } from '../../../lib/quickFilters';
 
 async function openSimulationQuickFilter() {
@@ -113,6 +113,26 @@ describe('Dashboard filters and drilldowns', () => {
     const decisionsCard = screen.getByText('Active Decisions').closest('a');
     expect(alertsCard).toHaveAttribute('href', '/alerts?q=country%3ADE');
     expect(decisionsCard).toHaveAttribute('href', '/decisions?q=country%3ADE');
+  });
+
+  test('applies a compatible saved query to dashboard data and drilldowns', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (!init?.method) return Response.json({
+        saved: [{ id: 'one', name: 'German WAF', query: 'kind=waf AND country=DE', created_at: '', updated_at: '' }],
+        recent: [],
+        shared: false,
+      });
+      return Response.json({ recent: [] });
+    }));
+    render(<MemoryRouter><Dashboard /></MemoryRouter>);
+    await screen.findByText('Top Countries');
+    await userEvent.click(screen.getByRole('button', { name: 'Saved filters' }));
+    const entry = await screen.findByText('German WAF');
+    await userEvent.click(within(entry.closest('div.rounded-md') as HTMLElement).getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ q: 'kind=waf AND country=DE', decision_q: 'kind=waf AND country=DE' }),
+      expect.any(Object),
+    ));
   });
 
   test('applies the kind quick filter to alert and decision dashboard data', async () => {

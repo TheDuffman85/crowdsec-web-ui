@@ -1,4 +1,5 @@
 import {
+    useCallback,
     useEffect,
     useMemo,
     useRef,
@@ -60,6 +61,7 @@ interface QuickFiltersProps {
     refreshKey?: number | string;
     triggerClassName?: string;
     disabledReason?: string;
+    onOpenChange?: (open: boolean) => void;
 }
 
 export function QuickFilters({
@@ -83,6 +85,7 @@ export function QuickFilters({
     refreshKey = 0,
     triggerClassName,
     disabledReason,
+    onOpenChange,
 }: QuickFiltersProps) {
     const { t } = useI18n();
     const [drawerOpen, setDrawerOpen] = useState(false);
@@ -108,6 +111,11 @@ export function QuickFilters({
         simulation?.value,
     ]);
 
+    const changeDrawerOpen = useCallback((open: boolean) => {
+        setDrawerOpen(open);
+        onOpenChange?.(open);
+    }, [onOpenChange]);
+
     useEffect(() => {
         if (!drawerOpen) return;
         const trigger = triggerRef.current;
@@ -117,7 +125,7 @@ export function QuickFilters({
 
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Escape') {
-                setDrawerOpen(false);
+                changeDrawerOpen(false);
                 return;
             }
             if (event.key !== 'Tab' || !drawerRef.current) return;
@@ -142,7 +150,7 @@ export function QuickFilters({
             document.removeEventListener('keydown', handleKeyDown);
             trigger?.focus();
         };
-    }, [drawerOpen]);
+    }, [changeDrawerOpen, drawerOpen]);
 
     const toggleField = (field: QuickFilterSectionId) => {
         setOpenFields((current) => {
@@ -181,7 +189,7 @@ export function QuickFilters({
         <button
             ref={triggerRef}
             type="button"
-            onClick={() => setDrawerOpen(true)}
+            onClick={() => changeDrawerOpen(true)}
             disabled={Boolean(disabledReason)}
             title={disabledReason}
             className={`inline-flex items-center justify-center gap-2 border bg-white text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:border-amber-300 disabled:bg-amber-50 disabled:text-amber-700 disabled:opacity-80 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 dark:disabled:border-amber-700 dark:disabled:bg-amber-950/30 dark:disabled:text-amber-300 ${
@@ -228,7 +236,7 @@ export function QuickFilters({
                     <button
                         type="button"
                         className="absolute inset-0 bg-black/50"
-                        onClick={() => setDrawerOpen(false)}
+                        onClick={() => changeDrawerOpen(false)}
                         aria-label={t('components.quickFilters.close')}
                     />
                     <div
@@ -245,7 +253,7 @@ export function QuickFilters({
                             <button
                                 ref={closeButtonRef}
                                 type="button"
-                                onClick={() => setDrawerOpen(false)}
+                                onClick={() => changeDrawerOpen(false)}
                                 className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
                                 aria-label={t('components.quickFilters.close')}
                             >

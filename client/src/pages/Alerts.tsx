@@ -7,6 +7,8 @@ import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
 import { HighlightedSearchInput } from "../components/HighlightedSearchInput";
 import { CollapsibleSearchControls } from "../components/CollapsibleSearchControls";
+import { SavedFiltersMenu } from "../components/SavedFiltersMenu";
+import { useRecentFilter } from "../lib/savedFilters";
 import { SearchSyntaxModal } from "../components/SearchSyntaxModal";
 import { TableColumnsModal } from "../components/TableColumnsModal";
 import { QuickFilterDisabledNotice, QuickFilters, type QuickFilterDefinition, type QuickFilterSectionId } from "../components/QuickFilters";
@@ -246,6 +248,7 @@ export function Alerts() {
     const { refreshSignal } = useRefresh();
     const [facetRefreshKey, setFacetRefreshKey] = useState(refreshSignal);
     const [searchParams, setSearchParams] = useSearchParams();
+    const [quickFiltersOpen, setQuickFiltersOpen] = useState(false);
     const [persistedQuickFilters, setPersistedQuickFilters] = useState<StoredQuickFilters>(
         () => loadStoredQuickFilters(),
     );
@@ -294,6 +297,7 @@ export function Alerts() {
     const currentSimulationFilter = simulationsEnabled ? parseSimulationFilter(searchParams.get("simulation")) : 'all';
     const alertIdParam = searchParams.get("id");
     const queryParam = searchParams.get("q");
+    useRecentFilter(queryParam ?? '', 'alerts', quickFiltersOpen);
     const dateStartParam = searchParams.get("dateStart") ?? "";
     const dateEndParam = searchParams.get("dateEnd") ?? "";
 
@@ -1202,6 +1206,21 @@ export function Alerts() {
         }
     };
 
+    const applySavedFilter = useCallback((query: string) => {
+        cancelSearchDebounce();
+        searchDraftRef.current = query;
+        setSearchDraft(query);
+        setDebouncedSearchDraft(query);
+        searchSelectionRef.current = { start: query.length, end: query.length };
+        const currentQuery = searchParams.get('q') ?? '';
+        skipSearchParamSyncRef.current = currentQuery === query ? null : query;
+        if (currentQuery !== query) {
+            const nextParams = new URLSearchParams(searchParams);
+            nextParams.set('q', query);
+            setSearchParams(nextParams);
+        }
+    }, [cancelSearchDebounce, searchParams, setSearchParams]);
+
     const applySearchExample = useCallback((query: string) => {
         cancelSearchDebounce();
         searchDraftRef.current = query;
@@ -1557,7 +1576,8 @@ export function Alerts() {
                                 aria-describedby={queryError ? 'alerts-search-error' : undefined}
                             />
                         </CollapsibleSearchControls>
-                        <QuickFilters {...quickFilterProps} />
+                        <SavedFiltersMenu page="alerts" query={searchDraft} onApply={applySavedFilter} />
+                        <QuickFilters {...quickFilterProps} onOpenChange={setQuickFiltersOpen} />
                     </div>
                 </div>
             </div>

@@ -16,7 +16,7 @@ rmSync(configPath, { force: true });
 
 const database = new CrowdsecDatabase({ dbDir });
 
-database.createAuthUser({
+const demoUserId = database.createAuthUser({
   username: demoUsername,
   passwordHash: await hashPassword(demoPassword),
   role: 'admin',
@@ -27,6 +27,26 @@ const now = new Date();
 const iso = (minutesAgo: number) => new Date(now.getTime() - minutesAgo * 60_000).toISOString();
 const futureIso = (hoursFromNow: number) => new Date(now.getTime() + hoursFromNow * 3_600_000).toISOString();
 const pastIso = (hoursAgo: number) => new Date(now.getTime() - hoursAgo * 3_600_000).toISOString();
+
+for (const [id, name, query] of [
+  ['filter-germany', 'German alerts', 'country=DE'],
+  ['filter-waf', 'WAF activity', 'kind=waf'],
+  ['filter-ssh', 'SSH attempts', 'scenario=crowdsecurity/ssh-bf'],
+]) {
+  database.db.query(`INSERT INTO saved_search_filters (id, owner_id, name, query, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)`).run(id, demoUserId, name, query, now.toISOString(), now.toISOString());
+}
+
+for (const [index, query] of [
+  'country=DE AND kind=waf',
+  'target=ssh',
+  'scenario=crowdsecurity/ssh-bf',
+  'kind=waf',
+  'country=NL',
+].entries()) {
+  database.db.query('INSERT INTO recent_search_filters (owner_id, query, used_at_ms) VALUES (?, ?, ?)')
+    .run(demoUserId, query, now.getTime() - (4 - index) * 60_000);
+}
 
 type DemoAlertOptions = {
   instanceId?: string;

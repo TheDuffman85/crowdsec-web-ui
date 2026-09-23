@@ -36,21 +36,25 @@ A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alert
 | Notifications | Alert, decision, CVE, availability, and update rules delivered through Email, Gotify, MQTT, ntfy, or Webhooks |
 | Security | Initial administrator setup, password and TOTP login, passkeys, OIDC SSO, group roles, and instance-wide read-only mode |
 | Localization | Arabic, Chinese, English, French, German, Hindi, Japanese, Portuguese, Russian, and Spanish |
-| Experience | Unified search, dark/light themes, and responsive layouts |
+| Experience | Unified search, server-synced saved and recent filters, dark/light themes, and responsive layouts |
 
 ### Screenshots
 
 <p>
   <a href="screenshots/dashboard.png"><img src="screenshots/dashboard.png" alt="Dashboard" width="48%"></a>
-  <a href="screenshots/multi_instance.png"><img src="screenshots/multi_instance.png" alt="Combined multi-instance alerts" width="48%"></a>
+  <a href="screenshots/metrics.png"><img src="screenshots/metrics.png" alt="Runtime Metrics" width="48%"></a>
 </p>
 <p>
+  <a href="screenshots/multi_instance.png"><img src="screenshots/multi_instance.png" alt="Combined multi-instance alerts" width="48%"></a>
   <a href="screenshots/alerts.png"><img src="screenshots/alerts.png" alt="Alerts" width="48%"></a>
-  <a href="screenshots/quick_filters.png"><img src="screenshots/quick_filters.png" alt="Quick filters applied to alerts" width="48%"></a>
 </p>
 <p>
   <a href="screenshots/alert_details.png"><img src="screenshots/alert_details.png" alt="Alert details with CrowdSec context" width="48%"></a>
   <a href="screenshots/search_syntax.png"><img src="screenshots/search_syntax.png" alt="Search Syntax" width="48%"></a>
+</p>
+<p>
+  <a href="screenshots/quick_filters.png"><img src="screenshots/quick_filters.png" alt="Quick filters applied to alerts" width="48%"></a>
+  <a href="screenshots/saved_filters.png"><img src="screenshots/saved_filters.png" alt="Saved and recently used filters" width="48%"></a>
 </p>
 <p>
   <a href="screenshots/decisions.png"><img src="screenshots/decisions.png" alt="Decisions" width="48%"></a>
@@ -60,8 +64,7 @@ A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alert
   <a href="screenshots/notifications.png"><img src="screenshots/notifications.png" alt="Notification Center" width="48%"></a>
   <a href="screenshots/notification_rule.png"><img src="screenshots/notification_rule.png" alt="Notification Rule" width="48%"></a>
 </p>
-<p>
-  <a href="screenshots/metrics.png"><img src="screenshots/metrics.png" alt="Runtime Metrics" width="48%"></a>
+<p align="center">
   <a href="screenshots/settings.png"><img src="screenshots/settings.png" alt="Settings" width="48%"></a>
 </p>
 
@@ -789,6 +792,12 @@ Instance and machine options use stable IDs for filtering while displaying their
 Dashboard applies the shared fields `Country`, `Scenario`, `Kind`, `AS`, `IP / Range`, `Target`, `ID`, `Instance`, `Region`, `City`, `Machine`, and `Origin`. Filters that depend on decision-only or alert-list-only data are retained in **Unavailable** instead of being silently discarded.
 
 Active decisions are deduplicated by instance, value, and simulation mode. When filters exclude the globally preferred decision, the best matching decision is promoted so enabling **Hide duplicates** cannot make an otherwise matching duplicate group disappear.
+
+### Saved and Recent Filters
+
+Use the bookmark button beside search on Dashboard, Alerts, or Decisions to save the current valid query under a name. The menu lets you apply, rename, and delete saved filters, reuse the five most recently used queries, or clear recent history. Queries are shared across these pages; **Apply** is disabled when a query is not valid for the current page. Applying one changes the search query while keeping the selected instance and other page settings.
+
+Saved filters and recent history are stored on the server for the signed-in user, so they are available on other devices. Read-only users can manage their own filters. If authentication is disabled, everyone using the installation shares one list. Valid nonempty queries enter recent history after a brief pause, including searches opened from bookmarked URLs. Quick Filter queries enter recent history only after the Quick Filters drawer closes.
 
 ### Search Syntax
 
