@@ -60,6 +60,13 @@ describe('server date and time helpers', () => {
     expect(formatDateTime(date, 'UTC', '12h')).toBe(date.toLocaleString(undefined, { timeZone: 'UTC', hour12: true }));
   });
 
+  test('formats configured day-first dates in server-generated timestamps', () => {
+    const date = new Date('2025-01-01T13:34:56.000Z');
+    expect(formatDateTime(date, 'UTC', '24h', 'dd/mm/yyyy')).toBe('01/01/2025, 13:34:56');
+    expect(formatDateTime(date, 'UTC', '12h', 'dd/mm/yyyy')).toMatch(/^01\/01\/2025, 1:34:56 pm$/i);
+    expect(formatDateTime(date, 'UTC', '24h', 'yyyy-MM-dd')).toBe('2025-01-01, 13:34:56');
+  });
+
   test('normalizes equivalent ISO timestamps to UTC with millisecond precision', () => {
     expect(normalizeIsoTimestamp('2026-07-14T08:56:33-04:00')).toBe('2026-07-14T12:56:33.000Z');
     expect(normalizeIsoTimestamp('2026-07-14T12:56:33Z')).toBe('2026-07-14T12:56:33.000Z');

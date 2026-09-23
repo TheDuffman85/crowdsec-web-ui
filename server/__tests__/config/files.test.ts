@@ -22,6 +22,7 @@ storage:
 ui:
   timeZone: UTC
   timeFormat: 12h
+  dateFormat: dd/mm/yyyy
   readOnly: true
 auth:
   enabled: false
@@ -111,6 +112,7 @@ instances:
         sqliteJournalSizeLimitBytes: -1,
         timeZone: 'UTC',
         timeFormat: '12h',
+        dateFormat: 'dd/mm/yyyy',
         readOnly: true,
         simulationsEnabled: true,
         lookbackMs: 172_800_000,
@@ -236,7 +238,7 @@ instances:
       CONFIG_STORAGE_WAL_ENABLED: 'false',
       CONFIG_STORAGE_INCREMENTAL_VACUUM_ENABLED: 'false',
       CONFIG_STORAGE_JOURNAL_SIZE_LIMIT: '64MiB',
-      CONFIG_UI: '{ timeZone: UTC, timeFormat: 24h, readOnly: false }',
+      CONFIG_UI: '{ timeZone: UTC, timeFormat: 24h, dateFormat: dd/mm/yyyy, readOnly: false }',
       CONFIG_UI_READ_ONLY: 'true',
       CONFIG_AUTH_SESSION_SECRET: 'do-not-write-this-auth-secret',
       CONFIG_AUTH_OIDC_ADMIN_GROUPS_0: 'admins',
@@ -373,10 +375,10 @@ instances:
     try {
       createRuntimeConfigImpl({
         ...Object.fromEntries(entries),
-        CONFIG_UI: '{ readOnly: true, timeFormat: 24h, timeZone: UTC }',
+        CONFIG_UI: '{ readOnly: true, dateFormat: dd/mm/yyyy, timeFormat: 24h, timeZone: UTC }',
       }, { defaultConfigFile: firstConfigFile });
       createRuntimeConfigImpl({
-        CONFIG_UI: '{ timeZone: UTC, timeFormat: 24h, readOnly: true }',
+        CONFIG_UI: '{ timeZone: UTC, timeFormat: 24h, dateFormat: dd/mm/yyyy, readOnly: true }',
         ...Object.fromEntries([...entries].reverse()),
       }, { defaultConfigFile: secondConfigFile });
       const first = readFileSync(firstConfigFile, 'utf8');
@@ -389,7 +391,7 @@ instances:
       expect(Object.keys(document)).toEqual([
         'server', 'storage', 'ui', 'updates', 'auth', 'notifications', 'crowdsec', 'instances',
       ]);
-      expect(Object.keys(document.ui)).toEqual(['timeZone', 'timeFormat', 'readOnly']);
+      expect(Object.keys(document.ui)).toEqual(['timeZone', 'timeFormat', 'dateFormat', 'readOnly']);
       expect(Object.keys(document.instances[0])).toEqual(['lapi', 'metrics', 'sync']);
       expect(Object.keys(document.instances[0].lapi)).toEqual(['url', 'auth']);
       expect(Object.keys(document.instances[0].lapi.auth)).toEqual(['username', 'password']);

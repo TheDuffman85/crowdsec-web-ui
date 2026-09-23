@@ -10,7 +10,7 @@ interface TimeDisplayProps {
 }
 
 export function TimeDisplay({ timestamp, className = "" }: TimeDisplayProps) {
-    const { formatDate, formatTime } = useDateTime();
+    const { formatDate, formatTime, dateFormat } = useDateTime();
     if (!timestamp) return null;
 
     const date = new Date(timestamp);
@@ -18,12 +18,9 @@ export function TimeDisplay({ timestamp, className = "" }: TimeDisplayProps) {
         return <span className={className}>{timestamp}</span>;
     }
 
-    // Format date as "Dec 16, 2025"
-    const dateStr = formatDate(date, {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric'
-    });
+    const dateStr = dateFormat !== 'browser'
+        ? formatDate(date)
+        : formatDate(date, { month: 'short', day: 'numeric', year: 'numeric' });
 
     // Format time as "15:30:45"
     const timeStr = formatTime(date, {

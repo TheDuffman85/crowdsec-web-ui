@@ -35,7 +35,7 @@ import type { NotificationOutboundGuard } from './notifications/outbound-guard';
 import type { NotificationSecretStore } from './notifications/secret-store';
 import type { UpdateChecker } from './update-check';
 import { getServerTranslator, type Translator } from './i18n';
-import type { TimeFormat } from './config';
+import type { DateFormat, TimeFormat } from './config';
 import { formatDateTime } from './utils/date-time';
 import {
   ALERT_RECORD_COLUMNS,
@@ -65,6 +65,7 @@ export interface NotificationServiceOptions {
   debugPayloads?: boolean;
   timeZone?: string | null;
   timeFormat?: TimeFormat;
+  dateFormat?: DateFormat;
   instanceAware?: boolean;
   instances?: ReadonlyArray<{ id: string; name: string }>;
 }
@@ -292,7 +293,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
     const result = await sendToChannel(channel, {
       title: t('server.notifications.test.title'),
       message: t('server.notifications.test.message', {
-        timestamp: formatDateTime(new Date(), options.timeZone ?? null, options.timeFormat ?? 'browser'),
+        timestamp: formatDateTime(new Date(), options.timeZone ?? null, options.timeFormat ?? 'browser', options.dateFormat ?? 'browser'),
       }),
       metadata: { kind: 'test' },
       dedupeKey: `test:${Date.now()}`,

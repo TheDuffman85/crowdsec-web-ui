@@ -20,7 +20,7 @@ services:
       # instead of their individual field overrides.
       # CONFIG_SERVER: '{port: 3000, basePath: ""}'
       # CONFIG_STORAGE: '{dataDir: /app/data, geonamesDir: /app/geonames, walEnabled: true}'
-      # CONFIG_UI: '{timeZone: browser, timeFormat: browser, readOnly: false}'
+      # CONFIG_UI: '{timeZone: browser, timeFormat: browser, dateFormat: browser, readOnly: false}'
       # CONFIG_UPDATES: '{enabled: true}'
       # CONFIG_AUTH: '{enabled: auto}'
       # CONFIG_NOTIFICATIONS: '{allowPrivateAddresses: true, debugPayloads: false}'
@@ -35,6 +35,7 @@ services:
       # CONFIG_STORAGE_WAL_ENABLED: "true"
       # CONFIG_UI_TIME_ZONE: browser
       # CONFIG_UI_TIME_FORMAT: browser
+      # CONFIG_UI_DATE_FORMAT: dd/mm/yyyy # Or browser, mm/dd/yyyy, yyyy-MM-dd.
       # CONFIG_UI_READ_ONLY: "false"
       # CONFIG_UPDATES_ENABLED: "true"
 

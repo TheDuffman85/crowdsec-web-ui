@@ -164,7 +164,7 @@ describe('Settings general and password', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const dateTime = createDateTimeContextValue({ timeZone: 'America/Los_Angeles', timeFormat: '24h' });
+    const dateTime = createDateTimeContextValue({ timeZone: 'America/Los_Angeles', timeFormat: '24h', dateFormat: 'browser' });
     render(
       <DateTimeContext.Provider value={dateTime}>
         <Settings />

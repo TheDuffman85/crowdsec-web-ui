@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { isValidDateFormat, type DateFormat } from '../shared/date-format';
+export type { DateFormat } from '../shared/date-format';
 import { createCrowdsecAuthConfig, type CrowdsecAuthConfig } from './auth';
 import {
   type AppliedConfigEnvironmentOverride,
@@ -95,6 +97,7 @@ export interface RuntimeConfig {
   notificationDebugPayloads: boolean;
   timeZone: string | null;
   timeFormat: TimeFormat;
+  dateFormat: DateFormat;
   readOnly: boolean;
   auditEnabled: boolean;
   auditLogFile?: string;
@@ -118,6 +121,13 @@ export function parseTimeFormat(value: string | undefined): TimeFormat {
   if (!timeFormat) return 'browser';
   if (timeFormat === '12h' || timeFormat === '24h') return timeFormat;
   throw new Error('Invalid TIME_FORMAT value. Must be one of: 12h, 24h.');
+}
+
+export function parseDateFormat(value: string | undefined): DateFormat {
+  const dateFormat = value?.trim();
+  if (!dateFormat || dateFormat.toLowerCase() === 'browser') return 'browser';
+  if (isValidDateFormat(dateFormat)) return dateFormat;
+  throw new Error('Invalid DATE_FORMAT value. Use browser or a pattern containing one day, month, and year token (for example dd/mm/yyyy).');
 }
 
 export function parseTotpSeed(value: string | undefined): string | undefined {
@@ -434,6 +444,7 @@ function createRuntimeConfigFromEnvironment(env: NodeJS.ProcessEnv): RuntimeConf
     notificationDebugPayloads: parseBooleanEnv(env.NOTIFICATION_DEBUG_PAYLOADS, false),
     timeZone: parseTimeZone(env.TZ),
     timeFormat: parseTimeFormat(resolveRenamedEnv(env, 'TIME_FORMAT', 'CROWDSEC_TIME_FORMAT')),
+    dateFormat: parseDateFormat(env.DATE_FORMAT),
     readOnly: parseBooleanEnv(env.PERMISSION_READ_ONLY, false),
     auditEnabled: parseBooleanEnv(env.AUDIT_ENABLED, true),
     auditLogFile: env.AUDIT_LOG_FILE?.trim() || undefined,

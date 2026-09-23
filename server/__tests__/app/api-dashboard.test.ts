@@ -776,6 +776,7 @@ describe('createApp dashboard API', () => {
       env: {
         TZ: 'Europe/Berlin',
         TIME_FORMAT: '24h',
+        DATE_FORMAT: 'dd/mm/yyyy',
       },
       fetchResolver: (url) => url.includes('/v1/alerts?') ? Response.json([alert]) : undefined,
     });
@@ -786,6 +787,7 @@ describe('createApp dashboard API', () => {
     expect(await configResponse.json()).toEqual(expect.objectContaining({
       time_zone: 'Europe/Berlin',
       time_format: '24h',
+      date_format: 'dd/mm/yyyy',
     }));
 
     const hourOne = await controller.fetch(new Request(

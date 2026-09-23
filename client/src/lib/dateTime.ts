@@ -1,10 +1,13 @@
 import { createContext, useContext } from 'react';
+import { formatCustomDate, type DateFormat } from '../../../shared/date-format';
 
 export type TimeFormat = 'browser' | '12h' | '24h';
+export type { DateFormat } from '../../../shared/date-format';
 
 export interface DateTimeSettings {
   timeZone: string | null;
   timeFormat: TimeFormat;
+  dateFormat: DateFormat;
 }
 
 export interface DateTimeContextValue extends DateTimeSettings {
@@ -13,7 +16,7 @@ export interface DateTimeContextValue extends DateTimeSettings {
   formatDateTime: (value: Date | string | number, options?: Intl.DateTimeFormatOptions) => string;
 }
 
-export const DEFAULT_DATE_TIME_SETTINGS: DateTimeSettings = { timeZone: null, timeFormat: 'browser' };
+export const DEFAULT_DATE_TIME_SETTINGS: DateTimeSettings = { timeZone: null, timeFormat: 'browser', dateFormat: 'browser' };
 
 function toDate(value: Date | string | number): Date | null {
   const date = value instanceof Date ? value : new Date(value);
@@ -30,7 +33,13 @@ function withSettings(settings: DateTimeSettings, options: Intl.DateTimeFormatOp
 
 export function formatDateValue(value: Date | string | number, settings: DateTimeSettings, options: Intl.DateTimeFormatOptions = {}): string {
   const date = toDate(value);
-  return date ? date.toLocaleDateString(undefined, withSettings(settings, options)) : String(value);
+  if (!date) return String(value);
+  // Charts request a compact label explicitly; keep those labels in the browser locale.
+  const hasExplicitDateOptions = options.day !== undefined || options.month !== undefined || options.year !== undefined || options.weekday !== undefined;
+  if (settings.dateFormat !== 'browser' && !hasExplicitDateOptions) {
+    return formatCustomDate(date, settings.dateFormat, settings.timeZone ?? options.timeZone ?? null);
+  }
+  return date.toLocaleDateString(undefined, withSettings(settings, options));
 }
 
 export function formatTimeValue(value: Date | string | number, settings: DateTimeSettings, options: Intl.DateTimeFormatOptions = {}): string {
@@ -40,7 +49,11 @@ export function formatTimeValue(value: Date | string | number, settings: DateTim
 
 export function formatDateTimeValue(value: Date | string | number, settings: DateTimeSettings, options: Intl.DateTimeFormatOptions = {}): string {
   const date = toDate(value);
-  return date ? date.toLocaleString(undefined, withSettings(settings, options)) : String(value);
+  if (!date) return String(value);
+  const formatOptions = withSettings(settings, options);
+  if (settings.dateFormat === 'browser') return date.toLocaleString(undefined, formatOptions);
+  const formattedDate = formatCustomDate(date, settings.dateFormat, settings.timeZone ?? options.timeZone ?? null);
+  return `${formattedDate}, ${date.toLocaleTimeString(undefined, formatOptions)}`;
 }
 
 export function getBrowserTimeZone(): string | null {

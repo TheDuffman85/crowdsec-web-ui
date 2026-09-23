@@ -473,6 +473,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     debugPayloads: config.notificationDebugPayloads,
     timeZone: config.timeZone,
     timeFormat: config.timeFormat,
+    dateFormat: config.dateFormat,
     instanceAware: config.instances.length > 1,
     instances: config.instances.map((instance) => ({ id: instance.id, name: instance.name })),
   });
@@ -839,6 +840,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   Notification Private Destinations: ${config.notificationAllowPrivateAddresses ? 'Allowed' : 'Blocked'}
   Time Zone: ${config.timeZone || 'Browser local'}
   Time Format: ${config.timeFormat}
+  Date Format: ${config.dateFormat}
   Dashboard Auth: ${dashboardAuth.enabled ? 'Enabled' : 'Disabled'}
   Dashboard OIDC: ${dashboardAuth.oidcEnabled ? 'Enabled' : 'Disabled'}
   Read-only Mode: ${config.readOnly ? 'Enabled' : 'Disabled'}

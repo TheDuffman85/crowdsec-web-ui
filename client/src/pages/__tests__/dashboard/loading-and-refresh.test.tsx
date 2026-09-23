@@ -332,7 +332,7 @@ describe('Dashboard loading and refresh', () => {
     const stableConfig = await fetchConfigMock();
     fetchConfigMock.mockClear();
     fetchConfigMock.mockImplementation(async () => structuredClone(stableConfig));
-    const dateTime = createDateTimeContextValue({ timeZone: null, timeFormat: 'browser' });
+    const dateTime = createDateTimeContextValue({ timeZone: null, timeFormat: 'browser', dateFormat: 'browser' });
 
     const { rerender } = render(
       <DateTimeContext.Provider value={dateTime}>

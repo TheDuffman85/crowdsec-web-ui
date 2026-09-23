@@ -31,7 +31,7 @@ const RETAINED_METADATA_ENV = [
 ] as const;
 
 export const DEPRECATED_CONFIG_ENV = [
-  'PORT', 'BASE_PATH', 'DB_DIR', 'GEONAMES_DUMP_DIR', 'TZ', 'TIME_FORMAT', 'CROWDSEC_TIME_FORMAT',
+  'PORT', 'BASE_PATH', 'DB_DIR', 'GEONAMES_DUMP_DIR', 'TZ', 'TIME_FORMAT', 'CROWDSEC_TIME_FORMAT', 'DATE_FORMAT',
   'PERMISSION_READ_ONLY',
   'AUTH_ENABLED', 'CROWDSEC_AUTH_ENABLED',
   'AUTH_SECRET_FILE', 'AUTH_TOTP_SECRET_FILE', 'AUTH_TOTP_SEED_FILE',
@@ -210,11 +210,12 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
     : parseByteSize(storage.journalSizeLimit, 'storage.journalSizeLimit');
 
   const ui = section(root, 'ui');
-  knownKeys(ui, ['timeZone', 'timeFormat', 'readOnly'], 'ui');
+  knownKeys(ui, ['timeZone', 'timeFormat', 'dateFormat', 'readOnly'], 'ui');
   if (ui.timeZone !== undefined && ui.timeZone !== null && ui.timeZone !== 'browser') {
     env.TZ = string(ui.timeZone, 'ui.timeZone');
   }
   if (ui.timeFormat !== undefined && ui.timeFormat !== 'browser') setString(env, ui, 'timeFormat', 'TIME_FORMAT', 'ui');
+  if (ui.dateFormat !== undefined && ui.dateFormat !== 'browser') setString(env, ui, 'dateFormat', 'DATE_FORMAT', 'ui');
   setBoolean(env, ui, 'readOnly', 'PERMISSION_READ_ONLY', 'ui');
 
   const auth = section(root, 'auth');
@@ -339,7 +340,7 @@ export const CONFIG_KEY_ORDER = new Map<string, readonly string[]>([
   ['', ['server', 'storage', 'ui', 'updates', 'auth', 'notifications', 'audit', 'crowdsec', 'instances']],
   ['server', ['port', 'basePath']],
   ['storage', ['dataDir', 'geonamesDir', 'walEnabled', 'incrementalVacuumEnabled', 'journalSizeLimit']],
-  ['ui', ['timeZone', 'timeFormat', 'readOnly']],
+  ['ui', ['timeZone', 'timeFormat', 'dateFormat', 'readOnly']],
   ['updates', ['enabled']],
   ['auth', ['enabled', 'sessionSecret', 'totpSecret', 'totpSeed', 'oidc']],
   ['auth.oidc', ['issuerUrl', 'clientId', 'clientSecret', 'scope', 'groupsClaim', 'adminGroups', 'readOnlyGroups', 'unmatchedRole']],
@@ -408,6 +409,7 @@ const LEGACY_GENERATED_CONFIG_PATHS = [
   ['TZ', ['ui', 'timeZone']],
   ['TIME_FORMAT', ['ui', 'timeFormat']],
   ['CROWDSEC_TIME_FORMAT', ['ui', 'timeFormat']],
+  ['DATE_FORMAT', ['ui', 'dateFormat']],
   ['PERMISSION_READ_ONLY', ['ui', 'readOnly']],
   ['AUTH_ENABLED', ['auth', 'enabled']],
   ['CROWDSEC_AUTH_ENABLED', ['auth', 'enabled']],
@@ -535,7 +537,7 @@ export function generateApplicationConfig(env: NodeJS.ProcessEnv, config: Runtim
       incrementalVacuumEnabled: config.sqliteIncrementalVacuumEnabled,
       journalSizeLimit: formatByteSize(config.sqliteJournalSizeLimitBytes),
     },
-    ui: { timeZone: config.timeZone || 'browser', timeFormat: config.timeFormat, readOnly: config.readOnly },
+    ui: { timeZone: config.timeZone || 'browser', timeFormat: config.timeFormat, dateFormat: config.dateFormat, readOnly: config.readOnly },
     auth: {
       enabled: config.dashboardAuth.enabled === null ? 'auto' : config.dashboardAuth.enabled,
       ...(secretReference(env, 'AUTH_SECRET', 'CROWDSEC_AUTH_SECRET') ? { sessionSecret: secretReference(env, 'AUTH_SECRET', 'CROWDSEC_AUTH_SECRET') } : {}),
@@ -628,6 +630,7 @@ const CONFIG_VALUE_ENV = [
   ['CONFIG_STORAGE_JOURNAL_SIZE_LIMIT', ['storage', 'journalSizeLimit']],
   ['CONFIG_UI_TIME_ZONE', ['ui', 'timeZone']],
   ['CONFIG_UI_TIME_FORMAT', ['ui', 'timeFormat']],
+  ['CONFIG_UI_DATE_FORMAT', ['ui', 'dateFormat']],
   ['CONFIG_UI_READ_ONLY', ['ui', 'readOnly']],
   ['CONFIG_AUTH_ENABLED', ['auth', 'enabled']],
   ['CONFIG_AUTH_OIDC_ISSUER_URL', ['auth', 'oidc', 'issuerUrl']],

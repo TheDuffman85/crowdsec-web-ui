@@ -221,8 +221,11 @@ Use `CONFIG_FILE` only to select another existing file. [`config.example.yaml`](
 | `storage.journalSizeLimit` | `128MiB` | Retained WAL size after checkpoints. This does not cap transactions; use `unlimited` to disable trimming. Ignored when WAL is disabled. | `CONFIG_STORAGE_JOURNAL_SIZE_LIMIT` |
 | `ui.timeZone` | `browser` | Browser timezone or an IANA zone such as `Europe/Berlin` or `UTC`. | `CONFIG_UI_TIME_ZONE` |
 | `ui.timeFormat` | `browser` | Clock format: `browser`, `12h`, or `24h`. | `CONFIG_UI_TIME_FORMAT` |
+| `ui.dateFormat` | `browser` | Browser date format or a custom pattern such as `dd/mm/yyyy`, `mm/dd/yyyy`, or `yyyy-MM-dd`. | `CONFIG_UI_DATE_FORMAT` |
 | `ui.readOnly` | `false` | Hides management actions and rejects mutating API operations. | `CONFIG_UI_READ_ONLY` |
 | `updates.enabled` | `true` in packaged images | Enables the built-in update check. | `CONFIG_UPDATES_ENABLED` |
+
+Date patterns require one day, month, and year token in any order: `d`/`dd` (day), `m`/`mm` (numeric month), `mmm`/`mmmm` (localized month name), and `yy`/`yyyy` (year). Punctuation and spaces are literal; wrap words in single quotes, for example `d 'of' mmmm yyyy`. Date patterns affect full dates and timestamps; compact chart labels keep their own display format. Set `ui.timeFormat` separately for a 12 or 24 hour clock.
 
 ### Authentication
 

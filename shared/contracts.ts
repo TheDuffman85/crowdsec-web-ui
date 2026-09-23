@@ -568,6 +568,7 @@ export interface ConfigResponse {
   origin_features_enabled: boolean;
   time_zone?: string | null;
   time_format?: 'browser' | '12h' | '24h';
+  date_format?: string;
   metrics_enabled?: boolean;
   metrics_sidebar_visible?: boolean;
   deployment_mode?: 'load-test';

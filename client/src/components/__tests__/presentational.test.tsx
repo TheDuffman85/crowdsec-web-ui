@@ -5,6 +5,7 @@ import { TimeDisplay } from '../TimeDisplay';
 import { Badge } from '../ui/Badge';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/Card';
 import { I18nContext, type I18nContextValue } from '../../lib/i18n';
+import { DateTimeContext, createDateTimeContextValue } from '../../lib/dateTime';
 
 describe('presentational components', () => {
   test('renders badges and card wrappers', () => {
@@ -26,6 +27,18 @@ describe('presentational components', () => {
   test('renders formatted time', () => {
     render(<TimeDisplay timestamp="2025-01-01T12:34:56.000Z" />);
     expect(screen.getByText(/2025/)).toBeInTheDocument();
+  });
+
+  test('shows day-first dates and a 24-hour clock when configured', () => {
+    const dateTime = createDateTimeContextValue({ timeZone: 'UTC', timeFormat: '24h', dateFormat: 'dd/mm/yyyy' });
+    render(
+      <DateTimeContext.Provider value={dateTime}>
+        <TimeDisplay timestamp="2025-01-01T12:34:56.000Z" />
+      </DateTimeContext.Provider>,
+    );
+
+    expect(screen.getByText('01/01/2025')).toBeInTheDocument();
+    expect(screen.getByText('12:34:56')).toBeInTheDocument();
   });
 
   test('preserves invalid timestamps for troubleshooting', () => {

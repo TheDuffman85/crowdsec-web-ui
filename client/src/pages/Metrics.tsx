@@ -27,6 +27,7 @@ import { Switch } from '../components/ui/Switch';
 import { DropdownSelect } from '../components/ui/DropdownSelect';
 import { InstanceIcon } from '../components/InstanceIcon';
 import { useI18n } from '../lib/i18n';
+import { useDateTime } from '../lib/dateTime';
 import type {
   CrowdsecMetricsApiEntity,
   CrowdsecMetricsAppsecEngine,
@@ -94,9 +95,8 @@ function formatDuration(value: number | null, notAvailable = 'n/a'): string {
   return `${value.toFixed(2)} s`;
 }
 
-function formatDateTime(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? 'n/a' : date.toLocaleString();
+function formatMetricDateTime(value: string, formatDateTime: (value: string) => string): string {
+  return Number.isNaN(new Date(value).getTime()) ? 'n/a' : formatDateTime(value);
 }
 
 function formatOptionalNumber(value: number | null): string {
@@ -388,6 +388,7 @@ function EntityList({
   fetchedAt: string;
 }) {
   const { t } = useI18n();
+  const { formatDateTime } = useDateTime();
   const isMachine = entityType === 'machine';
 
   return (
@@ -431,7 +432,7 @@ function EntityList({
                     ? t('pages.metrics.heartbeatObserved')
                     : t('pages.metrics.heartbeatNotObserved');
               const heartbeatTitle = item.lastHeartbeatAt && (heartbeatStatus === 'online' || heartbeatStatus === 'stale')
-                ? t('pages.metrics.heartbeatLastSeenDescription', { time: formatDateTime(item.lastHeartbeatAt) })
+                ? t('pages.metrics.heartbeatLastSeenDescription', { time: formatMetricDateTime(item.lastHeartbeatAt, formatDateTime) })
                 : heartbeatStatus === 'observed'
                   ? t('pages.metrics.heartbeatObservedDescription')
                   : undefined;
@@ -917,6 +918,7 @@ type MetricsSourceSummaryItem = {
 
 function MetricsSourceSummary({ data }: { data: CrowdsecMetricsResponse }) {
   const { t } = useI18n();
+  const { formatDateTime } = useDateTime();
   const activeDecisions = data.totals.activeDecisions;
   const alerts = data.totals.alerts;
   const summaryMetricCandidates: Array<MetricsSourceSummaryItem | null> = [
@@ -932,7 +934,7 @@ function MetricsSourceSummary({ data }: { data: CrowdsecMetricsResponse }) {
       ? {
         key: 'started',
         label: t('pages.metrics.started'),
-        value: <time dateTime={data.crowdsecStartedAt}>{formatDateTime(data.crowdsecStartedAt)}</time>,
+        value: <time dateTime={data.crowdsecStartedAt}>{formatMetricDateTime(data.crowdsecStartedAt, formatDateTime)}</time>,
         title: data.crowdsecStartedAt,
         valueClassName: 'text-sm text-gray-900 dark:text-white',
       }
@@ -993,6 +995,7 @@ function MetricsSourceSummary({ data }: { data: CrowdsecMetricsResponse }) {
 
 function CombinedSourcesSummary({ sources, includeInstance }: { sources: CrowdsecMetricsSource[]; includeInstance: boolean }) {
   const { t } = useI18n();
+  const { formatDateTime } = useDateTime();
 
   return (
     <Card>
@@ -1025,7 +1028,7 @@ function CombinedSourcesSummary({ sources, includeInstance }: { sources: Crowdse
                   <div className="mt-2 space-y-1 text-xs text-gray-500 dark:text-gray-400">
                     {source.crowdsecVersion && <p>{t('pages.metrics.version')}: {source.crowdsecVersion}</p>}
                     {source.crowdsecStartedAt && (
-                      <p>{t('pages.metrics.started')}: {formatDateTime(source.crowdsecStartedAt)}</p>
+                      <p>{t('pages.metrics.started')}: {formatMetricDateTime(source.crowdsecStartedAt, formatDateTime)}</p>
                     )}
                   </div>
                 ) : (

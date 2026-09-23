@@ -25,6 +25,7 @@
 # ui:
 #   timeZone: browser # Or an IANA zone such as Europe/Berlin or UTC.
 #   timeFormat: browser # browser, 12h, or 24h.
+#   dateFormat: browser # Or a pattern such as dd/mm/yyyy, mm/dd/yyyy, or yyyy-MM-dd.
 #   readOnly: false
 
 # updates:

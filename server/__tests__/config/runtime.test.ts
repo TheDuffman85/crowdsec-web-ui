@@ -13,6 +13,16 @@ describe('runtime configuration', () => {
     expect(config.readOnly).toBe(true);
   });
 
+  test('accepts custom date patterns and rejects malformed patterns', () => {
+    expect(createRuntimeConfig({ CONFIG_UI_DATE_FORMAT: 'dd/mm/yyyy' }).dateFormat).toBe('dd/mm/yyyy');
+    expect(createRuntimeConfig({ DATE_FORMAT: 'dd/mm/yyyy' }).dateFormat).toBe('dd/mm/yyyy');
+    expect(createRuntimeConfig({ CONFIG_UI_DATE_FORMAT: 'yyyy-MM-dd' }).dateFormat).toBe('yyyy-MM-dd');
+    expect(createRuntimeConfig({ CONFIG_UI_DATE_FORMAT: "d 'of' MMMM yyyy" }).dateFormat).toBe("d 'of' MMMM yyyy");
+    expect(createRuntimeConfig({}).dateFormat).toBe('browser');
+    expect(() => createRuntimeConfig({ CONFIG_UI_DATE_FORMAT: 'dd/QQ/yyyy' })).toThrow(/DATE_FORMAT/);
+    expect(() => createRuntimeConfig({ CONFIG_UI_DATE_FORMAT: 'dd/mm' })).toThrow(/DATE_FORMAT/);
+  });
+
   test('createRuntimeConfig falls back when positive intervals are disabled', () => {
     const config = createRuntimeConfig({ CROWDSEC_LAPI_REQUEST_TIMEOUT: 'manual' });
     expect(config.lapiRequestTimeoutMs).toBe(30_000);

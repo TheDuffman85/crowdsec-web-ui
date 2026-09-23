@@ -1,4 +1,5 @@
-import type { TimeFormat } from '../config';
+import type { DateFormat, TimeFormat } from '../config';
+import { formatCustomDate } from '../../shared/date-format';
 
 const TIMESTAMP_KEYS = new Set([
   'timestamp',
@@ -85,11 +86,14 @@ export function formatDateTime(
   date: Date,
   timeZone: string | null,
   timeFormat: TimeFormat,
+  dateFormat: DateFormat = 'browser',
 ): string {
-  return date.toLocaleString(undefined, {
+  const options: Intl.DateTimeFormatOptions = {
     ...(timeZone ? { timeZone } : {}),
     ...(timeFormat === 'browser' ? {} : { hour12: getHour12(timeFormat) }),
-  });
+  };
+  if (dateFormat === 'browser') return date.toLocaleString(undefined, options);
+  return `${formatCustomDate(date, dateFormat, timeZone)}, ${date.toLocaleTimeString(undefined, options)}`;
 }
 
 export function getDateTimeKey(

@@ -639,6 +639,7 @@ app.get(`${config.basePath}/api/config`, ensureAuth, (context) => {
     origin_features_enabled: true,
     time_zone: config.timeZone,
     time_format: config.timeFormat,
+    date_format: config.dateFormat,
     metrics_enabled: config.instances.some((instance) => instance.prometheus.length > 0),
     metrics_sidebar_visible: state.metricsSidebarVisible,
     ...(config.deploymentMode === 'load-test' ? { deployment_mode: config.deploymentMode } : {}),

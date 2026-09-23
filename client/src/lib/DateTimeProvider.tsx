@@ -20,6 +20,7 @@ export function DateTimeProvider({ children }: { children: ReactNode }) {
           setSettings({
             timeZone: config.time_zone ?? null,
             timeFormat: config.time_format ?? 'browser',
+            dateFormat: config.date_format ?? 'browser',
           });
         }
       })
