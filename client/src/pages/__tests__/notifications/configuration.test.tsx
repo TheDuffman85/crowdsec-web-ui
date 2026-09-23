@@ -345,6 +345,39 @@ describe('Notifications page configuration', () => {
     }));
   });
 
+  test('shows scenario exclusion and time-window help on applicable rule types', async () => {
+    const user = userEvent.setup();
+    render(<Notifications />);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /add rule/i })).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /add rule/i }));
+
+    const ruleType = screen.getByLabelText('Rule Type');
+    const windowCases = [
+      ['alert-spike', /compare alerts in this rolling window/i],
+      ['alert-threshold', /count matching alerts created within this rolling window/i],
+      ['new-alert-decision', /look back this many minutes for newly created alerts and decisions/i],
+      ['ip-ban', /look back this many minutes for ban decisions that are still active/i],
+    ] as const;
+    for (const [type, hint] of windowCases) {
+      await user.selectOptions(ruleType, type);
+      expect(screen.getByLabelText('Scenario Contains')).toBeInTheDocument();
+      expect(screen.getByRole('checkbox', { name: 'Exclude matching scenarios' })).toBeInTheDocument();
+      expect(screen.getByLabelText('Window Minutes')).toBeInTheDocument();
+      expect(screen.getByText(hint)).toBeInTheDocument();
+    }
+
+    await user.selectOptions(ruleType, 'new-cve');
+    expect(screen.getByRole('checkbox', { name: 'Exclude matching scenarios' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Window Minutes')).not.toBeInTheDocument();
+
+    for (const type of ['application-update', 'lapi-availability']) {
+      await user.selectOptions(ruleType, type);
+      expect(screen.queryByRole('checkbox', { name: 'Exclude matching scenarios' })).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Window Minutes')).not.toBeInTheDocument();
+    }
+  });
+
   test('configures per-record alerts and decisions with filters', async () => {
     const user = userEvent.setup();
     render(<Notifications />);
@@ -358,8 +391,12 @@ describe('Notifications page configuration', () => {
     expect(screen.getByRole('checkbox', { name: 'Decisions' })).toBeChecked();
     expect(screen.getByLabelText('IP / Range Filter')).toBeInTheDocument();
     expect(screen.getByText(/include simulated alerts and decisions/i)).toBeInTheDocument();
+    expect(screen.getByText(/look back this many minutes/i)).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Exclude matching scenarios' })).not.toBeChecked();
 
     await user.type(screen.getByLabelText('Name'), 'Every decision');
+    await user.type(screen.getByLabelText('Scenario Contains'), 'ssh');
+    await user.click(screen.getByRole('checkbox', { name: 'Exclude matching scenarios' }));
     await user.click(screen.getByRole('checkbox', { name: 'Alerts' }));
     await user.type(screen.getByLabelText('IP / Range Filter'), '10.0.0.0/24');
     await user.click(screen.getByRole('button', { name: /save rule/i }));
@@ -371,7 +408,8 @@ describe('Notifications page configuration', () => {
         window_minutes: 5,
         event_type: 'decision',
         filters: {
-          scenario: '',
+          scenario: 'ssh',
+          exclude_scenario: true,
           target: '',
           include_simulated: false,
           values: ['10.0.0.0/24'],

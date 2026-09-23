@@ -1043,7 +1043,9 @@ export function createNotificationService(options: NotificationServiceOptions): 
     const params: unknown[] = [start.toISOString(), end.toISOString()];
     if (filters?.include_simulated !== true) clauses.push('simulated = 0');
     if (filters?.scenario) {
-      clauses.push("LOWER(scenario) LIKE ? ESCAPE '\\'");
+      clauses.push(filters.exclude_scenario === true
+        ? "(scenario IS NULL OR LOWER(scenario) NOT LIKE ? ESCAPE '\\')"
+        : "LOWER(scenario) LIKE ? ESCAPE '\\'");
       params.push(`%${escapeSqlLike(filters.scenario.toLowerCase())}%`);
     }
     if (filters?.target) {
@@ -1263,6 +1265,7 @@ function normalizeFilters(filters: NotificationFilter | undefined): Notification
   }
   return {
     scenario: scenario || undefined,
+    exclude_scenario: scenario && filters.exclude_scenario === true ? true : undefined,
     target: target || undefined,
     include_simulated: filters.include_simulated === true,
     values: values.length > 0 ? values : undefined,
@@ -1271,11 +1274,15 @@ function normalizeFilters(filters: NotificationFilter | undefined): Notification
   };
 }
 
+function matchesScenarioFilter(scenario: string, filter: string, exclude: boolean): boolean {
+  return scenario.toLowerCase().includes(filter.toLowerCase()) !== exclude;
+}
+
 function matchesAlertFilters(alert: AlertRecord, filters?: NotificationFilter): boolean {
   if (filters?.include_simulated !== true && alert.simulated === true) {
     return false;
   }
-  if (filters?.scenario && !String(alert.scenario || '').toLowerCase().includes(filters.scenario.toLowerCase())) {
+  if (filters?.scenario && !matchesScenarioFilter(String(alert.scenario || ''), filters.scenario, filters.exclude_scenario === true)) {
     return false;
   }
   if (filters?.target && !String(alert.target || '').toLowerCase().includes(filters.target.toLowerCase())) {
@@ -1298,7 +1305,7 @@ function matchesDecisionFilters(decision: AlertDecision & Record<string, unknown
   if (filters?.include_simulated !== true && decision.simulated === true) {
     return false;
   }
-  if (filters?.scenario && !String(decision.scenario || '').toLowerCase().includes(filters.scenario.toLowerCase())) {
+  if (filters?.scenario && !matchesScenarioFilter(String(decision.scenario || ''), filters.scenario, filters.exclude_scenario === true)) {
     return false;
   }
   if (filters?.target && !String(decision.target || '').toLowerCase().includes(filters.target.toLowerCase())) {

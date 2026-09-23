@@ -346,6 +346,43 @@ describe('notification per-record incidents', () => {
     database.close();
   });
 
+  test('new alert and decision rules exclude matching scenarios', async () => {
+    const { database, service } = createService();
+    const rule = await service.createRule({
+      name: 'Exclude SSH',
+      type: 'new-alert-decision',
+      enabled: true,
+      severity: 'info',
+      channel_ids: [],
+      config: {
+        window_minutes: 5,
+        event_type: 'both',
+        filters: { scenario: 'SsH', exclude_scenario: true },
+      },
+    });
+    expect(rule.config).toEqual(expect.objectContaining({
+      filters: expect.objectContaining({ scenario: 'SsH', exclude_scenario: true }),
+    }));
+
+    insertAlert(database, createAlert(1, '2026-03-28T11:58:00.000Z'));
+    insertAlert(database, createAlert(2, '2026-03-28T11:58:00.000Z', { scenario: 'crowdsecurity/http-bf' }));
+    insertAlert(database, createAlert(3, '2026-03-28T11:58:00.000Z', { scenario: undefined }));
+    insertDecision(database, createDecision('ssh', '2026-03-28T11:58:00.000Z'));
+    insertDecision(database, createDecision('http', '2026-03-28T11:58:00.000Z', { scenario: 'crowdsecurity/http-bf' }));
+    insertDecision(database, createDecision('none', '2026-03-28T11:58:00.000Z', { scenario: undefined }));
+
+    await service.evaluateRules(new Date('2026-03-28T12:00:00.000Z'));
+    const notifications = service.listNotifications().data;
+    expect(notifications).toHaveLength(4);
+    expect(notifications.map((item) => item.metadata.event_type === 'alert'
+      ? `alert:${item.metadata.alert_id}`
+      : `decision:${item.metadata.decision_id}`)).toEqual(
+      expect.arrayContaining(['alert:2', 'alert:3', 'decision:http', 'decision:none']),
+    );
+
+    database.close();
+  });
+
   test('multi-instance per-record notifications identify the source instance by name', async () => {
     const instances = [
       { id: 'primary', name: 'Primary' },

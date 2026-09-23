@@ -73,6 +73,7 @@ type RuleFormState = {
   channel_ids: string[];
   filters: {
     scenario: string;
+    exclude_scenario: boolean;
     target: string;
     include_simulated: boolean;
     values: string;
@@ -142,6 +143,7 @@ const defaultRuleForm = (type: NotificationRuleType = 'alert-spike'): RuleFormSt
   channel_ids: [],
   filters: {
     scenario: '',
+    exclude_scenario: false,
     target: '',
     include_simulated: false,
     values: '',
@@ -419,6 +421,7 @@ function buildRulePayload(ruleForm: RuleFormState): UpsertNotificationRuleReques
   } as const;
   const filters = {
     scenario: ruleForm.filters.scenario.trim(),
+    ...(ruleForm.filters.scenario.trim() && ruleForm.filters.exclude_scenario ? { exclude_scenario: true } : {}),
     target: ruleForm.filters.target.trim(),
     include_simulated: ruleForm.filters.include_simulated,
   };
@@ -796,6 +799,7 @@ export function Notifications() {
       channel_ids: [...rule.channel_ids],
       filters: {
         scenario: filters?.scenario || '',
+        exclude_scenario: filters?.exclude_scenario === true,
         target: filters?.target || '',
         include_simulated: filters?.include_simulated === true,
         values: Array.isArray(filters?.values) ? filters.values.join(', ') : '',
@@ -1555,7 +1559,9 @@ function RuleModal({
   const supportsAlertFilters = form.type !== 'application-update' && form.type !== 'lapi-availability';
   const simulatedFilterLabel = form.type === 'ip-ban'
     ? t('pages.notifications.includeSimulatedDecisions')
-    : t('pages.notifications.includeSimulatedAlerts');
+    : form.type === 'new-alert-decision'
+      ? t('pages.notifications.includeSimulatedAlertsAndDecisions')
+      : t('pages.notifications.includeSimulatedAlerts');
 
   return (
     <Modal isOpen={open} onClose={onClose} title={editingRule ? t('pages.notifications.editRuleTitle') : t('pages.notifications.newRuleTitle')} maxWidth="max-w-3xl">
@@ -1623,27 +1629,37 @@ function RuleModal({
             )}
         </div>
         {supportsAlertFilters && (
-          <div className="grid gap-4 md:grid-cols-3">
-            {(form.type === 'ip-ban' || form.type === 'new-alert-decision') && (
-              <LabeledInput label={t('pages.notifications.ipRangeFilter')} value={form.filters.values} onChange={(value) => onSetForm((current) => ({ ...current, filters: { ...current.filters, values: value } }))} />
-            )}
-            {form.type === 'ip-ban' && (
-              <LabeledInput label={t('pages.notifications.countryFilter')} value={form.filters.countries} onChange={(value) => onSetForm((current) => ({ ...current, filters: { ...current.filters, countries: value } }))} />
-            )}
-            <LabeledInput label={t('pages.notifications.scenarioContains')} value={form.filters.scenario} onChange={(value) => onSetForm((current) => ({ ...current, filters: { ...current.filters, scenario: value } }))} />
-            <LabeledInput label={t('pages.notifications.targetContains')} value={form.filters.target} onChange={(value) => onSetForm((current) => ({ ...current, filters: { ...current.filters, target: value } }))} />
-            {form.type !== 'new-alert-decision' && (
-              <div className="flex items-center gap-3 pt-7">
+          <div className="space-y-3">
+            <div className={`grid gap-4 ${form.type === 'new-alert-decision' ? 'md:grid-cols-3' : 'md:grid-cols-2'}`}>
+              {(form.type === 'ip-ban' || form.type === 'new-alert-decision') && (
+                <LabeledInput label={t('pages.notifications.ipRangeFilter')} value={form.filters.values} onChange={(value) => onSetForm((current) => ({ ...current, filters: { ...current.filters, values: value } }))} />
+              )}
+              {form.type === 'ip-ban' && (
+                <LabeledInput label={t('pages.notifications.countryFilter')} value={form.filters.countries} onChange={(value) => onSetForm((current) => ({ ...current, filters: { ...current.filters, countries: value } }))} />
+              )}
+              <LabeledInput label={t('pages.notifications.scenarioContains')} value={form.filters.scenario} onChange={(value) => onSetForm((current) => ({ ...current, filters: { ...current.filters, scenario: value } }))} />
+              <LabeledInput label={t('pages.notifications.targetContains')} value={form.filters.target} onChange={(value) => onSetForm((current) => ({ ...current, filters: { ...current.filters, target: value } }))} />
+            </div>
+            <div className={`grid items-center gap-x-4 gap-y-3 ${form.type === 'new-alert-decision' ? 'md:grid-cols-3' : 'md:grid-cols-2'}`}>
+              <label className={`flex items-center gap-2 text-sm ${form.type === 'new-alert-decision' ? 'md:col-start-2' : ''}`}>
+                <input
+                  type="checkbox"
+                  checked={form.filters.exclude_scenario}
+                  onChange={(event) => onSetForm((current) => ({ ...current, filters: { ...current.filters, exclude_scenario: event.target.checked } }))}
+                />
+                <span>{t('pages.notifications.excludeMatchingScenarios')}</span>
+              </label>
+              <div className="flex items-center gap-3">
                 <Switch id="rule-include-simulated" checked={form.filters.include_simulated} onCheckedChange={(checked) => onSetForm((current) => ({ ...current, filters: { ...current.filters, include_simulated: checked } }))} />
                 <label htmlFor="rule-include-simulated" className="text-sm font-medium">{simulatedFilterLabel}</label>
               </div>
-            )}
-            {form.type === 'ip-ban' && (
-              <div className="flex items-center gap-3 pt-7">
-                <Switch id="rule-exclude-countries" checked={form.filters.exclude_countries} onCheckedChange={(checked) => onSetForm((current) => ({ ...current, filters: { ...current.filters, exclude_countries: checked } }))} />
-                <label htmlFor="rule-exclude-countries" className="text-sm font-medium">{t('pages.notifications.excludeCountries')}</label>
-              </div>
-            )}
+              {form.type === 'ip-ban' && (
+                <div className="flex items-center gap-3">
+                  <Switch id="rule-exclude-countries" checked={form.filters.exclude_countries} onCheckedChange={(checked) => onSetForm((current) => ({ ...current, filters: { ...current.filters, exclude_countries: checked } }))} />
+                  <label htmlFor="rule-exclude-countries" className="text-sm font-medium">{t('pages.notifications.excludeCountries')}</label>
+                </div>
+              )}
+            </div>
           </div>
         )}
         <RuleConfigFields
@@ -2105,8 +2121,26 @@ function RuleConfigFields({
 }) {
   const { t } = useI18n();
   const input = (key: string, label: string) => <LabeledInput key={key} label={label} value={form.config[key] || ''} onChange={(value) => onChange(key, value)} />;
-  if (form.type === 'alert-spike') return <div className="grid gap-4 md:grid-cols-3">{input('window_minutes', t('pages.notifications.windowMinutes'))}{input('percent_increase', t('pages.notifications.percentIncrease'))}{input('minimum_current_alerts', t('pages.notifications.minimumAlerts'))}</div>;
-  if (form.type === 'alert-threshold') return <div className="grid gap-4 md:grid-cols-2">{input('window_minutes', t('pages.notifications.windowMinutes'))}{input('alert_threshold', t('pages.notifications.alertThreshold'))}</div>;
+  const windowHelp = (key: string) => <p className="text-xs text-gray-500 dark:text-gray-400">{t(key)}</p>;
+  if (form.type === 'alert-spike') return (
+    <div className="space-y-2">
+      <div className="grid gap-4 md:grid-cols-3">
+        {input('window_minutes', t('pages.notifications.windowMinutes'))}
+        {input('percent_increase', t('pages.notifications.percentIncrease'))}
+        {input('minimum_current_alerts', t('pages.notifications.minimumAlerts'))}
+      </div>
+      {windowHelp('pages.notifications.alertSpikeWindowHelp')}
+    </div>
+  );
+  if (form.type === 'alert-threshold') return (
+    <div className="space-y-2">
+      <div className="grid gap-4 md:grid-cols-2">
+        {input('window_minutes', t('pages.notifications.windowMinutes'))}
+        {input('alert_threshold', t('pages.notifications.alertThreshold'))}
+      </div>
+      {windowHelp('pages.notifications.alertThresholdWindowHelp')}
+    </div>
+  );
   if (form.type === 'new-alert-decision') {
     const eventType = form.config.event_type || 'both';
     const includesAlerts = eventType !== 'decision';
@@ -2148,24 +2182,23 @@ function RuleConfigFields({
             </label>
           </div>
         </fieldset>
-        <div className="grid items-end gap-4 md:grid-cols-2">
-          {input('window_minutes', t('pages.notifications.windowMinutes'))}
-          <div className="flex min-h-10 items-center gap-3 rounded-lg border border-gray-200 bg-white/60 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900/50">
-            <Switch
-              id="rule-include-simulated"
-              checked={form.filters.include_simulated}
-              onCheckedChange={(checked) => onSetForm((current) => ({
-                ...current,
-                filters: { ...current.filters, include_simulated: checked },
-              }))}
-            />
-            <label htmlFor="rule-include-simulated" className="font-medium">{t('pages.notifications.includeSimulatedAlertsAndDecisions')}</label>
+        <div className="space-y-2">
+          <div className="grid gap-4 md:grid-cols-2">
+            {input('window_minutes', t('pages.notifications.windowMinutes'))}
           </div>
+          {windowHelp('pages.notifications.newAlertDecisionWindowHelp')}
         </div>
       </div>
     );
   }
-  if (form.type === 'ip-ban') return <div className="grid gap-4 md:grid-cols-2">{input('window_minutes', t('pages.notifications.windowMinutes'))}</div>;
+  if (form.type === 'ip-ban') return (
+    <div className="space-y-2">
+      <div className="grid gap-4 md:grid-cols-2">
+        {input('window_minutes', t('pages.notifications.windowMinutes'))}
+      </div>
+      {windowHelp('pages.notifications.ipBanWindowHelp')}
+    </div>
+  );
   if (form.type === 'application-update') {
     return (
       <div className="rounded-xl border border-blue-200 bg-blue-50/80 p-4 text-sm text-blue-900 dark:border-blue-900/40 dark:bg-blue-950/20 dark:text-blue-200">

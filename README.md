@@ -867,7 +867,7 @@ Rules run against locally cached CrowdSec data, create in-app notifications, rec
 
 ### Rules
 
-Every rule has a name, severity (`info`, `warning`, `critical`), incident deduplication, and destination channels. Alert rules filter scenario, target, and simulation state; `IP Ban` and `New Alert/Decision` also accept exact IP/CIDR filters.
+Every rule has a name, severity (`info`, `warning`, `critical`), incident deduplication, and destination channels. Alert rules filter scenario, target, and simulation state; the scenario filter can include or exclude matching names. `IP Ban` and `New Alert/Decision` also accept exact IP/CIDR filters. `Window Minutes` sets the rolling lookback for each rule evaluation; `Alert Spike` also compares it with the preceding period of equal length. It does not set how often rules are evaluated.
 
 | Rule type | Behavior |
 | --- | --- |

@@ -425,6 +425,7 @@ export type NotificationDeliveryStatus = 'delivered' | 'failed' | 'skipped';
 
 export interface NotificationFilter {
   scenario?: string;
+  exclude_scenario?: boolean;
   target?: string;
   include_simulated?: boolean;
   values?: string[];
