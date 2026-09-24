@@ -110,7 +110,9 @@ describe('createApp refresh API', () => {
       isSyncing: true,
       state: 'syncing',
     }));
-    await vi.waitFor(() => expect(releaseFirstAlertRequest).not.toBeNull());
+    // The sync worker prunes cached entries before requesting alerts. That setup
+    // can take longer than waitFor's 1s default when CI runs test files in parallel.
+    await vi.waitFor(() => expect(releaseFirstAlertRequest).not.toBeNull(), { timeout: 5_000 });
 
     controller.startBackgroundTasks();
     const scheduledBefore = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
@@ -143,7 +145,7 @@ describe('createApp refresh API', () => {
     expect(await fullRefresh.json()).toMatchObject({ success: true, mode: 'full' });
     expect(controller.getSyncStatus()).toMatchObject({ isSyncing: false, state: 'complete' });
     controller.stopBackgroundTasks();
-  });
+  }, 10_000);
 
   test('runs delta and latest-window manual refresh modes', async () => {
     const { controller, lapiClient, fetchCalls } = createController({
