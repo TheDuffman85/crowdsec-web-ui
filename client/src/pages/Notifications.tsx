@@ -100,6 +100,7 @@ const RULE_DEFAULTS: Record<NotificationRuleType, Record<string, string>> = {
   'new-cve': { max_cve_age_days: '14' },
   'ip-ban': { window_minutes: '60' },
   'application-update': {},
+  'crowdsec-update': {},
   'lapi-availability': { outage_threshold_seconds: '60', notify_on_recovery: 'false' },
 };
 
@@ -113,6 +114,7 @@ const RULE_TYPE_LABEL_KEYS: Record<NotificationRuleType, string> = {
   'new-cve': 'pages.notifications.ruleTypes.recentCve',
   'ip-ban': 'pages.notifications.ruleTypes.ipBan',
   'application-update': 'pages.notifications.ruleTypes.applicationUpdate',
+  'crowdsec-update': 'pages.notifications.ruleTypes.crowdsecUpdate',
   'lapi-availability': 'pages.notifications.ruleTypes.lapiAvailability',
 };
 
@@ -389,6 +391,19 @@ function localizeNotificationText(
     }
   }
 
+  if (item.rule_type === 'crowdsec-update') {
+    const instanceName = getMetadataString(item, 'instance_name');
+    const endpointName = getMetadataString(item, 'endpoint_name');
+    const currentVersion = getMetadataString(item, 'local_version');
+    const targetVersion = getMetadataString(item, 'remote_version');
+    if (instanceName && endpointName && currentVersion && targetVersion) {
+      return {
+        title: t('server.notifications.crowdsecUpdate.title', titleValues),
+        message: t('server.notifications.crowdsecUpdate.message', { instanceName, endpointName, currentVersion, targetVersion }),
+      };
+    }
+  }
+
   if (item.rule_type === 'lapi-availability') {
     const seconds = getMetadataNumber(item, 'outage_duration_seconds');
     if (seconds !== null) {
@@ -468,10 +483,10 @@ function buildRulePayload(ruleForm: RuleFormState): UpsertNotificationRuleReques
     };
   }
 
-  if (ruleForm.type === 'application-update') {
+  if (ruleForm.type === 'application-update' || ruleForm.type === 'crowdsec-update') {
     return {
       ...basePayload,
-      type: 'application-update',
+      type: ruleForm.type,
       config: {},
     };
   }
@@ -1288,6 +1303,8 @@ function NotificationRow({
   const { t } = useI18n();
   const { formatDateTime } = useDateTime();
   const localizedText = localizeNotificationText(item, t);
+  const releaseUrl = item.rule_type === 'crowdsec-update' ? getMetadataString(item, 'release_url') : null;
+  const safeReleaseUrl = releaseUrl?.startsWith('https://github.com/crowdsecurity/crowdsec/releases/') ? releaseUrl : null;
 
   return (
     <div
@@ -1313,6 +1330,7 @@ function NotificationRow({
               {!item.read_at && <Badge variant="secondary">{t('pages.notifications.unread')}</Badge>}
             </div>
             <p className="text-sm text-gray-700 dark:text-gray-300">{localizedText.message}</p>
+            {safeReleaseUrl && <a href={safeReleaseUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-700 underline dark:text-blue-300">{t('pages.notifications.viewCrowdsecRelease')}</a>}
             <p className="text-xs text-gray-500 dark:text-gray-400">{t('pages.notifications.ruleWithTime', { rule: item.rule_name, time: formatDateTime(item.created_at) })}</p>
             <div className="flex flex-wrap gap-2">
               {item.deliveries.map((delivery, index) => (
@@ -1556,7 +1574,7 @@ function RuleModal({
   onSetForm: Dispatch<SetStateAction<RuleFormState>>;
 }) {
   const { t } = useI18n();
-  const supportsAlertFilters = form.type !== 'application-update' && form.type !== 'lapi-availability';
+  const supportsAlertFilters = form.type !== 'application-update' && form.type !== 'crowdsec-update' && form.type !== 'lapi-availability';
   const simulatedFilterLabel = form.type === 'ip-ban'
     ? t('pages.notifications.includeSimulatedDecisions')
     : form.type === 'new-alert-decision'
@@ -1581,6 +1599,7 @@ function RuleModal({
               <option value="new-cve">{t('pages.notifications.ruleTypes.recentCve')}</option>
               <option value="ip-ban">{t('pages.notifications.ruleTypes.ipBan')}</option>
               <option value="application-update">{t('pages.notifications.ruleTypes.applicationUpdate')}</option>
+              <option value="crowdsec-update">{t('pages.notifications.ruleTypes.crowdsecUpdate')}</option>
               <option value="lapi-availability">{t('pages.notifications.ruleTypes.lapiAvailability')}</option>
             </select>
           </label>
@@ -2199,10 +2218,10 @@ function RuleConfigFields({
       {windowHelp('pages.notifications.ipBanWindowHelp')}
     </div>
   );
-  if (form.type === 'application-update') {
+  if (form.type === 'application-update' || form.type === 'crowdsec-update') {
     return (
       <div className="rounded-xl border border-blue-200 bg-blue-50/80 p-4 text-sm text-blue-900 dark:border-blue-900/40 dark:bg-blue-950/20 dark:text-blue-200">
-        {t('pages.notifications.applicationUpdateHelp')}
+        {t(form.type === 'crowdsec-update' ? 'pages.notifications.crowdsecUpdateHelp' : 'pages.notifications.applicationUpdateHelp')}
       </div>
     );
   }

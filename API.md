@@ -302,7 +302,7 @@ Rule create/update body:
 }
 ```
 
-Supported rule types: `alert-spike`, `alert-threshold`, `new-alert-decision`, `new-cve`, `ip-ban`, `application-update`, `lapi-availability`.
+Supported rule types: `alert-spike`, `alert-threshold`, `new-alert-decision`, `new-cve`, `ip-ban`, `application-update`, `crowdsec-update`, `lapi-availability`. The `crowdsec-update` rule has an empty config and checks each configured Prometheus endpoint against the latest stable CrowdSec release.
 
 Supported severities: `info`, `warning`, `critical`.
 

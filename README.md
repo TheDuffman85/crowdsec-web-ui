@@ -895,12 +895,15 @@ Every rule has a name, severity (`info`, `warning`, `critical`), incident dedupl
 | Aggregate matching alerts across instances | `Alert Spike`, `Alert Threshold`, `Recent CVE` |
 | Evaluate each matching record | `New Alert/Decision`, `IP Ban` |
 | Evaluate each instance | `LAPI Availability` |
+| Evaluate each Prometheus endpoint | `CrowdSec Update` |
 | Application-wide | `Application Update` |
 
 Instance-backed titles and metadata identify the contributing instance or instances.
 
 > [!NOTE]
 > The `Recent CVE` rule queries the NVD API to determine when a CVE was published. If outbound access to `services.nvd.nist.gov` is blocked, recent-CVE notifications may be skipped.
+>
+> The `CrowdSec Update` rule requires a configured Prometheus endpoint with a `cs_info` version metric and outbound access to the CrowdSec GitHub release API. It checks the latest stable release and notifies once per outdated endpoint and target version.
 
 ### Destinations
 

@@ -70,6 +70,56 @@ describe('Notifications page localization and delivery', () => {
     expect(screen.queryByText('bbb: failed')).not.toBeInTheDocument();
   });
 
+  test('localizes CrowdSec update notices and links to the release', async () => {
+    vi.mocked(fetchNotificationSettings).mockResolvedValueOnce(buildSettings({
+      rules: [{
+        id: 'rule-update',
+        name: 'Updates',
+        type: 'crowdsec-update',
+        enabled: true,
+        severity: 'info',
+        channel_ids: [],
+        config: {},
+        created_at: '2026-09-24T10:00:00.000Z',
+        updated_at: '2026-09-24T10:00:00.000Z',
+      }],
+    }));
+    vi.mocked(fetchNotificationsPaginated).mockResolvedValueOnce(buildNotificationPage({
+      data: [{
+        id: 'notif-update',
+        rule_id: 'rule-update',
+        rule_name: 'Updates',
+        rule_type: 'crowdsec-update',
+        severity: 'info',
+        title: 'CrowdSec update available',
+        message: 'An update is available',
+        created_at: '2026-09-24T10:00:00.000Z',
+        read_at: null,
+        metadata: {
+          instance_name: 'Edge',
+          endpoint_name: 'Node A',
+          local_version: 'v1.7.8',
+          remote_version: 'v1.8.0',
+          release_url: 'https://github.com/crowdsecurity/crowdsec/releases/tag/v1.8.0',
+        },
+        deliveries: [],
+      }],
+      selectable_ids: ['notif-update'],
+      unread_count: 1,
+      total: 1,
+    }));
+
+    renderWithChineseLocale(<Notifications />);
+
+    expect(await screen.findByText('Updates：CrowdSec 有可用更新')).toBeInTheDocument();
+    expect(screen.getByText('Edge / Node A：CrowdSec v1.7.8 -> v1.8.0 已发布。')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '查看 CrowdSec 版本' })).toHaveAttribute(
+      'href',
+      'https://github.com/crowdsecurity/crowdsec/releases/tag/v1.8.0',
+    );
+    expect(screen.getByText('CrowdSec 更新')).toBeInTheDocument();
+  });
+
   test('shows a success toast when sending a test notification', async () => {
     const user = userEvent.setup();
     vi.mocked(testNotificationChannel).mockResolvedValueOnce(undefined);

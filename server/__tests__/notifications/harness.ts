@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
 import type { AlertDecision, AlertRecord, LapiStatus, UpdateCheckResponse } from '../../../shared/contracts';
+import type { CrowdsecUpdateChecker } from '../../crowdsec-update-check';
 import { CrowdsecDatabase } from '../../database';
 import { createNotificationService } from '../../notifications';
 import { createNotificationSecretStore } from '../../notifications/secret-store';
@@ -38,8 +39,8 @@ export function insertDecision(database: CrowdsecDatabase, decision: AlertDecisi
   database.insertDecision({ $id: String(decision.id), $instance_id: typeof decision.instance_id === 'string' ? decision.instance_id : undefined, $uuid: String(decision.id), $alert_id: typeof decision.alert_id === 'string' || typeof decision.alert_id === 'number' ? decision.alert_id : 1, $created_at: String(decision.created_at || ''), $stop_at: String(decision.stop_at || ''), $value: typeof decision.value === 'string' ? decision.value : undefined, $type: typeof decision.type === 'string' ? decision.type : undefined, $origin: typeof decision.origin === 'string' ? decision.origin : undefined, $scenario: typeof decision.scenario === 'string' ? decision.scenario : undefined, $raw_data: JSON.stringify(decision) });
 }
 
-export function createService(options: { fetchImpl?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>; updateChecker?: () => Promise<UpdateCheckResponse>; getLapiStatus?: () => LapiStatus; getLapiStatuses?: () => Array<{ instanceId: string; instanceName: string; status: LapiStatus }>; debugPayloads?: boolean; instanceAware?: boolean; instances?: Array<{ id: string; name: string }> } = {}) {
+export function createService(options: { fetchImpl?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>; updateChecker?: () => Promise<UpdateCheckResponse>; crowdsecUpdateChecker?: CrowdsecUpdateChecker; getLapiStatus?: () => LapiStatus; getLapiStatuses?: () => Array<{ instanceId: string; instanceName: string; status: LapiStatus }>; debugPayloads?: boolean; instanceAware?: boolean; instances?: Array<{ id: string; name: string }> } = {}) {
   const database = createTestDatabase();
-  const service = createNotificationService({ database, fetchImpl: options.fetchImpl, updateChecker: options.updateChecker, getLapiStatus: options.getLapiStatus, getLapiStatuses: options.getLapiStatuses, outboundGuard: { assertHostAllowed: async () => {}, assertUrlAllowed: async () => {} }, secretStore: createNotificationSecretStore(), debugPayloads: options.debugPayloads, instanceAware: options.instanceAware, instances: options.instances });
+  const service = createNotificationService({ database, fetchImpl: options.fetchImpl, updateChecker: options.updateChecker, crowdsecUpdateChecker: options.crowdsecUpdateChecker, getLapiStatus: options.getLapiStatus, getLapiStatuses: options.getLapiStatuses, outboundGuard: { assertHostAllowed: async () => {}, assertUrlAllowed: async () => {} }, secretStore: createNotificationSecretStore(), debugPayloads: options.debugPayloads, instanceAware: options.instanceAware, instances: options.instances });
   return { database, service };
 }

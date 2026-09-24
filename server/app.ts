@@ -52,6 +52,7 @@ import type { MqttPublishConfig } from './notifications/mqtt-client';
 import { createNotificationOutboundGuard } from './notifications/outbound-guard';
 import { createNotificationSecretStore } from './notifications/secret-store';
 import { createUpdateChecker, type UpdateCheckOverrides, type UpdateChecker } from './update-check';
+import { createCrowdsecUpdateChecker, type CrowdsecUpdateChecker } from './crowdsec-update-check';
 import { getServerTranslator, normalizeLanguagePreference, saveLanguagePreference } from './i18n';
 import {
   addDashboardAttackLocation,
@@ -199,6 +200,7 @@ export interface CreateAppOptions {
   distRoot?: string;
   startBackgroundTasks?: boolean;
   updateChecker?: UpdateChecker;
+  crowdsecUpdateChecker?: CrowdsecUpdateChecker;
   notificationFetchImpl?: FetchLike;
   metricsFetchImpl?: FetchLike;
   mqttPublishImpl?: (config: MqttPublishConfig, payload: string) => Promise<void>;
@@ -427,6 +429,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     version: config.version,
     enabled: config.updateCheckEnabled,
   });
+  const checkCrowdsecUpdates = options.crowdsecUpdateChecker || createCrowdsecUpdateChecker({
+    instances: config.instances,
+    prometheusTimeoutMs: config.prometheusRequestTimeoutMs,
+    metricsFetchImpl: options.metricsFetchImpl,
+  });
   const notificationSecretKey = resolveNotificationSecretKey(database, config.notificationSecretKey);
   const notificationSecretStore = createNotificationSecretStore(notificationSecretKey);
   const notificationOutboundGuard = createNotificationOutboundGuard({
@@ -461,6 +468,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     fetchImpl: options.notificationFetchImpl,
     mqttPublishImpl: options.mqttPublishImpl,
     updateChecker: checkForUpdates,
+    crowdsecUpdateChecker: checkCrowdsecUpdates,
     getLapiStatus: () => lapiClient.getStatus(),
     ...(config.instances.length > 1 ? {
       getLapiStatuses: () => config.instances.map((instance) => ({

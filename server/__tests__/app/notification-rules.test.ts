@@ -88,6 +88,57 @@ describe('createApp notification rules', () => {
     destroyTempDir();
   });
 
+  test('creates and evaluates CrowdSec update rules through the API', async () => {
+    const { controller, database } = createController({
+      env: { CROWDSEC_REFRESH_INTERVAL: '0', CROWDSEC_LOOKBACK_PERIOD: '168h' },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) return Response.json({ code: 200, token: 'token' });
+        if (url.includes('/v1/alerts?')) return Response.json([]);
+        return undefined;
+      },
+      crowdsecUpdateChecker: async () => [{
+        instanceId: 'edge',
+        instanceName: 'Edge',
+        endpointId: 'metrics',
+        endpointName: 'Metrics',
+        currentVersion: 'v1.7.8',
+        remoteVersion: 'v1.8.0',
+        releaseUrl: 'https://github.com/crowdsecurity/crowdsec/releases/tag/v1.8.0',
+        updateAvailable: true,
+      }],
+    });
+
+    try {
+      const response = await controller.fetch(new Request('http://localhost/crowdsec/api/notification-rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'CrowdSec updates',
+          type: 'crowdsec-update',
+          enabled: true,
+          severity: 'info',
+          channel_ids: [],
+          config: {},
+        }),
+      }));
+      expect(response.status).toBe(201);
+      expect(await response.json()).toMatchObject({ type: 'crowdsec-update', config: {} });
+
+      expect((await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'))).status).toBe(200);
+      const notifications = await controller.fetch(new Request('http://localhost/crowdsec/api/notifications'));
+      expect(await notifications.json()).toMatchObject({
+        data: [expect.objectContaining({
+          rule_type: 'crowdsec-update',
+          metadata: expect.objectContaining({ endpoint_id: 'metrics', remote_version: 'v1.8.0' }),
+        })],
+      });
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
   test('creates and evaluates lapi availability rules through the API', async () => {
     const { controller, database, lapiClient } = createController({
       env: {

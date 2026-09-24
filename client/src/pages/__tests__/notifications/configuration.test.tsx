@@ -276,6 +276,26 @@ describe('Notifications page configuration', () => {
     expect(screen.queryByLabelText('Target Contains')).not.toBeInTheDocument();
   });
 
+  test('shows and submits the CrowdSec update rule without alert filters', async () => {
+    const user = userEvent.setup();
+    render(<Notifications />);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /add rule/i })).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /add rule/i }));
+    await user.selectOptions(screen.getByLabelText('Rule Type'), 'crowdsec-update');
+
+    expect(screen.getByText(/latest stable CrowdSec release/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Scenario Contains')).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText('Name'), 'CrowdSec updates');
+    await user.click(screen.getByRole('button', { name: /save rule/i }));
+
+    await waitFor(() => expect(createNotificationRule).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'CrowdSec updates',
+      type: 'crowdsec-update',
+      config: {},
+    })));
+  });
+
   test('shows and submits the lapi availability rule config without alert filters', async () => {
     const user = userEvent.setup();
     render(<Notifications />);
@@ -371,7 +391,7 @@ describe('Notifications page configuration', () => {
     expect(screen.getByRole('checkbox', { name: 'Exclude matching scenarios' })).toBeInTheDocument();
     expect(screen.queryByLabelText('Window Minutes')).not.toBeInTheDocument();
 
-    for (const type of ['application-update', 'lapi-availability']) {
+    for (const type of ['application-update', 'crowdsec-update', 'lapi-availability']) {
       await user.selectOptions(ruleType, type);
       expect(screen.queryByRole('checkbox', { name: 'Exclude matching scenarios' })).not.toBeInTheDocument();
       expect(screen.queryByLabelText('Window Minutes')).not.toBeInTheDocument();

@@ -4,6 +4,7 @@ import type {
   AlertMetaValue,
   AlertSpikeRuleConfig,
   ApplicationUpdateRuleConfig,
+  CrowdsecUpdateRuleConfig,
   AlertRecord,
   AlertThresholdRuleConfig,
   IpBanRuleConfig,
@@ -34,6 +35,7 @@ import {
 import type { NotificationOutboundGuard } from './notifications/outbound-guard';
 import type { NotificationSecretStore } from './notifications/secret-store';
 import type { UpdateChecker } from './update-check';
+import type { CrowdsecUpdateChecker, CrowdsecUpdateObservation } from './crowdsec-update-check';
 import { getServerTranslator, type Translator } from './i18n';
 import type { DateFormat, TimeFormat } from './config';
 import { formatDateTime } from './utils/date-time';
@@ -58,6 +60,7 @@ export interface NotificationServiceOptions {
   fetchImpl?: FetchLike;
   mqttPublishImpl?: (config: MqttPublishConfig, payload: string) => Promise<void>;
   updateChecker?: UpdateChecker;
+  crowdsecUpdateChecker?: CrowdsecUpdateChecker;
   getLapiStatus?: () => LapiStatus;
   getLapiStatuses?: () => Array<{ instanceId: string; instanceName: string; status: LapiStatus }>;
   outboundGuard: NotificationOutboundGuard;
@@ -127,6 +130,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
   const fetchImpl = options.fetchImpl || fetch;
   const mqttPublishImpl = options.mqttPublishImpl;
   const updateChecker = options.updateChecker;
+  const crowdsecUpdateChecker = options.crowdsecUpdateChecker;
   const getLapiStatus = options.getLapiStatus;
   const getLapiStatuses = options.getLapiStatuses;
   const outboundGuard = options.outboundGuard;
@@ -317,15 +321,24 @@ export function createNotificationService(options: NotificationServiceOptions): 
     const timestamp = now.toISOString();
     const t = getServerTranslator(database);
     for (const rule of rules) {
-      const candidates = dedupeCandidates(await evaluateRule(rule, now, t));
+      if (rule.type === 'crowdsec-update' && !crowdsecUpdateChecker) continue;
+      const crowdsecObservations = rule.type === 'crowdsec-update'
+        ? await crowdsecUpdateChecker?.() || []
+        : null;
+      const candidates = dedupeCandidates(crowdsecObservations
+        ? evaluateCrowdsecUpdateRule(rule, crowdsecObservations, t)
+        : await evaluateRule(rule, now, t));
       const activeIncidents = loadActiveIncidents(rule.id);
       const candidateKeys = new Set(candidates.map((candidate) => candidate.dedupeKey));
+      const unknownPrefixes = crowdsecObservations?.filter((observation) => observation.updateAvailable === null)
+        .map((observation) => crowdsecUpdateIncidentPrefix(observation)) || [];
 
       for (const incident of activeIncidents.values()) {
-        if (!candidateKeys.has(incident.incidentKey)) {
+        if (!candidateKeys.has(incident.incidentKey)
+          && !unknownPrefixes.some((prefix) => incident.incidentKey.startsWith(prefix))) {
           await writeDatabase(() => {
             database.resolveNotificationIncident(rule.id, incident.incidentKey, timestamp);
-            if (rule.type === 'application-update') {
+            if (rule.type === 'application-update' || rule.type === 'crowdsec-update') {
               database.deleteNotificationByRuleAndDedupeKey(rule.id, incident.incidentKey);
             }
           });
@@ -602,6 +615,38 @@ export function createNotificationService(options: NotificationServiceOptions): 
       return evaluateIpBanRule(rule, now, t);
     }
     return evaluateNewCveRule(rule, now, t);
+  }
+
+  function evaluateCrowdsecUpdateRule(rule: NotificationRule, observations: CrowdsecUpdateObservation[], t: Translator): NotificationCandidate[] {
+    return observations.flatMap((observation) => {
+      if (!observation.updateAvailable || !observation.currentVersion || !observation.remoteVersion) return [];
+      return [{
+        dedupeKey: `${crowdsecUpdateIncidentPrefix(observation)}${observation.remoteVersion}`,
+        title: t('server.notifications.crowdsecUpdate.title', { ruleName: rule.name }),
+        message: [
+          t('server.notifications.crowdsecUpdate.message', {
+            instanceName: observation.instanceName,
+            endpointName: observation.endpointName,
+            currentVersion: observation.currentVersion,
+            targetVersion: observation.remoteVersion,
+          }),
+          observation.releaseUrl,
+        ].filter(Boolean).join(' '),
+        metadata: {
+          instance_id: observation.instanceId,
+          instance_name: observation.instanceName,
+          endpoint_id: observation.endpointId,
+          endpoint_name: observation.endpointName,
+          local_version: observation.currentVersion,
+          remote_version: observation.remoteVersion,
+          release_url: observation.releaseUrl,
+        },
+      }];
+    });
+  }
+
+  function crowdsecUpdateIncidentPrefix(observation: CrowdsecUpdateObservation): string {
+    return `crowdsec-update:${encodeURIComponent(observation.instanceId)}:${encodeURIComponent(observation.endpointId)}:`;
   }
 
   async function evaluateAlertSpikeRule(rule: NotificationRule, now: Date, t: Translator): Promise<NotificationCandidate[]> {
@@ -1190,6 +1235,7 @@ function normalizeRuleConfig(type: 'new-alert-decision', config: RuleConfigInput
 function normalizeRuleConfig(type: 'new-cve', config: RuleConfigInput): NewCveRuleConfig;
 function normalizeRuleConfig(type: 'ip-ban', config: RuleConfigInput): IpBanRuleConfig;
 function normalizeRuleConfig(type: 'application-update', config: RuleConfigInput): ApplicationUpdateRuleConfig;
+function normalizeRuleConfig(type: 'crowdsec-update', config: RuleConfigInput): CrowdsecUpdateRuleConfig;
 function normalizeRuleConfig(type: 'lapi-availability', config: RuleConfigInput): LapiAvailabilityRuleConfig;
 function normalizeRuleConfig(type: NotificationRuleType, config: RuleConfigInput): NotificationRuleConfig;
 function normalizeRuleConfig(type: NotificationRuleType, config: RuleConfigInput): NotificationRuleConfig {
@@ -1223,7 +1269,7 @@ function normalizeRuleConfig(type: NotificationRuleType, config: RuleConfigInput
     };
   }
 
-  if (type === 'application-update') {
+  if (type === 'application-update' || type === 'crowdsec-update') {
     return {};
   }
 
@@ -1376,6 +1422,7 @@ function normalizeRuleType(value: unknown): NotificationRuleType {
     value === 'new-cve' ||
     value === 'ip-ban' ||
     value === 'application-update' ||
+    value === 'crowdsec-update' ||
     value === 'lapi-availability'
   ) return value;
   throw new Error('Invalid notification rule type');

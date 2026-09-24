@@ -419,7 +419,7 @@ export interface UpdateCheckResponse {
 }
 
 export type NotificationChannelType = 'ntfy' | 'gotify' | 'email' | 'mqtt' | 'webhook';
-export type NotificationRuleType = 'alert-spike' | 'alert-threshold' | 'new-alert-decision' | 'new-cve' | 'ip-ban' | 'application-update' | 'lapi-availability';
+export type NotificationRuleType = 'alert-spike' | 'alert-threshold' | 'new-alert-decision' | 'new-cve' | 'ip-ban' | 'application-update' | 'crowdsec-update' | 'lapi-availability';
 export type NotificationSeverity = 'info' | 'warning' | 'critical';
 export type NotificationDeliveryStatus = 'delivered' | 'failed' | 'skipped';
 
@@ -466,6 +466,8 @@ export interface IpBanRuleConfig {
 
 export interface ApplicationUpdateRuleConfig {}
 
+export interface CrowdsecUpdateRuleConfig {}
+
 export interface LapiAvailabilityRuleConfig {
   outage_threshold_seconds: number;
   notify_on_recovery: boolean;
@@ -478,6 +480,7 @@ export type NotificationRuleConfig =
   | NewCveRuleConfig
   | IpBanRuleConfig
   | ApplicationUpdateRuleConfig
+  | CrowdsecUpdateRuleConfig
   | LapiAvailabilityRuleConfig;
 
 export interface NotificationChannel {

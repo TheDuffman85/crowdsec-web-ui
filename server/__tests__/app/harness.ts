@@ -377,6 +377,7 @@ export function createController(options: {
   fetchResolver?: (url: string, init?: LapiRequestInit) => Response | Promise<Response> | undefined;
   notificationFetchResolver?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
   metricsFetchResolver?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
+  crowdsecUpdateChecker?: CreateAppOptions['crowdsecUpdateChecker'];
   mqttPublishResolver?: (config: MqttPublishConfig, payload: string) => void | Promise<void>;
   syncWorker?: CreateAppOptions['syncWorker'];
   queryWorker?: CreateAppOptions['queryWorker'];
@@ -487,6 +488,7 @@ export function createController(options: {
     lapiClient,
     distRoot: createTestDistRoot(),
     updateChecker: async () => ({ update_available: true, remote_version: '2.0.0' }),
+    crowdsecUpdateChecker: options.crowdsecUpdateChecker,
     notificationFetchImpl: async (input, init) => {
       const url = String(input);
       const resolved = await options.notificationFetchResolver?.(url, init);
