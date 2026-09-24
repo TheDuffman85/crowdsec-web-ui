@@ -3,7 +3,7 @@ import { describe, expect, test, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Notifications } from '../../Notifications';
-import { createNotificationRule, fetchConfig, fetchNotificationSettings, fetchNotificationsPaginated, markNotificationRead } from '../../../lib/api';
+import { createNotificationChannel, createNotificationRule, fetchConfig, fetchNotificationSettings, fetchNotificationsPaginated, markNotificationRead } from '../../../lib/api';
 
 describe('Notifications page configuration', () => {
   test('hides notification management controls when read-only but keeps mark-read available', async () => {
@@ -98,6 +98,65 @@ describe('Notifications page configuration', () => {
     await user.selectOptions(screen.getByLabelText('Type'), 'webhook');
     expect(screen.getByText('Query Parameters')).toBeInTheDocument();
     expect(screen.getByLabelText('Body Template')).toBeInTheDocument();
+  });
+
+  test('submits the email subject prefix from the destination form', async () => {
+    const user = userEvent.setup();
+    render(<Notifications />);
+
+    await user.click(await screen.findByRole('button', { name: /add destination/i }));
+    await user.selectOptions(screen.getByLabelText('Type'), 'email');
+    expect(screen.getByLabelText('Subject Prefix')).toHaveValue('[CrowdSec]');
+
+    await user.type(screen.getByLabelText('Name'), 'Security email');
+    await user.type(screen.getByLabelText('SMTP Host'), 'smtp.example.com');
+    await user.type(screen.getByLabelText('From Address'), 'alerts@example.com');
+    await user.type(screen.getByLabelText('To Address(es)'), 'admin@example.com');
+    await user.clear(screen.getByLabelText('Subject Prefix'));
+    await user.type(screen.getByLabelText('Subject Prefix'), 'Home');
+    await user.click(screen.getByRole('button', { name: /save destination/i }));
+
+    await waitFor(() => expect(createNotificationChannel).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'email',
+      config: expect.objectContaining({ subjectPrefix: 'Home' }),
+    })));
+  });
+
+  test('submits all ntfy settings and offers every Gotify priority', async () => {
+    const user = userEvent.setup();
+    render(<Notifications />);
+
+    await user.click(await screen.findByRole('button', { name: /add destination/i }));
+    expect(screen.getByLabelText('Username')).toBeInTheDocument();
+    expect(screen.getByLabelText('Password')).toBeInTheDocument();
+    expect(screen.getByLabelText('Title Prefix')).toHaveValue('CrowdSec');
+    expect(screen.getByLabelText('Tags')).toHaveValue('warning,shield');
+
+    await user.type(screen.getByLabelText('Name'), 'Private ntfy');
+    await user.type(screen.getByLabelText('Topic'), 'alerts');
+    await user.type(screen.getByLabelText('Username'), 'operator');
+    await user.type(screen.getByLabelText('Password'), 'secret');
+    await user.clear(screen.getByLabelText('Title Prefix'));
+    await user.type(screen.getByLabelText('Title Prefix'), 'Network A');
+    await user.clear(screen.getByLabelText('Tags'));
+    await user.type(screen.getByLabelText('Tags'), 'shield');
+    await user.click(screen.getByRole('button', { name: /save destination/i }));
+
+    await waitFor(() => expect(createNotificationChannel).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'ntfy',
+      config: expect.objectContaining({
+        ntfyUsername: 'operator',
+        ntfyPassword: 'secret',
+        titlePrefix: 'Network A',
+        tags: 'shield',
+      }),
+    })));
+
+    await user.click(screen.getByRole('button', { name: /add destination/i }));
+    await user.selectOptions(screen.getByLabelText('Type'), 'gotify');
+    expect(within(screen.getByLabelText('Priority')).getAllByRole('option')).toHaveLength(12);
+    await user.selectOptions(screen.getByLabelText('Priority'), '9');
+    expect(screen.getByLabelText('Priority')).toHaveValue('9');
   });
 
   test('shows unchanged placeholder for stored secrets when editing', async () => {

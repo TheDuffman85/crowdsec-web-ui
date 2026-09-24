@@ -1845,6 +1845,7 @@ function EmailChannelFields({ config, onSetForm }: { config: EmailConfig; onSetF
         <SecretInput label={t('pages.notifications.smtpPassword')} value={config.smtpPassword} onChange={(value) => updateChannelConfig<EmailConfig>(onSetForm, (current) => ({ ...coerceEmailConfig(current), smtpPassword: value || current.smtpPassword }))} />
         <LabeledInput label={t('pages.notifications.fromAddress')} value={config.smtpFrom} onChange={(value) => updateChannelConfig<EmailConfig>(onSetForm, (current) => ({ ...coerceEmailConfig(current), smtpFrom: value }))} />
         <LabeledInput label={t('pages.notifications.toAddresses')} value={config.emailTo} onChange={(value) => updateChannelConfig<EmailConfig>(onSetForm, (current) => ({ ...coerceEmailConfig(current), emailTo: value }))} />
+        <LabeledInput label={t('pages.notifications.subjectPrefix')} value={config.subjectPrefix} onChange={(value) => updateChannelConfig<EmailConfig>(onSetForm, (current) => ({ ...coerceEmailConfig(current), subjectPrefix: value }))} />
         <label className="space-y-2 text-sm">
           <span className="font-medium">{t('pages.notifications.importance')}</span>
           <select value={config.emailImportanceOverride} onChange={(event) => updateChannelConfig<EmailConfig>(onSetForm, (current) => ({ ...coerceEmailConfig(current), emailImportanceOverride: event.target.value as EmailConfig['emailImportanceOverride'] }))} className="w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-900">
@@ -1874,7 +1875,7 @@ function GotifyChannelFields({ config, onSetForm }: { config: GotifyConfig; onSe
         <span className="font-medium">{t('pages.notifications.priority')}</span>
         <select value={config.gotifyPriorityOverride} onChange={(event) => updateChannelConfig<GotifyConfig>(onSetForm, (current) => ({ ...coerceGotifyConfig(current), gotifyPriorityOverride: event.target.value }))} className="w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-900">
           <option value="auto">Auto</option>
-          {[0, 1, 3, 5, 7, 8, 10].map((value) => <option key={value} value={String(value)}>{value}</option>)}
+          {Array.from({ length: 11 }, (_, value) => <option key={value} value={String(value)}>{value}</option>)}
         </select>
       </label>
       <div className="md:col-span-2">
@@ -1892,6 +1893,10 @@ function NtfyChannelFields({ config, onSetForm }: { config: NtfyConfig; onSetFor
       <LabeledInput label={t('pages.notifications.serverUrl')} value={config.ntfyUrl} onChange={(value) => updateChannelConfig<NtfyConfig>(onSetForm, (current) => ({ ...coerceNtfyConfig(current), ntfyUrl: value }))} />
       <LabeledInput label={t('pages.notifications.topic')} value={config.ntfyTopic} onChange={(value) => updateChannelConfig<NtfyConfig>(onSetForm, (current) => ({ ...coerceNtfyConfig(current), ntfyTopic: value }))} />
       <SecretInput label={t('pages.notifications.accessToken')} value={config.ntfyToken} onChange={(value) => updateChannelConfig<NtfyConfig>(onSetForm, (current) => ({ ...coerceNtfyConfig(current), ntfyToken: value || current.ntfyToken }))} />
+      <LabeledInput label={t('pages.notifications.username')} value={config.ntfyUsername} onChange={(value) => updateChannelConfig<NtfyConfig>(onSetForm, (current) => ({ ...coerceNtfyConfig(current), ntfyUsername: value }))} />
+      <SecretInput label={t('pages.notifications.password')} value={config.ntfyPassword} onChange={(value) => updateChannelConfig<NtfyConfig>(onSetForm, (current) => ({ ...coerceNtfyConfig(current), ntfyPassword: value || current.ntfyPassword }))} />
+      <LabeledInput label={t('pages.notifications.titlePrefix')} value={config.titlePrefix} onChange={(value) => updateChannelConfig<NtfyConfig>(onSetForm, (current) => ({ ...coerceNtfyConfig(current), titlePrefix: value }))} />
+      <LabeledInput label={t('pages.notifications.tags')} value={config.tags} onChange={(value) => updateChannelConfig<NtfyConfig>(onSetForm, (current) => ({ ...coerceNtfyConfig(current), tags: value }))} />
       <label className="space-y-2 text-sm">
         <span className="font-medium">{t('pages.notifications.priority')}</span>
         <select value={config.ntfyPriorityOverride} onChange={(event) => updateChannelConfig<NtfyConfig>(onSetForm, (current) => ({ ...coerceNtfyConfig(current), ntfyPriorityOverride: event.target.value }))} className="w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-900">
