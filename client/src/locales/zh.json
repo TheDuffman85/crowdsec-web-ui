@@ -597,6 +597,8 @@
   "pages.decisions.addDecision": "添加决策",
   "pages.decisions.addFailed": "添加决策失败。请重试。",
   "pages.decisions.addManualDecision": "手动添加决策",
+  "pages.decisions.allInstances": "所有实例",
+  "pages.decisions.currentInstance": "当前实例：{name}",
   "pages.decisions.adding": "添加中...",
   "pages.decisions.alreadyExpired": "决策已过期",
   "pages.decisions.deleteDecision": "删除决策",

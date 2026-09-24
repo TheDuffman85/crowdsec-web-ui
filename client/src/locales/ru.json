@@ -597,6 +597,8 @@
   "pages.decisions.addDecision": "Добавить решение",
   "pages.decisions.addFailed": "Не удалось добавить решение. Попробуйте ещё раз.",
   "pages.decisions.addManualDecision": "Добавить ручное решение",
+  "pages.decisions.allInstances": "Все экземпляры",
+  "pages.decisions.currentInstance": "Текущий экземпляр: {name}",
   "pages.decisions.adding": "Добавление...",
   "pages.decisions.alreadyExpired": "Решение уже истекло",
   "pages.decisions.deleteDecision": "Удалить решение",

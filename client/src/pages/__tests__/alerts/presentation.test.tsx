@@ -35,14 +35,19 @@ describe('Alerts page presentation and columns', () => {
 
     expect(screen.queryByRole('button', { name: 'Delete selected' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Delete Alert' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add Decision' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Choose alert table columns' })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText('1.2.3.4')).toBeInTheDocument());
     expect(screen.queryByRole('button', { name: 'Delete selected' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Delete Alert' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add Decision' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Choose alert table columns' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Delete all alerts and decisions for/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Actions' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Select all loaded alerts')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByText('1.2.3.4').closest('tr')!);
+    const details = await screen.findByRole('dialog', { name: 'Alert Details #1' });
+    expect(within(details).queryByRole('button', { name: 'Add Decision' })).not.toBeInTheDocument();
   });
 
   test('localizes country names in the alert table and alert details', async () => {

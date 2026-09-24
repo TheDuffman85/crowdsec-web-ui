@@ -597,6 +597,8 @@
   "pages.decisions.addDecision": "Adicionar decisão",
   "pages.decisions.addFailed": "Falha ao adicionar decisão. Tente novamente.",
   "pages.decisions.addManualDecision": "Adicionar decisão manual",
+  "pages.decisions.allInstances": "Todas as instâncias",
+  "pages.decisions.currentInstance": "Instância atual: {name}",
   "pages.decisions.adding": "Adicionando...",
   "pages.decisions.alreadyExpired": "Decisão já expirada",
   "pages.decisions.deleteDecision": "Excluir decisão",

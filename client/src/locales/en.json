@@ -599,6 +599,8 @@
   "pages.decisions.addDecision": "Add Decision",
   "pages.decisions.addFailed": "Failed to add decision. Please try again.",
   "pages.decisions.addManualDecision": "Add Manual Decision",
+  "pages.decisions.allInstances": "All instances",
+  "pages.decisions.currentInstance": "Current instance: {name}",
   "pages.decisions.adding": "Adding...",
   "pages.decisions.alreadyExpired": "Decision already expired",
   "pages.decisions.deleteDecision": "Delete Decision",

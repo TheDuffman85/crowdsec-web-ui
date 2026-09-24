@@ -216,6 +216,7 @@ vi.mock('../../../lib/api', () => {
       }));
       return toPaginatedDecisions(decisions, 1, pageSize);
     }),
+    addDecision: vi.fn(),
     deleteAlert: vi.fn(),
     bulkDeleteAlerts: vi.fn(async () => ({
       requested_alerts: 0,

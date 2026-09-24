@@ -597,6 +597,8 @@
   "pages.decisions.addDecision": "決定を追加",
   "pages.decisions.addFailed": "決定の追加に失敗しました。もう一度お試しください。",
   "pages.decisions.addManualDecision": "手動決定を追加",
+  "pages.decisions.allInstances": "すべてのインスタンス",
+  "pages.decisions.currentInstance": "現在のインスタンス: {name}",
   "pages.decisions.adding": "追加中...",
   "pages.decisions.alreadyExpired": "決定はすでに期限切れです",
   "pages.decisions.deleteDecision": "決定を削除",

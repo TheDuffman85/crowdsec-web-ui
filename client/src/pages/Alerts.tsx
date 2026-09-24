@@ -5,6 +5,7 @@ import { isSimulatedAlert, isSimulatedDecision, parseSimulationFilter } from "..
 import { useRefresh } from "../contexts/useRefresh";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
+import { AddDecisionModal } from "../components/AddDecisionModal";
 import { HighlightedSearchInput } from "../components/HighlightedSearchInput";
 import { CollapsibleSearchControls } from "../components/CollapsibleSearchControls";
 import { SavedFiltersMenu } from "../components/SavedFiltersMenu";
@@ -57,7 +58,7 @@ import {
     type SearchDateRange,
     type SearchParseError,
 } from "../../../shared/search";
-import { Info, ExternalLink, Shield, ShieldBan, Trash2, X, AlertCircle, Columns3, Loader2 } from "lucide-react";
+import { Info, ExternalLink, Shield, ShieldBan, Gavel, Trash2, X, AlertCircle, Columns3, Loader2 } from "lucide-react";
 import type { AlertRecord, AlertSource, ApiPermissionError, BulkDeleteResult, DecisionListItem, FacetField, InstanceEntityRef, InstanceOperationResult, SimulationFilter, SlimAlert, TableColumnId, TableColumnPreferences } from '../types';
 import { useI18n, type I18nContextValue } from "../lib/i18n";
 import { getBrowserTimeZone, useDateTime } from "../lib/dateTime";
@@ -150,6 +151,10 @@ function toErrorInfo(error: unknown, fallbackMessage: string): ErrorInfo {
 
 function hasAlertEvents(alert: AlertSelection): alert is AlertRecord {
     return 'events' in alert;
+}
+
+function getAlertDecisionIp(alert: AlertSelection): string | null {
+    return alert.source?.ip?.trim() || null;
 }
 
 function getAlertSourceValue(source: AlertSource | null | undefined): string | undefined {
@@ -275,6 +280,7 @@ export function Alerts() {
     const [backgroundLoading, setBackgroundLoading] = useState(false);
     const [loadingMore, setLoadingMore] = useState(false);
     const [selectedAlert, setSelectedAlert] = useState<AlertSelection | null>(null);
+    const [pendingDecisionAlert, setPendingDecisionAlert] = useState<AlertSelection | null>(null);
     const [modalDecisions, setModalDecisions] = useState<DecisionListItem[]>([]);
     const [modalDecisionsLoading, setModalDecisionsLoading] = useState(false);
     const [modalDecisionsLoadingMore, setModalDecisionsLoadingMore] = useState(false);
@@ -328,6 +334,7 @@ export function Alerts() {
         append?: boolean;
         preserveLoadedPages?: boolean;
         refreshConfig?: boolean;
+        forceRefresh?: boolean;
     }) => Promise<void>>(async () => {});
     const lastRefreshSignalRef = useRef(refreshSignal);
     const configRef = useRef<{
@@ -746,12 +753,14 @@ export function Alerts() {
         append = false,
         preserveLoadedPages = false,
         refreshConfig = false,
+        forceRefresh = false,
     }: {
         isBackground?: boolean;
         page?: number;
         append?: boolean;
         preserveLoadedPages?: boolean;
         refreshConfig?: boolean;
+        forceRefresh?: boolean;
     } = {}) => {
         const loadKey = JSON.stringify({
             page,
@@ -765,7 +774,7 @@ export function Alerts() {
         const lastCompletedLoad = lastCompletedLoadRef.current;
         if (
             inFlightLoadKeysRef.current.has(loadKey) ||
-            (lastCompletedLoad?.key === loadKey && Date.now() - lastCompletedLoad.completedAt < 250)
+            (!forceRefresh && lastCompletedLoad?.key === loadKey && Date.now() - lastCompletedLoad.completedAt < 250)
         ) {
             return;
         }
@@ -1256,6 +1265,17 @@ export function Alerts() {
         const instance = searchParams.get('instance');
         setSearchParams(instance ? { instance } : {});
     }, [cancelSearchDebounce, searchParams, setSearchParams]);
+
+    const openAlertDecision = (alert: AlertSelection) => {
+        setPendingDecisionAlert(alert);
+    };
+
+    const refreshAfterDecision = async () => {
+        await loadAlerts({ page: 1, refreshConfig: true, forceRefresh: true });
+        if (selectedAlertIdRef.current) {
+            setModalDecisionsRefreshToken((current) => current + 1);
+        }
+    };
 
     // Delete handlers
     const requestDelete = (alert: AlertListItem, event: ReactMouseEvent<HTMLButtonElement>) => {
@@ -1798,6 +1818,19 @@ export function Alerts() {
                                             {canManageEnforcement && (
                                                 <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                                                     <div className="flex items-center justify-end gap-2">
+                                                        {getAlertDecisionIp(alert) && (
+                                                            <button
+                                                                onClick={(event) => {
+                                                                    event.stopPropagation();
+                                                                    openAlertDecision(alert);
+                                                                }}
+                                                                className="text-primary-600 hover:text-primary-900 dark:text-primary-400 dark:hover:text-primary-300 hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
+                                                                title={t('pages.decisions.addDecision')}
+                                                                aria-label={t('pages.decisions.addDecision')}
+                                                            >
+                                                                <Gavel size={16} aria-hidden="true" />
+                                                            </button>
+                                                        )}
                                                         {sourceValue && (
                                                             <button
                                                                 onClick={(e) => {
@@ -1837,7 +1870,7 @@ export function Alerts() {
 
             {/* Alert Details Modal */}
             <Modal
-                isOpen={!!selectedAlert}
+                isOpen={!!selectedAlert && !pendingDecisionAlert}
                 onClose={() => {
                     setSelectedAlert(null);
                     const newParams = new URLSearchParams(searchParams);
@@ -1852,6 +1885,15 @@ export function Alerts() {
                         <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2 mb-4">
                             {t('pages.alerts.capturedAt', { time: formatDateTime(selectedAlert.created_at) })}
                         </p>
+                        {canManageEnforcement && getAlertDecisionIp(selectedAlert) && (
+                            <button
+                                onClick={() => openAlertDecision(selectedAlert)}
+                                className="inline-flex items-center gap-2 rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700"
+                            >
+                                <Gavel size={16} aria-hidden="true" />
+                                {t('pages.decisions.addDecision')}
+                            </button>
+                        )}
 
                         {/* Summary Cards */}
                         <div className={`grid grid-cols-1 ${alertSummaryGridColumns} gap-4`}>
@@ -2149,6 +2191,22 @@ export function Alerts() {
                     </div>
                 )}
             </Modal>
+
+            {pendingDecisionAlert && (
+                <AddDecisionModal
+                    initialDecision={{
+                        ip: getAlertDecisionIp(pendingDecisionAlert) || '',
+                        duration: '4h',
+                        reason: pendingDecisionAlert.scenario?.trim() || 'manual',
+                    }}
+                    multipleInstances={multipleInstances}
+                    currentInstanceId={pendingDecisionAlert.instance_id}
+                    currentInstanceName={pendingDecisionAlert.instance_name || instanceNames[pendingDecisionAlert.instance_id || '']}
+                    defaultAllInstances={false}
+                    onClose={() => setPendingDecisionAlert(null)}
+                    onDecisionAdded={refreshAfterDecision}
+                />
+            )}
 
             {/* Delete Confirmation Modal */}
             <Modal

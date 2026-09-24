@@ -597,6 +597,8 @@
   "pages.decisions.addDecision": "إضافة قرار",
   "pages.decisions.addFailed": "فشل إضافة القرار. يرجى المحاولة مرة أخرى.",
   "pages.decisions.addManualDecision": "إضافة قرار يدوي",
+  "pages.decisions.allInstances": "جميع المثيلات",
+  "pages.decisions.currentInstance": "المثيل الحالي: {name}",
   "pages.decisions.adding": "جارٍت الإضافة...",
   "pages.decisions.alreadyExpired": "انتهى القرار بالفعل",
   "pages.decisions.deleteDecision": "حذف القرار",

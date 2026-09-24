@@ -597,6 +597,8 @@
   "pages.decisions.addDecision": "निर्णय जोड़ें",
   "pages.decisions.addFailed": "निर्णय जोड़ने में विफल। कृपया पुनः प्रयास करें।",
   "pages.decisions.addManualDecision": "मैन्युअल निर्णय जोड़ें",
+  "pages.decisions.allInstances": "सभी इंस्टेंस",
+  "pages.decisions.currentInstance": "वर्तमान इंस्टेंस: {name}",
   "pages.decisions.adding": "जोड़ा जा रहा है...",
   "pages.decisions.alreadyExpired": "निर्णय पहले ही समाप्त हो चुका है",
   "pages.decisions.deleteDecision": "निर्णय हटाएँ",

@@ -597,6 +597,8 @@
   "pages.decisions.addDecision": "Entscheidung hinzufügen",
   "pages.decisions.addFailed": "Entscheidung konnte nicht hinzugefügt werden. Bitte versuchen Sie es erneut.",
   "pages.decisions.addManualDecision": "Manuelle Entscheidung hinzufügen",
+  "pages.decisions.allInstances": "Alle Instanzen",
+  "pages.decisions.currentInstance": "Aktuelle Instanz: {name}",
   "pages.decisions.adding": "Wird hinzugefügt...",
   "pages.decisions.alreadyExpired": "Entscheidung ist bereits abgelaufen",
   "pages.decisions.deleteDecision": "Entscheidung löschen",

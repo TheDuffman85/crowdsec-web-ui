@@ -1,10 +1,11 @@
-import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useSearchParams, Link } from "react-router-dom";
-import { deleteDecision, bulkDeleteDecisions, cleanupByIp, addDecision, fetchConfig, fetchDecisionsPaginated } from "../lib/api";
+import { deleteDecision, bulkDeleteDecisions, cleanupByIp, fetchConfig, fetchDecisionsPaginated } from "../lib/api";
 import { isSimulatedDecision, parseSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
+import { AddDecisionModal } from "../components/AddDecisionModal";
 import { HighlightedSearchInput } from "../components/HighlightedSearchInput";
 import { CollapsibleSearchControls } from "../components/CollapsibleSearchControls";
 import { SavedFiltersMenu } from "../components/SavedFiltersMenu";
@@ -52,7 +53,7 @@ import {
     type SearchParseError,
 } from "../../../shared/search";
 import { Trash2, Gavel, X, ExternalLink, Shield, ShieldBan, AlertCircle, Columns3, Loader2 } from "lucide-react";
-import type { AddDecisionRequest, ApiPermissionError, BulkDeleteResult, DecisionListItem, FacetField, InstanceEntityRef, InstanceOperationResult, MultiInstanceOperationResponse, TableColumnId, TableColumnPreferences } from '../types';
+import type { ApiPermissionError, BulkDeleteResult, DecisionListItem, FacetField, InstanceEntityRef, InstanceOperationResult, TableColumnId, TableColumnPreferences } from '../types';
 import { useI18n, type I18nContextValue } from "../lib/i18n";
 import { getBrowserTimeZone, useDateTime } from "../lib/dateTime";
 
@@ -209,13 +210,9 @@ export function Decisions() {
     const [pendingDeleteAction, setPendingDeleteAction] = useState<DecisionDeleteAction | null>(null);
     const [selectedDecisionIds, setSelectedDecisionIds] = useState<string[]>([]);
     const [deleteInProgress, setDeleteInProgress] = useState(false);
-    const [newDecision, setNewDecision] = useState<AddDecisionRequest>({ ip: "", duration: "4h", reason: "manual" });
     const [errorInfo, setErrorInfo] = useState<ErrorInfo | null>(null);
     const [pendingDeleteErrorInfo, setPendingDeleteErrorInfo] = useState<ErrorInfo | null>(null);
     const [retryCleanupInstances, setRetryCleanupInstances] = useState<InstanceOperationResult[]>([]);
-    const [addDecisionErrorInfo, setAddDecisionErrorInfo] = useState<ErrorInfo | null>(null);
-    const [addDecisionInProgress, setAddDecisionInProgress] = useState(false);
-    const [retryDecisionInstances, setRetryDecisionInstances] = useState<InstanceOperationResult[]>([]);
     const alertIdFilter = searchParams.get("alert_id");
     const queryParam = searchParams.get("q");
     useRecentFilter(queryParam ?? '', 'decisions', quickFiltersOpen);
@@ -241,6 +238,7 @@ export function Decisions() {
         append?: boolean;
         preserveLoadedPages?: boolean;
         refreshConfig?: boolean;
+        forceRefresh?: boolean;
     }) => Promise<void>>(async () => {});
     const lastRefreshSignalRef = useRef(refreshSignal);
     const configRef = useRef<{
@@ -699,12 +697,14 @@ export function Decisions() {
         append = false,
         preserveLoadedPages = false,
         refreshConfig = false,
+        forceRefresh = false,
     }: {
         isBackground?: boolean;
         page?: number;
         append?: boolean;
         preserveLoadedPages?: boolean;
         refreshConfig?: boolean;
+        forceRefresh?: boolean;
     } = {}) => {
         const loadKey = JSON.stringify({
             page,
@@ -718,7 +718,7 @@ export function Decisions() {
         const lastCompletedLoad = lastCompletedLoadRef.current;
         if (
             inFlightLoadKeysRef.current.has(loadKey) ||
-            (lastCompletedLoad?.key === loadKey && Date.now() - lastCompletedLoad.completedAt < 250)
+            (!forceRefresh && lastCompletedLoad?.key === loadKey && Date.now() - lastCompletedLoad.completedAt < 250)
         ) {
             return;
         }
@@ -960,81 +960,7 @@ export function Decisions() {
         }
     }, [compiledSearch, debouncedSearchDraft, searchParams, setSearchParams]);
 
-    const handleAddDecision = async (e: FormEvent<HTMLFormElement>) => {
-        e.preventDefault();
-        const instanceScope = searchParams.get('instance');
-        const decisionData: AddDecisionRequest = !instanceScope && !multipleInstances
-            ? { ...newDecision }
-            : instanceScope === 'all' || !instanceScope
-            ? { ...newDecision, scope: 'all' }
-            : { ...newDecision, scope: 'instance', instance_id: instanceScope };
-        setAddDecisionInProgress(true);
-        setErrorInfo(null);
-        setAddDecisionErrorInfo(null);
-        try {
-            const response = retryDecisionInstances.length > 0
-                ? {
-                    results: await Promise.all(retryDecisionInstances.map(async (failedInstance): Promise<InstanceOperationResult> => {
-                        try {
-                            const retryResponse = await addDecision({
-                                ...newDecision,
-                                scope: 'instance',
-                                instance_id: failedInstance.instance_id,
-                            }) as MultiInstanceOperationResponse;
-                            return retryResponse?.results?.[0] || { ...failedInstance, success: true, error: undefined };
-                        } catch (error) {
-                            return {
-                                ...failedInstance,
-                                success: false,
-                                error: error instanceof Error ? error.message : String(error),
-                            };
-                        }
-                    })),
-                    succeeded: 0,
-                    failed: 0,
-                }
-                : await addDecision(decisionData) as MultiInstanceOperationResponse | undefined;
-            if (response && Array.isArray(response.results)) {
-                const failedInstances = response.results.filter((result) => !result.success);
-                if (failedInstances.length > 0) {
-                    const succeededNames = response.results.filter((result) => result.success).map((result) => result.instance_name);
-                    const failedNames = failedInstances.map((result) => result.instance_name);
-                    setRetryDecisionInstances(failedInstances);
-                    setAddDecisionErrorInfo({
-                        message: `${succeededNames.length > 0 ? `Succeeded: ${succeededNames.join(', ')}. ` : ''}Failed: ${failedNames.join(', ')}.`,
-                    });
-                    await loadDecisions({ page: 1, refreshConfig: true });
-                    return;
-                }
-            }
-            setRetryDecisionInstances([]);
-            setShowAddModal(false);
-            setNewDecision({ ip: "", duration: "4h", reason: "manual" });
-            await loadDecisions({ page: 1, refreshConfig: true });
-        } catch (error) {
-            console.error("Failed to add decision", error);
-            setAddDecisionErrorInfo(toErrorInfo(error, t('pages.decisions.addFailed')));
-        } finally {
-            setAddDecisionInProgress(false);
-        }
-    };
-
-    const openAddDecision = () => {
-        setAddDecisionErrorInfo(null);
-        setRetryDecisionInstances([]);
-        setShowAddModal(true);
-    };
-
-    const closeAddDecision = () => {
-        if (addDecisionInProgress) {
-            return;
-        }
-
-        setAddDecisionErrorInfo(null);
-        setRetryDecisionInstances([]);
-        setShowAddModal(false);
-    };
-
+    const openAddDecision = () => setShowAddModal(true);
 
     // Trigger modal instead of window.confirm
     const requestDelete = (decision: DecisionListItem) => {
@@ -1755,75 +1681,19 @@ export function Decisions() {
                 </div>
             </Modal>
 
-            {/* Add Decision Modal */}
-            <Modal
-                isOpen={showAddModal}
-                onClose={closeAddDecision}
-                title={t('pages.decisions.addManualDecision')}
-                maxWidth="max-w-md"
-            >
-                <form onSubmit={handleAddDecision} className="space-y-4">
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('tableColumns.source')}</label>
-                        <input
-                            type="text"
-                            required
-                            disabled={addDecisionInProgress}
-                            className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-                            placeholder="1.2.3.4"
-                            value={newDecision.ip}
-                            onChange={e => setNewDecision({ ...newDecision, ip: e.target.value })}
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('pages.decisions.duration')}</label>
-                        <input
-                            type="text"
-                            disabled={addDecisionInProgress}
-                            className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-                            placeholder="4h"
-                            value={newDecision.duration}
-                            onChange={e => setNewDecision({ ...newDecision, duration: e.target.value })}
-                        />
-                        <p className="text-xs text-gray-500 mt-1">{t('pages.decisions.durationHint')}</p>
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('pages.decisions.reason')}</label>
-                        <input
-                            type="text"
-                            disabled={addDecisionInProgress}
-                            className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-                            placeholder={t('pages.decisions.placeholderReason')}
-                            value={newDecision.reason}
-                            onChange={e => setNewDecision({ ...newDecision, reason: e.target.value })}
-                        />
-                    </div>
-                    {addDecisionErrorInfo && (
-                        <ErrorBanner errorInfo={addDecisionErrorInfo} />
-                    )}
-                    <div className="flex justify-end gap-3 mt-6">
-                        <button
-                            type="button"
-                            onClick={closeAddDecision}
-                            disabled={addDecisionInProgress}
-                            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                            {t('common.cancel')}
-                        </button>
-                        <button
-                            type="submit"
-                            disabled={addDecisionInProgress}
-                            className="px-4 py-2 text-sm font-medium text-white bg-primary-600 border border-transparent rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                            {addDecisionInProgress
-                                ? t('pages.decisions.adding')
-                                : retryDecisionInstances.length > 0
-                                    ? 'Retry failed instances'
-                                    : t('pages.decisions.addDecision')}
-                        </button>
-                    </div>
-                </form>
-            </Modal>
+            {showAddModal && (
+                <AddDecisionModal
+                    initialDecision={{ ip: "", duration: "4h", reason: "manual" }}
+                    multipleInstances={multipleInstances}
+                    currentInstanceId={searchParams.get('instance') && searchParams.get('instance') !== 'all'
+                        ? searchParams.get('instance')!
+                        : undefined}
+                    currentInstanceName={instanceNames[searchParams.get('instance') || '']}
+                    defaultAllInstances={!searchParams.get('instance') || searchParams.get('instance') === 'all'}
+                    onClose={() => setShowAddModal(false)}
+                    onDecisionAdded={() => loadDecisions({ page: 1, refreshConfig: true, forceRefresh: true })}
+                />
+            )}
             <SearchSyntaxModal
                 help={searchHelp}
                 searchFeatures={searchValidationFeatures}
