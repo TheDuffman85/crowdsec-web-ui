@@ -271,10 +271,15 @@ Notification configuration routes manage destinations and rule definitions.
 | POST | `/api/notification-channels` | Create a notification channel. Blocked in read-only mode. |
 | PUT | `/api/notification-channels/:id` | Update a notification channel. Blocked in read-only mode. |
 | DELETE | `/api/notification-channels/:id` | Delete a notification channel. Blocked in read-only mode. |
-| POST | `/api/notification-channels/:id/test` | Send a test notification through a saved channel. Blocked in read-only mode. |
+| POST | `/api/notification-channels/:id/test` | Send a test notification through a saved channel and return its title, message, and delivery result. Blocked in read-only mode. |
 | POST | `/api/notification-rules` | Create a notification rule. Blocked in read-only mode. |
+| POST | `/api/notification-rules/:id/test` | Send one test notification through the saved rule's enabled destinations. Blocked in read-only mode. |
 | PUT | `/api/notification-rules/:id` | Update a notification rule. Blocked in read-only mode. |
 | DELETE | `/api/notification-rules/:id` | Delete a notification rule. Blocked in read-only mode. |
+
+Destination tests return `success: true`, the sent `title` and `message`, and a `delivery` result. This lets the UI show the same result details as rule tests.
+
+Rule tests return `source: "current"` when a rule matches current data, or `source: "sample"` when a synthetic example is used. The response includes the exact sent `title` and `message` and a `deliveries` result for each enabled destination. A sample checks rendering and delivery but does not verify filters or thresholds. Test sends are marked `[TEST]` and do not create notifications or incident state. A rule with no enabled outbound destinations cannot be tested.
 
 Channel create/update body:
 

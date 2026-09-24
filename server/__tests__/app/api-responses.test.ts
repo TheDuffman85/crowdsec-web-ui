@@ -754,6 +754,7 @@ describe('createApp API responses', () => {
         body: JSON.stringify({}),
       }),
       new Request('http://localhost/crowdsec/api/notification-rules/rule-1', { method: 'DELETE' }),
+      new Request('http://localhost/crowdsec/api/notification-rules/rule-1/test', { method: 'POST' }),
     ];
 
     for (const request of guardedRequests) {

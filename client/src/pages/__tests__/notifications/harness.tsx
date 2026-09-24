@@ -23,6 +23,7 @@ vi.mock('../../../lib/api', () => ({
   updateNotificationChannel: vi.fn(),
   deleteNotificationChannel: vi.fn(),
   testNotificationChannel: vi.fn(),
+  testNotificationRule: vi.fn(),
   createNotificationRule: vi.fn(),
   updateNotificationRule: vi.fn(),
   deleteNotificationRule: vi.fn(),

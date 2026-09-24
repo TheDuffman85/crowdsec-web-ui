@@ -1088,8 +1088,7 @@ app.post(`${config.basePath}/api/notification-channels/:id/test`, ensureAuth, as
 
   try {
     const id = String(context.req.param('id'));
-    await notificationService.testChannel(id);
-    return context.json({ success: true });
+    return context.json(await notificationService.testChannel(id));
   } catch (error: any) {
     const status = error.message === 'Notification channel not found' ? 404 : 400;
     return context.json({ error: error.message || 'Failed to send test notification' }, status);
@@ -1119,6 +1118,19 @@ app.put(`${config.basePath}/api/notification-rules/:id`, ensureAuth, async (cont
   } catch (error: any) {
     const status = error.message === 'Notification rule not found' ? 404 : 400;
     return context.json({ error: error.message || 'Failed to update notification rule' }, status);
+  }
+});
+
+app.post(`${config.basePath}/api/notification-rules/:id/test`, ensureAuth, async (context) => {
+  const readOnlyResponse = ensureCanManageSettings(context);
+  if (readOnlyResponse) return readOnlyResponse;
+
+  try {
+    const id = String(context.req.param('id'));
+    return context.json(await notificationService.testRule(id));
+  } catch (error: any) {
+    const status = error.message === 'Notification rule not found' ? 404 : 400;
+    return context.json({ error: error.message || 'Failed to send rule test' }, status);
   }
 });
 

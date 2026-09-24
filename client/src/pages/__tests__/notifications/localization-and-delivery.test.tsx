@@ -3,7 +3,7 @@ import { describe, expect, test, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Notifications } from '../../Notifications';
-import { fetchNotificationSettings, fetchNotificationsPaginated, testNotificationChannel } from '../../../lib/api';
+import { fetchNotificationSettings, fetchNotificationsPaginated, testNotificationChannel, testNotificationRule } from '../../../lib/api';
 
 describe('Notifications page localization and delivery', () => {
   test('localizes notification badges, rule types, delivery statuses, and stored server messages', async () => {
@@ -120,15 +120,26 @@ describe('Notifications page localization and delivery', () => {
     expect(screen.getByText('CrowdSec 更新')).toBeInTheDocument();
   });
 
-  test('shows a success toast when sending a test notification', async () => {
+  test('shows destination test content and delivery in the shared result modal', async () => {
     const user = userEvent.setup();
-    vi.mocked(testNotificationChannel).mockResolvedValueOnce(undefined);
+    vi.mocked(testNotificationChannel).mockResolvedValueOnce({
+      success: true,
+      title: 'CrowdSec notification test',
+      message: 'Test sent at 2026-09-24 12:00.',
+      delivery: {
+        channel_id: 'channel-1', channel_name: 'Ops MQTT', channel_type: 'mqtt',
+        status: 'delivered', attempted_at: '2026-09-24T12:00:00.000Z',
+      },
+    });
     render(<Notifications />);
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Send test notification' })).toBeInTheDocument());
     await user.click(screen.getByRole('button', { name: 'Send test notification' }));
 
-    expect(await screen.findByText('Test notification sent to Ops MQTT')).toBeInTheDocument();
+    expect(await screen.findByRole('dialog', { name: 'Test for Ops MQTT' })).toBeInTheDocument();
+    expect(screen.getByText('CrowdSec notification test')).toBeInTheDocument();
+    expect(screen.getByText('Test sent at 2026-09-24 12:00.')).toBeInTheDocument();
+    expect(screen.getByText('Ops MQTT: Delivered')).toBeInTheDocument();
   });
 
   test('shows an error toast when sending a test notification fails', async () => {
@@ -140,6 +151,33 @@ describe('Notifications page localization and delivery', () => {
     await user.click(screen.getByRole('button', { name: 'Send test notification' }));
 
     expect(await screen.findByText('MQTT broker unavailable')).toBeInTheDocument();
+  });
+
+  test('guides rule names and shows whether a rule test used a sample', async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchNotificationSettings).mockResolvedValueOnce(buildSettings({
+      rules: [{
+        id: 'rule-1', name: 'EU probes', type: 'ip-ban', enabled: false, severity: 'warning',
+        channel_ids: ['channel-1'], config: { window_minutes: 60, filters: {} },
+        created_at: '2026-03-28T12:00:00.000Z', updated_at: '2026-03-28T12:00:00.000Z',
+      }],
+    }));
+    vi.mocked(testNotificationRule).mockResolvedValueOnce({
+      source: 'sample', title: '[TEST] EU probes: IP banned', message: '192.0.2.1 was banned.',
+      deliveries: [{ channel_id: 'channel-1', channel_name: 'Ops MQTT', channel_type: 'mqtt', status: 'delivered', attempted_at: '2026-03-28T12:00:00.000Z' }],
+    });
+    render(<Notifications />);
+
+    await user.click(await screen.findByRole('button', { name: 'Edit rule' }));
+    expect(screen.getByLabelText('Name')).toHaveAttribute('placeholder', 'EU probes');
+    expect(screen.getByText(/name appears at the start of notification titles/i)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await user.click(screen.getByRole('button', { name: 'Send rule test' }));
+    expect(testNotificationRule).toHaveBeenCalledWith('rule-1');
+    expect(await screen.findByText('[TEST] EU probes: IP banned')).toBeInTheDocument();
+    expect(screen.getByText(/does not verify filters or thresholds/i)).toBeInTheDocument();
+    expect(screen.getByText('Ops MQTT: Delivered')).toBeInTheDocument();
   });
 
   test('does not render cooldown fields or text for rules', async () => {

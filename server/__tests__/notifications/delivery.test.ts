@@ -76,14 +76,76 @@ describe('notification delivery', () => {
       },
     });
 
-    await service.testChannel(channel.id);
+    const result = await service.testChannel(channel.id);
 
+    expect(result).toMatchObject({
+      success: true,
+      title: 'CrowdSec notification test',
+      delivery: expect.objectContaining({ status: 'delivered', channel_id: channel.id }),
+    });
+    expect(result.message).toContain('Test sent at');
     expect(sentBodies).toHaveLength(1);
     expect(JSON.parse(sentBodies[0] || '{}')).toEqual({
       rule: 'Test notification',
       rule_type: 'test',
     });
 
+    database.close();
+  });
+
+  test('rule tests send one current match or a marked sample without creating incidents', async () => {
+    const sentBodies: string[] = [];
+    const { database, service } = createService({
+      fetchImpl: async (_input, init) => {
+        sentBodies.push(String(init?.body || ''));
+        return Response.json({ ok: true });
+      },
+    });
+    const channel = await service.createChannel({
+      name: 'Ops webhook', type: 'webhook', enabled: true,
+      config: {
+        url: 'https://example.com/webhook', method: 'POST',
+        body: { mode: 'json', template: '{"title":{{event.titleJson}},"rule":{{event.rule_nameJson}}}' },
+        retryAttempts: 0,
+      },
+    });
+    const rule = await service.createRule({
+      name: 'Admin panel', type: 'alert-threshold', enabled: false, severity: 'warning',
+      channel_ids: [channel.id],
+      config: { window_minutes: 60, alert_threshold: 1, filters: { scenario: 'ssh' } },
+    });
+
+    const sample = await service.testRule(rule.id);
+    expect(sample).toMatchObject({
+      source: 'sample',
+      title: '[TEST] Admin panel: threshold exceeded',
+      deliveries: [expect.objectContaining({ status: 'delivered' })],
+    });
+    expect(sample.message).toContain('crossing the threshold of 1');
+
+    insertAlert(database, createAlert(1, new Date(Date.now() - 60_000).toISOString()));
+    const current = await service.testRule(rule.id);
+    expect(current).toMatchObject({
+      source: 'current',
+      title: '[TEST] Admin panel: threshold exceeded',
+      deliveries: [expect.objectContaining({ status: 'delivered' })],
+    });
+    expect(current.message).toContain('1 alerts matched');
+    expect(sentBodies).toHaveLength(2);
+    expect(JSON.parse(sentBodies[1] || '{}')).toMatchObject({ rule: 'Admin panel', title: current.title });
+    expect(service.listNotifications().data).toEqual([]);
+    expect(database.listNotificationIncidentsByRule(rule.id)).toEqual([]);
+    database.close();
+  });
+
+  test('rule tests reject missing rules and rules without enabled destinations', async () => {
+    const { database, service } = createService();
+    await expect(service.testRule('missing')).rejects.toThrow('Notification rule not found');
+    const rule = await service.createRule({
+      name: 'No destinations', type: 'ip-ban', enabled: true, severity: 'info',
+      channel_ids: [], config: { window_minutes: 60 },
+    });
+    await expect(service.testRule(rule.id)).rejects.toThrow('no enabled outbound destinations');
     database.close();
   });
 

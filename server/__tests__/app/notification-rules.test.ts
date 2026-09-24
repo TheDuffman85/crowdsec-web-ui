@@ -12,6 +12,40 @@ import {
 } from './harness';
 
 describe('createApp notification rules', () => {
+  test('sends a rule test through the API and reports a sample without storing a notification', async () => {
+    const { controller, database } = createController({
+      env: { CROWDSEC_REFRESH_INTERVAL: '0' },
+      notificationFetchResolver: (url) => url.includes('ntfy.sh') ? Response.json({ id: 'sent' }) : undefined,
+    });
+    try {
+      const channelResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/notification-channels', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Ops ntfy', type: 'ntfy', enabled: true, config: { topic: 'rule-tests' } }),
+      }));
+      expect(channelResponse.status).toBe(201);
+      const channel = await channelResponse.json() as { id: string };
+      const ruleResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/notification-rules', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Admin bans', type: 'ip-ban', enabled: false, severity: 'warning', channel_ids: [channel.id], config: { window_minutes: 60 } }),
+      }));
+      expect(ruleResponse.status).toBe(201);
+      const rule = await ruleResponse.json() as { id: string };
+
+      const response = await controller.fetch(new Request(`http://localhost/crowdsec/api/notification-rules/${rule.id}/test`, { method: 'POST' }));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        source: 'sample', title: '[TEST] Admin bans: IP banned',
+        deliveries: [expect.objectContaining({ status: 'delivered', channel_id: channel.id })],
+      });
+      expect(database.countNotifications()).toBe(0);
+      expect(database.listNotificationIncidentsByRule(rule.id)).toEqual([]);
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
   test('fires application update rules when a newer version is available', async () => {
     const { controller, database } = createController({
       env: {

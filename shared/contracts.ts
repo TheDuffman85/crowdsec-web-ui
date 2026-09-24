@@ -515,6 +515,20 @@ export interface NotificationDeliveryResult {
   error?: string;
 }
 
+export interface NotificationChannelTestResult {
+  success: true;
+  title: string;
+  message: string;
+  delivery: NotificationDeliveryResult;
+}
+
+export interface NotificationRuleTestResult {
+  source: 'current' | 'sample';
+  title: string;
+  message: string;
+  deliveries: NotificationDeliveryResult[];
+}
+
 export interface NotificationItem {
   id: string;
   rule_id: string;

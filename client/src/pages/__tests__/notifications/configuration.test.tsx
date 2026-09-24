@@ -76,10 +76,61 @@ describe('Notifications page configuration', () => {
     expect(screen.queryByRole('button', { name: 'Edit destination' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Delete destination' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Edit rule' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Send rule test' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Delete rule' })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Mark read' }));
     await waitFor(() => expect(markNotificationRead).toHaveBeenCalledWith('notif-1'));
+  });
+
+  test('generates an editable rule name from the current type and positive filters', async () => {
+    const user = userEvent.setup();
+    render(<Notifications />);
+
+    await user.click(await screen.findByRole('button', { name: 'Add Rule' }));
+    const name = screen.getByRole('textbox', { name: 'Name' });
+    const generate = screen.getByRole('button', { name: 'Generate name' });
+    expect(name).toHaveValue('');
+
+    await user.click(generate);
+    expect(name).toHaveValue('Monitored traffic');
+
+    await user.selectOptions(screen.getByLabelText('Rule Type'), 'ip-ban');
+    await user.type(screen.getByLabelText('Country Filter (ISO Codes)'), 'DE');
+    await user.click(generate);
+    expect(name).toHaveValue('Monitored IPs · DE');
+
+    await user.clear(name);
+    await user.type(name, 'My custom name');
+    expect(name).toHaveValue('My custom name');
+
+    await user.selectOptions(screen.getByLabelText('Rule Type'), 'application-update');
+    await user.click(generate);
+    expect(name).toHaveValue('Web UI releases');
+  });
+
+  test('generates editable destination names from the type and configured endpoint', async () => {
+    const user = userEvent.setup();
+    render(<Notifications />);
+
+    await user.click(await screen.findByRole('button', { name: 'Add Destination' }));
+    const name = screen.getByRole('textbox', { name: 'Name' });
+    const generate = screen.getByRole('button', { name: 'Generate name' });
+    await user.click(generate);
+    expect(name).toHaveValue('ntfy alerts');
+
+    await user.type(screen.getByLabelText('Topic'), 'security-alerts');
+    await user.click(generate);
+    expect(name).toHaveValue('ntfy alerts · security-alerts');
+
+    await user.selectOptions(screen.getByLabelText('Type'), 'webhook');
+    await user.type(screen.getByLabelText('URL'), 'https://hooks.example.com/notify');
+    await user.click(generate);
+    expect(name).toHaveValue('Webhook events · hooks.example.com/notify');
+
+    await user.clear(name);
+    await user.type(name, 'My webhook');
+    expect(name).toHaveValue('My webhook');
   });
 
   test('renders typed destination fields for MQTT and webhook', async () => {

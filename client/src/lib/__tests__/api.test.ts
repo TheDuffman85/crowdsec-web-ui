@@ -344,11 +344,14 @@ describe('api helpers', () => {
         if (String(input).includes('/api/notification-channels/boom')) {
           return Response.json({ error: 'boom' }, { status: 400 });
         }
+        if (String(input).includes('/api/notification-channels/1/test')) {
+          return Response.json({ success: true, title: 'Test', message: 'Sent', delivery: { status: 'delivered' } });
+        }
         return Response.json({ success: true });
       }),
     );
 
-    await expect(testNotificationChannel('1')).resolves.toBeUndefined();
+    await expect(testNotificationChannel('1')).resolves.toMatchObject({ title: 'Test', delivery: { status: 'delivered' } });
     await expect(deleteNotificationChannel('1')).resolves.toBeUndefined();
     await expect(deleteNotificationRule('1')).resolves.toBeUndefined();
     await expect(deleteNotification('1')).resolves.toBeUndefined();

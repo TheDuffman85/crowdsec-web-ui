@@ -14,8 +14,10 @@ import type {
   InstanceEntityRef,
   MultiInstanceOperationResponse,
   NotificationChannel,
+  NotificationChannelTestResult,
   NotificationListResponse,
   NotificationRule,
+  NotificationRuleTestResult,
   NotificationSettingsResponse,
   PaginatedResponse,
   SlimAlert,
@@ -433,8 +435,8 @@ export async function deleteNotificationChannel(id: string): Promise<void> {
     await sendJson(`/api/notification-channels/${id}`, { method: 'DELETE' }, 'Failed to delete notification channel');
 }
 
-export async function testNotificationChannel(id: string): Promise<void> {
-    await sendJson(`/api/notification-channels/${id}/test`, { method: 'POST' }, 'Failed to send test notification');
+export async function testNotificationChannel(id: string): Promise<NotificationChannelTestResult> {
+    return sendJson<NotificationChannelTestResult>(`/api/notification-channels/${id}/test`, { method: 'POST' }, 'Failed to send test notification');
 }
 
 export async function createNotificationRule(data: UpsertNotificationRuleRequest): Promise<NotificationRule> {
@@ -455,6 +457,10 @@ export async function updateNotificationRule(id: string, data: UpsertNotificatio
 
 export async function deleteNotificationRule(id: string): Promise<void> {
     await sendJson(`/api/notification-rules/${id}`, { method: 'DELETE' }, 'Failed to delete notification rule');
+}
+
+export async function testNotificationRule(id: string): Promise<NotificationRuleTestResult> {
+    return sendJson<NotificationRuleTestResult>(`/api/notification-rules/${id}/test`, { method: 'POST' }, 'Failed to send rule test');
 }
 
 export async function markNotificationRead(id: string): Promise<void> {

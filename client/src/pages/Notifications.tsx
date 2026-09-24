@@ -1,7 +1,7 @@
 import { type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import Sortable from 'sortablejs';
-import { Bell, Check, CheckCheck, GripVertical, Plus, Send, SendHorizontal, SquarePen, Trash2 } from 'lucide-react';
+import { Bell, Check, CheckCheck, GripVertical, Plus, Send, SendHorizontal, SquarePen, Trash2, WandSparkles } from 'lucide-react';
 import {
   bulkDeleteNotifications,
   createNotificationChannel,
@@ -15,6 +15,7 @@ import {
   markNotificationRead,
   markNotificationsRead,
   testNotificationChannel,
+  testNotificationRule,
   updateNotificationChannel,
   updateNotificationRule,
   fetchConfig,
@@ -49,10 +50,12 @@ import { useI18n } from '../lib/i18n';
 import type {
   AlertMetaValue,
   NotificationChannel,
+  NotificationChannelTestResult,
   NotificationChannelType,
   NotificationDeliveryStatus,
   NotificationItem,
   NotificationRule,
+  NotificationRuleTestResult,
   NotificationRuleType,
   NotificationSeverity,
   UpsertNotificationRuleRequest,
@@ -82,6 +85,10 @@ type RuleFormState = {
   };
   config: Record<string, string>;
 };
+
+type NotificationTestResultState =
+  | { kind: 'channel'; name: string; result: NotificationChannelTestResult }
+  | { kind: 'rule'; name: string; result: NotificationRuleTestResult };
 
 type ToastState = {
   message: string;
@@ -154,6 +161,51 @@ const defaultRuleForm = (type: NotificationRuleType = 'alert-spike'): RuleFormSt
   },
   config: { ...RULE_DEFAULTS[type] },
 });
+
+function formatGeneratedName(base: string, details: string[]): string {
+  const detail = details.filter(Boolean).slice(0, 2).join(' / ');
+  return detail ? `${base} · ${detail}` : base;
+}
+
+function generateRuleName(form: RuleFormState, t: (key: string) => string): string {
+  const fallback = t(`pages.notifications.ruleNameDefaults.${form.type}`);
+  if (form.type === 'application-update' || form.type === 'crowdsec-update' || form.type === 'lapi-availability') {
+    return fallback;
+  }
+
+  const firstTwoValues = (value: string) => {
+    const values = value.split(',').map((part) => part.trim()).filter(Boolean);
+    return values.slice(0, 2).join(', ') + (values.length > 2 ? '…' : '');
+  };
+  const scopes = [
+    form.filters.exclude_countries ? '' : firstTwoValues(form.filters.countries),
+    firstTwoValues(form.filters.values),
+    form.filters.target.trim(),
+    form.filters.exclude_scenario ? '' : form.filters.scenario.trim(),
+  ].filter(Boolean);
+
+  return formatGeneratedName(fallback, scopes);
+}
+
+function generateChannelName(form: ChannelFormState, t: (key: string) => string): string {
+  const fallback = t(`pages.notifications.destinationNameDefaults.${form.type}`);
+  const setting = (key: string) => typeof form.config[key] === 'string' ? String(form.config[key]).trim() : '';
+  const hostAndPath = (value: string) => {
+    try {
+      const url = new URL(value);
+      return url.host + (url.pathname === '/' ? '' : url.pathname);
+    } catch {
+      return '';
+    }
+  };
+  let detail = '';
+  if (form.type === 'ntfy') detail = setting('ntfyTopic');
+  if (form.type === 'gotify') detail = hostAndPath(setting('gotifyUrl'));
+  if (form.type === 'email') detail = setting('emailTo').split(/[;,]/)[0].trim();
+  if (form.type === 'mqtt') detail = setting('topic') || hostAndPath(setting('brokerUrl'));
+  if (form.type === 'webhook') detail = hostAndPath(setting('url'));
+  return formatGeneratedName(fallback, [detail]);
+}
 
 function cloneConfig<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -549,6 +601,9 @@ export function Notifications() {
   const [ruleForm, setRuleForm] = useState<RuleFormState>(defaultRuleForm());
   const [toast, setToast] = useState<ToastState>(null);
   const [saving, setSaving] = useState(false);
+  const [testingChannelId, setTestingChannelId] = useState<string | null>(null);
+  const [testingRuleId, setTestingRuleId] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<NotificationTestResultState | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
   const [totalNotifications, setTotalNotifications] = useState(0);
@@ -880,11 +935,23 @@ export function Notifications() {
 
   const sendTestNotification = async (channel: NotificationChannel) => {
     try {
-      await testNotificationChannel(channel.id);
-      await loadData({ preserveLoadedPages: true });
-      showToast(t('pages.notifications.testSent', { name: channel.name }), 'success');
+      setTestingChannelId(channel.id);
+      setTestResult({ kind: 'channel', name: channel.name, result: await testNotificationChannel(channel.id) });
     } catch (err) {
       showToast(err instanceof Error ? err.message : t('pages.notifications.failedToSendTest'));
+    } finally {
+      setTestingChannelId(null);
+    }
+  };
+
+  const sendRuleTest = async (rule: NotificationRule) => {
+    try {
+      setTestingRuleId(rule.id);
+      setTestResult({ kind: 'rule', name: rule.name, result: await testNotificationRule(rule.id) });
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : t('pages.notifications.failedToSendRuleTest'));
+    } finally {
+      setTestingRuleId(null);
     }
   };
 
@@ -1076,6 +1143,7 @@ export function Notifications() {
                     hasAttachedRule={linkedChannelIds.has(channel.id)}
                     onEdit={() => openEditChannel(channel)}
                     onTest={() => void sendTestNotification(channel)}
+                    testing={testingChannelId === channel.id}
                     onDelete={() => void deleteNotificationChannel(channel.id).then(() => loadData({ preserveLoadedPages: true })).catch((err) => setError(err instanceof Error ? err.message : t('pages.notifications.failedToDeleteDestination')))}
                     canManageSettings={canManageSettings}
                   />
@@ -1102,6 +1170,8 @@ export function Notifications() {
                     channels={channels}
                     hasDestinations={rule.channel_ids.length > 0}
                     onEdit={() => openEditRule(rule)}
+                    onTest={() => void sendRuleTest(rule)}
+                    testing={testingRuleId === rule.id}
                     onDelete={() => void deleteNotificationRule(rule.id).then(() => loadData({ preserveLoadedPages: true })).catch((err) => setError(err instanceof Error ? err.message : t('pages.notifications.failedToDeleteRule')))}
                     canManageSettings={canManageSettings}
                   />
@@ -1158,6 +1228,38 @@ export function Notifications() {
         onSave={() => void saveChannel()}
         onSetForm={setChannelForm}
       />
+      <Modal
+        isOpen={testResult !== null}
+        onClose={() => setTestResult(null)}
+        title={testResult?.kind === 'channel'
+          ? t('pages.notifications.channelTestResultTitle', { name: testResult.name })
+          : t('pages.notifications.ruleTestResultTitle', { name: testResult?.name || '' })}
+        maxWidth="max-w-lg"
+      >
+        {testResult && (
+          <div className="space-y-4 text-sm">
+            {testResult.kind === 'rule' && (
+              <p className="text-gray-600 dark:text-gray-300">
+                {t(testResult.result.source === 'current'
+                  ? 'pages.notifications.ruleTestCurrentHelp'
+                  : 'pages.notifications.ruleTestSampleHelp')}
+              </p>
+            )}
+            <div className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+              <p className="font-semibold">{testResult.result.title}</p>
+              <p className="mt-2 whitespace-pre-wrap">{testResult.result.message}</p>
+            </div>
+            <div className="space-y-1">
+              {(testResult.kind === 'channel' ? [testResult.result.delivery] : testResult.result.deliveries).map((delivery) => (
+                <p key={delivery.channel_id}>
+                  {delivery.channel_name}: {t(`pages.notifications.deliveryStatuses.${delivery.status}`)}
+                  {delivery.error ? ` — ${delivery.error}` : ''}
+                </p>
+              ))}
+            </div>
+          </div>
+        )}
+      </Modal>
       <RuleModal
         open={ruleModalOpen}
         editingRule={editingRule}
@@ -1356,6 +1458,7 @@ function ChannelRow({
   hasAttachedRule,
   onEdit,
   onTest,
+  testing,
   onDelete,
   canManageSettings,
 }: {
@@ -1364,6 +1467,7 @@ function ChannelRow({
   hasAttachedRule: boolean;
   onEdit: () => void;
   onTest: () => void;
+  testing: boolean;
   onDelete: () => void;
   canManageSettings: boolean;
 }) {
@@ -1389,7 +1493,7 @@ function ChannelRow({
         </div>
         {canManageSettings && (
           <div className="flex flex-wrap gap-2 md:self-start">
-            <ActionIconButton label={t('pages.notifications.sendTest')} icon={<SendHorizontal className="h-4 w-4" />} onClick={onTest} />
+            <ActionIconButton label={t('pages.notifications.sendTest')} icon={<SendHorizontal className="h-4 w-4" />} onClick={onTest} disabled={testing || !channel.enabled} />
             <ActionIconButton label={t('pages.notifications.editDestination')} icon={<SquarePen className="h-4 w-4" />} onClick={onEdit} />
             <ActionIconButton label={t('pages.notifications.deleteDestination')} icon={<Trash2 className="h-4 w-4" />} onClick={onDelete} variant="danger" />
           </div>
@@ -1406,6 +1510,8 @@ function RuleRow({
   channels,
   hasDestinations,
   onEdit,
+  onTest,
+  testing,
   onDelete,
   canManageSettings,
 }: {
@@ -1414,6 +1520,8 @@ function RuleRow({
   channels: NotificationChannel[];
   hasDestinations: boolean;
   onEdit: () => void;
+  onTest: () => void;
+  testing: boolean;
   onDelete: () => void;
   canManageSettings: boolean;
 }) {
@@ -1438,6 +1546,7 @@ function RuleRow({
         </div>
         {canManageSettings && (
           <div className="flex flex-wrap gap-2 md:self-start">
+            <ActionIconButton label={t('pages.notifications.sendRuleTest')} icon={<SendHorizontal className="h-4 w-4" />} onClick={onTest} disabled={!hasDestinations || testing} />
             <ActionIconButton label={t('pages.notifications.editRule')} icon={<SquarePen className="h-4 w-4" />} onClick={onEdit} />
             <ActionIconButton label={t('pages.notifications.deleteRule')} icon={<Trash2 className="h-4 w-4" />} onClick={onDelete} variant="danger" />
           </div>
@@ -1453,11 +1562,13 @@ function ActionIconButton({
   icon,
   onClick,
   variant = 'neutral',
+  disabled = false,
 }: {
   label: string;
   icon: ReactNode;
   onClick: () => void;
   variant?: 'neutral' | 'danger' | 'accent';
+  disabled?: boolean;
 }) {
   const styles = {
     neutral: 'text-gray-500 hover:text-gray-700 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-gray-200 dark:hover:bg-gray-700/60',
@@ -1469,9 +1580,10 @@ function ActionIconButton({
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       aria-label={label}
       title={label}
-      className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors ${styles[variant]}`}
+      className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${styles[variant]}`}
     >
       {icon}
     </button>
@@ -1496,6 +1608,55 @@ function ToastBanner({ toast, onClose }: { toast: NonNullable<ToastState>; onClo
   );
 }
 
+function GeneratedNameInput({
+  value,
+  onChange,
+  onGenerate,
+  generateLabel,
+  placeholder,
+  help,
+  disabled,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  onGenerate: () => void;
+  generateLabel: string;
+  placeholder?: string;
+  help?: string;
+  disabled: boolean;
+}) {
+  const { t } = useI18n();
+  const id = useId();
+  return (
+    <div className="space-y-2 text-sm">
+      <label htmlFor={id} className="block leading-5 font-medium">{t('common.name')}</label>
+      <div className="flex gap-2">
+        <input
+          id={id}
+          name="name"
+          type="text"
+          value={value}
+          placeholder={placeholder}
+          autoComplete="off"
+          onChange={(event) => onChange(event.target.value)}
+          className="h-10 min-w-0 flex-1 rounded-lg border border-gray-300 px-3 dark:border-gray-700 dark:bg-gray-900"
+        />
+        <button
+          type="button"
+          disabled={disabled}
+          aria-label={generateLabel}
+          title={generateLabel}
+          onClick={onGenerate}
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-gray-300 text-primary-600 hover:bg-primary-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-600 disabled:opacity-50 dark:border-gray-700 dark:hover:bg-gray-800"
+        >
+          <WandSparkles className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </div>
+      {help && <p className="text-xs text-gray-500 dark:text-gray-400">{help}</p>}
+    </div>
+  );
+}
+
 function ChannelModal({
   open,
   editingChannel,
@@ -1514,18 +1675,26 @@ function ChannelModal({
   onSetForm: Dispatch<SetStateAction<ChannelFormState>>;
 }) {
   const { t } = useI18n();
+  const channelTypeId = useId();
 
   return (
     <Modal isOpen={open} onClose={onClose} title={editingChannel ? t('pages.notifications.editDestinationTitle') : t('pages.notifications.newDestinationTitle')} maxWidth="max-w-4xl">
       <div className="space-y-5">
         <div className="grid gap-4 md:grid-cols-2">
-          <LabeledInput label={t('common.name')} value={form.name} onChange={(value) => onSetForm((current) => ({ ...current, name: value }))} />
-          <label className="space-y-2 text-sm">
-            <span className="font-medium">{t('tableColumns.type')}</span>
+          <GeneratedNameInput
+            value={form.name}
+            onChange={(value) => onSetForm((current) => ({ ...current, name: value }))}
+            onGenerate={() => onSetForm((current) => ({ ...current, name: generateChannelName(current, t) }))}
+            generateLabel={t('pages.notifications.generateRuleName')}
+            disabled={saving}
+          />
+          <div className="space-y-2 text-sm">
+            <label htmlFor={channelTypeId} className="block leading-5 font-medium">{t('tableColumns.type')}</label>
             <select
+              id={channelTypeId}
               value={form.type}
               onChange={(event) => onSetForm((current) => ({ ...current, type: event.target.value as NotificationChannelType, config: cloneConfig(defaultChannelConfig(event.target.value as NotificationChannelType)) }))}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-900"
+              className="h-10 w-full rounded-lg border border-gray-300 px-3 dark:border-gray-700 dark:bg-gray-900"
             >
               <option value="ntfy">ntfy</option>
               <option value="gotify">Gotify</option>
@@ -1533,7 +1702,7 @@ function ChannelModal({
               <option value="mqtt">MQTT</option>
               <option value="webhook">Webhook</option>
             </select>
-          </label>
+          </div>
         </div>
 
         <div className="flex items-center gap-3">
@@ -1574,6 +1743,7 @@ function RuleModal({
   onSetForm: Dispatch<SetStateAction<RuleFormState>>;
 }) {
   const { t } = useI18n();
+  const ruleTypeId = useId();
   const supportsAlertFilters = form.type !== 'application-update' && form.type !== 'crowdsec-update' && form.type !== 'lapi-availability';
   const simulatedFilterLabel = form.type === 'ip-ban'
     ? t('pages.notifications.includeSimulatedDecisions')
@@ -1585,13 +1755,22 @@ function RuleModal({
     <Modal isOpen={open} onClose={onClose} title={editingRule ? t('pages.notifications.editRuleTitle') : t('pages.notifications.newRuleTitle')} maxWidth="max-w-3xl">
       <div className="space-y-4">
         <div className="grid gap-4 md:grid-cols-2">
-          <LabeledInput label={t('common.name')} value={form.name} onChange={(value) => onSetForm((current) => ({ ...current, name: value }))} />
-          <label className="space-y-2 text-sm">
-            <span className="font-medium">{t('pages.notifications.ruleType')}</span>
+          <GeneratedNameInput
+            value={form.name}
+            onChange={(value) => onSetForm((current) => ({ ...current, name: value }))}
+            onGenerate={() => onSetForm((current) => ({ ...current, name: generateRuleName(current, t) }))}
+            generateLabel={t('pages.notifications.generateRuleName')}
+            placeholder={t(`pages.notifications.ruleNameExamples.${form.type}`)}
+            help={t('pages.notifications.ruleNameHelp')}
+            disabled={saving}
+          />
+          <div className="space-y-2 text-sm">
+            <label htmlFor={ruleTypeId} className="block leading-5 font-medium">{t('pages.notifications.ruleType')}</label>
             <select
+              id={ruleTypeId}
               value={form.type}
               onChange={(event) => onSetForm((current) => ({ ...current, type: event.target.value as NotificationRuleType, config: { ...RULE_DEFAULTS[event.target.value as NotificationRuleType] } }))}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-900"
+              className="h-10 w-full rounded-lg border border-gray-300 px-3 dark:border-gray-700 dark:bg-gray-900"
             >
               <option value="alert-spike">{t('pages.notifications.ruleTypes.alertSpike')}</option>
               <option value="alert-threshold">{t('pages.notifications.ruleTypes.alertThreshold')}</option>
@@ -1602,7 +1781,7 @@ function RuleModal({
               <option value="crowdsec-update">{t('pages.notifications.ruleTypes.crowdsecUpdate')}</option>
               <option value="lapi-availability">{t('pages.notifications.ruleTypes.lapiAvailability')}</option>
             </select>
-          </label>
+          </div>
         </div>
         <div className="grid gap-4 md:grid-cols-2">
           <label className="space-y-2 text-sm">

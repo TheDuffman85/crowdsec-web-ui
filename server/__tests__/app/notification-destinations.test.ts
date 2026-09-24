@@ -169,6 +169,11 @@ describe('createApp notification destinations', () => {
 
     const testChannel = await controller.fetch(new Request(`http://localhost/crowdsec/api/notification-channels/${channelPayload.id}/test`, { method: 'POST' }));
     expect(testChannel.status).toBe(200);
+    expect(await testChannel.json()).toMatchObject({
+      success: true,
+      title: 'CrowdSec notification test',
+      delivery: expect.objectContaining({ status: 'delivered', channel_id: channelPayload.id }),
+    });
 
     controller.stopBackgroundTasks();
     database.close();
