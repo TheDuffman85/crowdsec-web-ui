@@ -131,13 +131,18 @@ export function createCrowdsecUpdateChecker(options: CrowdsecUpdateCheckOptions)
 
 interface ParsedVersion { core: [number, number, number]; prerelease: string[] }
 
+function isCommitHashSuffix(parts: string[]): boolean {
+  return parts.length === 1 && /^[0-9a-f]{7,40}$/i.test(parts[0]);
+}
+
 function parseVersion(input: string): ParsedVersion | null {
   const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(input.trim());
   if (!match) return null;
   const core = [Number(match[1]), Number(match[2]), Number(match[3])] as [number, number, number];
   if (!core.every(Number.isSafeInteger) || match.slice(1, 4).some((part) => part.length > 1 && part.startsWith('0'))) return null;
   const prerelease = match[4]?.split('.') || [];
-  if (prerelease.some((part) => !part || (/^\d+$/.test(part) && part.length > 1 && part.startsWith('0')))) return null;
+  if (!isCommitHashSuffix(prerelease)
+    && prerelease.some((part) => !part || (/^\d+$/.test(part) && part.length > 1 && part.startsWith('0')))) return null;
   return { core, prerelease };
 }
 
@@ -148,11 +153,15 @@ export function compareVersions(left: string, right: string): number {
   for (let index = 0; index < 3; index += 1) {
     if (a.core[index] !== b.core[index]) return Math.sign(a.core[index] - b.core[index]);
   }
-  if (a.prerelease.length === 0) return b.prerelease.length === 0 ? 0 : 1;
-  if (b.prerelease.length === 0) return -1;
-  for (let index = 0; index < Math.max(a.prerelease.length, b.prerelease.length); index += 1) {
-    const leftPart = a.prerelease[index];
-    const rightPart = b.prerelease[index];
+  // CrowdSec appends its commit hash with a hyphen to release builds. Unlike a
+  // SemVer prerelease, that suffix does not make the installed release older.
+  const aPrerelease = isCommitHashSuffix(a.prerelease) ? [] : a.prerelease;
+  const bPrerelease = isCommitHashSuffix(b.prerelease) ? [] : b.prerelease;
+  if (aPrerelease.length === 0) return bPrerelease.length === 0 ? 0 : 1;
+  if (bPrerelease.length === 0) return -1;
+  for (let index = 0; index < Math.max(aPrerelease.length, bPrerelease.length); index += 1) {
+    const leftPart = aPrerelease[index];
+    const rightPart = bPrerelease[index];
     if (leftPart === undefined) return -1;
     if (rightPart === undefined) return 1;
     if (leftPart === rightPart) continue;

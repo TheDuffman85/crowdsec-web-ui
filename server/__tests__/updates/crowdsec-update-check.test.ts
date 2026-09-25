@@ -25,6 +25,8 @@ describe('CrowdSec update checker', () => {
     expect(compareVersions('v1.8.1', 'v1.8.0')).toBeGreaterThan(0);
     expect(compareVersions('v1.8.0-rc.2', 'v1.8.0')).toBeLessThan(0);
     expect(compareVersions('v1.8.0-rc.10', 'v1.8.0-rc.2')).toBeGreaterThan(0);
+    expect(compareVersions('v1.8.1-90b9157', 'v1.8.1')).toBe(0);
+    expect(compareVersions('v1.8.1-0123456', 'v1.8.1')).toBe(0);
     expect(() => compareVersions('nightly', 'v1.8.0')).toThrow();
   });
 
@@ -82,6 +84,24 @@ describe('CrowdSec update checker', () => {
     releaseVersion = 'v1.8.1';
     expect((await check())[0].remoteVersion).toBe('v1.8.1');
     expect(releaseFetch).toHaveBeenCalledTimes(2);
+  });
+
+  test('does not report a release build with a commit suffix as outdated', async () => {
+    const check = createCrowdsecUpdateChecker({
+      instances: [instance('a', ['one'])],
+      prometheusTimeoutMs: 1_000,
+      releaseFetchImpl: async () => Response.json({
+        tag_name: 'v1.8.1',
+        html_url: 'https://github.com/crowdsecurity/crowdsec/releases/tag/v1.8.1',
+      }),
+      metricsFetchImpl: async () => new Response('cs_info{version="v1.8.1-90b9157"} 1\n'),
+    });
+
+    expect(await check()).toEqual([expect.objectContaining({
+      currentVersion: 'v1.8.1-90b9157',
+      remoteVersion: 'v1.8.1',
+      updateAvailable: false,
+    })]);
   });
 
   test('marks checks unknown on temporary failures and retries them', async () => {
