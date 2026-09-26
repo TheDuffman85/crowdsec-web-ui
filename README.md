@@ -170,6 +170,10 @@ Adjust the URL and certificate paths. Enable `CONFIG_INSTANCE_LAPI_TLS_CA_FILE` 
 > [!CAUTION]
 > Use HTTPS and a hardened reverse proxy for public deployments. Built-in authentication protects the UI and API, but TLS terminates outside the application. OIDC integrations include [Authentik](https://goauthentik.io/), [Authelia](https://www.authelia.com/), and [Keycloak](https://www.keycloak.org/). Migrated installations that predate authentication remain unauthenticated until explicitly enabled.
 
+## ☁️ One-Click Deploy
+
+[![Deploy on RepoCloud](https://d16t0pc4846x52.cloudfront.net/deploylobe.svg)](https://repocloud.io/details/CrowdSec%20Web%20UI/)
+
 ## Architecture
 
 | Component | Implementation |
