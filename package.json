@@ -61,7 +61,7 @@
     "@eslint/js": "^10.0.1",
     "@nivo/core": "^0.99.0",
     "@nivo/geo": "^0.99.0",
-    "@tailwindcss/vite": "^4.3.2",
+    "@tailwindcss/vite": "^4.3.3",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.1",
