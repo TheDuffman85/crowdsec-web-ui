@@ -10,8 +10,8 @@ Contributor setup, build metadata, verification, and implementation notes for Cr
 
 | Tool | Version |
 | --- | --- |
-| Node.js | `24.20.0` |
-| pnpm | `11.9.0` |
+| Node.js | `24.21.0` (LTS) |
+| pnpm | `12.9.1` |
 | CrowdSec | A reachable LAPI for normal development |
 
 ### Install dependencies
@@ -102,6 +102,11 @@ pnpm run lint
 pnpm run build
 ```
 
+Type checking uses TypeScript 7 through the `@typescript/native` package alias. The
+`typescript` alias provides Microsoft's TypeScript 6 API compatibility package for
+ESLint and other tools that still require the compiler API. This follows the
+[upstream compatibility guidance](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/#running-side-by-side-with-typescript-6.0).
+
 The synthetic large-dataset workflow is documented separately in [LOAD_TESTING.md](LOAD_TESTING.md).
 
 ## Build and Image Metadata
@@ -122,7 +127,7 @@ These values apply when building a local production bundle or container image.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `BACKEND_URL` | `http://localhost:3000` | Vite proxy target for `/api`. |
-| `CROWDSEC_MTLS_IMAGE` | `crowdsecurity/crowdsec:latest` | Image used by the CrowdSec mTLS smoke test. |
+| `CROWDSEC_MTLS_IMAGE` | `crowdsecurity/crowdsec:v1.8.1` | Image used by the CrowdSec mTLS smoke test. |
 | `CROWDSEC_MTLS_KEEP` | `0` | Set to `1` to retain the disposable test container. |
 | `CROWDSEC_MTLS_CONTAINER` | Generated | Override the disposable container name. |
 

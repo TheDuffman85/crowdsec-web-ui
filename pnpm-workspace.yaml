@@ -3,5 +3,5 @@ allowBuilds:
   esbuild: true
   local-reverse-geocoder: false
 overrides:
-  ip-address: 10.1.1
-  ws: 8.21.1
+  ip-address: 10.7.3
+  ws: 8.22.0
