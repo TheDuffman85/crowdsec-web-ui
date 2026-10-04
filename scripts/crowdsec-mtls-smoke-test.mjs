@@ -5,7 +5,7 @@ import path from 'node:path';
 import tls from 'node:tls';
 import { LapiClient } from '../server/lapi.ts';
 
-const image = process.env.CROWDSEC_MTLS_IMAGE || 'crowdsecurity/crowdsec:latest';
+const image = process.env.CROWDSEC_MTLS_IMAGE || 'crowdsecurity/crowdsec:v1.8.1';
 const keepContainer = process.env.CROWDSEC_MTLS_KEEP === '1';
 const containerName = process.env.CROWDSEC_MTLS_CONTAINER || `crowdsec-web-ui-mtls-${Date.now()}`;
 const machineCommonName = 'crowdsec-web-ui-mtls';
