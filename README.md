@@ -1,4 +1,6 @@
 <div align="center">
+
+[![Deploy to Railyard](https://app.railyard.run/deploy/badge)](https://app.railyard.run/deploy?repo=https://github.com/TheDuffman85/crowdsec-web-ui)
   <img src="client/public/logo.svg" alt="CrowdSec Web UI Logo" width="400" />
 </div>
 
