@@ -205,7 +205,9 @@ Use `CONFIG_FILE` only to select another existing file. [`config.example.yaml`](
 ### Environment overrides
 
 - Values are parsed as YAML and validated.
+- `CONFIG_AUTH_OIDC_CLIENT_ID` parses YAML scalars as strings, preserving numeric identifiers and leading zeros. For example, `CONFIG_AUTH_OIDC_CLIENT_ID=123456789012345678901` keeps every digit; YAML-quoted values also work. In `config.yaml` or whole-section `CONFIG_AUTH` overrides, quote numeric client IDs (for example `clientId: "123456789012345678901"`).
 - Arrays use zero-based contiguous indexes: `CONFIG_AUTH_OIDC_ADMIN_GROUPS_0`, `CONFIG_INSTANCES_0_ID`, `CONFIG_INSTANCES_0_METRICS_0_URL`.
+- OIDC role groups require YAML arrays (for example `CONFIG_AUTH_OIDC_ADMIN_GROUPS='[crowdsec_admins]'` and `CONFIG_AUTH_OIDC_READ_ONLY_GROUPS='[crowdsec_users]'`) or indexed variables, even for a single group.
 - Whole sections accept YAML through `CONFIG_SERVER`, `CONFIG_STORAGE`, `CONFIG_UI`, `CONFIG_AUTH`, `CONFIG_NOTIFICATIONS`, `CONFIG_AUDIT`, `CONFIG_UPDATES`, `CONFIG_CROWDSEC`, or `CONFIG_INSTANCES`.
 - `CONFIG_INSTANCE_*` addresses instance `0`: `CONFIG_INSTANCE_NAME` equals `CONFIG_INSTANCES_0_NAME`. Metrics index `0` may also be omitted: `CONFIG_INSTANCES_0_METRICS_URL` equals `CONFIG_INSTANCES_0_METRICS_0_URL`, and `CONFIG_INSTANCE_METRICS_URL` applies both shorthands. Do not set equivalent forms together.
 - Secrets accept a direct string or exactly one `env: NAME` / `file: PATH` reference. Secret overrides also accept `_FILE`.

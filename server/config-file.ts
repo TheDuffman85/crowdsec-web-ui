@@ -838,7 +838,10 @@ export function hasConfigEnvironmentOverrides(env: NodeJS.ProcessEnv): boolean {
 function parseConfigEnvironmentValue(name: string, value: string | undefined): unknown {
   if (!value) return '';
   try {
-    return parseYaml(value);
+    // Client IDs are opaque strings; numeric parsing can lose precision or leading zeros.
+    return name === 'CONFIG_AUTH_OIDC_CLIENT_ID'
+      ? parseYaml(value, { schema: 'failsafe' })
+      : parseYaml(value);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Configuration error: failed to parse ${name} as YAML: ${message}`);
