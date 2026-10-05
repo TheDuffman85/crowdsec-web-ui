@@ -8,6 +8,99 @@ import { ConfigurationLoadError } from '../../config-error';
 import { createMissingConfigPath, createRuntimeConfig, createTempConfig, createTempSecret, tempDirs } from './harness';
 
 describe('configuration overrides', () => {
+  const clientIds = [
+    ['123456', '123456'],
+    ['123456789012345678901', '123456789012345678901'],
+    ['00123456', '00123456'],
+    ['crowdsec-web-ui', 'crowdsec-web-ui'],
+    ['"123456789012345678901"', '123456789012345678901'],
+    ["'00123456'", '00123456'],
+    ['true', 'true'],
+    ['false', 'false'],
+    ['null', 'null'],
+    ['  00123456  ', '00123456'],
+  ];
+
+  test.each(clientIds)('generates and reloads the exact OIDC client ID from %j', (value, expected) => {
+    const configFile = createMissingConfigPath();
+    const config = createRuntimeConfigImpl({
+      CONFIG_AUTH_OIDC_CLIENT_ID: value,
+    }, { defaultConfigFile: configFile });
+
+    expect(config.dashboardAuth.oidcClientId).toBe(expected);
+    expect(parseYaml(readFileSync(configFile, 'utf8')).auth.oidc.clientId).toBe(expected);
+    expect(createRuntimeConfigImpl({ CONFIG_FILE: configFile }).dashboardAuth.oidcClientId).toBe(expected);
+  });
+
+  test.each(clientIds)('overrides and persists the exact OIDC client ID from %j', (value, expected) => {
+    const configFile = createMissingConfigPath();
+    createRuntimeConfigImpl({ CONFIG_AUTH_OIDC_CLIENT_ID: 'original-client' }, { defaultConfigFile: configFile });
+    const original = readFileSync(configFile, 'utf8');
+    const env = { CONFIG_FILE: configFile, CONFIG_AUTH_OIDC_CLIENT_ID: value };
+
+    expect(createRuntimeConfigImpl(env).dashboardAuth.oidcClientId).toBe(expected);
+    expect(readFileSync(configFile, 'utf8')).toBe(original);
+    expect(createRuntimeConfigImpl({ CONFIG_FILE: configFile }).dashboardAuth.oidcClientId).toBe('original-client');
+
+    expect(createRuntimeConfigImpl({ ...env, CONFIG_PERSIST_OVERRIDES: 'true' }).dashboardAuth.oidcClientId).toBe(expected);
+    expect(parseYaml(readFileSync(configFile, 'utf8')).auth.oidc.clientId).toBe(expected);
+    expect(createRuntimeConfigImpl({ CONFIG_FILE: configFile }).dashboardAuth.oidcClientId).toBe(expected);
+  });
+
+  test.each(['', '   ', '""', '[client]', '{client: value}', '"unterminated'])(
+    'rejects invalid OIDC client ID %j without writing configuration',
+    (value) => {
+      const configFile = createMissingConfigPath();
+      const expectedError = value === '"unterminated'
+        ? /failed to parse CONFIG_AUTH_OIDC_CLIENT_ID as YAML/i
+        : /auth\.oidc\.clientId must be a non-empty string/i;
+
+      expect(() => createRuntimeConfigImpl({
+        CONFIG_AUTH_OIDC_CLIENT_ID: value,
+      }, { defaultConfigFile: configFile })).toThrow(expectedError);
+      expect(existsSync(configFile)).toBe(false);
+
+      createRuntimeConfigImpl({}, { defaultConfigFile: configFile });
+      const original = readFileSync(configFile, 'utf8');
+      for (const persist of ['false', 'true']) {
+        expect(() => createRuntimeConfigImpl({
+          CONFIG_FILE: configFile,
+          CONFIG_AUTH_OIDC_CLIENT_ID: value,
+          CONFIG_PERSIST_OVERRIDES: persist,
+        })).toThrow(expectedError);
+        expect(readFileSync(configFile, 'utf8')).toBe(original);
+      }
+    },
+  );
+
+  test('keeps other environment override types when configuring a numeric OIDC client ID', () => {
+    const config = createRuntimeConfig({
+      CONFIG_AUTH_OIDC_CLIENT_ID: '123456789012345678901',
+      CONFIG_SERVER_PORT: '4200',
+      CONFIG_UI_READ_ONLY: 'true',
+      CONFIG_AUTH_OIDC_ADMIN_GROUPS: '[crowdsec_admins]',
+      CONFIG_AUTH_OIDC_READ_ONLY_GROUPS: '[crowdsec_users]',
+      CONFIG_AUTH_OIDC_CLIENT_SECRET: '00123456',
+    });
+
+    expect(config.port).toBe(4200);
+    expect(config.readOnly).toBe(true);
+    expect(config.dashboardAuth).toMatchObject({
+      oidcClientId: '123456789012345678901',
+      oidcClientSecret: '00123456',
+      oidcAdminGroups: ['crowdsec_admins'],
+      oidcReadOnlyGroups: ['crowdsec_users'],
+    });
+  });
+
+  test('still requires a string client ID in whole-section overrides and YAML files', () => {
+    const configFile = createTempConfig('auth:\n  oidc:\n    clientId: 123456\n');
+    expect(() => createRuntimeConfigImpl({ CONFIG_FILE: configFile }))
+      .toThrow(/auth\.oidc\.clientId must be a non-empty string/i);
+    expect(() => createRuntimeConfig({ CONFIG_AUTH: '{oidc: {clientId: 123456}}' }))
+      .toThrow(/auth\.oidc\.clientId must be a non-empty string/i);
+  });
+
   test('applies CONFIG_ values without modifying an existing YAML', () => {
     const generatedConfigFile = createMissingConfigPath();
     createRuntimeConfigImpl({ CONFIG_SERVER_PORT: '4100' }, { defaultConfigFile: generatedConfigFile });
