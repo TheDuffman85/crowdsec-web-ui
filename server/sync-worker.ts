@@ -40,6 +40,10 @@ parentPort?.on('message', (message: WorkerRequest) => {
 });
 
 function execute(request: WorkerRequest['request']): unknown {
+  if (request.type === 'set-meta') {
+    database.setMeta(String(request.key), String(request.value));
+    return undefined;
+  }
   if (request.type === 'begin-transaction') {
     database.db.exec('BEGIN IMMEDIATE');
     return undefined;

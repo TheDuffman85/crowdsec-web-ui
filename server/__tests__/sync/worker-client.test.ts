@@ -226,21 +226,59 @@ describe('DatabaseSyncWorker', () => {
 
     await worker.runTransaction(async () => {
       await worker.persistAlerts([mutation]);
+      await worker.setMeta('alert_reconcile_window_state', 'committed');
       expect(database.countAlerts()).toBe(0);
+      expect(database.getMeta('alert_reconcile_window_state')).toBeNull();
     });
     expect(database.countAlerts()).toBe(1);
+    expect(database.getMeta('alert_reconcile_window_state')?.value).toBe('committed');
 
     await expect(worker.runTransaction(async () => {
       await worker.persistAlerts([{
         ...mutation,
         alert: { ...mutation.alert, $id: 2, $uuid: 'rolled-back-alert' },
       }]);
+      await worker.setMeta('alert_reconcile_window_state', 'rolled-back');
       expect(database.countAlerts()).toBe(1);
       throw new Error('abort refresh');
     })).rejects.toThrow('abort refresh');
     expect(database.countAlerts()).toBe(1);
+    expect(database.getMeta('alert_reconcile_window_state')?.value).toBe('committed');
 
     database.close();
+  });
+
+  test('queues metadata writes outside transactions without blocking the event loop', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-sync-worker-'));
+    tempDirs.push(dir);
+    const dbPath = path.join(dir, 'test.db');
+    const database = new CrowdsecDatabase({ dbPath });
+    const worker = new DatabaseSyncWorker({ dbPath });
+    workers.push(worker);
+    let releaseTransaction!: () => void;
+    const transactionGate = new Promise<void>((resolve) => { releaseTransaction = resolve; });
+    let transactionStarted!: () => void;
+    const started = new Promise<void>((resolve) => { transactionStarted = resolve; });
+    const transaction = worker.runTransaction(async () => {
+      transactionStarted();
+      await transactionGate;
+    });
+
+    try {
+      await started;
+      const metadataWrite = worker.setMeta('alert_reconcile_window_state', 'queued');
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(database.getMeta('alert_reconcile_window_state')).toBeNull();
+      releaseTransaction();
+      await transaction;
+      await metadataWrite;
+      expect(database.getMeta('alert_reconcile_window_state')?.value).toBe('queued');
+    } finally {
+      releaseTransaction();
+      await transaction;
+      worker.close();
+      database.close();
+    }
   });
 
   test('compares large alert decision membership exactly in the sync worker', async () => {

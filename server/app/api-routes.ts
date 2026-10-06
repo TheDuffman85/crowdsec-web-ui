@@ -1150,7 +1150,7 @@ app.post(`${config.basePath}/api/cache/clear`, ensureAuth, async (context) => {
   try {
     console.log('Manual cache clear requested');
     await syncWorker.clearSyncData();
-    resetReconcileWindowState();
+    await resetReconcileWindowState();
     state.cache.isInitialized = false;
     state.cache.isComplete = false;
     state.cache.lastUpdate = null;

@@ -47,6 +47,7 @@ export interface DatabaseTransactionOptions {
 }
 
 type SyncWorkerRequest =
+  | { type: 'set-meta'; key: string; value: string }
   | { type: 'persist-alerts'; mutations: SyncAlertMutation[] }
   | { type: 'compare-alert-decisions'; comparisons: AlertDecisionComparison[] }
   | { type: 'delete-alerts-missing-between'; start: string; end: string; keepIds: Array<string | number>; instanceId?: string }
@@ -151,6 +152,10 @@ export class DatabaseSyncWorker {
 
   clearSyncData(): Promise<void> {
     return this.execute({ type: 'clear-sync-data' });
+  }
+
+  setMeta(key: string, value: string): Promise<void> {
+    return this.execute({ type: 'set-meta', key, value });
   }
 
   runExclusive<T>(operation: () => T | Promise<T>): Promise<T> {
