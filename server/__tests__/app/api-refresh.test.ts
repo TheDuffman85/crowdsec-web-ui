@@ -170,6 +170,74 @@ describe('createApp refresh API', () => {
     expect(fetchCalls.some((call) => call.url.includes('/v1/alerts?'))).toBe(true);
   });
 
+  test.each(['delta', 'latest'] as const)('rolls back %s data and reconciliation state when commit fails', async (mode) => {
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const initialAlert = sampleAlert({ id: 931, uuid: 'rollback-931', decisions: [] });
+    const refreshedAlert = sampleAlert({ id: 932, uuid: 'rollback-932', decisions: [] });
+    seedAlert(database, initialAlert);
+    const syncWorker = new DatabaseSyncWorker({ dbPath: database.dbPath });
+    const runTransaction = syncWorker.runTransaction.bind(syncWorker);
+    const saveMetadata = vi.spyOn(syncWorker, 'setMeta');
+    vi.spyOn(syncWorker, 'runTransaction').mockImplementationOnce((operation, options) => (
+      runTransaction(operation, {
+        ...options,
+        beforeCommit: async () => {
+          await options?.beforeCommit?.();
+          throw new Error('commit failed after metadata save');
+        },
+      })
+    ));
+    const lastUpdate = new Date(Date.now() - 10_000).toISOString();
+    const { controller, lapiClient } = createController({
+      database,
+      syncWorker,
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: '0',
+        CROWDSEC_RECONCILE_WINDOW: '1m',
+        CROWDSEC_RECONCILE_RECENT_INTERVAL: '1h',
+        CROWDSEC_RECONCILE_WINDOWS_PER_REFRESH: '3',
+      },
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate },
+      fetchResolver: (url) => url.includes('/v1/alerts?')
+        ? Response.json([initialAlert, refreshedAlert])
+        : undefined,
+    });
+    const published = vi.fn();
+    const unsubscribe = controller.subscribeCacheUpdates(published);
+
+    try {
+      await lapiClient.login();
+      const response = await controller.fetch(mode === 'latest'
+        ? new Request('http://localhost/crowdsec/api/cache/refresh', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode }),
+          })
+        : new Request('http://localhost/crowdsec/api/alerts'));
+      expect(response.status).toBe(mode === 'latest' ? 502 : 200);
+      expect(saveMetadata).toHaveBeenCalledTimes(1);
+      expect(database.countAlerts()).toBe(1);
+      expect(database.getMeta('alert_reconcile_window_state')).toBeNull();
+      expect(controller.getCacheLastUpdate()).toBe(lastUpdate);
+      expect(published).not.toHaveBeenCalled();
+
+      // The failed head/window successes must remain due in memory, so the
+      // next automatic delta retries them and persists its own cutoff.
+      const retryStartedAt = Date.now();
+      expect((await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'))).status).toBe(200);
+      expect(saveMetadata).toHaveBeenCalledTimes(2);
+      const persisted = JSON.parse(database.getMeta('alert_reconcile_window_state')!.value);
+      expect(persisted.headLastSuccess).toBeGreaterThanOrEqual(retryStartedAt);
+      expect(persisted.headLastSuccess).toBeLessThanOrEqual(Date.parse(controller.getCacheLastUpdate()!));
+      expect(database.countAlerts()).toBe(2);
+      expect(published).toHaveBeenCalledOnce();
+    } finally {
+      unsubscribe();
+      controller.stopBackgroundTasks();
+      database.close();
+    }
+  });
+
   test('publishes the committed revision while dashboard analytics warm in the background', async () => {
     const initialAlert = sampleAlert({
       id: 901,

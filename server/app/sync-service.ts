@@ -1114,15 +1114,16 @@ async function getActiveReconcileWindowKeys(now: number): Promise<Set<string>> {
   return keys;
 }
 
-function seedReconcileWindowState(now: number): void {
+async function seedReconcileWindowState(now: number): Promise<void> {
   const windows = Object.fromEntries(createClosedReconcileWindows(now).map((window) => [window.key, now]));
-  state.reconcileWindowState = {
+  const nextState: ReconcileWindowState = {
     version: 1,
     configFingerprint: reconcileConfigFingerprint,
     headLastSuccess: now,
     windows,
   };
-  saveReconcileWindowState();
+  await saveReconcileWindowState(nextState);
+  state.reconcileWindowState = nextState;
 }
 
 async function planDueReconcileWindows(now: number): Promise<ReconcilePlan> {
@@ -1209,11 +1210,11 @@ function recordReconcileWindowSuccess(window: ReconcileWindow, now: number): voi
   else state.reconcileWindowState.windows[window.key] = now;
 }
 
-function finishReconcilePlan(plan: ReconcilePlan): void {
+async function finishReconcilePlan(plan: ReconcilePlan): Promise<void> {
   state.reconcileWindowState.windows = Object.fromEntries(
     Object.entries(state.reconcileWindowState.windows).filter(([key]) => plan.currentKeys.has(key)),
   );
-  if (plan.windows.length > 0) saveReconcileWindowState();
+  if (plan.windows.length > 0) await saveReconcileWindowState();
 }
 
 async function runPlannedReconcileWindows(
@@ -1430,7 +1431,7 @@ async function initializeSingleInstanceCache(options: { showOverlay?: boolean } 
       cache.isInitialized = syncSummary.state !== 'failed';
       cache.isComplete = syncSummary.state === 'complete';
       if (syncSummary.state === 'complete') {
-        seedReconcileWindowState(Date.parse(syncSummary.syncedThrough));
+        await seedReconcileWindowState(Date.parse(syncSummary.syncedThrough));
       }
       lapiClient.updateStatus(syncSummary.state === 'complete', syncSummary.errors[0] ? { message: syncSummary.errors[0] } : null);
       if (cache.isInitialized) {
@@ -1639,7 +1640,7 @@ async function initializeMultiInstanceCache(options: { showOverlay?: boolean } =
         historicalInstanceSyncPending.delete(runtime.instanceId);
       }
       if (summaries[0]?.state === 'complete') {
-        seedReconcileWindowState(Date.parse(summaries[0].syncedThrough));
+        await seedReconcileWindowState(Date.parse(summaries[0].syncedThrough));
       }
       await runNotificationEvaluation('multi-instance cache initialization');
     dependencies.state.cacheRefreshCompletedAt = completedAt;
@@ -1751,6 +1752,9 @@ async function updateCacheDelta(options: { throwOnError?: boolean; reconcile?: b
         const duplicateRefreshStartedAt = Date.now();
         await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
         console.log(`Decision duplicate index refreshed in ${formatElapsedTime(Date.now() - duplicateRefreshStartedAt)}.`);
+        // Persist through the worker before commit. A queued post-commit save
+        // could wait on another refresh that needs our publication lock.
+        if (reconcilePlan) await finishReconcilePlan(reconcilePlan);
         return { deltaSummary, reconcileSummary, dataChanged, cleanupSucceeded: removed.succeeded };
       });
       refreshResult = committedRefresh.result;
@@ -1763,7 +1767,6 @@ async function updateCacheDelta(options: { throwOnError?: boolean; reconcile?: b
     let publishedRevision: string | null = null;
     try {
       const { deltaSummary, reconcileSummary, dataChanged } = refreshResult;
-      if (reconcilePlan) finishReconcilePlan(reconcilePlan);
       prepareDashboardStatsAfterRefreshInBackground(dataChanged, undefined, 'delta update');
       // Advance only through the exact authoritative delta end. Work performed
       // after this timestamp is intentionally picked up by the next overlap.
@@ -1799,6 +1802,7 @@ async function refreshLatestWindow(): Promise<void> {
     const currentWindowStart = Math.floor(now / config.reconcileWindowMs) * config.reconcileWindowMs;
     const start = Math.max(now - config.lookbackMs, currentWindowStart);
     console.log(`Manual latest-window refresh (${formatSyncWindow(start, now, now)})...`);
+    const reconcileStateBeforeRefresh = structuredClone(state.reconcileWindowState);
     const committedRefresh = await runConsistentDatabaseRefresh(async () => {
       const summary = await syncAlertWindow(start, now, now);
       if (summary.errors.length > 0) {
@@ -1809,13 +1813,16 @@ async function refreshLatestWindow(): Promise<void> {
       const removed = await cleanupOldData();
       const dataChanged = summary.changed || removed.alerts > 0 || removed.decisions > 0;
       await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
+      state.reconcileWindowState.headLastSuccess = now;
+      await saveReconcileWindowState();
       return { summary, dataChanged, cleanupSucceeded: removed.succeeded };
+    }).catch((error) => {
+      state.reconcileWindowState = reconcileStateBeforeRefresh;
+      throw error;
     });
     let publishedRevision: string | null = null;
     try {
       const { summary, dataChanged } = committedRefresh.result;
-      state.reconcileWindowState.headLastSuccess = now;
-      saveReconcileWindowState();
       prepareDashboardStatsAfterRefreshInBackground(dataChanged, undefined, 'latest-window refresh');
       cache.lastUpdate = new Date(now).toISOString();
       instanceLastUpdates.set(primaryInstance.id, cache.lastUpdate);

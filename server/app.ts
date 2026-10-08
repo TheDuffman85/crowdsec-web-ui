@@ -220,6 +220,7 @@ export interface CreateAppOptions {
     | 'refreshDecisionDuplicateFlags'
     | 'cleanupOldData'
     | 'clearSyncData'
+    | 'setMeta'
     | 'runExclusive'
     | 'close'
   > & Partial<Pick<DatabaseSyncWorker, 'compareAlertDecisions' | 'runTransaction' | 'runIncrementalVacuum'>>;
@@ -812,13 +813,14 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
   }
 
-  function saveReconcileWindowState(): void {
-    database.setMeta(RECONCILE_WINDOW_STATE_META_KEY, JSON.stringify(reconcileWindowState));
+  function saveReconcileWindowState(nextState = reconcileWindowState): Promise<void> {
+    return syncWorker.setMeta(RECONCILE_WINDOW_STATE_META_KEY, JSON.stringify(nextState));
   }
 
-  function resetReconcileWindowState(): void {
-    reconcileWindowState = emptyReconcileWindowState();
-    saveReconcileWindowState();
+  async function resetReconcileWindowState(): Promise<void> {
+    const nextState = emptyReconcileWindowState();
+    await saveReconcileWindowState(nextState);
+    reconcileWindowState = nextState;
   }
 
   console.log(`Cache Configuration:

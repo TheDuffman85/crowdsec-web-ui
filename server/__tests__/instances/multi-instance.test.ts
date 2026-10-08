@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { createApp } from '../../app';
 import { createRuntimeConfig } from '../../config';
 import { CrowdsecDatabase } from '../../database';
+import { DatabaseSyncWorker } from '../../sync-worker-client';
 
 const tempDirs: string[] = [];
 
@@ -38,6 +39,7 @@ function createMultiController(options: {
   secondarySyncNeverCompletes?: boolean;
   secondaryName?: string;
   startBackgroundTasks?: boolean;
+  createSyncWorker?: (database: CrowdsecDatabase) => DatabaseSyncWorker;
 } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-multi-test-'));
   tempDirs.push(dir);
@@ -63,6 +65,7 @@ function createMultiController(options: {
   const controller = createApp({
     config,
     database,
+    syncWorker: options.createSyncWorker?.(database),
     lapiClients: new Map([
       ['primary', primary as never],
       ['secondary', secondary as never],
@@ -75,6 +78,82 @@ function createMultiController(options: {
 }
 
 describe('multi-instance API', () => {
+  test('publishes primary reconciliation while a queued secondary transaction remains open', async () => {
+    let primaryStarted!: () => void;
+    const primaryFetchStarted = new Promise<void>((resolve) => { primaryStarted = resolve; });
+    let secondaryQueued!: () => void;
+    const secondaryTransactionQueued = new Promise<void>((resolve) => { secondaryQueued = resolve; });
+    let secondaryStarted!: () => void;
+    const secondaryTransactionStarted = new Promise<void>((resolve) => { secondaryStarted = resolve; });
+    let releaseSecondary!: () => void;
+    const secondaryGate = new Promise<void>((resolve) => { releaseSecondary = resolve; });
+    const { controller, database, primary, secondary } = createMultiController({
+      createSyncWorker: (database) => {
+        const worker = new DatabaseSyncWorker({ dbPath: database.dbPath });
+        const runTransaction = worker.runTransaction.bind(worker);
+        let transactionCount = 0;
+        vi.spyOn(worker, 'runTransaction').mockImplementation(async (operation, options) => {
+          const transactionNumber = ++transactionCount;
+          if (transactionNumber === 2) secondaryQueued();
+          const result = await runTransaction(async () => {
+            if (transactionNumber === 2) secondaryStarted();
+            return operation();
+          }, options);
+          // Force the second writer to hold SQLite's lock before the primary
+          // resumes post-commit bookkeeping, making the reported race reliable.
+          if (transactionNumber === 1) await secondaryTransactionStarted;
+          return result;
+        });
+        return worker;
+      },
+    });
+    // Keep failures quick if a synchronous main-thread write is reintroduced.
+    database.db.exec('PRAGMA busy_timeout = 100');
+    primary.fetchAlerts.mockImplementation(async () => {
+      primaryStarted();
+      await secondaryTransactionQueued;
+      return [];
+    });
+    secondary.addDecision.mockImplementation(async () => {
+      await primaryFetchStarted;
+      return { message: 'secondary added' };
+    });
+    secondary.fetchAlerts.mockImplementation(async () => {
+      await secondaryGate;
+      return [];
+    });
+    const publishedInstances: string[][] = [];
+    const unsubscribe = controller.subscribeCacheUpdates((_revision, instanceIds) => {
+      publishedInstances.push(instanceIds);
+    });
+    const refresh = controller.fetch(new Request('http://localhost/api/decisions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip: '1.2.3.4', duration: '4h', type: 'ban', scope: 'all' }),
+    }));
+
+    try {
+      await vi.waitFor(() => expect(publishedInstances).toContainEqual(['primary']), { timeout: 5_000 });
+      expect(primary.updateStatus).toHaveBeenLastCalledWith(true, null);
+      expect(secondary.fetchAlerts).toHaveBeenCalled();
+      const persisted = JSON.parse(database.getMeta('alert_reconcile_window_state')!.value);
+      expect(persisted.headLastSuccess > 0 || Object.values(persisted.windows).some((value) => Number(value) > 0)).toBe(true);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect((await controller.fetch(new Request('http://localhost/api/config'))).status).toBe(200);
+
+      releaseSecondary();
+      expect((await refresh).status).toBe(200);
+      expect(secondary.updateStatus).toHaveBeenLastCalledWith(true);
+      expect(controller.getCacheLastUpdate()).not.toBeNull();
+    } finally {
+      releaseSecondary();
+      await refresh;
+      unsubscribe();
+      controller.stopBackgroundTasks();
+      database.close();
+    }
+  }, 10_000);
+
   test('runs every historical sync through chunk windows with a global concurrency limit of two', async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-multi-chunk-test-'));
     tempDirs.push(dir);

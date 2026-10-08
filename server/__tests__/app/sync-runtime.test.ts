@@ -153,6 +153,7 @@ describe('createApp synchronization runtime', () => {
       refreshDecisionDuplicateFlags: vi.fn(async () => {}),
       cleanupOldData: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
       clearSyncData: vi.fn(async () => {}),
+      setMeta: vi.fn(async () => {}),
       runExclusive: vi.fn(async (operation) => operation()),
       close: vi.fn(),
     };
@@ -235,6 +236,7 @@ describe('createApp synchronization runtime', () => {
       refreshDecisionDuplicateFlags: vi.fn(async () => {}),
       cleanupOldData: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
       clearSyncData: vi.fn(async () => {}),
+      setMeta: vi.fn(async () => {}),
       runExclusive: vi.fn(async (operation) => operation()),
       close: vi.fn(),
     };
