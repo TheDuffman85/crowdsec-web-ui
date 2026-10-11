@@ -37,6 +37,7 @@ A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alert
 | Security | Initial administrator setup, password and TOTP login, passkeys, OIDC SSO, group roles, and instance-wide read-only mode |
 | Localization | Arabic, Chinese, English, French, German, Hindi, Japanese, Portuguese, Russian, and Spanish |
 | Experience | Unified search, server-synced saved and recent filters, dark/light themes, and responsive layouts |
+| Branding | Custom application name and logo for the sidebar, browser tab, sign-in page, notifications, and authenticator apps |
 
 ### Screenshots
 
@@ -776,6 +777,15 @@ AppSec and latency sections appear only when CrowdSec emits those metrics. Time-
 - `ID`, `Machine`, and `Origin` are hidden by default. `Machine` prefers `machine_alias`, then `machine_id`; multiple alert decision origins display as `Mixed`.
 - Hidden columns remain searchable through fields such as `id:`, `machine:`, and `origin:`.
 
+### Branding
+
+Administrators can replace the application name and logo from **Settings > Branding**. The name is used in the sidebar, browser tab title, web app manifest, sign-in and setup pages, TOTP issuer, passkey relying-party name, test and application update notifications, and the `{{event.app_name}}` webhook template variable. The logo replaces the sidebar, sign-in, and setup logos as well as the browser favicon and home screen icon.
+
+- Names are limited to 60 characters; leave the field empty to restore `CrowdSec Web UI`.
+- Logos may be PNG, JPEG, GIF, WebP, or SVG images up to 512 KB. The image type is detected from the file content, and SVG logos are served with a sandboxed Content Security Policy.
+- The server injects the branded title and icons into the page shell, so the browser tab is branded before JavaScript loads.
+- Branding is stored in the application database and requires admin mode to change.
+
 ### Quick Filters
 
 Dashboard, Alerts, and Decisions share one count-aware Quick Filters drawer. Its trigger shows the number of active selections, and the clear control in the drawer header resets all stored quick filters.
@@ -922,7 +932,7 @@ Destinations are independently enabled and reusable across rules. **Send Test** 
 #### Payloads and security
 
 - MQTT JSON contains `title`, `message`, `severity`, `metadata`, `sent_at`, `channel_id`, `channel_name`, `channel_type`, `rule_id`, `rule_name`, and `rule_type`. Tests use `rule_id=test`, `rule_name=Test notification`, and `rule_type=test`.
-- Webhook templates expose dotted `event.*` fields for `title`, `message`, `severity`, `metadata`, `sent_at`, `channel_name`, `rule_id`, `rule_name`, and `rule_type`. Each has a `*Json` variant; nullable rule fields also have `OrUnknown` and `OrUnknownJson` aliases.
+- Webhook templates expose dotted `event.*` fields for `title`, `message`, `severity`, `metadata`, `sent_at`, `channel_name`, `rule_id`, `rule_name`, `rule_type`, and `app_name` (the configured branding name). Each has a `*Json` variant; nullable rule fields also have `OrUnknown` and `OrUnknownJson` aliases.
 - Failed webhooks store HTTP status and a truncated response. `notifications.debugPayloads: true` also logs a truncated rendered body with sensitive form fields redacted; enable it only while troubleshooting.
 - Destination secrets are masked and encrypted by `notifications.secretKey`, or an auto-generated key stored in application metadata.
 - `notifications.allowPrivateAddresses: false` blocks private, loopback, and link-local destinations; default: `true`.

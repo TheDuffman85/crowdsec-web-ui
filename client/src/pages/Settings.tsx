@@ -1,7 +1,7 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import i18next from "i18next";
 import QRCode from "qrcode";
-import { Copy, KeyRound, LockKeyhole, Plus, QrCode, Save, ShieldCheck, Trash2, X } from "lucide-react";
+import { Copy, KeyRound, LockKeyhole, Plus, QrCode, RotateCcw, Save, ShieldCheck, Trash2, Upload, X } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card";
 import { Modal } from "../components/ui/Modal";
 import { Switch } from "../components/ui/Switch";
@@ -12,6 +12,16 @@ import { fetchConfig, updateManualRefreshSetting, updateMetricsSidebarPreference
 import { apiUrl } from "../lib/basePath";
 import { sessionFetch } from "../lib/sessionFetch";
 import { useAuth } from "../contexts/AuthContext";
+import { useBranding } from "../contexts/useBranding";
+import { AppLogo } from "../components/AppLogo";
+import {
+    ACCEPTED_APP_LOGO_TYPES,
+    MAX_APP_LOGO_BYTES,
+    MAX_APP_NAME_LENGTH,
+    resetAppLogo,
+    updateAppName,
+    uploadAppLogo,
+} from "../lib/branding";
 import {
     serializeRegistrationCredential,
     toPublicKeyCredentialCreationOptions,
@@ -87,6 +97,7 @@ export function Settings() {
     const { authEnabled, refresh: refreshAuth } = useAuth();
     const { browserLanguage, preference, setLanguagePreference, t } = useI18n();
     const { formatDate } = useDateTime();
+    const { appName, defaultAppName, logoUrl, setBranding } = useBranding();
     const toast = useOptionalToast();
     const [config, setConfig] = useState<ConfigResponse | null>(null);
     const [passkeys, setPasskeys] = useState<PasskeySummary[]>([]);
@@ -97,6 +108,10 @@ export function Settings() {
     const [manualRefreshEnabled, setManualRefreshEnabled] = useState(false);
     const [metricsSidebarVisible, setMetricsSidebarVisible] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
+    const [appNameDraft, setAppNameDraft] = useState<string | null>(null);
+    const [isSavingAppName, setIsSavingAppName] = useState(false);
+    const [isUpdatingLogo, setIsUpdatingLogo] = useState(false);
+    const logoInputRef = useRef<HTMLInputElement | null>(null);
     const [disablePasswordLogin, setDisablePasswordLogin] = useState(false);
     const [isSavingPasswordLogin, setIsSavingPasswordLogin] = useState(false);
     const [passkeyModalOpen, setPasskeyModalOpen] = useState(false);
@@ -231,6 +246,10 @@ export function Settings() {
     const hasMetricsSidebarChange = metricsSidebarVisible !== savedMetricsSidebarVisible;
     const canManageAuthSettings = canManageSettings;
     const canChangePassword = authSettings?.hasPassword === true && authSettings.authMethod === 'password';
+    const savedAppNameValue = appName === defaultAppName ? '' : appName;
+    const appNameValue = appNameDraft ?? savedAppNameValue;
+    const hasAppNameChange = appNameValue.trim() !== savedAppNameValue;
+    const maxLogoSize = `${MAX_APP_LOGO_BYTES / 1024} KB`;
 
     const inputClass = "w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:disabled:bg-gray-800 dark:disabled:text-gray-500";
     const labelClass = "block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400";
@@ -275,6 +294,58 @@ export function Settings() {
             showToast(t("pages.settings.failedToSaveSettings"), "danger");
         } finally {
             setIsSaving(false);
+        }
+    };
+
+    const handleSaveAppName = async () => {
+        setIsSavingAppName(true);
+        try {
+            setBranding(await updateAppName(appNameValue));
+            setAppNameDraft(null);
+            showToast(t("pages.settings.appNameSaved"), "success");
+        } catch (error) {
+            console.error("Failed to save application name", error);
+            showToast(error instanceof Error ? error.message : t("pages.settings.failedToSaveAppName"), "danger");
+        } finally {
+            setIsSavingAppName(false);
+        }
+    };
+
+    const handleLogoSelected = async (event: ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        event.target.value = '';
+        if (!file) return;
+        if (file.type && !ACCEPTED_APP_LOGO_TYPES.includes(file.type)) {
+            showToast(t("pages.settings.logoUnsupportedType"), "danger");
+            return;
+        }
+        if (file.size > MAX_APP_LOGO_BYTES) {
+            showToast(t("pages.settings.logoTooLarge", { size: maxLogoSize }), "danger");
+            return;
+        }
+
+        setIsUpdatingLogo(true);
+        try {
+            setBranding(await uploadAppLogo(file));
+            showToast(t("pages.settings.logoUpdated"), "success");
+        } catch (error) {
+            console.error("Failed to upload logo", error);
+            showToast(error instanceof Error ? error.message : t("pages.settings.failedToUpdateLogo"), "danger");
+        } finally {
+            setIsUpdatingLogo(false);
+        }
+    };
+
+    const handleResetLogo = async () => {
+        setIsUpdatingLogo(true);
+        try {
+            setBranding(await resetAppLogo());
+            showToast(t("pages.settings.logoReset"), "success");
+        } catch (error) {
+            console.error("Failed to reset logo", error);
+            showToast(error instanceof Error ? error.message : t("pages.settings.failedToUpdateLogo"), "danger");
+        } finally {
+            setIsUpdatingLogo(false);
         }
     };
 
@@ -975,6 +1046,97 @@ export function Settings() {
                     </CardContent>
                 </Card>
             )}
+
+            <Card>
+                <CardHeader>
+                    <CardTitle>{t("pages.settings.branding")}</CardTitle>
+                    <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.brandingDescription")}</p>
+                </CardHeader>
+                <CardContent>
+                    <div className="grid gap-6 xl:grid-cols-2">
+                        <div className="space-y-2">
+                            <label htmlFor="settings-app-name" className={labelClass}>
+                                {t("pages.settings.appName")}
+                            </label>
+                            <input
+                                id="settings-app-name"
+                                type="text"
+                                value={appNameValue}
+                                maxLength={MAX_APP_NAME_LENGTH}
+                                placeholder={defaultAppName}
+                                onChange={(event) => setAppNameDraft(event.target.value)}
+                                disabled={!canManageSettings || isSavingAppName}
+                                className={inputClass}
+                            />
+                            <p className="text-xs text-gray-500 dark:text-gray-400">
+                                {t("pages.settings.appNameHelp", { defaultName: defaultAppName })}
+                            </p>
+                        </div>
+
+                        <div className="space-y-2">
+                            <span className={labelClass}>{t("pages.settings.logo")}</span>
+                            <div className="flex items-center gap-4">
+                                <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900">
+                                    <AppLogo alt={t("components.sidebar.logoAlt", { appName })} className="h-12 w-12" />
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                    <input
+                                        ref={logoInputRef}
+                                        type="file"
+                                        accept={ACCEPTED_APP_LOGO_TYPES.join(',')}
+                                        onChange={(event) => void handleLogoSelected(event)}
+                                        className="hidden"
+                                        data-testid="settings-logo-input"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => logoInputRef.current?.click()}
+                                        disabled={!canManageSettings || isUpdatingLogo}
+                                        className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800"
+                                    >
+                                        <Upload className="h-4 w-4" />
+                                        {t("pages.settings.uploadLogo")}
+                                    </button>
+                                    {logoUrl && (
+                                        <button
+                                            type="button"
+                                            onClick={() => void handleResetLogo()}
+                                            disabled={!canManageSettings || isUpdatingLogo}
+                                            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800"
+                                        >
+                                            <RotateCcw className="h-4 w-4" />
+                                            {t("pages.settings.resetLogo")}
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                            <p className="text-xs text-gray-500 dark:text-gray-400">
+                                {t("pages.settings.logoHelp", { size: maxLogoSize })}
+                            </p>
+                        </div>
+                    </div>
+
+                    {!canManageSettings && (
+                        <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-100">
+                            <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0" />
+                            <span>{t("pages.settings.readOnlyBranding")}</span>
+                        </div>
+                    )}
+
+                    <div className="mt-6 flex justify-start">
+                        <button
+                            type="button"
+                            onClick={() => void handleSaveAppName()}
+                            aria-label={t("pages.settings.saveAppName")}
+                            disabled={!canManageSettings || isSavingAppName || !hasAppNameChange}
+                            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                            <Save className="h-4 w-4" />
+                            {isSavingAppName ? t("common.saving") : t("common.save")}
+                        </button>
+                    </div>
+                </CardContent>
+            </Card>
 
             <Modal
                 isOpen={totpModalOpen}

@@ -62,7 +62,7 @@ describe('Login', () => {
     );
 
     expect(await screen.findByRole('heading', { name: 'Willkommen zurück' })).toBeInTheDocument();
-    expect(screen.getByText('Melde dich bei deinem CrowdSec-Dashboard an')).toBeInTheDocument();
+    expect(screen.getByText('Melde dich bei CrowdSec Web UI an')).toBeInTheDocument();
     expect(screen.getByLabelText('Benutzername')).toBeInTheDocument();
     expect(screen.getByLabelText('Passwort')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Anmelden' })).toBeInTheDocument();

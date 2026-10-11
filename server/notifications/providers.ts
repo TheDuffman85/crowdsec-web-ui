@@ -26,6 +26,7 @@ export interface NotificationProviderPayload {
   rule_id: string | null;
   rule_name: string | null;
   rule_type: NotificationRuleType | 'test' | null;
+  app_name: string;
 }
 
 export interface NotificationProviderContext {

@@ -39,6 +39,7 @@ import type { NotificationSecretStore } from './notifications/secret-store';
 import type { UpdateChecker } from './update-check';
 import type { CrowdsecUpdateChecker, CrowdsecUpdateObservation } from './crowdsec-update-check';
 import { getServerTranslator, type Translator } from './i18n';
+import { getAppName } from './branding';
 import type { DateFormat, TimeFormat } from './config';
 import { formatDateTime } from './utils/date-time';
 import {
@@ -301,6 +302,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
     const candidate: NotificationCandidate = {
       title: t('server.notifications.test.title'),
       message: t('server.notifications.test.message', {
+        appName: getAppName(database),
         timestamp: formatDateTime(new Date(), options.timeZone ?? null, options.timeFormat ?? 'browser', options.dateFormat ?? 'browser'),
       }),
       metadata: { kind: 'test' },
@@ -392,7 +394,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
     }
     if (rule.type === 'application-update') {
       return sample(t('server.notifications.applicationUpdate.title', name),
-        t('server.notifications.applicationUpdate.message', { currentVersion: 'v1.0.0', targetVersion: 'v1.1.0' }),
+        t('server.notifications.applicationUpdate.message', { appName: getAppName(database), currentVersion: 'v1.0.0', targetVersion: 'v1.1.0' }),
         { update_available: true, local_version: 'v1.0.0', remote_version: 'v1.1.0' });
     }
     if (rule.type === 'crowdsec-update') {
@@ -1006,7 +1008,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
     return [{
       dedupeKey: `application-update:${targetVersion}`,
       title: t('server.notifications.applicationUpdate.title', { ruleName: rule.name }),
-      message: t('server.notifications.applicationUpdate.message', { currentVersion, targetVersion }),
+      message: t('server.notifications.applicationUpdate.message', { appName: getAppName(database), currentVersion, targetVersion }),
       metadata: {
         update_available: true,
         local_version: status.local_version || null,
@@ -1267,6 +1269,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
         rule_id: rule?.id || null,
         rule_name: rule?.name || null,
         rule_type: rule?.type || null,
+        app_name: getAppName(database),
       };
       await provider.send(channel, payload, {
         fetchImpl,

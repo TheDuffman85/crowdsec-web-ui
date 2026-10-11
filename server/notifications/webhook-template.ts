@@ -15,6 +15,7 @@ interface WebhookTemplateEvent {
   rule_id: string | null;
   rule_name: string | null;
   rule_type: string | null;
+  app_name: string;
 }
 
 function stringify(value: unknown): string {
@@ -80,6 +81,7 @@ export function buildWebhookTemplateView(event: WebhookTemplateEvent): { event: 
       rule_idJson: json(event.rule_id),
       rule_nameJson: json(event.rule_name),
       rule_typeJson: json(event.rule_type),
+      app_nameJson: json(event.app_name),
       rule_idOrUnknown: ruleIdOrUnknown,
       rule_idOrUnknownJson: json(ruleIdOrUnknown),
       rule_nameOrUnknown: ruleNameOrUnknown,

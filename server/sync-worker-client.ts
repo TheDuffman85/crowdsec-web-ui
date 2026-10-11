@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { Worker } from 'node:worker_threads';
+import { isWorkerReadyMessage, markWorkerReady, terminateWorker, type WorkerReadyMessage } from './worker-lifecycle';
 import type {
   AlertInsertParams,
   DecisionInsertParams,
@@ -192,7 +193,7 @@ export class DatabaseSyncWorker {
       this.pending.delete(id);
     }
     if (this.worker) {
-      void this.worker.terminate();
+      terminateWorker(this.worker);
       this.worker = null;
     }
   }
@@ -234,7 +235,10 @@ export class DatabaseSyncWorker {
       },
       execArgv: isTsRuntime ? ['--import', 'tsx'] : [],
     });
-    worker.on('message', (message: SyncWorkerResponse) => this.handleMessage(message));
+    worker.on('message', (message: SyncWorkerResponse | WorkerReadyMessage) => {
+      if (isWorkerReadyMessage(message)) markWorkerReady(worker);
+      else this.handleMessage(message);
+    });
     worker.on('error', (error) => this.handleFailure(error));
     worker.on('exit', (code) => {
       if (this.worker === worker) this.worker = null;
@@ -265,6 +269,6 @@ export class DatabaseSyncWorker {
   private restartWorker(): void {
     const worker = this.worker;
     this.worker = null;
-    if (worker) void worker.terminate();
+    if (worker) terminateWorker(worker);
   }
 }

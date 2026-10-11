@@ -13,6 +13,7 @@ import {
 import { generateSecret, generateURI, verify } from 'otplib';
 import * as oidcClient from 'openid-client';
 import { parseOidcScope, parseOidcUnmatchedRole, type DashboardAuthConfig, type OidcUnmatchedRole } from './config';
+import { getAppName } from './branding';
 import { CrowdsecDatabase, type AuthUserRow, type OidcUserUpsertParams } from './database';
 import type { DatabaseWrite } from './sync-worker-client';
 
@@ -419,7 +420,7 @@ async function createRegistrationOptions(
 ) {
   const existingCredentials = database.listWebAuthnCredentialsByUser(user.userId);
   return generateRegistrationOptions({
-    rpName: 'CrowdSec Web UI',
+    rpName: getAppName(database),
     rpID,
     userName: user.username,
     userDisplayName: user.username,
@@ -1055,7 +1056,7 @@ export function createDashboardAuth(options: {
       if (isTotpEnabled(user)) return context.json({ error: 'TOTP is already enabled for this account' }, 400);
       const secret = generateSecret();
       const otpauthUrl = generateURI({
-        issuer: 'CrowdSec Web UI',
+        issuer: getAppName(database),
         label: user.username,
         secret,
       });

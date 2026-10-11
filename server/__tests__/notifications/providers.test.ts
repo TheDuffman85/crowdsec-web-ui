@@ -14,6 +14,7 @@ const basePayload: NotificationProviderPayload = {
   rule_id: 'rule-1',
   rule_name: 'Alert threshold',
   rule_type: 'alert-threshold',
+  app_name: 'CrowdSec Web UI',
 };
 
 function createChannel(type: NotificationChannel['type'], config: NotificationChannel['config']): NotificationChannel {
