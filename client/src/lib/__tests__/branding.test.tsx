@@ -80,6 +80,7 @@ describe('branding', () => {
     resolveFetch(new Response(JSON.stringify({ appName: 'Acme SOC', defaultAppName: 'CrowdSec Web UI', logoUrl: '/api/branding/logo?v=2' })));
     await waitFor(() => expect(screen.getByText('Acme SOC')).toBeInTheDocument());
     expect(screen.getByAltText('logo')).toHaveAttribute('src', '/api/branding/logo?v=2');
-    expect(document.title).toBe('Acme SOC');
+    // document.title is applied in a passive effect, which can flush after the re-render is visible.
+    await waitFor(() => expect(document.title).toBe('Acme SOC'));
   });
 });
