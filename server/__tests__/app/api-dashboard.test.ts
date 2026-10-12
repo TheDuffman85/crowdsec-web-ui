@@ -447,7 +447,9 @@ describe('createApp dashboard API', () => {
 
   test('refreshes cached dashboard active totals when a decision expires without a database mutation', async () => {
     vi.useRealTimers();
-    const stopAt = new Date(Date.now() + 1_000).toISOString();
+    // The first request syncs and builds the dashboard index before the
+    // decision may expire, which can take over a second on loaded CI runners.
+    const stopAt = new Date(Date.now() + 3_000).toISOString();
     const alert = sampleAlert({
       id: 104,
       uuid: 'dashboard-expiring-alert',
@@ -486,7 +488,7 @@ describe('createApp dashboard API', () => {
         && sql.includes('ORDER BY rowid ASC')
       ))).toBe(true);
 
-      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      await new Promise((resolve) => setTimeout(resolve, Math.max(0, Date.parse(stopAt) - Date.now()) + 100));
       let secondResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/dashboard/stats'));
       let secondDashboard = (await secondResponse.json()) as DashboardStatsResponse;
       if (secondDashboard.pending) {
