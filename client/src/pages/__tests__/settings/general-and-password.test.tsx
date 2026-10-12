@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { Settings } from '../../Settings';
 import { fetchConfig, updateManualRefreshSetting, updateMetricsSidebarPreference } from '../../../lib/api';
 import { DateTimeContext, createDateTimeContextValue } from '../../../lib/dateTime';
+import { FontContext } from '../../../lib/font';
 
 describe('Settings general and password', () => {
   test('keeps language editable but disables refresh in read-only mode', async () => {
@@ -30,6 +31,28 @@ describe('Settings general and password', () => {
 
     await user.click(screen.getByRole('button', { name: 'Save' }));
     expect(setLanguagePreferenceMock).toHaveBeenCalledWith('de');
+  });
+
+  test('only applies font changes when saved', async () => {
+    const user = userEvent.setup();
+    const setFontPreference = vi.fn();
+    render(
+      <FontContext.Provider value={{ preference: 'system', setFontPreference }}>
+        <Settings />
+      </FontContext.Provider>,
+    );
+
+    await waitFor(() => expect(fetchConfig).toHaveBeenCalled());
+
+    const fontSelect = screen.getByLabelText('Font');
+    expect(fontSelect).toBeEnabled();
+    expect(screen.getByRole('option', { name: 'Match language (IBM Plex Sans)' })).toBeInTheDocument();
+
+    await user.selectOptions(fontSelect, 'ibm-plex-sans-kr');
+    expect(setFontPreference).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(setFontPreference).toHaveBeenCalledWith('ibm-plex-sans-kr');
   });
 
   test('saves metrics sidebar visibility from the general settings form', async () => {

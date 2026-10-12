@@ -34,6 +34,14 @@ import {
     useI18n,
     type LanguagePreference,
 } from "../lib/i18n";
+import {
+    AUTO_FONT_SETTING,
+    FONT_PRESETS,
+    SYSTEM_FONT_SETTING,
+    resolveFontPreset,
+    useFont,
+    type FontPreference,
+} from "../lib/font";
 import type { ConfigResponse } from "../types";
 import { useDateTime } from "../lib/dateTime";
 
@@ -96,6 +104,7 @@ export function Settings() {
     const { intervalMs, setIntervalMs } = useRefresh();
     const { authEnabled, refresh: refreshAuth } = useAuth();
     const { browserLanguage, preference, setLanguagePreference, t } = useI18n();
+    const { preference: savedFontPreference, setFontPreference } = useFont();
     const { formatDate } = useDateTime();
     const { appName, defaultAppName, logoUrl, setBranding } = useBranding();
     const toast = useOptionalToast();
@@ -104,6 +113,7 @@ export function Settings() {
     const [authSettings, setAuthSettings] = useState<AuthSettings | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [languagePreference, setLanguagePreferenceValue] = useState<LanguagePreference>(preference);
+    const [fontPreference, setFontPreferenceValue] = useState<FontPreference>(savedFontPreference);
     const [refreshInterval, setRefreshInterval] = useState(intervalMs);
     const [manualRefreshEnabled, setManualRefreshEnabled] = useState(false);
     const [metricsSidebarVisible, setMetricsSidebarVisible] = useState(true);
@@ -239,6 +249,8 @@ export function Settings() {
 
     const canManageSettings = config ? config.permissions?.can_manage_settings !== false : false;
     const hasLanguageChange = languagePreference !== preference;
+    const hasFontChange = fontPreference !== savedFontPreference;
+    const autoFontPreset = resolveFontPreset(AUTO_FONT_SETTING, resolveLanguagePreference(languagePreference));
     const hasRefreshChange = refreshInterval !== intervalMs;
     const savedManualRefreshEnabled = config?.manual_refresh_enabled === true;
     const hasManualRefreshChange = manualRefreshEnabled !== savedManualRefreshEnabled;
@@ -279,6 +291,9 @@ export function Settings() {
             }
             if (hasLanguageChange) {
                 setLanguagePreference(languagePreference);
+            }
+            if (hasFontChange) {
+                setFontPreference(fontPreference);
             }
             if (hasMetricsSidebarChange) {
                 const payload = await updateMetricsSidebarPreference({ visible: metricsSidebarVisible });
@@ -652,6 +667,29 @@ export function Settings() {
                                 ))}
                             </select>
                             <p className="text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.languageHelp")}</p>
+                        </div>
+
+                        <div className="space-y-2">
+                            <label htmlFor="settings-font" className={labelClass}>
+                                {t("pages.settings.font")}
+                            </label>
+                            <select
+                                id="settings-font"
+                                value={fontPreference}
+                                onChange={(event) => setFontPreferenceValue(event.target.value as FontPreference)}
+                                className={inputClass}
+                            >
+                                <option value={SYSTEM_FONT_SETTING}>{t("pages.settings.fontSystem")}</option>
+                                <option value={AUTO_FONT_SETTING}>
+                                    {t("pages.settings.fontAuto", { font: autoFontPreset?.label ?? "" })}
+                                </option>
+                                {FONT_PRESETS.map((preset) => (
+                                    <option key={preset.id} value={preset.id}>
+                                        {preset.label}
+                                    </option>
+                                ))}
+                            </select>
+                            <p className="text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.fontHelp")}</p>
                         </div>
 
                         <div className="space-y-2">
