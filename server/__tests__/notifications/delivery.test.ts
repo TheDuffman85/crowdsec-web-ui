@@ -83,7 +83,7 @@ describe('notification delivery', () => {
       title: 'CrowdSec notification test',
       delivery: expect.objectContaining({ status: 'delivered', channel_id: channel.id }),
     });
-    expect(result.message).toContain('Test sent at');
+    expect(result.message).toContain('Test sent from CrowdSec Web UI at');
     expect(sentBodies).toHaveLength(1);
     expect(JSON.parse(sentBodies[0] || '{}')).toEqual({
       rule: 'Test notification',

@@ -13,6 +13,7 @@ const baseEvent = {
   rule_id: null,
   rule_name: null,
   rule_type: null,
+  app_name: 'CrowdSec Web UI',
 };
 
 describe('webhook templates', () => {
@@ -46,5 +47,10 @@ describe('webhook templates', () => {
       rule_name: 'High volume',
       rule_type: 'alert-threshold',
     });
+  });
+
+  test('exposes the configured application name', () => {
+    expect(renderTemplate('{{event.app_name}}|{{event.app_nameJson}}', { ...baseEvent, app_name: 'Acme "SOC"' }))
+      .toBe('Acme "SOC"|"Acme \\"SOC\\""');
   });
 });

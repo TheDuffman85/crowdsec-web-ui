@@ -126,6 +126,18 @@ These routes are mounted below `/api/auth`. Auth setup/login routes are availabl
 | PUT | `/api/config/manual-refresh` | Enable or disable manual cache refreshes. Body: `{ "enabled": true }`. Blocked in read-only mode. |
 | PUT | `/api/config/language` | Save language preference. Body: `{ "language": "browser" }` or a supported locale code. |
 
+## Branding
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| GET | `/api/branding` | Unauthenticated branding: `{ "appName", "defaultAppName", "logoUrl" }`. `logoUrl` is `null` when the default logo is used. |
+| GET | `/api/branding/logo` | Unauthenticated custom logo image; `404` when none is configured. Versioned URLs (`?v=`) are cached as immutable. |
+| PUT | `/api/branding` | Set the application name. Body: `{ "appName": "Acme SOC" }`. An empty name restores the default. Blocked in read-only mode. |
+| PUT | `/api/branding/logo` | Upload a custom logo. Body: `{ "dataUrl": "data:image/png;base64,..." }`. Blocked in read-only mode. |
+| DELETE | `/api/branding/logo` | Restore the default logo. Blocked in read-only mode. |
+
+Names are limited to 60 characters. Logos may be PNG, JPEG, GIF, WebP, or SVG images up to 512 KB; the image type is detected from the file content, and SVG logos are served with a sandboxed Content Security Policy.
+
 ## Alerts
 
 | Method | Endpoint | Description |

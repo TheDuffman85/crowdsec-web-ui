@@ -1,4 +1,5 @@
 import { Worker } from 'node:worker_threads';
+import { isWorkerReadyMessage, markWorkerReady, terminateWorker, type WorkerReadyMessage } from './worker-lifecycle';
 
 type QueryMethod = 'all' | 'get';
 
@@ -83,7 +84,7 @@ export class DatabaseQueryWorker {
   close(): void {
     this.rejectPending(new Error('Database query worker closed'));
     for (const slot of this.workers) {
-      void slot.worker.terminate();
+      terminateWorker(slot.worker);
     }
     this.workers.clear();
     this.queue.length = 0;
@@ -205,7 +206,11 @@ export class DatabaseQueryWorker {
     });
     const slot: WorkerSlot = { worker, currentId: null };
 
-    worker.on('message', (message: WorkerResponse) => {
+    worker.on('message', (message: WorkerResponse | WorkerReadyMessage) => {
+      if (isWorkerReadyMessage(message)) {
+        markWorkerReady(worker);
+        return;
+      }
       this.handleWorkerMessage(slot, message);
     });
 
@@ -267,7 +272,7 @@ export class DatabaseQueryWorker {
   private restartWorker(slot: WorkerSlot): void {
     this.workers.delete(slot);
     slot.currentId = null;
-    void slot.worker.terminate();
+    terminateWorker(slot.worker);
     this.dispatch();
   }
 
@@ -292,7 +297,7 @@ export class DatabaseQueryWorker {
       if (slot.currentId === id) {
         this.workers.delete(slot);
         slot.currentId = null;
-        void slot.worker.terminate();
+        terminateWorker(slot.worker);
       }
     } else {
       const queueIndex = this.queue.indexOf(pending);

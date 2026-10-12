@@ -2,7 +2,9 @@ import { useState, type FormEvent } from 'react';
 import { KeyRound, LogIn, ShieldCheck } from 'lucide-react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { apiUrl, assetUrl } from '../lib/basePath';
+import { apiUrl } from '../lib/basePath';
+import { AppLogo } from '../components/AppLogo';
+import { useBranding } from '../contexts/useBranding';
 import { useI18n } from '../lib/i18n';
 import {
   serializeAuthenticationCredential,
@@ -12,6 +14,7 @@ import {
 export function Login() {
   const { authEnabled, authenticated, login, oidcEnabled, passwordLoginDisabled, passkeysEnabled, refresh } = useAuth();
   const { t } = useI18n();
+  const { appName } = useBranding();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [totpCode, setTotpCode] = useState('');
@@ -134,9 +137,9 @@ export function Login() {
     <div className="flex min-h-screen items-center justify-center bg-gray-950 p-4 text-gray-100">
       <div className="w-full max-w-sm rounded-xl border border-gray-800 bg-gray-900 p-8 shadow-2xl">
         <div className="mb-6 text-center">
-          <img src={assetUrl('/logo-sidebar.png')} alt="" className="mx-auto h-14 w-14" />
+          <AppLogo className="mx-auto h-14 w-14" />
           <h1 className="mt-4 text-2xl font-bold">{t('pages.login.title')}</h1>
-          <p className="mt-1 text-sm text-gray-400">{t('pages.login.subtitle')}</p>
+          <p className="mt-1 break-words text-sm text-gray-400">{t('pages.login.subtitle', { appName })}</p>
         </div>
 
         {error && (

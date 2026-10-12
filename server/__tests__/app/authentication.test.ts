@@ -50,7 +50,7 @@ test('security middleware applies CSP, private API caching, origin checks, and b
   expect(nonce).toBeTruthy();
   expect(csp).toContain("default-src 'self'");
   expect(csp).toContain("frame-ancestors 'none'");
-  expect(pageHtml).toContain(`<script nonce="${nonce}">window.__BASE_PATH__="/crowdsec";</script>`);
+  expect(pageHtml).toContain(`<script nonce="${nonce}">window.__BASE_PATH__="/crowdsec";window.__BRANDING__={"appName":"CrowdSec Web UI","defaultAppName":"CrowdSec Web UI","logoUrl":null};</script>`);
   expect(page.headers.get('strict-transport-security')).toBeNull();
 
   const apiResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));

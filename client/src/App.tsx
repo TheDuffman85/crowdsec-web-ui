@@ -2,6 +2,7 @@ import { lazy, Suspense, type ReactNode } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { Layout } from "./components/Layout";
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { BrandingProvider } from './contexts/BrandingContext';
 import { NotificationUnreadProvider } from "./contexts/NotificationUnreadContext";
 import { RefreshProvider } from "./contexts/RefreshContext";
 import { ToastProvider } from "./contexts/ToastContext";
@@ -140,11 +141,13 @@ function AuthenticatedRoutes() {
 
 function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter basename={getBasePath() || '/'}>
-        <AuthenticatedRoutes />
-      </BrowserRouter>
-    </AuthProvider>
+    <BrandingProvider>
+      <AuthProvider>
+        <BrowserRouter basename={getBasePath() || '/'}>
+          <AuthenticatedRoutes />
+        </BrowserRouter>
+      </AuthProvider>
+    </BrandingProvider>
   );
 }
 

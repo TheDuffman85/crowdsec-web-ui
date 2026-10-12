@@ -3,6 +3,7 @@ import { parentPort, workerData } from 'node:worker_threads';
 import { matchesIpSearchValue } from '../shared/search';
 import { installTimestampedConsole } from './logging';
 import { withoutUnavailableIndexHints } from './query-index-fallback';
+import type { WorkerReadyMessage } from './worker-lifecycle';
 
 type WorkerRequest = {
   id: number;
@@ -43,6 +44,8 @@ try {
 } catch {
   // Older better-sqlite3 builds may not expose custom functions; SQL callers also keep LIKE fallbacks.
 }
+
+parentPort?.postMessage({ ready: true } satisfies WorkerReadyMessage);
 
 parentPort?.on('message', (request: WorkerRequest) => {
   const response: WorkerResponse = { id: request.id };

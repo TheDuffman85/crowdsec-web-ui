@@ -2,6 +2,11 @@
 
 interface Window {
   __BASE_PATH__?: string;
+  __BRANDING__?: {
+    appName: string;
+    defaultAppName: string;
+    logoUrl: string | null;
+  };
 }
 
 interface ImportMetaEnv {

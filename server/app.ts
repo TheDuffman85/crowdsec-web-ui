@@ -66,6 +66,8 @@ import { fetchCrowdsecMetrics, fetchCrowdsecMetricsSamples, summarizeCrowdsecMet
 import { DatabaseQueryWorker, QueryWorkerTimeoutError } from './query-worker-client';
 import { registerApiRoutes } from './app/api-routes';
 import { registerSavedFilterRoutes } from './app/saved-filters';
+import { registerBrandingRoutes } from './app/branding-routes';
+import { applyBrandingToIndexHtml, getPublicBranding, serializeBrandingForScript } from './branding';
 import { createQueryService } from './app/query-service';
 import { createDeletionService } from './app/deletion-service';
 import { createSyncService } from './app/sync-service';
@@ -1199,13 +1201,17 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     context.header('X-Frame-Options', 'DENY');
     context.header('Referrer-Policy', 'strict-origin-when-cross-origin');
     context.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-    context.header(
-      'Content-Security-Policy',
-      `default-src 'self'; base-uri 'self'; connect-src 'self'; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self' 'nonce-${cspNonce}'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:`,
-    );
+    // Handlers serving user-supplied content (e.g. the branding logo) set a
+    // stricter policy and their own caching; keep those intact.
+    if (!context.res.headers.has('Content-Security-Policy')) {
+      context.header(
+        'Content-Security-Policy',
+        `default-src 'self'; base-uri 'self'; connect-src 'self'; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self' 'nonce-${cspNonce}'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:`,
+      );
+    }
     const pathname = new URL(context.req.url).pathname;
     const apiPrefix = `${config.basePath}/api/`;
-    if (pathname.startsWith(apiPrefix) || pathname === `${config.basePath}/api`) {
+    if ((pathname.startsWith(apiPrefix) || pathname === `${config.basePath}/api`) && !context.res.headers.has('Cache-Control')) {
       context.header('Cache-Control', 'private, no-store');
       context.header('Pragma', 'no-cache');
       context.header('Expires', '0');
@@ -1247,6 +1253,15 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     if (dashboardAuth.getPermissions(context).can_manage_settings) return null;
     return context.json({ error: 'Read-only mode is enabled', code: 'READ_ONLY' }, 403);
   };
+
+  registerBrandingRoutes({
+    app,
+    basePath: config.basePath,
+    database,
+    auth: dashboardAuth,
+    ensureCanManageSettings,
+    writeDatabase: (operation) => syncWorker.runExclusive(operation),
+  });
 
   const ensurePublishedRevisionRead = async (context: HonoContext, next: HonoNext) => {
     if (refreshIntervalMs === 0) {
@@ -1426,20 +1441,25 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     );
   });
 
-  app.get(`${config.basePath}/site.webmanifest`, (context) =>
-    context.json({
-      name: 'CrowdSec Web UI',
-      short_name: 'CrowdSec',
-      icons: [
-        { src: `${config.basePath}/android-chrome-192x192.png`, sizes: '192x192', type: 'image/png' },
-        { src: `${config.basePath}/android-chrome-512x512.png`, sizes: '512x512', type: 'image/png' },
-      ],
+  app.get(`${config.basePath}/site.webmanifest`, (context) => {
+    const branding = getPublicBranding(database, config.basePath);
+    const customized = branding.appName !== branding.defaultAppName;
+    context.header('Cache-Control', 'no-cache');
+    return context.json({
+      name: branding.appName,
+      short_name: customized ? branding.appName : 'CrowdSec',
+      icons: branding.logoUrl
+        ? [{ src: branding.logoUrl, sizes: 'any' }]
+        : [
+          { src: `${config.basePath}/android-chrome-192x192.png`, sizes: '192x192', type: 'image/png' },
+          { src: `${config.basePath}/android-chrome-512x512.png`, sizes: '512x512', type: 'image/png' },
+        ],
       theme_color: '#ffffff',
       background_color: '#ffffff',
       display: 'standalone',
       start_url: config.basePath || '/',
-    }),
-  );
+    });
+  });
 
   app.get(`${config.basePath}/*`, (context) => {
     try {
@@ -1454,8 +1474,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       let html = fs.readFileSync(indexPath, 'utf-8');
       const safePath = config.basePath.replace(/[^a-zA-Z0-9/_-]/g, '');
       const cspNonce = String((context as HonoContext).get('cspNonce') || '');
-      const configScript = `<script nonce="${cspNonce}">window.__BASE_PATH__="${safePath}";</script>`;
-      html = html.replace('</head>', `${configScript}\n</head>`);
+      const branding = getPublicBranding(database, config.basePath);
+      const configScript = `<script nonce="${cspNonce}">window.__BASE_PATH__="${safePath}";window.__BRANDING__=${serializeBrandingForScript(branding)};</script>`;
+      html = applyBrandingToIndexHtml(html, branding);
+      html = html.replace('</head>', () => `${configScript}\n</head>`);
 
       if (config.basePath) {
         html = html.replace(/href="\.\//g, `href="${config.basePath}/`);

@@ -5,7 +5,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { useNotificationUnreadCount } from "../contexts/useNotificationUnreadCount";
 import { useRefresh } from "../contexts/useRefresh";
 import { useState, useEffect, useRef } from "react";
-import { apiUrl, assetUrl } from "../lib/basePath";
+import { apiUrl } from "../lib/basePath";
 import { fetchConfig } from "../lib/api";
 import { sessionFetch } from "../lib/sessionFetch";
 import type { InstanceSummary, UpdateCheckResponse } from '../types';
@@ -15,6 +15,8 @@ import { useOptionalToast } from "../contexts/useToast";
 import { Modal } from "./ui/Modal";
 import { DropdownSelect } from "./ui/DropdownSelect";
 import { InstanceIcon } from "./InstanceIcon";
+import { AppLogo } from "./AppLogo";
+import { useBranding } from "../contexts/useBranding";
 import type { ManualRefreshMode } from "../types";
 import { compileAlertSearch, compileDecisionSearch } from "../../../shared/search";
 import type { ThemeMode } from "../lib/theme";
@@ -26,6 +28,8 @@ const THEME_OPTIONS = [
 ] as const;
 const METRICS_SIDEBAR_PREFERENCE_EVENT = 'metrics-sidebar-preference-changed';
 const MANUAL_REFRESH_SETTING_EVENT = 'manual-refresh-setting-changed';
+// Custom names wrap instead of being cut off; long ones use a smaller font.
+const LONG_APP_NAME_LENGTH = 24;
 
 interface SidebarProps {
     isOpen: boolean;
@@ -78,6 +82,8 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, setTheme }: SidebarP
     const { lastUpdated, refreshSignal, syncStatus, refreshNow } = useRefresh();
     const { unreadCount } = useNotificationUnreadCount();
     const { t } = useI18n();
+    const { appName } = useBranding();
+    const appNameSize = appName.length > LONG_APP_NAME_LENGTH ? "text-lg lg:text-xl" : "text-xl lg:text-2xl";
     const { formatTime } = useDateTime();
     const [updateStatus, setUpdateStatus] = useState<UpdateCheckResponse | null>(null);
     const [showMetricsNav, setShowMetricsNav] = useState(false);
@@ -280,10 +286,9 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, setTheme }: SidebarP
     };
 
     const logo = (
-        <img
-            src={assetUrl('/logo-sidebar.png')}
-            alt={t('components.sidebar.logoAlt')}
-            className="h-10 w-10 flex-shrink-0"
+        <AppLogo
+            alt={t('components.sidebar.logoAlt', { appName })}
+            className="h-10 w-10"
         />
     );
 
@@ -311,7 +316,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, setTheme }: SidebarP
             <aside
                 className={`
                     fixed top-0 left-0 z-[9999]
-                    w-[340px] h-[100dvh]
+                    w-[360px] h-[100dvh]
                     bg-white dark:bg-gray-800 
                     border-r border-gray-200 dark:border-gray-700 
                     flex flex-col 
@@ -321,10 +326,13 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, setTheme }: SidebarP
                 `}
             >
             <div className="p-4 lg:p-5 flex justify-between items-center gap-2">
-                <div className="flex items-center gap-2 lg:gap-3">
+                <div className="flex min-w-0 items-center gap-2 lg:gap-3">
                     {isOpen ? logo : null}
-                    <h1 className="text-xl lg:text-2xl font-bold bg-gradient-to-r from-primary-600 to-primary-400 bg-clip-text text-transparent leading-tight whitespace-nowrap">
-                        CrowdSec Web UI
+                    <h1
+                        className={`min-w-0 break-words [overflow-wrap:anywhere] ${appNameSize} font-bold bg-gradient-to-r from-primary-600 to-primary-400 bg-clip-text text-transparent leading-tight`}
+                        title={appName}
+                    >
+                        {appName}
                     </h1>
                 </div>
                 {/* Close button on mobile */}
@@ -612,9 +620,8 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, setTheme }: SidebarP
             {/* Logo mini and expand button */}
             <div className="p-4 flex flex-col items-center gap-3">
                 {!isOpen ? (
-                    <img
-                        src={assetUrl('/logo-sidebar.png')}
-                        alt={t('components.sidebar.logoAlt')}
+                    <AppLogo
+                        alt={t('components.sidebar.logoAlt', { appName })}
                         className="h-8 w-8"
                     />
                 ) : null}

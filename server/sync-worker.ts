@@ -1,6 +1,7 @@
 import { parentPort, workerData } from 'node:worker_threads';
 import { CrowdsecDatabase } from './database';
 import { installTimestampedConsole } from './logging';
+import type { WorkerReadyMessage } from './worker-lifecycle';
 import type {
   AlertDecisionComparison,
   AlertDecisionComparisonResult,
@@ -28,6 +29,7 @@ const database = new CrowdsecDatabase({
   incrementalVacuumEnabled: workerOptions.incrementalVacuumEnabled ?? true,
   journalSizeLimitBytes: workerOptions.journalSizeLimitBytes,
 });
+parentPort?.postMessage({ ready: true } satisfies WorkerReadyMessage);
 
 parentPort?.on('message', (message: WorkerRequest) => {
   const response: { id: number; result?: unknown; error?: string } = { id: message.id };
