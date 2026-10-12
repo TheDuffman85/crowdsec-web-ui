@@ -1,7 +1,18 @@
 import path from 'path';
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+
+function dropFontsourceWoffFallback(): Plugin {
+  return {
+    name: 'drop-fontsource-woff-fallback',
+    enforce: 'pre',
+    transform(code, id) {
+      if (!id.includes('/@fontsource/') || !/\.css(?:$|\?)/.test(id)) return null;
+      return { code: code.replace(/,\s*url\([^)]+\.woff\)\s*format\('woff'\)/g, ''), map: null };
+    },
+  };
+}
 
 export default defineConfig({
   root: 'client',
@@ -11,7 +22,7 @@ export default defineConfig({
       process.env.VITE_BUILD_DATE || new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12),
     ),
   },
-  plugins: [react(), tailwindcss()],
+  plugins: [dropFontsourceWoffFallback(), react(), tailwindcss()],
   resolve: {
     alias: {
       '@shared': path.resolve(__dirname, 'shared'),
