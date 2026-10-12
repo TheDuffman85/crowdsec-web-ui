@@ -1704,7 +1704,9 @@ function initializeCache(options: { showOverlay?: boolean } = {}): Promise<SyncH
     : initializeSingleInstanceCache(options);
 }
 
-async function updateCacheDelta(options: { throwOnError?: boolean; reconcile?: boolean } = {}): Promise<void> {
+async function updateCacheDelta(
+  options: { throwOnError?: boolean; reconcile?: boolean; publishUnchanged?: boolean } = {},
+): Promise<void> {
   if (!cache.isInitialized || !cache.lastUpdate) {
     console.log('Cache not initialized, performing full load...');
     const ready = await ensureBootstrapReady('delta update full load');
@@ -1767,7 +1769,21 @@ async function updateCacheDelta(options: { throwOnError?: boolean; reconcile?: b
     let publishedRevision: string | null = null;
     try {
       const { deltaSummary, reconcileSummary, dataChanged } = refreshResult;
-      prepareDashboardStatsAfterRefreshInBackground(dataChanged, undefined, 'delta update');
+      // Pushing an unchanged revision makes every open page refetch. With an
+      // on-demand refresh interval each of those reads starts another delta,
+      // so unchanged deltas only notify clients once time-dependent dashboard
+      // statistics were actually rebuilt.
+      const publishRevision = dataChanged || options.publishUnchanged === true;
+      prepareDashboardStatsAfterRefreshInBackground(
+        dataChanged,
+        undefined,
+        'delta update',
+        publishRevision
+          ? undefined
+          : () => {
+              if (state.cacheRefreshCompletedAt) publishCacheUpdate(state.cacheRefreshCompletedAt);
+            },
+      );
       // Advance only through the exact authoritative delta end. Work performed
       // after this timestamp is intentionally picked up by the next overlap.
       cache.lastUpdate = new Date(deltaStartedAt).toISOString();
@@ -1779,7 +1795,7 @@ async function updateCacheDelta(options: { throwOnError?: boolean; reconcile?: b
         `Delta update complete: ${deltaSummary.alerts} alerts and ${deltaSummary.decisions} decisions synced; ${completedReconcileWindows} reconciliation window${completedReconcileWindows === 1 ? '' : 's'} completed`,
       );
       state.cacheRefreshCompletedAt = new Date().toISOString();
-      publishedRevision = state.cacheRefreshCompletedAt;
+      if (publishRevision) publishedRevision = state.cacheRefreshCompletedAt;
     } finally {
       releasePublishedRevision?.();
     }
@@ -1925,7 +1941,9 @@ async function runConsistentDatabaseRefresh<T>(
   }
 }
 
-async function updateCache(options: { throwOnError?: boolean; reconcile?: boolean; skipIfBusy?: boolean } = {}): Promise<void> {
+async function updateCache(
+  options: { throwOnError?: boolean; reconcile?: boolean; skipIfBusy?: boolean; publishUnchanged?: boolean } = {},
+): Promise<void> {
   return runCacheRefresh(async () => {
     await updateCacheDelta(options);
     await runNotificationEvaluation('cache update');

@@ -891,7 +891,8 @@ app.post(`${config.basePath}/api/cache/refresh`, ensureAuth, async (context) => 
 
   try {
     if (body.mode === 'delta') {
-      await updateCache({ throwOnError: true, reconcile: false });
+      // An explicit refresh always notifies pages, even without new data.
+      await updateCache({ throwOnError: true, reconcile: false, publishUnchanged: true });
     } else if (body.mode === 'latest') {
       await refreshLatestWindow();
     } else {
@@ -1350,7 +1351,7 @@ app.post(`${config.basePath}/api/decisions`, ensureAuth, async (context) => {
       try {
         const result = await client.addDecision(ip, type, duration, reason.slice(0, 256));
         upstreamAdded = true;
-        if (instance.id === primaryInstance.id) await updateCacheDelta();
+        if (instance.id === primaryInstance.id) await updateCacheDelta({ publishUnchanged: true });
         else await syncInstanceDelta(instance.id);
         targetOutcomes.set(instance.id, 'success');
         return { instance_id: instance.id, instance_name: instance.name, success: true, result };
