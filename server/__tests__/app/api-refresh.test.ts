@@ -170,6 +170,63 @@ describe('createApp refresh API', () => {
     expect(fetchCalls.some((call) => call.url.includes('/v1/alerts?'))).toBe(true);
   });
 
+  test('does not publish unchanged on-demand deltas so page reads cannot trigger a refresh loop', async () => {
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const cachedAlert = sampleAlert({ id: 941, uuid: 'on-demand-941', decisions: [] });
+    seedAlert(database, cachedAlert);
+    const lastUpdate = new Date(Date.now() - 10_000).toISOString();
+    const { controller, lapiClient, fetchCalls } = createController({
+      database,
+      env: { CROWDSEC_REFRESH_INTERVAL: '0' },
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate },
+      fetchResolver: (url) => url.includes('/v1/alerts?') ? Response.json([cachedAlert]) : undefined,
+    });
+    const published = vi.fn();
+    const unsubscribe = controller.subscribeCacheUpdates(published);
+
+    try {
+      await lapiClient.login();
+      for (let request = 0; request < 3; request += 1) {
+        expect((await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'))).status).toBe(200);
+      }
+
+      expect(fetchCalls.filter((call) => call.url.includes('/v1/alerts?')).length).toBeGreaterThanOrEqual(3);
+      expect(controller.getCacheLastUpdate()).not.toBe(lastUpdate);
+      expect(published).not.toHaveBeenCalled();
+    } finally {
+      unsubscribe();
+      controller.stopBackgroundTasks();
+      database.close();
+    }
+  });
+
+  test('publishes an explicit delta refresh even when no data changed', async () => {
+    const { controller, lapiClient } = createController({
+      initialCacheState: {
+        isInitialized: true,
+        isComplete: true,
+        lastUpdate: new Date(Date.now() - 5_000).toISOString(),
+      },
+    });
+    const published = vi.fn();
+    const unsubscribe = controller.subscribeCacheUpdates(published);
+
+    try {
+      await lapiClient.login();
+      const response = await controller.fetch(new Request('http://localhost/crowdsec/api/cache/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'delta' }),
+      }));
+      expect(response.status).toBe(200);
+      const payload = await response.json() as { completed_at: string };
+      expect(published).toHaveBeenCalledExactlyOnceWith(payload.completed_at, expect.anything());
+    } finally {
+      unsubscribe();
+      controller.stopBackgroundTasks();
+    }
+  });
+
   test.each(['delta', 'latest'] as const)('rolls back %s data and reconciliation state when commit fails', async (mode) => {
     const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
     const initialAlert = sampleAlert({ id: 931, uuid: 'rollback-931', decisions: [] });

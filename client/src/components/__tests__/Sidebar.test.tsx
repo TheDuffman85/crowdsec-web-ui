@@ -99,8 +99,9 @@ describe('Sidebar', () => {
     // "CrowdSec Web UI" needs ~208px at text-2xl; a 340px sidebar left only
     // ~203px for the title, which wrapped the default name onto two lines.
     const title = screen.getByRole('heading', { level: 1, name: 'CrowdSec Web UI' });
-    expect(title.closest('aside')).toHaveClass('w-[360px]');
-    expect(title).toHaveClass('lg:text-2xl');
+    // Small desktops (lg to 2xl) use a narrower sidebar with smaller text.
+    expect(title.closest('aside')).toHaveClass('w-[360px]', 'lg:max-2xl:w-[272px]');
+    expect(title).toHaveClass('2xl:text-2xl');
     expect(title).not.toHaveClass('truncate');
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
   });
@@ -114,7 +115,7 @@ describe('Sidebar', () => {
     const { unmount } = renderSidebar(undefined, ['/'], 'CrowdSec Dashboard');
 
     let title = screen.getByRole('heading', { level: 1, name: 'CrowdSec Dashboard' });
-    expect(title).toHaveClass('min-w-0', 'break-words', 'lg:text-2xl');
+    expect(title).toHaveClass('min-w-0', 'break-words', '2xl:text-2xl');
     expect(title).not.toHaveClass('whitespace-nowrap', 'truncate');
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     unmount();
@@ -122,8 +123,8 @@ describe('Sidebar', () => {
     const longName = 'Acme Corporation Security Operations Center Production West';
     renderSidebar(undefined, ['/'], longName);
     title = screen.getByRole('heading', { level: 1, name: longName });
-    expect(title).toHaveClass('break-words', 'lg:text-xl');
-    expect(title).not.toHaveClass('lg:text-2xl');
+    expect(title).toHaveClass('break-words', '2xl:text-xl');
+    expect(title).not.toHaveClass('2xl:text-2xl');
   });
 
   test('renders a light / system / dark switcher and reports the chosen mode', async () => {
