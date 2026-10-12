@@ -1352,7 +1352,7 @@ app.post(`${config.basePath}/api/decisions`, ensureAuth, async (context) => {
       return context.json({ error: 'Invalid duration format. Use e.g. "4h", "30m", "1d"' }, 400);
     }
 
-    if (!isValidDecisionScenario(scenario)) {
+    if ((body.scenario != null && typeof body.scenario !== 'string') || !isValidDecisionScenario(scenario)) {
       return context.json({ error: `Invalid scenario format. Use e.g. "${DEFAULT_MANUAL_DECISION_SCENARIO}"` }, 400);
     }
 
@@ -1377,7 +1377,7 @@ app.post(`${config.basePath}/api/decisions`, ensureAuth, async (context) => {
     const succeeded = results.filter((result) => result.success).length;
     const payload = { results, succeeded, failed: results.length - succeeded };
     for (const result of results) {
-      if (result.success) console.log(`[decisions] Added ${type} decision for ${ip} (${duration}). Instance: ${result.instance_name}.`);
+      if (result.success) console.log(`[decisions] Added ${type} decision for ${ip} (${duration}, ${scenario}). Instance: ${result.instance_name}.`);
     }
     const instanceResultEntries = results.map((result) => ({
       instance_id: result.instance_id,

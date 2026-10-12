@@ -356,7 +356,7 @@ Synchronization durations accept `ms`, `s`, `m`, `h`, or `d`, for example `500ms
 | `instances[].lapi.tls.caFile` | Unset | CA bundle used to verify the LAPI server. | `CONFIG_INSTANCES_<INDEX>_LAPI_TLS_CA_FILE` |
 | `instances[].metrics` | `[]` | Zero or more metrics endpoints. | `CONFIG_INSTANCES_<INDEX>_METRICS` or `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_*` |
 | `instances[].manualDecisions` | Inherits global values | Per-instance Add Decision settings. | `CONFIG_INSTANCES_<INDEX>_MANUAL_DECISIONS` |
-| `instances[].manualDecisions.scenarios` | Global `crowdsec.manualDecisions.scenarios` | Replaces the global scenario list for this instance; `[]` offers only `manual/web-ui`. | `CONFIG_INSTANCES_<INDEX>_MANUAL_DECISIONS_SCENARIOS` |
+| `instances[].manualDecisions.scenarios` | Global `crowdsec.manualDecisions.scenarios` | Replaces the global scenario list for this instance; `[]` offers only `manual/web-ui`. | `CONFIG_INSTANCES_<INDEX>_MANUAL_DECISIONS_SCENARIOS` as a YAML list (indexed entries are not supported) |
 | `instances[].sync` | Inherits global values | Per-instance synchronization overrides. | `CONFIG_INSTANCES_<INDEX>_SYNC` or `CONFIG_INSTANCES_<INDEX>_SYNC_*` |
 
 ### Metrics endpoints

@@ -689,7 +689,7 @@ describe('createApp API responses', () => {
         }),
       ]);
 
-      for (const scenario of ['no-slash', 'custom/with space', `custom/${'a'.repeat(256)}`]) {
+      for (const scenario of ['no-slash', 'custom/with space', `custom/${'a'.repeat(256)}`, 42, ['custom/abuse-report']]) {
         const response = await postDecision({ ip: '5.6.7.10', scenario });
         expect(response.status).toBe(400);
         expect(await response.json()).toEqual({ error: 'Invalid scenario format. Use e.g. "manual/web-ui"' });
