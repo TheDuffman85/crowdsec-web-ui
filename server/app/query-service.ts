@@ -79,6 +79,7 @@ export function createQueryService(dependencies: QueryServiceDependencies) {
     decisionSearchCanSplitDuplicateGroup,
     dashboardBuckets,
     dashboardCountryList,
+    dashboardIpList,
     dashboardWorldMapData,
     database,
     decisionFieldCondition,
@@ -2484,6 +2485,7 @@ function createEmptyDashboardStatsResponse(options: { pending?: boolean } = {}):
     attackLocations: [],
     topScenarios: [],
     topAS: [],
+    topIPs: [],
     series: {
       alertsHistory: [],
       simulatedAlertsHistory: [],
@@ -3137,6 +3139,7 @@ async function buildDashboardStatsResponse(
     attackLocations,
     topScenarios: topDashboardEntries(filteredAlertAccumulator.scenarios),
     topAS: topDashboardEntries(filteredAlertAccumulator.asNames),
+    topIPs: dashboardIpList(filteredAlertAccumulator.ips, 10),
     series: {
       alertsHistory: dashboardBuckets(chartAlertAccumulator.liveAlertBuckets, filters, lookbackDays),
       simulatedAlertsHistory: dashboardBuckets(chartAlertAccumulator.simulatedAlertBuckets, filters, lookbackDays),

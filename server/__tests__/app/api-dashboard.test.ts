@@ -262,9 +262,11 @@ describe('createApp dashboard API', () => {
     expect((await combinedResponse.json()) as {
       filteredTotals: { alerts: number; decisions: number };
       topScenarios: Array<{ label: string; count: number }>;
+      topIPs: Array<{ label: string; count: number; sourceCountryCode?: string }>;
     }).toEqual(expect.objectContaining({
       filteredTotals: expect.objectContaining({ alerts: 1, decisions: 1 }),
       topScenarios: [expect.objectContaining({ label: 'crowdsecurity/ssh-bf', count: 1 })],
+      topIPs: [expect.objectContaining({ label: '1.2.3.4', count: 1, sourceCountryCode: 'DE' })],
     }));
 
     const sharedFilterParams = new URLSearchParams({

@@ -31,6 +31,7 @@ export function createDashboardStatsAccumulator(): DashboardStatsAccumulator {
     attackLocations: new Map(),
     scenarios: new Map(),
     asNames: new Map(),
+    ips: new Map(),
     targets: new Map(),
     liveAlertBuckets: new Map(),
     simulatedAlertBuckets: new Map(),
@@ -167,6 +168,13 @@ export function addDashboardAlert(
     incrementCount(accumulator.asNames, alert.asName);
   }
 
+  if (alert.ip) {
+    const current = accumulator.ips.get(alert.ip) || { count: 0 };
+    current.count += 1;
+    current.countryCode ??= normalizeDashboardCountryCode(alert.country);
+    accumulator.ips.set(alert.ip, current);
+  }
+
   if (alert.target && alert.target !== 'Unknown' && alert.target !== 'N/A') {
     incrementCount(accumulator.targets, alert.target);
   }
@@ -278,6 +286,20 @@ export function dashboardCountryList(
       value: code,
       count: summary.count,
       countryCode: code,
+    }));
+}
+
+export function dashboardIpList(
+  ips: DashboardStatsAccumulator['ips'],
+  limit: number,
+): DashboardStatListItem[] {
+  return Array.from(ips.entries())
+    .sort((left, right) => right[1].count - left[1].count)
+    .slice(0, limit)
+    .map(([ip, summary]) => ({
+      label: ip,
+      count: summary.count,
+      sourceCountryCode: summary.countryCode,
     }));
 }
 

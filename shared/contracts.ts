@@ -347,6 +347,7 @@ export interface DashboardStatListItem {
   count: number;
   value?: string;
   countryCode?: string;
+  sourceCountryCode?: string;
 }
 
 export interface DashboardWorldMapDatum {
@@ -405,6 +406,7 @@ export interface DashboardStatsResponse {
   attackLocations: DashboardAttackLocationDatum[];
   topScenarios: DashboardStatListItem[];
   topAS: DashboardStatListItem[];
+  topIPs: DashboardStatListItem[];
   series: DashboardStatsSeries;
 }
 

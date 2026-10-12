@@ -63,6 +63,7 @@ import {
 type Granularity = 'day' | 'hour';
 type ScaleMode = 'linear' | 'symlog';
 type PercentageBasis = 'filtered' | 'global';
+type TopSourceMode = 'as' | 'ip';
 type FilterKey = 'country' | 'scenario' | 'as' | 'ip' | 'target';
 type DashboardStatListItem = DashboardStatsResponse['topCountries'][number];
 
@@ -89,6 +90,7 @@ const DASHBOARD_UNAVAILABLE_QUICK_FILTER_FIELDS: FacetField[] = [
 ];
 const DASHBOARD_SEARCH_FEATURES = { machineEnabled: true, originEnabled: true };
 const PERCENTAGE_BASES: PercentageBasis[] = ['filtered', 'global'];
+const TOP_SOURCE_MODES: TopSourceMode[] = ['as', 'ip'];
 
 const DASHBOARD_ALL_QUICK_FILTER_FIELDS = new Set<FacetField>([
     ...DASHBOARD_QUICK_FILTER_FIELDS,
@@ -138,6 +140,7 @@ const EMPTY_DASHBOARD_STATS: DashboardStatsResponse = {
     attackLocations: [],
     topScenarios: [],
     topAS: [],
+    topIPs: [],
     series: {
         alertsHistory: [],
         simulatedAlertsHistory: [],
@@ -173,6 +176,10 @@ function parseStoredScaleMode(value: string | null): ScaleMode {
 
 function parseStoredPercentageBasis(value: string | null): PercentageBasis {
     return value === 'filtered' ? 'filtered' : 'global';
+}
+
+function parseStoredTopSourceMode(value: string | null): TopSourceMode {
+    return value === 'ip' ? 'ip' : 'as';
 }
 
 function parseLegacyStoredFilters(value: string | null): DashboardFilters {
@@ -593,6 +600,56 @@ function scopeStaleStatItemsToSelected<TItem extends DashboardStatListItem>(
     return items.filter((item) => statItemMatchesValue(item, selectedValue));
 }
 
+interface StatCardToggleProps<TValue extends string> {
+    label: string;
+    prefix?: string;
+    options: TValue[];
+    value: TValue;
+    onChange: (value: TValue) => void;
+    getOptionLabel: (value: TValue) => string;
+}
+
+function StatCardToggle<TValue extends string>({
+    label,
+    prefix,
+    options,
+    value,
+    onChange,
+    getOptionLabel,
+}: StatCardToggleProps<TValue>) {
+    return (
+        <div
+            className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-lg"
+            role="group"
+            aria-label={label}
+            title={label}
+        >
+            {prefix && (
+                <span
+                    className="flex items-center px-2 text-xs font-medium text-gray-500 dark:text-gray-400"
+                    aria-hidden="true"
+                >
+                    {prefix}
+                </span>
+            )}
+            {options.map((option) => (
+                <button
+                    key={option}
+                    type="button"
+                    onClick={() => onChange(option)}
+                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${value === option
+                        ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
+                        : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-300'
+                        }`}
+                    aria-pressed={value === option}
+                >
+                    {getOptionLabel(option)}
+                </button>
+            ))}
+        </div>
+    );
+}
+
 export function Dashboard() {
     const [searchParams, setSearchParams] = useSearchParams();
     const [quickFiltersOpen, setQuickFiltersOpen] = useState(false);
@@ -617,6 +674,7 @@ export function Dashboard() {
 
     // Percentage Basis: 'filtered' or 'global'
     const [percentageBasis, setPercentageBasis] = useState<PercentageBasis>(() => parseStoredPercentageBasis(localStorage.getItem('dashboard_percentage_basis')));
+    const [topSourceMode, setTopSourceMode] = useState<TopSourceMode>(() => parseStoredTopSourceMode(localStorage.getItem('dashboard_top_source_mode')));
     const [dashboardSearchDraft, setDashboardSearchDraft] = useState(() => (
         initialStoredFilters.quickFiltersCompatible
             ? combineDashboardSearchQuery(
@@ -731,6 +789,10 @@ export function Dashboard() {
     useEffect(() => {
         localStorage.setItem('dashboard_percentage_basis', percentageBasis);
     }, [percentageBasis]);
+
+    useEffect(() => {
+        localStorage.setItem('dashboard_top_source_mode', topSourceMode);
+    }, [topSourceMode]);
 
     const finishFilterApplication = useCallback(() => {
         filterApplyingRef.current = false;
@@ -1112,6 +1174,11 @@ export function Dashboard() {
                 filters.as,
                 (asName) => ({ label: asName, count: 0 }),
             ),
+            topIPs: withSelectedZeroItem(
+                scopeStaleStatItemsToSelected(dashboardData.topIPs, filters.ip, isDashboardStatsStaleForFilters),
+                filters.ip,
+                (ip) => ({ label: ip, count: 0 }),
+            ),
             alertsHistory: toActivitySeries(dashboardData.series.alertsHistory, formatDate, formatTime),
             simulatedAlertsHistory: toActivitySeries(dashboardData.series.simulatedAlertsHistory, formatDate, formatTime),
             decisionsHistory: toActivitySeries(dashboardData.series.decisionsHistory, formatDate, formatTime),
@@ -1123,7 +1190,7 @@ export function Dashboard() {
             unfilteredDecisionsHistory: toActivitySeries(dashboardData.series.unfilteredDecisionsHistory, formatDate, formatTime),
             unfilteredSimulatedDecisionsHistory: toActivitySeries(dashboardData.series.unfilteredSimulatedDecisionsHistory, formatDate, formatTime),
         };
-    }, [dashboardData, filters.as, filters.country, filters.scenario, filters.target, formatDate, formatTime, isDashboardStatsStaleForFilters]);
+    }, [dashboardData, filters.as, filters.country, filters.ip, filters.scenario, filters.target, formatDate, formatTime, isDashboardStatsStaleForFilters]);
     
 
     // Handle Filters
@@ -1368,6 +1435,7 @@ export function Dashboard() {
     const selectedCountryValues = getStoredQuickFilterSelection(persistedQuickFilters, 'country').included;
     const selectedScenarioValues = getStoredQuickFilterSelection(persistedQuickFilters, 'scenario').included;
     const selectedAsValues = getStoredQuickFilterSelection(persistedQuickFilters, 'as').included;
+    const selectedIpValues = getStoredQuickFilterSelection(persistedQuickFilters, 'ip').included;
     const selectedTargetValues = getStoredQuickFilterSelection(persistedQuickFilters, 'target').included;
     const dashboardFacetFilters = buildDashboardStatsFilters();
     const dashboardRefreshing = backgroundRefreshing || dashboardStatsPending || filterApplying;
@@ -1630,33 +1698,14 @@ export function Dashboard() {
                         total={percentageBasis === 'global' ? dashboardData.globalTotal : filteredTotals.alerts}
                         selectionDisabledReason={quickFilterDisabledReason}
                         headerAction={(
-                            <div
-                                className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-lg"
-                                role="group"
-                                aria-label={t('pages.dashboard.percentageBasis')}
-                                title={t('pages.dashboard.percentageBasis')}
-                            >
-                                <span
-                                    className="flex items-center px-2 text-xs font-medium text-gray-500 dark:text-gray-400"
-                                    aria-hidden="true"
-                                >
-                                    %
-                                </span>
-                                {PERCENTAGE_BASES.map((basis) => (
-                                    <button
-                                        key={basis}
-                                        type="button"
-                                        onClick={() => setPercentageBasis(basis)}
-                                        className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${percentageBasis === basis
-                                            ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
-                                            : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-300'
-                                            }`}
-                                        aria-pressed={percentageBasis === basis}
-                                    >
-                                        {t(`pages.dashboard.${basis}`)}
-                                    </button>
-                                ))}
-                            </div>
+                            <StatCardToggle
+                                label={t('pages.dashboard.percentageBasis')}
+                                prefix="%"
+                                options={PERCENTAGE_BASES}
+                                value={percentageBasis}
+                                onChange={setPercentageBasis}
+                                getOptionLabel={(basis) => t(`pages.dashboard.${basis}`)}
+                            />
                         )}
                     />
                     <StatCard
@@ -1671,14 +1720,40 @@ export function Dashboard() {
                         total={percentageBasis === 'global' ? dashboardData.globalTotal : filteredTotals.alerts}
                         selectionDisabledReason={quickFilterDisabledReason}
                     />
-                    <StatCard
-                        title={t('pages.dashboard.topAs')}
-                        items={statistics.topAS}
-                        onSelect={(item) => toggleFilter('as', item.label)}
-                        selectedValue={filters.as}
-                        selectedValues={selectedAsValues}
+                    <StatCard<DashboardStatListItem>
+                        title={t(topSourceMode === 'ip' ? 'pages.dashboard.topIps' : 'pages.dashboard.topAs')}
+                        items={topSourceMode === 'ip' ? statistics.topIPs : statistics.topAS}
+                        onSelect={(item) => toggleFilter(topSourceMode, item.label)}
+                        selectedValue={topSourceMode === 'ip' ? filters.ip : filters.as}
+                        selectedValues={topSourceMode === 'ip' ? selectedIpValues : selectedAsValues}
+                        renderLabel={topSourceMode === 'ip' ? (item) => {
+                            const countryName = item.sourceCountryCode
+                                ? getCountryName(item.sourceCountryCode, language) ?? item.sourceCountryCode
+                                : null;
+                            return (
+                                <div className="flex flex-col min-w-0 leading-tight">
+                                    <span className="text-sm truncate font-medium text-gray-900 dark:text-gray-100" title={item.label}>
+                                        {item.label}
+                                    </span>
+                                    {countryName && (
+                                        <span className="text-xs truncate text-gray-500 dark:text-gray-400" title={countryName}>
+                                            {countryName}
+                                        </span>
+                                    )}
+                                </div>
+                            );
+                        } : undefined}
                         total={percentageBasis === 'global' ? dashboardData.globalTotal : filteredTotals.alerts}
                         selectionDisabledReason={quickFilterDisabledReason}
+                        headerAction={(
+                            <StatCardToggle
+                                label={t('pages.dashboard.groupBy')}
+                                options={TOP_SOURCE_MODES}
+                                value={topSourceMode}
+                                onChange={setTopSourceMode}
+                                getOptionLabel={(mode) => t(`pages.dashboard.${mode}`)}
+                            />
+                        )}
                     />
                     <StatCard
                         title={t('pages.dashboard.topTargets')}
