@@ -57,13 +57,13 @@ export function StatCard<TItem extends StatListItem>({
                 </CardTitle>
                 {headerAction}
             </CardHeader>
-            <CardContent>
+            <CardContent className="p-4">
                 {items.length === 0 ? (
                     <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">
                         {resolvedEmptyMessage}
                     </p>
                 ) : (
-                    <div className="space-y-2">
+                    <div className="space-y-1">
                         {items.map((item, idx) => {
                             const isSelected = selectedValue === item.value
                                 || selectedValue === item.label
@@ -84,17 +84,17 @@ export function StatCard<TItem extends StatListItem>({
                                     onClick={handleRowClick}
                                     aria-disabled={selectionDisabledReason ? 'true' : undefined}
                                     title={selectionDisabledReason}
-                                    className={`flex items-center justify-between p-2 rounded-lg transition-colors border ${
+                                    className={`flex items-center justify-between gap-3 px-2.5 py-2 rounded-lg transition-colors border ${
                                         selectionDisabledReason ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'
                                     } ${isSelected
                                         ? 'bg-primary-50 dark:bg-primary-900/40 border-primary-200 dark:border-primary-800'
                                         : `border-transparent ${selectionDisabledReason ? '' : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'}`
                                         }`}
                                 >
-                                    <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
-                                        <span className={`flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full text-xs font-semibold ${isSelected
-                                            ? 'bg-primary-600 text-white'
-                                            : 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300'
+                                    <div className="flex items-center gap-2.5 min-w-0 flex-1 overflow-hidden">
+                                        <span className={`flex-shrink-0 w-5 text-right text-xs font-medium tabular-nums ${isSelected
+                                            ? 'text-primary-700 dark:text-primary-300'
+                                            : 'text-gray-400 dark:text-gray-500'
                                             }`}>
                                             {idx + 1}
                                         </span>
@@ -105,10 +105,16 @@ export function StatCard<TItem extends StatListItem>({
                                             {renderLabel ? (
                                                 renderLabel(item)
                                             ) : (
-                                                <span className={`text-sm truncate font-medium ${isSelected ? 'text-primary-900 dark:text-white' : 'text-gray-900 dark:text-gray-100'}`} title={item.label}>
+                                                <span className={`block text-sm truncate font-medium ${isSelected ? 'text-primary-900 dark:text-white' : 'text-gray-900 dark:text-gray-100'}`} title={item.label}>
                                                     {item.label}
                                                 </span>
                                             )}
+                                            <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700/60" aria-hidden="true">
+                                                <div
+                                                    className={`h-full rounded-full ${isSelected ? 'bg-primary-500' : 'bg-primary-400/70 dark:bg-primary-500/60'}`}
+                                                    style={{ width: `${Math.min(100, Number(percent))}%` }}
+                                                />
+                                            </div>
                                         </div>
                                         {hubUrl && !renderLabel && (
                                             <a
@@ -123,14 +129,14 @@ export function StatCard<TItem extends StatListItem>({
                                             </a>
                                         )}
                                     </div>
-                                    <div className="flex flex-col items-end ml-2 flex-shrink-0">
-                                        <span className={`text-sm font-bold ${isSelected
+                                    <div className="flex flex-col items-end flex-shrink-0">
+                                        <span className={`text-sm font-semibold tabular-nums ${isSelected
                                             ? 'text-primary-800 dark:text-primary-100'
                                             : 'text-gray-900 dark:text-white'
                                             }`}>
                                             {item.count.toLocaleString()}
                                         </span>
-                                        <span className="text-xs text-gray-500 dark:text-gray-400">
+                                        <span className="text-xs tabular-nums text-gray-500 dark:text-gray-400">
                                             {percent}%
                                         </span>
                                     </div>

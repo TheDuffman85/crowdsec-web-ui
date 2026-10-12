@@ -1,9 +1,9 @@
 import { lazy, memo, startTransition, Suspense, useEffect, useState, useMemo, useCallback, useRef } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 
 import { fetchDashboardStats, fetchConfig } from "../lib/api";
 import { useRefresh } from "../contexts/useRefresh";
-import { Card, CardContent } from "../components/ui/Card";
+import { DashboardSummaryCard, SummaryBreakdown } from "../components/DashboardSummaryCard";
 import { StatCard } from "../components/StatCard";
 import { ScenarioName } from "../components/ScenarioName";
 import { QuickFilterDisabledNotice, QuickFilters, type QuickFilterDefinition, type QuickFilterSectionId } from "../components/QuickFilters";
@@ -1066,19 +1066,16 @@ export function Dashboard() {
                 : t('common.offline');
     const lapiStatusTone = lapiAvailability === 'online'
         ? {
-            background: 'bg-green-100 dark:bg-green-900/20',
-            icon: 'text-green-600 dark:text-green-400',
+            chip: 'bg-green-50 text-green-600 ring-green-100 dark:bg-green-500/10 dark:text-green-400 dark:ring-green-500/20',
             text: 'text-gray-900 dark:text-white',
         }
         : lapiAvailability === 'partial'
             ? {
-                background: 'bg-amber-100 dark:bg-amber-900/20',
-                icon: 'text-amber-600 dark:text-amber-400',
+                chip: 'bg-amber-50 text-amber-600 ring-amber-100 dark:bg-amber-500/10 dark:text-amber-400 dark:ring-amber-500/20',
                 text: 'text-amber-600 dark:text-amber-400',
             }
             : {
-                background: 'bg-red-100 dark:bg-red-900/20',
-                icon: 'text-red-600 dark:text-red-400',
+                chip: 'bg-red-50 text-red-600 ring-red-100 dark:bg-red-500/10 dark:text-red-400 dark:ring-red-500/20',
                 text: 'text-red-600 dark:text-red-400',
             };
     const currentDashboardStatsLoadKey = useMemo(() => JSON.stringify(buildDashboardStatsFilters()), [buildDashboardStatsFilters]);
@@ -1380,103 +1377,61 @@ export function Dashboard() {
         <div className="space-y-8">
             {/* Summary Cards */}
             <div className="grid grid-cols-3 gap-3 sm:gap-4 lg:gap-6">
-                <Link to={alertsLink} className="block h-full transition-transform hover:scale-105">
-                    <Card className="h-full cursor-pointer hover:shadow-lg transition-shadow">
-                        <CardContent className="flex flex-col items-center gap-2 p-3 text-center sm:flex-row sm:items-center sm:gap-3 sm:p-4 sm:text-left lg:gap-4 lg:p-6">
-                            <div className="rounded-full bg-red-100 p-2 text-red-600 dark:bg-red-900/20 dark:text-red-400 sm:p-3 lg:p-4">
-                                <ShieldAlert className="h-5 w-5 sm:h-6 sm:w-6 lg:h-8 lg:w-8" />
-                            </div>
-                            <div className="min-w-0">
-                                <p className="text-[11px] font-medium leading-tight text-gray-500 dark:text-gray-400 sm:text-sm">{t('pages.dashboard.totalAlerts')}</p>
-                                <div className="flex items-baseline justify-center gap-1 sm:justify-start sm:gap-2">
-                                    <h3 className="text-lg font-bold text-gray-900 dark:text-white sm:text-2xl">{modeAwareAlertsTotal}</h3>
-                                    {hasActiveFilters && (
-                                        <span className="text-xs text-gray-500 dark:text-gray-400 sm:text-sm">
-                                            {modeAwareAlertsFiltered}
-                                        </span>
-                                    )}
-                                </div>
-                                {showSimulationBreakout && stats.simulatedAlerts > 0 && (
-                                    <div className="mt-2 sm:mt-3">
-                                        <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400 sm:text-[11px]">
-                                            {t('pages.dashboard.simulation')}
-                                        </p>
-                                        <div className="flex items-baseline justify-center gap-1 sm:justify-start sm:gap-2">
-                                            <span className="text-sm font-semibold text-gray-900 dark:text-gray-100 sm:text-lg">
-                                                {stats.simulatedAlerts}
-                                            </span>
-                                            {hasActiveFilters && (
-                                                <span className="text-[10px] text-gray-500 dark:text-gray-400 sm:text-xs">
-                                                    {filteredSimulationAlertsCount}
-                                                </span>
-                                            )}
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        </CardContent>
-                    </Card>
-                </Link>
+                <DashboardSummaryCard
+                    to={alertsLink}
+                    label={t('pages.dashboard.totalAlerts')}
+                    icon={ShieldAlert}
+                    iconClassName="bg-red-50 text-red-600 ring-red-100 dark:bg-red-500/10 dark:text-red-400 dark:ring-red-500/20"
+                    value={modeAwareAlertsTotal}
+                    detail={hasActiveFilters && (
+                        <span className="text-xs tabular-nums text-gray-500 dark:text-gray-400 sm:text-sm">
+                            {modeAwareAlertsFiltered}
+                        </span>
+                    )}
+                    footer={showSimulationBreakout && stats.simulatedAlerts > 0 && (
+                        <SummaryBreakdown
+                            label={t('pages.dashboard.simulation')}
+                            total={stats.simulatedAlerts}
+                            filtered={hasActiveFilters ? filteredSimulationAlertsCount : undefined}
+                        />
+                    )}
+                />
 
-                <Link to={decisionsLink} className="block h-full transition-transform hover:scale-105">
-                    <Card className="h-full cursor-pointer hover:shadow-lg transition-shadow">
-                        <CardContent className="flex flex-col items-center gap-2 p-3 text-center sm:flex-row sm:items-center sm:gap-3 sm:p-4 sm:text-left lg:gap-4 lg:p-6">
-                            <div className="rounded-full bg-blue-100 p-2 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400 sm:p-3 lg:p-4">
-                                <Gavel className="h-5 w-5 sm:h-6 sm:w-6 lg:h-8 lg:w-8" />
-                            </div>
-                            <div className="min-w-0">
-                                <p className="text-[11px] font-medium leading-tight text-gray-500 dark:text-gray-400 sm:text-sm">{t('pages.dashboard.activeDecisions')}</p>
-                                <div className="flex items-baseline justify-center gap-1 sm:justify-start sm:gap-2">
-                                    <h3 className="text-lg font-bold text-gray-900 dark:text-white sm:text-2xl">{modeAwareDecisionsTotal}</h3>
-                                    {hasActiveFilters && (
-                                        <span className="text-xs text-gray-500 dark:text-gray-400 sm:text-sm">
-                                            {modeAwareDecisionsFiltered}
-                                        </span>
-                                    )}
-                                </div>
-                                {showSimulationBreakout && stats.simulatedDecisions > 0 && (
-                                    <div className="mt-2 sm:mt-3">
-                                        <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400 sm:text-[11px]">
-                                            {t('pages.dashboard.simulation')}
-                                        </p>
-                                        <div className="flex items-baseline justify-center gap-1 sm:justify-start sm:gap-2">
-                                            <span className="text-sm font-semibold text-gray-900 dark:text-gray-100 sm:text-lg">
-                                                {stats.simulatedDecisions}
-                                            </span>
-                                            {hasActiveFilters && (
-                                                <span className="text-[10px] text-gray-500 dark:text-gray-400 sm:text-xs">
-                                                    {filteredSimulationDecisionsCount}
-                                                </span>
-                                            )}
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        </CardContent>
-                    </Card>
-                </Link>
+                <DashboardSummaryCard
+                    to={decisionsLink}
+                    label={t('pages.dashboard.activeDecisions')}
+                    icon={Gavel}
+                    iconClassName="bg-blue-50 text-blue-600 ring-blue-100 dark:bg-blue-500/10 dark:text-blue-400 dark:ring-blue-500/20"
+                    value={modeAwareDecisionsTotal}
+                    detail={hasActiveFilters && (
+                        <span className="text-xs tabular-nums text-gray-500 dark:text-gray-400 sm:text-sm">
+                            {modeAwareDecisionsFiltered}
+                        </span>
+                    )}
+                    footer={showSimulationBreakout && stats.simulatedDecisions > 0 && (
+                        <SummaryBreakdown
+                            label={t('pages.dashboard.simulation')}
+                            total={stats.simulatedDecisions}
+                            filtered={hasActiveFilters ? filteredSimulationDecisionsCount : undefined}
+                        />
+                    )}
+                />
 
-                <Card>
-                    <CardContent className="flex flex-col items-center gap-2 p-3 text-center sm:flex-row sm:items-center sm:gap-3 sm:p-4 sm:text-left lg:gap-4 lg:p-6">
-                        <div className={`rounded-full p-2 sm:p-3 lg:p-4 ${lapiStatusTone.background}`}>
-                            <Activity className={`h-5 w-5 sm:h-6 sm:w-6 lg:h-8 lg:w-8 ${lapiStatusTone.icon}`} />
-                        </div>
-                        <div className="min-w-0">
-                            <p className="text-[11px] font-medium leading-tight text-gray-500 dark:text-gray-400 sm:text-sm">
-                                {t(isAllInstancesScope ? 'pages.dashboard.crowdsecLapis' : 'pages.dashboard.crowdsecLapi')}
-                            </p>
-                            <h3 className={`text-lg font-bold sm:text-2xl ${lapiStatusTone.text}`}>{lapiStatusLabel}</h3>
-                            {isAllInstancesScope && (
-                                <p className="text-[10px] text-gray-500 dark:text-gray-400 sm:text-xs">
-                                    {t('pages.dashboard.lapisOnlineCount', {
-                                        online: configRequestFailed ? 0 : onlineInstanceCount,
-                                        total: totalInstanceCount,
-                                    })}
-                                </p>
-                            )}
-                        </div>
-                    </CardContent>
-                </Card>
+                <DashboardSummaryCard
+                    label={t(isAllInstancesScope ? 'pages.dashboard.crowdsecLapis' : 'pages.dashboard.crowdsecLapi')}
+                    icon={Activity}
+                    iconClassName={lapiStatusTone.chip}
+                    value={lapiStatusLabel}
+                    valueClassName={`text-lg sm:text-2xl ${lapiStatusTone.text}`}
+                    footer={isAllInstancesScope && (
+                        <span className="text-gray-500 dark:text-gray-400">
+                            {t('pages.dashboard.lapisOnlineCount', {
+                                online: configRequestFailed ? 0 : onlineInstanceCount,
+                                total: totalInstanceCount,
+                            })}
+                        </span>
+                    )}
+                />
             </div>
 
             {/* Statistics Section */}
@@ -1485,7 +1440,7 @@ export function Dashboard() {
                     <div className="flex flex-col gap-4 md:flex-row md:items-start">
                         <div className="flex min-h-11 shrink-0 items-center gap-2">
                             <TrendingUp className="w-6 h-6 text-primary-600 dark:text-primary-400" />
-                            <h3 className="text-2xl font-bold text-gray-900 dark:text-white">
+                            <h3 className="text-xl font-semibold tracking-tight text-gray-900 dark:text-white sm:text-2xl">
                                 {t('pages.dashboard.lastDaysStats', { days: config?.lookback_days ?? 7 })}
                             </h3>
                         </div>
@@ -1561,7 +1516,7 @@ export function Dashboard() {
 
                 {/* Charts Area */}
                 <div
-                    className="grid gap-8 md:grid-cols-2"
+                    className="grid gap-6 md:grid-cols-2"
                     aria-busy={dashboardRefreshing}
                     aria-disabled={filterApplying}
                     inert={filterApplying ? true : undefined}
@@ -1611,7 +1566,7 @@ export function Dashboard() {
 
                 {/* Top Statistics Grid */}
                 <div
-                    className="grid gap-8 md:grid-cols-2 xl:grid-cols-4"
+                    className="grid gap-6 md:grid-cols-2 xl:grid-cols-4"
                     aria-busy={dashboardRefreshing}
                     aria-disabled={filterApplying}
                     inert={filterApplying ? true : undefined}
@@ -1623,7 +1578,7 @@ export function Dashboard() {
                         selectedValue={filters.country}
                         selectedValues={selectedCountryValues}
                         renderLabel={(item) => (
-                            <span className="text-sm truncate font-medium text-gray-900 dark:text-gray-100" title={item.count === 0 && item.label === item.countryCode ? item.label : getCountryName(item.countryCode, language) ?? item.label}>
+                            <span className="block text-sm truncate font-medium text-gray-900 dark:text-gray-100" title={item.count === 0 && item.label === item.countryCode ? item.label : getCountryName(item.countryCode, language) ?? item.label}>
                                 {item.count === 0 && item.label === item.countryCode ? item.label : getCountryName(item.countryCode, language) ?? item.label}
                             </span>
                         )}

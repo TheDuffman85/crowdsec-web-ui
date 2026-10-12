@@ -6,7 +6,6 @@ import {
     YAxis,
     CartesianGrid,
     Tooltip,
-    Legend,
     ResponsiveContainer
 } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
@@ -619,6 +618,16 @@ export function ActivityBarChart({
     const resolvedScaleMode = scaleMode ?? internalScaleMode;
     const handleScaleModeChange = setScaleMode ?? setInternalScaleMode;
     const isSymlogScale = resolvedScaleMode === 'symlog';
+    const legendItems = [
+        { key: 'alerts', label: t('components.dashboardCharts.alerts'), color: DASHBOARD_COLORS.liveAlerts },
+        ...(simulationsEnabled
+            ? [{ key: 'simulatedAlerts', label: t('components.dashboardCharts.simulationAlerts'), color: DASHBOARD_COLORS.simulatedAlerts }]
+            : []),
+        { key: 'decisions', label: t('components.dashboardCharts.decisions'), color: DASHBOARD_COLORS.liveDecisions },
+        ...(simulationsEnabled
+            ? [{ key: 'simulatedDecisions', label: t('components.dashboardCharts.simulationDecisions'), color: DASHBOARD_COLORS.simulatedDecisions }]
+            : []),
+    ];
 
     return (
         <Card className="h-full outline-none flex flex-col">
@@ -680,15 +689,23 @@ export function ActivityBarChart({
                 </div>
             </CardHeader>
             <CardContent className="flex-1 min-h-0 flex flex-col gap-0">
+                <ul className="flex flex-none flex-wrap items-center gap-x-4 gap-y-1 pl-[76px] text-xs text-gray-600 dark:text-gray-300">
+                    {legendItems.map((item) => (
+                        <li key={item.key} className="inline-flex items-center gap-1.5">
+                            <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: item.color }} aria-hidden="true" />
+                            {item.label}
+                        </li>
+                    ))}
+                </ul>
                 {/* Main Chart Section */}
                 <div className="flex-1 min-h-0 outline-none relative">
                     <ResponsiveContainer width="100%" height="100%">
                         <BarChart
                             data={filteredData}
-                            margin={{ top: 20, right: 30, left: 20, bottom: 0 }}
+                            margin={{ top: 12, right: 30, left: 20, bottom: 0 }}
                             barGap={2}
                         >
-                            <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
+                            <CartesianGrid vertical={false} strokeDasharray="3 3" opacity={0.25} />
                             <XAxis dataKey="label" stroke="#888888" fontSize={12} tickLine={false} axisLine={false} />
                             <YAxis
                                 stroke="#888888"
@@ -702,7 +719,6 @@ export function ActivityBarChart({
                                 tickFormatter={formatCount}
                             />
                             <Tooltip content={<CustomTooltip />} cursor={{ fill: 'transparent' }} />
-                            <Legend verticalAlign="top" height={36} />
                             <Bar
                                 isAnimationActive={false}
                                 dataKey="alerts"
