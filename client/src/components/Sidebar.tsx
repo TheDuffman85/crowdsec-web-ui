@@ -83,7 +83,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, setTheme }: SidebarP
     const { unreadCount } = useNotificationUnreadCount();
     const { t } = useI18n();
     const { appName } = useBranding();
-    const appNameSize = appName.length > LONG_APP_NAME_LENGTH ? "text-lg lg:text-xl" : "text-xl lg:text-2xl";
+    const appNameSize = appName.length > LONG_APP_NAME_LENGTH ? "text-lg lg:max-2xl:text-base 2xl:text-xl" : "text-xl lg:max-2xl:text-lg 2xl:text-2xl";
     const { formatTime } = useDateTime();
     const [updateStatus, setUpdateStatus] = useState<UpdateCheckResponse | null>(null);
     const [showMetricsNav, setShowMetricsNav] = useState(false);
@@ -288,7 +288,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, setTheme }: SidebarP
     const logo = (
         <AppLogo
             alt={t('components.sidebar.logoAlt', { appName })}
-            className="h-10 w-10"
+            className="h-10 w-10 lg:max-2xl:h-8 lg:max-2xl:w-8"
         />
     );
 
@@ -316,7 +316,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, setTheme }: SidebarP
             <aside
                 className={`
                     fixed top-0 left-0 z-[9999]
-                    w-[360px] h-[100dvh]
+                    w-[360px] lg:max-2xl:w-[272px] h-[100dvh]
                     bg-white dark:bg-gray-800 
                     border-r border-gray-200 dark:border-gray-700 
                     flex flex-col 
@@ -325,8 +325,8 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, setTheme }: SidebarP
                     ${isOpen ? "translate-x-0" : "-translate-x-full"}
                 `}
             >
-            <div className="p-4 lg:p-5 flex justify-between items-center gap-2">
-                <div className="flex min-w-0 items-center gap-2 lg:gap-3">
+            <div className="p-4 lg:max-2xl:p-3 2xl:p-5 flex justify-between items-center gap-2">
+                <div className="flex min-w-0 items-center gap-2 2xl:gap-3">
                     {isOpen ? logo : null}
                     <h1
                         className={`min-w-0 break-words [overflow-wrap:anywhere] ${appNameSize} font-bold bg-gradient-to-r from-primary-600 to-primary-400 bg-clip-text text-transparent leading-tight`}
@@ -353,7 +353,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, setTheme }: SidebarP
                 </button>
             </div>
             {instances.length > 1 && (
-                <div className="px-4 pb-3">
+                <div className="px-4 pb-3 lg:max-2xl:px-3">
                     <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500" htmlFor="crowdsec-instance-selector">
                         {t('components.sidebar.instance')}
                     </label>
@@ -377,7 +377,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, setTheme }: SidebarP
                     />
                 </div>
             )}
-            <nav className="flex-1 px-4 space-y-2">
+            <nav className="flex-1 px-4 space-y-2 lg:max-2xl:px-3 lg:max-2xl:space-y-1">
                 {links.map((link) => (
                     <NavLink
                         key={link.to}
@@ -390,21 +390,21 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, setTheme }: SidebarP
                             }
                         }}
                         className={({ isActive }) =>
-                            `flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 group ${isActive
+                            `flex items-center gap-3 px-4 py-3 lg:max-2xl:px-3 lg:max-2xl:py-2.5 lg:max-2xl:text-sm rounded-lg transition-all duration-200 group ${isActive
                                 ? "bg-primary-50 dark:bg-primary-900/20 text-primary-600 dark:text-primary-400"
                                 : "text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50 hover:text-gray-900 dark:hover:text-gray-200"
                             }`
                         }
                     >
                         <div className="flex min-w-0 items-center gap-3">
-                            <link.icon className="w-5 h-5" />
+                            <link.icon className="w-5 h-5 lg:max-2xl:w-[18px] lg:max-2xl:h-[18px]" />
                             <span className="font-medium">{t(link.label)}</span>
                         </div>
                         {link.to === "/notifications" ? renderUnreadBadge() : null}
                     </NavLink>
                 ))}
             </nav>
-            <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex flex-col gap-4">
+            <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex flex-col gap-4 lg:max-2xl:p-3 lg:max-2xl:gap-3">
                 <div role="radiogroup" aria-label={t('components.sidebar.theme')} className="grid grid-cols-3 rounded-lg bg-gray-50 p-1 dark:bg-gray-900/50">
                     {THEME_OPTIONS.map(({ mode, Icon, labelKey }) => (
                         <button
