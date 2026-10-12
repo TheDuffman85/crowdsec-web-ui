@@ -248,6 +248,7 @@ describe('Dashboard loading and refresh', () => {
         topCountries: [],
         topScenarios: [],
         topAS: [],
+        topIPs: [],
         topTargets: [],
       })
       .mockReturnValueOnce(readyStats.promise);

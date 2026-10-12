@@ -141,6 +141,7 @@ export interface DashboardStatsAccumulator {
   attackLocations: DashboardAttackLocationAccumulator;
   scenarios: Map<string, number>;
   asNames: Map<string, number>;
+  ips: Map<string, { count: number; countryCode?: string }>;
   targets: Map<string, number>;
   liveAlertBuckets: Map<string, number>;
   simulatedAlertBuckets: Map<string, number>;

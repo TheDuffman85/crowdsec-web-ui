@@ -352,6 +352,38 @@ describe('Dashboard filters and drilldowns', () => {
     });
   });
 
+  test('switches the top AS card to top IPs and filters by the selected IP', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole('heading', { name: 'Top AS' });
+    const groupBy = screen.getByRole('group', { name: 'Group by' });
+    expect(within(groupBy).getByRole('button', { name: 'AS' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByText('1.2.3.4')).not.toBeInTheDocument();
+
+    await user.click(within(groupBy).getByRole('button', { name: 'IP' }));
+    expect(screen.getByRole('heading', { name: 'Top IPs' })).toBeInTheDocument();
+    expect(screen.queryByText('Hetzner')).not.toBeInTheDocument();
+    expect(localStorage.getItem('dashboard_top_source_mode')).toBe('ip');
+    const ipRow = screen.getByText('1.2.3.4').closest('.cursor-pointer');
+    expect(ipRow).not.toBeNull();
+    expect(within(ipRow as HTMLElement).getByText('Germany')).toBeInTheDocument();
+
+    await user.click(screen.getByText('1.2.3.4'));
+    await waitFor(() => expect(fetchDashboardStatsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ip: '1.2.3.4' }),
+      expect.any(Object),
+    ));
+    expect(JSON.parse(localStorage.getItem(QUICK_FILTERS_STORAGE_KEY) || '{}').selections.ip).toEqual({
+      included: ['1.2.3.4'],
+      excluded: [],
+    });
+  });
+
   test('keeps the activity-history range and quick-filter date range in sync', async () => {
     const user = userEvent.setup();
     render(
