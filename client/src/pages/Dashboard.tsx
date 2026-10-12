@@ -1611,7 +1611,7 @@ export function Dashboard() {
 
                 {/* Top Statistics Grid */}
                 <div
-                    className="grid gap-8 md:grid-cols-2 xl:grid-cols-4"
+                    className="grid gap-8 md:grid-cols-2 2xl:grid-cols-4"
                     aria-busy={dashboardRefreshing}
                     aria-disabled={filterApplying}
                     inert={filterApplying ? true : undefined}
