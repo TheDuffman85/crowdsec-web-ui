@@ -5,6 +5,7 @@ import es from '../client/src/locales/es.json';
 import fr from '../client/src/locales/fr.json';
 import hi from '../client/src/locales/hi.json';
 import ja from '../client/src/locales/ja.json';
+import ko from '../client/src/locales/ko.json';
 import pt from '../client/src/locales/pt.json';
 import ru from '../client/src/locales/ru.json';
 import zh from '../client/src/locales/zh.json';
@@ -13,7 +14,7 @@ import type { CrowdsecDatabase } from './database';
 export const LANGUAGE_SETTING_KEY = 'language';
 export const BROWSER_LANGUAGE_SETTING = 'browser';
 
-export const SUPPORTED_SERVER_LANGUAGES = ['ar', 'en', 'de', 'fr', 'hi', 'ja', 'pt', 'es', 'ru', 'zh'] as const;
+export const SUPPORTED_SERVER_LANGUAGES = ['ar', 'en', 'de', 'fr', 'hi', 'ja', 'ko', 'pt', 'es', 'ru', 'zh'] as const;
 export type SupportedServerLanguage = (typeof SUPPORTED_SERVER_LANGUAGES)[number];
 export type LanguagePreference = SupportedServerLanguage | typeof BROWSER_LANGUAGE_SETTING;
 export type TranslationValues = Record<string, string | number | boolean | null | undefined>;
@@ -27,6 +28,7 @@ const resources: Record<SupportedServerLanguage, Record<string, string>> = {
   fr,
   hi,
   ja,
+  ko,
   pt,
   ru,
   zh,
