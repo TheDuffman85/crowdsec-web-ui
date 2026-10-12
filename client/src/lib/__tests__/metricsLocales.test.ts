@@ -6,11 +6,12 @@ import es from '../../locales/es.json';
 import fr from '../../locales/fr.json';
 import hi from '../../locales/hi.json';
 import ja from '../../locales/ja.json';
+import ko from '../../locales/ko.json';
 import pt from '../../locales/pt.json';
 import ru from '../../locales/ru.json';
 import zh from '../../locales/zh.json';
 
-const locales = { ar, de, es, fr, hi, ja, pt, ru, zh };
+const locales = { ar, de, es, fr, hi, ja, ko, pt, ru, zh };
 
 function metricKeys(locale: Record<string, string>): string[] {
   return Object.keys(locale)

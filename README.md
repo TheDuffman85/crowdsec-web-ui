@@ -35,7 +35,7 @@ A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alert
 | Metrics | Optional Prometheus views for LAPI activity, bouncers, AppSec, parsers, latency, parsing time, and whitelists |
 | Notifications | Alert, decision, CVE, availability, and update rules delivered through Email, Gotify, MQTT, ntfy, or Webhooks |
 | Security | Initial administrator setup, password and TOTP login, passkeys, OIDC SSO, group roles, and instance-wide read-only mode |
-| Localization | Arabic, Chinese, English, French, German, Hindi, Japanese, Portuguese, Russian, and Spanish |
+| Localization | Arabic, Chinese, English, French, German, Hindi, Japanese, Korean, Portuguese, Russian, and Spanish |
 | Experience | Unified search, server-synced saved and recent filters, dark/light themes, and responsive layouts |
 | Branding | Custom application name and logo for the sidebar, browser tab, sign-in page, notifications, and authenticator apps |
 
