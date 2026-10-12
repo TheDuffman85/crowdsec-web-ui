@@ -75,6 +75,10 @@
 #     includeCapi: false
 #     includeOriginEmpty: false
 #     excludeOriginEmpty: false
+#   Scenarios offered by the Add Decision form in addition to manual/web-ui,
+#   which is always available and selected by default.
+#   manualDecisions:
+#     scenarios: [custom/abuse-report]
 #   sync:
 #     lookback: 168h
 #     refreshInterval: 1m
@@ -148,6 +152,9 @@ instances:
     #     #   caFile: /certs/metrics-ca.pem
     #     #   certFile: /certs/metrics-client.pem
     #     #   keyFile: /certs/metrics-client-key.pem
+    # Per-instance manualDecisions replaces the global scenario list above.
+    # manualDecisions:
+    #   scenarios: [custom/branch-office]
     # Per-instance sync values are optional and inherit the global values above.
     # sync:
     #   lookback: 168h

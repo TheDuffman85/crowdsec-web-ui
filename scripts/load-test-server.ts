@@ -1,7 +1,7 @@
 import { serve } from '@hono/node-server';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import path from 'node:path';
-import type { AlertDecision, AlertRecord } from '../shared/contracts';
+import { DEFAULT_MANUAL_DECISION_SCENARIO, type AlertDecision, type AlertRecord } from '../shared/contracts';
 import { createApp } from '../server/app';
 import { createRuntimeConfig } from '../server/config';
 import { CrowdsecDatabase } from '../server/database';
@@ -1111,12 +1111,18 @@ const fakeLapiClient = {
     const snapshot = database.getAlertDecisionSnapshot(alertId);
     return snapshot ? JSON.parse(snapshot.raw_data) : null;
   },
-  addDecision: async (ip: string, type: string, duration: string, reason = 'Manual decision from Web UI') => {
+  addDecision: async (
+    ip: string,
+    type: string,
+    duration: string,
+    reason = 'Manual decision from Web UI',
+    scenario = DEFAULT_MANUAL_DECISION_SCENARIO,
+  ) => {
     const createdAt = new Date(Date.now() - 1_000).toISOString();
     const alertId = nextGeneratedAlertId++;
     const alert = buildGeneratedAlert(alertId, createdAt);
     alert.source = { ...(alert.source || {}), scope: 'ip', value: ip, ip };
-    alert.scenario = 'manual/web-ui';
+    alert.scenario = scenario;
     alert.reason = reason;
     const stopAt = new Date(Date.now() + parseGoDuration(duration)).toISOString();
     alert.decisions = [{
@@ -1127,7 +1133,7 @@ const fakeLapiClient = {
       stop_at: stopAt,
       created_at: createdAt,
       origin: 'cscli',
-      scenario: 'manual/web-ui',
+      scenario,
       simulated: false,
     }];
     dynamicAlerts.set(String(alert.id), alert);

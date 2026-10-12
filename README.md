@@ -262,7 +262,7 @@ Date patterns require one day, month, and year token in any order: `d`/`dd` (day
 User actions that change CrowdSec state (adding decisions, deleting decisions and alerts, and per-IP cleanup) are recorded as single `[audit]` lines in the application log. Each entry is a JSON object with the timestamp, acting user and role, action, target (IP, range, or entity IDs), and outcome:
 
 ```
-[audit] {"time":"2026-08-17T01:30:00.000Z","user":"tommy","role":"admin","action":"decision.add","ip":"192.0.2.10","type":"ban","duration":"4h","reason":"manual","instances":["CrowdSec"],"outcome":"success"}
+[audit] {"time":"2026-08-17T01:30:00.000Z","user":"tommy","role":"admin","action":"decision.add","ip":"192.0.2.10","type":"ban","scenario":"manual/web-ui","duration":"4h","reason":"manual","instances":["CrowdSec"],"outcome":"success"}
 ```
 
 Outcomes are `success`, `partial`, `failure`, or `queued`. Alert deletions handled by the persistent deletion queue are recorded as `queued`, because CrowdSec may complete them after the HTTP request returns. Multi-target actions include `target_results` or `instance_results` so successful, failed, and queued targets remain distinguishable.
@@ -286,6 +286,14 @@ Omitting `crowdsec.alertFilters` uses the standard non-CAPI feed. Setting any ex
 | `crowdsec.alertFilters.excludeOriginEmpty` | `false` | Drops alerts whose effective origin is empty. | `CONFIG_CROWDSEC_ALERT_FILTERS_EXCLUDE_ORIGIN_EMPTY` |
 | `crowdsec.alertFilters.legacy.origins` | `[]` | Compatibility origin allowlist; `CAPI` enables the CAPI feed. | `CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_ORIGINS` or `CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_ORIGINS_<INDEX>` |
 | `crowdsec.alertFilters.legacy.extraScenarios` | `[]` | Compatibility list of additional scenarios. | `CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_EXTRA_SCENARIOS` or `CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_EXTRA_SCENARIOS_<INDEX>` |
+
+### Manual decisions
+
+The Add Decision form always offers `manual/web-ui` and selects it by default. With no scenarios configured, the scenario field stays greyed out on `manual/web-ui`; configured scenarios turn it into a dropdown. When **All instances** targets instances with different lists, only `manual/web-ui` is offered. These lists only shape the form: `POST /api/decisions` accepts any `author/name` scenario. If `crowdsec.alertFilters.legacy.extraScenarios` is used to show manual decisions, add the configured scenarios there too.
+
+| YAML field | Default | Purpose | Environment override |
+| --- | --- | --- | --- |
+| `crowdsec.manualDecisions.scenarios` | `[]` | Additional `author/name` scenarios offered by the Add Decision form. | `CONFIG_CROWDSEC_MANUAL_DECISIONS_SCENARIOS` or `CONFIG_CROWDSEC_MANUAL_DECISIONS_SCENARIOS_<INDEX>` |
 
 ### Global synchronization
 
@@ -347,6 +355,8 @@ Synchronization durations accept `ms`, `s`, `m`, `h`, or `d`, for example `500ms
 | `instances[].lapi.tls` | Empty mapping | LAPI server-trust settings. | `CONFIG_INSTANCES_<INDEX>_LAPI_TLS` |
 | `instances[].lapi.tls.caFile` | Unset | CA bundle used to verify the LAPI server. | `CONFIG_INSTANCES_<INDEX>_LAPI_TLS_CA_FILE` |
 | `instances[].metrics` | `[]` | Zero or more metrics endpoints. | `CONFIG_INSTANCES_<INDEX>_METRICS` or `CONFIG_INSTANCES_<INDEX>_METRICS_<METRIC_INDEX>_*` |
+| `instances[].manualDecisions` | Inherits global values | Per-instance Add Decision settings. | `CONFIG_INSTANCES_<INDEX>_MANUAL_DECISIONS` |
+| `instances[].manualDecisions.scenarios` | Global `crowdsec.manualDecisions.scenarios` | Replaces the global scenario list for this instance; `[]` offers only `manual/web-ui`. | `CONFIG_INSTANCES_<INDEX>_MANUAL_DECISIONS_SCENARIOS` |
 | `instances[].sync` | Inherits global values | Per-instance synchronization overrides. | `CONFIG_INSTANCES_<INDEX>_SYNC` or `CONFIG_INSTANCES_<INDEX>_SYNC_*` |
 
 ### Metrics endpoints

@@ -156,7 +156,7 @@ Alert facets require `field=id|instance|scenario|kind|country|region|city|as|ip|
 | --- | --- | --- |
 | GET | `/api/decisions` | List decisions. Without `page`, returns an array. With `page`, returns a paginated response. Active decisions are returned by default. |
 | GET | `/api/decisions/facets` | Return one bounded quick-filter facet across the complete effective decision result set. |
-| POST | `/api/decisions` | Add a manual CrowdSec decision through LAPI. Body: `{ "ip": "1.2.3.4", "duration": "4h", "reason": "manual", "type": "ban" }`. `type` defaults to `ban` and accepts `ban` or `captcha`; optional `scope` and `instance_id` select targets. Blocked in read-only mode. |
+| POST | `/api/decisions` | Add a manual CrowdSec decision through LAPI. Body: `{ "ip": "1.2.3.4", "duration": "4h", "reason": "manual", "type": "ban", "scenario": "manual/web-ui" }`. `type` defaults to `ban` and accepts `ban` or `captcha`; `scenario` defaults to `manual/web-ui` and must look like `author/name` (letters, digits, `_`, `.`, `-`; at most 256 characters); `crowdsec.manualDecisions` only limits the Web UI form, not this endpoint; optional `scope` and `instance_id` select targets. Blocked in read-only mode. |
 | POST | `/api/decisions/bulk-delete` | Delete multiple decisions by numeric ID. Body: `{ "ids": [10, "11"] }`. Blocked in read-only mode. |
 | DELETE | `/api/decisions/:id` | Delete one decision from CrowdSec LAPI and local cache. `:id` must be numeric. Blocked in read-only mode. |
 | DELETE | `/api/instances/:instanceId/decisions/:id` | Delete one decision from a specific instance and its local cache. Blocked in read-only mode. |

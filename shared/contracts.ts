@@ -65,6 +65,7 @@ export interface InstanceSummary {
   sync_status: SyncStatus;
   prometheus: PrometheusEndpointSummary[];
   sync_overrides?: Record<string, string | number | boolean>;
+  manual_decision_scenarios?: string[];
 }
 
 export type TableColumnPreferenceTable = 'alerts' | 'decisions';
@@ -755,11 +756,20 @@ export interface CrowdsecMetricsResponse {
   appsecEngines?: CrowdsecMetricsAppsecEngine[];
 }
 
+export const DEFAULT_MANUAL_DECISION_SCENARIO = 'manual/web-ui';
+
+const DECISION_SCENARIO_PATTERN = /^[\w.-]+\/[\w.-]+$/;
+
+export function isValidDecisionScenario(scenario: string): boolean {
+  return scenario.length <= 256 && DECISION_SCENARIO_PATTERN.test(scenario);
+}
+
 export interface AddDecisionRequest {
   ip: string;
   duration?: string;
   reason?: string;
   type?: 'ban' | 'captcha';
+  scenario?: string;
   scope?: 'all' | 'instance';
   instance_id?: string;
 }

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { parse as parseYaml } from 'yaml';
+import { isValidDecisionScenario } from '../shared/contracts';
 import type { CrowdsecAuthConfig } from './auth';
 
 export interface EndpointTlsConfig {
@@ -52,6 +53,7 @@ export interface CrowdsecInstanceConfig {
   lapiTls: EndpointTlsConfig;
   prometheus: PrometheusEndpointConfig[];
   sync: InstanceSyncOverrides;
+  manualDecisionScenarios?: string[];
 }
 
 type UnknownRecord = Record<string, unknown>;
@@ -281,6 +283,23 @@ function parseSync(value: unknown, label: string): InstanceSyncOverrides {
   };
 }
 
+export function parseManualDecisionScenarios(value: unknown, label: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  const input = record(value, label);
+  knownKeys(input, ['scenarios'], label);
+  if (input.scenarios === undefined) return undefined;
+  const entries = Array.isArray(input.scenarios) ? Array.from(input.scenarios) : null;
+  if (!entries || entries.some((entry) => typeof entry !== 'string' || !entry.trim())) {
+    throw new Error(`Configuration error: ${label}.scenarios must be an array of non-empty strings.`);
+  }
+  const scenarios = [...new Set(entries.map((entry) => String(entry).trim()))];
+  const invalid = scenarios.find((scenario) => !isValidDecisionScenario(scenario));
+  if (invalid) {
+    throw new Error(`Configuration error: ${label}.scenarios entry "${invalid}" must look like author/name using letters, digits, _, . or - (at most 256 characters).`);
+  }
+  return scenarios;
+}
+
 export function parseInstancesConfig(parsed: unknown, env: NodeJS.ProcessEnv): CrowdsecInstanceConfig[] {
   const root = record(parsed, 'instances config');
   if (!Array.isArray(root.instances) || root.instances.length === 0) {
@@ -340,6 +359,7 @@ export function parseInstancesConfig(parsed: unknown, env: NodeJS.ProcessEnv): C
       lapiTls,
       prometheus,
       sync: parseSync(input.sync, `${label}.sync`),
+      manualDecisionScenarios: parseManualDecisionScenarios(input.manualDecisions, `${label}.manualDecisions`),
     };
   });
 }

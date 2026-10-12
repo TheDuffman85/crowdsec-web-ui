@@ -43,7 +43,7 @@ describe('Add Decision from alerts', () => {
     await userEvent.type(within(dialog).getByRole('textbox', { name: 'IP / Range' }), '203.0.113.7');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Add Decision' }));
     await waitFor(() => expect(api.addDecision).toHaveBeenCalledWith({
-      ip: '203.0.113.7', duration: '4h', reason: 'crowdsecurity/ssh-bf',
+      ip: '203.0.113.7', duration: '4h', type: 'ban', reason: 'crowdsecurity/ssh-bf', scenario: 'manual/web-ui',
     }));
     await waitFor(() => expect(vi.mocked(api.fetchAlertsPaginated).mock.calls.length).toBeGreaterThan(fetchCount));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Add Manual Decision' })).not.toBeInTheDocument());
@@ -127,7 +127,7 @@ describe('Add Decision from alerts', () => {
       expect(within(dialog).getByText('Current instance: EAST')).toBeInTheDocument();
       await userEvent.click(within(dialog).getByRole('button', { name: 'Add Decision' }));
       await waitFor(() => expect(api.addDecision).toHaveBeenLastCalledWith({
-        ip: '198.51.100.4', duration: '4h', reason: 'crowdsecurity/ssh-bf',
+        ip: '198.51.100.4', duration: '4h', type: 'ban', reason: 'crowdsecurity/ssh-bf', scenario: 'manual/web-ui',
         scope: 'instance', instance_id: 'east',
       }));
       await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Add Manual Decision' })).not.toBeInTheDocument());
@@ -137,7 +137,7 @@ describe('Add Decision from alerts', () => {
       await userEvent.click(within(dialog).getByRole('checkbox', { name: 'All instances' }));
       await userEvent.click(within(dialog).getByRole('button', { name: 'Add Decision' }));
       await waitFor(() => expect(api.addDecision).toHaveBeenLastCalledWith({
-        ip: '198.51.100.4', duration: '4h', reason: 'crowdsecurity/ssh-bf', scope: 'all',
+        ip: '198.51.100.4', duration: '4h', type: 'ban', reason: 'crowdsecurity/ssh-bf', scenario: 'manual/web-ui', scope: 'all',
       }));
     } finally {
       if (originalImplementation) fetchAlerts.mockImplementation(originalImplementation);

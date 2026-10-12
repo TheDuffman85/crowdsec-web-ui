@@ -3,7 +3,7 @@ import path from 'node:path';
 import { isMap, isSeq, parse as parseYaml, parseDocument as parseYamlDocument, stringify as stringifyYaml } from 'yaml';
 import type { RuntimeConfig } from './config';
 import { ConfigurationEnvironmentError } from './config-error';
-import { parseInstancesConfig, type CrowdsecInstanceConfig } from './instances-config';
+import { parseInstancesConfig, parseManualDecisionScenarios, type CrowdsecInstanceConfig } from './instances-config';
 
 type UnknownRecord = Record<string, unknown>;
 type ConfigPath = readonly (string | number)[];
@@ -15,6 +15,7 @@ export interface ParsedConfigFile {
   sqliteIncrementalVacuumEnabled: boolean;
   sqliteJournalSizeLimitBytes: number;
   updateCheckEnabled?: boolean;
+  manualDecisionScenarios: string[];
 }
 
 export const DEFAULT_SQLITE_JOURNAL_SIZE_LIMIT_BYTES = 128 * 1024 * 1024;
@@ -251,7 +252,7 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
   const updateCheckEnabled = updates.enabled === undefined ? undefined : boolean(updates.enabled, 'updates.enabled');
 
   const crowdsec = section(root, 'crowdsec');
-  knownKeys(crowdsec, ['simulationsEnabled', 'alertFilters', 'sync'], 'crowdsec');
+  knownKeys(crowdsec, ['simulationsEnabled', 'alertFilters', 'manualDecisions', 'sync'], 'crowdsec');
   setBoolean(env, crowdsec, 'simulationsEnabled', 'CROWDSEC_SIMULATIONS_ENABLED', 'crowdsec');
   const filters = crowdsec.alertFilters === undefined ? {} : record(crowdsec.alertFilters, 'crowdsec.alertFilters');
   knownKeys(filters, ['includeOrigins', 'excludeOrigins', 'includeCapi', 'includeOriginEmpty', 'excludeOriginEmpty', 'legacy'], 'crowdsec.alertFilters');
@@ -266,6 +267,7 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
     setArray(env, legacyFilters, 'origins', 'CROWDSEC_ALERT_ORIGINS', 'crowdsec.alertFilters.legacy');
     setArray(env, legacyFilters, 'extraScenarios', 'CROWDSEC_ALERT_EXTRA_SCENARIOS', 'crowdsec.alertFilters.legacy');
   }
+  const manualDecisionScenarios = parseManualDecisionScenarios(crowdsec.manualDecisions, 'crowdsec.manualDecisions') ?? [];
 
   const sync = crowdsec.sync === undefined ? {} : record(crowdsec.sync, 'crowdsec.sync');
   const syncKeys = {
@@ -298,6 +300,7 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
     sqliteIncrementalVacuumEnabled,
     sqliteJournalSizeLimitBytes,
     updateCheckEnabled,
+    manualDecisionScenarios,
   };
 }
 
@@ -346,9 +349,10 @@ export const CONFIG_KEY_ORDER = new Map<string, readonly string[]>([
   ['auth.oidc', ['issuerUrl', 'clientId', 'clientSecret', 'scope', 'groupsClaim', 'adminGroups', 'readOnlyGroups', 'unmatchedRole']],
   ['notifications', ['secretKey', 'allowPrivateAddresses', 'debugPayloads']],
   ['audit', ['enabled', 'logFile']],
-  ['crowdsec', ['simulationsEnabled', 'alertFilters', 'sync']],
+  ['crowdsec', ['simulationsEnabled', 'alertFilters', 'manualDecisions', 'sync']],
   ['crowdsec.alertFilters', ['includeOrigins', 'excludeOrigins', 'includeCapi', 'includeOriginEmpty', 'excludeOriginEmpty', 'legacy']],
   ['crowdsec.alertFilters.legacy', ['origins', 'extraScenarios']],
+  ['crowdsec.manualDecisions', ['scenarios']],
   ['crowdsec.sync', [
     'lookback', 'refreshInterval', 'manualRefreshEnabled', 'idleRefreshInterval', 'idleThreshold',
     'requestTimeout', 'bouncerPropagationDelay', 'deletionQueueMaxAge', 'metricsRequestTimeout', 'heartbeatInterval',
@@ -356,13 +360,14 @@ export const CONFIG_KEY_ORDER = new Map<string, readonly string[]>([
     'reconcileRecentInterval', 'reconcileActiveInterval', 'reconcileOldInterval',
     'reconcileWindowsPerRefresh', 'bootstrapRetryDelay', 'bootstrapRetryEnabled',
   ]],
-  ['instances[]', ['id', 'name', 'icon', 'lapi', 'metrics', 'sync']],
+  ['instances[]', ['id', 'name', 'icon', 'lapi', 'metrics', 'manualDecisions', 'sync']],
   ['instances[].lapi', ['url', 'auth', 'tls']],
   ['instances[].lapi.auth', ['type', 'username', 'password', 'certFile', 'keyFile']],
   ['instances[].lapi.tls', ['caFile']],
   ['instances[].metrics[]', ['id', 'name', 'icon', 'url', 'requestTimeout', 'auth', 'tls']],
   ['instances[].metrics[].auth', ['type', 'username', 'password', 'token']],
   ['instances[].metrics[].tls', ['caFile', 'certFile', 'keyFile']],
+  ['instances[].manualDecisions', ['scenarios']],
   ['instances[].sync', [
     'lookback', 'refreshInterval', 'idleRefreshInterval', 'idleThreshold', 'requestTimeout',
     'heartbeatInterval', 'alertSyncChunk', 'alertSyncMinChunk', 'reconcileWindow',
@@ -580,6 +585,7 @@ export function generateApplicationConfig(env: NodeJS.ProcessEnv, config: Runtim
           ? { legacy: { origins: config.legacyAlertOrigins, extraScenarios: config.legacyAlertExtraScenarios } }
           : {}),
       },
+      manualDecisions: { scenarios: config.manualDecisionScenarios },
       sync: {
         lookback: config.lookbackPeriod,
         refreshInterval: duration(config.refreshIntervalMs),
@@ -653,6 +659,7 @@ const CONFIG_VALUE_ENV = [
   ['CONFIG_CROWDSEC_ALERT_FILTERS_EXCLUDE_ORIGIN_EMPTY', ['crowdsec', 'alertFilters', 'excludeOriginEmpty']],
   ['CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_ORIGINS', ['crowdsec', 'alertFilters', 'legacy', 'origins']],
   ['CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_EXTRA_SCENARIOS', ['crowdsec', 'alertFilters', 'legacy', 'extraScenarios']],
+  ['CONFIG_CROWDSEC_MANUAL_DECISIONS_SCENARIOS', ['crowdsec', 'manualDecisions', 'scenarios']],
   ['CONFIG_CROWDSEC_SYNC_LOOKBACK', ['crowdsec', 'sync', 'lookback']],
   ['CONFIG_CROWDSEC_SYNC_REFRESH_INTERVAL', ['crowdsec', 'sync', 'refreshInterval']],
   ['CONFIG_CROWDSEC_SYNC_MANUAL_REFRESH_ENABLED', ['crowdsec', 'sync', 'manualRefreshEnabled']],
@@ -690,6 +697,7 @@ const CONFIG_ARRAY_ENV = [
   ['CONFIG_CROWDSEC_ALERT_FILTERS_EXCLUDE_ORIGINS', ['crowdsec', 'alertFilters', 'excludeOrigins']],
   ['CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_ORIGINS', ['crowdsec', 'alertFilters', 'legacy', 'origins']],
   ['CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_EXTRA_SCENARIOS', ['crowdsec', 'alertFilters', 'legacy', 'extraScenarios']],
+  ['CONFIG_CROWDSEC_MANUAL_DECISIONS_SCENARIOS', ['crowdsec', 'manualDecisions', 'scenarios']],
 ] as const;
 
 const CONFIG_INSTANCE_VALUE_SUFFIX = new Map<string, readonly string[]>([
@@ -706,6 +714,8 @@ const CONFIG_INSTANCE_VALUE_SUFFIX = new Map<string, readonly string[]>([
   ['LAPI_TLS', ['lapi', 'tls']],
   ['LAPI_TLS_CA_FILE', ['lapi', 'tls', 'caFile']],
   ['METRICS', ['metrics']],
+  ['MANUAL_DECISIONS', ['manualDecisions']],
+  ['MANUAL_DECISIONS_SCENARIOS', ['manualDecisions', 'scenarios']],
   ['SYNC', ['sync']],
   ['SYNC_LOOKBACK', ['sync', 'lookback']],
   ['SYNC_REFRESH_INTERVAL', ['sync', 'refreshInterval']],
@@ -1276,6 +1286,7 @@ function initialConfigReference(document: UnknownRecord): UnknownRecord {
   const audit = record(document.audit, 'audit');
   const crowdsec = record(document.crowdsec, 'crowdsec');
   const sync = record(crowdsec.sync, 'crowdsec.sync');
+  const manualDecisions = crowdsec.manualDecisions === undefined ? {} : record(crowdsec.manualDecisions, 'crowdsec.manualDecisions');
   const filters = crowdsec.alertFilters === undefined ? {} : record(crowdsec.alertFilters, 'crowdsec.alertFilters');
   const instances = (document.instances as unknown[]).map((rawInstance, instanceIndex) => {
     const instance = record(rawInstance, `instances[${instanceIndex}]`);
@@ -1283,6 +1294,9 @@ function initialConfigReference(document: UnknownRecord): UnknownRecord {
     const lapiAuth = lapi.auth === undefined ? {} : record(lapi.auth, `instances[${instanceIndex}].lapi.auth`);
     const lapiTls = lapi.tls === undefined ? {} : record(lapi.tls, `instances[${instanceIndex}].lapi.tls`);
     const instanceSync = instance.sync === undefined ? {} : record(instance.sync, `instances[${instanceIndex}].sync`);
+    const instanceManualDecisions = instance.manualDecisions === undefined
+      ? {}
+      : record(instance.manualDecisions, `instances[${instanceIndex}].manualDecisions`);
     const rawMetrics = Array.isArray(instance.metrics) ? instance.metrics : [];
     const metrics = (rawMetrics.length > 0 ? rawMetrics : [{}]).map((rawEndpoint, metricsIndex) => {
       const endpoint = record(rawEndpoint, `instances[${instanceIndex}].metrics[${metricsIndex}]`);
@@ -1333,6 +1347,7 @@ function initialConfigReference(document: UnknownRecord): UnknownRecord {
         tls: { caFile: '/certs/ca.pem', ...lapiTls },
       },
       metrics,
+      manualDecisions: { scenarios: manualDecisions.scenarios, ...instanceManualDecisions },
       sync: {
         lookback: sync.lookback,
         refreshInterval: sync.refreshInterval,

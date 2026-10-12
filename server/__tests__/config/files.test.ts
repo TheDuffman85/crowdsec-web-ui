@@ -498,6 +498,108 @@ instances:
     expect(() => createRuntimeConfig({ CONFIG_FILE: unknownKey })).toThrow(/unknown audit setting.*file/i);
   });
 
+  test('loads manual decision scenarios with per-instance overrides', () => {
+    const configFile = createTempConfig(`
+crowdsec:
+  manualDecisions:
+    scenarios: [custom/abuse-report, " custom/scanner ", custom/abuse-report]
+instances:
+  - id: main
+    name: Main
+    lapi:
+      url: http://main:8080
+      auth: { type: none }
+  - id: branch
+    name: Branch
+    lapi:
+      url: http://branch:8080
+      auth: { type: none }
+    manualDecisions:
+      scenarios: [custom/branch-office]
+  - id: lab
+    name: Lab
+    lapi:
+      url: http://lab:8080
+      auth: { type: none }
+    manualDecisions:
+      scenarios: []
+`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfig({ CONFIG_FILE: configFile });
+      expect(config.manualDecisionScenarios).toEqual(['custom/abuse-report', 'custom/scanner']);
+      expect(config.instances.map((instance) => instance.manualDecisionScenarios)).toEqual([
+        undefined,
+        ['custom/branch-office'],
+        [],
+      ]);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test('defaults to no configured manual decision scenarios', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfig({});
+      expect(config.manualDecisionScenarios).toEqual([]);
+      expect(config.instances[0].manualDecisionScenarios).toBeUndefined();
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test('rejects invalid manual decision scenarios', () => {
+    const instance = `
+instances:
+  - id: default
+    name: CrowdSec
+    lapi:
+      url: http://crowdsec:8080
+      auth: { type: none }`;
+    const invalidFormat = createTempConfig(`
+crowdsec:
+  manualDecisions:
+    scenarios: [no-slash]${instance}
+`);
+    expect(() => createRuntimeConfig({ CONFIG_FILE: invalidFormat }))
+      .toThrow(/crowdsec\.manualDecisions\.scenarios entry "no-slash" must look like author\/name/i);
+
+    const notArray = createTempConfig(`
+crowdsec:
+  manualDecisions:
+    scenarios: custom/abuse-report${instance}
+`);
+    expect(() => createRuntimeConfig({ CONFIG_FILE: notArray }))
+      .toThrow(/crowdsec\.manualDecisions\.scenarios must be an array of non-empty strings/i);
+
+    const unknownInstanceKey = createTempConfig(`${instance}
+    manualDecisions:
+      scenario: [custom/abuse-report]
+`);
+    expect(() => createRuntimeConfig({ CONFIG_FILE: unknownInstanceKey }))
+      .toThrow(/unknown instances\[0\]\.manualDecisions setting.*scenario/i);
+  });
+
+  test('sets manual decision scenarios from CONFIG_ setup variables', () => {
+    const generatedConfigFile = createMissingConfigPath();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const config = createRuntimeConfigImpl({
+        CONFIG_CROWDSEC_MANUAL_DECISIONS_SCENARIOS_0: 'custom/abuse-report',
+        CONFIG_CROWDSEC_MANUAL_DECISIONS_SCENARIOS_1: 'custom/scanner',
+        CONFIG_INSTANCE_MANUAL_DECISIONS_SCENARIOS: '[custom/branch-office]',
+      }, { defaultConfigFile: generatedConfigFile });
+      expect(config.manualDecisionScenarios).toEqual(['custom/abuse-report', 'custom/scanner']);
+      expect(config.instances[0].manualDecisionScenarios).toEqual(['custom/branch-office']);
+      const persisted = parseYaml(readFileSync(generatedConfigFile, 'utf8'));
+      expect(persisted.crowdsec.manualDecisions.scenarios).toEqual(['custom/abuse-report', 'custom/scanner']);
+      expect(persisted.instances[0].manualDecisions.scenarios).toEqual(['custom/branch-office']);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   test('prefers CONFIG_ setup values over deprecated values during initial generation', () => {
     const generatedConfigFile = createMissingConfigPath();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
