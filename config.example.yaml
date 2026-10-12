@@ -52,6 +52,7 @@
 #     adminGroups: []
 #     readOnlyGroups: []
 #     unmatchedRole: deny
+#     endSession: true
 
 # notifications:
 #   secretKey:

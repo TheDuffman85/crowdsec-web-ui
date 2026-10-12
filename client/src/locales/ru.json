@@ -429,6 +429,8 @@
   "pages.settings.oidcUnmatchedRoleDeny": "Запретить вход",
   "pages.settings.oidcUnmatchedRoleAdmin": "Доступ администратора",
   "pages.settings.oidcUnmatchedRoleReadOnly": "Доступ только для чтения",
+  "pages.settings.oidcEndSession": "Выходить из провайдера удостоверений при выходе",
+  "pages.settings.oidcEndSessionHelp": "Когда пользователь SSO выходит из системы, его сеанс у провайдера удостоверений также завершается, и при следующем входе через SSO учетные данные будут запрошены снова. Зарегистрируйте {url} у провайдера как URI перенаправления после выхода.",
   "pages.settings.addGroup": "Добавить",
   "pages.settings.noScopesConfigured": "Scopes не настроены.",
   "pages.settings.removeScope": "Удалить {scope}",

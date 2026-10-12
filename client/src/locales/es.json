@@ -429,6 +429,8 @@
   "pages.settings.oidcUnmatchedRoleDeny": "Denegar inicio de sesión",
   "pages.settings.oidcUnmatchedRoleAdmin": "Acceso de administrador",
   "pages.settings.oidcUnmatchedRoleReadOnly": "Acceso de solo lectura",
+  "pages.settings.oidcEndSession": "Cerrar sesión también en el proveedor de identidad",
+  "pages.settings.oidcEndSessionHelp": "Cuando un usuario SSO cierra sesión, también se cierra su sesión en el proveedor de identidad, de modo que el próximo inicio de sesión SSO vuelva a pedir credenciales. Registra {url} como URI de redirección posterior al cierre de sesión en tu proveedor.",
   "pages.settings.addGroup": "Añadir",
   "pages.settings.noScopesConfigured": "No hay scopes configurados.",
   "pages.settings.removeScope": "Eliminar {scope}",

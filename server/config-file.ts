@@ -225,7 +225,7 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
   applySecretReference(auth.totpSecret, 'auth.totpSecret', env, sourceEnv, 'AUTH_TOTP_SECRET');
   applySecretReference(auth.totpSeed, 'auth.totpSeed', env, sourceEnv, 'AUTH_TOTP_SEED');
   const oidc = auth.oidc === undefined ? {} : record(auth.oidc, 'auth.oidc');
-  knownKeys(oidc, ['issuerUrl', 'clientId', 'clientSecret', 'scope', 'groupsClaim', 'adminGroups', 'readOnlyGroups', 'unmatchedRole'], 'auth.oidc');
+  knownKeys(oidc, ['issuerUrl', 'clientId', 'clientSecret', 'scope', 'groupsClaim', 'adminGroups', 'readOnlyGroups', 'unmatchedRole', 'endSession'], 'auth.oidc');
   setString(env, oidc, 'issuerUrl', 'AUTH_OIDC_ISSUER_URL', 'auth.oidc');
   setString(env, oidc, 'clientId', 'AUTH_OIDC_CLIENT_ID', 'auth.oidc');
   applySecretReference(oidc.clientSecret, 'auth.oidc.clientSecret', env, sourceEnv, 'AUTH_OIDC_CLIENT_SECRET');
@@ -234,6 +234,7 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
   setArray(env, oidc, 'adminGroups', 'AUTH_OIDC_ADMIN_GROUPS', 'auth.oidc');
   setArray(env, oidc, 'readOnlyGroups', 'AUTH_OIDC_READ_ONLY_GROUPS', 'auth.oidc');
   setString(env, oidc, 'unmatchedRole', 'AUTH_OIDC_UNMATCHED_ROLE', 'auth.oidc');
+  setBoolean(env, oidc, 'endSession', 'AUTH_OIDC_END_SESSION', 'auth.oidc');
 
   const notifications = section(root, 'notifications');
   knownKeys(notifications, ['secretKey', 'allowPrivateAddresses', 'debugPayloads'], 'notifications');
@@ -343,7 +344,7 @@ export const CONFIG_KEY_ORDER = new Map<string, readonly string[]>([
   ['ui', ['timeZone', 'timeFormat', 'dateFormat', 'readOnly']],
   ['updates', ['enabled']],
   ['auth', ['enabled', 'sessionSecret', 'totpSecret', 'totpSeed', 'oidc']],
-  ['auth.oidc', ['issuerUrl', 'clientId', 'clientSecret', 'scope', 'groupsClaim', 'adminGroups', 'readOnlyGroups', 'unmatchedRole']],
+  ['auth.oidc', ['issuerUrl', 'clientId', 'clientSecret', 'scope', 'groupsClaim', 'adminGroups', 'readOnlyGroups', 'unmatchedRole', 'endSession']],
   ['notifications', ['secretKey', 'allowPrivateAddresses', 'debugPayloads']],
   ['audit', ['enabled', 'logFile']],
   ['crowdsec', ['simulationsEnabled', 'alertFilters', 'sync']],
@@ -552,6 +553,7 @@ export function generateApplicationConfig(env: NodeJS.ProcessEnv, config: Runtim
         adminGroups: config.dashboardAuth.oidcAdminGroups,
         readOnlyGroups: config.dashboardAuth.oidcReadOnlyGroups,
         unmatchedRole: config.dashboardAuth.oidcUnmatchedRole,
+        endSession: config.dashboardAuth.oidcEndSession,
       },
     },
     notifications: {
@@ -640,6 +642,7 @@ const CONFIG_VALUE_ENV = [
   ['CONFIG_AUTH_OIDC_ADMIN_GROUPS', ['auth', 'oidc', 'adminGroups']],
   ['CONFIG_AUTH_OIDC_READ_ONLY_GROUPS', ['auth', 'oidc', 'readOnlyGroups']],
   ['CONFIG_AUTH_OIDC_UNMATCHED_ROLE', ['auth', 'oidc', 'unmatchedRole']],
+  ['CONFIG_AUTH_OIDC_END_SESSION', ['auth', 'oidc', 'endSession']],
   ['CONFIG_NOTIFICATIONS_ALLOW_PRIVATE_ADDRESSES', ['notifications', 'allowPrivateAddresses']],
   ['CONFIG_NOTIFICATIONS_DEBUG_PAYLOADS', ['notifications', 'debugPayloads']],
   ['CONFIG_AUDIT_ENABLED', ['audit', 'enabled']],

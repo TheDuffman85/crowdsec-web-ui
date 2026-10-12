@@ -38,6 +38,7 @@ export interface DashboardAuthConfig {
   oidcAdminGroups: string[];
   oidcReadOnlyGroups: string[];
   oidcUnmatchedRole: OidcUnmatchedRole;
+  oidcEndSession: boolean;
 }
 
 export interface RuntimeConfig {
@@ -256,6 +257,7 @@ function parseDashboardAuthConfig(env: NodeJS.ProcessEnv): DashboardAuthConfig {
     oidcAdminGroups: parseCsvEnv(resolveRenamedEnv(env, 'AUTH_OIDC_ADMIN_GROUPS', 'CROWDSEC_AUTH_OIDC_ADMIN_GROUPS')),
     oidcReadOnlyGroups: parseCsvEnv(resolveRenamedEnv(env, 'AUTH_OIDC_READ_ONLY_GROUPS', 'CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS')),
     oidcUnmatchedRole: parseOidcUnmatchedRole(resolveRenamedEnv(env, 'AUTH_OIDC_UNMATCHED_ROLE', 'CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE')),
+    oidcEndSession: parseBooleanEnv(env.AUTH_OIDC_END_SESSION, true),
   };
 }
 

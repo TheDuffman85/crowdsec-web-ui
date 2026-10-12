@@ -30,7 +30,8 @@ type MutableAuthSettingKey =
   | 'oidc_groups_claim'
   | 'oidc_admin_groups'
   | 'oidc_read_only_groups'
-  | 'oidc_unmatched_role';
+  | 'oidc_unmatched_role'
+  | 'oidc_end_session';
 
 interface EffectiveAuthConfig {
   oidcIssuerUrl?: string;
@@ -41,6 +42,7 @@ interface EffectiveAuthConfig {
   oidcAdminGroups: string[];
   oidcReadOnlyGroups: string[];
   oidcUnmatchedRole: OidcUnmatchedRole;
+  oidcEndSession: boolean;
 }
 
 export interface OidcRoleConfig {
@@ -78,6 +80,8 @@ const TOTP_SETUP_COOKIE = 'crowdsec_web_ui_totp_setup';
 const OIDC_STATE_COOKIE = 'crowdsec_web_ui_oidc_state';
 const OIDC_NONCE_COOKIE = 'crowdsec_web_ui_oidc_nonce';
 const OIDC_REDIRECT_COOKIE = 'crowdsec_web_ui_oidc_redirect_uri';
+const OIDC_ID_TOKEN_COOKIE = 'crowdsec_web_ui_oidc_id_token';
+const MAX_ID_TOKEN_COOKIE_LENGTH = 3800;
 const DUMMY_PASSWORD_HASH_PROMISE = hashPassword('timing-safe-dummy-password-pad');
 const ENCRYPTED_SECRET_PREFIX = 'enc:v1:';
 const TOTP_EPOCH_TOLERANCE_SECONDS = 30;
@@ -536,11 +540,24 @@ class OidcRuntime {
     return `${authorizationEndpoint}?${params.toString()}`;
   }
 
+  /**
+   * Builds the RP-Initiated Logout URL, or returns null when the provider does
+   * not advertise an end_session_endpoint.
+   */
+  async endSessionUrl(postLogoutRedirectUri: string, idTokenHint?: string): Promise<string | null> {
+    const configuration = await this.getConfiguration();
+    if (!configuration.serverMetadata().end_session_endpoint) return null;
+    const params: Record<string, string> = { post_logout_redirect_uri: postLogoutRedirectUri };
+    if (idTokenHint) params.id_token_hint = idTokenHint;
+    return oidcClient.buildEndSessionUrl(configuration, params).toString();
+  }
+
   async handleCallback(currentUrl: URL, expectedNonce?: string, expectedState?: string): Promise<{
     username: string;
     role: Role | null;
     issuer: string;
     subject: string;
+    idToken?: string;
   } | null> {
     const configuration = await this.getConfiguration();
     const config = this.getConfig();
@@ -563,6 +580,7 @@ class OidcRuntime {
       role: resolved.role,
       issuer,
       subject,
+      idToken: tokens.id_token,
     };
   }
 
@@ -652,6 +670,7 @@ export function createDashboardAuth(options: {
       oidcAdminGroups: parseCsvList(readAuthSetting(database, 'oidc_admin_groups') ?? config.oidcAdminGroups.join(',')),
       oidcReadOnlyGroups: parseCsvList(readAuthSetting(database, 'oidc_read_only_groups') ?? config.oidcReadOnlyGroups.join(',')),
       oidcUnmatchedRole: parseOidcUnmatchedRole(readAuthSetting(database, 'oidc_unmatched_role') ?? config.oidcUnmatchedRole),
+      oidcEndSession: (readAuthSetting(database, 'oidc_end_session') ?? String(config.oidcEndSession)) !== 'false',
     };
   }
 
@@ -913,8 +932,22 @@ export function createDashboardAuth(options: {
       return context.json({ status: 'ok', user: { userId: user.id, username: user.username, role: user.role } });
     });
 
-    auth.post('/logout', (context) => {
+    auth.post('/logout', async (context) => {
+      const session = getSession(context);
+      const idToken = getCookie(context, OIDC_ID_TOKEN_COOKIE);
       clearSession(context);
+      deleteCookie(context, OIDC_ID_TOKEN_COOKIE, { path: cookiePath });
+
+      // RP-initiated logout: send SSO users to the provider so its session ends too.
+      if (session?.authMethod === 'oidc' && oidc.enabled && getEffectiveConfig().oidcEndSession) {
+        try {
+          const redirectUrl = await oidc.endSessionUrl(`${getPublicOrigin(context)}${basePath}/login`, idToken);
+          if (redirectUrl) return context.json({ status: 'ok', redirectUrl });
+        } catch (error) {
+          console.warn(`OIDC end-session URL could not be built; logging out locally: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+
       return context.json({ status: 'ok' });
     });
 
@@ -939,6 +972,7 @@ export function createDashboardAuth(options: {
         oidcAdminGroups: effectiveConfig.oidcAdminGroups.join(','),
         oidcReadOnlyGroups: effectiveConfig.oidcReadOnlyGroups.join(','),
         oidcUnmatchedRole: effectiveConfig.oidcUnmatchedRole,
+        oidcEndSession: effectiveConfig.oidcEndSession,
         hasPassword: Boolean(user?.password_hash),
         passkeysAvailable: !isOidcOnlyAccount(user),
         totpEnabled: isTotpEnabled(user),
@@ -974,6 +1008,7 @@ export function createDashboardAuth(options: {
           return context.json({ error: 'Invalid OIDC unmatched role' }, 400);
         }
       }
+      if ('oidcEndSession' in body) updates.set('oidc_end_session', body.oidcEndSession === false ? 'false' : 'true');
       if (typeof body.oidcIssuerUrl === 'string') updates.set('oidc_issuer_url', body.oidcIssuerUrl.trim());
       if (typeof body.oidcClientId === 'string') updates.set('oidc_client_id', body.oidcClientId.trim());
       if (typeof body.oidcClientSecret === 'string' && body.oidcClientSecret.trim()) {
@@ -1015,6 +1050,7 @@ export function createDashboardAuth(options: {
           oidcAdminGroups: effectiveConfig.oidcAdminGroups.join(','),
           oidcReadOnlyGroups: effectiveConfig.oidcReadOnlyGroups.join(','),
           oidcUnmatchedRole: effectiveConfig.oidcUnmatchedRole,
+          oidcEndSession: effectiveConfig.oidcEndSession,
         },
       });
     });
@@ -1287,6 +1323,19 @@ export function createDashboardAuth(options: {
         };
         const user = await writeDatabase(() => database.upsertOidcUser(oidcUser));
         createSession(context, user, 'oidc');
+        // Kept as id_token_hint for RP-initiated logout. Oversized tokens are
+        // skipped; logout then falls back to client_id only.
+        if (result.idToken && result.idToken.length <= MAX_ID_TOKEN_COOKIE_LENGTH) {
+          setCookie(context, OIDC_ID_TOKEN_COOKIE, result.idToken, {
+            httpOnly: true,
+            sameSite: 'Lax',
+            secure: isSecureRequest(context),
+            maxAge: OIDC_SESSION_LIFETIME_SECONDS,
+            path: cookiePath,
+          });
+        } else {
+          deleteCookie(context, OIDC_ID_TOKEN_COOKIE, { path: cookiePath });
+        }
         deleteCookie(context, OIDC_STATE_COOKIE, { path: cookiePath });
         deleteCookie(context, OIDC_NONCE_COOKIE, { path: cookiePath });
         deleteCookie(context, OIDC_REDIRECT_COOKIE, { path: cookiePath });

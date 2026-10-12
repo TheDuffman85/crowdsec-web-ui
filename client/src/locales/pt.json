@@ -429,6 +429,8 @@
   "pages.settings.oidcUnmatchedRoleDeny": "Negar login",
   "pages.settings.oidcUnmatchedRoleAdmin": "Acesso de administrador",
   "pages.settings.oidcUnmatchedRoleReadOnly": "Acesso somente leitura",
+  "pages.settings.oidcEndSession": "Sair também do provedor de identidade ao fazer logout",
+  "pages.settings.oidcEndSessionHelp": "Quando um usuário SSO faz logout, a sessão no provedor de identidade também é encerrada, para que o próximo login SSO solicite as credenciais novamente. Registre {url} como URI de redirecionamento pós-logout no seu provedor.",
   "pages.settings.addGroup": "Adicionar",
   "pages.settings.noScopesConfigured": "Nenhum scope configurado.",
   "pages.settings.removeScope": "Remover {scope}",

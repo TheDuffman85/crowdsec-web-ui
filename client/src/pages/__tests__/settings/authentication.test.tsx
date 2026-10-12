@@ -357,6 +357,7 @@ describe('Settings authentication methods', () => {
           oidcAdminGroups: 'Application Admin,secops',
           oidcReadOnlyGroups: 'Application User',
           oidcUnmatchedRole: 'deny',
+          oidcEndSession: true,
           hasPassword: true,
           totpEnabled: false,
           authMethod: 'password',
@@ -369,6 +370,11 @@ describe('Settings authentication methods', () => {
     render(<Settings />);
 
     await screen.findByText('Application Admin');
+    const endSessionSwitch = screen.getByRole('switch', { name: 'Sign out of the identity provider on logout' });
+    expect(endSessionSwitch).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByText(/Register http:\/\/localhost(:\d+)?\/login as a post-logout redirect URI/)).toBeInTheDocument();
+    await user.click(endSessionSwitch);
+    expect(endSessionSwitch).toHaveAttribute('aria-checked', 'false');
     expect(screen.getByLabelText('Unmatched OIDC users')).toHaveValue('deny');
     expect(screen.getByLabelText('Unmatched OIDC users')).toHaveAccessibleDescription('Choose what happens when an OIDC user matches no configured group. The default is deny sign-in.');
     expect(screen.queryByRole('button', { name: 'Remove openid' })).not.toBeInTheDocument();
@@ -396,6 +402,7 @@ describe('Settings authentication methods', () => {
           oidcAdminGroups: 'Application Admin,security-team',
           oidcReadOnlyGroups: 'Application User',
           oidcUnmatchedRole: 'admin',
+          oidcEndSession: false,
         }),
       }),
     ));
