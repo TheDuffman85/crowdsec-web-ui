@@ -203,6 +203,7 @@
   "components.sidebar.newVersionAvailableForTag": "टैग के लिए नया संस्करण उपलब्ध है",
   "components.sidebar.lastRefresh": "अंतिम रिफ्रेश",
   "components.sidebar.lastRefreshNever": "अभी नहीं",
+  "components.sidebar.resize": "साइडबार की चौड़ाई बदलें",
   "components.sidebar.refresh": "रीफ्रेश",
   "components.sidebar.refresh.chooseType": "रीफ्रेश प्रकार चुनें",
   "components.sidebar.refresh.completed": "रीफ्रेश पूरा हुआ",

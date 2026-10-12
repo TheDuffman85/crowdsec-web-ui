@@ -203,6 +203,7 @@
   "components.sidebar.newVersionAvailableForTag": "يتوفر إصدار جديد للوسم",
   "components.sidebar.lastRefresh": "آخر تحديث",
   "components.sidebar.lastRefreshNever": "ليس بعد",
+  "components.sidebar.resize": "تغيير عرض الشريط الجانبي",
   "components.sidebar.refresh": "التحديث",
   "components.sidebar.refresh.chooseType": "اختر نوع التحديث",
   "components.sidebar.refresh.completed": "اكتمل التحديث",

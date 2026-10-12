@@ -316,7 +316,7 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, setTheme }: SidebarP
             <aside
                 className={`
                     fixed top-0 left-0 z-[9999]
-                    w-[360px] h-[100dvh]
+                    w-[360px] lg:w-[var(--sidebar-width,360px)] h-[100dvh]
                     bg-white dark:bg-gray-800 
                     border-r border-gray-200 dark:border-gray-700 
                     flex flex-col 

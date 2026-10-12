@@ -205,6 +205,7 @@
   "components.sidebar.newVersionAvailableForTag": "이 태그의 새 버전이 있습니다",
   "components.sidebar.lastRefresh": "마지막 새로고침",
   "components.sidebar.lastRefreshNever": "아직 없음",
+  "components.sidebar.resize": "사이드바 너비 조절",
   "components.sidebar.refresh": "새로고침",
   "components.sidebar.refresh.chooseType": "새로고침 유형 선택",
   "components.sidebar.refresh.completed": "새로고침 완료",

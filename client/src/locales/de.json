@@ -203,6 +203,7 @@
   "components.sidebar.newVersionAvailableForTag": "Neue Version verfügbar für Tag",
   "components.sidebar.lastRefresh": "Letzte Aktualisierung",
   "components.sidebar.lastRefreshNever": "Noch nicht",
+  "components.sidebar.resize": "Seitenleistenbreite anpassen",
   "components.sidebar.refresh": "Aktualisieren",
   "components.sidebar.refresh.chooseType": "Aktualisierungstyp wählen",
   "components.sidebar.refresh.completed": "Aktualisierung abgeschlossen",

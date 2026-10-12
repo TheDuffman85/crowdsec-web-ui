@@ -203,6 +203,7 @@
   "components.sidebar.newVersionAvailableForTag": "タグの新しいバージョンがあります",
   "components.sidebar.lastRefresh": "最終更新",
   "components.sidebar.lastRefreshNever": "未実行",
+  "components.sidebar.resize": "サイドバーの幅を調整",
   "components.sidebar.refresh": "更新",
   "components.sidebar.refresh.chooseType": "更新タイプを選択",
   "components.sidebar.refresh.completed": "更新が完了しました",

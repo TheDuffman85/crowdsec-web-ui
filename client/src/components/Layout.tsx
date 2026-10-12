@@ -1,14 +1,32 @@
 import { Outlet, useLocation } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
-import { useState, useEffect, useRef } from "react";
+import { SidebarResizeHandle } from "./SidebarResizeHandle";
+import { useState, useEffect, useRef, type CSSProperties } from "react";
 import { Toast } from "./Toast";
 import { BackToTop } from "./BackToTop";
 import { useToast } from "../contexts/useToast";
 import { useI18n } from "../lib/i18n";
 import { useTheme } from "../lib/theme";
 
+const SIDEBAR_WIDTH_KEY = "sidebarWidth";
+const DEFAULT_SIDEBAR_WIDTH = 360;
+const MIN_SIDEBAR_WIDTH = 280;
+const MAX_SIDEBAR_WIDTH = 520;
+
+function clampSidebarWidth(width: number) {
+    return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, Math.round(width)));
+}
+
+function readStoredSidebarWidth() {
+    if (typeof window === 'undefined') return DEFAULT_SIDEBAR_WIDTH;
+    const stored = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    return stored > 0 ? clampSidebarWidth(stored) : DEFAULT_SIDEBAR_WIDTH;
+}
+
 export function Layout() {
     const { t } = useI18n();
+    const [sidebarWidth, setSidebarWidth] = useState(readStoredSidebarWidth);
+    const [isResizingSidebar, setIsResizingSidebar] = useState(false);
     const { toasts, removeToast } = useToast();
     const pageTopRef = useRef<HTMLDivElement | null>(null);
     const [theme, setTheme] = useTheme();
@@ -26,6 +44,10 @@ export function Layout() {
     useEffect(() => {
         localStorage.setItem("menuOpen", String(isMenuOpen));
     }, [isMenuOpen]);
+
+    useEffect(() => {
+        localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth));
+    }, [sidebarWidth]);
 
     const toggleMenu = () => {
         setIsMenuOpen(!isMenuOpen);
@@ -53,7 +75,10 @@ export function Layout() {
     };
 
     return (
-        <div className="flex h-[100dvh] bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 font-sans">
+        <div
+            className={`flex h-[100dvh] bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 font-sans ${isResizingSidebar ? 'cursor-col-resize select-none' : ''}`}
+            style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}
+        >
             {/* Mobile Sidebar Overlay */}
             <div
                 className={`fixed inset-0 bg-black/50 z-40 lg:hidden transition-opacity duration-300 ease-in-out ${isMenuOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
@@ -68,9 +93,20 @@ export function Layout() {
                 setTheme={setTheme}
             />
 
+            {isMenuOpen && (
+                <SidebarResizeHandle
+                    width={sidebarWidth}
+                    minWidth={MIN_SIDEBAR_WIDTH}
+                    maxWidth={MAX_SIDEBAR_WIDTH}
+                    onResize={(width) => setSidebarWidth(clampSidebarWidth(width))}
+                    onReset={() => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH)}
+                    onResizingChange={setIsResizingSidebar}
+                />
+            )}
+
             <main
                 data-scroll-container
-                className={`flex-1 relative w-full z-0 isolate overflow-auto transition-[padding] duration-300 ease-in-out ${isMenuOpen ? 'lg:pl-[360px]' : 'lg:pl-16'} ${isMenuOpen ? 'lg:overflow-auto overflow-hidden touch-none lg:touch-auto' : ''}`}
+                className={`flex-1 relative w-full z-0 isolate overflow-auto ${isResizingSidebar ? '' : 'transition-[padding] duration-300 ease-in-out'} ${isMenuOpen ? 'lg:pl-[var(--sidebar-width)]' : 'lg:pl-16'} ${isMenuOpen ? 'lg:overflow-auto overflow-hidden touch-none lg:touch-auto' : ''}`}
             >
                 <div ref={pageTopRef} className="pointer-events-none absolute left-0 top-80 h-px w-px" aria-hidden="true" />
                 <div className="sticky top-0 z-30 bg-gray-50 dark:bg-gray-950 border-b border-gray-200 dark:border-gray-800">

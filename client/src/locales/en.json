@@ -205,6 +205,7 @@
   "components.sidebar.newVersionAvailableForTag": "New version available for tag",
   "components.sidebar.lastRefresh": "Last refresh",
   "components.sidebar.lastRefreshNever": "Not yet",
+  "components.sidebar.resize": "Resize sidebar",
   "components.sidebar.refresh": "Refresh",
   "components.sidebar.refresh.chooseType": "Choose refresh type",
   "components.sidebar.refresh.completed": "Refresh completed",

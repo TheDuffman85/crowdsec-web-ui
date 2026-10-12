@@ -203,6 +203,7 @@
   "components.sidebar.newVersionAvailableForTag": "Новая версия доступна для тега",
   "components.sidebar.lastRefresh": "Последнее обновление",
   "components.sidebar.lastRefreshNever": "Еще не было",
+  "components.sidebar.resize": "Изменить ширину боковой панели",
   "components.sidebar.refresh": "Обновление",
   "components.sidebar.refresh.chooseType": "Выбрать тип обновления",
   "components.sidebar.refresh.completed": "Обновление завершено",

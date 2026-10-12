@@ -205,6 +205,7 @@
   "components.sidebar.newVersionAvailableForTag": "Nouvelle version disponible pour le tag",
   "components.sidebar.lastRefresh": "Dernière actualisation",
   "components.sidebar.lastRefreshNever": "Pas encore",
+  "components.sidebar.resize": "Redimensionner la barre latérale",
   "components.sidebar.refresh": "Actualisation",
   "components.sidebar.refresh.chooseType": "Choisir le type d’actualisation",
   "components.sidebar.refresh.completed": "Actualisation terminée",

@@ -203,6 +203,7 @@
   "components.sidebar.newVersionAvailableForTag": "标签有新版本可用",
   "components.sidebar.lastRefresh": "上次刷新",
   "components.sidebar.lastRefreshNever": "尚未刷新",
+  "components.sidebar.resize": "调整侧边栏宽度",
   "components.sidebar.refresh": "刷新",
   "components.sidebar.refresh.chooseType": "选择刷新类型",
   "components.sidebar.refresh.completed": "刷新完成",

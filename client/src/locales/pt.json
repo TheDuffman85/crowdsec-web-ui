@@ -203,6 +203,7 @@
   "components.sidebar.newVersionAvailableForTag": "Nova versão disponível para a tag",
   "components.sidebar.lastRefresh": "Última atualização",
   "components.sidebar.lastRefreshNever": "Ainda não",
+  "components.sidebar.resize": "Redimensionar a barra lateral",
   "components.sidebar.refresh": "Atualizar",
   "components.sidebar.refresh.chooseType": "Escolher tipo de atualização",
   "components.sidebar.refresh.completed": "Atualização concluída",
