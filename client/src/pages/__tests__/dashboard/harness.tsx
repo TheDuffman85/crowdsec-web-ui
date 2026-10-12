@@ -92,6 +92,7 @@ function buildDashboardStatsResponse(filters?: Record<string, string>) {
     ],
     topScenarios: liveAlertCount ? [{ label: 'crowdsecurity/ssh-bf', count: liveAlertCount }] : [],
     topAS: liveAlertCount ? [{ label: 'Hetzner', count: liveAlertCount }] : [],
+    topIPs: liveAlertCount ? [{ label: '1.2.3.4', count: liveAlertCount, sourceCountryCode: 'DE' }] : [],
     series: {
       alertsHistory: [{ ...bucket, count: liveAlertCount }],
       simulatedAlertsHistory: [{ ...bucket, count: simulatedAlertCount }],
