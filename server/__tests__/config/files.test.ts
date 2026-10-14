@@ -19,6 +19,8 @@ storage:
   walEnabled: false
   incrementalVacuumEnabled: false
   journalSizeLimit: unlimited
+  queryTimeout: 2m
+  analyticsQueryTimeout: 5m
 ui:
   timeZone: UTC
   timeFormat: 12h
@@ -111,6 +113,8 @@ instances:
         sqliteWalEnabled: false,
         sqliteIncrementalVacuumEnabled: false,
         sqliteJournalSizeLimitBytes: -1,
+        dbQueryTimeoutMs: 120_000,
+        dbAnalyticsQueryTimeoutMs: 300_000,
         timeZone: 'UTC',
         timeFormat: '12h',
         dateFormat: 'dd/mm/yyyy',
@@ -240,6 +244,7 @@ instances:
       CONFIG_STORAGE_WAL_ENABLED: 'false',
       CONFIG_STORAGE_INCREMENTAL_VACUUM_ENABLED: 'false',
       CONFIG_STORAGE_JOURNAL_SIZE_LIMIT: '64MiB',
+      CONFIG_STORAGE_QUERY_TIMEOUT: '90s',
       CONFIG_UI: '{ timeZone: UTC, timeFormat: 24h, dateFormat: dd/mm/yyyy, readOnly: false }',
       CONFIG_UI_READ_ONLY: 'true',
       CONFIG_AUTH_SESSION_SECRET: 'do-not-write-this-auth-secret',
@@ -274,6 +279,8 @@ instances:
         sqliteWalEnabled: false,
         sqliteIncrementalVacuumEnabled: false,
         sqliteJournalSizeLimitBytes: 64 * 1024 * 1024,
+        dbQueryTimeoutMs: 90_000,
+        dbAnalyticsQueryTimeoutMs: 60_000,
         timeZone: 'UTC',
         readOnly: true,
         refreshIntervalMs: 120_000,
@@ -312,6 +319,7 @@ instances:
       expect(saved).toContain('  walEnabled: false');
       expect(saved).toContain('  incrementalVacuumEnabled: false');
       expect(saved).toContain('  journalSizeLimit: 64MiB');
+      expect(saved).toContain('  queryTimeout: 90s');
       expect(saved).toContain('  # geonamesDir:');
       const document = parseYaml(saved);
       expect(document.server).toEqual({ port: 4200, basePath: '/security' });

@@ -292,6 +292,7 @@ describe('createApp alert source filter exclusion', () => {
       },
     });
 
+    database.setMeta('alert_filter_fingerprint:default', 'previous-filters');
     seedAlert(database, crowdsecAlert);
     seedAlert(database, staleManualAlert);
     seedAlert(database, staleCapiAlert);

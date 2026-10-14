@@ -93,6 +93,8 @@ export interface RuntimeConfig {
   sqliteWalEnabled: boolean;
   sqliteIncrementalVacuumEnabled: boolean;
   sqliteJournalSizeLimitBytes: number;
+  dbQueryTimeoutMs: number;
+  dbAnalyticsQueryTimeoutMs: number;
   notificationSecretKey?: string;
   notificationAllowPrivateAddresses: boolean;
   notificationDebugPayloads: boolean;
@@ -441,6 +443,8 @@ function createRuntimeConfigFromEnvironment(env: NodeJS.ProcessEnv): RuntimeConf
     sqliteWalEnabled: true,
     sqliteIncrementalVacuumEnabled: true,
     sqliteJournalSizeLimitBytes: 128 * 1024 * 1024,
+    dbQueryTimeoutMs: parsePositiveIntervalEnv(env.DB_QUERY_TIMEOUT, '30s'),
+    dbAnalyticsQueryTimeoutMs: parsePositiveIntervalEnv(env.DB_ANALYTICS_QUERY_TIMEOUT, '60s'),
     notificationSecretKey,
     notificationAllowPrivateAddresses: parseBooleanEnv(env.NOTIFICATION_ALLOW_PRIVATE_ADDRESSES, true),
     notificationDebugPayloads: parseBooleanEnv(env.NOTIFICATION_DEBUG_PAYLOADS, false),

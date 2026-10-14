@@ -445,6 +445,7 @@ describe('createApp alert source filter inclusion', () => {
       },
     });
 
+    database.setMeta('alert_filter_fingerprint:default', 'previous-filters');
     seedAlert(database, staleCapiAlert);
     seedAlert(database, crowdsecAlert);
     database.insertDecision({
@@ -480,6 +481,59 @@ describe('createApp alert source filter inclusion', () => {
     const alertRequests = fetchCalls.filter((call) => call.url.includes('/v1/alerts?'));
     expect(alertRequests.every((call) => call.url.includes('include_capi=false'))).toBe(true);
     expect(alertRequests.some((call) => call.url.includes('origin=CAPI'))).toBe(false);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
+  test('boot cleanup skips the full cache scan when no previous filter fingerprint exists', async () => {
+    const crowdsecAlert = sampleAlert({ id: 71, uuid: 'alert-71' });
+
+    const { controller, database } = createController({
+      env: {
+        CROWDSEC_ALERT_INCLUDE_CAPI: 'false',
+      },
+      fetchResolver: (url) => {
+        if (url.endsWith('/v1/watchers/login')) {
+          return Response.json({ code: 200, token: 'token' });
+        }
+        if (!url.includes('/v1/alerts?')) {
+          return undefined;
+        }
+        if (!url.includes('origin=') && url.includes('scope=ip')) {
+          return Response.json([crowdsecAlert]);
+        }
+        return Response.json([]);
+      },
+    });
+
+    seedAlert(database, crowdsecAlert);
+    database.insertDecision({
+      $id: '7100',
+      $uuid: '7100',
+      $alert_id: 7100,
+      $created_at: new Date().toISOString(),
+      $stop_at: new Date(Date.now() + 60 * 60 * 1_000).toISOString(),
+      $value: '7.7.7.7',
+      $type: 'ban',
+      $origin: 'CAPI',
+      $scenario: 'http:scan',
+      $raw_data: JSON.stringify({
+        id: 7100,
+        alert_id: 7100,
+        value: '7.7.7.7',
+        origin: 'CAPI',
+        stop_at: new Date(Date.now() + 60 * 60 * 1_000).toISOString(),
+      }),
+    });
+
+    const alertsResponse = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+    expect(alertsResponse.status).toBe(200);
+
+    const storedDecisions = database.db.query('SELECT origin FROM decisions ORDER BY id').all() as Array<{ origin: string }>;
+    expect(storedDecisions).toContainEqual({ origin: 'CAPI' });
+    expect(database.getMeta('alert_filter_fingerprint:default')?.value).toContain('"includeCapi":false');
 
     controller.stopBackgroundTasks();
     database.close();

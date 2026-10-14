@@ -196,9 +196,14 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
   setString(env, server, 'basePath', 'BASE_PATH', 'server', true);
 
   const storage = section(root, 'storage');
-  knownKeys(storage, ['dataDir', 'geonamesDir', 'walEnabled', 'incrementalVacuumEnabled', 'journalSizeLimit'], 'storage');
+  knownKeys(storage, [
+    'dataDir', 'geonamesDir', 'walEnabled', 'incrementalVacuumEnabled', 'journalSizeLimit',
+    'queryTimeout', 'analyticsQueryTimeout',
+  ], 'storage');
   setString(env, storage, 'dataDir', 'DB_DIR', 'storage');
   setString(env, storage, 'geonamesDir', 'GEONAMES_DUMP_DIR', 'storage');
+  setDuration(env, storage, 'queryTimeout', 'DB_QUERY_TIMEOUT', 'storage', false);
+  setDuration(env, storage, 'analyticsQueryTimeout', 'DB_ANALYTICS_QUERY_TIMEOUT', 'storage', false);
   const sqliteWalEnabled = storage.walEnabled === undefined
     ? true
     : boolean(storage.walEnabled, 'storage.walEnabled');
@@ -340,7 +345,10 @@ const INITIAL_CONFIG_HEADER = [
 export const CONFIG_KEY_ORDER = new Map<string, readonly string[]>([
   ['', ['server', 'storage', 'ui', 'updates', 'auth', 'notifications', 'audit', 'crowdsec', 'instances']],
   ['server', ['port', 'basePath']],
-  ['storage', ['dataDir', 'geonamesDir', 'walEnabled', 'incrementalVacuumEnabled', 'journalSizeLimit']],
+  ['storage', [
+    'dataDir', 'geonamesDir', 'walEnabled', 'incrementalVacuumEnabled', 'journalSizeLimit',
+    'queryTimeout', 'analyticsQueryTimeout',
+  ]],
   ['ui', ['timeZone', 'timeFormat', 'dateFormat', 'readOnly']],
   ['updates', ['enabled']],
   ['auth', ['enabled', 'sessionSecret', 'totpSecret', 'totpSeed', 'oidc']],
@@ -537,6 +545,8 @@ export function generateApplicationConfig(env: NodeJS.ProcessEnv, config: Runtim
       walEnabled: config.sqliteWalEnabled,
       incrementalVacuumEnabled: config.sqliteIncrementalVacuumEnabled,
       journalSizeLimit: formatByteSize(config.sqliteJournalSizeLimitBytes),
+      queryTimeout: duration(config.dbQueryTimeoutMs),
+      analyticsQueryTimeout: duration(config.dbAnalyticsQueryTimeoutMs),
     },
     ui: { timeZone: config.timeZone || 'browser', timeFormat: config.timeFormat, dateFormat: config.dateFormat, readOnly: config.readOnly },
     auth: {
@@ -630,6 +640,8 @@ const CONFIG_VALUE_ENV = [
   ['CONFIG_STORAGE_WAL_ENABLED', ['storage', 'walEnabled']],
   ['CONFIG_STORAGE_INCREMENTAL_VACUUM_ENABLED', ['storage', 'incrementalVacuumEnabled']],
   ['CONFIG_STORAGE_JOURNAL_SIZE_LIMIT', ['storage', 'journalSizeLimit']],
+  ['CONFIG_STORAGE_QUERY_TIMEOUT', ['storage', 'queryTimeout']],
+  ['CONFIG_STORAGE_ANALYTICS_QUERY_TIMEOUT', ['storage', 'analyticsQueryTimeout']],
   ['CONFIG_UI_TIME_ZONE', ['ui', 'timeZone']],
   ['CONFIG_UI_TIME_FORMAT', ['ui', 'timeFormat']],
   ['CONFIG_UI_DATE_FORMAT', ['ui', 'dateFormat']],

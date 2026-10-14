@@ -225,6 +225,8 @@ Use `CONFIG_FILE` only to select another existing file. [`config.example.yaml`](
 | `storage.walEnabled` | `true` | Enables SQLite write-ahead logging. Set to `false` for filesystems that do not support WAL. | `CONFIG_STORAGE_WAL_ENABLED` |
 | `storage.incrementalVacuumEnabled` | `true` | Uses bounded incremental vacuum while idle on compatible databases. Existing databases are not migrated automatically. | `CONFIG_STORAGE_INCREMENTAL_VACUUM_ENABLED` |
 | `storage.journalSizeLimit` | `128MiB` | Retained WAL size after checkpoints. This does not cap transactions; use `unlimited` to disable trimming. Ignored when WAL is disabled. | `CONFIG_STORAGE_JOURNAL_SIZE_LIMIT` |
+| `storage.queryTimeout` | `30s` | Maximum execution time for regular database queries, such as list pages and cache synchronization. Raise it for very large databases or slow storage. | `CONFIG_STORAGE_QUERY_TIMEOUT` |
+| `storage.analyticsQueryTimeout` | `60s` | Maximum execution time for dashboard statistics queries. | `CONFIG_STORAGE_ANALYTICS_QUERY_TIMEOUT` |
 | `ui.timeZone` | `browser` | Browser timezone or an IANA zone such as `Europe/Berlin` or `UTC`. | `CONFIG_UI_TIME_ZONE` |
 | `ui.timeFormat` | `browser` | Clock format: `browser`, `12h`, or `24h`. | `CONFIG_UI_TIME_FORMAT` |
 | `ui.dateFormat` | `browser` | Browser date format or a custom pattern such as `dd/mm/yyyy`, `mm/dd/yyyy`, or `yyyy-MM-dd`. | `CONFIG_UI_DATE_FORMAT` |
