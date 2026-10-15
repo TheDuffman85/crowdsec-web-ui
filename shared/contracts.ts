@@ -592,6 +592,7 @@ export interface ConfigResponse {
   date_format?: string;
   metrics_enabled?: boolean;
   metrics_sidebar_visible?: boolean;
+  manual_decision_scenario_settings?: ManualDecisionScenarioSettings;
   deployment_mode?: 'load-test';
   load_test_profile?: string;
   permissions?: {
@@ -607,6 +608,17 @@ export interface UpdateMetricsSidebarPreferenceRequest {
 
 export interface UpdateManualRefreshSettingRequest {
   enabled: boolean;
+}
+
+export interface ManualDecisionScenarioSettings {
+  /** Scenarios from the config file or CONFIG_ variables; read-only in the UI. */
+  configured: string[];
+  /** Scenarios added in Settings; offered for every instance. */
+  custom: string[];
+}
+
+export interface UpdateManualDecisionScenariosRequest {
+  scenarios: string[];
 }
 
 export type CrowdsecMetricsBouncerMode = 'live' | 'stream' | 'mixed' | 'unknown';
@@ -759,6 +771,8 @@ export interface CrowdsecMetricsResponse {
 }
 
 export const DEFAULT_MANUAL_DECISION_SCENARIO = 'manual/web-ui';
+/** Prefix of the alert message the Web UI writes when it adds a manual decision. */
+export const MANUAL_DECISION_MESSAGE_PREFIX = 'Manual decision from Web UI';
 
 const DECISION_SCENARIO_PATTERN = /^[\w.-]+\/[\w.-]+$/;
 

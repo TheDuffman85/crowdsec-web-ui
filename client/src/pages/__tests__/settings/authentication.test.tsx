@@ -380,12 +380,12 @@ describe('Settings authentication methods', () => {
     expect(screen.queryByRole('button', { name: 'Remove openid' })).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Remove email' }));
     await user.type(screen.getByLabelText('Scopes'), 'groups');
-    await user.click(screen.getAllByRole('button', { name: 'Add' })[0]);
+    await user.click(within(screen.getByLabelText('Scopes').closest('form')!).getByRole('button', { name: 'Add' }));
     await user.type(screen.getByLabelText('Scopes'), 'offline_access');
-    await user.click(screen.getAllByRole('button', { name: 'Add' })[0]);
+    await user.click(within(screen.getByLabelText('Scopes').closest('form')!).getByRole('button', { name: 'Add' }));
     await user.click(screen.getByRole('button', { name: 'Remove secops' }));
     await user.type(screen.getByLabelText('Admin Groups'), 'security-team');
-    await user.click(screen.getAllByRole('button', { name: 'Add' })[1]);
+    await user.click(within(screen.getByLabelText('Admin Groups').closest('form')!).getByRole('button', { name: 'Add' }));
     await user.selectOptions(screen.getByLabelText('Unmatched OIDC users'), 'admin');
     await user.click(screen.getByRole('button', { name: 'Save OIDC Settings' }));
 

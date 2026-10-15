@@ -8,7 +8,8 @@ import { Switch } from "../components/ui/Switch";
 import { Badge } from "../components/ui/Badge";
 import { useRefresh } from "../contexts/useRefresh";
 import { useOptionalToast } from "../contexts/useToast";
-import { fetchConfig, updateManualRefreshSetting, updateMetricsSidebarPreference } from "../lib/api";
+import { fetchConfig, updateManualDecisionScenarios, updateManualRefreshSetting, updateMetricsSidebarPreference } from "../lib/api";
+import { DEFAULT_MANUAL_DECISION_SCENARIO, isValidDecisionScenario } from "../../../shared/contracts";
 import { apiUrl, withBasePath } from "../lib/basePath";
 import { sessionFetch } from "../lib/sessionFetch";
 import { useAuth } from "../contexts/AuthContext";
@@ -119,6 +120,9 @@ export function Settings() {
     const [manualRefreshEnabled, setManualRefreshEnabled] = useState(false);
     const [metricsSidebarVisible, setMetricsSidebarVisible] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
+    const [customScenarios, setCustomScenarios] = useState<string[]>([]);
+    const [scenarioDraft, setScenarioDraft] = useState('');
+    const [isSavingScenarios, setIsSavingScenarios] = useState(false);
     const [appNameDraft, setAppNameDraft] = useState<string | null>(null);
     const [isSavingAppName, setIsSavingAppName] = useState(false);
     const [isUpdatingLogo, setIsUpdatingLogo] = useState(false);
@@ -164,6 +168,7 @@ export function Settings() {
                     setRefreshInterval(nextConfig.refresh_interval);
                     setManualRefreshEnabled(nextConfig.manual_refresh_enabled === true);
                     setMetricsSidebarVisible(nextConfig.metrics_sidebar_visible !== false);
+                    setCustomScenarios(nextConfig.manual_decision_scenario_settings?.custom ?? []);
                 }
             })
             .catch((error) => {
@@ -265,6 +270,10 @@ export function Settings() {
     const appNameValue = appNameDraft ?? savedAppNameValue;
     const hasAppNameChange = appNameValue.trim() !== savedAppNameValue;
     const maxLogoSize = `${MAX_APP_LOGO_BYTES / 1024} KB`;
+    const configuredScenarios = config?.manual_decision_scenario_settings?.configured ?? [];
+    const lockedScenarios = [...new Set([DEFAULT_MANUAL_DECISION_SCENARIO, ...configuredScenarios])];
+    const savedCustomScenarios = config?.manual_decision_scenario_settings?.custom ?? [];
+    const hasScenarioChange = customScenarios.join('\n') !== savedCustomScenarios.join('\n');
 
     const inputClass = "w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:disabled:bg-gray-800 dark:disabled:text-gray-500";
     const labelClass = "block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400";
@@ -615,6 +624,37 @@ export function Settings() {
         }
     };
 
+    const addScenario = () => {
+        const scenario = scenarioDraft.trim();
+        if (!scenario) return;
+        if (!isValidDecisionScenario(scenario)) {
+            showToast(t("pages.settings.manualDecisionScenarioInvalid", { scenario }), "danger");
+            return;
+        }
+        if (!lockedScenarios.includes(scenario) && !customScenarios.includes(scenario)) {
+            setCustomScenarios((current) => [...current, scenario]);
+        }
+        setScenarioDraft('');
+    };
+
+    const handleSaveScenarios = async () => {
+        setIsSavingScenarios(true);
+        try {
+            const payload = await updateManualDecisionScenarios({ scenarios: customScenarios });
+            setConfig((current) => current ? {
+                ...current,
+                manual_decision_scenario_settings: payload.manual_decision_scenario_settings,
+            } : current);
+            setCustomScenarios(payload.manual_decision_scenario_settings.custom);
+            showToast(t("pages.settings.manualDecisionScenariosSaved"), "success");
+        } catch (error) {
+            console.error("Failed to save manual decision scenarios", error);
+            showToast(error instanceof Error ? error.message : t("pages.settings.failedToSaveManualDecisionScenarios"), "danger");
+        } finally {
+            setIsSavingScenarios(false);
+        }
+    };
+
     const addOidcListItem = (field: 'scopes' | 'adminGroups' | 'readOnlyGroups') => {
         const draft = oidcListDrafts[field].trim();
         if (!draft) return;
@@ -795,6 +835,52 @@ export function Settings() {
                         >
                             <Save className="h-4 w-4" />
                             {isSaving ? t("common.saving") : t("common.save")}
+                        </button>
+                    </div>
+                </CardContent>
+            </Card>
+
+            <Card>
+                <CardHeader>
+                    <CardTitle>{t("pages.settings.manualDecisions")}</CardTitle>
+                    <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.manualDecisionsDescription")}</p>
+                </CardHeader>
+                <CardContent>
+                    <GroupListEditor
+                        id="settings-manual-decision-scenarios"
+                        label={t("pages.settings.manualDecisionScenarios")}
+                        groups={[...lockedScenarios, ...customScenarios]}
+                        draft={scenarioDraft}
+                        onDraftChange={setScenarioDraft}
+                        onAdd={addScenario}
+                        onRemove={(scenario) => setCustomScenarios((current) => current.filter((candidate) => candidate !== scenario))}
+                        canRemove={(scenario) => !lockedScenarios.includes(scenario)}
+                        disabled={!canManageSettings || isSavingScenarios}
+                        placeholder="custom/abuse-report"
+                        addLabel={t("pages.settings.addGroup")}
+                        emptyLabel=""
+                        removeLabel={(scenario) => t("pages.settings.removeManualDecisionScenario", { scenario })}
+                        labelClass={labelClass}
+                    />
+                    <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.manualDecisionScenariosHelp")}</p>
+
+                    {!canManageSettings && (
+                        <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-100">
+                            <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0" />
+                            <span>{t("pages.settings.readOnlyManualDecisions")}</span>
+                        </div>
+                    )}
+
+                    <div className="mt-6 flex justify-start">
+                        <button
+                            type="button"
+                            onClick={() => void handleSaveScenarios()}
+                            aria-label={t("pages.settings.saveManualDecisionScenarios")}
+                            disabled={!canManageSettings || isSavingScenarios || !hasScenarioChange}
+                            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                            <Save className="h-4 w-4" />
+                            {isSavingScenarios ? t("common.saving") : t("common.save")}
                         </button>
                     </div>
                 </CardContent>

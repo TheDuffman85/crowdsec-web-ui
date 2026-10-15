@@ -26,6 +26,11 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
     'pages.settings.fontAuto': 'Match language ({font})',
     'pages.settings.fontSystem': 'System default',
     'pages.settings.readOnlyRefresh': 'Read-only mode is enabled.',
+    'pages.settings.manualDecisionScenarios': 'Scenarios',
+    'pages.settings.manualDecisionScenarioInvalid': '"{scenario}" is not a valid scenario.',
+    'pages.settings.manualDecisionScenariosSaved': 'Scenarios saved',
+    'pages.settings.removeManualDecisionScenario': 'Remove {scenario}',
+    'pages.settings.saveManualDecisionScenarios': 'Save scenarios',
     'pages.settings.refresh': 'Refresh',
     'pages.settings.refreshDescription': 'Control how often the backend imports CrowdSec changes.',
     'pages.settings.refreshHelp': 'Pages update immediately after each LAPI refresh.',
@@ -125,6 +130,7 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
 
 vi.mock('../../../lib/api', () => ({
   fetchConfig: vi.fn(),
+  updateManualDecisionScenarios: vi.fn(),
   updateManualRefreshSetting: vi.fn(),
   updateMetricsSidebarPreference: vi.fn(),
 }));

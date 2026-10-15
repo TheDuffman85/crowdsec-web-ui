@@ -702,6 +702,47 @@ describe('createApp API responses', () => {
     }
   });
 
+  test('adds and removes manual decision scenarios from settings on top of the configured list', async () => {
+    const { controller, database } = createController({
+      env: { CONFIG_CROWDSEC_MANUAL_DECISIONS_SCENARIOS: '[custom/abuse-report]' },
+    });
+    try {
+      const putScenarios = (body: unknown) => controller.fetch(new Request('http://localhost/crowdsec/api/config/manual-decision-scenarios', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }));
+      const readConfig = async () => (await (await controller.fetch(new Request('http://localhost/crowdsec/api/config'))).json()) as ConfigResponse;
+
+      expect((await readConfig()).manual_decision_scenario_settings).toEqual({ configured: ['custom/abuse-report'], custom: [] });
+
+      for (const body of [{}, { scenarios: 'custom/x' }, { scenarios: [42] }, { scenarios: ['no-slash'] }]) {
+        expect((await putScenarios(body)).status).toBe(400);
+      }
+
+      const update = await putScenarios({ scenarios: [' custom/scanner ', 'custom/scanner', 'manual/web-ui', 'custom/abuse-report', 'custom/spam'] });
+      expect(update.status).toBe(200);
+      expect(await update.json()).toEqual({
+        success: true,
+        manual_decision_scenario_settings: { configured: ['custom/abuse-report'], custom: ['custom/scanner', 'custom/spam'] },
+      });
+      expect(JSON.parse(database.getMeta('manual_decision_scenarios')?.value || '[]')).toEqual(['custom/scanner', 'custom/spam']);
+
+      const config = await readConfig();
+      expect(config.manual_decision_scenario_settings?.custom).toEqual(['custom/scanner', 'custom/spam']);
+      expect(config.instances?.map((instance) => instance.manual_decision_scenarios))
+        .toEqual([['manual/web-ui', 'custom/abuse-report', 'custom/scanner', 'custom/spam']]);
+
+      expect((await putScenarios({ scenarios: [] })).status).toBe(200);
+      expect((await readConfig()).instances?.map((instance) => instance.manual_decision_scenarios))
+        .toEqual([['manual/web-ui', 'custom/abuse-report']]);
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
   test('read-only mode blocks enforcement and management mutations but allows preferences and notification read state', async () => {
     const alert = sampleAlert();
     const { controller, database, lapiClient, fetchCalls } = createController({
@@ -771,6 +812,11 @@ describe('createApp API responses', () => {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: false }),
+      }),
+      new Request('http://localhost/crowdsec/api/config/manual-decision-scenarios', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scenarios: ['custom/scanner'] }),
       }),
       new Request('http://localhost/crowdsec/api/notifications/bulk-delete', {
         method: 'POST',

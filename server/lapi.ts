@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import { Agent, fetch as undiciFetch, type Dispatcher } from 'undici';
-import { DEFAULT_MANUAL_DECISION_SCENARIO, type LapiStatus } from '../shared/contracts';
+import { DEFAULT_MANUAL_DECISION_SCENARIO, MANUAL_DECISION_MESSAGE_PREFIX, type LapiStatus } from '../shared/contracts';
 import type { CrowdsecAuthConfig } from './auth';
 
 export type LapiRequestInit = RequestInit & {
@@ -421,7 +421,7 @@ export class LapiClient {
     ip: string,
     type: string,
     duration: string,
-    reason = 'Manual decision from Web UI',
+    reason = MANUAL_DECISION_MESSAGE_PREFIX,
     scenario = DEFAULT_MANUAL_DECISION_SCENARIO,
   ): Promise<unknown> {
     const now = new Date().toISOString();
@@ -429,7 +429,7 @@ export class LapiClient {
       {
         scenario,
         campaign_name: scenario,
-        message: `Manual decision from Web UI: ${reason}`,
+        message: `${MANUAL_DECISION_MESSAGE_PREFIX}: ${reason}`,
         events_count: 1,
         start_at: now,
         stop_at: now,

@@ -101,13 +101,11 @@ describe('shared Add Decision modal on Decisions page', () => {
     }));
   });
 
-  test('defaults to a ban with the greyed-out manual scenario when no scenarios are configured', async () => {
+  test('defaults to a ban and hides the scenario field when only the manual scenario is available', async () => {
     vi.mocked(api.addDecision).mockResolvedValue(undefined);
     const dialog = await openAddDecision('/decisions');
     expect(within(dialog).getByRole('combobox', { name: 'Type' })).toHaveValue('ban');
-    const scenario = within(dialog).getByRole('combobox', { name: 'Scenario' });
-    expect(scenario).toHaveValue('manual/web-ui');
-    expect(scenario).toBeDisabled();
+    expect(within(dialog).queryByRole('combobox', { name: 'Scenario' })).not.toBeInTheDocument();
 
     await userEvent.type(within(dialog).getByRole('textbox', { name: 'IP / Range' }), '203.0.113.11');
     await userEvent.selectOptions(within(dialog).getByRole('combobox', { name: 'Type' }), 'captcha');
@@ -121,8 +119,8 @@ describe('shared Add Decision modal on Decisions page', () => {
     configureInstances(['main'], { main: ['manual/web-ui', 'custom/abuse-report'] });
     vi.mocked(api.addDecision).mockResolvedValue(undefined);
     const dialog = await openAddDecision('/decisions');
-    const scenario = within(dialog).getByRole('combobox', { name: 'Scenario' });
-    await waitFor(() => expect(scenario).toBeEnabled());
+    const scenario = await within(dialog).findByRole('combobox', { name: 'Scenario' });
+    expect(scenario).toBeEnabled();
     expect(scenario).toHaveValue('manual/web-ui');
     expect(within(scenario).getAllByRole('option').map((option) => option.textContent)).toEqual(['manual/web-ui', 'custom/abuse-report']);
 
@@ -151,7 +149,7 @@ describe('shared Add Decision modal on Decisions page', () => {
     }));
   });
 
-  test('falls back to the manual scenario for All instances with different lists', async () => {
+  test('falls back to the manual scenario and hides the field for All instances with different lists', async () => {
     configureMultipleInstances({ east: ['manual/web-ui', 'custom/east-only'] });
     vi.mocked(api.addDecision).mockResolvedValue(undefined);
     const dialog = await openAddDecision('/decisions?instance=east');
@@ -161,8 +159,7 @@ describe('shared Add Decision modal on Decisions page', () => {
 
     await userEvent.click(within(dialog).getByRole('checkbox', { name: 'All instances' }));
     expect(within(dialog).getByText('Will be added to: EAST, WEST')).toBeInTheDocument();
-    expect(scenario).toHaveValue('manual/web-ui');
-    expect(scenario).toBeDisabled();
+    expect(within(dialog).queryByRole('combobox', { name: 'Scenario' })).not.toBeInTheDocument();
 
     await userEvent.type(within(dialog).getByRole('textbox', { name: 'IP / Range' }), '203.0.113.14');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Add Decision' }));

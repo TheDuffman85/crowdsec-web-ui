@@ -82,9 +82,11 @@ import type {
   DashboardStatsFilters,
 } from './app/types';
 import {
+  loadManualDecisionScenarios,
   loadMetricsSidebarVisible,
   loadPersistedConfig,
   resolveNotificationSecretKey,
+  saveManualDecisionScenarios,
   saveMetricsSidebarVisible,
   savePersistedConfig,
 } from './app/preferences';
@@ -661,6 +663,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   // SQLite indexes. Keep this tiny preference in memory so startup polling
   // never contends with the index writer (notably when WAL is disabled).
   let metricsSidebarVisible = loadMetricsSidebarVisible(database);
+  let manualDecisionScenarios = loadManualDecisionScenarios(database);
   const reconcileConfigFingerprint = crypto.createHash('sha256').update(JSON.stringify({
     lookbackMs: config.lookbackMs,
     reconcileWindowMs: config.reconcileWindowMs,
@@ -1288,6 +1291,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     set manualRefreshEnabled(value: boolean) { manualRefreshEnabled = value; },
     get metricsSidebarVisible() { return metricsSidebarVisible; },
     set metricsSidebarVisible(value: boolean) { metricsSidebarVisible = value; },
+    get manualDecisionScenarios() { return manualDecisionScenarios; },
+    set manualDecisionScenarios(value: string[]) { manualDecisionScenarios = value; },
     get cacheRefreshCompletedAt() { return cacheRefreshCompletedAt; },
     set cacheRefreshCompletedAt(value: string | null) { cacheRefreshCompletedAt = value; },
     cache,
@@ -1390,6 +1395,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     runConsistentDatabaseRefresh,
     runNotificationEvaluation,
     saveLanguagePreference,
+    saveManualDecisionScenarios,
     saveMetricsSidebarVisible,
     savePersistedConfig,
     startRefreshScheduler,

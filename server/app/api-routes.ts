@@ -11,6 +11,7 @@ import type {
   InstanceEntityRef,
   StatsAlert,
   StatsDecision,
+  UpdateManualDecisionScenariosRequest,
   UpdateManualRefreshSettingRequest,
   UpdateMetricsSidebarPreferenceRequest,
   UpsertNotificationChannelRequest,
@@ -38,6 +39,7 @@ export interface ApiRouteState {
   refreshIntervalMs: number;
   manualRefreshEnabled: boolean;
   metricsSidebarVisible: boolean;
+  manualDecisionScenarios: string[];
   cacheRefreshCompletedAt: string | null;
   cache: { isInitialized: boolean; isComplete: boolean; lastUpdate: string | null };
   initialHistorySyncs: Set<string>;
@@ -150,6 +152,7 @@ export function registerApiRoutes(dependencies: ApiRouteDependencies): void {
     runConsistentDatabaseRefresh,
     runNotificationEvaluation,
     saveLanguagePreference,
+    saveManualDecisionScenarios,
     saveMetricsSidebarVisible,
     savePersistedConfig,
     startRefreshScheduler,
@@ -613,9 +616,21 @@ app.delete(`${config.basePath}/api/instances/:instanceId/decisions/:id`, ensureA
 });
 
 // Only shapes the Web UI's Add Decision form; POST /api/decisions accepts any valid scenario.
+// Scenarios added in Settings apply to every instance on top of the configured list.
 const manualDecisionScenarios = (instance: RuntimeConfig['instances'][number]): string[] => [
-  ...new Set([DEFAULT_MANUAL_DECISION_SCENARIO, ...(instance.manualDecisionScenarios ?? config.manualDecisionScenarios)]),
+  ...new Set([
+    DEFAULT_MANUAL_DECISION_SCENARIO,
+    ...(instance.manualDecisionScenarios ?? config.manualDecisionScenarios),
+    ...state.manualDecisionScenarios,
+  ]),
 ];
+const configuredManualDecisionScenarios = (): string[] => [
+  ...new Set([
+    ...config.manualDecisionScenarios,
+    ...config.instances.flatMap((instance) => instance.manualDecisionScenarios ?? []),
+  ]),
+];
+const MAX_CUSTOM_MANUAL_DECISION_SCENARIOS = 100;
 
 app.get(`${config.basePath}/api/config`, ensureAuth, (context) => {
   const hours = lookbackHours(config.lookbackPeriod);
@@ -649,6 +664,10 @@ app.get(`${config.basePath}/api/config`, ensureAuth, (context) => {
     date_format: config.dateFormat,
     metrics_enabled: config.instances.some((instance) => instance.prometheus.length > 0),
     metrics_sidebar_visible: state.metricsSidebarVisible,
+    manual_decision_scenario_settings: {
+      configured: configuredManualDecisionScenarios(),
+      custom: [...state.manualDecisionScenarios],
+    },
     ...(config.deploymentMode === 'load-test' ? { deployment_mode: config.deploymentMode } : {}),
     ...(config.loadTestProfile ? { load_test_profile: config.loadTestProfile } : {}),
     permissions: dashboardAuth.getPermissions(context),
@@ -808,6 +827,43 @@ app.put(`${config.basePath}/api/config/metrics-sidebar`, ensureAuth, async (cont
   } catch (error: any) {
     console.error('Error updating metrics sidebar preference:', error.message);
     return context.json({ error: 'Failed to update metrics sidebar preference' }, 500);
+  }
+});
+
+app.put(`${config.basePath}/api/config/manual-decision-scenarios`, ensureAuth, async (context) => {
+  const readOnlyResponse = ensureCanManageSettings(context);
+  if (readOnlyResponse) return readOnlyResponse;
+
+  try {
+    const body = await context.req.json<UpdateManualDecisionScenariosRequest>();
+    if (!Array.isArray(body?.scenarios) || body.scenarios.some((scenario) => typeof scenario !== 'string')) {
+      return context.json({ error: 'scenarios must be an array of strings' }, 400);
+    }
+    const configured = new Set([DEFAULT_MANUAL_DECISION_SCENARIO, ...configuredManualDecisionScenarios()]);
+    const scenarios = [...new Set(body.scenarios.map((scenario) => scenario.trim()))]
+      .filter((scenario) => scenario && !configured.has(scenario));
+    const invalid = scenarios.find((scenario) => !isValidDecisionScenario(scenario));
+    if (invalid) {
+      return context.json({ error: `Invalid scenario format: "${invalid}". Use e.g. "${DEFAULT_MANUAL_DECISION_SCENARIO}"` }, 400);
+    }
+    if (scenarios.length > MAX_CUSTOM_MANUAL_DECISION_SCENARIOS) {
+      return context.json({ error: `At most ${MAX_CUSTOM_MANUAL_DECISION_SCENARIOS} scenarios can be added` }, 400);
+    }
+
+    await syncWorker.runExclusive(() => saveManualDecisionScenarios(database, scenarios));
+    state.manualDecisionScenarios = scenarios;
+    console.log(`Manual decision scenarios updated: ${scenarios.join(', ') || '(none)'}`);
+
+    return context.json({
+      success: true,
+      manual_decision_scenario_settings: {
+        configured: configuredManualDecisionScenarios(),
+        custom: scenarios,
+      },
+    });
+  } catch (error: any) {
+    console.error('Error updating manual decision scenarios:', error.message);
+    return context.json({ error: 'Failed to update manual decision scenarios' }, 500);
   }
 });
 

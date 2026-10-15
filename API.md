@@ -119,11 +119,12 @@ These routes are mounted below `/api/auth`. Auth setup/login routes are availabl
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| GET | `/api/config` | Runtime UI config, LAPI status, sync status, simulation setting, time settings, manual refresh availability, metrics availability, metrics sidebar preference, permissions, and each instance's effective manual decision scenarios (`manual_decision_scenarios`). |
+| GET | `/api/config` | Runtime UI config, LAPI status, sync status, simulation setting, time settings, manual refresh availability, metrics availability, metrics sidebar preference, permissions, each instance's effective manual decision scenarios (`manual_decision_scenarios`), and the configured and Settings-managed scenario lists (`manual_decision_scenario_settings`). |
 | GET | `/api/instances` | Configured instance identities, LAPI and synchronization status, metrics endpoint identities, per-instance overrides, effective manual decision scenarios (`manual_decision_scenarios`), and aggregate availability. |
 | PUT | `/api/config/metrics-sidebar` | Save the metrics sidebar preference. Body: `{ "visible": true }`. |
 | PUT | `/api/config/refresh-interval` | Update the refresh interval. Body: `{ "interval": "manual" \| "0" \| "5s" \| "30s" \| "1m" \| "5m" }`. Blocked in read-only mode. |
 | PUT | `/api/config/manual-refresh` | Enable or disable manual cache refreshes. Body: `{ "enabled": true }`. Blocked in read-only mode. |
+| PUT | `/api/config/manual-decision-scenarios` | Replace the scenarios added in Settings. Body: `{ "scenarios": ["custom/scanner"] }`. Entries must look like `author/name`; `manual/web-ui` and configured scenarios are ignored; at most 100. They are offered for every instance on top of the configured list. Blocked in read-only mode. |
 | PUT | `/api/config/language` | Save language preference. Body: `{ "language": "browser" }` or a supported locale code. |
 
 ## Branding

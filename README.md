@@ -293,7 +293,7 @@ Omitting `crowdsec.alertFilters` uses the standard non-CAPI feed. Setting any ex
 
 ### Manual decisions
 
-The Add Decision form always offers `manual/web-ui` and selects it by default. With no scenarios configured, the scenario field stays greyed out on `manual/web-ui`; configured scenarios turn it into a dropdown. When **All instances** targets instances with different lists, only `manual/web-ui` is offered. These lists only shape the form: `POST /api/decisions` accepts any `author/name` scenario. If `crowdsec.alertFilters.legacy.extraScenarios` is used to show manual decisions, add the configured scenarios there too.
+The Add Decision form always offers `manual/web-ui` and selects it by default. With no other scenarios available, the scenario field is hidden and `manual/web-ui` is used; additional scenarios turn it into a dropdown. Admins can also add and remove scenarios under **Settings → Manual decisions**; those are stored in the database, offered for every instance on top of the configured list, and take effect without a restart. Scenarios from `config.yaml` or `CONFIG_` variables are shown there as read-only. When **All instances** targets instances with different lists, only `manual/web-ui` is used and the field is hidden. These lists only shape the form: `POST /api/decisions` accepts any `author/name` scenario. If `crowdsec.alertFilters.legacy.extraScenarios` is used to show manual decisions, add the configured scenarios there too.
 
 | YAML field | Default | Purpose | Environment override |
 | --- | --- | --- | --- |

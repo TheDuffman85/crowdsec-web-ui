@@ -434,6 +434,64 @@ describe('CrowdsecDatabase identity and storage', () => {
     migrated.close();
   });
 
+  test('clears the scenario-derived target on stored Web UI alerts and their decisions', () => {
+    const dbPath = createTestDatabasePath();
+    const original = new CrowdsecDatabase({ dbPath });
+    const insert = (id: number, scenario: string, message: string, target: string) => {
+      original.insertAlert({
+        $id: id,
+        $uuid: `alert-${id}`,
+        $created_at: '2026-10-15T10:00:00.000Z',
+        $scenario: scenario,
+        $source_ip: '192.0.2.1',
+        $message: message,
+        $record: {
+          id,
+          uuid: `alert-${id}`,
+          created_at: '2026-10-15T10:00:00.000Z',
+          scenario,
+          message,
+          machine_id: 'crowdsec-web-ui',
+          target,
+          targets: [target],
+          target_count: 1,
+          source: { ip: '192.0.2.1' },
+        },
+      });
+      original.insertDecision({
+        $id: String(id),
+        $uuid: `decision-${id}`,
+        $alert_id: id,
+        $created_at: '2026-10-15T10:00:00.000Z',
+        $stop_at: '2026-10-15T14:00:00.000Z',
+        $value: '192.0.2.1',
+        $type: 'ban',
+        $origin: 'cscli',
+        $scenario: scenario,
+        $record: { id, alert_id: id, value: '192.0.2.1', type: 'ban', origin: 'cscli', scenario, machine: 'crowdsec-web-ui', target, targets: [target] },
+      });
+    };
+    insert(1, 'beta/blubb', 'Manual decision from Web UI: abuse report', 'blubb');
+    insert(2, 'crowdsecurity/ssh-bf', 'Ip 192.0.2.1 performed ssh-bf', 'ssh');
+    original.db.prepare("DELETE FROM meta WHERE key = 'manual_alert_target_version'").run();
+    original.close();
+
+    const migrated = new CrowdsecDatabase({ dbPath });
+    const alertTargets = migrated.db.prepare('SELECT upstream_id, target, json_extract(extra_data, \'$.targets\') AS targets FROM alerts ORDER BY upstream_id').all();
+    expect(alertTargets).toEqual([
+      { upstream_id: '1', target: null, targets: null },
+      { upstream_id: '2', target: 'ssh', targets: '["ssh"]' },
+    ]);
+    expect(migrated.db.prepare('SELECT upstream_id, target FROM decisions ORDER BY upstream_id').all()).toEqual([
+      { upstream_id: '1', target: null },
+      { upstream_id: '2', target: 'ssh' },
+    ]);
+    const manualAlert = migrated.getAllAlerts().map((row) => JSON.parse(row.raw_data)).find((alert) => alert.id === 1);
+    expect(manualAlert).not.toHaveProperty('targets');
+    expect(manualAlert).not.toHaveProperty('target');
+    migrated.close();
+  });
+
   test('normalizes timestamps already stored by earlier versions', () => {
     const dbPath = createTestDatabasePath();
     const original = new CrowdsecDatabase({ dbPath });

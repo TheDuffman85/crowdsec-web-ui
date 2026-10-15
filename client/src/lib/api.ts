@@ -12,6 +12,7 @@ import type {
   FacetField,
   FacetResponse,
   InstanceEntityRef,
+  ManualDecisionScenarioSettings,
   MultiInstanceOperationResponse,
   NotificationChannel,
   NotificationChannelTestResult,
@@ -24,6 +25,7 @@ import type {
   StatsAlert,
   StatsDecision,
   UpdateMetricsSidebarPreferenceRequest,
+  UpdateManualDecisionScenariosRequest,
   UpdateManualRefreshSettingRequest,
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
@@ -361,6 +363,17 @@ export async function updateManualRefreshSetting(data: UpdateManualRefreshSettin
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
     }, 'Failed to update manual refresh setting');
+}
+
+export async function updateManualDecisionScenarios(data: UpdateManualDecisionScenariosRequest): Promise<{
+    success: boolean;
+    manual_decision_scenario_settings: ManualDecisionScenarioSettings;
+}> {
+    return sendJson('/api/config/manual-decision-scenarios', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    }, 'Failed to update manual decision scenarios');
 }
 
 export async function updateLanguagePreference(language: string): Promise<{

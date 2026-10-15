@@ -176,20 +176,22 @@ export function AddDecisionModal({
                     />
                     <p className="text-xs text-gray-500 mt-1">{t('pages.decisions.durationHint')}</p>
                 </div>
-                <div>
-                    <label htmlFor="add-decision-scenario" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('tableColumns.scenario')}</label>
-                    <select
-                        id="add-decision-scenario"
-                        disabled={inProgress || scenarioOptions.length <= 1}
-                        className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-primary-500 focus:border-primary-500 sm:text-sm disabled:cursor-not-allowed disabled:opacity-60"
-                        value={selectedScenario}
-                        onChange={(event) => updateDecision({ scenario: event.target.value })}
-                    >
-                        {scenarioOptions.map((scenario) => (
-                            <option key={scenario} value={scenario}>{scenario}</option>
-                        ))}
-                    </select>
-                </div>
+                {scenarioOptions.length > 1 && (
+                    <div>
+                        <label htmlFor="add-decision-scenario" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('tableColumns.scenario')}</label>
+                        <select
+                            id="add-decision-scenario"
+                            disabled={inProgress}
+                            className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-primary-500 focus:border-primary-500 sm:text-sm disabled:cursor-not-allowed disabled:opacity-60"
+                            value={selectedScenario}
+                            onChange={(event) => updateDecision({ scenario: event.target.value })}
+                        >
+                            {scenarioOptions.map((scenario) => (
+                                <option key={scenario} value={scenario}>{scenario}</option>
+                            ))}
+                        </select>
+                    </div>
+                )}
                 <div>
                     <label htmlFor="add-decision-reason" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('pages.decisions.reason')}</label>
                     <input
