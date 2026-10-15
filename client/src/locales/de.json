@@ -429,6 +429,8 @@
   "pages.settings.oidcUnmatchedRoleDeny": "Anmeldung verweigern",
   "pages.settings.oidcUnmatchedRoleAdmin": "Admin-Zugriff",
   "pages.settings.oidcUnmatchedRoleReadOnly": "Nur-Lese-Zugriff",
+  "pages.settings.oidcEndSession": "Beim Abmelden auch beim Identitätsanbieter abmelden",
+  "pages.settings.oidcEndSessionHelp": "Wenn sich ein SSO-Benutzer abmeldet, wird auch seine Sitzung beim Identitätsanbieter beendet, sodass bei der nächsten SSO-Anmeldung erneut Zugangsdaten abgefragt werden. Registriere {url} beim Anbieter als Post-Logout-Redirect-URI.",
   "pages.settings.addGroup": "Hinzufügen",
   "pages.settings.noScopesConfigured": "Keine Scopes konfiguriert.",
   "pages.settings.removeScope": "{scope} entfernen",

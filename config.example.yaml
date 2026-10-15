@@ -21,6 +21,8 @@
 #   walEnabled: true # Set to false for filesystems that do not support SQLite WAL.
 #   incrementalVacuumEnabled: true # Enables bounded idle maintenance for compatible databases.
 #   journalSizeLimit: 128MiB # Retained WAL size after checkpoints; use unlimited to disable trimming.
+#   queryTimeout: 30s # Raise for very large databases or slow storage.
+#   analyticsQueryTimeout: 60s # Timeout for dashboard statistics queries.
 
 # ui:
 #   timeZone: browser # Or an IANA zone such as Europe/Berlin or UTC.
@@ -52,6 +54,7 @@
 #     adminGroups: []
 #     readOnlyGroups: []
 #     unmatchedRole: deny
+#     endSession: true
 
 # notifications:
 #   secretKey:

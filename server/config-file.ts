@@ -196,9 +196,14 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
   setString(env, server, 'basePath', 'BASE_PATH', 'server', true);
 
   const storage = section(root, 'storage');
-  knownKeys(storage, ['dataDir', 'geonamesDir', 'walEnabled', 'incrementalVacuumEnabled', 'journalSizeLimit'], 'storage');
+  knownKeys(storage, [
+    'dataDir', 'geonamesDir', 'walEnabled', 'incrementalVacuumEnabled', 'journalSizeLimit',
+    'queryTimeout', 'analyticsQueryTimeout',
+  ], 'storage');
   setString(env, storage, 'dataDir', 'DB_DIR', 'storage');
   setString(env, storage, 'geonamesDir', 'GEONAMES_DUMP_DIR', 'storage');
+  setDuration(env, storage, 'queryTimeout', 'DB_QUERY_TIMEOUT', 'storage', false);
+  setDuration(env, storage, 'analyticsQueryTimeout', 'DB_ANALYTICS_QUERY_TIMEOUT', 'storage', false);
   const sqliteWalEnabled = storage.walEnabled === undefined
     ? true
     : boolean(storage.walEnabled, 'storage.walEnabled');
@@ -225,7 +230,7 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
   applySecretReference(auth.totpSecret, 'auth.totpSecret', env, sourceEnv, 'AUTH_TOTP_SECRET');
   applySecretReference(auth.totpSeed, 'auth.totpSeed', env, sourceEnv, 'AUTH_TOTP_SEED');
   const oidc = auth.oidc === undefined ? {} : record(auth.oidc, 'auth.oidc');
-  knownKeys(oidc, ['issuerUrl', 'clientId', 'clientSecret', 'scope', 'groupsClaim', 'adminGroups', 'readOnlyGroups', 'unmatchedRole'], 'auth.oidc');
+  knownKeys(oidc, ['issuerUrl', 'clientId', 'clientSecret', 'scope', 'groupsClaim', 'adminGroups', 'readOnlyGroups', 'unmatchedRole', 'endSession'], 'auth.oidc');
   setString(env, oidc, 'issuerUrl', 'AUTH_OIDC_ISSUER_URL', 'auth.oidc');
   setString(env, oidc, 'clientId', 'AUTH_OIDC_CLIENT_ID', 'auth.oidc');
   applySecretReference(oidc.clientSecret, 'auth.oidc.clientSecret', env, sourceEnv, 'AUTH_OIDC_CLIENT_SECRET');
@@ -234,6 +239,7 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
   setArray(env, oidc, 'adminGroups', 'AUTH_OIDC_ADMIN_GROUPS', 'auth.oidc');
   setArray(env, oidc, 'readOnlyGroups', 'AUTH_OIDC_READ_ONLY_GROUPS', 'auth.oidc');
   setString(env, oidc, 'unmatchedRole', 'AUTH_OIDC_UNMATCHED_ROLE', 'auth.oidc');
+  setBoolean(env, oidc, 'endSession', 'AUTH_OIDC_END_SESSION', 'auth.oidc');
 
   const notifications = section(root, 'notifications');
   knownKeys(notifications, ['secretKey', 'allowPrivateAddresses', 'debugPayloads'], 'notifications');
@@ -339,11 +345,14 @@ const INITIAL_CONFIG_HEADER = [
 export const CONFIG_KEY_ORDER = new Map<string, readonly string[]>([
   ['', ['server', 'storage', 'ui', 'updates', 'auth', 'notifications', 'audit', 'crowdsec', 'instances']],
   ['server', ['port', 'basePath']],
-  ['storage', ['dataDir', 'geonamesDir', 'walEnabled', 'incrementalVacuumEnabled', 'journalSizeLimit']],
+  ['storage', [
+    'dataDir', 'geonamesDir', 'walEnabled', 'incrementalVacuumEnabled', 'journalSizeLimit',
+    'queryTimeout', 'analyticsQueryTimeout',
+  ]],
   ['ui', ['timeZone', 'timeFormat', 'dateFormat', 'readOnly']],
   ['updates', ['enabled']],
   ['auth', ['enabled', 'sessionSecret', 'totpSecret', 'totpSeed', 'oidc']],
-  ['auth.oidc', ['issuerUrl', 'clientId', 'clientSecret', 'scope', 'groupsClaim', 'adminGroups', 'readOnlyGroups', 'unmatchedRole']],
+  ['auth.oidc', ['issuerUrl', 'clientId', 'clientSecret', 'scope', 'groupsClaim', 'adminGroups', 'readOnlyGroups', 'unmatchedRole', 'endSession']],
   ['notifications', ['secretKey', 'allowPrivateAddresses', 'debugPayloads']],
   ['audit', ['enabled', 'logFile']],
   ['crowdsec', ['simulationsEnabled', 'alertFilters', 'sync']],
@@ -536,6 +545,8 @@ export function generateApplicationConfig(env: NodeJS.ProcessEnv, config: Runtim
       walEnabled: config.sqliteWalEnabled,
       incrementalVacuumEnabled: config.sqliteIncrementalVacuumEnabled,
       journalSizeLimit: formatByteSize(config.sqliteJournalSizeLimitBytes),
+      queryTimeout: duration(config.dbQueryTimeoutMs),
+      analyticsQueryTimeout: duration(config.dbAnalyticsQueryTimeoutMs),
     },
     ui: { timeZone: config.timeZone || 'browser', timeFormat: config.timeFormat, dateFormat: config.dateFormat, readOnly: config.readOnly },
     auth: {
@@ -552,6 +563,7 @@ export function generateApplicationConfig(env: NodeJS.ProcessEnv, config: Runtim
         adminGroups: config.dashboardAuth.oidcAdminGroups,
         readOnlyGroups: config.dashboardAuth.oidcReadOnlyGroups,
         unmatchedRole: config.dashboardAuth.oidcUnmatchedRole,
+        endSession: config.dashboardAuth.oidcEndSession,
       },
     },
     notifications: {
@@ -628,6 +640,8 @@ const CONFIG_VALUE_ENV = [
   ['CONFIG_STORAGE_WAL_ENABLED', ['storage', 'walEnabled']],
   ['CONFIG_STORAGE_INCREMENTAL_VACUUM_ENABLED', ['storage', 'incrementalVacuumEnabled']],
   ['CONFIG_STORAGE_JOURNAL_SIZE_LIMIT', ['storage', 'journalSizeLimit']],
+  ['CONFIG_STORAGE_QUERY_TIMEOUT', ['storage', 'queryTimeout']],
+  ['CONFIG_STORAGE_ANALYTICS_QUERY_TIMEOUT', ['storage', 'analyticsQueryTimeout']],
   ['CONFIG_UI_TIME_ZONE', ['ui', 'timeZone']],
   ['CONFIG_UI_TIME_FORMAT', ['ui', 'timeFormat']],
   ['CONFIG_UI_DATE_FORMAT', ['ui', 'dateFormat']],
@@ -640,6 +654,7 @@ const CONFIG_VALUE_ENV = [
   ['CONFIG_AUTH_OIDC_ADMIN_GROUPS', ['auth', 'oidc', 'adminGroups']],
   ['CONFIG_AUTH_OIDC_READ_ONLY_GROUPS', ['auth', 'oidc', 'readOnlyGroups']],
   ['CONFIG_AUTH_OIDC_UNMATCHED_ROLE', ['auth', 'oidc', 'unmatchedRole']],
+  ['CONFIG_AUTH_OIDC_END_SESSION', ['auth', 'oidc', 'endSession']],
   ['CONFIG_NOTIFICATIONS_ALLOW_PRIVATE_ADDRESSES', ['notifications', 'allowPrivateAddresses']],
   ['CONFIG_NOTIFICATIONS_DEBUG_PAYLOADS', ['notifications', 'debugPayloads']],
   ['CONFIG_AUDIT_ENABLED', ['audit', 'enabled']],

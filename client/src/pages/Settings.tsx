@@ -9,7 +9,7 @@ import { Badge } from "../components/ui/Badge";
 import { useRefresh } from "../contexts/useRefresh";
 import { useOptionalToast } from "../contexts/useToast";
 import { fetchConfig, updateManualRefreshSetting, updateMetricsSidebarPreference } from "../lib/api";
-import { apiUrl } from "../lib/basePath";
+import { apiUrl, withBasePath } from "../lib/basePath";
 import { sessionFetch } from "../lib/sessionFetch";
 import { useAuth } from "../contexts/AuthContext";
 import { useBranding } from "../contexts/useBranding";
@@ -72,6 +72,7 @@ interface AuthSettings {
     oidcAdminGroups: string;
     oidcReadOnlyGroups: string;
     oidcUnmatchedRole: OidcUnmatchedRole;
+    oidcEndSession?: boolean;
     hasPassword: boolean;
     passkeysAvailable?: boolean;
     totpEnabled: boolean;
@@ -146,6 +147,7 @@ export function Settings() {
         adminGroups: [] as string[],
         readOnlyGroups: [] as string[],
         unmatchedRole: 'deny' as OidcUnmatchedRole,
+        endSession: true,
     });
     const [oidcListDrafts, setOidcListDrafts] = useState({
         scopes: '',
@@ -207,6 +209,7 @@ export function Settings() {
                             adminGroups: parseCsvList(payload.oidcAdminGroups || ''),
                             readOnlyGroups: parseCsvList(payload.oidcReadOnlyGroups || ''),
                             unmatchedRole: payload.oidcUnmatchedRole || 'deny',
+                            endSession: payload.oidcEndSession !== false,
                         });
                     }
                 })
@@ -572,6 +575,7 @@ export function Settings() {
                     oidcAdminGroups: adminGroups,
                     oidcReadOnlyGroups: readOnlyGroups,
                     oidcUnmatchedRole: oidcForm.unmatchedRole,
+                    oidcEndSession: oidcForm.endSession,
                 }),
             });
             const payload = await response.json().catch(() => ({})) as {
@@ -594,6 +598,7 @@ export function Settings() {
                 oidcAdminGroups: adminGroups,
                 oidcReadOnlyGroups: readOnlyGroups,
                 oidcUnmatchedRole: oidcForm.unmatchedRole,
+                oidcEndSession: oidcForm.endSession,
             } : current);
             setOidcForm((current) => ({ ...current, clientSecret: '' }));
             if (payload.oidcError) {
@@ -1070,6 +1075,22 @@ export function Settings() {
                                     removeLabel={(group) => t("pages.settings.removeGroup", { group })}
                                     labelClass={labelClass}
                                 />
+                                <div className="flex items-start gap-4 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800 lg:col-span-2">
+                                    <Switch
+                                        id="oidc-end-session"
+                                        checked={oidcForm.endSession}
+                                        onCheckedChange={(checked) => setOidcForm((current) => ({ ...current, endSession: checked }))}
+                                        disabled={!canManageAuthSettings}
+                                    />
+                                    <div className="min-w-0">
+                                        <label htmlFor="oidc-end-session" className={labelClass}>
+                                            {t("pages.settings.oidcEndSession")}
+                                        </label>
+                                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                            {t("pages.settings.oidcEndSessionHelp", { url: `${window.location.origin}${withBasePath('/login')}` })}
+                                        </p>
+                                    </div>
+                                </div>
                             </div>
                             <button
                                 type="button"

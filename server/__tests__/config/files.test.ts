@@ -19,6 +19,8 @@ storage:
   walEnabled: false
   incrementalVacuumEnabled: false
   journalSizeLimit: unlimited
+  queryTimeout: 2m
+  analyticsQueryTimeout: 5m
 ui:
   timeZone: UTC
   timeFormat: 12h
@@ -38,6 +40,7 @@ auth:
     adminGroups: [admins]
     readOnlyGroups: [viewers]
     unmatchedRole: read-only
+    endSession: false
 notifications:
   secretKey:
     env: YAML_NOTIFICATION_KEY
@@ -110,6 +113,8 @@ instances:
         sqliteWalEnabled: false,
         sqliteIncrementalVacuumEnabled: false,
         sqliteJournalSizeLimitBytes: -1,
+        dbQueryTimeoutMs: 120_000,
+        dbAnalyticsQueryTimeoutMs: 300_000,
         timeZone: 'UTC',
         timeFormat: '12h',
         dateFormat: 'dd/mm/yyyy',
@@ -128,6 +133,7 @@ instances:
       });
       expect(config.dashboardAuth.sessionSecret).toBe('auth-secret');
       expect(config.dashboardAuth.oidcClientSecret).toBe('oidc-secret');
+      expect(config.dashboardAuth.oidcEndSession).toBe(false);
       expect(config.instances[0].lapiAuth).toEqual({ mode: 'password', user: 'watcher', password: 'lapi-secret' });
       expect(warn).toHaveBeenCalledWith(expect.stringMatching(/PORT.*CROWDSEC_URL.*application YAML.*takes precedence.*variables do not affect/i));
       expect(log).toHaveBeenCalledWith(`Loaded application configuration from ${configFile}.`);
@@ -238,6 +244,7 @@ instances:
       CONFIG_STORAGE_WAL_ENABLED: 'false',
       CONFIG_STORAGE_INCREMENTAL_VACUUM_ENABLED: 'false',
       CONFIG_STORAGE_JOURNAL_SIZE_LIMIT: '64MiB',
+      CONFIG_STORAGE_QUERY_TIMEOUT: '90s',
       CONFIG_UI: '{ timeZone: UTC, timeFormat: 24h, dateFormat: dd/mm/yyyy, readOnly: false }',
       CONFIG_UI_READ_ONLY: 'true',
       CONFIG_AUTH_SESSION_SECRET: 'do-not-write-this-auth-secret',
@@ -272,6 +279,8 @@ instances:
         sqliteWalEnabled: false,
         sqliteIncrementalVacuumEnabled: false,
         sqliteJournalSizeLimitBytes: 64 * 1024 * 1024,
+        dbQueryTimeoutMs: 90_000,
+        dbAnalyticsQueryTimeoutMs: 60_000,
         timeZone: 'UTC',
         readOnly: true,
         refreshIntervalMs: 120_000,
@@ -310,6 +319,7 @@ instances:
       expect(saved).toContain('  walEnabled: false');
       expect(saved).toContain('  incrementalVacuumEnabled: false');
       expect(saved).toContain('  journalSizeLimit: 64MiB');
+      expect(saved).toContain('  queryTimeout: 90s');
       expect(saved).toContain('  # geonamesDir:');
       const document = parseYaml(saved);
       expect(document.server).toEqual({ port: 4200, basePath: '/security' });

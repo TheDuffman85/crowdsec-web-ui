@@ -431,6 +431,8 @@
   "pages.settings.oidcUnmatchedRoleDeny": "로그인 거부",
   "pages.settings.oidcUnmatchedRoleAdmin": "관리자 권한",
   "pages.settings.oidcUnmatchedRoleReadOnly": "읽기 전용 권한",
+  "pages.settings.oidcEndSession": "로그아웃 시 ID 공급자에서도 로그아웃",
+  "pages.settings.oidcEndSessionHelp": "SSO 사용자가 로그아웃하면 ID 공급자의 세션도 종료되어, 다음 SSO 로그인 시 자격 증명을 다시 요청합니다. 공급자에 {url}을(를) 로그아웃 후 리디렉션 URI로 등록하세요.",
   "pages.settings.addGroup": "추가",
   "pages.settings.noScopesConfigured": "설정된 스코프가 없습니다.",
   "pages.settings.removeScope": "{scope} 제거",

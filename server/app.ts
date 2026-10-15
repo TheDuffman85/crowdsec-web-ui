@@ -442,11 +442,14 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   const notificationOutboundGuard = createNotificationOutboundGuard({
     allowPrivateAddresses: config.notificationAllowPrivateAddresses,
   });
-  const queryWorker = options.queryWorker || new DatabaseQueryWorker({ dbPath: database.dbPath });
+  const queryWorker = options.queryWorker || new DatabaseQueryWorker({
+    dbPath: database.dbPath,
+    timeoutMs: config.dbQueryTimeoutMs,
+  });
   const analyticsQueryWorker = options.analyticsQueryWorker
     || (options.queryWorker ? queryWorker : new DatabaseQueryWorker({
       dbPath: database.dbPath,
-      timeoutMs: 60_000,
+      timeoutMs: config.dbAnalyticsQueryTimeoutMs,
       queueTimeoutMs: 30_000,
       maxWorkers: 1,
     }));

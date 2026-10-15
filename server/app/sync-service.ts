@@ -402,6 +402,47 @@ function isDecisionOriginAllowedByCurrentFilter(origin: string | undefined): boo
   return origin !== CAPI_ALERT_ORIGIN;
 }
 
+function alertFilterFingerprintMetaKey(instanceId: string): string {
+  return `alert_filter_fingerprint:${instanceId}`;
+}
+
+function getAlertFilterFingerprint(): string {
+  const sorted = (values: string[]) => [...values].sort();
+  return JSON.stringify({
+    mode: config.alertFilterMode,
+    includeOrigins: sorted(config.alertIncludeOrigins),
+    excludeOrigins: sorted(config.alertExcludeOrigins),
+    includeCapi: config.alertIncludeCapi,
+    includeOriginEmpty: config.alertIncludeOriginEmpty,
+    excludeOriginEmpty: config.alertExcludeOriginEmpty,
+    legacyOrigins: sorted(config.legacyAlertOrigins),
+    legacyExtraScenarios: sorted(config.legacyAlertExtraScenarios),
+  });
+}
+
+// The startup cleanup scans every cached alert and decision, which can exceed
+// the query timeout on large databases. Window reconciliation already keeps the
+// cache aligned with LAPI, so the scan only runs when the alert filters changed.
+async function pruneCachedEntriesIfAlertFiltersChanged(instanceId = primaryInstance.id): Promise<{ alerts: number; decisions: number }> {
+  const metaKey = alertFilterFingerprintMetaKey(instanceId);
+  const fingerprint = getAlertFilterFingerprint();
+  const storedFingerprint = database.getMeta(metaKey)?.value;
+  if (storedFingerprint === fingerprint) {
+    return { alerts: 0, decisions: 0 };
+  }
+  if (storedFingerprint === undefined) {
+    // Caches created before fingerprints were stored have already been pruned
+    // for their filters on every previous startup.
+    database.setMeta(metaKey, fingerprint);
+    return { alerts: 0, decisions: 0 };
+  }
+
+  console.log(`[${getInstanceSyncRuntime(instanceId).instanceName}] Alert filters changed, removing cached entries that no longer match...`);
+  const pruned = await pruneCachedEntriesForCurrentAlertFilters(instanceId);
+  database.setMeta(metaKey, fingerprint);
+  return pruned;
+}
+
 async function pruneCachedEntriesForCurrentAlertFilters(instanceId = primaryInstance.id): Promise<{ alerts: number; decisions: number }> {
   const cachedAlerts = await queryWorker.all<NormalizedAlertRow & { origins?: string | null }>(
     `SELECT ${ALERT_RECORD_COLUMNS}, origins FROM alerts WHERE instance_id = ?`,
@@ -1277,7 +1318,7 @@ async function syncHistory(
     throw new Error(runtime.client.getStatus().lastError || `Authentication failed for ${runtime.instanceName}`);
   }
 
-  const filterPruned = await pruneCachedEntriesForCurrentAlertFilters(runtime.instanceId);
+  const filterPruned = await pruneCachedEntriesIfAlertFiltersChanged(runtime.instanceId);
   changed = filterPruned.alerts > 0 || filterPruned.decisions > 0;
   if (filterPruned.alerts > 0 || filterPruned.decisions > 0) {
     Object.assign(runtime.status, {

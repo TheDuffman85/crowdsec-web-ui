@@ -253,7 +253,7 @@ describe('createApp synchronization runtime', () => {
 
     try {
       controller.startBackgroundTasks();
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1_000);
       await dashboardStarted;
       const alertRequestsBeforeScheduler = fetchCalls.filter(({ url }) => url.includes('/v1/alerts?')).length;
       await vi.advanceTimersByTimeAsync(30_001);

@@ -429,6 +429,8 @@
   "pages.settings.oidcUnmatchedRoleDeny": "拒绝登录",
   "pages.settings.oidcUnmatchedRoleAdmin": "管理员访问",
   "pages.settings.oidcUnmatchedRoleReadOnly": "只读访问",
+  "pages.settings.oidcEndSession": "注销时同时退出身份提供商",
+  "pages.settings.oidcEndSessionHelp": "SSO 用户注销时，同时结束其在身份提供商处的会话，下次 SSO 登录时将重新要求输入凭据。请在身份提供商处将 {url} 注册为注销后重定向 URI。",
   "pages.settings.addGroup": "添加",
   "pages.settings.noScopesConfigured": "未配置作用域。",
   "pages.settings.removeScope": "移除 {scope}",

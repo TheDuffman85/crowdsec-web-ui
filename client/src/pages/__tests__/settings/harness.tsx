@@ -94,6 +94,8 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
     'pages.settings.oidcUnmatchedRoleDeny': 'Deny sign-in',
     'pages.settings.oidcUnmatchedRoleAdmin': 'Admin access',
     'pages.settings.oidcUnmatchedRoleReadOnly': 'Read-only access',
+    'pages.settings.oidcEndSession': 'Sign out of the identity provider on logout',
+    'pages.settings.oidcEndSessionHelp': 'When an SSO user logs out, also end their session at the identity provider so the next SSO sign-in asks for credentials again. Register {url} as a post-logout redirect URI with your provider.',
     'pages.settings.addGroup': 'Add',
     'pages.settings.noScopesConfigured': 'No scopes configured.',
     'pages.settings.removeScope': 'Remove {scope}',

@@ -97,10 +97,10 @@ These routes are mounted below `/api/auth`. Auth setup/login routes are availabl
 | GET | `/api/auth/status` | Auth state, setup status, current user/session state, OIDC availability, passkey availability, and password-login state. |
 | POST | `/api/auth/setup` | Create the first admin user and start a session. Requires `username` and `password`; only works before any auth user exists. |
 | POST | `/api/auth/login` | Password login with `username` and `password`. Accounts with TOTP enabled also require `totpCode`; missing or invalid codes return `requiresTotp: true`. |
-| POST | `/api/auth/logout` | Clear the session cookie. |
+| POST | `/api/auth/logout` | Clear the session cookie. SSO sessions may return a provider `redirectUrl` for RP-initiated logout. |
 | GET | `/api/auth/me` | Current authenticated session user. |
 | GET | `/api/auth/settings` | Auth settings visible to the current user, including OIDC settings metadata and password/passkey state. |
-| PUT | `/api/auth/settings` | Admin-only auth settings update. Can disable password login and configure OIDC issuer, client ID, client secret, scopes, groups claim, admin groups, read-only groups, and unmatched-user policy. |
+| PUT | `/api/auth/settings` | Admin-only auth settings update. Can disable password login and configure OIDC issuer, client ID, client secret, scopes, groups claim, admin groups, read-only groups, unmatched-user policy, and whether logout also ends the identity provider session. |
 | POST | `/api/auth/change-password` | Change the current user's password. The user must be logged in with password auth. |
 | POST | `/api/auth/totp/setup` | Start TOTP enrollment for the current password-authenticated user. Returns a base32 secret and `otpauth://` URI for QR setup. |
 | POST | `/api/auth/totp/enable` | Complete TOTP enrollment with `{ "code": "123456" }`. |

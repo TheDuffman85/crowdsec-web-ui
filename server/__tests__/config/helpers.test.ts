@@ -230,6 +230,7 @@ describe('config helpers', () => {
       oidcAdminGroups: ['admins', 'secops'],
       oidcReadOnlyGroups: ['viewers'],
       oidcUnmatchedRole: 'read-only',
+      oidcEndSession: true,
     });
   });
 

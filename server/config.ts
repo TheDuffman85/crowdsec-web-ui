@@ -38,6 +38,7 @@ export interface DashboardAuthConfig {
   oidcAdminGroups: string[];
   oidcReadOnlyGroups: string[];
   oidcUnmatchedRole: OidcUnmatchedRole;
+  oidcEndSession: boolean;
 }
 
 export interface RuntimeConfig {
@@ -92,6 +93,8 @@ export interface RuntimeConfig {
   sqliteWalEnabled: boolean;
   sqliteIncrementalVacuumEnabled: boolean;
   sqliteJournalSizeLimitBytes: number;
+  dbQueryTimeoutMs: number;
+  dbAnalyticsQueryTimeoutMs: number;
   notificationSecretKey?: string;
   notificationAllowPrivateAddresses: boolean;
   notificationDebugPayloads: boolean;
@@ -256,6 +259,7 @@ function parseDashboardAuthConfig(env: NodeJS.ProcessEnv): DashboardAuthConfig {
     oidcAdminGroups: parseCsvEnv(resolveRenamedEnv(env, 'AUTH_OIDC_ADMIN_GROUPS', 'CROWDSEC_AUTH_OIDC_ADMIN_GROUPS')),
     oidcReadOnlyGroups: parseCsvEnv(resolveRenamedEnv(env, 'AUTH_OIDC_READ_ONLY_GROUPS', 'CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS')),
     oidcUnmatchedRole: parseOidcUnmatchedRole(resolveRenamedEnv(env, 'AUTH_OIDC_UNMATCHED_ROLE', 'CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE')),
+    oidcEndSession: parseBooleanEnv(env.AUTH_OIDC_END_SESSION, true),
   };
 }
 
@@ -439,6 +443,8 @@ function createRuntimeConfigFromEnvironment(env: NodeJS.ProcessEnv): RuntimeConf
     sqliteWalEnabled: true,
     sqliteIncrementalVacuumEnabled: true,
     sqliteJournalSizeLimitBytes: 128 * 1024 * 1024,
+    dbQueryTimeoutMs: parsePositiveIntervalEnv(env.DB_QUERY_TIMEOUT, '30s'),
+    dbAnalyticsQueryTimeoutMs: parsePositiveIntervalEnv(env.DB_ANALYTICS_QUERY_TIMEOUT, '60s'),
     notificationSecretKey,
     notificationAllowPrivateAddresses: parseBooleanEnv(env.NOTIFICATION_ALLOW_PRIVATE_ADDRESSES, true),
     notificationDebugPayloads: parseBooleanEnv(env.NOTIFICATION_DEBUG_PAYLOADS, false),

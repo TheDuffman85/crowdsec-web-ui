@@ -56,6 +56,7 @@ services:
       # CONFIG_AUTH_OIDC_ADMIN_GROUPS: '[admins]'
       # CONFIG_AUTH_OIDC_READ_ONLY_GROUPS: '[auditors]'
       # CONFIG_AUTH_OIDC_UNMATCHED_ROLE: deny
+      # CONFIG_AUTH_OIDC_END_SESSION: "true"
       # CONFIG_NOTIFICATIONS_SECRET_KEY: change-me
       # CONFIG_NOTIFICATIONS_SECRET_KEY_FILE: /run/secrets/notification_secret_key
       # CONFIG_NOTIFICATIONS_ALLOW_PRIVATE_ADDRESSES: "true"

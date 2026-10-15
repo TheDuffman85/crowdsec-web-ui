@@ -429,6 +429,8 @@
   "pages.settings.oidcUnmatchedRoleDeny": "साइन-इन अस्वीकार करें",
   "pages.settings.oidcUnmatchedRoleAdmin": "एडमिन एक्सेस",
   "pages.settings.oidcUnmatchedRoleReadOnly": "रीड-ओनली एक्सेस",
+  "pages.settings.oidcEndSession": "लॉगआउट पर पहचान प्रदाता से भी साइन आउट करें",
+  "pages.settings.oidcEndSessionHelp": "जब कोई SSO उपयोगकर्ता लॉग आउट करता है, तो पहचान प्रदाता पर उसका सत्र भी समाप्त हो जाता है, ताकि अगली SSO साइन-इन पर फिर से क्रेडेंशियल मांगे जाएं। अपने प्रदाता में {url} को पोस्ट-लॉगआउट रीडायरेक्ट URI के रूप में पंजीकृत करें।",
   "pages.settings.addGroup": "जोड़ें",
   "pages.settings.noScopesConfigured": "कोई स्कोप कॉन्फ़िगर नहीं है।",
   "pages.settings.removeScope": "{scope} हटाएं",

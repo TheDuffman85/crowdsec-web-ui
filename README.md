@@ -225,6 +225,8 @@ Use `CONFIG_FILE` only to select another existing file. [`config.example.yaml`](
 | `storage.walEnabled` | `true` | Enables SQLite write-ahead logging. Set to `false` for filesystems that do not support WAL. | `CONFIG_STORAGE_WAL_ENABLED` |
 | `storage.incrementalVacuumEnabled` | `true` | Uses bounded incremental vacuum while idle on compatible databases. Existing databases are not migrated automatically. | `CONFIG_STORAGE_INCREMENTAL_VACUUM_ENABLED` |
 | `storage.journalSizeLimit` | `128MiB` | Retained WAL size after checkpoints. This does not cap transactions; use `unlimited` to disable trimming. Ignored when WAL is disabled. | `CONFIG_STORAGE_JOURNAL_SIZE_LIMIT` |
+| `storage.queryTimeout` | `30s` | Maximum execution time for regular database queries, such as list pages and cache synchronization. Raise it for very large databases or slow storage. | `CONFIG_STORAGE_QUERY_TIMEOUT` |
+| `storage.analyticsQueryTimeout` | `60s` | Maximum execution time for dashboard statistics queries. | `CONFIG_STORAGE_ANALYTICS_QUERY_TIMEOUT` |
 | `ui.timeZone` | `browser` | Browser timezone or an IANA zone such as `Europe/Berlin` or `UTC`. | `CONFIG_UI_TIME_ZONE` |
 | `ui.timeFormat` | `browser` | Clock format: `browser`, `12h`, or `24h`. | `CONFIG_UI_TIME_FORMAT` |
 | `ui.dateFormat` | `browser` | Browser date format or a custom pattern such as `dd/mm/yyyy`, `mm/dd/yyyy`, or `yyyy-MM-dd`. | `CONFIG_UI_DATE_FORMAT` |
@@ -249,6 +251,7 @@ Date patterns require one day, month, and year token in any order: `d`/`dd` (day
 | `auth.oidc.adminGroups` | `[]` | Groups granted administrator access. | `CONFIG_AUTH_OIDC_ADMIN_GROUPS` or `CONFIG_AUTH_OIDC_ADMIN_GROUPS_<INDEX>` |
 | `auth.oidc.readOnlyGroups` | `[]` | Groups granted read-only access. | `CONFIG_AUTH_OIDC_READ_ONLY_GROUPS` or `CONFIG_AUTH_OIDC_READ_ONLY_GROUPS_<INDEX>` |
 | `auth.oidc.unmatchedRole` | `deny` | Role for unmatched OIDC users: `deny`, `admin`, or `read-only`. | `CONFIG_AUTH_OIDC_UNMATCHED_ROLE` |
+| `auth.oidc.endSession` | `true` | Also end the identity provider session when an SSO user logs out (RP-initiated logout). | `CONFIG_AUTH_OIDC_END_SESSION` |
 
 ### Notifications
 
@@ -559,6 +562,7 @@ auth:
     adminGroups: [crowdsec-admins, secops]
     readOnlyGroups: [crowdsec-viewers]
     unmatchedRole: deny
+    endSession: true
 ```
 
 #### Callback URL
@@ -580,6 +584,16 @@ https://<crowdsec-web-ui-host>/api/auth/oidc/callback
 - Identities use stable issuer and subject claims. Username collisions with local accounts remain separate.
 - Sessions have a 24-hour absolute lifetime. OIDC-only users cannot add local passkeys; password-backed local accounts retain passkey support.
 - Existing OIDC rows migrate on their next successful SSO login.
+
+#### Logout
+
+When an SSO user logs out, the dashboard also ends their session at the identity provider (OpenID Connect RP-initiated logout), so the next SSO sign-in asks for credentials again. This requires the provider to advertise an `end_session_endpoint`; otherwise only the dashboard session is cleared. Register this post-logout redirect URI with the identity provider:
+
+```text
+https://<crowdsec-web-ui-host>/login
+```
+
+Include the base path when one is configured, for example `https://<host>/crowdsec/login`. Set `auth.oidc.endSession: false` or turn it off in Settings to only clear the dashboard session.
 
 ## Deployment and Security
 

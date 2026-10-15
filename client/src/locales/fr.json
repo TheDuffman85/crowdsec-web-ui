@@ -431,6 +431,8 @@
   "pages.settings.oidcUnmatchedRoleDeny": "Refuser la connexion",
   "pages.settings.oidcUnmatchedRoleAdmin": "Accès administrateur",
   "pages.settings.oidcUnmatchedRoleReadOnly": "Accès lecture seule",
+  "pages.settings.oidcEndSession": "Se déconnecter du fournisseur d'identité lors de la déconnexion",
+  "pages.settings.oidcEndSessionHelp": "Lorsqu'un utilisateur SSO se déconnecte, sa session auprès du fournisseur d'identité est également fermée, de sorte que la prochaine connexion SSO redemande les identifiants. Enregistrez {url} comme URI de redirection après déconnexion auprès de votre fournisseur.",
   "pages.settings.addGroup": "Ajouter",
   "pages.settings.noScopesConfigured": "Aucun scope configuré.",
   "pages.settings.removeScope": "Supprimer {scope}",

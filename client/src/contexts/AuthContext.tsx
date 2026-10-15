@@ -149,7 +149,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const logout = useCallback(async () => {
-    await readJson('/api/auth/logout', { method: 'POST' });
+    const payload = await readJson<{ redirectUrl?: string }>('/api/auth/logout', { method: 'POST' });
+    // SSO sessions are also ended at the identity provider, which then
+    // redirects back to the login page.
+    if (payload?.redirectUrl && /^https?:\/\//i.test(payload.redirectUrl)) {
+      window.location.assign(payload.redirectUrl);
+      return;
+    }
     await refresh();
   }, [refresh]);
 
