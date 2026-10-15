@@ -119,11 +119,12 @@ These routes are mounted below `/api/auth`. Auth setup/login routes are availabl
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| GET | `/api/config` | Runtime UI config, LAPI status, sync status, simulation setting, time settings, manual refresh availability, metrics availability, metrics sidebar preference, and permissions. |
-| GET | `/api/instances` | Configured instance identities, LAPI and synchronization status, metrics endpoint identities, per-instance overrides, and aggregate availability. |
+| GET | `/api/config` | Runtime UI config, LAPI status, sync status, simulation setting, time settings, manual refresh availability, metrics availability, metrics sidebar preference, permissions, each instance's effective manual decision scenarios (`manual_decision_scenarios`), and the configured and Settings-managed scenario lists (`manual_decision_scenario_settings`). |
+| GET | `/api/instances` | Configured instance identities, LAPI and synchronization status, metrics endpoint identities, per-instance overrides, effective manual decision scenarios (`manual_decision_scenarios`), and aggregate availability. |
 | PUT | `/api/config/metrics-sidebar` | Save the metrics sidebar preference. Body: `{ "visible": true }`. |
 | PUT | `/api/config/refresh-interval` | Update the refresh interval. Body: `{ "interval": "manual" \| "0" \| "5s" \| "30s" \| "1m" \| "5m" }`. Blocked in read-only mode. |
 | PUT | `/api/config/manual-refresh` | Enable or disable manual cache refreshes. Body: `{ "enabled": true }`. Blocked in read-only mode. |
+| PUT | `/api/config/manual-decision-scenarios` | Replace the scenarios added in Settings. Body: `{ "scenarios": ["custom/scanner"] }`. Entries must look like `author/name`; `manual/web-ui` and configured scenarios are ignored; at most 100. They are offered for every instance on top of the configured list. Blocked in read-only mode. |
 | PUT | `/api/config/language` | Save language preference. Body: `{ "language": "browser" }` or a supported locale code. |
 
 ## Branding
@@ -168,7 +169,7 @@ Alert facets require `field=id|instance|scenario|kind|country|region|city|as|ip|
 | --- | --- | --- |
 | GET | `/api/decisions` | List decisions. Without `page`, returns an array. With `page`, returns a paginated response. Active decisions are returned by default. |
 | GET | `/api/decisions/facets` | Return one bounded quick-filter facet across the complete effective decision result set. |
-| POST | `/api/decisions` | Add a manual CrowdSec decision through LAPI. Body: `{ "ip": "1.2.3.4", "duration": "4h", "reason": "manual", "type": "ban" }`. `type` defaults to `ban` and accepts `ban` or `captcha`; optional `scope` and `instance_id` select targets. Blocked in read-only mode. |
+| POST | `/api/decisions` | Add a manual CrowdSec decision through LAPI. Body: `{ "ip": "1.2.3.4", "duration": "4h", "reason": "manual", "type": "ban", "scenario": "manual/web-ui" }`. `type` defaults to `ban` and accepts `ban` or `captcha`; `scenario` defaults to `manual/web-ui` and must look like `author/name` (letters, digits, `_`, `.`, `-`; at most 256 characters); `crowdsec.manualDecisions` only limits the Web UI form, not this endpoint; optional `scope` and `instance_id` select targets. Blocked in read-only mode. |
 | POST | `/api/decisions/bulk-delete` | Delete multiple decisions by numeric ID. Body: `{ "ids": [10, "11"] }`. Blocked in read-only mode. |
 | DELETE | `/api/decisions/:id` | Delete one decision from CrowdSec LAPI and local cache. `:id` must be numeric. Blocked in read-only mode. |
 | DELETE | `/api/instances/:instanceId/decisions/:id` | Delete one decision from a specific instance and its local cache. Blocked in read-only mode. |

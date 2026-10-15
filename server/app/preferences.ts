@@ -1,7 +1,9 @@
 import crypto from 'node:crypto';
+import { isValidDecisionScenario } from '../../shared/contracts';
 import type { CrowdsecDatabase } from '../database';
 
 const METRICS_SIDEBAR_VISIBLE_META_KEY = 'metrics_sidebar_visible';
+const MANUAL_DECISION_SCENARIOS_META_KEY = 'manual_decision_scenarios';
 const NOTIFICATION_SECRET_KEY_META_KEY = 'notification_secret_key';
 
 export interface PersistedConfig {
@@ -21,6 +23,23 @@ export function loadMetricsSidebarVisible(database: CrowdsecDatabase): boolean {
 
 export function saveMetricsSidebarVisible(database: CrowdsecDatabase, visible: boolean): void {
   database.setMeta(METRICS_SIDEBAR_VISIBLE_META_KEY, visible ? 'true' : 'false');
+}
+
+export function loadManualDecisionScenarios(database: CrowdsecDatabase): string[] {
+  try {
+    const value = database.getMeta(MANUAL_DECISION_SCENARIOS_META_KEY)?.value;
+    if (!value) return [];
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((entry): entry is string => typeof entry === 'string' && isValidDecisionScenario(entry));
+  } catch (error) {
+    console.error('Error loading manual decision scenarios from database:', error);
+    return [];
+  }
+}
+
+export function saveManualDecisionScenarios(database: CrowdsecDatabase, scenarios: string[]): void {
+  database.setMeta(MANUAL_DECISION_SCENARIOS_META_KEY, JSON.stringify(scenarios));
 }
 
 export function loadPersistedConfig(database: CrowdsecDatabase): PersistedConfig {

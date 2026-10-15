@@ -104,6 +104,7 @@ export interface RuntimeConfig {
   readOnly: boolean;
   auditEnabled: boolean;
   auditLogFile?: string;
+  manualDecisionScenarios: string[];
   dashboardAuth: DashboardAuthConfig;
   instances: CrowdsecInstanceConfig[];
 }
@@ -454,6 +455,7 @@ function createRuntimeConfigFromEnvironment(env: NodeJS.ProcessEnv): RuntimeConf
     readOnly: parseBooleanEnv(env.PERMISSION_READ_ONLY, false),
     auditEnabled: parseBooleanEnv(env.AUDIT_ENABLED, true),
     auditLogFile: env.AUDIT_LOG_FILE?.trim() || undefined,
+    manualDecisionScenarios: [],
     dashboardAuth: parseDashboardAuthConfig(env),
     instances: [],
   };
@@ -518,6 +520,7 @@ function createRuntimeConfigFromParsedConfig(parsed: ParsedConfigFile): RuntimeC
   runtimeConfig.sqliteWalEnabled = parsed.sqliteWalEnabled;
   runtimeConfig.sqliteIncrementalVacuumEnabled = parsed.sqliteIncrementalVacuumEnabled;
   runtimeConfig.sqliteJournalSizeLimitBytes = parsed.sqliteJournalSizeLimitBytes;
+  runtimeConfig.manualDecisionScenarios = parsed.manualDecisionScenarios;
   const primaryInstance = parsed.instances[0];
   runtimeConfig.crowdsecUrl = primaryInstance.lapiUrl;
   runtimeConfig.crowdsecAuth = primaryInstance.lapiAuth.mode === 'mtls'

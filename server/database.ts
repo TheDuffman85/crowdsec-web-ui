@@ -3,7 +3,7 @@ import path from 'path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import BetterSqlite3 from 'better-sqlite3';
-import type { AlertDecision, AlertRecord } from '../shared/contracts';
+import { MANUAL_DECISION_MESSAGE_PREFIX, type AlertDecision, type AlertRecord } from '../shared/contracts';
 import { matchesIpSearchValue } from '../shared/search';
 import { deriveAlertIndexValues, deriveAlertIndexValuesFromRecord, deriveDecisionIndexValues, deriveDecisionIndexValuesFromRecord } from './record-index';
 import {
@@ -2826,6 +2826,7 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
   migrateNormalizedAlertPayloads(db);
   migrateAlertKindColumn(db);
   migrateAlertContextSearch(db);
+  migrateManualAlertTargets(db);
   initDecisionDuplicateDirtyTracking(db);
   migrateNotificationRulesTable(db, createNotificationRulesTable);
   migrateNotificationsTable(db, createNotificationsTable);
@@ -3316,6 +3317,42 @@ function migrateAlertKindColumn(db: Database): void {
     `);
     db.query('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(migrationKey, '1');
     db.exec('DROP TABLE IF EXISTS alerts_fts');
+  });
+  migrate();
+}
+
+// Web UI alerts used to get a target guessed from their scenario name (manual/web-ui -> "web").
+// They have no meaningful target, so clear it on stored alerts and their decisions.
+function migrateManualAlertTargets(db: Database): void {
+  const migrationKey = 'manual_alert_target_version';
+  const currentVersion = db.query('SELECT value FROM meta WHERE key = ?').get(migrationKey) as MetaRow | null;
+  if (currentVersion?.value === '2') return;
+
+  const manualAlerts = `
+    SELECT id FROM alerts
+    WHERE substr(message, 1, ${MANUAL_DECISION_MESSAGE_PREFIX.length + 1}) = '${MANUAL_DECISION_MESSAGE_PREFIX}:'
+  `;
+  const withoutTargets = `
+    CASE WHEN json_valid(extra_data)
+      THEN json_remove(extra_data, '$.target', '$.targets', '$.target_count')
+      ELSE extra_data
+    END`;
+
+  const migrate = db.transaction(() => {
+    db.exec(`
+      UPDATE alerts
+      SET target = NULL,
+          extra_data = ${withoutTargets}
+      WHERE id IN (${manualAlerts})
+        AND (target IS NOT NULL OR json_type(extra_data, '$.targets') IS NOT NULL);
+
+      UPDATE decisions
+      SET target = NULL,
+          extra_data = ${withoutTargets}
+      WHERE alert_id IN (${manualAlerts})
+        AND (target IS NOT NULL OR json_type(extra_data, '$.targets') IS NOT NULL);
+    `);
+    db.query('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(migrationKey, '2');
   });
   migrate();
 }

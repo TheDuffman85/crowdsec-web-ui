@@ -59,7 +59,7 @@ import {
     type SearchParseError,
 } from "../../../shared/search";
 import { Info, ExternalLink, Shield, ShieldBan, Gavel, Trash2, X, AlertCircle, Columns3, Loader2 } from "lucide-react";
-import type { AlertRecord, AlertSource, ApiPermissionError, BulkDeleteResult, DecisionListItem, FacetField, InstanceEntityRef, InstanceOperationResult, SimulationFilter, SlimAlert, TableColumnId, TableColumnPreferences } from '../types';
+import type { AlertRecord, AlertSource, ApiPermissionError, BulkDeleteResult, DecisionListItem, FacetField, InstanceEntityRef, InstanceOperationResult, InstanceSummary, SimulationFilter, SlimAlert, TableColumnId, TableColumnPreferences } from '../types';
 import { useI18n, type I18nContextValue } from "../lib/i18n";
 import { getBrowserTimeZone, useDateTime } from "../lib/dateTime";
 
@@ -269,6 +269,7 @@ export function Alerts() {
     const [canManageEnforcement, setCanManageEnforcement] = useState(false);
     const [multipleInstances, setMultipleInstances] = useState(false);
     const [instanceNames, setInstanceNames] = useState<Record<string, string>>({});
+    const [instances, setInstances] = useState<InstanceSummary[]>([]);
     const [tableColumnPreferences, setTableColumnPreferences] = useState<TableColumnPreferences>(() => loadStoredTableColumnPreferences());
     const [showColumnsModal, setShowColumnsModal] = useState(false);
     const [searchDraft, setSearchDraft] = useState(initialQueryParam);
@@ -343,6 +344,7 @@ export function Alerts() {
         canManageEnforcement: boolean;
         multipleInstances: boolean;
         instanceNames: Record<string, string>;
+        instances: InstanceSummary[];
     } | null>(null);
     const hasLoadedAlertsRef = useRef(false);
     const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -723,6 +725,7 @@ export function Alerts() {
             instanceNames: Object.fromEntries(
                 (configData.instances || []).map((instance) => [instance.id, instance.name]),
             ),
+            instances: configData.instances || [],
         };
 
         configRef.current = nextConfig;
@@ -731,6 +734,7 @@ export function Alerts() {
         setCanManageEnforcement(nextConfig.canManageEnforcement);
         setMultipleInstances(nextConfig.multipleInstances);
         setInstanceNames(nextConfig.instanceNames);
+        setInstances(nextConfig.instances);
 
         return nextConfig;
     }, []);
@@ -2199,6 +2203,7 @@ export function Alerts() {
                         duration: '4h',
                         reason: pendingDecisionAlert.scenario?.trim() || 'manual',
                     }}
+                    instances={instances}
                     multipleInstances={multipleInstances}
                     currentInstanceId={pendingDecisionAlert.instance_id}
                     currentInstanceName={pendingDecisionAlert.instance_name || instanceNames[pendingDecisionAlert.instance_id || '']}

@@ -1,12 +1,14 @@
 import { useState, type FormEvent } from 'react';
 import { AlertCircle } from 'lucide-react';
+import { DEFAULT_MANUAL_DECISION_SCENARIO } from '../../../shared/contracts';
 import { addDecision } from '../lib/api';
 import { useI18n } from '../lib/i18n';
-import type { AddDecisionRequest, ApiPermissionError, InstanceOperationResult, MultiInstanceOperationResponse } from '../types';
+import type { AddDecisionRequest, ApiPermissionError, InstanceOperationResult, InstanceSummary, MultiInstanceOperationResponse } from '../types';
 import { Modal } from './ui/Modal';
 
 interface AddDecisionModalProps {
     initialDecision: AddDecisionRequest;
+    instances: InstanceSummary[];
     multipleInstances: boolean;
     currentInstanceId?: string;
     currentInstanceName?: string;
@@ -14,6 +16,13 @@ interface AddDecisionModalProps {
     onClose: () => void;
     onDecisionAdded: () => Promise<void>;
 }
+
+const DECISION_TYPES: Array<{ value: NonNullable<AddDecisionRequest['type']>; labelKey: string }> = [
+    { value: 'ban', labelKey: 'pages.decisions.typeBan' },
+    { value: 'captcha', labelKey: 'pages.decisions.typeCaptcha' },
+];
+
+const scenarioListKey = (scenarios: string[]) => [...scenarios].sort().join('\n');
 
 interface ErrorInfo {
     message: string;
@@ -23,6 +32,7 @@ interface ErrorInfo {
 
 export function AddDecisionModal({
     initialDecision,
+    instances,
     multipleInstances,
     currentInstanceId,
     currentInstanceName,
@@ -31,11 +41,26 @@ export function AddDecisionModal({
     onDecisionAdded,
 }: AddDecisionModalProps) {
     const { t } = useI18n();
-    const [decision, setDecision] = useState<AddDecisionRequest>(() => ({ ...initialDecision }));
+    const [decision, setDecision] = useState<AddDecisionRequest>(() => ({ type: 'ban', ...initialDecision }));
     const [allInstances, setAllInstances] = useState(defaultAllInstances || !currentInstanceId);
     const [errorInfo, setErrorInfo] = useState<ErrorInfo | null>(null);
     const [inProgress, setInProgress] = useState(false);
     const [retryInstances, setRetryInstances] = useState<InstanceOperationResult[]>([]);
+
+    const targetInstances = !multipleInstances || allInstances
+        ? instances
+        : instances.filter((instance) => instance.id === currentInstanceId);
+    const targetScenarioLists = targetInstances.map((instance) => (
+        instance.manual_decision_scenarios?.length ? instance.manual_decision_scenarios : [DEFAULT_MANUAL_DECISION_SCENARIO]
+    ));
+    // Instances with different lists fall back to the default scenario that every instance offers.
+    const scenarioOptions = targetScenarioLists.length > 0
+        && targetScenarioLists.every((list) => scenarioListKey(list) === scenarioListKey(targetScenarioLists[0]))
+        ? targetScenarioLists[0]
+        : [DEFAULT_MANUAL_DECISION_SCENARIO];
+    const selectedScenario = decision.scenario && scenarioOptions.includes(decision.scenario)
+        ? decision.scenario
+        : scenarioOptions[0];
 
     const close = () => {
         if (!inProgress) onClose();
@@ -49,11 +74,12 @@ export function AddDecisionModal({
 
     const submit = async (event: FormEvent<HTMLFormElement>) => {
         event.preventDefault();
+        const payload: AddDecisionRequest = { ...decision, scenario: selectedScenario };
         const request: AddDecisionRequest = !multipleInstances
-            ? { ...decision }
+            ? payload
             : allInstances
-                ? { ...decision, scope: 'all' }
-                : { ...decision, scope: 'instance', instance_id: currentInstanceId };
+                ? { ...payload, scope: 'all' }
+                : { ...payload, scope: 'instance', instance_id: currentInstanceId };
         setInProgress(true);
         setErrorInfo(null);
         try {
@@ -62,7 +88,7 @@ export function AddDecisionModal({
                     results: await Promise.all(retryInstances.map(async (failedInstance): Promise<InstanceOperationResult> => {
                         try {
                             const retryResponse = await addDecision({
-                                ...decision,
+                                ...payload,
                                 scope: 'instance',
                                 instance_id: failedInstance.instance_id,
                             }) as MultiInstanceOperationResponse;
@@ -124,6 +150,20 @@ export function AddDecisionModal({
                     />
                 </div>
                 <div>
+                    <label htmlFor="add-decision-type" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('tableColumns.type')}</label>
+                    <select
+                        id="add-decision-type"
+                        disabled={inProgress}
+                        className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                        value={decision.type}
+                        onChange={(event) => updateDecision({ type: event.target.value as AddDecisionRequest['type'] })}
+                    >
+                        {DECISION_TYPES.map((option) => (
+                            <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
+                        ))}
+                    </select>
+                </div>
+                <div>
                     <label htmlFor="add-decision-duration" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('pages.decisions.duration')}</label>
                     <input
                         id="add-decision-duration"
@@ -136,6 +176,22 @@ export function AddDecisionModal({
                     />
                     <p className="text-xs text-gray-500 mt-1">{t('pages.decisions.durationHint')}</p>
                 </div>
+                {scenarioOptions.length > 1 && (
+                    <div>
+                        <label htmlFor="add-decision-scenario" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('tableColumns.scenario')}</label>
+                        <select
+                            id="add-decision-scenario"
+                            disabled={inProgress}
+                            className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-primary-500 focus:border-primary-500 sm:text-sm disabled:cursor-not-allowed disabled:opacity-60"
+                            value={selectedScenario}
+                            onChange={(event) => updateDecision({ scenario: event.target.value })}
+                        >
+                            {scenarioOptions.map((scenario) => (
+                                <option key={scenario} value={scenario}>{scenario}</option>
+                            ))}
+                        </select>
+                    </div>
+                )}
                 <div>
                     <label htmlFor="add-decision-reason" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('pages.decisions.reason')}</label>
                     <input
@@ -166,6 +222,11 @@ export function AddDecisionModal({
                         {currentInstanceId && !allInstances && (
                             <p className="text-xs text-gray-500 dark:text-gray-400">
                                 {t('pages.decisions.currentInstance', { name: currentInstanceName || currentInstanceId })}
+                            </p>
+                        )}
+                        {allInstances && targetInstances.length > 0 && (
+                            <p className="text-xs text-gray-500 dark:text-gray-400">
+                                {t('pages.decisions.targetInstances', { names: targetInstances.map((instance) => instance.name).join(', ') })}
                             </p>
                         )}
                     </div>

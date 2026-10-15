@@ -1,4 +1,4 @@
-import type { AlertDecision, AlertEvent, AlertMeta, AlertRecord, AlertSource, SlimAlert, SlimDecision } from '../../shared/contracts';
+import { MANUAL_DECISION_MESSAGE_PREFIX, type AlertDecision, type AlertEvent, type AlertMeta, type AlertRecord, type AlertSource, type SlimAlert, type SlimDecision } from '../../shared/contracts';
 import { resolveMachineName } from '../../shared/machine';
 
 export interface AlertTargetSummary {
@@ -7,11 +7,12 @@ export interface AlertTargetSummary {
 }
 
 export function getAlertTargetSummary(
-  alert: Pick<AlertRecord, 'events' | 'scenario' | 'machine_alias' | 'machine_id' | 'target' | 'targets'> | null | undefined,
+  alert: Pick<AlertRecord, 'events' | 'scenario' | 'message' | 'machine_alias' | 'machine_id' | 'target' | 'targets'> | null | undefined,
 ): AlertTargetSummary {
   if (!alert) return { target: 'Unknown', count: 1 };
 
   const targets = getAlertTargets(alert);
+  if (targets.length === 0) return { target: '', count: 0 };
   return {
     target: targets[0] || 'Unknown',
     count: Math.max(1, targets.length),
@@ -19,9 +20,11 @@ export function getAlertTargetSummary(
 }
 
 export function getAlertTargets(
-  alert: Pick<AlertRecord, 'events' | 'scenario' | 'machine_alias' | 'machine_id' | 'target' | 'targets'> | null | undefined,
+  alert: Pick<AlertRecord, 'events' | 'scenario' | 'message' | 'machine_alias' | 'machine_id' | 'target' | 'targets'> | null | undefined,
 ): string[] {
   if (!alert) return ['Unknown'];
+  // Web UI decisions target an IP, not a service, and their scenario is user-chosen.
+  if (isManualWebUiAlert(alert)) return [];
   if (Array.isArray(alert.targets)) {
     const targets = [...new Set(alert.targets
       .filter((target): target is string => typeof target === 'string')
@@ -60,7 +63,11 @@ export function getAlertTargets(
   return [resolveMachineName(alert) || 'Unknown'];
 }
 
-export function getAlertTarget(alert: Pick<AlertRecord, 'events' | 'scenario' | 'machine_alias' | 'machine_id'> | null | undefined): string {
+export function isManualWebUiAlert(alert: Pick<AlertRecord, 'message'>): boolean {
+  return typeof alert.message === 'string' && alert.message.startsWith(`${MANUAL_DECISION_MESSAGE_PREFIX}:`);
+}
+
+export function getAlertTarget(alert: Pick<AlertRecord, 'events' | 'scenario' | 'message' | 'machine_alias' | 'machine_id'> | null | undefined): string {
   return getAlertTargetSummary(alert).target;
 }
 

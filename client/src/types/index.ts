@@ -73,6 +73,8 @@ export type {
   UpsertNotificationRuleRequest,
   UpdateMetricsSidebarPreferenceRequest,
   UpdateManualRefreshSettingRequest,
+  UpdateManualDecisionScenariosRequest,
+  ManualDecisionScenarioSettings,
   UpdateCheckResponse,
 } from '../../../shared/contracts';
 
