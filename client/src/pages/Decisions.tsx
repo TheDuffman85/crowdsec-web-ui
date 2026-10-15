@@ -53,7 +53,7 @@ import {
     type SearchParseError,
 } from "../../../shared/search";
 import { Trash2, Gavel, X, ExternalLink, Shield, ShieldBan, AlertCircle, Columns3, Loader2 } from "lucide-react";
-import type { ApiPermissionError, BulkDeleteResult, DecisionListItem, FacetField, InstanceEntityRef, InstanceOperationResult, TableColumnId, TableColumnPreferences } from '../types';
+import type { ApiPermissionError, BulkDeleteResult, DecisionListItem, FacetField, InstanceEntityRef, InstanceOperationResult, InstanceSummary, TableColumnId, TableColumnPreferences } from '../types';
 import { useI18n, type I18nContextValue } from "../lib/i18n";
 import { getBrowserTimeZone, useDateTime } from "../lib/dateTime";
 
@@ -191,6 +191,7 @@ export function Decisions() {
     const [canManageEnforcement, setCanManageEnforcement] = useState(false);
     const [multipleInstances, setMultipleInstances] = useState(false);
     const [instanceNames, setInstanceNames] = useState<Record<string, string>>({});
+    const [instances, setInstances] = useState<InstanceSummary[]>([]);
     const [tableColumnPreferences, setTableColumnPreferences] = useState<TableColumnPreferences>(() => loadStoredTableColumnPreferences());
     const [showColumnsModal, setShowColumnsModal] = useState(false);
     const [searchDraft, setSearchDraft] = useState(initialQueryParam);
@@ -247,6 +248,7 @@ export function Decisions() {
         canManageEnforcement: boolean;
         multipleInstances: boolean;
         instanceNames: Record<string, string>;
+        instances: InstanceSummary[];
     } | null>(null);
     const hasLoadedDecisionsRef = useRef(false);
     const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -667,6 +669,7 @@ export function Decisions() {
             instanceNames: Object.fromEntries(
                 (configData.instances || []).map((instance) => [instance.id, instance.name]),
             ),
+            instances: configData.instances || [],
         };
 
         configRef.current = nextConfig;
@@ -675,6 +678,7 @@ export function Decisions() {
         setCanManageEnforcement(nextConfig.canManageEnforcement);
         setMultipleInstances(nextConfig.multipleInstances);
         setInstanceNames(nextConfig.instanceNames);
+        setInstances(nextConfig.instances);
 
         return nextConfig;
     }, []);
@@ -1684,6 +1688,7 @@ export function Decisions() {
             {showAddModal && (
                 <AddDecisionModal
                     initialDecision={{ ip: "", duration: "4h", reason: "manual" }}
+                    instances={instances}
                     multipleInstances={multipleInstances}
                     currentInstanceId={searchParams.get('instance') && searchParams.get('instance') !== 'all'
                         ? searchParams.get('instance')!

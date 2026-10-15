@@ -16,6 +16,7 @@ import type {
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
 } from '../../shared/contracts';
+import { DEFAULT_MANUAL_DECISION_SCENARIO, isValidDecisionScenario } from '../../shared/contracts';
 import type { AuditOutcome } from '../audit-log';
 import type { RuntimeConfig } from '../config';
 import type { CrowdsecDatabase } from '../database';
@@ -611,6 +612,11 @@ app.delete(`${config.basePath}/api/instances/:instanceId/decisions/:id`, ensureA
   }
 });
 
+// Only shapes the Web UI's Add Decision form; POST /api/decisions accepts any valid scenario.
+const manualDecisionScenarios = (instance: RuntimeConfig['instances'][number]): string[] => [
+  ...new Set([DEFAULT_MANUAL_DECISION_SCENARIO, ...(instance.manualDecisionScenarios ?? config.manualDecisionScenarios)]),
+];
+
 app.get(`${config.basePath}/api/config`, ensureAuth, (context) => {
   const hours = lookbackHours(config.lookbackPeriod);
   const payload: ConfigResponse = {
@@ -629,6 +635,7 @@ app.get(`${config.basePath}/api/config`, ensureAuth, (context) => {
       sync_status: { ...(instanceSyncStatuses.get(instance.id) || syncStatus) },
       prometheus: instance.prometheus.map((endpoint) => ({ id: endpoint.id, name: endpoint.name, icon: endpoint.icon })),
       sync_overrides: { ...instance.sync },
+      manual_decision_scenarios: manualDecisionScenarios(instance),
     })),
     aggregate_lapi_status: aggregateLapiStatus(),
     sync_status: aggregateHistoricalSyncStatus(),
@@ -659,6 +666,7 @@ app.get(`${config.basePath}/api/instances`, ensureAuth, (context) => context.jso
     sync_status: { ...(instanceSyncStatuses.get(instance.id) || syncStatus) },
     prometheus: instance.prometheus.map((endpoint) => ({ id: endpoint.id, name: endpoint.name, icon: endpoint.icon })),
     sync_overrides: { ...instance.sync },
+    manual_decision_scenarios: manualDecisionScenarios(instance),
   })),
   aggregate_status: aggregateLapiStatus(),
 }));
@@ -1324,6 +1332,9 @@ app.post(`${config.basePath}/api/decisions`, ensureAuth, async (context) => {
     const duration = body.duration || '4h';
     const reason = body.reason || 'manual';
     const type = body.type || 'ban';
+    const scenario = typeof body.scenario === 'string' && body.scenario.trim()
+      ? body.scenario.trim()
+      : DEFAULT_MANUAL_DECISION_SCENARIO;
 
     if (!ip) {
       return context.json({ error: 'IP address is required' }, 400);
@@ -1342,6 +1353,10 @@ app.post(`${config.basePath}/api/decisions`, ensureAuth, async (context) => {
       return context.json({ error: 'Invalid duration format. Use e.g. "4h", "30m", "1d"' }, 400);
     }
 
+    if ((body.scenario != null && typeof body.scenario !== 'string') || !isValidDecisionScenario(scenario)) {
+      return context.json({ error: `Invalid scenario format. Use e.g. "${DEFAULT_MANUAL_DECISION_SCENARIO}"` }, 400);
+    }
+
     const targets = resolveOperationInstances(body.scope, body.instance_id);
     if ('error' in targets) return context.json({ error: targets.error }, 400);
     const targetOutcomes = new Map<string, AuditOutcome>();
@@ -1349,7 +1364,7 @@ app.post(`${config.basePath}/api/decisions`, ensureAuth, async (context) => {
       const client = lapiClients.get(instance.id)!;
       let upstreamAdded = false;
       try {
-        const result = await client.addDecision(ip, type, duration, reason.slice(0, 256));
+        const result = await client.addDecision(ip, type, duration, reason.slice(0, 256), scenario);
         upstreamAdded = true;
         if (instance.id === primaryInstance.id) await updateCacheDelta({ publishUnchanged: true });
         else await syncInstanceDelta(instance.id);
@@ -1363,7 +1378,7 @@ app.post(`${config.basePath}/api/decisions`, ensureAuth, async (context) => {
     const succeeded = results.filter((result) => result.success).length;
     const payload = { results, succeeded, failed: results.length - succeeded };
     for (const result of results) {
-      if (result.success) console.log(`[decisions] Added ${type} decision for ${ip} (${duration}). Instance: ${result.instance_name}.`);
+      if (result.success) console.log(`[decisions] Added ${type} decision for ${ip} (${duration}, ${scenario}). Instance: ${result.instance_name}.`);
     }
     const instanceResultEntries = results.map((result) => ({
       instance_id: result.instance_id,
@@ -1375,6 +1390,7 @@ app.post(`${config.basePath}/api/decisions`, ensureAuth, async (context) => {
       action: 'decision.add',
       ip,
       type,
+      scenario,
       duration,
       reason: reason.slice(0, 256),
       instances: results.map((result) => result.instance_name),

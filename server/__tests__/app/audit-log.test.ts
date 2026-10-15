@@ -48,6 +48,7 @@ describe('audit log', () => {
         action: 'decision.add',
         ip: '5.6.7.8',
         type: 'ban',
+        scenario: 'manual/web-ui',
         duration: '4h',
         reason: 'manual',
         instances: ['CrowdSec'],

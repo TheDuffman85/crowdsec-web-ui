@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import { Agent, fetch as undiciFetch, type Dispatcher } from 'undici';
-import type { LapiStatus } from '../shared/contracts';
+import { DEFAULT_MANUAL_DECISION_SCENARIO, type LapiStatus } from '../shared/contracts';
 import type { CrowdsecAuthConfig } from './auth';
 
 export type LapiRequestInit = RequestInit & {
@@ -281,7 +281,7 @@ export class LapiClient {
 
       try {
         const body: Record<string, unknown> = {
-          scenarios: ['manual/web-ui'],
+          scenarios: [DEFAULT_MANUAL_DECISION_SCENARIO],
         };
         if (this.auth.mode === 'password') {
           body.machine_id = this.auth.user;
@@ -417,12 +417,18 @@ export class LapiClient {
     return response.data;
   }
 
-  async addDecision(ip: string, type: string, duration: string, reason = 'Manual decision from Web UI'): Promise<unknown> {
+  async addDecision(
+    ip: string,
+    type: string,
+    duration: string,
+    reason = 'Manual decision from Web UI',
+    scenario = DEFAULT_MANUAL_DECISION_SCENARIO,
+  ): Promise<unknown> {
     const now = new Date().toISOString();
     const payload = [
       {
-        scenario: 'manual/web-ui',
-        campaign_name: 'manual/web-ui',
+        scenario,
+        campaign_name: scenario,
         message: `Manual decision from Web UI: ${reason}`,
         events_count: 1,
         start_at: now,
@@ -443,7 +449,7 @@ export class LapiClient {
             duration,
             value: ip,
             origin: 'cscli',
-            scenario: 'manual/web-ui',
+            scenario,
             scope: 'ip',
           },
         ],

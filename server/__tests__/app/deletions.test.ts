@@ -125,7 +125,7 @@ describe('createApp deletion workflows', () => {
 
       expect(response.status).toBe(200);
       expect(logSpy.mock.calls.some((call) =>
-        String(call[0]).includes('[decisions] Added ban decision for 5.6.7.8 (4h).'),
+        String(call[0]).includes('[decisions] Added ban decision for 5.6.7.8 (4h, manual/web-ui).'),
       )).toBe(true);
     } finally {
       controller.stopBackgroundTasks();

@@ -72,6 +72,9 @@ services:
       # CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_ORIGINS: '[]'
       # CONFIG_CROWDSEC_ALERT_FILTERS_LEGACY_EXTRA_SCENARIOS: '[]'
 
+      # Manual decisions (manual/web-ui is always offered)
+      # CONFIG_CROWDSEC_MANUAL_DECISIONS_SCENARIOS: '[custom/abuse-report]'
+
       # Global synchronization
       # CONFIG_CROWDSEC_SYNC_LOOKBACK: 168h
       # CONFIG_CROWDSEC_SYNC_REFRESH_INTERVAL: 1m
@@ -126,6 +129,10 @@ services:
       # CONFIG_INSTANCE_METRICS_TLS_CA_FILE: /certs/metrics-ca.pem
       # CONFIG_INSTANCE_METRICS_TLS_CERT_FILE: /certs/metrics-client.pem
       # CONFIG_INSTANCE_METRICS_TLS_KEY_FILE: /certs/metrics-client-key.pem
+
+      # Per-instance manual decision scenarios (replace the global list)
+      # CONFIG_INSTANCE_MANUAL_DECISIONS: '{scenarios: [custom/branch-office]}'
+      # CONFIG_INSTANCE_MANUAL_DECISIONS_SCENARIOS: '[custom/branch-office]'
 
       # Per-instance synchronization overrides
       # CONFIG_INSTANCE_SYNC: '{refreshInterval: 1m, requestTimeout: 30s}'

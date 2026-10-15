@@ -38,6 +38,8 @@ function createMultiController(options: {
   secondaryAddFails?: boolean;
   secondarySyncNeverCompletes?: boolean;
   secondaryName?: string;
+  manualDecisionScenarios?: string[];
+  secondaryManualDecisionScenarios?: string[];
   startBackgroundTasks?: boolean;
   createSyncWorker?: (database: CrowdsecDatabase) => DatabaseSyncWorker;
 } = {}) {
@@ -52,9 +54,16 @@ function createMultiController(options: {
     AUTH_ENABLED: 'false',
   }, { defaultConfigFile: path.join(dir, 'config.yaml') });
   const base = config.instances[0];
+  config.manualDecisionScenarios = options.manualDecisionScenarios ?? [];
   config.instances = [
     { ...base, id: 'primary', name: 'Primary', lapiUrl: 'http://primary:8080' },
-    { ...base, id: 'secondary', name: options.secondaryName || 'Secondary', lapiUrl: 'http://secondary:8080' },
+    {
+      ...base,
+      id: 'secondary',
+      name: options.secondaryName || 'Secondary',
+      lapiUrl: 'http://secondary:8080',
+      manualDecisionScenarios: options.secondaryManualDecisionScenarios,
+    },
   ];
   const database = new CrowdsecDatabase({ dbDir: dir });
   const primary = fakeClient('primary');
@@ -645,6 +654,23 @@ describe('multi-instance API', () => {
       expect((await decisions.json() as any).data).toEqual([
         expect.objectContaining({ instance_id: 'secondary', instance_name: 'Branch Office' }),
       ]);
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+    }
+  });
+
+  test('exposes each instance\'s effective manual decision scenarios', async () => {
+    const { controller, database } = createMultiController({
+      manualDecisionScenarios: ['custom/abuse-report', 'manual/web-ui'],
+      secondaryManualDecisionScenarios: [],
+    });
+    try {
+      const expected = [['manual/web-ui', 'custom/abuse-report'], ['manual/web-ui']];
+      const config = await controller.fetch(new Request('http://localhost/api/config'));
+      expect((await config.json() as any).instances.map((instance: any) => instance.manual_decision_scenarios)).toEqual(expected);
+      const instances = await controller.fetch(new Request('http://localhost/api/instances'));
+      expect((await instances.json() as any).data.map((instance: any) => instance.manual_decision_scenarios)).toEqual(expected);
     } finally {
       controller.stopBackgroundTasks();
       database.close();
