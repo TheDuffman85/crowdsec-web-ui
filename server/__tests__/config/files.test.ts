@@ -591,6 +591,46 @@ crowdsec:
       .toThrow(/unknown instances\[0\]\.manualDecisions setting.*scenario/i);
   });
 
+  test('loads auth.passwordLogin.enabled from YAML and CONFIG_ overrides', () => {
+    const instance = `
+instances:
+  - id: default
+    name: CrowdSec
+    lapi:
+      url: http://crowdsec:8080
+      auth: { type: none }
+`;
+    const unset = createTempConfig(instance);
+    const disabled = createTempConfig(`
+auth:
+  passwordLogin:
+    enabled: false
+${instance}`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(createRuntimeConfig({ CONFIG_FILE: unset }).dashboardAuth.passwordLoginEnabled).toBeNull();
+      expect(createRuntimeConfig({ CONFIG_FILE: disabled }).dashboardAuth.passwordLoginEnabled).toBe(false);
+      expect(createRuntimeConfig({ CONFIG_FILE: disabled, CONFIG_AUTH_PASSWORD_LOGIN_ENABLED: 'true' }).dashboardAuth.passwordLoginEnabled).toBe(true);
+      expect(createRuntimeConfig({ CONFIG_FILE: unset, CONFIG_AUTH_PASSWORD_LOGIN_ENABLED: 'false' }).dashboardAuth.passwordLoginEnabled).toBe(false);
+    } finally {
+      log.mockRestore();
+    }
+
+    const invalidEnabled = createTempConfig(`
+auth:
+  passwordLogin:
+    enabled: please
+${instance}`);
+    expect(() => createRuntimeConfig({ CONFIG_FILE: invalidEnabled })).toThrow(/auth\.passwordLogin\.enabled must be a boolean/i);
+
+    const unknownKey = createTempConfig(`
+auth:
+  passwordLogin:
+    disabled: true
+${instance}`);
+    expect(() => createRuntimeConfig({ CONFIG_FILE: unknownKey })).toThrow(/unknown auth\.passwordLogin setting.*disabled/i);
+  });
+
   test('sets manual decision scenarios from CONFIG_ setup variables', () => {
     const generatedConfigFile = createMissingConfigPath();
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});

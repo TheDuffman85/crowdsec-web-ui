@@ -37,7 +37,7 @@ A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alert
 | Security | Initial administrator setup, password and TOTP login, passkeys, OIDC SSO, group roles, and instance-wide read-only mode |
 | Localization | Arabic, Chinese, English, French, German, Hindi, Japanese, Korean, Portuguese, Russian, and Spanish |
 | Experience | Unified search, server-synced saved and recent filters, dark/light themes, and responsive layouts |
-| Branding | Custom application name and logo for the sidebar, browser tab, sign-in page, notifications, and authenticator apps |
+| Branding | Custom application name, light and dark mode logos, and colors for the sidebar, browser tab, sign-in page, notifications, and authenticator apps |
 
 ### Screenshots
 
@@ -243,6 +243,7 @@ Date patterns require one day, month, and year token in any order: `d`/`dd` (day
 | `auth.sessionSecret` | Generated and stored | Signs sessions and encrypts saved authentication settings. | `CONFIG_AUTH_SESSION_SECRET` or `CONFIG_AUTH_SESSION_SECRET_FILE` |
 | `auth.totpSecret` | `sessionSecret` | Encrypts stored per-account TOTP seeds. | `CONFIG_AUTH_TOTP_SECRET` or `CONFIG_AUTH_TOTP_SECRET_FILE` |
 | `auth.totpSeed` | Unset | Optional base32 fallback TOTP seed for the password user; minimum 26 characters. | `CONFIG_AUTH_TOTP_SEED` or `CONFIG_AUTH_TOTP_SEED_FILE` |
+| `auth.passwordLogin.enabled` | Unset (managed in Settings) | Enables or disables password login from deployment config and locks the Settings toggle. `false` keeps password login enabled until OIDC or a passkey exists. | `CONFIG_AUTH_PASSWORD_LOGIN_ENABLED` |
 | `auth.oidc.issuerUrl` | Unset | OIDC provider issuer URL. | `CONFIG_AUTH_OIDC_ISSUER_URL` |
 | `auth.oidc.clientId` | Unset | OIDC client identifier. | `CONFIG_AUTH_OIDC_CLIENT_ID` |
 | `auth.oidc.clientSecret` | Unset | OIDC client secret. | `CONFIG_AUTH_OIDC_CLIENT_SECRET` or `CONFIG_AUTH_OIDC_CLIENT_SECRET_FILE` |
@@ -553,7 +554,15 @@ auth:
 - Password changes and passkey registration/removal from Settings.
 - Optional TOTP enrollment through a QR code, mobile setup link, or manual key.
 - An enrolled TOTP seed overrides the optional base32 `auth.totpSeed` fallback.
-- Administrators can disable password login.
+- Administrators can disable password login in Settings, or pin it from deployment config:
+
+```yaml
+auth:
+  passwordLogin:
+    enabled: false # CONFIG_AUTH_PASSWORD_LOGIN_ENABLED=false
+```
+
+When `auth.passwordLogin.enabled` is set, it overrides the Settings value and the toggle is shown as managed by configuration. Removing it restores the last value saved in Settings. To avoid a lockout, `false` only takes effect while OIDC or a passkey is configured; otherwise password login stays enabled and a warning is logged. Password hashes are kept, so setting `enabled: true` and restarting restores password login if the identity provider is unreachable.
 
 ### OIDC
 
@@ -803,11 +812,13 @@ AppSec and latency sections appear only when CrowdSec emits those metrics. Time-
 
 ### Branding
 
-Administrators can replace the application name and logo from **Settings > Branding**. The name is used in the sidebar, browser tab title, web app manifest, sign-in and setup pages, TOTP issuer, passkey relying-party name, test and application update notifications, and the `{{event.app_name}}` webhook template variable. The logo replaces the sidebar, sign-in, and setup logos as well as the browser favicon and home screen icon.
+Administrators can replace the application name, logo, and colors from **Settings > Branding**. The name is used in the sidebar, browser tab title, web app manifest, sign-in and setup pages, TOTP issuer, passkey relying-party name, test and application update notifications, and the `{{event.app_name}}` webhook template variable. The logo replaces the sidebar, sign-in, and setup logos as well as the browser favicon and home screen icon.
 
 - Names are limited to 60 characters; leave the field empty to restore `CrowdSec Web UI`.
 - Logos may be PNG, JPEG, GIF, WebP, or SVG images up to 512 KB. The image type is detected from the file content, and SVG logos are served with a sandboxed Content Security Policy.
-- The server injects the branded title and icons into the page shell, so the browser tab is branded before JavaScript loads.
+- An optional dark mode logo replaces the sidebar, sign-in, and setup logos while the dark theme is active. Without one, the main logo is used in both themes. The favicon and home screen icon always use the main logo.
+- Colors can be set separately for light and dark mode: an accent color, from which the full accent palette is generated, and a neutral tone (gray, slate, zinc, neutral, or stone) for backgrounds, borders, and text. Dark mode uses the light mode colors unless it has its own. Status colors such as red for bans stay unchanged. The settings page previews both modes and warns when the accent has low contrast.
+- The server injects the branded title, icons, and colors into the page shell, so the page is branded before JavaScript loads.
 - Branding is stored in the application database and requires admin mode to change.
 
 ### Quick Filters

@@ -809,10 +809,10 @@ export function WorldMapCard({
                     if (feature.id === selectedCountry) {
                         path.setAttribute('data-status', 'active');
                         path.style.opacity = '1';
-                        path.style.stroke = '#38bdf8';
+                        path.style.stroke = 'var(--color-primary-400)';
                         path.style.strokeWidth = '1.5';
                         path.style.strokeLinejoin = 'round';
-                        path.style.filter = 'drop-shadow(0 0 4px rgba(56, 189, 248, 0.65))';
+                        path.style.filter = 'drop-shadow(0 0 4px color-mix(in srgb, var(--color-primary-400) 65%, transparent))';
                     } else {
                         path.setAttribute('data-status', 'dimmed');
                         path.style.opacity = '0.3';

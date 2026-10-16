@@ -44,6 +44,8 @@
 #     file: /run/secrets/auth_totp_secret
 #   totpSeed:
 #     env: AUTH_TOTP_SEED
+#   passwordLogin:
+#     enabled: true # Unset = managed in Settings; true/false locks it. false stays enabled until OIDC or a passkey exists.
 #   oidc:
 #     issuerUrl: https://idp.example.com/application/o/crowdsec/
 #     clientId: crowdsec-web-ui

@@ -99,8 +99,8 @@ These routes are mounted below `/api/auth`. Auth setup/login routes are availabl
 | POST | `/api/auth/login` | Password login with `username` and `password`. Accounts with TOTP enabled also require `totpCode`; missing or invalid codes return `requiresTotp: true`. |
 | POST | `/api/auth/logout` | Clear the session cookie. SSO sessions may return a provider `redirectUrl` for RP-initiated logout. |
 | GET | `/api/auth/me` | Current authenticated session user. |
-| GET | `/api/auth/settings` | Auth settings visible to the current user, including OIDC settings metadata and password/passkey state. |
-| PUT | `/api/auth/settings` | Admin-only auth settings update. Can disable password login and configure OIDC issuer, client ID, client secret, scopes, groups claim, admin groups, read-only groups, unmatched-user policy, and whether logout also ends the identity provider session. |
+| GET | `/api/auth/settings` | Auth settings visible to the current user, including OIDC settings metadata and password/passkey state. `passwordLoginManaged` is `true` when `auth.passwordLogin.enabled` is set; `passwordLoginFallback` is `true` when the configuration disables password login but it stays enabled because neither OIDC nor a passkey is configured. |
+| PUT | `/api/auth/settings` | Admin-only auth settings update. Can disable password login (returns `409` with `code: "MANAGED_BY_CONFIG"` when `auth.passwordLogin.enabled` is set) and configure OIDC issuer, client ID, client secret, scopes, groups claim, admin groups, read-only groups, unmatched-user policy, and whether logout also ends the identity provider session. |
 | POST | `/api/auth/change-password` | Change the current user's password. The user must be logged in with password auth. |
 | POST | `/api/auth/totp/setup` | Start TOTP enrollment for the current password-authenticated user. Returns a base32 secret and `otpauth://` URI for QR setup. |
 | POST | `/api/auth/totp/enable` | Complete TOTP enrollment with `{ "code": "123456" }`. |
@@ -131,13 +131,19 @@ These routes are mounted below `/api/auth`. Auth setup/login routes are availabl
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| GET | `/api/branding` | Unauthenticated branding: `{ "appName", "defaultAppName", "logoUrl" }`. `logoUrl` is `null` when the default logo is used. |
+| GET | `/api/branding` | Unauthenticated branding: `{ "appName", "defaultAppName", "logoUrl", "logoDarkUrl", "theme" }`. `logoUrl` is `null` when the default logo is used; `logoDarkUrl` is `null` when no dark mode logo is set. |
 | GET | `/api/branding/logo` | Unauthenticated custom logo image; `404` when none is configured. Versioned URLs (`?v=`) are cached as immutable. |
+| GET | `/api/branding/logo/dark` | Unauthenticated dark mode logo image; `404` when none is configured. Versioned URLs (`?v=`) are cached as immutable. |
 | PUT | `/api/branding` | Set the application name. Body: `{ "appName": "Acme SOC" }`. An empty name restores the default. Blocked in read-only mode. |
 | PUT | `/api/branding/logo` | Upload a custom logo. Body: `{ "dataUrl": "data:image/png;base64,..." }`. Blocked in read-only mode. |
 | DELETE | `/api/branding/logo` | Restore the default logo. Blocked in read-only mode. |
+| PUT | `/api/branding/logo/dark` | Upload a logo used while the dark theme is active. Body: `{ "dataUrl": "data:image/png;base64,..." }`. Blocked in read-only mode. |
+| DELETE | `/api/branding/logo/dark` | Remove the dark mode logo so the main logo is used in both themes. Blocked in read-only mode. |
+| PUT | `/api/branding/theme` | Set the colors. Body: `{ "theme": { "light": { "accent": "#e11d48", "neutral": "slate" }, "dark": { "accent": null, "neutral": null } } }`. Blocked in read-only mode. |
 
 Names are limited to 60 characters. Logos may be PNG, JPEG, GIF, WebP, or SVG images up to 512 KB; the image type is detected from the file content, and SVG logos are served with a sandboxed Content Security Policy.
+
+Theme colors: `accent` is a `#rrggbb` (or `#rgb`) color from which the full accent palette is generated, and `neutral` is one of `gray`, `slate`, `zinc`, `neutral`, or `stone`. `null` uses the default; in `dark`, `null` uses the `light` setting instead. Sending all values as `null` restores the default colors.
 
 ## Alerts
 

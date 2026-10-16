@@ -222,6 +222,7 @@ describe('config helpers', () => {
       sessionSecret: 'auth-secret',
       totpSecret: 'totp-secret',
       totpSeed: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP',
+      passwordLoginEnabled: null,
       oidcIssuerUrl: 'https://idp.example.com/application/o/crowdsec/',
       oidcClientId: 'crowdsec-client',
       oidcClientSecret: 'oidc-secret',

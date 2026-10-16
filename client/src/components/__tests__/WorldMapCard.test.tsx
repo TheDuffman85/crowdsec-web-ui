@@ -601,7 +601,7 @@ describe('WorldMapCard', () => {
     expect(otherPath).not.toBeNull();
 
     await waitFor(() => expect(selectedPath?.getAttribute('data-status')).toBe('active'));
-    expect(selectedPath?.style.stroke).toBe('rgb(56, 189, 248)');
+    expect(selectedPath?.style.stroke).toBe('var(--color-primary-400)');
     expect(selectedPath?.style.strokeWidth).toBe('1.5');
     expect(otherPath?.getAttribute('data-status')).toBe('dimmed');
     expect(otherPath?.style.opacity).toBe('0.3');

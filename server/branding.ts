@@ -1,12 +1,26 @@
 import crypto from 'node:crypto';
+import {
+  BRANDING_THEME_STYLE_ID,
+  buildBrandingThemeCss,
+  DEFAULT_BRANDING_THEME,
+  isDefaultBrandingTheme,
+  normalizeBrandingTheme,
+  type BrandingTheme,
+} from '../shared/branding-theme';
 import type { CrowdsecDatabase } from './database';
 
 export const DEFAULT_APP_NAME = 'CrowdSec Web UI';
 export const APP_NAME_META_KEY = 'branding_app_name';
 export const APP_LOGO_META_KEY = 'branding_logo';
+export const APP_LOGO_DARK_META_KEY = 'branding_logo_dark';
+export const APP_THEME_META_KEY = 'branding_theme';
 export const MAX_APP_NAME_LENGTH = 60;
 export const MAX_APP_LOGO_BYTES = 512 * 1024;
 export const APP_LOGO_PATH = '/api/branding/logo';
+export const APP_LOGO_DARK_PATH = '/api/branding/logo/dark';
+
+/** The main logo is used everywhere; the optional dark variant only replaces it while the dark theme is active. */
+export type AppLogoVariant = 'default' | 'dark';
 
 export type AppLogoContentType =
   | 'image/png'
@@ -25,12 +39,18 @@ export interface PublicBranding {
   appName: string;
   defaultAppName: string;
   logoUrl: string | null;
+  logoDarkUrl: string | null;
+  theme: BrandingTheme;
 }
 
 export class BrandingValidationError extends Error {}
 
 const DATA_URL_PATTERN = /^data:[^,]*;base64,([A-Za-z0-9+/]+={0,2})$/;
-const parsedLogoCache = new WeakMap<CrowdsecDatabase, { stored: string; logo: AppLogo | null }>();
+const parsedLogoCache = new WeakMap<CrowdsecDatabase, Map<AppLogoVariant, { stored: string; logo: AppLogo | null }>>();
+
+function logoMetaKey(variant: AppLogoVariant): string {
+  return variant === 'dark' ? APP_LOGO_DARK_META_KEY : APP_LOGO_META_KEY;
+}
 
 /**
  * Normalizes an admin-provided application name. Control characters are
@@ -103,12 +123,16 @@ export function parseAppLogoUpload(dataUrl: unknown): { contentType: AppLogoCont
   return { contentType, data };
 }
 
-export function saveAppLogo(database: CrowdsecDatabase, logo: { contentType: AppLogoContentType; data: Buffer }): void {
-  database.setMeta(APP_LOGO_META_KEY, `data:${logo.contentType};base64,${logo.data.toString('base64')}`);
+export function saveAppLogo(
+  database: CrowdsecDatabase,
+  logo: { contentType: AppLogoContentType; data: Buffer },
+  variant: AppLogoVariant = 'default',
+): void {
+  database.setMeta(logoMetaKey(variant), `data:${logo.contentType};base64,${logo.data.toString('base64')}`);
 }
 
-export function clearAppLogo(database: CrowdsecDatabase): void {
-  database.setMeta(APP_LOGO_META_KEY, '');
+export function clearAppLogo(database: CrowdsecDatabase, variant: AppLogoVariant = 'default'): void {
+  database.setMeta(logoMetaKey(variant), '');
 }
 
 function parseStoredLogo(stored: string): AppLogo | null {
@@ -124,32 +148,53 @@ function parseStoredLogo(stored: string): AppLogo | null {
   };
 }
 
-export function getAppLogo(database: CrowdsecDatabase): AppLogo | null {
+export function getAppLogo(database: CrowdsecDatabase, variant: AppLogoVariant = 'default'): AppLogo | null {
   let stored: string;
   try {
-    stored = database.getMeta(APP_LOGO_META_KEY)?.value || '';
+    stored = database.getMeta(logoMetaKey(variant))?.value || '';
   } catch {
     return null;
   }
   if (!stored) return null;
 
-  const cached = parsedLogoCache.get(database);
+  let cache = parsedLogoCache.get(database);
+  if (!cache) {
+    cache = new Map();
+    parsedLogoCache.set(database, cache);
+  }
+  const cached = cache.get(variant);
   if (cached?.stored === stored) return cached.logo;
   const logo = parseStoredLogo(stored);
-  parsedLogoCache.set(database, { stored, logo });
+  cache.set(variant, { stored, logo });
   return logo;
 }
 
-export function getAppLogoUrl(logo: AppLogo, basePath: string): string {
-  return `${basePath}${APP_LOGO_PATH}?v=${logo.version}`;
+export function getAppLogoUrl(logo: AppLogo, basePath: string, variant: AppLogoVariant = 'default'): string {
+  return `${basePath}${variant === 'dark' ? APP_LOGO_DARK_PATH : APP_LOGO_PATH}?v=${logo.version}`;
+}
+
+export function getAppTheme(database: CrowdsecDatabase): BrandingTheme {
+  try {
+    const stored = database.getMeta(APP_THEME_META_KEY)?.value;
+    return stored ? normalizeBrandingTheme(JSON.parse(stored)) : DEFAULT_BRANDING_THEME;
+  } catch {
+    return DEFAULT_BRANDING_THEME;
+  }
+}
+
+export function saveAppTheme(database: CrowdsecDatabase, theme: BrandingTheme): void {
+  database.setMeta(APP_THEME_META_KEY, isDefaultBrandingTheme(theme) ? '' : JSON.stringify(theme));
 }
 
 export function getPublicBranding(database: CrowdsecDatabase, basePath: string): PublicBranding {
   const logo = getAppLogo(database);
+  const logoDark = getAppLogo(database, 'dark');
   return {
     appName: getAppName(database),
     defaultAppName: DEFAULT_APP_NAME,
     logoUrl: logo ? getAppLogoUrl(logo, basePath) : null,
+    logoDarkUrl: logoDark ? getAppLogoUrl(logoDark, basePath, 'dark') : null,
+    theme: getAppTheme(database),
   };
 }
 
@@ -163,9 +208,10 @@ function escapeHtml(value: string): string {
 }
 
 /**
- * Injects the configured name and logo into the SPA shell so the browser tab,
- * bookmarks, and home screen icons are branded before any JavaScript runs.
- * Original icon URLs are kept in data attributes so the client can restore them.
+ * Injects the configured name, logo, and colors into the SPA shell so the
+ * browser tab, bookmarks, home screen icons, and palette are branded before
+ * any JavaScript runs. Original icon URLs are kept in data attributes so the
+ * client can restore them.
  */
 export function applyBrandingToIndexHtml(html: string, branding: PublicBranding): string {
   // Function replacers keep "$&"-style sequences in the name literal.
@@ -181,6 +227,12 @@ export function applyBrandingToIndexHtml(html: string, branding: PublicBranding)
       const sizesAttribute = sizes ? ` sizes="${sizes}"` : '';
       return `<link rel="${rel}"${sizesAttribute} href="${escapeHtml(logoUrl)}" data-default-href="${defaultHref}" data-default-type="${defaultType}" />`;
     });
+  }
+
+  // The theme CSS is built only from validated hex colors and preset names.
+  const themeCss = buildBrandingThemeCss(branding.theme);
+  if (themeCss) {
+    branded = branded.replace('</head>', () => `<style id="${BRANDING_THEME_STYLE_ID}">${themeCss}</style>\n</head>`);
   }
 
   return branded;
