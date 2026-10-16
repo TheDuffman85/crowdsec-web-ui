@@ -6,6 +6,8 @@ interface Window {
     appName: string;
     defaultAppName: string;
     logoUrl: string | null;
+    logoDarkUrl?: string | null;
+    theme?: unknown;
   };
 }
 

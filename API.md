@@ -131,13 +131,19 @@ These routes are mounted below `/api/auth`. Auth setup/login routes are availabl
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| GET | `/api/branding` | Unauthenticated branding: `{ "appName", "defaultAppName", "logoUrl" }`. `logoUrl` is `null` when the default logo is used. |
+| GET | `/api/branding` | Unauthenticated branding: `{ "appName", "defaultAppName", "logoUrl", "logoDarkUrl", "theme" }`. `logoUrl` is `null` when the default logo is used; `logoDarkUrl` is `null` when no dark mode logo is set. |
 | GET | `/api/branding/logo` | Unauthenticated custom logo image; `404` when none is configured. Versioned URLs (`?v=`) are cached as immutable. |
+| GET | `/api/branding/logo/dark` | Unauthenticated dark mode logo image; `404` when none is configured. Versioned URLs (`?v=`) are cached as immutable. |
 | PUT | `/api/branding` | Set the application name. Body: `{ "appName": "Acme SOC" }`. An empty name restores the default. Blocked in read-only mode. |
 | PUT | `/api/branding/logo` | Upload a custom logo. Body: `{ "dataUrl": "data:image/png;base64,..." }`. Blocked in read-only mode. |
 | DELETE | `/api/branding/logo` | Restore the default logo. Blocked in read-only mode. |
+| PUT | `/api/branding/logo/dark` | Upload a logo used while the dark theme is active. Body: `{ "dataUrl": "data:image/png;base64,..." }`. Blocked in read-only mode. |
+| DELETE | `/api/branding/logo/dark` | Remove the dark mode logo so the main logo is used in both themes. Blocked in read-only mode. |
+| PUT | `/api/branding/theme` | Set the colors. Body: `{ "theme": { "light": { "accent": "#e11d48", "neutral": "slate" }, "dark": { "accent": null, "neutral": null } } }`. Blocked in read-only mode. |
 
 Names are limited to 60 characters. Logos may be PNG, JPEG, GIF, WebP, or SVG images up to 512 KB; the image type is detected from the file content, and SVG logos are served with a sandboxed Content Security Policy.
+
+Theme colors: `accent` is a `#rrggbb` (or `#rgb`) color from which the full accent palette is generated, and `neutral` is one of `gray`, `slate`, `zinc`, `neutral`, or `stone`. `null` uses the default; in `dark`, `null` uses the `light` setting instead. Sending all values as `null` restores the default colors.
 
 ## Alerts
 

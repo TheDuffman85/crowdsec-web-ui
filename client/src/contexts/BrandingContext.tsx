@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { BrandingContext, type BrandingContextValue } from "./branding-context";
 import {
   applyDocumentBranding,
+  applyThemeBranding,
   fetchBranding,
   getInitialBranding,
   type PublicBranding,
@@ -32,6 +33,10 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     applyDocumentBranding(branding);
   }, [branding]);
+
+  useEffect(() => {
+    applyThemeBranding(branding.theme);
+  }, [branding.theme]);
 
   const value = useMemo<BrandingContextValue>(
     () => ({ ...branding, setBranding, refreshBranding }),

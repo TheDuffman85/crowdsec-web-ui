@@ -37,7 +37,7 @@ A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alert
 | Security | Initial administrator setup, password and TOTP login, passkeys, OIDC SSO, group roles, and instance-wide read-only mode |
 | Localization | Arabic, Chinese, English, French, German, Hindi, Japanese, Korean, Portuguese, Russian, and Spanish |
 | Experience | Unified search, server-synced saved and recent filters, dark/light themes, and responsive layouts |
-| Branding | Custom application name and logo for the sidebar, browser tab, sign-in page, notifications, and authenticator apps |
+| Branding | Custom application name, light and dark mode logos, and colors for the sidebar, browser tab, sign-in page, notifications, and authenticator apps |
 
 ### Screenshots
 
@@ -812,11 +812,13 @@ AppSec and latency sections appear only when CrowdSec emits those metrics. Time-
 
 ### Branding
 
-Administrators can replace the application name and logo from **Settings > Branding**. The name is used in the sidebar, browser tab title, web app manifest, sign-in and setup pages, TOTP issuer, passkey relying-party name, test and application update notifications, and the `{{event.app_name}}` webhook template variable. The logo replaces the sidebar, sign-in, and setup logos as well as the browser favicon and home screen icon.
+Administrators can replace the application name, logo, and colors from **Settings > Branding**. The name is used in the sidebar, browser tab title, web app manifest, sign-in and setup pages, TOTP issuer, passkey relying-party name, test and application update notifications, and the `{{event.app_name}}` webhook template variable. The logo replaces the sidebar, sign-in, and setup logos as well as the browser favicon and home screen icon.
 
 - Names are limited to 60 characters; leave the field empty to restore `CrowdSec Web UI`.
 - Logos may be PNG, JPEG, GIF, WebP, or SVG images up to 512 KB. The image type is detected from the file content, and SVG logos are served with a sandboxed Content Security Policy.
-- The server injects the branded title and icons into the page shell, so the browser tab is branded before JavaScript loads.
+- An optional dark mode logo replaces the sidebar, sign-in, and setup logos while the dark theme is active. Without one, the main logo is used in both themes. The favicon and home screen icon always use the main logo.
+- Colors can be set separately for light and dark mode: an accent color, from which the full accent palette is generated, and a neutral tone (gray, slate, zinc, neutral, or stone) for backgrounds, borders, and text. Dark mode uses the light mode colors unless it has its own. Status colors such as red for bans stay unchanged. The settings page previews both modes and warns when the accent has low contrast.
+- The server injects the branded title, icons, and colors into the page shell, so the page is branded before JavaScript loads.
 - Branding is stored in the application database and requires admin mode to change.
 
 ### Quick Filters

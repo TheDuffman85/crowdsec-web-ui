@@ -15,6 +15,7 @@ import { sessionFetch } from "../lib/sessionFetch";
 import { useAuth } from "../contexts/AuthContext";
 import { useBranding } from "../contexts/useBranding";
 import { AppLogo } from "../components/AppLogo";
+import { BrandingColorsSettings } from "../components/BrandingColorsSettings";
 import {
     ACCEPTED_APP_LOGO_TYPES,
     MAX_APP_LOGO_BYTES,
@@ -22,6 +23,7 @@ import {
     resetAppLogo,
     updateAppName,
     uploadAppLogo,
+    type AppLogoVariant,
 } from "../lib/branding";
 import {
     serializeRegistrationCredential,
@@ -110,7 +112,7 @@ export function Settings() {
     const { browserLanguage, preference, setLanguagePreference, t } = useI18n();
     const { preference: savedFontPreference, setFontPreference } = useFont();
     const { formatDate } = useDateTime();
-    const { appName, defaultAppName, logoUrl, setBranding } = useBranding();
+    const { appName, defaultAppName, logoUrl, logoDarkUrl, theme: brandingTheme, setBranding } = useBranding();
     const toast = useOptionalToast();
     const [config, setConfig] = useState<ConfigResponse | null>(null);
     const [passkeys, setPasskeys] = useState<PasskeySummary[]>([]);
@@ -127,8 +129,9 @@ export function Settings() {
     const [isSavingScenarios, setIsSavingScenarios] = useState(false);
     const [appNameDraft, setAppNameDraft] = useState<string | null>(null);
     const [isSavingAppName, setIsSavingAppName] = useState(false);
-    const [isUpdatingLogo, setIsUpdatingLogo] = useState(false);
+    const [updatingLogo, setUpdatingLogo] = useState<AppLogoVariant | null>(null);
     const logoInputRef = useRef<HTMLInputElement | null>(null);
+    const darkLogoInputRef = useRef<HTMLInputElement | null>(null);
     const [disablePasswordLogin, setDisablePasswordLogin] = useState(false);
     const [isSavingPasswordLogin, setIsSavingPasswordLogin] = useState(false);
     const [passkeyModalOpen, setPasskeyModalOpen] = useState(false);
@@ -341,7 +344,7 @@ export function Settings() {
         }
     };
 
-    const handleLogoSelected = async (event: ChangeEvent<HTMLInputElement>) => {
+    const handleLogoSelected = async (event: ChangeEvent<HTMLInputElement>, variant: AppLogoVariant) => {
         const file = event.target.files?.[0];
         event.target.value = '';
         if (!file) return;
@@ -354,29 +357,91 @@ export function Settings() {
             return;
         }
 
-        setIsUpdatingLogo(true);
+        setUpdatingLogo(variant);
         try {
-            setBranding(await uploadAppLogo(file));
-            showToast(t("pages.settings.logoUpdated"), "success");
+            setBranding(await uploadAppLogo(file, variant));
+            showToast(t(variant === "dark" ? "pages.settings.darkLogoUpdated" : "pages.settings.logoUpdated"), "success");
         } catch (error) {
             console.error("Failed to upload logo", error);
             showToast(error instanceof Error ? error.message : t("pages.settings.failedToUpdateLogo"), "danger");
         } finally {
-            setIsUpdatingLogo(false);
+            setUpdatingLogo(null);
         }
     };
 
-    const handleResetLogo = async () => {
-        setIsUpdatingLogo(true);
+    const handleResetLogo = async (variant: AppLogoVariant) => {
+        setUpdatingLogo(variant);
         try {
-            setBranding(await resetAppLogo());
-            showToast(t("pages.settings.logoReset"), "success");
+            setBranding(await resetAppLogo(variant));
+            showToast(t(variant === "dark" ? "pages.settings.darkLogoRemoved" : "pages.settings.logoReset"), "success");
         } catch (error) {
             console.error("Failed to reset logo", error);
             showToast(error instanceof Error ? error.message : t("pages.settings.failedToUpdateLogo"), "danger");
         } finally {
-            setIsUpdatingLogo(false);
+            setUpdatingLogo(null);
         }
+    };
+
+    const logoButtonClass = "inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800";
+    const renderLogoField = (variant: AppLogoVariant) => {
+        const dark = variant === "dark";
+        const inputRef = dark ? darkLogoInputRef : logoInputRef;
+        const customUrl = dark ? logoDarkUrl : logoUrl;
+        return (
+            <div
+                className="space-y-2"
+                role="group"
+                aria-labelledby={`settings-logo-${variant}-label`}
+                data-testid={`settings-logo-${variant}`}
+            >
+                <span id={`settings-logo-${variant}-label`} className={labelClass}>
+                    {t(dark ? "pages.settings.darkLogo" : "pages.settings.logo")}
+                </span>
+                <div className="flex items-center gap-4">
+                    {/* Fixed light and dark tiles show each logo on the background it is used on. */}
+                    <div className={`flex h-16 w-16 shrink-0 items-center justify-center rounded-lg border ${dark ? "border-gray-700 bg-gray-900" : "border-gray-200 bg-gray-50"}`}>
+                        <AppLogo
+                            variant={variant}
+                            alt={t(dark ? "pages.settings.darkLogoAlt" : "components.sidebar.logoAlt", { appName })}
+                            className="h-12 w-12"
+                        />
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                        <input
+                            ref={inputRef}
+                            type="file"
+                            accept={ACCEPTED_APP_LOGO_TYPES.join(',')}
+                            onChange={(event) => void handleLogoSelected(event, variant)}
+                            className="hidden"
+                            data-testid={dark ? "settings-dark-logo-input" : "settings-logo-input"}
+                        />
+                        <button
+                            type="button"
+                            onClick={() => inputRef.current?.click()}
+                            disabled={!canManageSettings || updatingLogo !== null}
+                            className={logoButtonClass}
+                        >
+                            <Upload className="h-4 w-4" />
+                            {t("pages.settings.uploadLogo")}
+                        </button>
+                        {customUrl && (
+                            <button
+                                type="button"
+                                onClick={() => void handleResetLogo(variant)}
+                                disabled={!canManageSettings || updatingLogo !== null}
+                                className={logoButtonClass}
+                            >
+                                <RotateCcw className="h-4 w-4" />
+                                {t(dark ? "pages.settings.removeLogo" : "pages.settings.resetLogo")}
+                            </button>
+                        )}
+                    </div>
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                    {dark ? t("pages.settings.darkLogoHelp") : t("pages.settings.logoHelp", { size: maxLogoSize })}
+                </p>
+            </div>
+        );
     };
 
     const openPasskeyModal = () => {
@@ -1229,47 +1294,9 @@ export function Settings() {
                             </p>
                         </div>
 
-                        <div className="space-y-2">
-                            <span className={labelClass}>{t("pages.settings.logo")}</span>
-                            <div className="flex items-center gap-4">
-                                <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900">
-                                    <AppLogo alt={t("components.sidebar.logoAlt", { appName })} className="h-12 w-12" />
-                                </div>
-                                <div className="flex flex-wrap gap-2">
-                                    <input
-                                        ref={logoInputRef}
-                                        type="file"
-                                        accept={ACCEPTED_APP_LOGO_TYPES.join(',')}
-                                        onChange={(event) => void handleLogoSelected(event)}
-                                        className="hidden"
-                                        data-testid="settings-logo-input"
-                                    />
-                                    <button
-                                        type="button"
-                                        onClick={() => logoInputRef.current?.click()}
-                                        disabled={!canManageSettings || isUpdatingLogo}
-                                        className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800"
-                                    >
-                                        <Upload className="h-4 w-4" />
-                                        {t("pages.settings.uploadLogo")}
-                                    </button>
-                                    {logoUrl && (
-                                        <button
-                                            type="button"
-                                            onClick={() => void handleResetLogo()}
-                                            disabled={!canManageSettings || isUpdatingLogo}
-                                            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800"
-                                        >
-                                            <RotateCcw className="h-4 w-4" />
-                                            {t("pages.settings.resetLogo")}
-                                        </button>
-                                    )}
-                                </div>
-                            </div>
-                            <p className="text-xs text-gray-500 dark:text-gray-400">
-                                {t("pages.settings.logoHelp", { size: maxLogoSize })}
-                            </p>
-                        </div>
+                        {/* Starts a new row so both logos sit side by side below the name. */}
+                        <div className="xl:col-start-1">{renderLogoField("default")}</div>
+                        {renderLogoField("dark")}
                     </div>
 
                     {!canManageSettings && (
@@ -1291,6 +1318,15 @@ export function Settings() {
                             {isSavingAppName ? t("common.saving") : t("common.save")}
                         </button>
                     </div>
+
+                    <BrandingColorsSettings
+                        theme={brandingTheme}
+                        canManageSettings={canManageSettings}
+                        inputClass={inputClass}
+                        labelClass={labelClass}
+                        onSaved={setBranding}
+                        showToast={showToast}
+                    />
                 </CardContent>
             </Card>
 
