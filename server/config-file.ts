@@ -225,11 +225,14 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
   setBoolean(env, ui, 'readOnly', 'PERMISSION_READ_ONLY', 'ui');
 
   const auth = section(root, 'auth');
-  knownKeys(auth, ['enabled', 'sessionSecret', 'totpSecret', 'totpSeed', 'oidc'], 'auth');
+  knownKeys(auth, ['enabled', 'sessionSecret', 'totpSecret', 'totpSeed', 'passwordLogin', 'oidc'], 'auth');
   if (auth.enabled !== undefined && auth.enabled !== 'auto') setBoolean(env, auth, 'enabled', 'AUTH_ENABLED', 'auth');
   applySecretReference(auth.sessionSecret, 'auth.sessionSecret', env, sourceEnv, 'AUTH_SECRET');
   applySecretReference(auth.totpSecret, 'auth.totpSecret', env, sourceEnv, 'AUTH_TOTP_SECRET');
   applySecretReference(auth.totpSeed, 'auth.totpSeed', env, sourceEnv, 'AUTH_TOTP_SEED');
+  const passwordLogin = auth.passwordLogin === undefined ? {} : record(auth.passwordLogin, 'auth.passwordLogin');
+  knownKeys(passwordLogin, ['enabled'], 'auth.passwordLogin');
+  setBoolean(env, passwordLogin, 'enabled', 'AUTH_PASSWORD_LOGIN_ENABLED', 'auth.passwordLogin');
   const oidc = auth.oidc === undefined ? {} : record(auth.oidc, 'auth.oidc');
   knownKeys(oidc, ['issuerUrl', 'clientId', 'clientSecret', 'scope', 'groupsClaim', 'adminGroups', 'readOnlyGroups', 'unmatchedRole', 'endSession'], 'auth.oidc');
   setString(env, oidc, 'issuerUrl', 'AUTH_OIDC_ISSUER_URL', 'auth.oidc');
@@ -354,7 +357,8 @@ export const CONFIG_KEY_ORDER = new Map<string, readonly string[]>([
   ]],
   ['ui', ['timeZone', 'timeFormat', 'dateFormat', 'readOnly']],
   ['updates', ['enabled']],
-  ['auth', ['enabled', 'sessionSecret', 'totpSecret', 'totpSeed', 'oidc']],
+  ['auth', ['enabled', 'sessionSecret', 'totpSecret', 'totpSeed', 'passwordLogin', 'oidc']],
+  ['auth.passwordLogin', ['enabled']],
   ['auth.oidc', ['issuerUrl', 'clientId', 'clientSecret', 'scope', 'groupsClaim', 'adminGroups', 'readOnlyGroups', 'unmatchedRole', 'endSession']],
   ['notifications', ['secretKey', 'allowPrivateAddresses', 'debugPayloads']],
   ['audit', ['enabled', 'logFile']],
@@ -559,6 +563,9 @@ export function generateApplicationConfig(env: NodeJS.ProcessEnv, config: Runtim
       ...(secretReference(env, 'AUTH_SECRET', 'CROWDSEC_AUTH_SECRET') ? { sessionSecret: secretReference(env, 'AUTH_SECRET', 'CROWDSEC_AUTH_SECRET') } : {}),
       ...(secretReference(env, 'AUTH_TOTP_SECRET', 'CROWDSEC_AUTH_TOTP_SECRET') ? { totpSecret: secretReference(env, 'AUTH_TOTP_SECRET', 'CROWDSEC_AUTH_TOTP_SECRET') } : {}),
       ...(secretReference(env, 'AUTH_TOTP_SEED', 'CROWDSEC_AUTH_TOTP_SEED') ? { totpSeed: secretReference(env, 'AUTH_TOTP_SEED', 'CROWDSEC_AUTH_TOTP_SEED') } : {}),
+      ...(config.dashboardAuth.passwordLoginEnabled !== null
+        ? { passwordLogin: { enabled: config.dashboardAuth.passwordLoginEnabled } }
+        : {}),
       oidc: {
         ...(config.dashboardAuth.oidcIssuerUrl ? { issuerUrl: config.dashboardAuth.oidcIssuerUrl } : {}),
         ...(config.dashboardAuth.oidcClientId ? { clientId: config.dashboardAuth.oidcClientId } : {}),
@@ -653,6 +660,7 @@ const CONFIG_VALUE_ENV = [
   ['CONFIG_UI_DATE_FORMAT', ['ui', 'dateFormat']],
   ['CONFIG_UI_READ_ONLY', ['ui', 'readOnly']],
   ['CONFIG_AUTH_ENABLED', ['auth', 'enabled']],
+  ['CONFIG_AUTH_PASSWORD_LOGIN_ENABLED', ['auth', 'passwordLogin', 'enabled']],
   ['CONFIG_AUTH_OIDC_ISSUER_URL', ['auth', 'oidc', 'issuerUrl']],
   ['CONFIG_AUTH_OIDC_CLIENT_ID', ['auth', 'oidc', 'clientId']],
   ['CONFIG_AUTH_OIDC_SCOPE', ['auth', 'oidc', 'scope']],
@@ -1393,6 +1401,7 @@ function initialConfigReference(document: UnknownRecord): UnknownRecord {
       sessionSecret: { env: 'AUTH_SECRET' },
       totpSecret: { file: '/run/secrets/auth_totp_secret' },
       totpSeed: { env: 'AUTH_TOTP_SEED' },
+      passwordLogin: { enabled: true },
       ...auth,
       oidc: {
         issuerUrl: 'https://idp.example.com/application/o/crowdsec/',

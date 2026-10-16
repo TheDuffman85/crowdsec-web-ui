@@ -216,6 +216,73 @@ describe('Settings general and password', () => {
     expect(screen.getByRole('button', { name: 'Change Password' })).toBeInTheDocument();
   });
 
+  test('locks the password login setting when it is managed by configuration', async () => {
+    useAuthMock.mockReturnValue({
+      authEnabled: true,
+      setupRequired: false,
+      authenticated: true,
+      user: { userId: 1, username: 'admin', role: 'admin' },
+      authMethod: 'password',
+      oidcEnabled: false,
+      passwordLoginDisabled: false,
+      passkeysEnabled: false,
+      hasPassword: true,
+      totpEnabled: false,
+      loading: false,
+      refresh: vi.fn(),
+      login: vi.fn(),
+      setup: vi.fn(),
+      logout: vi.fn(),
+    });
+    vi.mocked(fetchConfig).mockResolvedValue({
+      lookback_period: '1h',
+      lookback_hours: 1,
+      lookback_days: 1,
+      refresh_interval: 30000,
+      current_interval_name: '30s',
+      lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
+      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+      simulations_enabled: true,
+      machine_features_enabled: false,
+      origin_features_enabled: false,
+      permissions: {
+        mode: 'admin',
+        can_manage_enforcement: true,
+        can_manage_settings: true,
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/auth/passkeys')) return Response.json({ passkeys: [] });
+      if (url.includes('/api/auth/settings')) {
+        return Response.json({
+          disablePasswordLogin: false,
+          passwordLoginManaged: true,
+          passwordLoginFallback: true,
+          oidcIssuerUrl: '',
+          oidcClientId: '',
+          hasOidcClientSecret: false,
+          oidcScope: 'openid profile email',
+          oidcGroupsClaim: 'groups',
+          oidcAdminGroups: '',
+          oidcReadOnlyGroups: '',
+          oidcUnmatchedRole: 'deny',
+          hasPassword: true,
+          totpEnabled: false,
+          authMethod: 'password',
+        });
+      }
+      return Response.json({});
+    }));
+
+    render(<Settings />);
+
+    expect(await screen.findByText(/Managed by the config file/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Disable password login/i)).toBeDisabled();
+    expect(screen.getByText(/stays enabled until OIDC/)).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Save' })).toHaveLength(1);
+  });
+
   test('hides password-backed settings when the session was not password-authenticated', async () => {
     useAuthMock.mockReturnValue({
       authEnabled: true,

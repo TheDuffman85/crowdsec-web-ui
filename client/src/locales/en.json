@@ -388,6 +388,8 @@
   "pages.settings.passwordDescription": "Change your local password or disable password login after another sign-in method is configured.",
   "pages.settings.disablePasswordLogin": "Disable password login",
   "pages.settings.disablePasswordLoginDescription": "When enabled, only passkeys and SSO can be used to sign in.",
+  "pages.settings.passwordLoginManaged": "Managed by the config file (auth.passwordLogin.enabled). Change it there and restart to update.",
+  "pages.settings.passwordLoginFallback": "The config file disables password login, but it stays enabled until OIDC or a passkey is configured.",
   "pages.settings.currentPassword": "Current password",
   "pages.settings.newPassword": "New password",
   "pages.settings.confirmPassword": "Confirm password",

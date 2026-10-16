@@ -243,6 +243,7 @@ Date patterns require one day, month, and year token in any order: `d`/`dd` (day
 | `auth.sessionSecret` | Generated and stored | Signs sessions and encrypts saved authentication settings. | `CONFIG_AUTH_SESSION_SECRET` or `CONFIG_AUTH_SESSION_SECRET_FILE` |
 | `auth.totpSecret` | `sessionSecret` | Encrypts stored per-account TOTP seeds. | `CONFIG_AUTH_TOTP_SECRET` or `CONFIG_AUTH_TOTP_SECRET_FILE` |
 | `auth.totpSeed` | Unset | Optional base32 fallback TOTP seed for the password user; minimum 26 characters. | `CONFIG_AUTH_TOTP_SEED` or `CONFIG_AUTH_TOTP_SEED_FILE` |
+| `auth.passwordLogin.enabled` | Unset (managed in Settings) | Enables or disables password login from deployment config and locks the Settings toggle. `false` keeps password login enabled until OIDC or a passkey exists. | `CONFIG_AUTH_PASSWORD_LOGIN_ENABLED` |
 | `auth.oidc.issuerUrl` | Unset | OIDC provider issuer URL. | `CONFIG_AUTH_OIDC_ISSUER_URL` |
 | `auth.oidc.clientId` | Unset | OIDC client identifier. | `CONFIG_AUTH_OIDC_CLIENT_ID` |
 | `auth.oidc.clientSecret` | Unset | OIDC client secret. | `CONFIG_AUTH_OIDC_CLIENT_SECRET` or `CONFIG_AUTH_OIDC_CLIENT_SECRET_FILE` |
@@ -553,7 +554,15 @@ auth:
 - Password changes and passkey registration/removal from Settings.
 - Optional TOTP enrollment through a QR code, mobile setup link, or manual key.
 - An enrolled TOTP seed overrides the optional base32 `auth.totpSeed` fallback.
-- Administrators can disable password login.
+- Administrators can disable password login in Settings, or pin it from deployment config:
+
+```yaml
+auth:
+  passwordLogin:
+    enabled: false # CONFIG_AUTH_PASSWORD_LOGIN_ENABLED=false
+```
+
+When `auth.passwordLogin.enabled` is set, it overrides the Settings value and the toggle is shown as managed by configuration. Removing it restores the last value saved in Settings. To avoid a lockout, `false` only takes effect while OIDC or a passkey is configured; otherwise password login stays enabled and a warning is logged. Password hashes are kept, so setting `enabled: true` and restarting restores password login if the identity provider is unreachable.
 
 ### OIDC
 

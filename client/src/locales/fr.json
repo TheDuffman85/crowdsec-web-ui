@@ -388,6 +388,8 @@
   "pages.settings.passwordDescription": "Modifiez votre mot de passe local ou désactivez la connexion par mot de passe après avoir configuré une autre méthode de connexion.",
   "pages.settings.disablePasswordLogin": "Désactiver la connexion par mot de passe",
   "pages.settings.disablePasswordLoginDescription": "Lorsque cette option est activée, seuls les passkeys et le SSO peuvent être utilisés pour se connecter.",
+  "pages.settings.passwordLoginManaged": "Géré par le fichier de configuration (auth.passwordLogin.enabled). Modifiez-le à cet endroit puis redémarrez.",
+  "pages.settings.passwordLoginFallback": "Le fichier de configuration désactive la connexion par mot de passe, mais elle reste active tant qu'OIDC ou un passkey n'est pas configuré.",
   "pages.settings.currentPassword": "Mot de passe actuel",
   "pages.settings.newPassword": "Nouveau mot de passe",
   "pages.settings.confirmPassword": "Confirmer le mot de passe",

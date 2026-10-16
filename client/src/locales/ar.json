@@ -386,6 +386,8 @@
   "pages.settings.passwordDescription": "غيّر كلمة المرور المحلية أو عطّل تسجيل الدخول بكلمة المرور بعد إعداد طريقة تسجيل دخول أخرى.",
   "pages.settings.disablePasswordLogin": "تعطيل تسجيل الدخول بكلمة المرور",
   "pages.settings.disablePasswordLoginDescription": "عند التفعيل، يمكن استخدام passkeys و SSO فقط لتسجيل الدخول.",
+  "pages.settings.passwordLoginManaged": "تتم إدارته عبر ملف الإعدادات (auth.passwordLogin.enabled). غيّره هناك وأعد التشغيل للتحديث.",
+  "pages.settings.passwordLoginFallback": "يعطّل ملف الإعدادات تسجيل الدخول بكلمة المرور، لكنه يبقى مفعّلًا حتى يتم إعداد OIDC أو passkey.",
   "pages.settings.currentPassword": "كلمة المرور الحالية",
   "pages.settings.newPassword": "كلمة المرور الجديدة",
   "pages.settings.confirmPassword": "تأكيد كلمة المرور",

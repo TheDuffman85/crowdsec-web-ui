@@ -386,6 +386,8 @@
   "pages.settings.passwordDescription": "Ändere dein lokales Passwort oder deaktiviere die Passwortanmeldung, nachdem eine andere Anmeldemethode eingerichtet wurde.",
   "pages.settings.disablePasswordLogin": "Passwortanmeldung deaktivieren",
   "pages.settings.disablePasswordLoginDescription": "Wenn aktiviert, können nur Passkeys und SSO zur Anmeldung verwendet werden.",
+  "pages.settings.passwordLoginManaged": "Wird über die Konfigurationsdatei verwaltet (auth.passwordLogin.enabled). Ändere den Wert dort und starte neu.",
+  "pages.settings.passwordLoginFallback": "Die Konfigurationsdatei deaktiviert die Passwort-Anmeldung, sie bleibt aber aktiv, bis OIDC oder ein Passkey eingerichtet ist.",
   "pages.settings.currentPassword": "Aktuelles Passwort",
   "pages.settings.newPassword": "Neues Passwort",
   "pages.settings.confirmPassword": "Passwort bestätigen",

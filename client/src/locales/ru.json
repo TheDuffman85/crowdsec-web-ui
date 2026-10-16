@@ -386,6 +386,8 @@
   "pages.settings.passwordDescription": "Измените локальный пароль или отключите вход по паролю после настройки другого способа входа.",
   "pages.settings.disablePasswordLogin": "Отключить вход по паролю",
   "pages.settings.disablePasswordLoginDescription": "Если включено, для входа можно использовать только passkeys и SSO.",
+  "pages.settings.passwordLoginManaged": "Управляется файлом конфигурации (auth.passwordLogin.enabled). Измените значение там и перезапустите.",
+  "pages.settings.passwordLoginFallback": "Файл конфигурации отключает вход по паролю, но он остаётся включённым, пока не настроен OIDC или passkey.",
   "pages.settings.currentPassword": "Текущий пароль",
   "pages.settings.newPassword": "Новый пароль",
   "pages.settings.confirmPassword": "Подтвердите пароль",

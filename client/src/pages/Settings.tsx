@@ -65,6 +65,8 @@ interface PasskeySummary {
 
 interface AuthSettings {
     disablePasswordLogin: boolean;
+    passwordLoginManaged?: boolean;
+    passwordLoginFallback?: boolean;
     oidcIssuerUrl: string;
     oidcClientId: string;
     hasOidcClientSecret: boolean;
@@ -266,6 +268,7 @@ export function Settings() {
     const hasMetricsSidebarChange = metricsSidebarVisible !== savedMetricsSidebarVisible;
     const canManageAuthSettings = canManageSettings;
     const canChangePassword = authSettings?.hasPassword === true && authSettings.authMethod === 'password';
+    const passwordLoginManaged = authSettings?.passwordLoginManaged === true;
     const savedAppNameValue = appName === defaultAppName ? '' : appName;
     const appNameValue = appNameDraft ?? savedAppNameValue;
     const hasAppNameChange = appNameValue.trim() !== savedAppNameValue;
@@ -530,7 +533,7 @@ export function Settings() {
                 return;
             }
             const savedValue = payload.settings?.disablePasswordLogin ?? disablePasswordLogin;
-            setAuthSettings((current) => current ? { ...current, disablePasswordLogin: savedValue } : current);
+            setAuthSettings((current) => current ? { ...current, ...payload.settings, disablePasswordLogin: savedValue } : current);
             setDisablePasswordLogin(savedValue);
             await refreshAuth();
             showToast(t("pages.settings.passwordLoginSaved"), "success");
@@ -911,23 +914,31 @@ export function Settings() {
                                         type="checkbox"
                                         checked={disablePasswordLogin}
                                         onChange={(event) => setDisablePasswordLogin(event.target.checked)}
-                                        disabled={!canManageAuthSettings || isSavingPasswordLogin}
+                                        disabled={!canManageAuthSettings || passwordLoginManaged || isSavingPasswordLogin}
                                         className="mt-1 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                                     />
                                     <span>
                                         <span className="block font-medium">{t("pages.settings.disablePasswordLogin")}</span>
                                         <span className="block text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.disablePasswordLoginDescription")}</span>
+                                        {passwordLoginManaged && (
+                                            <span className="mt-1 block text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.passwordLoginManaged")}</span>
+                                        )}
+                                        {authSettings?.passwordLoginFallback && (
+                                            <span className="mt-1 block text-xs text-amber-700 dark:text-amber-400">{t("pages.settings.passwordLoginFallback")}</span>
+                                        )}
                                     </span>
                                 </label>
-                                <button
-                                    type="button"
-                                    onClick={() => void savePasswordLoginSetting()}
-                                    disabled={!canManageAuthSettings || isSavingPasswordLogin}
-                                    className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
-                                >
-                                    <Save className="h-4 w-4" />
-                                    {isSavingPasswordLogin ? t("common.saving") : t("common.save")}
-                                </button>
+                                {!passwordLoginManaged && (
+                                    <button
+                                        type="button"
+                                        onClick={() => void savePasswordLoginSetting()}
+                                        disabled={!canManageAuthSettings || isSavingPasswordLogin}
+                                        className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        <Save className="h-4 w-4" />
+                                        {isSavingPasswordLogin ? t("common.saving") : t("common.save")}
+                                    </button>
+                                )}
                             </div>
 
                             {canChangePassword && (

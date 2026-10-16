@@ -674,8 +674,32 @@ export function createDashboardAuth(options: {
     };
   }
 
+  // auth.passwordLogin.enabled pins the setting from deployment config; unset leaves it managed in Settings.
+  const passwordLoginManaged = config.passwordLoginEnabled !== null;
+  let passwordLoginFallbackWarned = false;
+
+  // Config cannot disable password login while no other sign-in method exists, so it falls back to enabled.
+  function isPasswordLoginConfigFallbackActive(): boolean {
+    if (config.passwordLoginEnabled !== false) return false;
+    const fallback = !oidc.enabled && !hasUsablePasskey();
+    if (fallback && !passwordLoginFallbackWarned) {
+      console.warn('auth.passwordLogin.enabled is false, but neither OIDC nor a passkey is configured; keeping password login enabled to avoid a lockout.');
+    }
+    passwordLoginFallbackWarned = fallback;
+    return fallback;
+  }
+
   function isPasswordLoginDisabled(): boolean {
+    if (passwordLoginManaged) return config.passwordLoginEnabled === false && !isPasswordLoginConfigFallbackActive();
     return readAuthSetting(database, 'disable_password_login') === 'true';
+  }
+
+  function getPasswordLoginSettings() {
+    return {
+      disablePasswordLogin: isPasswordLoginDisabled(),
+      passwordLoginManaged,
+      passwordLoginFallback: isPasswordLoginConfigFallbackActive(),
+    };
   }
 
   const oidc = new OidcRuntime(getEffectiveConfig);
@@ -963,7 +987,7 @@ export function createDashboardAuth(options: {
       const effectiveConfig = getEffectiveConfig();
       const user = database.getAuthUserById(session.userId);
       return context.json({
-        disablePasswordLogin: isPasswordLoginDisabled(),
+        ...getPasswordLoginSettings(),
         oidcIssuerUrl: effectiveConfig.oidcIssuerUrl || '',
         oidcClientId: effectiveConfig.oidcClientId || '',
         hasOidcClientSecret: Boolean(effectiveConfig.oidcClientSecret),
@@ -986,6 +1010,10 @@ export function createDashboardAuth(options: {
       if (session.role !== 'admin' || instanceReadOnly) return context.json({ error: 'Read-only mode is enabled', code: 'READ_ONLY' }, 403);
       const body = asObject(await context.req.json().catch(() => null));
       if (!body) return context.json({ error: 'Invalid request body' }, 400);
+
+      if ('disablePasswordLogin' in body && passwordLoginManaged) {
+        return context.json({ error: 'Password login is managed by the application configuration', code: 'MANAGED_BY_CONFIG' }, 409);
+      }
 
       const updates = new Map<MutableAuthSettingKey, string>();
       if ('disablePasswordLogin' in body) updates.set('disable_password_login', body.disablePasswordLogin === true ? 'true' : 'false');
@@ -1019,7 +1047,7 @@ export function createDashboardAuth(options: {
         const issuer = updates.get('oidc_issuer_url') ?? current.oidcIssuerUrl;
         const clientId = updates.get('oidc_client_id') ?? current.oidcClientId;
         const passwordDisabled = (updates.get('disable_password_login') ?? String(isPasswordLoginDisabled())) === 'true';
-        if (passwordDisabled && !hasUsablePasskey() && !(issuer && clientId)) return false;
+        if (!passwordLoginManaged && passwordDisabled && !hasUsablePasskey() && !(issuer && clientId)) return false;
         if (!issuer && !clientId && (updates.has('oidc_issuer_url') || updates.has('oidc_client_id'))) updates.set('oidc_client_secret', '');
         database.transaction<void>(() => {
           for (const [key, value] of updates) writeAuthSetting(database, key, value);
@@ -1041,7 +1069,7 @@ export function createDashboardAuth(options: {
       return context.json({
         status: 'ok',
         settings: {
-          disablePasswordLogin: isPasswordLoginDisabled(),
+          ...getPasswordLoginSettings(),
           oidcIssuerUrl: effectiveConfig.oidcIssuerUrl || '',
           oidcClientId: effectiveConfig.oidcClientId || '',
           hasOidcClientSecret: Boolean(effectiveConfig.oidcClientSecret),
@@ -1191,7 +1219,7 @@ export function createDashboardAuth(options: {
       const id = Number(context.req.param('id'));
       const result = await writeDatabase(() => {
         if (!Number.isInteger(id) || !database.listWebAuthnCredentialsByUser(session.userId).some((credential) => credential.id === id)) return 'missing';
-        if (isPasswordLoginDisabled() && !oidc.enabled && !hasUsablePasskey(id)) return 'last';
+        if (!passwordLoginManaged && isPasswordLoginDisabled() && !oidc.enabled && !hasUsablePasskey(id)) return 'last';
         database.deleteWebAuthnCredential(id, session.userId);
         return 'deleted';
       });
@@ -1348,6 +1376,9 @@ export function createDashboardAuth(options: {
 
     app.route(`${basePath}/api/auth`, auth);
   }
+
+  // Surface a config-induced password login fallback at startup instead of on the first login attempt.
+  if (enabled) isPasswordLoginConfigFallbackActive();
 
   return {
     enabled,

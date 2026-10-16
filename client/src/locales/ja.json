@@ -386,6 +386,8 @@
   "pages.settings.passwordDescription": "ローカルパスワードを変更するか、別のサインイン方法を設定した後にパスワードログインを無効にします。",
   "pages.settings.disablePasswordLogin": "パスワードログインを無効にする",
   "pages.settings.disablePasswordLoginDescription": "有効にすると、passkeys と SSO のみでサインインできます。",
+  "pages.settings.passwordLoginManaged": "設定ファイルで管理されています（auth.passwordLogin.enabled）。変更するには設定ファイルを編集して再起動してください。",
+  "pages.settings.passwordLoginFallback": "設定ファイルでパスワードログインが無効化されていますが、OIDC または passkey が設定されるまで有効のままです。",
   "pages.settings.currentPassword": "現在のパスワード",
   "pages.settings.newPassword": "新しいパスワード",
   "pages.settings.confirmPassword": "パスワードの確認",

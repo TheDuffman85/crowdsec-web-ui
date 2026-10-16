@@ -30,6 +30,7 @@ export interface DashboardAuthConfig {
   sessionSecret?: string;
   totpSecret?: string;
   totpSeed?: string;
+  passwordLoginEnabled: boolean | null;
   oidcIssuerUrl?: string;
   oidcClientId?: string;
   oidcClientSecret?: string;
@@ -252,6 +253,7 @@ function parseDashboardAuthConfig(env: NodeJS.ProcessEnv): DashboardAuthConfig {
     sessionSecret: resolveRenamedSecretEnv(env, 'AUTH_SECRET', 'CROWDSEC_AUTH_SECRET')?.trim() || undefined,
     totpSecret: resolveRenamedSecretEnv(env, 'AUTH_TOTP_SECRET', 'CROWDSEC_AUTH_TOTP_SECRET')?.trim() || undefined,
     totpSeed: parseTotpSeed(resolveRenamedSecretEnv(env, 'AUTH_TOTP_SEED', 'CROWDSEC_AUTH_TOTP_SEED')),
+    passwordLoginEnabled: parseOptionalBooleanEnv(env.AUTH_PASSWORD_LOGIN_ENABLED),
     oidcIssuerUrl: resolveRenamedEnv(env, 'AUTH_OIDC_ISSUER_URL', 'CROWDSEC_AUTH_OIDC_ISSUER_URL')?.trim() || undefined,
     oidcClientId: resolveRenamedEnv(env, 'AUTH_OIDC_CLIENT_ID', 'CROWDSEC_AUTH_OIDC_CLIENT_ID')?.trim() || undefined,
     oidcClientSecret: resolveRenamedSecretEnv(env, 'AUTH_OIDC_CLIENT_SECRET', 'CROWDSEC_AUTH_OIDC_CLIENT_SECRET')?.trim() || undefined,
