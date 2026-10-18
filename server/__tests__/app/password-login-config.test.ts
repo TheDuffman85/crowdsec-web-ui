@@ -83,11 +83,51 @@ describe('auth.passwordLogin.enabled', () => {
     expect(fallbackWarnings(warn)).toBe(0);
   });
 
+  test('closes initial setup when password login is disabled', async () => {
+    const { controller, database } = createController({
+      env: {
+        AUTH_ENABLED: 'true',
+        AUTH_OIDC_ISSUER_URL: ISSUER,
+        AUTH_OIDC_CLIENT_ID: 'crowdsec-client',
+        AUTH_OIDC_ADMIN_GROUPS: 'crowdsec-admins',
+        CONFIG_AUTH_PASSWORD_LOGIN_ENABLED: 'false',
+      },
+    });
+
+    expect(await (await getJson(controller, 'status')).json()).toMatchObject({
+      setupRequired: false,
+      oidcEnabled: true,
+      passwordLoginDisabled: true,
+    });
+    const setup = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'Secret123' }),
+    }));
+    expect(setup.status).toBe(403);
+    expect(setup.headers.get('set-cookie')).toBeFalsy();
+    expect(database.countAuthUsers()).toBe(0);
+    expect(warn.mock.calls.some(([message]) => String(message).includes('no OIDC admin groups'))).toBe(false);
+  });
+
+  test('warns when password login is disabled without OIDC admin groups on a fresh instance', () => {
+    createController({
+      env: {
+        AUTH_ENABLED: 'true',
+        AUTH_OIDC_ISSUER_URL: ISSUER,
+        AUTH_OIDC_CLIENT_ID: 'crowdsec-client',
+        CONFIG_AUTH_PASSWORD_LOGIN_ENABLED: 'false',
+      },
+    });
+    expect(warn.mock.calls.some(([message]) => String(message).includes('no OIDC admin groups'))).toBe(true);
+  });
+
   test('keeps password login enabled when no other sign-in method exists', async () => {
     const { controller } = createController({
       env: { AUTH_ENABLED: 'true', CONFIG_AUTH_PASSWORD_LOGIN_ENABLED: 'false' },
     });
     expect(fallbackWarnings(warn)).toBe(1);
+    expect(await (await getJson(controller, 'status')).json()).toMatchObject({ setupRequired: true });
 
     const cookie = await setupAdmin(controller);
     expect(await (await getJson(controller, 'status')).json()).toMatchObject({ passwordLoginDisabled: false });

@@ -863,7 +863,8 @@ export function createDashboardAuth(options: {
       const user = session ? database.getAuthUserById(session.userId) : null;
       return context.json({
         authEnabled: enabled,
-        setupRequired: enabled && database.countAuthUsers() === 0,
+        // With password login disabled, the first OIDC sign-in bootstraps the instance instead.
+        setupRequired: enabled && !isPasswordLoginDisabled() && database.countAuthUsers() === 0,
         authenticated: !enabled || Boolean(session),
         user: enabled ? session : null,
         authMethod: enabled ? session?.authMethod ?? null : null,
@@ -877,6 +878,7 @@ export function createDashboardAuth(options: {
 
     auth.post('/setup', async (context) => {
       if (!enabled) return context.json({ error: 'Authentication is disabled' }, 400);
+      if (isPasswordLoginDisabled()) return context.json({ error: 'Password login is disabled' }, 403);
       if (database.countAuthUsers() > 0) return context.json({ error: 'Setup already completed' }, 400);
       const body = asObject(await context.req.json().catch(() => null));
       const username = typeof body?.username === 'string' ? body.username.trim() : '';
@@ -1379,6 +1381,11 @@ export function createDashboardAuth(options: {
 
   // Surface a config-induced password login fallback at startup instead of on the first login attempt.
   if (enabled) isPasswordLoginConfigFallbackActive();
+
+  // Without password setup, only an OIDC admin group can create the first administrator.
+  if (enabled && isPasswordLoginDisabled() && database.countAuthUsers() === 0 && getEffectiveConfig().oidcAdminGroups.length === 0) {
+    console.warn('Password login is disabled and no users exist, but no OIDC admin groups are configured; no one can sign in as administrator.');
+  }
 
   return {
     enabled,
