@@ -868,7 +868,13 @@ test('queues reachable bulk targets while reporting an uncached target lookup fa
   }
 });
 
-test('reconciles secondary instance windows to find alerts created after their start passed the delta cursor', async () => {
+test.each([
+  { window: 'head', now: '2026-10-21T00:35:00.000Z', dueRefreshes: 1 },
+  { window: 'closed', now: '2026-10-21T00:05:00.000Z', dueRefreshes: 2 },
+])('reconciles secondary instance $window windows to find alerts created after their start passed the delta cursor', async ({ now, dueRefreshes }) => {
+  // Keep worker I/O and application timers real while controlling window boundaries.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date(now));
   const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-multi-reconcile-test-'));
   tempDirs.push(dir);
   const config = createRuntimeConfig({
@@ -946,8 +952,12 @@ test('reconciles secondary instance windows to find alerts created after their s
     await syncSecondary();
     expect(cachedSecondaryDecisionIds()).not.toContain('193753');
 
-    await new Promise((resolve) => setTimeout(resolve, 1_100));
-    await syncSecondary();
+    // The first due refresh selects the head and the oldest due window.
+    // A bucket in the previous hour is selected on the next due refresh.
+    for (let refresh = 0; refresh < dueRefreshes; refresh += 1) {
+      vi.setSystemTime(Date.now() + 1_100);
+      await syncSecondary();
+    }
     expect(cachedSecondaryDecisionIds()).toContain('193753');
     expect(database.db.prepare('SELECT created_at FROM decisions WHERE instance_id = ? AND upstream_id = ?')
       .get('secondary', '193753')).toEqual({ created_at: lapiAlerts[0].created_at });
@@ -955,5 +965,6 @@ test('reconciles secondary instance windows to find alerts created after their s
   } finally {
     controller.stopBackgroundTasks();
     database.close();
+    vi.useRealTimers();
   }
 }, 15_000);
