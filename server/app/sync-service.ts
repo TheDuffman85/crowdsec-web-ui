@@ -611,7 +611,9 @@ function buildAlertMutation(
       continue;
     }
     const decisionSimulated = normalizeDecisionSimulated(decision, alert);
-    const createdAt = decision.created_at || alertHistoryAt;
+    // Bucket start time is for alert history; a decision is issued when the
+    // alert is created, potentially many hours after the bucket started.
+    const createdAt = decision.created_at || alert.created_at || alertHistoryAt;
     const stopAt = resolveDecisionStopAt(decision, createdAt, observedAt);
 
     const enrichedDecision = {

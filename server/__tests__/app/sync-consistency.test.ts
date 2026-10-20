@@ -15,6 +15,58 @@ import {
 } from './harness';
 
 describe('createApp synchronization consistency and pruning', () => {
+  test.each([false, true])('uses alert creation time for decisions from long-running buckets (legacy cache: %s)', async (legacyCache) => {
+    const createdAt = new Date(Date.now() - 10_000).toISOString();
+    const startedAt = new Date(Date.now() - 18 * 60 * 60 * 1_000).toISOString();
+    const explicitCreatedAt = new Date(Date.now() - 5_000).toISOString();
+    const stopAt = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
+    const alert = sampleAlert({
+      created_at: createdAt,
+      start_at: startedAt,
+      stop_at: createdAt,
+      scenario: 'ssh-persistent-bf',
+      decisions: [
+        { id: 10, type: 'ban', origin: 'crowdsec', value: '1.2.3.4', duration: '59m' },
+        { id: 11, type: 'ban', origin: 'crowdsec', value: '1.2.3.4', created_at: explicitCreatedAt, stop_at: stopAt },
+      ],
+    });
+    const { controller, database } = createController({
+      env: { CROWDSEC_LOOKBACK_PERIOD: '1d', CROWDSEC_REFRESH_INTERVAL: '0' },
+      fetchResolver: (url) => url.includes('/v1/alerts?') ? Response.json([alert]) : undefined,
+    });
+
+    try {
+      if (legacyCache) {
+        // Reproduce the old cached timestamp and unversioned metadata hash.
+        seedAlert(database, alert);
+        const hash = database.getAlertDecisionSnapshot(1, 'default')!.metadata_hash!;
+        database.db.prepare('UPDATE alerts SET metadata_hash = ?').run(hash.split(':').at(-1)!);
+        database.db.prepare('UPDATE decisions SET created_at = ? WHERE upstream_id = ?').run(startedAt, '10');
+        expect(database.db.prepare('SELECT created_at FROM decisions WHERE upstream_id = ?').get('10'))
+          .toEqual({ created_at: startedAt });
+      }
+
+      const response = await controller.fetch(new Request(
+        'http://localhost/crowdsec/api/decisions?page=1&page_size=50&hide_duplicates=false&include_expired=true',
+      ));
+      expect(response.status).toBe(200);
+      const body = await response.json() as { data: Array<{ id: number; created_at: string }> };
+      expect(body.data).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 10, created_at: createdAt }),
+        expect.objectContaining({ id: 11, created_at: explicitCreatedAt }),
+      ]));
+      expect(database.db.prepare('SELECT created_at FROM decisions WHERE upstream_id = ?').get('10'))
+        .toEqual({ created_at: createdAt });
+      // Alert history still uses bucket start time to match LAPI window filters.
+      expect(database.db.prepare('SELECT created_at FROM alerts WHERE upstream_id = ?').get('1'))
+        .toEqual({ created_at: startedAt });
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+    }
+  });
+
   test('keeps alerts and decisions endpoints consistent when sync repairs stale cached decisions', async () => {
     const createdAt = new Date().toISOString();
     const stopAt = new Date(Date.now() + 30 * 60 * 1_000).toISOString();

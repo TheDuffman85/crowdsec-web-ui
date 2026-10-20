@@ -544,7 +544,7 @@ export function seedAlert(database: CrowdsecDatabase, alert: AlertRecord): void 
     });
 
     for (const decision of record.decisions || []) {
-      const createdAt = decision.created_at || alertHistoryAt;
+      const createdAt = decision.created_at || record.created_at || alertHistoryAt;
       const stopAt = decision.stop_at || new Date(Date.now() + 30 * 60 * 1_000).toISOString();
       database.insertDecision({
         $id: String(decision.id),

@@ -161,7 +161,9 @@ export function serializeAlertSourceExtras(source: AlertSource | null | undefine
 export function alertMetadataFingerprint(alert: AlertRecord | null | undefined): string | null {
   if (!alert) return null;
   const { decisions: _decisions, ...metadata } = alert;
-  return crypto.createHash('sha256').update(stableSerialize(metadata)).digest('hex');
+  // Invalidate legacy fingerprints once so the next sync also repairs cached
+  // decisions whose creation time incorrectly inherited the bucket start.
+  return `2:${crypto.createHash('sha256').update(stableSerialize(metadata)).digest('hex')}`;
 }
 
 export function alertFromRow(row: NormalizedAlertRow): AlertRecord {

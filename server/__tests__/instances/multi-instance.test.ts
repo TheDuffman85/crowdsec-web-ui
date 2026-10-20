@@ -949,6 +949,8 @@ test('reconciles secondary instance windows to find alerts created after their s
     await new Promise((resolve) => setTimeout(resolve, 1_100));
     await syncSecondary();
     expect(cachedSecondaryDecisionIds()).toContain('193753');
+    expect(database.db.prepare('SELECT created_at FROM decisions WHERE instance_id = ? AND upstream_id = ?')
+      .get('secondary', '193753')).toEqual({ created_at: lapiAlerts[0].created_at });
     expect(database.getMeta('alert_reconcile_window_state:secondary')).not.toBeNull();
   } finally {
     controller.stopBackgroundTasks();
