@@ -63,6 +63,12 @@ interface InstanceSyncRuntime {
   chunkSizeMs: number;
   minChunkSizeMs: number;
   requestTimeoutMs: number;
+  reconcileWindowMs: number;
+  reconcileRecentAgeMs: number;
+  reconcileRecentIntervalMs: number;
+  reconcileActiveIntervalMs: number;
+  reconcileOldIntervalMs: number;
+  reconcileWindowsPerRefresh: number;
 }
 
 interface ReconcileWindowState {
@@ -93,7 +99,8 @@ const SQLITE_INCREMENTAL_VACUUM_MAX_PAGES = 4096;
 const SQLITE_INCREMENTAL_VACUUM_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 export interface SyncServiceState extends Record<string, any> {
-  reconcileWindowState: ReconcileWindowState;
+  getReconcileWindowState: (instanceId?: string) => ReconcileWindowState;
+  setReconcileWindowState: (nextState: ReconcileWindowState, instanceId?: string) => void;
   initializationPromise: Promise<SyncHistorySummary | null> | null;
   cacheRefreshCompletedAt: string | null;
   cacheRefreshPromise: Promise<void> | null;
@@ -1119,9 +1126,12 @@ function reconcileWindowKey(start: number, end: number): string {
   return `${start}:${end}`;
 }
 
-function createClosedReconcileWindows(now: number): Array<{ key: string; start: number; end: number }> {
-  const windowMs = config.reconcileWindowMs;
-  const lookbackStart = now - config.lookbackMs;
+function createClosedReconcileWindows(
+  now: number,
+  runtime: InstanceSyncRuntime,
+): Array<{ key: string; start: number; end: number }> {
+  const windowMs = runtime.reconcileWindowMs;
+  const lookbackStart = now - runtime.lookbackMs;
   const firstWindowStart = Math.floor(lookbackStart / windowMs) * windowMs;
   const openWindowStart = Math.floor(now / windowMs) * windowMs;
   const windows: Array<{ key: string; start: number; end: number }> = [];
@@ -1136,61 +1146,71 @@ function createClosedReconcileWindows(now: number): Array<{ key: string; start: 
   return windows;
 }
 
-async function getActiveReconcileWindowKeys(now: number): Promise<Set<string>> {
-  const since = new Date(now - config.lookbackMs).toISOString();
+async function getActiveReconcileWindowKeys(now: number, runtime: InstanceSyncRuntime): Promise<Set<string>> {
+  const since = new Date(now - runtime.lookbackMs).toISOString();
   const rows = await queryWorker.all<{ created_at: string }>(`
     SELECT DISTINCT alerts.created_at
     FROM decisions AS active INDEXED BY idx_decisions_stop_alert_id
     JOIN alerts ON alerts.id = active.alert_id
     WHERE active.stop_at > ?
+      AND active.instance_id = ?
       AND alerts.created_at >= ?
-  `, [new Date(now).toISOString(), since]);
+  `, [new Date(now).toISOString(), runtime.instanceId, since]);
   const keys = new Set<string>();
   for (const row of rows) {
     const createdAt = Date.parse(row.created_at);
     if (!Number.isFinite(createdAt)) continue;
-    const start = Math.floor(createdAt / config.reconcileWindowMs) * config.reconcileWindowMs;
-    keys.add(reconcileWindowKey(start, start + config.reconcileWindowMs));
+    const start = Math.floor(createdAt / runtime.reconcileWindowMs) * runtime.reconcileWindowMs;
+    keys.add(reconcileWindowKey(start, start + runtime.reconcileWindowMs));
   }
   return keys;
 }
 
-async function seedReconcileWindowState(now: number): Promise<void> {
-  const windows = Object.fromEntries(createClosedReconcileWindows(now).map((window) => [window.key, now]));
+async function seedReconcileWindowState(
+  now: number,
+  runtime = getInstanceSyncRuntime(primaryInstance.id),
+): Promise<void> {
+  const windows = Object.fromEntries(
+    createClosedReconcileWindows(now, runtime).map((window) => [window.key, now]),
+  );
   const nextState: ReconcileWindowState = {
     version: 1,
     configFingerprint: reconcileConfigFingerprint,
     headLastSuccess: now,
     windows,
   };
-  await saveReconcileWindowState(nextState);
-  state.reconcileWindowState = nextState;
+  await saveReconcileWindowState(nextState, runtime.instanceId);
+  state.setReconcileWindowState(nextState, runtime.instanceId);
 }
 
-async function planDueReconcileWindows(now: number): Promise<ReconcilePlan> {
-  const closedWindows = createClosedReconcileWindows(now);
+async function planDueReconcileWindows(
+  now: number,
+  runtime = getInstanceSyncRuntime(primaryInstance.id),
+): Promise<ReconcilePlan> {
+  const reconcileWindowState = state.getReconcileWindowState(runtime.instanceId);
+  const closedWindows = createClosedReconcileWindows(now, runtime);
   const currentKeys = new Set(closedWindows.map((window) => window.key));
-  const activeKeys = await getActiveReconcileWindowKeys(now);
-  const currentWindowStart = Math.floor(now / config.reconcileWindowMs) * config.reconcileWindowMs;
-  const headStart = Math.max(now - config.lookbackMs, currentWindowStart);
+  const activeKeys = await getActiveReconcileWindowKeys(now, runtime);
+  const currentWindowStart = Math.floor(now / runtime.reconcileWindowMs) * runtime.reconcileWindowMs;
+  const headStart = Math.max(now - runtime.lookbackMs, currentWindowStart);
   const headKey = 'head';
   const headActive = Array.from(activeKeys).some((key) => {
     const start = Number(key.split(':', 1)[0]);
-    return Number.isFinite(start) && start + config.reconcileWindowMs > headStart;
+    return Number.isFinite(start) && start + runtime.reconcileWindowMs > headStart;
   });
   const candidates: ReconcileWindow[] = closedWindows.map((window) => {
     const active = activeKeys.has(window.key);
     const age = Math.max(0, now - window.end);
     const intervalMs = active
-      ? config.reconcileActiveIntervalMs
-      : age <= config.reconcileRecentAgeMs
-        ? config.reconcileRecentIntervalMs
-        : config.reconcileOldIntervalMs;
+      ? runtime.reconcileActiveIntervalMs
+      : age <= runtime.reconcileRecentAgeMs
+        ? runtime.reconcileRecentIntervalMs
+        : runtime.reconcileOldIntervalMs;
     return {
       ...window,
       active,
       intervalMs,
-      lastSuccess: state.reconcileWindowState.windows[window.key] || 0,
+      lastSuccess: reconcileWindowState.windows[window.key] || 0,
     };
   });
   candidates.push({
@@ -1198,8 +1218,8 @@ async function planDueReconcileWindows(now: number): Promise<ReconcilePlan> {
     start: headStart,
     end: now,
     active: headActive,
-    intervalMs: headActive ? config.reconcileActiveIntervalMs : config.reconcileRecentIntervalMs,
-    lastSuccess: state.reconcileWindowState.headLastSuccess,
+    intervalMs: headActive ? runtime.reconcileActiveIntervalMs : runtime.reconcileRecentIntervalMs,
+    lastSuccess: reconcileWindowState.headLastSuccess,
     head: true,
   });
 
@@ -1225,7 +1245,7 @@ async function planDueReconcileWindows(now: number): Promise<ReconcilePlan> {
     selectedKeys.add(window.key);
   };
 
-  if (config.reconcileWindowsPerRefresh === 1) {
+  if (runtime.reconcileWindowsPerRefresh === 1) {
     // With a single slot, oldest-success-first is the only starvation-free
     // policy. Active/recent cadence still makes those windows due sooner.
     addWindow(dueByAge[0]);
@@ -1233,12 +1253,12 @@ async function planDueReconcileWindows(now: number): Promise<ReconcilePlan> {
     // Reserve one slot for the least recently successful due window. Fill
     // the remaining budget by normalized overdue priority so active and
     // recent windows retain their lower latency without starving old data.
-    for (const window of dueByPriority.slice(0, config.reconcileWindowsPerRefresh - 1)) {
+    for (const window of dueByPriority.slice(0, runtime.reconcileWindowsPerRefresh - 1)) {
       addWindow(window);
     }
     addWindow(dueByAge.find((window) => !selectedKeys.has(window.key)));
     for (const window of dueByPriority) {
-      if (selected.length >= config.reconcileWindowsPerRefresh) break;
+      if (selected.length >= runtime.reconcileWindowsPerRefresh) break;
       addWindow(window);
     }
   }
@@ -1246,22 +1266,25 @@ async function planDueReconcileWindows(now: number): Promise<ReconcilePlan> {
   return { windows: selected, currentKeys };
 }
 
-function recordReconcileWindowSuccess(window: ReconcileWindow, now: number): void {
-  if (window.head) state.reconcileWindowState.headLastSuccess = now;
-  else state.reconcileWindowState.windows[window.key] = now;
+function recordReconcileWindowSuccess(window: ReconcileWindow, now: number, instanceId = primaryInstance.id): void {
+  const reconcileWindowState = state.getReconcileWindowState(instanceId);
+  if (window.head) reconcileWindowState.headLastSuccess = now;
+  else reconcileWindowState.windows[window.key] = now;
 }
 
-async function finishReconcilePlan(plan: ReconcilePlan): Promise<void> {
-  state.reconcileWindowState.windows = Object.fromEntries(
-    Object.entries(state.reconcileWindowState.windows).filter(([key]) => plan.currentKeys.has(key)),
+async function finishReconcilePlan(plan: ReconcilePlan, instanceId = primaryInstance.id): Promise<void> {
+  const reconcileWindowState = state.getReconcileWindowState(instanceId);
+  reconcileWindowState.windows = Object.fromEntries(
+    Object.entries(reconcileWindowState.windows).filter(([key]) => plan.currentKeys.has(key)),
   );
-  if (plan.windows.length > 0) await saveReconcileWindowState();
+  if (plan.windows.length > 0) await saveReconcileWindowState(reconcileWindowState, instanceId);
 }
 
 async function runPlannedReconcileWindows(
   plan: ReconcilePlan,
   now: number,
   excludedKeys: Set<string> = new Set(),
+  runtime = getInstanceSyncRuntime(primaryInstance.id),
 ): Promise<WindowSyncSummary> {
 
   let summary: WindowSyncSummary = {
@@ -1273,11 +1296,12 @@ async function runPlannedReconcileWindows(
   };
   for (const window of plan.windows) {
     if (excludedKeys.has(window.key)) continue;
-    console.log(`Reconciling ${window.active ? 'active ' : ''}alert window ${formatSyncWindow(window.start, window.end, now)}...`);
-    const result = await syncAlertWindow(window.start, window.end, now);
+    const instanceLabel = runtime.instanceId === primaryInstance.id ? '' : `[${runtime.instanceName}] `;
+    console.log(`${instanceLabel}Reconciling ${window.active ? 'active ' : ''}alert window ${formatSyncWindow(window.start, window.end, now)}...`);
+    const result = await syncAlertWindow(window.start, window.end, now, undefined, runtime);
     summary = combineWindowSummaries(summary, result);
     if (result.errors.length === 0) {
-      recordReconcileWindowSuccess(window, now);
+      recordReconcileWindowSuccess(window, now, runtime.instanceId);
     }
     await delay(0);
   }
@@ -1680,8 +1704,11 @@ async function initializeMultiInstanceCache(options: { showOverlay?: boolean } =
         });
         historicalInstanceSyncPending.delete(runtime.instanceId);
       }
-      if (summaries[0]?.state === 'complete') {
-        await seedReconcileWindowState(Date.parse(summaries[0].syncedThrough));
+      for (let index = 0; index < runtimes.length; index += 1) {
+        const summary = summaries[index];
+        if (summary.state === 'complete') {
+          await seedReconcileWindowState(Date.parse(summary.syncedThrough), runtimes[index]);
+        }
       }
       await runNotificationEvaluation('multi-instance cache initialization');
     dependencies.state.cacheRefreshCompletedAt = completedAt;
@@ -1763,7 +1790,7 @@ async function updateCacheDelta(
     const headWindow = reconcilePlan?.windows.find((window) => window.head);
     const deltaStart = Math.min(normalDeltaStart, headWindow?.start ?? normalDeltaStart);
     console.log(`Fetching delta updates (${formatSyncWindow(deltaStart, deltaStartedAt, deltaStartedAt)})...`);
-    const reconcileStateBeforeRefresh = structuredClone(state.reconcileWindowState);
+    const reconcileStateBeforeRefresh = structuredClone(state.getReconcileWindowState());
     let refreshResult: {
       deltaSummary: WindowSyncSummary;
       reconcileSummary: WindowSyncSummary;
@@ -1803,7 +1830,7 @@ async function updateCacheDelta(
       refreshResult = committedRefresh.result;
       releasePublishedRevision = committedRefresh.releasePublishedRevision;
     } catch (error) {
-      state.reconcileWindowState = reconcileStateBeforeRefresh;
+      state.setReconcileWindowState(reconcileStateBeforeRefresh);
       throw error;
     }
 
@@ -1856,10 +1883,11 @@ async function refreshLatestWindow(): Promise<void> {
     }
 
     const now = Date.now();
-    const currentWindowStart = Math.floor(now / config.reconcileWindowMs) * config.reconcileWindowMs;
-    const start = Math.max(now - config.lookbackMs, currentWindowStart);
+    const runtime = getInstanceSyncRuntime(primaryInstance.id);
+    const currentWindowStart = Math.floor(now / runtime.reconcileWindowMs) * runtime.reconcileWindowMs;
+    const start = Math.max(now - runtime.lookbackMs, currentWindowStart);
     console.log(`Manual latest-window refresh (${formatSyncWindow(start, now, now)})...`);
-    const reconcileStateBeforeRefresh = structuredClone(state.reconcileWindowState);
+    const reconcileStateBeforeRefresh = structuredClone(state.getReconcileWindowState());
     const committedRefresh = await runConsistentDatabaseRefresh(async () => {
       const summary = await syncAlertWindow(start, now, now);
       if (summary.errors.length > 0) {
@@ -1870,11 +1898,11 @@ async function refreshLatestWindow(): Promise<void> {
       const removed = await cleanupOldData();
       const dataChanged = summary.changed || removed.alerts > 0 || removed.decisions > 0;
       await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
-      state.reconcileWindowState.headLastSuccess = now;
+      state.getReconcileWindowState().headLastSuccess = now;
       await saveReconcileWindowState();
       return { summary, dataChanged, cleanupSucceeded: removed.succeeded };
     }).catch((error) => {
-      state.reconcileWindowState = reconcileStateBeforeRefresh;
+      state.setReconcileWindowState(reconcileStateBeforeRefresh);
       throw error;
     });
     let publishedRevision: string | null = null;
@@ -2323,6 +2351,10 @@ async function ensureAuth(context: HonoContext, next: HonoNext): Promise<Respons
   return {
     runNotificationEvaluation,
     syncAlertWindow,
+    planDueReconcileWindows,
+    recordReconcileWindowSuccess,
+    runPlannedReconcileWindows,
+    finishReconcilePlan,
     syncHistory,
     updateCacheDelta,
     refreshLatestWindow,
