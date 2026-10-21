@@ -867,3 +867,104 @@ test('queues reachable bulk targets while reporting an uncached target lookup fa
     database.close();
   }
 });
+
+test.each([
+  { window: 'head', now: '2026-10-21T00:35:00.000Z', dueRefreshes: 1 },
+  { window: 'closed', now: '2026-10-21T00:05:00.000Z', dueRefreshes: 2 },
+])('reconciles secondary instance $window windows to find alerts created after their start passed the delta cursor', async ({ now, dueRefreshes }) => {
+  // Keep worker I/O and application timers real while controlling window boundaries.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date(now));
+  const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-multi-reconcile-test-'));
+  tempDirs.push(dir);
+  const config = createRuntimeConfig({
+    DB_DIR: dir,
+    CROWDSEC_USER: 'watcher',
+    CROWDSEC_PASSWORD: 'secret',
+    CROWDSEC_LOOKBACK_PERIOD: '1d',
+    CROWDSEC_REFRESH_INTERVAL: '1h',
+    CROWDSEC_MANUAL_REFRESH_ENABLED: 'true',
+    CROWDSEC_BOUNCER_PROPAGATION_DELAY: '0',
+    CROWDSEC_RECONCILE_ACTIVE_INTERVAL: '1s',
+    CROWDSEC_RECONCILE_RECENT_INTERVAL: '1s',
+    AUTH_ENABLED: 'false',
+  }, { defaultConfigFile: path.join(dir, 'config.yaml') });
+  const base = config.instances[0];
+  config.instances = [
+    { ...base, id: 'primary', name: 'Primary', lapiUrl: 'http://primary:8080' },
+    { ...base, id: 'secondary', name: 'Secondary', lapiUrl: 'http://secondary:8080' },
+  ];
+  const database = new CrowdsecDatabase({ dbDir: dir });
+  const primary = fakeClient('primary');
+  const secondary = fakeClient('secondary');
+  const lapiAlerts: any[] = [];
+  // LAPI applies since/until to started_at, not created_at.
+  secondary.fetchAlerts.mockImplementation(async (_since?: unknown, _until?: unknown, filters: any = {}) => {
+    const window = filters.relativeWindow;
+    return lapiAlerts.filter((alert) => {
+      const startedAt = Date.parse(alert.start_at);
+      return !window || (startedAt >= window.startMs - window.paddingMs && startedAt <= window.endMs + window.paddingMs);
+    });
+  });
+  const controller = createApp({
+    config,
+    database,
+    lapiClients: new Map([['primary', primary as never], ['secondary', secondary as never]]),
+    startBackgroundTasks: false,
+    initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+    updateChecker: async () => ({ update_available: false, current_version: 'test', remote_version: 'test', tag: 'test', release_url: '', checked_at: new Date().toISOString() }),
+  });
+  const syncSecondary = async () => {
+    const response = await controller.fetch(new Request('http://localhost/api/decisions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip: '10.0.0.1', duration: '1m', type: 'ban', scope: 'instance', instance_id: 'secondary' }),
+    }));
+    expect(response.status).toBe(200);
+  };
+  const cachedSecondaryDecisionIds = () => (database.db
+    .prepare('SELECT upstream_id FROM decisions WHERE instance_id = ?')
+    .all('secondary') as Array<{ upstream_id: string }>).map((row) => String(row.upstream_id));
+
+  try {
+    const refresh = await controller.fetch(new Request('http://localhost/api/cache/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'full' }),
+    }));
+    expect(refresh.status).toBe(200);
+
+    // A slow leaky bucket started before the history sync, but overflowed
+    // (and was created in LAPI) only afterwards.
+    const startedAt = new Date(Date.now() - 20 * 60_000).toISOString();
+    lapiAlerts.push({
+      id: 135227,
+      uuid: 'slow-bf',
+      scenario: 'crowdsecurity/ssh-slow-bf',
+      message: 'slow bruteforce',
+      start_at: startedAt,
+      stop_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+      source: { scope: 'Ip', value: '77.239.124.66', ip: '77.239.124.66' },
+      decisions: [{ id: 193753, origin: 'crowdsec', scenario: 'crowdsecurity/ssh-slow-bf', scope: 'Ip', value: '77.239.124.66', type: 'ban', duration: '59m' }],
+    });
+
+    await syncSecondary();
+    expect(cachedSecondaryDecisionIds()).not.toContain('193753');
+
+    // The first due refresh selects the head and the oldest due window.
+    // A bucket in the previous hour is selected on the next due refresh.
+    for (let refresh = 0; refresh < dueRefreshes; refresh += 1) {
+      vi.setSystemTime(Date.now() + 1_100);
+      await syncSecondary();
+    }
+    expect(cachedSecondaryDecisionIds()).toContain('193753');
+    expect(database.db.prepare('SELECT created_at FROM decisions WHERE instance_id = ? AND upstream_id = ?')
+      .get('secondary', '193753')).toEqual({ created_at: lapiAlerts[0].created_at });
+    expect(database.getMeta('alert_reconcile_window_state:secondary')).not.toBeNull();
+  } finally {
+    controller.stopBackgroundTasks();
+    database.close();
+    vi.useRealTimers();
+  }
+}, 15_000);

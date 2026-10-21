@@ -73,6 +73,7 @@ type SyncWorkerResponse = {
 const DUPLICATE_REFRESH_TIMEOUT_MS = 2 * 60_000;
 
 type PendingRequest = {
+  worker: Worker;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
@@ -85,10 +86,12 @@ export class DatabaseSyncWorker {
   private readonly journalSizeLimitBytes: number;
   private readonly timeoutMs: number;
   private worker: Worker | null = null;
+  private workerShutdown: Promise<void> | null = null;
+  private closed = false;
   private nextId = 1;
   private readonly pending = new Map<number, PendingRequest>();
   private operationQueue: Promise<void> = Promise.resolve();
-  private readonly transactionContext = new AsyncLocalStorage<boolean>();
+  private readonly transactionContext = new AsyncLocalStorage<{ worker: Worker; active: boolean }>();
 
   constructor(options: {
     dbPath: string;
@@ -160,66 +163,93 @@ export class DatabaseSyncWorker {
   }
 
   runExclusive<T>(operation: () => T | Promise<T>): Promise<T> {
-    const result = this.operationQueue.then(operation);
+    const result = this.operationQueue.then(() => {
+      // Main-thread writes share this queue too. They must wait until a failed
+      // worker has closed its SQLite connection and released its write lock.
+      const run = () => {
+        if (this.closed) throw new Error('Database sync worker is closed');
+        return operation();
+      };
+      return this.workerShutdown ? this.workerShutdown.then(run) : run();
+    });
     this.operationQueue = result.then(() => undefined, () => undefined);
     return result;
   }
 
   runTransaction<T>(operation: () => Promise<T>, options: DatabaseTransactionOptions = {}): Promise<T> {
     return this.runExclusive(async () => {
-      await this.dispatch<void>({ type: 'begin-transaction' }, this.timeoutMs);
+      const worker = this.getWorker();
+      const context = { worker, active: true };
+      let began = false;
       try {
-        const result = await this.transactionContext.run(true, operation);
+        await this.dispatch<void>({ type: 'begin-transaction' }, this.timeoutMs, worker);
+        began = true;
+        const result = await this.transactionContext.run(context, operation);
         await options.beforeCommit?.();
-        await this.dispatch<void>({ type: 'commit-transaction' }, this.timeoutMs);
+        await this.dispatch<void>({ type: 'commit-transaction' }, this.timeoutMs, worker);
         return result;
       } catch (error) {
-        try {
-          await this.dispatch<void>({ type: 'rollback-transaction' }, this.timeoutMs);
-        } catch (rollbackError) {
-          console.error(
-            'Failed to roll back database refresh transaction:',
-            rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
-          );
+        context.active = false;
+        // A replacement connection cannot roll back this transaction. A timeout
+        // or worker failure already retires the connection that owned it.
+        if (this.worker === worker) {
+          if (began) {
+            try {
+              await this.dispatch<void>({ type: 'rollback-transaction' }, this.timeoutMs, worker);
+            } catch (rollbackError) {
+              console.error(
+                'Failed to roll back database refresh transaction:',
+                rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+              );
+            }
+          }
+          // Reload in-memory duplicate/index tracking from committed data after
+          // an abort, even when SQL rollback succeeded.
+          this.retireWorker(worker, error instanceof Error ? error : new Error(String(error)));
         }
+        if (this.workerShutdown) await this.workerShutdown;
         throw error;
+      } finally {
+        context.active = false;
       }
     });
   }
 
   close(): void {
-    for (const [id, pending] of this.pending) {
-      clearTimeout(pending.timeout);
-      this.pending.delete(id);
-    }
-    if (this.worker) {
-      terminateWorker(this.worker);
-      this.worker = null;
-    }
+    this.closed = true;
+    if (this.worker) this.retireWorker(this.worker, new Error('Database sync worker is closed'));
   }
 
   private execute<T>(request: SyncWorkerRequest, timeoutMs = this.timeoutMs): Promise<T> {
-    if (this.transactionContext.getStore()) {
-      return this.dispatch<T>(request, timeoutMs);
+    const context = this.transactionContext.getStore();
+    if (context) {
+      if (!context.active) return Promise.reject(new Error('Database refresh transaction is no longer active'));
+      return this.dispatch<T>(request, timeoutMs, context.worker);
     }
-    return this.runExclusive(() => this.dispatch<T>(request, timeoutMs));
+    return this.runExclusive(() => this.dispatch<T>(request, timeoutMs, this.getWorker()));
   }
 
-  private dispatch<T>(request: SyncWorkerRequest, timeoutMs: number): Promise<T> {
-    const worker = this.getWorker();
+  private dispatch<T>(request: SyncWorkerRequest, timeoutMs: number, worker: Worker): Promise<T> {
+    if (this.closed || this.worker !== worker) {
+      return Promise.reject(new Error('Database refresh worker is no longer available'));
+    }
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
       const timeout = setTimeout(() => {
-        if (!this.pending.delete(id)) return;
-        reject(new Error(`Database maintenance exceeded ${timeoutMs}ms timeout`));
-        this.restartWorker();
+        if (!this.pending.has(id)) return;
+        this.retireWorker(worker, new Error(`Database maintenance exceeded ${timeoutMs}ms timeout (${request.type})`));
       }, timeoutMs);
       this.pending.set(id, {
+        worker,
         resolve: (value) => resolve(value as T),
         reject,
         timeout,
       });
-      worker.postMessage({ id, request });
+      try {
+        worker.postMessage({ id, request });
+      } catch (error) {
+        this.retireWorker(worker, error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 
@@ -237,38 +267,46 @@ export class DatabaseSyncWorker {
     });
     worker.on('message', (message: SyncWorkerResponse | WorkerReadyMessage) => {
       if (isWorkerReadyMessage(message)) markWorkerReady(worker);
-      else this.handleMessage(message);
+      else this.handleMessage(worker, message);
     });
-    worker.on('error', (error) => this.handleFailure(error));
+    worker.on('error', (error) => this.retireWorker(worker, error));
     worker.on('exit', (code) => {
-      if (this.worker === worker) this.worker = null;
-      if (code !== 0) this.handleFailure(new Error(`Database sync worker exited with code ${code}`));
+      if (this.worker !== worker) return;
+      this.worker = null;
+      this.rejectPending(worker, new Error(`Database sync worker exited with code ${code}`));
     });
     worker.unref();
     this.worker = worker;
     return worker;
   }
 
-  private handleMessage(message: SyncWorkerResponse): void {
+  private handleMessage(worker: Worker, message: SyncWorkerResponse): void {
     const pending = this.pending.get(message.id);
-    if (!pending) return;
+    if (!pending || pending.worker !== worker) return;
     this.pending.delete(message.id);
     clearTimeout(pending.timeout);
     if (message.error) pending.reject(new Error(message.error));
     else pending.resolve(message.result);
   }
 
-  private handleFailure(error: Error): void {
+  private rejectPending(worker: Worker, error: Error): void {
     for (const [id, pending] of this.pending) {
+      if (pending.worker !== worker) continue;
       clearTimeout(pending.timeout);
       pending.reject(error);
       this.pending.delete(id);
     }
   }
 
-  private restartWorker(): void {
-    const worker = this.worker;
+  private retireWorker(worker: Worker, error: Error): void {
+    if (this.worker !== worker) return;
     this.worker = null;
-    if (worker) terminateWorker(worker);
+    const shutdown = new Promise<void>((resolve) => worker.once('exit', () => resolve()));
+    this.workerShutdown = shutdown;
+    void shutdown.then(() => {
+      if (this.workerShutdown === shutdown) this.workerShutdown = null;
+    });
+    this.rejectPending(worker, error);
+    terminateWorker(worker);
   }
 }

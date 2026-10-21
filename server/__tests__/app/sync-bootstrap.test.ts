@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from 'vitest';
 import path from 'path';
 import { CrowdsecDatabase } from '../../database';
 import type { CreateAppOptions } from '../../app';
+import { DatabaseSyncWorker } from '../../sync-worker-client';
 import { parseGoDuration } from '../../utils/duration';
 import {
   createController,
@@ -15,6 +16,35 @@ import {
 } from './harness';
 
 describe('createApp synchronization bootstrap', () => {
+  test('reports index setup failures and allows a later bootstrap to recover', async () => {
+    const beginIndexes = vi.spyOn(DatabaseSyncWorker.prototype, 'beginDeferredSearchIndexUpdates')
+      .mockRejectedValueOnce(new Error('Index setup failed'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { controller, database, lapiClient } = createController();
+    await lapiClient.login();
+
+    try {
+      await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+
+      expect(controller.getSyncStatus()).toEqual(expect.objectContaining({
+        state: 'failed',
+        errors: ['Index setup failed'],
+      }));
+      expect(errorSpy).toHaveBeenCalledWith('Failed to initialize cache:', 'Index setup failed');
+
+      const retry = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
+      expect(retry.status).toBe(200);
+      expect(beginIndexes).toHaveBeenCalledTimes(2);
+      expect(controller.getSyncStatus().state).toBe('complete');
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+      destroyTempDir();
+      beginIndexes.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
   test('bootstraps successfully with mTLS authentication', async () => {
     const { controller, database, fetchCalls } = createController({ authMode: 'mtls' });
 

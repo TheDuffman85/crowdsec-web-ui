@@ -281,6 +281,12 @@ interface InstanceSyncRuntime {
   chunkSizeMs: number;
   minChunkSizeMs: number;
   requestTimeoutMs: number;
+  reconcileWindowMs: number;
+  reconcileRecentAgeMs: number;
+  reconcileRecentIntervalMs: number;
+  reconcileActiveIntervalMs: number;
+  reconcileOldIntervalMs: number;
+  reconcileWindowsPerRefresh: number;
 }
 
 interface ReconcileWindowState {
@@ -677,7 +683,13 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     legacyAlertExtraScenarios: config.legacyAlertExtraScenarios,
     simulationsEnabled: config.simulationsEnabled,
   })).digest('hex');
-  let reconcileWindowState = loadReconcileWindowState();
+  // Every instance reconciles its own LAPI windows. LAPI filters alerts by
+  // started_at, so long-running buckets are created after the delta cursor
+  // has already passed their start and only a window reconcile finds them.
+  const reconcileWindowStates = new Map(config.instances.map((instance) => [
+    instance.id,
+    loadReconcileWindowState(instance.id),
+  ]));
   let initializationPromise: Promise<SyncHistorySummary | null> | null = null;
   const initialHistorySyncs = new Set(config.instances.map((instance) => instance.id));
   let lastRequestTime = Date.now();
@@ -790,6 +802,12 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       chunkSizeMs: instance.sync.alertSyncChunkMs ?? config.alertSyncChunkMs,
       minChunkSizeMs: instance.sync.alertSyncMinChunkMs ?? config.alertSyncMinChunkMs,
       requestTimeoutMs: instance.sync.requestTimeoutMs ?? config.lapiRequestTimeoutMs,
+      reconcileWindowMs: instance.sync.reconcileWindowMs ?? config.reconcileWindowMs,
+      reconcileRecentAgeMs: instance.sync.reconcileRecentAgeMs ?? config.reconcileRecentAgeMs,
+      reconcileRecentIntervalMs: instance.sync.reconcileRecentIntervalMs ?? config.reconcileRecentIntervalMs,
+      reconcileActiveIntervalMs: instance.sync.reconcileActiveIntervalMs ?? config.reconcileActiveIntervalMs,
+      reconcileOldIntervalMs: instance.sync.reconcileOldIntervalMs ?? config.reconcileOldIntervalMs,
+      reconcileWindowsPerRefresh: instance.sync.reconcileWindowsPerRefresh ?? config.reconcileWindowsPerRefresh,
     };
   }
 
@@ -802,9 +820,29 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     };
   }
 
-  function loadReconcileWindowState(): ReconcileWindowState {
+  function reconcileWindowStateMetaKey(instanceId: string): string {
+    // The primary keeps the original key so existing state survives upgrades.
+    return instanceId === primaryInstance.id
+      ? RECONCILE_WINDOW_STATE_META_KEY
+      : `${RECONCILE_WINDOW_STATE_META_KEY}:${instanceId}`;
+  }
+
+  function getReconcileWindowState(instanceId = primaryInstance.id): ReconcileWindowState {
+    let current = reconcileWindowStates.get(instanceId);
+    if (!current) {
+      current = emptyReconcileWindowState();
+      reconcileWindowStates.set(instanceId, current);
+    }
+    return current;
+  }
+
+  function setReconcileWindowState(nextState: ReconcileWindowState, instanceId = primaryInstance.id): void {
+    reconcileWindowStates.set(instanceId, nextState);
+  }
+
+  function loadReconcileWindowState(instanceId: string): ReconcileWindowState {
     try {
-      const value = database.getMeta(RECONCILE_WINDOW_STATE_META_KEY)?.value;
+      const value = database.getMeta(reconcileWindowStateMetaKey(instanceId))?.value;
       if (!value) return emptyReconcileWindowState();
       const parsed = JSON.parse(value) as Partial<ReconcileWindowState>;
       if (
@@ -822,14 +860,22 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
   }
 
-  function saveReconcileWindowState(nextState = reconcileWindowState): Promise<void> {
-    return syncWorker.setMeta(RECONCILE_WINDOW_STATE_META_KEY, JSON.stringify(nextState));
+  function saveReconcileWindowState(
+    nextState?: ReconcileWindowState,
+    instanceId = primaryInstance.id,
+  ): Promise<void> {
+    return syncWorker.setMeta(
+      reconcileWindowStateMetaKey(instanceId),
+      JSON.stringify(nextState ?? getReconcileWindowState(instanceId)),
+    );
   }
 
   async function resetReconcileWindowState(): Promise<void> {
-    const nextState = emptyReconcileWindowState();
-    await saveReconcileWindowState(nextState);
-    reconcileWindowState = nextState;
+    for (const instance of config.instances) {
+      const nextState = emptyReconcileWindowState();
+      await saveReconcileWindowState(nextState, instance.id);
+      setReconcileWindowState(nextState, instance.id);
+    }
   }
 
   console.log(`Cache Configuration:
@@ -1069,8 +1115,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   });
 
   const syncServiceState = {
-    get reconcileWindowState() { return reconcileWindowState; },
-    set reconcileWindowState(value: ReconcileWindowState) { reconcileWindowState = value; },
+    getReconcileWindowState,
+    setReconcileWindowState,
     get initializationPromise() { return initializationPromise; },
     set initializationPromise(value: Promise<SyncHistorySummary | null> | null) { initializationPromise = value; },
     get cacheRefreshCompletedAt() { return cacheRefreshCompletedAt; },
@@ -1184,6 +1230,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     runNotificationEvaluation,
     syncHistory,
     syncAlertWindow,
+    planDueReconcileWindows,
+    recordReconcileWindowSuccess,
+    runPlannedReconcileWindows,
+    finishReconcilePlan,
     updateCacheDelta,
     refreshLatestWindow,
     refreshFullHistory,
@@ -1531,11 +1581,15 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         const previousUpdate = instanceLastUpdates.get(instanceId);
         const previousUpdateMs = previousUpdate ? Date.parse(previousUpdate) : Number.NaN;
         const overlapMs = Math.max(refreshMs, 60_000) + 60_000;
-        const start = Number.isFinite(previousUpdateMs)
+        const normalStart = Number.isFinite(previousUpdateMs)
           ? Math.max(now - runtime.lookbackMs, previousUpdateMs - 10_000)
           : Math.max(now - runtime.lookbackMs, now - overlapMs);
+        const reconcilePlan = await planDueReconcileWindows(now, runtime);
+        const headWindow = reconcilePlan.windows.find((window: { head?: boolean }) => window.head);
+        const start = Math.min(normalStart, headWindow?.start ?? normalStart);
+        const reconcileStateBeforeRefresh = structuredClone(getReconcileWindowState(instanceId));
         const committedRefresh = await runConsistentDatabaseRefresh(async () => {
-          const summary = await syncAlertWindow(start, now, now, (window: string, alerts: number, decisions: number) => {
+          const deltaSummary = await syncAlertWindow(start, now, now, (window: string, alerts: number, decisions: number) => {
             status.progress = 60;
             status.message = getServerTranslator(database)('components.syncOverlay.statusProcessingWindow', {
               window,
@@ -1543,26 +1597,38 @@ export function createApp(options: CreateAppOptions = {}): AppController {
               decisions,
             });
           }, runtime);
-          if (summary.errors.length > 0) {
-            throw summary.lastError || new Error(summary.errors.join('; '));
+          if (deltaSummary.errors.length > 0) {
+            throw deltaSummary.lastError || new Error(deltaSummary.errors.join('; '));
           }
+          // The expanded delta already reconciled the moving head window.
+          if (headWindow) recordReconcileWindowSuccess(headWindow, now, instanceId);
+          const excludedKeys = headWindow ? new Set([headWindow.key]) : new Set<string>();
+          const reconcileSummary = await runPlannedReconcileWindows(reconcilePlan, now, excludedKeys, runtime);
           await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
-          return summary;
+          await finishReconcilePlan(reconcilePlan, instanceId);
+          return { deltaSummary, reconcileSummary };
+        }).catch((error: unknown) => {
+          setReconcileWindowState(reconcileStateBeforeRefresh, instanceId);
+          throw error;
         });
         let publishedRevision: string | null = null;
         try {
-          const summary = committedRefresh.result;
-          client.updateStatus(true);
+          const { deltaSummary, reconcileSummary } = committedRefresh.result;
+          const changed = deltaSummary.changed || reconcileSummary.changed;
+          const reconcileError = reconcileSummary.lastError
+            || (reconcileSummary.errors[0] ? new Error(reconcileSummary.errors[0]) : null);
+          if (reconcileError) client.updateStatus(false, reconcileError);
+          else client.updateStatus(true);
           status.state = 'complete';
           status.progress = 100;
           status.message = `${instance.name} sync complete`;
           status.errors = [];
           instanceLastUpdates.set(instanceId, new Date(now).toISOString());
           prepareDashboardStatsAfterRefreshInBackground(
-            summary.changed,
+            changed,
             instanceId,
             `${instance.name} update`,
-            summary.changed
+            changed
               ? undefined
               : () => {
                   const revision = new Date().toISOString();
@@ -1570,12 +1636,16 @@ export function createApp(options: CreateAppOptions = {}): AppController {
                   publishCacheUpdate(revision, [instanceId]);
                 },
           );
-          if (summary.changed) {
+          if (changed) {
             const revision = new Date().toISOString();
             cacheRefreshCompletedAt = revision;
             publishedRevision = revision;
           }
-          console.log(`[${instance.name}] Delta update complete: ${summary.alerts} alerts and ${summary.decisions} decisions synced.`);
+          const completedReconcileWindows = reconcileSummary.successfulWindows + (headWindow ? 1 : 0);
+          console.log(
+            `[${instance.name}] Delta update complete: ${deltaSummary.alerts} alerts and ${deltaSummary.decisions} decisions synced; `
+            + `${completedReconcileWindows} reconciliation window${completedReconcileWindows === 1 ? '' : 's'} completed`,
+          );
         } finally {
           committedRefresh.releasePublishedRevision();
         }
