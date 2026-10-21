@@ -1449,13 +1449,13 @@ async function initializeSingleInstanceCache(options: { showOverlay?: boolean } 
       && database.countAlerts() === 0
       && database.countDecisions() === 0;
     let deferredIndexesRebuilt = false;
-    if (deferIndexUpdates) {
-      // A populated startup cache still benefits substantially from deferring
-      // FTS writes, but it must retain the alert_id indexes used to reconcile
-      // stale decisions. A brand-new cache can defer every secondary index.
-      await syncWorker.beginDeferredSearchIndexUpdates(freshBulkImport);
-    }
     try {
+      if (deferIndexUpdates) {
+        // A populated startup cache still benefits substantially from deferring
+        // FTS writes, but it must retain the alert_id indexes used to reconcile
+        // stale decisions. A brand-new cache can defer every secondary index.
+        await syncWorker.beginDeferredSearchIndexUpdates(freshBulkImport);
+      }
       console.log('Initializing cache with chunked data load...');
       const syncSummary = await syncHistory(
         options.showOverlay,
