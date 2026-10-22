@@ -1,3 +1,4 @@
+import { PublishedRevisionLock } from './published-revision-lock';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'node:crypto';
@@ -598,69 +599,12 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   const dashboardStatsResponsePromises = new Map<string, Promise<DashboardStatsResponse>>();
   let lastDashboardStatsFilters: DashboardStatsFilters | null = null;
   let lastDashboardStatsRequestedAt = 0;
-  let activePublishedRevisionReaders = 0;
-  let queuedPublishedRevisionWriters = 0;
-  let publishedRevisionWriterTail = Promise.resolve();
-  let publishedRevisionReadersDrained: Promise<void> | null = null;
-  let resolvePublishedRevisionReadersDrained: (() => void) | null = null;
-  let publishedRevisionReadersAllowed: Promise<void> | null = null;
-  let resolvePublishedRevisionReadersAllowed: (() => void) | null = null;
+  const publishedRevisionLock = new PublishedRevisionLock(
+    Math.max(config.dbQueryTimeoutMs, config.dbAnalyticsQueryTimeoutMs) + 30_000,
+  );
+  const acquirePublishedRevisionRead = () => publishedRevisionLock.acquireRead();
+  const acquirePublishedRevisionWrite = () => publishedRevisionLock.acquireWrite();
   const onDemandRefreshPreparedContextKey = 'onDemandRefreshPrepared';
-
-  async function acquirePublishedRevisionRead(): Promise<() => void> {
-    while (queuedPublishedRevisionWriters > 0) {
-      if (!publishedRevisionReadersAllowed) {
-        publishedRevisionReadersAllowed = new Promise<void>((resolve) => {
-          resolvePublishedRevisionReadersAllowed = resolve;
-        });
-      }
-      await publishedRevisionReadersAllowed;
-    }
-
-    activePublishedRevisionReaders += 1;
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      activePublishedRevisionReaders -= 1;
-      if (activePublishedRevisionReaders === 0) {
-        resolvePublishedRevisionReadersDrained?.();
-        resolvePublishedRevisionReadersDrained = null;
-        publishedRevisionReadersDrained = null;
-      }
-    };
-  }
-
-  async function acquirePublishedRevisionWrite(): Promise<() => void> {
-    queuedPublishedRevisionWriters += 1;
-    let releaseWriterTurn!: () => void;
-    const writerTurn = new Promise<void>((resolve) => {
-      releaseWriterTurn = resolve;
-    });
-    const previousWriter = publishedRevisionWriterTail;
-    publishedRevisionWriterTail = previousWriter.then(() => writerTurn);
-    await previousWriter;
-
-    if (activePublishedRevisionReaders > 0) {
-      publishedRevisionReadersDrained = new Promise<void>((resolve) => {
-        resolvePublishedRevisionReadersDrained = resolve;
-      });
-      await publishedRevisionReadersDrained;
-    }
-
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      queuedPublishedRevisionWriters -= 1;
-      releaseWriterTurn();
-      if (queuedPublishedRevisionWriters === 0) {
-        resolvePublishedRevisionReadersAllowed?.();
-        resolvePublishedRevisionReadersAllowed = null;
-        publishedRevisionReadersAllowed = null;
-      }
-    };
-  }
 
   const persistedConfig = loadPersistedConfig(database);
   let refreshIntervalMs = persistedConfig.refresh_interval_ms ?? config.refreshIntervalMs;
@@ -696,6 +640,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   let schedulerTimeout: ReturnType<typeof setTimeout> | null = null;
   let nextRefreshAt: string | null = null;
   let isSchedulerRunning = false;
+  let stopped = false;
   let heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
   let isHeartbeatSchedulerRunning = false;
   let heartbeatPromise: Promise<void> | null = null;
@@ -1115,6 +1060,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   });
 
   const syncServiceState = {
+    get stopped() { return stopped; },
     getReconcileWindowState,
     setReconcileWindowState,
     get initializationPromise() { return initializationPromise; },
@@ -1689,6 +1635,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   }
 
   function scheduleInstanceRefresh(instanceId: string): void {
+    if (stopped) return;
     const instance = config.instances.find((candidate) => candidate.id === instanceId);
     if (!instance) return;
     const interval = instance.sync.refreshIntervalMs ?? refreshIntervalMs;
@@ -1714,6 +1661,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     lapiClients,
     startBackgroundTasks,
     stopBackgroundTasks: () => {
+      stopped = true;
       pendingAlertDeletionStopped = true;
       stopRefreshScheduler();
       stopHeartbeatScheduler();
@@ -1737,6 +1685,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   };
 
   function startBackgroundTasks(): void {
+    if (stopped) return;
     if (!lapiClient.hasAuthConfig()) {
       console.warn('Cache initialization skipped - CrowdSec LAPI authentication not configured');
       return;
@@ -1747,7 +1696,10 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       for (const instance of config.instances) historicalInstanceSyncPending.add(instance.id);
     }
     void ensureBootstrapReady('startup').then(() => {
+      if (stopped) return;
       for (const instance of config.instances.slice(1)) scheduleInstanceRefresh(instance.id);
+    }).catch((error: unknown) => {
+      if (!stopped) console.error('Background bootstrap failed:', error);
     });
   }
 

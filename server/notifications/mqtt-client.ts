@@ -25,17 +25,23 @@ export async function publishMqttNotification(config: MqttPublishConfig, payload
     });
 
     let settled = false;
+    // connectTimeout does not cover a broker that connects but never ACKs a
+    // QoS 1 publish. Bound the entire delivery, including socket teardown.
+    const timeoutMs = config.connectTimeoutMs + 30_000;
+    const timeout = setTimeout(() => finalize(new Error(`MQTT delivery exceeded ${timeoutMs}ms timeout`)), timeoutMs);
     const finalize = (error?: Error) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timeout);
       client.removeAllListeners();
-      client.end(true, () => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve();
-      });
+      // Ignore socket errors during forced shutdown; completion must not wait
+      // for another callback from an already unresponsive connection.
+      client.on('error', () => {});
+      try { client.end(true); } catch (closeError) {
+        error ??= closeError instanceof Error ? closeError : new Error(String(closeError));
+      }
+      if (error) reject(error);
+      else resolve();
     };
 
     client.once('connect', () => {

@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { Worker } from 'node:worker_threads';
-import { isWorkerReadyMessage, markWorkerReady, terminateWorker, type WorkerReadyMessage } from './worker-lifecycle';
+import { DatabaseWorker as Worker } from './database-worker';
+import { isWorkerReadyMessage, terminateWorker, type WorkerReadyMessage } from './worker-lifecycle';
 import type {
   AlertInsertParams,
   DecisionInsertParams,
@@ -266,8 +266,8 @@ export class DatabaseSyncWorker {
       execArgv: isTsRuntime ? ['--import', 'tsx'] : [],
     });
     worker.on('message', (message: SyncWorkerResponse | WorkerReadyMessage) => {
-      if (isWorkerReadyMessage(message)) markWorkerReady(worker);
-      else this.handleMessage(worker, message);
+      if (isWorkerReadyMessage(message)) return;
+      this.handleMessage(worker, message);
     });
     worker.on('error', (error) => this.retireWorker(worker, error));
     worker.on('exit', (code) => {
@@ -301,6 +301,7 @@ export class DatabaseSyncWorker {
   private retireWorker(worker: Worker, error: Error): void {
     if (this.worker !== worker) return;
     this.worker = null;
+    if (!this.closed) console.warn(`Retiring database sync worker: ${error.message}`);
     const shutdown = new Promise<void>((resolve) => worker.once('exit', () => resolve()));
     this.workerShutdown = shutdown;
     void shutdown.then(() => {

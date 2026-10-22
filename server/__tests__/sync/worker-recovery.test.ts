@@ -3,7 +3,7 @@ import { once } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { Worker } from 'node:worker_threads';
+import { DatabaseWorker as Worker } from '../../database-worker';
 import { CrowdsecDatabase } from '../../database';
 import { DatabaseSyncWorker } from '../../sync-worker-client';
 
@@ -17,13 +17,13 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
-async function createWorker() {
+async function createWorker(timeoutMs = 5_000) {
   const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-sync-recovery-'));
   const database = new CrowdsecDatabase({ dbPath: path.join(dir, 'test.db') });
-  const client = new DatabaseSyncWorker({ dbPath: database.dbPath, timeoutMs: 5_000 });
+  const client = new DatabaseSyncWorker({ dbPath: database.dbPath, timeoutMs });
   const threads = new Set<Worker>();
   cleanups.push(async () => {
-    const exits = [...threads].filter((thread) => thread.threadId !== -1).map((thread) => (
+    const exits = [...threads].filter((thread) => !thread.exited).map((thread) => (
       new Promise<void>((resolve) => thread.once('exit', () => resolve()))
     ));
     client.close();
@@ -35,10 +35,10 @@ async function createWorker() {
   async function captureThread() {
     let thread!: Worker;
     const postMessage = Worker.prototype.postMessage;
-    const spy = vi.spyOn(Worker.prototype, 'postMessage').mockImplementation(function (this: Worker, value, transferList) {
+    const spy = vi.spyOn(Worker.prototype, 'postMessage').mockImplementation(function (this: Worker, value) {
       thread = this;
       threads.add(thread);
-      postMessage.call(this, value, transferList);
+      postMessage.call(this, value);
     });
     try {
       await client.setMeta('worker_ready', 'true');
@@ -60,7 +60,8 @@ function dropReply(thread: Worker, requestType: string) {
   let received!: () => void;
   const replyDropped = new Promise<void>((resolve) => { received = resolve; });
   const postMessage = thread.postMessage.bind(thread);
-  vi.spyOn(thread, 'postMessage').mockImplementation((message: Request) => {
+  vi.spyOn(thread, 'postMessage').mockImplementation((value) => {
+    const message = value as Request;
     requests.push(message.request.type);
     typesById.set(message.id, message.request.type);
     postMessage(message);
@@ -111,7 +112,8 @@ describe('DatabaseSyncWorker recovery', () => {
     const onMessage = thread.listeners('message')[0];
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     const postMessage = thread.postMessage.bind(thread);
-    vi.spyOn(thread, 'postMessage').mockImplementation((message: Request) => {
+    vi.spyOn(thread, 'postMessage').mockImplementation((value) => {
+      const message = value as Request;
       if (message.request.type === 'rollback-transaction') {
         queueMicrotask(() => thread.emit('message', { id: message.id, error: 'injected rollback failure' }));
       } else postMessage(message);
@@ -121,12 +123,13 @@ describe('DatabaseSyncWorker recovery', () => {
       throw new Error('refresh failed');
     })).rejects.toThrow('refresh failed');
     expect(log).toHaveBeenCalledWith('Failed to roll back database refresh transaction:', 'injected rollback failure');
-    expect(thread.threadId).toBe(-1);
+    expect(thread.exited).toBe(true);
     expect(database.getMeta('uncommitted')).toBeNull();
 
     const replacement = await captureThread();
     const replacementPostMessage = replacement.postMessage.bind(replacement);
-    vi.spyOn(replacement, 'postMessage').mockImplementation((message: Request) => {
+    vi.spyOn(replacement, 'postMessage').mockImplementation((value) => {
+      const message = value as Request;
       replacementPostMessage(message);
       if (message.request.type === 'begin-transaction') {
         // Reproduce an old worker's callbacks arriving while the replacement
@@ -179,7 +182,7 @@ describe('DatabaseSyncWorker recovery', () => {
     })).rejects.toThrow('120000ms timeout');
     let wrote = false;
     const write = client.runExclusive(() => {
-      expect(thread.threadId).toBe(-1);
+      expect(thread.exited).toBe(true);
       database.setMeta('other_writer', 'available');
       wrote = true;
     });
@@ -198,3 +201,30 @@ describe('DatabaseSyncWorker recovery', () => {
     expect(database.getMeta('other_writer')?.value).toBe('available');
   });
 });
+
+
+test('terminates executing native SQL, rolls back its transaction, and releases queued writes', async () => {
+  const { database, client, thread, captureThread } = await createWorker(500);
+  database.db.exec(`
+    CREATE TRIGGER slow_meta BEFORE INSERT ON meta WHEN NEW.key = 'hang' BEGIN
+      SELECT (WITH RECURSIVE c(v) AS (SELECT 1 UNION ALL SELECT v+1 FROM c WHERE v < 1000000000000)
+        SELECT COUNT(*) FROM c);
+    END;
+  `);
+  const failed = expect(client.runTransaction(async () => {
+    await client.setMeta('uncommitted', 'true');
+    await client.setMeta('hang', 'true');
+  })).rejects.toThrow('500ms timeout');
+  const queued = client.runExclusive(() => {
+    expect(thread.exited).toBe(true);
+    database.setMeta('other_writer', 'available');
+  });
+  await failed;
+  await queued;
+  expect(database.getMeta('uncommitted')).toBeNull();
+  expect(database.getMeta('other_writer')?.value).toBe('available');
+  database.db.exec('DROP TRIGGER slow_meta');
+  await captureThread();
+  await client.runTransaction(() => client.setMeta('after_failure', 'committed'));
+  expect(database.getMeta('after_failure')?.value).toBe('committed');
+}, 10000);

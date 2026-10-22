@@ -119,6 +119,7 @@ export interface SyncServiceDependencies extends Record<string, any> {
 
 export function createSyncService(dependencies: SyncServiceDependencies) {
   const state = dependencies.state;
+  let schedulerGeneration = 0;
   const {
     CAPI_ALERT_ORIGIN,
     COMMUNITY_BLOCKLIST_SOURCE_SCOPE,
@@ -1157,7 +1158,9 @@ async function getActiveReconcileWindowKeys(now: number, runtime: InstanceSyncRu
     WHERE active.stop_at > ?
       AND active.instance_id = ?
       AND alerts.created_at >= ?
-  `, [new Date(now).toISOString(), runtime.instanceId, since]);
+  `, [new Date(now).toISOString(), runtime.instanceId, since], {
+    label: `active alert reconciliation windows (${runtime.instanceId})`,
+  });
   const keys = new Set<string>();
   for (const row of rows) {
     const createdAt = Date.parse(row.created_at);
@@ -1788,6 +1791,7 @@ async function updateCacheDelta(
     const deltaStartedAt = Date.now();
     const diffSeconds = Math.ceil((deltaStartedAt - new Date(cache.lastUpdate).getTime()) / 1_000) + 10;
     const normalDeltaStart = deltaStartedAt - diffSeconds * 1_000;
+    console.log('Planning delta refresh reconciliation...');
     const reconcilePlan = options.reconcile === false ? null : await planDueReconcileWindows(deltaStartedAt);
     const headWindow = reconcilePlan?.windows.find((window) => window.head);
     const deltaStart = Math.min(normalDeltaStart, headWindow?.start ?? normalDeltaStart);
@@ -2029,6 +2033,7 @@ function clearBootstrapRetryTimeout(): void {
 }
 
 function finalizeBootstrapRecovery(): void {
+  if (state.stopped) return;
   clearBootstrapRetryTimeout();
   state.bootstrapWaitLogged = false;
   if (state.refreshIntervalMs > 0 && !state.isSchedulerRunning) {
@@ -2039,6 +2044,7 @@ function finalizeBootstrapRecovery(): void {
 
 function scheduleBootstrapRetry(reason = 'retry requested', options: { allowInitialized?: boolean } = {}): void {
   if (
+    state.stopped ||
     !lapiClient.hasAuthConfig() ||
     !config.bootstrapRetryEnabled ||
     (!options.allowInitialized && cache.isInitialized) ||
@@ -2080,7 +2086,7 @@ function isBackgroundBootstrapSource(source: string | null): boolean {
 }
 
 async function ensureBootstrapReady(source = 'bootstrap'): Promise<boolean> {
-  if (!lapiClient.hasAuthConfig()) {
+  if (state.stopped || !lapiClient.hasAuthConfig()) {
     return false;
   }
 
@@ -2106,6 +2112,7 @@ async function ensureBootstrapReady(source = 'bootstrap'): Promise<boolean> {
     console.log(`Starting bootstrap recovery (${source})...`);
     if (!lapiClient.hasToken()) {
       const loginSuccess = await lapiClient.login(`bootstrap: ${source}`);
+      if (state.stopped) return false;
       if (!loginSuccess) {
         scheduleBootstrapRetry(`authentication failed during ${source}`);
         return false;
@@ -2116,6 +2123,7 @@ async function ensureBootstrapReady(source = 'bootstrap'): Promise<boolean> {
     // before history sync so a restart cannot reintroduce a user-deleted
     // alert while its delayed LAPI deletion is still outstanding.
     await processPendingAlertDeletions(`before historical sync: ${source}`);
+    if (state.stopped) return false;
 
     const syncSummary = await initializeCache();
     if (syncSummary?.state === 'complete') {
@@ -2144,8 +2152,8 @@ async function ensureBootstrapReady(source = 'bootstrap'): Promise<boolean> {
   }
 }
 
-async function runSchedulerLoop(): Promise<void> {
-  if (!state.isSchedulerRunning) return;
+async function runSchedulerLoop(generation = schedulerGeneration): Promise<void> {
+  if (!state.isSchedulerRunning || generation !== schedulerGeneration) return;
   state.schedulerTimeout = null;
   state.nextRefreshAt = null;
 
@@ -2181,7 +2189,7 @@ async function runSchedulerLoop(): Promise<void> {
     console.error('Scheduler update failed:', error);
   }
 
-  if (!state.isSchedulerRunning) return;
+  if (!state.isSchedulerRunning || generation !== schedulerGeneration) return;
 
   const currentIdle = Date.now() - state.lastRequestTime > config.idleThresholdMs;
   let nextInterval = state.refreshIntervalMs;
@@ -2198,7 +2206,7 @@ async function runSchedulerLoop(): Promise<void> {
   }
 
   state.schedulerTimeout = setTimeout(() => {
-    void runSchedulerLoop();
+    void runSchedulerLoop(generation);
   }, nextInterval);
   state.nextRefreshAt = new Date(Date.now() + nextInterval).toISOString();
 }
@@ -2212,13 +2220,15 @@ function startRefreshScheduler(): void {
 
   console.log(`Starting smart scheduler (active: ${getIntervalName(state.refreshIntervalMs)}, idle: ${getIntervalName(config.idleRefreshIntervalMs)})...`);
   state.isSchedulerRunning = true;
+  const generation = schedulerGeneration;
   state.schedulerTimeout = setTimeout(() => {
-    void runSchedulerLoop();
+    void runSchedulerLoop(generation);
   }, state.refreshIntervalMs);
   state.nextRefreshAt = new Date(Date.now() + state.refreshIntervalMs).toISOString();
 }
 
 function stopRefreshScheduler(logStop = true): void {
+  schedulerGeneration += 1;
   if (logStop && (state.isSchedulerRunning || state.schedulerTimeout || state.bootstrapRetryTimeout)) {
     console.log('Stopping refresh scheduler...');
   }
@@ -2320,6 +2330,9 @@ async function activityTrackerMiddleware(context: HonoContext, next: HonoNext): 
       state.schedulerTimeout = null;
     }
     state.nextRefreshAt = null;
+    // An older loop may still be awaiting a refresh. It no longer owns the
+    // next timer; only this wake-up may schedule another polling cycle.
+    schedulerGeneration += 1;
     void runSchedulerLoop();
   }
 

@@ -1,9 +1,11 @@
 import BetterSqlite3 from 'better-sqlite3';
-import { parentPort, workerData } from 'node:worker_threads';
 import { matchesIpSearchValue } from '../shared/search';
 import { installTimestampedConsole } from './logging';
 import { withoutUnavailableIndexHints } from './query-index-fallback';
 import type { WorkerReadyMessage } from './worker-lifecycle';
+
+const workerData = JSON.parse(process.argv[2]);
+process.once('disconnect', () => process.exit(0));
 
 type WorkerRequest = {
   id: number;
@@ -45,9 +47,9 @@ try {
   // Older better-sqlite3 builds may not expose custom functions; SQL callers also keep LIKE fallbacks.
 }
 
-parentPort?.postMessage({ ready: true } satisfies WorkerReadyMessage);
+process.send?.({ ready: true } satisfies WorkerReadyMessage);
 
-parentPort?.on('message', (request: WorkerRequest) => {
+process.on('message', (request: WorkerRequest) => {
   const response: WorkerResponse = { id: request.id };
   try {
     response.rows = executeQuery(request);
@@ -63,7 +65,7 @@ parentPort?.on('message', (request: WorkerRequest) => {
       response.error = error instanceof Error ? error.message : String(error);
     }
   }
-  parentPort?.postMessage(response);
+  process.send?.(response);
 });
 
 function executeQuery(request: WorkerRequest): unknown {
