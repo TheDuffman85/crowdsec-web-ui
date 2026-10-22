@@ -3,7 +3,11 @@
 # ==========================================
 # Stage 0: Node + pnpm
 # ==========================================
-FROM node:24.21.0-trixie-slim AS node-pnpm
+FROM node:24.22.1-trixie-slim AS node-pnpm
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN npm config set fetch-retries 5 \
     && npm config set fetch-retry-factor 2 \

@@ -1,5 +1,5 @@
-import { Worker } from 'node:worker_threads';
-import { isWorkerReadyMessage, markWorkerReady, terminateWorker, type WorkerReadyMessage } from './worker-lifecycle';
+import { DatabaseWorker as Worker } from './database-worker';
+import { isWorkerReadyMessage, terminateWorker, type WorkerReadyMessage } from './worker-lifecycle';
 
 type QueryMethod = 'all' | 'get';
 
@@ -28,6 +28,7 @@ type WorkerResponse = {
 type WorkerSlot = {
   worker: Worker;
   currentId: number | null;
+  retiring: boolean;
 };
 
 type QueryOptions = {
@@ -57,6 +58,7 @@ export class DatabaseQueryWorker {
   private readonly queueTimeoutMs: number;
   private readonly maxWorkers: number;
   private nextId = 1;
+  private closed = false;
   private readonly pending = new Map<number, PendingQuery>();
   private readonly queue: PendingQuery[] = [];
   private readonly workers = new Set<WorkerSlot>();
@@ -82,6 +84,7 @@ export class DatabaseQueryWorker {
   }
 
   close(): void {
+    this.closed = true;
     this.rejectPending(new Error('Database query worker closed'));
     for (const slot of this.workers) {
       terminateWorker(slot.worker);
@@ -95,6 +98,10 @@ export class DatabaseQueryWorker {
     const label = options.label?.trim() || describeQuery(sql);
 
     return new Promise<T>((resolve, reject) => {
+      if (this.closed) {
+        reject(new Error('Database query worker closed'));
+        return;
+      }
       if (options.signal?.aborted) {
         reject(createAbortError());
         return;
@@ -147,6 +154,7 @@ export class DatabaseQueryWorker {
   }
 
   private dispatch(): void {
+    if (this.closed) return;
     while (this.queue.length > 0) {
       const slot = this.getIdleWorker() || this.createWorkerIfCapacity();
       if (!slot) {
@@ -176,18 +184,22 @@ export class DatabaseQueryWorker {
         this.restartWorker(slot);
       }, this.timeoutMs);
       slot.currentId = pending.id;
-      slot.worker.postMessage({
-        id: pending.id,
-        method: pending.method,
-        sql: pending.sql,
-        params: pending.params,
-      });
+      try {
+        slot.worker.postMessage({
+          id: pending.id,
+          method: pending.method,
+          sql: pending.sql,
+          params: pending.params,
+        });
+      } catch (error) {
+        this.handleWorkerFailure(slot, error instanceof Error ? error : new Error(String(error)));
+      }
     }
   }
 
   private getIdleWorker(): WorkerSlot | null {
     for (const slot of this.workers) {
-      if (slot.currentId === null) {
+      if (!slot.retiring && slot.currentId === null) {
         return slot;
       }
     }
@@ -204,11 +216,10 @@ export class DatabaseQueryWorker {
       workerData: { dbPath: this.dbPath },
       execArgv: isTsRuntime ? ['--import', 'tsx'] : [],
     });
-    const slot: WorkerSlot = { worker, currentId: null };
+    const slot: WorkerSlot = { worker, currentId: null, retiring: false };
 
     worker.on('message', (message: WorkerResponse | WorkerReadyMessage) => {
       if (isWorkerReadyMessage(message)) {
-        markWorkerReady(worker);
         return;
       }
       this.handleWorkerMessage(slot, message);
@@ -220,9 +231,7 @@ export class DatabaseQueryWorker {
 
     worker.on('exit', (code) => {
       this.workers.delete(slot);
-      if (code !== 0) {
-        this.handleWorkerFailure(slot, new Error(`Database query worker exited with code ${code}`));
-      }
+      this.handleWorkerFailure(slot, new Error(`Database query worker exited with code ${code}`));
       this.dispatch();
     });
 
@@ -231,6 +240,7 @@ export class DatabaseQueryWorker {
   }
 
   private handleWorkerMessage(slot: WorkerSlot, message: WorkerResponse): void {
+    if (slot.retiring) return;
     const pending = this.pending.get(message.id);
     if (!pending) {
       if (slot.currentId === message.id) {
@@ -239,6 +249,7 @@ export class DatabaseQueryWorker {
       this.dispatch();
       return;
     }
+    if (pending.worker !== slot) return;
     this.pending.delete(message.id);
     if (pending.timeout) clearTimeout(pending.timeout);
     this.removeAbortListener(pending);
@@ -255,7 +266,6 @@ export class DatabaseQueryWorker {
   }
 
   private handleWorkerFailure(slot: WorkerSlot, error: Error): void {
-    this.workers.delete(slot);
     if (slot.currentId !== null) {
       const pending = this.pending.get(slot.currentId);
       if (pending) {
@@ -266,11 +276,14 @@ export class DatabaseQueryWorker {
       }
       slot.currentId = null;
     }
-    this.dispatch();
+    this.restartWorker(slot);
   }
 
   private restartWorker(slot: WorkerSlot): void {
-    this.workers.delete(slot);
+    if (slot.retiring) return;
+    // Retiring processes count toward capacity until exit, preventing timeout
+    // storms from spawning an unbounded number of native SQLite operations.
+    slot.retiring = true;
     slot.currentId = null;
     terminateWorker(slot.worker);
     this.dispatch();
@@ -295,9 +308,7 @@ export class DatabaseQueryWorker {
     if (pending.worker) {
       const slot = pending.worker;
       if (slot.currentId === id) {
-        this.workers.delete(slot);
-        slot.currentId = null;
-        terminateWorker(slot.worker);
+        this.restartWorker(slot);
       }
     } else {
       const queueIndex = this.queue.indexOf(pending);

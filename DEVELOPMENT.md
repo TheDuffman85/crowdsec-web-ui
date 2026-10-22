@@ -10,7 +10,7 @@ Contributor setup, build metadata, verification, and implementation notes for Cr
 
 | Tool | Version |
 | --- | --- |
-| Node.js | `24.21.0` (LTS) |
+| Node.js | `24.22.1` (LTS) |
 | pnpm | `12.9.1` |
 | CrowdSec | A reachable LAPI for normal development |
 
@@ -196,6 +196,15 @@ CrowdSec Web UI keeps normalized alert and decision history in SQLite.
 - Normal and idle refresh intervals trigger each target cadence.
 - Timed-out history requests retry with smaller windows down to `crowdsec.sync.alertSyncMinChunk`.
 - Failed bootstrap work retries in the background using `crowdsec.sync.bootstrapRetryDelay`; partially imported caches remain available and are marked partial.
+
+### Refresh recovery
+
+- The scheduler uses a generation per start or idle wake-up. An older in-flight loop must never schedule another timer after its generation is replaced or stopped.
+- SQLite reads and sync writes run in persistent subprocesses. Native SQLite statements cannot be interrupted reliably by terminating a JavaScript worker thread. On timeout, kill the owning subprocess and wait for its exit before admitting another writer; retiring read processes still count toward pool capacity until exit.
+- Keep transaction ownership and atomic publication intact. Never recover by clearing the refresh promise while its transaction is still running. Reconciliation metadata and data commit together, and failed refreshes retain their previous cursor.
+- Publication waits expire after the larger of `storage.queryTimeout` and `storage.analyticsQueryTimeout`, plus 30 seconds. Expired writers are removed from the lock queue before rollback, so they cannot later acquire and leak the publication lock.
+- GeoNames initialization and lookups fall back to coordinates after 30 seconds. A late successful initialization remains usable by future requests. MQTT delivery has a deadline covering connect, publish acknowledgement, and forced teardown.
+- Recovery tests must interrupt executing SQL as well as drop acknowledgements. Cover subsequent successful refreshes, queued writes, stale callbacks, startup/shutdown, and reader/writer ordering. Do not replace these checks with tests that only assert a timeout error.
 
 ### Write and deletion safety
 

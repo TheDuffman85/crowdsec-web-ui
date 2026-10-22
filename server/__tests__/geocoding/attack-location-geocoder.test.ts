@@ -193,3 +193,32 @@ describe('attack location geocoder', () => {
     expect(warn).toHaveBeenCalledWith('GeoNames attack-location lookup failed: lookup failed');
   });
 });
+
+test.each(['initialization', 'lookup'] as const)('bounds stalled geocoder %s and accepts later successful lookups', async (stage) => {
+  vi.useFakeTimers();
+  let finishInit!: () => void;
+  let finishLookup!: (error: Error | null, results: never[]) => void;
+  const client = {
+    init: vi.fn((_options, callback: () => void) => { finishInit = callback; if (stage === 'lookup') callback(); }),
+    lookUp: vi.fn((_points, _limit, callback) => { finishLookup = callback; }),
+  };
+  const warn = vi.fn();
+  const resolver = createAttackLocationResolver({ dumpDirectory: '/geonames', client, dataAvailable: () => true, timeoutMs: 1000, warn });
+  try {
+    const stalled = resolver.resolve([berlinLocation]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await stalled).toEqual([berlinLocation]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('1000ms timeout'));
+    if (stage === 'initialization') {
+      // Further requests fail promptly without reinitializing a stuck singleton.
+      expect(await resolver.resolve([berlinLocation])).toEqual([berlinLocation]);
+      finishInit();
+    } else finishLookup(null, []);
+    client.lookUp.mockImplementation((_points, _limit, callback) => callback(null, [[{
+      name: 'Berlin', distance: 1, countryCode: 'DE',
+    }]]));
+    expect(await resolver.resolve([berlinLocation])).toEqual([{ ...berlinLocation, city: 'Berlin', region: undefined, countryCode: 'DE' }]);
+    expect(client.init).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { vi.useRealTimers(); }
+});

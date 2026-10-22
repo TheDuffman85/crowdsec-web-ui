@@ -117,3 +117,21 @@ describe('DatabaseQueryWorker', () => {
     database.close();
   });
 });
+
+test('kills a native query on timeout and serves the next read without waiting for SQL completion', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-query-timeout-'));
+  tempDirs.push(dir);
+  const database = new CrowdsecDatabase({ dbPath: path.join(dir, 'test.db') });
+  const worker = new DatabaseQueryWorker({ dbPath: database.dbPath, maxWorkers: 1, timeoutMs: 1000 });
+  workers.push(worker);
+  try {
+    await worker.get('SELECT 1');
+    await expect(worker.get(`
+      WITH RECURSIVE c(v) AS (SELECT 1 UNION ALL SELECT v+1 FROM c WHERE v < 1000000000000)
+      SELECT COUNT(*) FROM c
+    `)).rejects.toMatchObject({ name: 'QueryWorkerTimeoutError', stage: 'execution' });
+    expect(await worker.get('SELECT 42 AS answer')).toEqual({ answer: 42 });
+    worker.close();
+    await expect(worker.get('SELECT 1')).rejects.toThrow('closed');
+  } finally { database.close(); }
+}, 10000);

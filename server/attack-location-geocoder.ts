@@ -49,6 +49,7 @@ interface CreateAttackLocationResolverOptions {
   maxDistanceKm?: number;
   dataAvailable?: () => boolean;
   warn?: (message: string) => void;
+  timeoutMs?: number;
 }
 
 function hasImmutableDumpFile(dumpDirectory: string, subdirectory: string, basename: string): boolean {
@@ -103,7 +104,31 @@ export function createAttackLocationResolver(
   const dataAvailable = options.dataAvailable || (() => prepareGeoNamesAttackLocationData(options.dumpDirectory));
   const warn = options.warn || ((message: string) => console.warn(message));
   let initialization: Promise<void> | null = null;
+  let initialized = false;
+  const timeoutMs = options.timeoutMs ?? 30_000;
   let warned = false;
+
+  function withDeadline<T>(
+    label: string,
+    start: (resolve: (value: T) => void, reject: (error: unknown) => void) => void,
+  ): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error(`${label} exceeded ${timeoutMs}ms timeout`)), timeoutMs);
+      const complete = (value: T) => {
+        clearTimeout(timeout);
+        resolve(value);
+      };
+      const fail = (error: unknown) => {
+        clearTimeout(timeout);
+        reject(error);
+      };
+      try {
+        start(complete, fail);
+      } catch (error) {
+        fail(error);
+      }
+    });
+  }
 
   function warnOnce(message: string): void {
     if (warned) return;
@@ -112,9 +137,10 @@ export function createAttackLocationResolver(
   }
 
   function initialize(): Promise<void> {
+    if (initialized) return Promise.resolve();
     if (initialization) return initialization;
 
-    initialization = new Promise<void>((resolve, reject) => {
+    initialization = withDeadline<void>('GeoNames initialization', (resolve, reject) => {
       try {
         client.init({
           dumpDirectory: options.dumpDirectory,
@@ -125,7 +151,12 @@ export function createAttackLocationResolver(
             admin3And4: false,
             alternateNames: false,
           },
-        }, resolve);
+        }, () => {
+          // A slow initializer can still become usable later, without starting
+          // overlapping initialization of the singleton native data structures.
+          initialized = true;
+          resolve();
+        });
       } catch (error) {
         reject(error);
       }
@@ -134,7 +165,7 @@ export function createAttackLocationResolver(
   }
 
   function lookUp(locations: CoordinateLocation[]): Promise<LocalAddress[][]> {
-    return new Promise((resolve, reject) => {
+    return withDeadline('GeoNames lookup', (resolve, reject) => {
       client.lookUp(
         locations.map(({ latitude, longitude }) => ({ latitude, longitude })),
         ATTACK_LOCATION_CANDIDATE_LIMIT,
