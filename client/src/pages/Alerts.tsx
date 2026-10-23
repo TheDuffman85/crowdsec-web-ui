@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, type MouseEvent as ReactMouseEvent } from "react";
-import { useSearchParams, Link } from "react-router-dom";
+import { useSearchParams, useLocation, useNavigate, Link } from "react-router-dom";
 import { fetchAlertsPaginated, fetchAlert, deleteAlert, bulkDeleteAlerts, cleanupByIp, fetchConfig, fetchDecisionsPaginated } from "../lib/api";
 import { isSimulatedAlert, isSimulatedDecision, parseSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
@@ -81,6 +81,15 @@ function alertKey(alert: Pick<AlertListItem, 'id' | 'instance_id'>): string {
 
 function alertRef(alert: Pick<AlertListItem, 'id' | 'instance_id'>): InstanceEntityRef {
     return { instance_id: alert.instance_id || 'default', id: String(alert.id) };
+}
+
+// Opening details from a row pushes a same-URL history entry flagged in its
+// state, so the browser Back button closes the modal instead of leaving the page.
+const ALERT_DETAILS_HISTORY_KEY = "alertDetailsOpen";
+
+function isAlertDetailsHistoryEntry(state: unknown): boolean {
+    return typeof state === "object" && state !== null
+        && (state as Record<string, unknown>)[ALERT_DETAILS_HISTORY_KEY] === true;
 }
 
 interface ErrorInfo {
@@ -311,6 +320,31 @@ export function Alerts() {
     // Ref to track selected alert ID for auto-refresh (avoids stale closure issues)
     const selectedAlertIdRef = useRef<string | number | null>(null);
     const selectedAlertInstanceIdRef = useRef<string | undefined>(undefined);
+
+    const location = useLocation();
+    const navigate = useNavigate();
+    const alertDetailsHistoryEntry = isAlertDetailsHistoryEntry(location.state);
+    const alertDetailsHistoryEntryRef = useRef(alertDetailsHistoryEntry);
+
+    // Navigating off the history entry pushed for the details modal (Back) closes it
+    useEffect(() => {
+        const wasAlertDetailsHistoryEntry = alertDetailsHistoryEntryRef.current;
+        alertDetailsHistoryEntryRef.current = alertDetailsHistoryEntry;
+        if (wasAlertDetailsHistoryEntry && !alertDetailsHistoryEntry) {
+            setSelectedAlert(null);
+        }
+    }, [alertDetailsHistoryEntry]);
+
+    const closeAlertDetails = useCallback(() => {
+        setSelectedAlert(null);
+        if (alertDetailsHistoryEntryRef.current) {
+            navigate(-1);
+        } else if (searchParams.has("id")) {
+            const newParams = new URLSearchParams(searchParams);
+            newParams.delete("id");
+            setSearchParams(newParams, { replace: true });
+        }
+    }, [navigate, searchParams, setSearchParams]);
 
     const PAGE_SIZE = 50;
     const MAX_ALERT_REFRESH_SIZE = 200;
@@ -1209,6 +1243,12 @@ export function Alerts() {
         setSelectedAlert(alert);
         selectedAlertIdRef.current = alert.id;
         selectedAlertInstanceIdRef.current = alert.instance_id;
+        if (!alertDetailsHistoryEntryRef.current) {
+            navigate(
+                { pathname: location.pathname, search: location.search, hash: location.hash },
+                { state: { ...location.state, [ALERT_DETAILS_HISTORY_KEY]: true } },
+            );
+        }
 
         try {
             const fullAlert = await fetchAlert(alert.id, alert.instance_id);
@@ -1306,7 +1346,7 @@ export function Alerts() {
                 );
                 resultMessage = result ? summarizeDeleteResult(result, t) : null;
                 if (selectedAlert && alertKey(selectedAlert) === `${pendingDeleteAction.ref.instance_id}\u0000${pendingDeleteAction.ref.id}`) {
-                    setSelectedAlert(null);
+                    closeAlertDetails();
                 }
                 setSelectedAlertIds((prev) => prev.filter((id) => id !== `${pendingDeleteAction.ref.instance_id}\u0000${pendingDeleteAction.ref.id}`));
             } else if (pendingDeleteAction.kind === "selected") {
@@ -1315,7 +1355,7 @@ export function Alerts() {
                     : pendingDeleteAction.refs.map((ref) => ref.id));
                 resultMessage = summarizeDeleteResult(result, t);
                 if (selectedAlert && pendingDeleteAction.refs.some((ref) => `${ref.instance_id}\u0000${ref.id}` === alertKey(selectedAlert))) {
-                    setSelectedAlert(null);
+                    closeAlertDetails();
                 }
                 setSelectedAlertIds([]);
             } else {
@@ -1333,7 +1373,7 @@ export function Alerts() {
                         : { ip: pendingDeleteAction.ip, scope: 'instance', instance_id: instanceScope });
                 resultMessage = summarizeDeleteResult(result, t);
                 if (selectedAlert && getAlertSourceValue(selectedAlert.source) === pendingDeleteAction.ip) {
-                    setSelectedAlert(null);
+                    closeAlertDetails();
                 }
                 setSelectedAlertIds([]);
                 if (result.deleted_alerts === 0 && result.deleted_decisions === 0 && result.failed.length === 0) {
@@ -1875,12 +1915,7 @@ export function Alerts() {
             {/* Alert Details Modal */}
             <Modal
                 isOpen={!!selectedAlert && !pendingDecisionAlert}
-                onClose={() => {
-                    setSelectedAlert(null);
-                    const newParams = new URLSearchParams(searchParams);
-                    newParams.delete("id");
-                    setSearchParams(newParams);
-                }}
+                onClose={closeAlertDetails}
                 title={selectedAlert ? t('pages.alerts.alertDetailsId', { id: selectedAlert.id }) : t('pages.alerts.alertDetails')}
                 maxWidth="max-w-6xl"
             >
