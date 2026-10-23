@@ -2,7 +2,7 @@ import { installControlledIntersectionObserver, largeDecisionList, setRefreshSig
 import { describe, expect, test, vi } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate, type NavigateFunction } from 'react-router-dom';
 import * as api from '../../../lib/api';
 import { Alerts } from '../../Alerts';
 import { type DecisionListItem, type SlimAlert } from '../../../types';
@@ -428,5 +428,58 @@ describe('Alerts page details and actions', () => {
       'href',
       'https://github.com/TheDuffman85/crowdsec-web-ui#trusted-ips-for-delete-operations-optional',
     );
+  });
+});
+
+describe('Alerts page details history', () => {
+  function renderWithHistory() {
+    const history: { navigate?: NavigateFunction; pathname?: string } = {};
+    function HistoryProbe() {
+      history.navigate = useNavigate();
+      history.pathname = useLocation().pathname;
+      return null;
+    }
+
+    render(
+      <MemoryRouter initialEntries={['/', '/alerts']} initialIndex={1}>
+        <HistoryProbe />
+        <Routes>
+          <Route path="/" element={<p>Home page</p>} />
+          <Route path="/alerts" element={<Alerts />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    return history;
+  }
+
+  test('closes the details opened from a row on Back without leaving the page', async () => {
+    const history = renderWithHistory();
+    await userEvent.click((await screen.findByText('1.2.3.4')).closest('tr')!);
+    expect(await screen.findByRole('dialog', { name: 'Alert Details #1' })).toBeInTheDocument();
+    const fetchCount = vi.mocked(api.fetchAlertsPaginated).mock.calls.length;
+
+    act(() => {
+      void history.navigate!(-1);
+    });
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Alert Details #1' })).not.toBeInTheDocument());
+    expect(history.pathname).toBe('/alerts');
+    expect(screen.getByText('1.2.3.4')).toBeInTheDocument();
+    expect(vi.mocked(api.fetchAlertsPaginated).mock.calls.length).toBe(fetchCount);
+  });
+
+  test('pops the details history entry when the modal is dismissed', async () => {
+    const history = renderWithHistory();
+    await userEvent.click((await screen.findByText('1.2.3.4')).closest('tr')!);
+    const details = await screen.findByRole('dialog', { name: 'Alert Details #1' });
+
+    await userEvent.click(details.parentElement!);
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Alert Details #1' })).not.toBeInTheDocument());
+
+    act(() => {
+      void history.navigate!(-1);
+    });
+    expect(await screen.findByText('Home page')).toBeInTheDocument();
   });
 });
