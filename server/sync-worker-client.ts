@@ -57,7 +57,7 @@ type SyncWorkerRequest =
   | { type: 'begin-deferred-search-indexes'; dropSecondaryIndexes: boolean; clearSearchIndexes: boolean }
   | { type: 'rebuild-search-indexes'; scope?: SearchIndexRebuildScope }
   | { type: 'refresh-duplicate-flags'; now: string }
-  | { type: 'cleanup-old-data'; cutoff: string }
+  | { type: 'cleanup-old-data'; cutoff: string; limit?: number }
   | ({ type: 'incremental-vacuum' } & IncrementalVacuumOptions)
   | { type: 'begin-transaction' }
   | { type: 'commit-transaction' }
@@ -146,8 +146,8 @@ export class DatabaseSyncWorker {
     return this.execute({ type: 'refresh-duplicate-flags', now }, DUPLICATE_REFRESH_TIMEOUT_MS);
   }
 
-  cleanupOldData(cutoff: string): Promise<{ alerts: number; decisions: number }> {
-    return this.execute({ type: 'cleanup-old-data', cutoff });
+  cleanupOldData(cutoff: string, limit?: number): Promise<{ alerts: number; decisions: number }> {
+    return this.execute({ type: 'cleanup-old-data', cutoff, limit });
   }
 
   runIncrementalVacuum(options: IncrementalVacuumOptions): Promise<IncrementalVacuumResult> {

@@ -235,15 +235,21 @@ describe('createApp refresh API', () => {
     const syncWorker = new DatabaseSyncWorker({ dbPath: database.dbPath });
     const runTransaction = syncWorker.runTransaction.bind(syncWorker);
     const saveMetadata = vi.spyOn(syncWorker, 'setMeta');
-    vi.spyOn(syncWorker, 'runTransaction').mockImplementationOnce((operation, options) => (
-      runTransaction(operation, {
+    const cleanupOldData = vi.spyOn(syncWorker, 'cleanupOldData');
+    let commitFailed = false;
+    vi.spyOn(syncWorker, 'runTransaction').mockImplementation((operation, options) => {
+      const cleanupCalls = cleanupOldData.mock.calls.length;
+      return runTransaction(operation, {
         ...options,
         beforeCommit: async () => {
           await options?.beforeCommit?.();
+          // Retention cleanup commits separately; fail the refresh commit.
+          if (commitFailed || cleanupOldData.mock.calls.length > cleanupCalls) return;
+          commitFailed = true;
           throw new Error('commit failed after metadata save');
         },
-      })
-    ));
+      });
+    });
     const lastUpdate = new Date(Date.now() - 10_000).toISOString();
     const { controller, lapiClient } = createController({
       database,
@@ -289,6 +295,90 @@ describe('createApp refresh API', () => {
       expect(database.countAlerts()).toBe(2);
       expect(published).toHaveBeenCalledOnce();
     } finally {
+      unsubscribe();
+      controller.stopBackgroundTasks();
+      database.close();
+    }
+  });
+
+  test('invalidates cached analytics when cleanup commits before a delta that later fails', async () => {
+    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const oldAlert = sampleAlert({
+      id: 941,
+      uuid: 'cleanup-941',
+      created_at: new Date(Date.now() - 10 * 24 * 60 * 60 * 1_000).toISOString(),
+      decisions: [],
+    });
+    seedAlert(database, oldAlert);
+    seedAlert(database, sampleAlert({ id: 942, uuid: 'cleanup-942', decisions: [] }));
+    const syncWorker = new DatabaseSyncWorker({ dbPath: database.dbPath });
+    const analyticsQueryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath, maxWorkers: 1 });
+    const analyticsQueries = vi.spyOn(analyticsQueryWorker, 'all');
+    let lapiStarted!: () => void;
+    const lapiFetchStarted = new Promise<void>((resolve) => { lapiStarted = resolve; });
+    let releaseLapi!: () => void;
+    const lapiGate = new Promise<void>((resolve) => { releaseLapi = resolve; });
+    const { controller, lapiClient } = createController({
+      database,
+      syncWorker,
+      analyticsQueryWorker,
+      env: { CROWDSEC_REFRESH_INTERVAL: '1h', CROWDSEC_HEARTBEAT_INTERVAL: 'manual' },
+      initialCacheState: {
+        isInitialized: true,
+        isComplete: true,
+        lastUpdate: new Date(Date.now() - 5_000).toISOString(),
+      },
+      fetchResolver: (url) => {
+        if (!url.includes('/v1/alerts?')) return undefined;
+        lapiStarted();
+        return lapiGate.then(() => new Response('unavailable', { status: 500 }));
+      },
+    });
+    const published = vi.fn();
+    const unsubscribe = controller.subscribeCacheUpdates(published);
+    const readAlertTotal = async () => {
+      const response = await controller.fetch(
+        new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=10&include_decisions=false'),
+      );
+      return ((await response.json()) as PaginatedResponse<SlimAlert>).pagination.total;
+    };
+    let refresh: Promise<Response> | Response | null = null;
+
+    try {
+      await lapiClient.login();
+      expect(await readAlertTotal()).toBe(1);
+      const primedDashboard = (await (await controller.fetch(
+        new Request('http://localhost/crowdsec/api/dashboard/stats'),
+      )).json()) as DashboardStatsResponse;
+      expect(primedDashboard.totals.alerts).toBe(1);
+
+      const refreshResponse = controller.fetch(new Request('http://localhost/crowdsec/api/cache/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'delta' }),
+      }));
+      refresh = refreshResponse;
+      await lapiFetchStarted;
+
+      // Cleanup has committed while the delta is still waiting for LAPI. Its
+      // commit must already have dropped the cached analytics generation.
+      expect(database.countAlerts()).toBe(1);
+      const queriesBeforeRead = analyticsQueries.mock.calls.length;
+      const dashboard = (await (await controller.fetch(
+        new Request('http://localhost/crowdsec/api/dashboard/stats'),
+      )).json()) as DashboardStatsResponse;
+      expect(dashboard.pending === true || dashboard.totals.alerts === 1).toBe(true);
+      await vi.waitFor(() => expect(analyticsQueries.mock.calls.length).toBeGreaterThan(queriesBeforeRead));
+      expect(await readAlertTotal()).toBe(1);
+
+      releaseLapi();
+      expect((await refreshResponse).status).not.toBe(200);
+      expect(database.countAlerts()).toBe(1);
+      expect(await readAlertTotal()).toBe(1);
+      expect(published).toHaveBeenCalledOnce();
+    } finally {
+      releaseLapi();
+      await refresh;
       unsubscribe();
       controller.stopBackgroundTasks();
       database.close();

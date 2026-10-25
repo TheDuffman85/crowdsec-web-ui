@@ -109,7 +109,7 @@ const CREATE_SYNC_SECONDARY_INDEXES_SQL = `
   CREATE INDEX IF NOT EXISTS idx_decisions_value ON decisions(value);
   CREATE INDEX IF NOT EXISTS idx_decisions_created_at ON decisions(created_at);
   CREATE INDEX IF NOT EXISTS idx_decisions_created_id_stop_at ON decisions(created_at DESC, id DESC, stop_at);
-  CREATE INDEX IF NOT EXISTS idx_decisions_stop_alert_id ON decisions(stop_at, alert_id);
+  CREATE INDEX IF NOT EXISTS idx_decisions_stop_alert_id ON decisions(stop_at, alert_id, instance_id);
   CREATE INDEX IF NOT EXISTS idx_decisions_value_stop_at ON decisions(value, stop_at DESC);
   CREATE INDEX IF NOT EXISTS idx_decisions_country ON decisions(country);
   CREATE INDEX IF NOT EXISTS idx_decisions_region ON decisions(region);
@@ -1229,12 +1229,14 @@ export class CrowdsecDatabase {
     return (this.countDecisionsStatement.get() as CountRow).count;
   }
 
-  deleteOldAlerts(cutoff: string): number {
+  deleteOldAlerts(cutoff: string, limit = Infinity): number {
     let changes = 0;
-    const selectOldAlerts = this.db.prepare('SELECT id FROM alerts WHERE created_at < ? LIMIT 900');
-    while (true) {
-      const ids = (selectOldAlerts.all(cutoff) as IdRow[]).map((row) => String(row.id));
+    let remaining = limit;
+    const selectOldAlerts = this.db.prepare('SELECT id FROM alerts WHERE created_at < ? LIMIT ?');
+    while (remaining > 0) {
+      const ids = (selectOldAlerts.all(cutoff, Math.min(900, remaining)) as IdRow[]).map((row) => String(row.id));
       if (ids.length === 0) break;
+      remaining -= ids.length;
       changes += runChunkedIdMutation(this.db, 'DELETE FROM alerts WHERE id IN', ids);
       this.deleteAlertSearchIndexes(ids);
     }
@@ -1375,7 +1377,18 @@ export class CrowdsecDatabase {
     return this.getDecisionsSinceStatement.all({ $since: since, $now: now }) as DecisionDataRow[];
   }
 
-  deleteOldDecisions(cutoff: string): number {
+  deleteOldDecisions(cutoff: string, limit?: number): number {
+    if (limit !== undefined) {
+      const deleteBatch = this.db.transaction((threshold: string) => {
+        const ids = (
+          this.db.prepare('SELECT id FROM decisions WHERE stop_at < ? LIMIT ?').all(threshold, limit) as IdRow[]
+        ).map((row) => String(row.id));
+        if (!this.searchIndexUpdatesDeferred) this.deleteDecisionSearchIndexes(ids);
+        return runChunkedIdMutation(this.db, 'DELETE FROM decisions WHERE id IN', ids);
+      });
+      return deleteBatch(cutoff);
+    }
+
     const cleanup = this.db.transaction((threshold: string) => {
       if (!this.searchIndexUpdatesDeferred && this.searchIndexAvailable) {
         this.db.prepare(`
@@ -3168,6 +3181,7 @@ function migrateRecordIndexColumns(db: Database): void {
   db.exec('DROP INDEX IF EXISTS idx_decisions_duplicate_created_at');
   db.exec('DROP INDEX IF EXISTS idx_decisions_duplicate_active');
   migrateDecisionDuplicateFilterIndex(db);
+  migrateDecisionStopAlertIndex(db);
   migrateAlertFilterIndex(db);
   db.exec(CREATE_SYNC_SECONDARY_INDEXES_SQL);
 
@@ -3180,6 +3194,17 @@ function migrateDecisionDuplicateFilterIndex(db: Database): void {
   ).map((column) => column.name);
   if (columns.length > 0 && columns[1] !== 'instance_id') {
     db.exec('DROP INDEX idx_decisions_duplicate_filters');
+  }
+}
+
+// Active reconciliation planning filters by instance. Without instance_id in
+// the index, every active decision needs a table row lookup.
+function migrateDecisionStopAlertIndex(db: Database): void {
+  const columns = (
+    db.query("PRAGMA index_info('idx_decisions_stop_alert_id')").all() as Array<{ name: string }>
+  ).map((column) => column.name);
+  if (columns.length > 0 && !columns.includes('instance_id')) {
+    db.exec('DROP INDEX idx_decisions_stop_alert_id');
   }
 }
 

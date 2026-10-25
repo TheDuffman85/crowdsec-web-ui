@@ -102,15 +102,16 @@ describe('multi-instance API', () => {
         const runTransaction = worker.runTransaction.bind(worker);
         let transactionCount = 0;
         vi.spyOn(worker, 'runTransaction').mockImplementation(async (operation, options) => {
+          // Transaction 1 is the primary's retention cleanup batch.
           const transactionNumber = ++transactionCount;
-          if (transactionNumber === 2) secondaryQueued();
+          if (transactionNumber === 3) secondaryQueued();
           const result = await runTransaction(async () => {
-            if (transactionNumber === 2) secondaryStarted();
+            if (transactionNumber === 3) secondaryStarted();
             return operation();
           }, options);
           // Force the second writer to hold SQLite's lock before the primary
           // resumes post-commit bookkeeping, making the reported race reliable.
-          if (transactionNumber === 1) await secondaryTransactionStarted;
+          if (transactionNumber === 2) await secondaryTransactionStarted;
           return result;
         });
         return worker;

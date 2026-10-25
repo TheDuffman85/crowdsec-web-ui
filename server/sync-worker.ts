@@ -125,9 +125,10 @@ function execute(request: WorkerRequest['request']): unknown {
   }
   if (request.type === 'cleanup-old-data') {
     const cutoff = String(request.cutoff);
+    const limit = request.limit === undefined ? undefined : Number(request.limit);
     return {
-      alerts: database.deleteOldAlerts(cutoff),
-      decisions: database.deleteOldDecisions(cutoff),
+      alerts: database.deleteOldAlerts(cutoff, limit),
+      decisions: database.deleteOldDecisions(cutoff, limit),
     };
   }
   if (request.type === 'incremental-vacuum') {
