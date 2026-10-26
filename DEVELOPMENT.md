@@ -11,7 +11,7 @@ Contributor setup, build metadata, verification, and implementation notes for Cr
 | Tool | Version |
 | --- | --- |
 | Node.js | `24.22.1` (LTS) |
-| pnpm | `12.9.1` |
+| pnpm | `12.15.0` |
 | CrowdSec | A reachable LAPI for normal development |
 
 ### Install dependencies

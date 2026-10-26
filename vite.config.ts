@@ -25,11 +25,11 @@ export default defineConfig({
   plugins: [dropFontsourceWoffFallback(), react(), tailwindcss()],
   resolve: {
     alias: {
-      '@shared': path.resolve(__dirname, 'shared'),
+      '@shared': path.resolve(import.meta.dirname, 'shared'),
     },
   },
   build: {
-    outDir: path.resolve(__dirname, 'dist/client'),
+    outDir: path.resolve(import.meta.dirname, 'dist/client'),
     emptyOutDir: true,
     rolldownOptions: {
       output: {
