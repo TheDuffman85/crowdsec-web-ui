@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, type MouseEvent as ReactMouseEvent } from "react";
-import { useSearchParams, useLocation, useNavigate, Link } from "react-router-dom";
+import { useSearchParams, Link } from "react-router-dom";
 import { fetchAlertsPaginated, fetchAlert, deleteAlert, bulkDeleteAlerts, cleanupByIp, fetchConfig, fetchDecisionsPaginated } from "../lib/api";
 import { isSimulatedAlert, isSimulatedDecision, parseSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
+import { useHistoryBackedOverlay } from "../lib/historyOverlay";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
 import { AddDecisionModal } from "../components/AddDecisionModal";
@@ -81,15 +82,6 @@ function alertKey(alert: Pick<AlertListItem, 'id' | 'instance_id'>): string {
 
 function alertRef(alert: Pick<AlertListItem, 'id' | 'instance_id'>): InstanceEntityRef {
     return { instance_id: alert.instance_id || 'default', id: String(alert.id) };
-}
-
-// Opening details from a row pushes a same-URL history entry flagged in its
-// state, so the browser Back button closes the modal instead of leaving the page.
-const ALERT_DETAILS_HISTORY_KEY = "alertDetailsOpen";
-
-function isAlertDetailsHistoryEntry(state: unknown): boolean {
-    return typeof state === "object" && state !== null
-        && (state as Record<string, unknown>)[ALERT_DETAILS_HISTORY_KEY] === true;
 }
 
 interface ErrorInfo {
@@ -321,30 +313,27 @@ export function Alerts() {
     const selectedAlertIdRef = useRef<string | number | null>(null);
     const selectedAlertInstanceIdRef = useRef<string | undefined>(undefined);
 
-    const location = useLocation();
-    const navigate = useNavigate();
-    const alertDetailsHistoryEntry = isAlertDetailsHistoryEntry(location.state);
-    const alertDetailsHistoryEntryRef = useRef(alertDetailsHistoryEntry);
-
-    // Navigating off the history entry pushed for the details modal (Back) closes it
-    useEffect(() => {
-        const wasAlertDetailsHistoryEntry = alertDetailsHistoryEntryRef.current;
-        alertDetailsHistoryEntryRef.current = alertDetailsHistoryEntry;
-        if (wasAlertDetailsHistoryEntry && !alertDetailsHistoryEntry) {
-            setSelectedAlert(null);
-        }
-    }, [alertDetailsHistoryEntry]);
+    // Details and the decision form opened from a row are backed by history
+    // entries, so the browser Back button closes them instead of leaving the page.
+    const alertDetailsHistory = useHistoryBackedOverlay("alertDetailsOpen", () => setSelectedAlert(null));
+    const alertDecisionHistory = useHistoryBackedOverlay("alertDecisionOpen", () => setPendingDecisionAlert(null));
+    const closeAlertDetailsHistory = alertDetailsHistory.close;
+    const closeAlertDecisionHistory = alertDecisionHistory.close;
 
     const closeAlertDetails = useCallback(() => {
         setSelectedAlert(null);
-        if (alertDetailsHistoryEntryRef.current) {
-            navigate(-1);
-        } else if (searchParams.has("id")) {
+        if (!closeAlertDetailsHistory() && searchParams.has("id")) {
+            // Opened from a deep link: drop the id without adding a history entry
             const newParams = new URLSearchParams(searchParams);
             newParams.delete("id");
             setSearchParams(newParams, { replace: true });
         }
-    }, [navigate, searchParams, setSearchParams]);
+    }, [closeAlertDetailsHistory, searchParams, setSearchParams]);
+
+    const closeAlertDecision = useCallback(() => {
+        setPendingDecisionAlert(null);
+        closeAlertDecisionHistory();
+    }, [closeAlertDecisionHistory]);
 
     const PAGE_SIZE = 50;
     const MAX_ALERT_REFRESH_SIZE = 200;
@@ -1243,12 +1232,7 @@ export function Alerts() {
         setSelectedAlert(alert);
         selectedAlertIdRef.current = alert.id;
         selectedAlertInstanceIdRef.current = alert.instance_id;
-        if (!alertDetailsHistoryEntryRef.current) {
-            navigate(
-                { pathname: location.pathname, search: location.search, hash: location.hash },
-                { state: { ...location.state, [ALERT_DETAILS_HISTORY_KEY]: true } },
-            );
-        }
+        alertDetailsHistory.open();
 
         try {
             const fullAlert = await fetchAlert(alert.id, alert.instance_id);
@@ -1312,6 +1296,7 @@ export function Alerts() {
 
     const openAlertDecision = (alert: AlertSelection) => {
         setPendingDecisionAlert(alert);
+        alertDecisionHistory.open();
     };
 
     const refreshAfterDecision = async () => {
@@ -2142,6 +2127,7 @@ export function Alerts() {
                                                         <td className="px-4 py-2 text-sm">
                                                             {isActive ? (
                                                                 <Link
+                                                                    replace={alertDetailsHistory.isActive || undefined}
                                                                     to={buildDecisionListHref(selectedAlert.id, {
                                                                         instanceId: selectedAlert.instance_id,
                                                                         simulation: simulationsEnabled
@@ -2157,6 +2143,7 @@ export function Alerts() {
                                                                 </Link>
                                                             ) : (
                                                                 <Link
+                                                                    replace={alertDetailsHistory.isActive || undefined}
                                                                     to={buildDecisionListHref(selectedAlert.id, {
                                                                         instanceId: selectedAlert.instance_id,
                                                                         includeExpired: true,
@@ -2243,7 +2230,7 @@ export function Alerts() {
                     currentInstanceId={pendingDecisionAlert.instance_id}
                     currentInstanceName={pendingDecisionAlert.instance_name || instanceNames[pendingDecisionAlert.instance_id || '']}
                     defaultAllInstances={false}
-                    onClose={() => setPendingDecisionAlert(null)}
+                    onClose={closeAlertDecision}
                     onDecisionAdded={refreshAfterDecision}
                 />
             )}

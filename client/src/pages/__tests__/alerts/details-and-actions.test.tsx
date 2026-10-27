@@ -483,3 +483,54 @@ describe('Alerts page details history', () => {
     expect(await screen.findByText('Home page')).toBeInTheDocument();
   });
 });
+
+describe('Alerts page decision form history', () => {
+  test('closes the decision form opened from the details on Back and keeps the details open', async () => {
+    vi.mocked(api.fetchAlert).mockResolvedValue({
+      id: 1,
+      created_at: '2026-03-23T11:00:00.000Z',
+      scenario: 'crowdsecurity/ssh-bf',
+      source: { ip: '1.2.3.4', value: '1.2.3.4' },
+      message: '',
+      decisions: [],
+      events: [],
+    });
+    const history: { navigate?: NavigateFunction; pathname?: string } = {};
+    function HistoryProbe() {
+      history.navigate = useNavigate();
+      history.pathname = useLocation().pathname;
+      return null;
+    }
+
+    render(
+      <MemoryRouter initialEntries={['/', '/alerts']} initialIndex={1}>
+        <HistoryProbe />
+        <Routes>
+          <Route path="/" element={<p>Home page</p>} />
+          <Route path="/alerts" element={<Alerts />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await userEvent.click((await screen.findByText('1.2.3.4')).closest('tr')!);
+    const details = await screen.findByRole('dialog', { name: 'Alert Details #1' });
+    await userEvent.click(within(details).getByRole('button', { name: 'Add Decision' }));
+    expect(await screen.findByRole('dialog', { name: 'Add Manual Decision' })).toBeInTheDocument();
+
+    act(() => {
+      void history.navigate!(-1);
+    });
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Add Manual Decision' })).not.toBeInTheDocument());
+    expect(await screen.findByRole('dialog', { name: 'Alert Details #1' })).toBeInTheDocument();
+
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Alert Details #1' })).not.toBeInTheDocument());
+    expect(history.pathname).toBe('/alerts');
+
+    act(() => {
+      void history.navigate!(-1);
+    });
+    expect(await screen.findByText('Home page')).toBeInTheDocument();
+  });
+});

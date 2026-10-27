@@ -5,6 +5,7 @@ import { Toast } from "./Toast";
 import { BackToTop } from "./BackToTop";
 import { useToast } from "../contexts/useToast";
 import { useI18n } from "../lib/i18n";
+import { useHistoryBackedOverlay } from "../lib/historyOverlay";
 import { useTheme } from "../lib/theme";
 
 export function Layout() {
@@ -27,8 +28,24 @@ export function Layout() {
         localStorage.setItem("menuOpen", String(isMenuOpen));
     }, [isMenuOpen]);
 
+    // On mobile the sidebar is a drawer backed by a history entry, so the
+    // browser Back button closes it instead of leaving the page.
+    const menuHistory = useHistoryBackedOverlay("menuOpen", () => setIsMenuOpen(false));
+
+    const closeMenu = () => {
+        setIsMenuOpen(false);
+        menuHistory.close();
+    };
+
     const toggleMenu = () => {
-        setIsMenuOpen(!isMenuOpen);
+        if (isMenuOpen) {
+            closeMenu();
+            return;
+        }
+        setIsMenuOpen(true);
+        if (window.innerWidth < 1024) {
+            menuHistory.open();
+        }
     };
 
     const location = useLocation();
@@ -57,13 +74,14 @@ export function Layout() {
             {/* Mobile Sidebar Overlay */}
             <div
                 className={`fixed inset-0 bg-black/50 z-40 lg:hidden transition-opacity duration-300 ease-in-out ${isMenuOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
-                onClick={() => setIsMenuOpen(false)}
+                onClick={closeMenu}
             />
 
             <Sidebar
                 isOpen={isMenuOpen}
-                onClose={() => setIsMenuOpen(false)}
+                onClose={closeMenu}
                 onToggle={toggleMenu}
+                replaceOnNavigate={menuHistory.isActive}
                 theme={theme}
                 setTheme={setTheme}
             />

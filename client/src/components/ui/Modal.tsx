@@ -11,11 +11,39 @@ interface ModalProps extends PropsWithChildren {
     showCloseButton?: boolean;
 }
 
+// Open modals in opening order, so Escape only closes the topmost one.
+const openModals: object[] = [];
+
 export function Modal({ isOpen, onClose, title, children, maxWidth = "max-w-md", showCloseButton = true }: ModalProps) {
     // Pressing inside the dialog and releasing over the backdrop (for example
     // while selecting text in an input) dispatches the click on the backdrop,
     // so the backdrop click only closes when the press also started on it.
     const pressStartedOnBackdrop = useRef<boolean | null>(null);
+    const onCloseRef = useRef(onClose);
+
+    useEffect(() => {
+        onCloseRef.current = onClose;
+    });
+
+    useEffect(() => {
+        if (!isOpen) return;
+        const modal = {};
+        openModals.push(modal);
+
+        const closeOnEscape = (event: KeyboardEvent) => {
+            if (event.key !== "Escape" || event.isComposing || event.defaultPrevented) return;
+            if (openModals[openModals.length - 1] !== modal) return;
+            event.preventDefault();
+            onCloseRef.current();
+        };
+        // Listening on window runs after document listeners, so popovers inside
+        // the dialog can handle Escape first by calling preventDefault.
+        window.addEventListener("keydown", closeOnEscape);
+        return () => {
+            window.removeEventListener("keydown", closeOnEscape);
+            openModals.splice(openModals.indexOf(modal), 1);
+        };
+    }, [isOpen]);
 
     useEffect(() => {
         if (isOpen) {
