@@ -88,7 +88,7 @@ wait_for_url() {
 
 cd "$REPO_ROOT"
 
-echo "Seeding screenshot database: $DB_DIR/crowdsec.db"
+echo "Seeding screenshot databases in $DB_DIR"
 "${PNPM[@]}" exec tsx "$SCRIPT_DIR/seed-demo-data.ts"
 
 echo "Starting screenshot backend on port $CROWDSEC_SCREENSHOT_BACKEND_PORT"

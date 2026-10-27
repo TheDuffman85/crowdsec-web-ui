@@ -1,9 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'node:crypto';
-import { fileURLToPath } from 'node:url';
 import BetterSqlite3 from 'better-sqlite3';
-import { MANUAL_DECISION_MESSAGE_PREFIX, type AlertDecision, type AlertRecord } from '../shared/contracts';
+import type { AlertDecision, AlertRecord } from '../shared/contracts';
 import { matchesIpSearchValue } from '../shared/search';
 import { deriveAlertIndexValues, deriveAlertIndexValuesFromRecord, deriveDecisionIndexValues, deriveDecisionIndexValuesFromRecord } from './record-index';
 import {
@@ -36,8 +35,23 @@ type Database = {
   function?: (name: string, optionsOrFn: unknown, fn?: (...args: unknown[]) => unknown) => void;
 };
 
-const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const RECENT_FILTER_LIMIT = 5;
+const DEFAULT_DATA_DIR = '/app/data';
+export const CACHE_DATABASE_FILE = 'cache.db';
+export const STATE_DATABASE_FILE = 'state.db';
+const LEGACY_DATABASE_FILE = 'crowdsec.db';
+const STATE_SCHEMA = 'state';
+// Settings that must survive losing cache.db. They are stored in state.db; every other
+// meta key is cache bookkeeping that stays in cache.db.
+const STATE_SETTING_KEYS = new Set([
+  'notification_secret_key',
+  'language',
+  'metrics_sidebar_visible',
+  'manual_decision_scenarios',
+  'refresh_interval_ms',
+  'manual_refresh_enabled',
+]);
+const STATE_SETTING_PREFIXES = ['auth_', 'branding_'];
 const DECISION_DUPLICATE_RANK_VERSION = '2';
 const DEFAULT_JOURNAL_SIZE_LIMIT_BYTES = 128 * 1024 * 1024;
 const INCREMENTAL_VACUUM_META_KEY = 'sqlite_incremental_vacuum_at';
@@ -109,7 +123,7 @@ const CREATE_SYNC_SECONDARY_INDEXES_SQL = `
   CREATE INDEX IF NOT EXISTS idx_decisions_value ON decisions(value);
   CREATE INDEX IF NOT EXISTS idx_decisions_created_at ON decisions(created_at);
   CREATE INDEX IF NOT EXISTS idx_decisions_created_id_stop_at ON decisions(created_at DESC, id DESC, stop_at);
-  CREATE INDEX IF NOT EXISTS idx_decisions_stop_alert_id ON decisions(stop_at, alert_id);
+  CREATE INDEX IF NOT EXISTS idx_decisions_stop_alert_id ON decisions(stop_at, alert_id, instance_id);
   CREATE INDEX IF NOT EXISTS idx_decisions_value_stop_at ON decisions(value, stop_at DESC);
   CREATE INDEX IF NOT EXISTS idx_decisions_country ON decisions(country);
   CREATE INDEX IF NOT EXISTS idx_decisions_region ON decisions(region);
@@ -174,8 +188,15 @@ export interface SearchIndexRebuildScope {
 }
 
 export interface DatabaseOptions {
-  dbDir?: string;
-  dbPath?: string;
+  /** Directory of state.db, and of a legacy crowdsec.db to migrate. */
+  dataDir?: string;
+  /** Directory of cache.db; defaults to dataDir. */
+  cacheDir?: string;
+  /** Explicit cache.db path. state.db then defaults to the same directory and no migration runs. */
+  cachePath?: string;
+  /** Explicit state.db path, or null for a connection that only uses the cache. */
+  statePath?: string | null;
+  /** Journal mode of cache.db; state.db always uses a rollback journal. */
   walEnabled?: boolean;
   incrementalVacuumEnabled?: boolean;
   journalSizeLimitBytes?: number;
@@ -206,6 +227,10 @@ export interface IncrementalVacuumResult {
   after: SqliteStorageStats;
 }
 
+export function isStateSettingKey(key: string): boolean {
+  return STATE_SETTING_KEYS.has(key) || STATE_SETTING_PREFIXES.some((prefix) => key.startsWith(prefix));
+}
+
 export function getSqliteMaintenanceWarning(storage: SqliteStorageStats): string | null {
   if (
     storage.autoVacuum !== 0
@@ -215,7 +240,7 @@ export function getSqliteMaintenanceWarning(storage: SqliteStorageStats): string
   const size = storage.reclaimableBytes >= 1024 ** 3
     ? `${(storage.reclaimableBytes / 1024 ** 3).toFixed(1).replace(/\.0$/, '')} GiB`
     : `${Math.round(storage.reclaimableBytes / 1024 ** 2)} MiB`;
-  return `SQLite can reclaim ~${size}. Stop the app and enable incremental vacuum: ${SQLITE_MAINTENANCE_GUIDE_URL}`;
+  return `SQLite can reclaim ~${size}. Stop the app and delete cache.db to rebuild it with incremental vacuum: ${SQLITE_MAINTENANCE_GUIDE_URL}`;
 }
 
 type RowWithRawData = { raw_data: string; created_at?: string; stop_at?: string; alert_id?: string | number | null };
@@ -306,7 +331,8 @@ export interface WebAuthnCredentialRow {
 
 export class CrowdsecDatabase {
   public readonly db: Database;
-  public readonly dbPath: string;
+  public readonly cachePath: string;
+  public readonly statePath: string | null;
   public readonly wasFresh: boolean;
   public readonly searchIndexAvailable: boolean;
   private searchIndexUpdatesDeferred = false;
@@ -341,6 +367,8 @@ export class CrowdsecDatabase {
   private readonly deleteDecisionsByAlertIdStatement: any;
   private readonly getMetaStatement: any;
   private readonly setMetaStatement: any;
+  private readonly getSettingStatement: any;
+  private readonly setSettingStatement: any;
   private readonly countAuthUsersStatement: any;
   private readonly createAuthUserStatement: any;
   private readonly getAuthUserByIdStatement: any;
@@ -390,17 +418,23 @@ export class CrowdsecDatabase {
   private readonly upsertDecisionSearchRowStatement: any | null;
 
   constructor(options: DatabaseOptions = {}) {
-    const resolvedPath = resolveDatabasePath(options);
-    this.dbPath = resolvedPath;
+    const paths = resolveDatabasePaths(options);
+    if (paths.legacyPath && paths.statePath) migrateLegacyDatabase(paths.legacyPath, paths.statePath);
+    this.cachePath = paths.cachePath;
+    this.statePath = paths.statePath;
     const opened = openDatabase(
-      resolvedPath,
+      this.cachePath,
       options.walEnabled ?? true,
       options.journalSizeLimitBytes ?? DEFAULT_JOURNAL_SIZE_LIMIT_BYTES,
       options.incrementalVacuumEnabled ?? true,
     );
     this.db = opened.database;
     this.wasFresh = opened.wasFresh;
-    this.searchIndexAvailable = initSchema(this.db, this.wasFresh);
+    this.searchIndexAvailable = initCacheSchema(this.db);
+    if (this.statePath) {
+      attachStateDatabase(this.db, this.statePath);
+      restoreAlertDeletionTombstones(this.db);
+    }
     this.loadDecisionDuplicateRefreshState();
     this.refreshAlertDeletionTombstones();
 
@@ -643,41 +677,43 @@ export class CrowdsecDatabase {
     this.deleteDecisionsByAlertIdStatement = this.db.query('DELETE FROM decisions WHERE alert_id = $alert_id');
     this.getMetaStatement = this.db.query('SELECT value FROM meta WHERE key = ?');
     this.setMetaStatement = this.db.query('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)');
-    this.countAuthUsersStatement = this.db.query('SELECT COUNT(*) as count FROM auth_users');
-    this.createAuthUserStatement = this.db.query(`
+    this.getSettingStatement = this.stateQuery('SELECT value FROM settings WHERE key = ?');
+    this.setSettingStatement = this.stateQuery('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
+    this.countAuthUsersStatement = this.stateQuery('SELECT COUNT(*) as count FROM auth_users');
+    this.createAuthUserStatement = this.stateQuery(`
       INSERT INTO auth_users (username, password_hash, role, auth_provider, created_at, updated_at)
       VALUES ($username, $password_hash, $role, $auth_provider, $created_at, $updated_at)
     `);
-    this.getAuthUserByIdStatement = this.db.query('SELECT * FROM auth_users WHERE id = $id');
-    this.getAuthUserByUsernameStatement = this.db.query('SELECT * FROM auth_users WHERE username = $username');
-    this.getAuthUserByOidcIdentityStatement = this.db.query(`
+    this.getAuthUserByIdStatement = this.stateQuery('SELECT * FROM auth_users WHERE id = $id');
+    this.getAuthUserByUsernameStatement = this.stateQuery('SELECT * FROM auth_users WHERE username = $username');
+    this.getAuthUserByOidcIdentityStatement = this.stateQuery(`
       SELECT * FROM auth_users
       WHERE oidc_issuer = $oidc_issuer AND oidc_subject = $oidc_subject
     `);
-    this.updateAuthUserPasswordStatement = this.db.query(`
+    this.updateAuthUserPasswordStatement = this.stateQuery(`
       UPDATE auth_users
       SET password_hash = $password_hash,
           session_version = session_version + 1,
           updated_at = $updated_at
       WHERE id = $id
     `);
-    this.updateAuthUserTotpStatement = this.db.query(`
+    this.updateAuthUserTotpStatement = this.stateQuery(`
       UPDATE auth_users
       SET totp_secret = $totp_secret, totp_enabled = $totp_enabled, totp_last_step = $totp_last_step, updated_at = $updated_at
       WHERE id = $id
     `);
-    this.updateAuthUserTotpLastStepStatement = this.db.query(`
+    this.updateAuthUserTotpLastStepStatement = this.stateQuery(`
       UPDATE auth_users
       SET totp_last_step = $totp_last_step, updated_at = $updated_at
       WHERE id = $id AND (totp_last_step IS NULL OR totp_last_step < $totp_last_step)
     `);
-    this.createOidcUserStatement = this.db.query(`
+    this.createOidcUserStatement = this.stateQuery(`
       INSERT INTO auth_users (
         username, password_hash, role, auth_provider, oidc_issuer, oidc_subject, created_at, updated_at
       )
       VALUES ($username, NULL, $role, 'oidc', $oidc_issuer, $oidc_subject, $created_at, $updated_at)
     `);
-    this.updateOidcUserStatement = this.db.query(`
+    this.updateOidcUserStatement = this.stateQuery(`
       UPDATE auth_users
       SET username = $username,
           role = $role,
@@ -688,78 +724,78 @@ export class CrowdsecDatabase {
           updated_at = $updated_at
       WHERE id = $id
     `);
-    this.listWebAuthnCredentialsByUserStatement = this.db.query(`
+    this.listWebAuthnCredentialsByUserStatement = this.stateQuery(`
       SELECT * FROM webauthn_credentials
       WHERE user_id = $user_id
       ORDER BY created_at DESC
     `);
-    this.countWebAuthnCredentialsStatement = this.db.query(`
+    this.countWebAuthnCredentialsStatement = this.stateQuery(`
       SELECT COUNT(*) as count
       FROM webauthn_credentials credentials
       JOIN auth_users users ON users.id = credentials.user_id
       WHERE users.auth_provider <> 'oidc' OR users.password_hash IS NOT NULL
     `);
-    this.createWebAuthnCredentialStatement = this.db.query(`
+    this.createWebAuthnCredentialStatement = this.stateQuery(`
       INSERT INTO webauthn_credentials (user_id, credential_id, public_key, sign_count, transports, name, created_at)
       VALUES ($user_id, $credential_id, $public_key, $sign_count, $transports, $name, $created_at)
     `);
-    this.getWebAuthnCredentialByCredentialIdStatement = this.db.query('SELECT * FROM webauthn_credentials WHERE credential_id = $credential_id');
-    this.updateWebAuthnCredentialCounterStatement = this.db.query(`
+    this.getWebAuthnCredentialByCredentialIdStatement = this.stateQuery('SELECT * FROM webauthn_credentials WHERE credential_id = $credential_id');
+    this.updateWebAuthnCredentialCounterStatement = this.stateQuery(`
       UPDATE webauthn_credentials
       SET sign_count = $sign_count
       WHERE id = $id
     `);
-    this.renameWebAuthnCredentialStatement = this.db.query(`
+    this.renameWebAuthnCredentialStatement = this.stateQuery(`
       UPDATE webauthn_credentials
       SET name = $name
       WHERE id = $id AND user_id = $user_id
     `);
-    this.deleteWebAuthnCredentialStatement = this.db.query('DELETE FROM webauthn_credentials WHERE id = $id AND user_id = $user_id');
-    this.listNotificationChannelsStatement = this.db.query(`
+    this.deleteWebAuthnCredentialStatement = this.stateQuery('DELETE FROM webauthn_credentials WHERE id = $id AND user_id = $user_id');
+    this.listNotificationChannelsStatement = this.stateQuery(`
       SELECT id, created_at, updated_at, name, type, enabled, config_json
       FROM notification_channels
       ORDER BY created_at DESC
     `);
-    this.getNotificationChannelByIdStatement = this.db.query(`
+    this.getNotificationChannelByIdStatement = this.stateQuery(`
       SELECT id, created_at, updated_at, name, type, enabled, config_json
       FROM notification_channels
       WHERE id = $id
     `);
-    this.upsertNotificationChannelStatement = this.db.query(`
+    this.upsertNotificationChannelStatement = this.stateQuery(`
       INSERT OR REPLACE INTO notification_channels (id, created_at, updated_at, name, type, enabled, config_json)
       VALUES ($id, $created_at, $updated_at, $name, $type, $enabled, $config_json)
     `);
-    this.deleteNotificationChannelStatement = this.db.query('DELETE FROM notification_channels WHERE id = $id');
-    this.listNotificationRulesStatement = this.db.query(`
+    this.deleteNotificationChannelStatement = this.stateQuery('DELETE FROM notification_channels WHERE id = $id');
+    this.listNotificationRulesStatement = this.stateQuery(`
       SELECT id, created_at, updated_at, name, type, enabled, severity, channel_ids_json, config_json
       FROM notification_rules
       ORDER BY created_at DESC
     `);
-    this.getNotificationRuleByIdStatement = this.db.query(`
+    this.getNotificationRuleByIdStatement = this.stateQuery(`
       SELECT id, created_at, updated_at, name, type, enabled, severity, channel_ids_json, config_json
       FROM notification_rules
       WHERE id = $id
     `);
-    this.upsertNotificationRuleStatement = this.db.query(`
+    this.upsertNotificationRuleStatement = this.stateQuery(`
       INSERT OR REPLACE INTO notification_rules (
         id, created_at, updated_at, name, type, enabled, severity, channel_ids_json, config_json
       )
       VALUES ($id, $created_at, $updated_at, $name, $type, $enabled, $severity, $channel_ids_json, $config_json)
     `);
-    this.deleteNotificationRuleStatement = this.db.query('DELETE FROM notification_rules WHERE id = $id');
-    this.listNotificationsPageStatement = this.db.query(`
+    this.deleteNotificationRuleStatement = this.stateQuery('DELETE FROM notification_rules WHERE id = $id');
+    this.listNotificationsPageStatement = this.stateQuery(`
       SELECT id, created_at, updated_at, rule_id, rule_name, rule_type, severity, title, message, read_at, metadata_json, deliveries_json, dedupe_key
       FROM notifications
       ORDER BY created_at DESC
       LIMIT $limit OFFSET $offset
     `);
-    this.countNotificationsStatement = this.db.query('SELECT COUNT(*) as count FROM notifications');
-    this.listNotificationIdsStatement = this.db.query(`
+    this.countNotificationsStatement = this.stateQuery('SELECT COUNT(*) as count FROM notifications');
+    this.listNotificationIdsStatement = this.stateQuery(`
       SELECT id
       FROM notifications
       ORDER BY created_at DESC
     `);
-    this.insertNotificationStatement = this.db.query(`
+    this.insertNotificationStatement = this.stateQuery(`
       INSERT OR IGNORE INTO notifications (
         id, created_at, updated_at, rule_id, rule_name, rule_type, severity, title, message, read_at, metadata_json, deliveries_json, dedupe_key
       )
@@ -767,35 +803,35 @@ export class CrowdsecDatabase {
         $id, $created_at, $updated_at, $rule_id, $rule_name, $rule_type, $severity, $title, $message, $read_at, $metadata_json, $deliveries_json, $dedupe_key
       )
     `);
-    this.listNotificationIncidentsByRuleStatement = this.db.query(`
+    this.listNotificationIncidentsByRuleStatement = this.stateQuery(`
       SELECT rule_id, incident_key, first_seen_at, last_seen_at, resolved_at
       FROM notification_incidents
       WHERE rule_id = $rule_id
       ORDER BY incident_key ASC
     `);
-    this.upsertNotificationIncidentStatement = this.db.query(`
+    this.upsertNotificationIncidentStatement = this.stateQuery(`
       INSERT OR REPLACE INTO notification_incidents (rule_id, incident_key, first_seen_at, last_seen_at, resolved_at)
       VALUES ($rule_id, $incident_key, $first_seen_at, $last_seen_at, $resolved_at)
     `);
-    this.resolveNotificationIncidentStatement = this.db.query(`
+    this.resolveNotificationIncidentStatement = this.stateQuery(`
       UPDATE notification_incidents
       SET resolved_at = $resolved_at, last_seen_at = $last_seen_at
       WHERE rule_id = $rule_id AND incident_key = $incident_key AND resolved_at IS NULL
     `);
-    this.deleteNotificationIncidentsByRuleStatement = this.db.query('DELETE FROM notification_incidents WHERE rule_id = $rule_id');
-    this.deleteNotificationStatement = this.db.query('DELETE FROM notifications WHERE id = $id');
-    this.deleteNotificationByRuleAndDedupeKeyStatement = this.db.query(`
+    this.deleteNotificationIncidentsByRuleStatement = this.stateQuery('DELETE FROM notification_incidents WHERE rule_id = $rule_id');
+    this.deleteNotificationStatement = this.stateQuery('DELETE FROM notifications WHERE id = $id');
+    this.deleteNotificationByRuleAndDedupeKeyStatement = this.stateQuery(`
       DELETE FROM notifications
       WHERE rule_id = $rule_id AND dedupe_key = $dedupe_key
     `);
-    this.markNotificationReadStatement = this.db.query('UPDATE notifications SET read_at = $read_at, updated_at = $updated_at WHERE id = $id');
-    this.markAllNotificationsReadStatement = this.db.query(`
+    this.markNotificationReadStatement = this.stateQuery('UPDATE notifications SET read_at = $read_at, updated_at = $updated_at WHERE id = $id');
+    this.markAllNotificationsReadStatement = this.stateQuery(`
       UPDATE notifications
       SET read_at = $read_at, updated_at = $updated_at
       WHERE read_at IS NULL
     `);
-    this.deleteReadNotificationsStatement = this.db.query('DELETE FROM notifications WHERE read_at IS NOT NULL');
-    this.countUnreadNotificationsStatement = this.db.query('SELECT COUNT(*) as count FROM notifications WHERE read_at IS NULL');
+    this.deleteReadNotificationsStatement = this.stateQuery('DELETE FROM notifications WHERE read_at IS NOT NULL');
+    this.countUnreadNotificationsStatement = this.stateQuery('SELECT COUNT(*) as count FROM notifications WHERE read_at IS NULL');
     this.getCveCacheEntryStatement = this.db.query(`
       SELECT id, published_at, fetched_at
       FROM cve_cache
@@ -1229,12 +1265,14 @@ export class CrowdsecDatabase {
     return (this.countDecisionsStatement.get() as CountRow).count;
   }
 
-  deleteOldAlerts(cutoff: string): number {
+  deleteOldAlerts(cutoff: string, limit = Infinity): number {
     let changes = 0;
-    const selectOldAlerts = this.db.prepare('SELECT id FROM alerts WHERE created_at < ? LIMIT 900');
-    while (true) {
-      const ids = (selectOldAlerts.all(cutoff) as IdRow[]).map((row) => String(row.id));
+    let remaining = limit;
+    const selectOldAlerts = this.db.prepare('SELECT id FROM alerts WHERE created_at < ? LIMIT ?');
+    while (remaining > 0) {
+      const ids = (selectOldAlerts.all(cutoff, Math.min(900, remaining)) as IdRow[]).map((row) => String(row.id));
       if (ids.length === 0) break;
+      remaining -= ids.length;
       changes += runChunkedIdMutation(this.db, 'DELETE FROM alerts WHERE id IN', ids);
       this.deleteAlertSearchIndexes(ids);
     }
@@ -1375,7 +1413,18 @@ export class CrowdsecDatabase {
     return this.getDecisionsSinceStatement.all({ $since: since, $now: now }) as DecisionDataRow[];
   }
 
-  deleteOldDecisions(cutoff: string): number {
+  deleteOldDecisions(cutoff: string, limit?: number): number {
+    if (limit !== undefined) {
+      const deleteBatch = this.db.transaction((threshold: string) => {
+        const ids = (
+          this.db.prepare('SELECT id FROM decisions WHERE stop_at < ? LIMIT ?').all(threshold, limit) as IdRow[]
+        ).map((row) => String(row.id));
+        if (!this.searchIndexUpdatesDeferred) this.deleteDecisionSearchIndexes(ids);
+        return runChunkedIdMutation(this.db, 'DELETE FROM decisions WHERE id IN', ids);
+      });
+      return deleteBatch(cutoff);
+    }
+
     const cleanup = this.db.transaction((threshold: string) => {
       if (!this.searchIndexUpdatesDeferred && this.searchIndexAvailable) {
         this.db.prepare(`
@@ -1588,12 +1637,15 @@ export class CrowdsecDatabase {
       ) VALUES (?, ?, ?, NULL, NULL, NULL, 0, NULL, NULL)
       ON CONFLICT(alert_id) DO NOTHING
     `).run(String(alertId), JSON.stringify(Array.from(new Set(decisionIds.map(String)))), requestedAt);
+    this.db.prepare('INSERT OR IGNORE INTO alert_deletion_tombstones (alert_id) VALUES (?)').run(String(alertId));
     this.alertDeletionTombstones.add(String(alertId));
   }
 
+  // The deletion queue lives in state.db; the sync worker only sees cache.db, so the
+  // queued alert IDs are mirrored into alert_deletion_tombstones to keep sync from restoring them.
   refreshAlertDeletionTombstones(): void {
-    const rows = this.db.prepare('SELECT alert_id FROM pending_alert_deletions').all() as Array<{ alert_id: string | number }>;
-    this.alertDeletionTombstones = new Set(rows.map((row) => String(row.alert_id)));
+    const rows = this.db.prepare('SELECT alert_id FROM alert_deletion_tombstones').all() as Array<{ alert_id: string }>;
+    this.alertDeletionTombstones = new Set(rows.map((row) => row.alert_id));
   }
 
   getPendingAlertDeletions(): PendingAlertDeletionRow[] {
@@ -1644,7 +1696,10 @@ export class CrowdsecDatabase {
       DELETE FROM pending_alert_deletions
       WHERE completed_at IS NOT NULL AND completed_at < ?
     `).run(completedBefore).changes;
-    if (changes > 0) this.refreshAlertDeletionTombstones();
+    if (changes > 0) {
+      this.db.exec('DELETE FROM alert_deletion_tombstones WHERE alert_id NOT IN (SELECT alert_id FROM pending_alert_deletions)');
+      this.refreshAlertDeletionTombstones();
+    }
     return changes;
   }
 
@@ -1909,11 +1964,13 @@ export class CrowdsecDatabase {
   }
 
   getMeta(key: string): MetaRow | null {
-    return (this.getMetaStatement.get(key) as MetaRow | null) || null;
+    const statement = isStateSettingKey(key) ? this.getSettingStatement : this.getMetaStatement;
+    return (statement.get(key) as MetaRow | null) || null;
   }
 
   setMeta(key: string, value: string): void {
-    this.setMetaStatement.run(key, value);
+    const statement = isStateSettingKey(key) ? this.setSettingStatement : this.setMetaStatement;
+    statement.run(key, value);
   }
 
   isAuthMigrationDefaultDisabled(): boolean {
@@ -2273,6 +2330,14 @@ export class CrowdsecDatabase {
     return this.db.transaction(callback);
   }
 
+  private stateQuery(sql: string): SqliteStatement {
+    if (this.statePath) return this.db.query(sql);
+    const unavailable = () => {
+      throw new Error('The state database is not attached to this connection');
+    };
+    return { run: unavailable, get: unavailable, all: unavailable };
+  }
+
   private clearSearchIndexes(): void {
     if (!this.searchIndexAvailable) return;
     this.runSearchIndexStatement('DELETE FROM alerts_fts');
@@ -2395,24 +2460,44 @@ function runChunkedIdMutation(db: Database, statementPrefix: string, ids: string
   return changes;
 }
 
-function resolveDatabasePath(options: DatabaseOptions): string {
-  if (options.dbPath) {
-    ensureDirectory(path.dirname(options.dbPath));
-    return options.dbPath;
+interface DatabasePaths {
+  cachePath: string;
+  statePath: string | null;
+  legacyPath: string | null;
+}
+
+function resolveDatabasePaths(options: DatabaseOptions): DatabasePaths {
+  if (options.cachePath) {
+    ensureDirectory(path.dirname(options.cachePath));
+    return {
+      cachePath: options.cachePath,
+      statePath: options.statePath === undefined
+        ? path.join(path.dirname(options.cachePath), STATE_DATABASE_FILE)
+        : options.statePath,
+      legacyPath: null,
+    };
   }
 
-  const dbDir = options.dbDir || '/app/data';
-  let dbPath = path.join(dbDir, 'crowdsec.db');
+  const dataDir = resolveDataDirectory(options.dataDir || DEFAULT_DATA_DIR);
+  const cacheDir = options.cacheDir ? resolveDataDirectory(options.cacheDir) : dataDir;
+  return {
+    cachePath: path.join(cacheDir, CACHE_DATABASE_FILE),
+    statePath: options.statePath === undefined ? path.join(dataDir, STATE_DATABASE_FILE) : options.statePath,
+    legacyPath: path.join(dataDir, LEGACY_DATABASE_FILE),
+  };
+}
 
-  if (!fs.existsSync(dbDir)) {
-    try {
-      fs.mkdirSync(dbDir, { recursive: true });
-    } catch (error) {
-      dbPath = path.join(MODULE_DIR, '../../crowdsec.db');
-    }
+function resolveDataDirectory(dirPath: string): string {
+  try {
+    ensureDirectory(dirPath);
+    return dirPath;
+  } catch (error) {
+    if (dirPath !== DEFAULT_DATA_DIR) throw error;
+    // Local runs outside the container cannot create /app/data; use ./data like the config file does.
+    const fallback = path.resolve(process.cwd(), 'data');
+    ensureDirectory(fallback);
+    return fallback;
   }
-
-  return dbPath;
 }
 
 function ensureDirectory(dirPath: string): void {
@@ -2427,14 +2512,29 @@ function openDatabase(
   journalSizeLimitBytes: number,
   incrementalVacuumEnabled: boolean,
 ): { database: Database; wasFresh: boolean } {
-  try {
-    return prepareDatabase(createDatabase(dbPath), walEnabled, journalSizeLimitBytes, incrementalVacuumEnabled);
-  } catch (error: any) {
-    if (dbPath.startsWith('/app/data') && error?.code === 'EACCES') {
-      return prepareDatabase(createDatabase('crowdsec.db'), walEnabled, journalSizeLimitBytes, incrementalVacuumEnabled);
-    }
-    throw error;
-  }
+  return prepareDatabase(createDatabase(dbPath), walEnabled, journalSizeLimitBytes, incrementalVacuumEnabled);
+}
+
+// The state database is small and rarely written. A rollback journal keeps it usable on
+// network filesystems and leaves a single file to back up, independent of storage.walEnabled.
+function attachStateDatabase(db: Database, statePath: string): void {
+  ensureDirectory(path.dirname(statePath));
+  db.prepare(`ATTACH DATABASE ? AS ${STATE_SCHEMA}`).run(statePath);
+  const fresh = isDatabaseFresh(db, STATE_SCHEMA);
+  db.exec(`PRAGMA ${STATE_SCHEMA}.journal_mode = DELETE`);
+  db.exec(`PRAGMA ${STATE_SCHEMA}.synchronous = FULL`);
+  initStateSchema(db, STATE_SCHEMA, fresh);
+}
+
+// Rebuilds the cache-side mirror of the deletion queue, for example after cache.db was lost.
+function restoreAlertDeletionTombstones(db: Database): void {
+  db.transaction(() => {
+    db.exec(`
+      DELETE FROM main.alert_deletion_tombstones;
+      INSERT INTO main.alert_deletion_tombstones (alert_id)
+      SELECT alert_id FROM ${STATE_SCHEMA}.pending_alert_deletions;
+    `);
+  })();
 }
 
 function prepareDatabase(
@@ -2491,10 +2591,10 @@ function registerDatabaseFunctions(database: Database): void {
   }
 }
 
-function isDatabaseFresh(db: Database): boolean {
+function isDatabaseFresh(db: Database, schema = 'main'): boolean {
   const row = db.query(`
     SELECT COUNT(*) AS count
-    FROM sqlite_master
+    FROM ${schema}.sqlite_master
     WHERE type = 'table'
       AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'
   `).get() as CountRow;
@@ -2526,8 +2626,8 @@ function normalizeBindingValue(value: unknown): unknown {
   return normalized;
 }
 
-function initSchema(db: Database, freshDatabase: boolean): boolean {
-  const createAlertsTable = `
+function initCacheSchema(db: Database): boolean {
+  db.exec(`
     CREATE TABLE IF NOT EXISTS alerts (
       id INTEGER PRIMARY KEY,
       instance_id TEXT NOT NULL DEFAULT 'default',
@@ -2565,13 +2665,11 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
       meta_search TEXT,
       origins TEXT,
       simulated INTEGER NOT NULL DEFAULT 0,
-      search_text TEXT
-      , UNIQUE(instance_id, upstream_id)
-      , UNIQUE(instance_id, uuid)
+      search_text TEXT,
+      UNIQUE(instance_id, upstream_id),
+      UNIQUE(instance_id, uuid)
     );
-  `;
 
-  const createDecisionsTable = `
     CREATE TABLE IF NOT EXISTS decisions (
       id TEXT PRIMARY KEY,
       instance_id TEXT NOT NULL DEFAULT 'default',
@@ -2598,21 +2696,45 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
       machine TEXT,
       simulated INTEGER NOT NULL DEFAULT 0,
       search_text TEXT,
-      is_duplicate INTEGER NOT NULL DEFAULT 0
-      , UNIQUE(instance_id, upstream_id)
-      , UNIQUE(instance_id, uuid)
+      is_duplicate INTEGER NOT NULL DEFAULT 0,
+      UNIQUE(instance_id, upstream_id),
+      UNIQUE(instance_id, uuid)
     );
-  `;
 
-  const createMetaTable = `
     CREATE TABLE IF NOT EXISTS meta (
       key TEXT PRIMARY KEY,
       value TEXT
     );
-  `;
 
-  const createAuthUsersTable = `
-    CREATE TABLE IF NOT EXISTS auth_users (
+    CREATE TABLE IF NOT EXISTS cve_cache (
+      id TEXT PRIMARY KEY,
+      published_at TEXT NOT NULL,
+      fetched_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS alert_deletion_tombstones (
+      alert_id TEXT PRIMARY KEY
+    );
+  `);
+  // A refresh drops the secondary indexes while it bulk-loads and recreates them afterwards.
+  // Recreate them here too in case the previous process stopped in between.
+  db.exec(CREATE_SYNC_SECONDARY_INDEXES_SQL);
+  initDashboardChangeTracking(db);
+  const searchIndexAvailable = initSearchIndexes(db);
+  if (searchIndexAvailable) {
+    backfillSearchIndexes(db);
+  }
+  return searchIndexAvailable;
+}
+
+function initStateSchema(db: Database, schema: string, fresh: boolean): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ${schema}.settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS ${schema}.auth_users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT NOT NULL UNIQUE,
       password_hash TEXT,
@@ -2627,11 +2749,12 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
-    CREATE INDEX IF NOT EXISTS idx_auth_users_username ON auth_users(username);
-  `;
+    CREATE INDEX IF NOT EXISTS ${schema}.idx_auth_users_username ON auth_users(username);
+    CREATE UNIQUE INDEX IF NOT EXISTS ${schema}.idx_auth_users_oidc_identity
+      ON auth_users(oidc_issuer, oidc_subject)
+      WHERE oidc_issuer IS NOT NULL AND oidc_subject IS NOT NULL;
 
-  const createWebAuthnCredentialsTable = `
-    CREATE TABLE IF NOT EXISTS webauthn_credentials (
+    CREATE TABLE IF NOT EXISTS ${schema}.webauthn_credentials (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
       credential_id TEXT NOT NULL UNIQUE,
@@ -2641,11 +2764,9 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
       name TEXT,
       created_at TEXT NOT NULL
     );
-    CREATE INDEX IF NOT EXISTS idx_webauthn_credentials_user_id ON webauthn_credentials(user_id);
-  `;
+    CREATE INDEX IF NOT EXISTS ${schema}.idx_webauthn_credentials_user_id ON webauthn_credentials(user_id);
 
-  const createNotificationChannelsTable = `
-    CREATE TABLE IF NOT EXISTS notification_channels (
+    CREATE TABLE IF NOT EXISTS ${schema}.notification_channels (
       id TEXT PRIMARY KEY,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
@@ -2654,10 +2775,8 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
       enabled INTEGER NOT NULL DEFAULT 1,
       config_json TEXT NOT NULL
     );
-  `;
 
-  const createNotificationRulesTable = `
-    CREATE TABLE IF NOT EXISTS notification_rules (
+    CREATE TABLE IF NOT EXISTS ${schema}.notification_rules (
       id TEXT PRIMARY KEY,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
@@ -2668,10 +2787,8 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
       channel_ids_json TEXT NOT NULL,
       config_json TEXT NOT NULL
     );
-  `;
 
-  const createNotificationsTable = `
-    CREATE TABLE IF NOT EXISTS notifications (
+    CREATE TABLE IF NOT EXISTS ${schema}.notifications (
       id TEXT PRIMARY KEY,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
@@ -2686,13 +2803,11 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
       deliveries_json TEXT NOT NULL,
       dedupe_key TEXT NOT NULL
     );
-    CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at);
-    CREATE INDEX IF NOT EXISTS idx_notifications_read_at ON notifications(read_at);
-    CREATE INDEX IF NOT EXISTS idx_notifications_rule_id ON notifications(rule_id);
-  `;
+    CREATE INDEX IF NOT EXISTS ${schema}.idx_notifications_created_at ON notifications(created_at);
+    CREATE INDEX IF NOT EXISTS ${schema}.idx_notifications_read_at ON notifications(read_at);
+    CREATE INDEX IF NOT EXISTS ${schema}.idx_notifications_rule_id ON notifications(rule_id);
 
-  const createNotificationIncidentsTable = `
-    CREATE TABLE IF NOT EXISTS notification_incidents (
+    CREATE TABLE IF NOT EXISTS ${schema}.notification_incidents (
       rule_id TEXT NOT NULL,
       incident_key TEXT NOT NULL,
       first_seen_at TEXT NOT NULL,
@@ -2700,20 +2815,31 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
       resolved_at TEXT,
       PRIMARY KEY (rule_id, incident_key)
     );
-    CREATE INDEX IF NOT EXISTS idx_notification_incidents_rule_id ON notification_incidents(rule_id);
-    CREATE INDEX IF NOT EXISTS idx_notification_incidents_resolved_at ON notification_incidents(resolved_at);
-  `;
+    CREATE INDEX IF NOT EXISTS ${schema}.idx_notification_incidents_rule_id ON notification_incidents(rule_id);
+    CREATE INDEX IF NOT EXISTS ${schema}.idx_notification_incidents_resolved_at ON notification_incidents(resolved_at);
 
-  const createCveCacheTable = `
-    CREATE TABLE IF NOT EXISTS cve_cache (
+    CREATE TABLE IF NOT EXISTS ${schema}.saved_search_filters (
       id TEXT PRIMARY KEY,
-      published_at TEXT NOT NULL,
-      fetched_at TEXT NOT NULL
+      owner_id INTEGER NOT NULL,
+      name TEXT NOT NULL COLLATE NOCASE,
+      query TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(owner_id, name)
     );
-  `;
+    CREATE INDEX IF NOT EXISTS ${schema}.idx_saved_search_filters_owner
+      ON saved_search_filters(owner_id, name);
 
-  const createPendingAlertDeletionsTable = `
-    CREATE TABLE IF NOT EXISTS pending_alert_deletions (
+    CREATE TABLE IF NOT EXISTS ${schema}.recent_search_filters (
+      owner_id INTEGER NOT NULL,
+      query TEXT NOT NULL,
+      used_at_ms INTEGER NOT NULL,
+      PRIMARY KEY(owner_id, query)
+    );
+    CREATE INDEX IF NOT EXISTS ${schema}.idx_recent_search_filters_owner_used
+      ON recent_search_filters(owner_id, used_at_ms DESC);
+
+    CREATE TABLE IF NOT EXISTS ${schema}.pending_alert_deletions (
       alert_id TEXT PRIMARY KEY,
       decision_ids_json TEXT NOT NULL,
       requested_at TEXT NOT NULL,
@@ -2724,37 +2850,90 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
       last_attempt_at TEXT,
       last_error TEXT
     );
-    CREATE INDEX IF NOT EXISTS idx_pending_alert_deletions_due
+    CREATE INDEX IF NOT EXISTS ${schema}.idx_pending_alert_deletions_due
       ON pending_alert_deletions(completed_at, delete_after, requested_at);
-  `;
-
-  db.exec(createAlertsTable);
-  db.exec(createMetaTable);
-  db.exec(`
-    INSERT OR IGNORE INTO meta (key, value)
-    VALUES ('auth_existing_install_default_disabled', '${freshDatabase ? 'false' : 'true'}')
   `);
-  db.exec(createAuthUsersTable);
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS saved_search_filters (
-      id TEXT PRIMARY KEY,
-      owner_id INTEGER NOT NULL,
-      name TEXT NOT NULL COLLATE NOCASE,
-      query TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      UNIQUE(owner_id, name)
-    );
-    CREATE INDEX IF NOT EXISTS idx_saved_search_filters_owner
-      ON saved_search_filters(owner_id, name);
-    CREATE TABLE IF NOT EXISTS recent_search_filters (
-      owner_id INTEGER NOT NULL,
-      query TEXT NOT NULL,
-      used_at_ms INTEGER NOT NULL,
-      PRIMARY KEY(owner_id, query)
-    );
-    CREATE INDEX IF NOT EXISTS idx_recent_search_filters_owner_used
-      ON recent_search_filters(owner_id, used_at_ms DESC);
+  // Only new installations enable authentication by default; migrated ones keep their previous state.
+  db.prepare(`INSERT OR IGNORE INTO ${schema}.settings (key, value) VALUES ('auth_existing_install_default_disabled', ?)`)
+    .run(fresh ? 'false' : 'true');
+}
+
+// Before the split, everything lived in crowdsec.db. Its durable data, including queued
+// alert deletions, is copied into a new state.db; cached alerts and decisions are left
+// behind because the next sync rebuilds them.
+// state.db is written under a temporary name and renamed when complete, so an interrupted
+// migration starts over on the next startup.
+function migrateLegacyDatabase(legacyPath: string, statePath: string): void {
+  const tempPath = `${statePath}.tmp`;
+  removeDatabaseFiles(tempPath);
+  if (fs.existsSync(statePath) || !fs.existsSync(legacyPath)) return;
+
+  console.log(`Migrating durable data from ${legacyPath} to ${statePath}...`);
+  const legacy = createDatabase(legacyPath);
+  try {
+    const target = createDatabase(tempPath);
+    try {
+      target.exec('PRAGMA journal_mode = DELETE');
+      target.exec('PRAGMA synchronous = FULL');
+      initStateSchema(target, 'main', false);
+      target.transaction(() => importLegacyState(legacy, target))();
+    } finally {
+      target.close();
+    }
+  } finally {
+    legacy.close();
+  }
+  fs.renameSync(tempPath, statePath);
+  try {
+    removeDatabaseFiles(legacyPath);
+  } catch (error) {
+    console.warn(`Migrated durable data to ${statePath}, but could not remove ${legacyPath}: ${(error as Error).message}`);
+    return;
+  }
+  console.log(`Migrated durable data to ${statePath} and removed ${legacyPath}. Cached alerts and decisions are rebuilt by the next sync.`);
+}
+
+const LEGACY_STATE_TABLES = [
+  'auth_users',
+  'webauthn_credentials',
+  'notification_channels',
+  'notification_rules',
+  'notifications',
+  'notification_incidents',
+  'saved_search_filters',
+  'recent_search_filters',
+  'pending_alert_deletions',
+] as const;
+
+// Older versions stored some timestamps in non-ISO formats.
+const LEGACY_TIMESTAMP_COLUMNS = new Set(['created_at', 'updated_at', 'read_at', 'first_seen_at', 'last_seen_at', 'resolved_at']);
+const LEGACY_TIMESTAMP_JSON_COLUMNS = new Set(['metadata_json', 'deliveries_json']);
+
+function importLegacyState(legacy: Database, target: Database): void {
+  for (const table of LEGACY_STATE_TABLES) {
+    const legacyColumns = tableColumns(legacy, table);
+    if (legacyColumns.length === 0) continue;
+    // Copy the columns both schemas share; columns that older versions lacked keep their defaults.
+    const columns = tableColumns(target, table).filter((column) => legacyColumns.includes(column));
+    const insert = target.prepare(`
+      INSERT OR REPLACE INTO ${table} (${columns.join(', ')})
+      VALUES (${columns.map(() => '?').join(', ')})
+    `);
+    const rows = legacy.prepare(`SELECT ${columns.join(', ')} FROM ${table}`).all() as Array<Record<string, unknown>>;
+    for (const row of rows) {
+      insert.run(...columns.map((column) => normalizeLegacyValue(column, row[column])));
+    }
+  }
+
+  if (tableColumns(legacy, 'meta').length > 0) {
+    const insertSetting = target.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
+    const rows = legacy.prepare('SELECT key, value FROM meta').all() as Array<{ key: string; value: string | null }>;
+    for (const row of rows) {
+      if (isStateSettingKey(row.key)) insertSetting.run(row.key, row.value);
+    }
+  }
+
+  target.exec(`
     DELETE FROM recent_search_filters WHERE rowid IN (
       SELECT rowid FROM (
         SELECT rowid, ROW_NUMBER() OVER (
@@ -2764,81 +2943,24 @@ function initSchema(db: Database, freshDatabase: boolean): boolean {
       ) WHERE position > ${RECENT_FILTER_LIMIT}
     );
   `);
-  db.exec(createWebAuthnCredentialsTable);
-  db.exec(createNotificationChannelsTable);
-  db.exec(createNotificationRulesTable);
-  db.exec(createNotificationsTable);
-  db.exec(createNotificationIncidentsTable);
-  db.exec(createCveCacheTable);
-  db.exec(createPendingAlertDeletionsTable);
+  seedNotificationIncidentsFromHistoryIfEmpty(target);
+}
 
-  const tableInfo = db.query('PRAGMA table_info(decisions)').all() as Array<{ name: string; type: string }>;
-  const idColumn = tableInfo.find((column) => column.name === 'id');
+function tableColumns(db: Database, table: string): string[] {
+  return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((column) => column.name);
+}
 
-  if (idColumn && idColumn.type.toUpperCase() === 'INTEGER') {
-    const existingDecisions = db.query('SELECT * FROM decisions').all() as Array<Record<string, unknown>>;
+function normalizeLegacyValue(column: string, value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  if (LEGACY_TIMESTAMP_COLUMNS.has(column)) return normalizeIsoTimestamp(value);
+  if (LEGACY_TIMESTAMP_JSON_COLUMNS.has(column)) return normalizeTimestampJson(value);
+  return value;
+}
 
-    db.exec('DROP INDEX IF EXISTS idx_decisions_stop_at');
-    db.exec('DROP INDEX IF EXISTS idx_decisions_alert_id');
-    db.exec('DROP TABLE IF EXISTS decisions');
-    db.exec(createDecisionsTable);
-
-    if (existingDecisions.length > 0) {
-      const insertStatement = db.query(`
-        INSERT OR REPLACE INTO decisions (id, instance_id, upstream_id, uuid, alert_id, alert_upstream_id, created_at, stop_at, value, type, origin, scenario, raw_data)
-        VALUES ($id, 'default', $id, $uuid, $alert_id, $alert_id, $created_at, $stop_at, $value, $type, $origin, $scenario, $raw_data)
-      `);
-
-      const restore = db.transaction((decisions: Array<Record<string, unknown>>) => {
-        for (const decision of decisions) {
-          (insertStatement as any).run({
-            $id: String(decision.id),
-            $uuid: decision.uuid,
-            $alert_id: decision.alert_id,
-            $created_at: normalizeIsoTimestamp(String(decision.created_at)),
-            $stop_at: normalizeIsoTimestamp(String(decision.stop_at)),
-            $value: decision.value,
-            $type: decision.type,
-            $origin: decision.origin,
-            $scenario: decision.scenario,
-            $raw_data: decision.raw_data,
-          });
-        }
-      });
-
-      restore(existingDecisions);
-    }
-  } else {
-    db.exec(createDecisionsTable);
+function removeDatabaseFiles(dbPath: string): void {
+  for (const suffix of ['', '-wal', '-shm', '-journal']) {
+    fs.rmSync(`${dbPath}${suffix}`, { force: true });
   }
-
-  db.exec(`
-    DROP TRIGGER IF EXISTS alerts_pending_deletion_insert_guard;
-    DROP TRIGGER IF EXISTS alerts_pending_deletion_update_guard;
-    DROP TRIGGER IF EXISTS decisions_pending_alert_deletion_insert_guard;
-    DROP TRIGGER IF EXISTS decisions_pending_alert_deletion_update_guard;
-  `);
-
-  migrateTimestamps(db);
-  migrateInstanceIdentityColumns(db);
-  migrateRecordIndexColumns(db);
-  migrateNormalizedDecisionPayloads(db);
-  migrateNormalizedAlertPayloads(db);
-  migrateAlertKindColumn(db);
-  migrateAlertContextSearch(db);
-  migrateManualAlertTargets(db);
-  initDecisionDuplicateDirtyTracking(db);
-  migrateNotificationRulesTable(db, createNotificationRulesTable);
-  migrateNotificationsTable(db, createNotificationsTable);
-  migrateAuthUsersTable(db);
-  db.exec(createNotificationIncidentsTable);
-  seedNotificationIncidentsFromHistoryIfEmpty(db);
-  const searchIndexAvailable = initSearchIndexes(db);
-  if (searchIndexAvailable) {
-    backfillSearchIndexes(db);
-  }
-  initDashboardChangeTracking(db);
-  return searchIndexAvailable;
 }
 
 function initDashboardChangeTracking(db: Database): void {
@@ -2853,8 +2975,6 @@ function initDashboardChangeTracking(db: Database): void {
     INSERT OR IGNORE INTO meta(key, value) VALUES ('dashboard_change_epoch', '1');
     INSERT OR IGNORE INTO meta(key, value) VALUES ('dashboard_change_floor', '0');
     INSERT OR IGNORE INTO meta(key, value) VALUES ('dashboard_change_tracking_enabled', 'true');
-    DROP TRIGGER IF EXISTS dashboard_alert_update;
-    DROP TRIGGER IF EXISTS dashboard_decision_update;
 
     CREATE TRIGGER IF NOT EXISTS dashboard_alert_insert
     AFTER INSERT ON alerts
@@ -2926,529 +3046,6 @@ function initDashboardChangeTracking(db: Database): void {
   `);
 }
 
-function migrateInstanceIdentityColumns(db: Database): void {
-  const alertColumns = new Set((db.query('PRAGMA table_info(alerts)').all() as Array<{ name: string }>).map((column) => column.name));
-  const migratedAlerts = !alertColumns.has('instance_id') || !alertColumns.has('upstream_id');
-  if (!alertColumns.has('instance_id')) db.exec("ALTER TABLE alerts ADD COLUMN instance_id TEXT NOT NULL DEFAULT 'default'");
-  if (!alertColumns.has('upstream_id')) {
-    db.exec('ALTER TABLE alerts ADD COLUMN upstream_id TEXT');
-    db.exec('UPDATE alerts SET upstream_id = CAST(id AS TEXT) WHERE upstream_id IS NULL');
-  }
-  const decisionColumns = new Set((db.query('PRAGMA table_info(decisions)').all() as Array<{ name: string }>).map((column) => column.name));
-  const migratedDecisions = !decisionColumns.has('instance_id') || !decisionColumns.has('upstream_id');
-  if (!decisionColumns.has('instance_id')) db.exec("ALTER TABLE decisions ADD COLUMN instance_id TEXT NOT NULL DEFAULT 'default'");
-  if (!decisionColumns.has('upstream_id')) {
-    db.exec('ALTER TABLE decisions ADD COLUMN upstream_id TEXT');
-    db.exec('UPDATE decisions SET upstream_id = CAST(id AS TEXT) WHERE upstream_id IS NULL');
-  }
-  if (!decisionColumns.has('alert_upstream_id')) {
-    db.exec('ALTER TABLE decisions ADD COLUMN alert_upstream_id TEXT');
-    db.exec('UPDATE decisions SET alert_upstream_id = CAST(alert_id AS TEXT) WHERE alert_upstream_id IS NULL');
-  }
-  const rebuiltAlerts = rebuildTableWithoutGlobalUuidConstraint(db, 'alerts');
-  const rebuiltDecisions = rebuildTableWithoutGlobalUuidConstraint(db, 'decisions');
-  if (migratedAlerts && !rebuiltAlerts) db.exec(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_instance_upstream ON alerts(instance_id, upstream_id);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_instance_uuid ON alerts(instance_id, uuid) WHERE uuid IS NOT NULL;
-  `);
-  if (migratedDecisions && !rebuiltDecisions) db.exec(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_decisions_instance_upstream ON decisions(instance_id, upstream_id);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_decisions_instance_uuid ON decisions(instance_id, uuid) WHERE uuid IS NOT NULL;
-  `);
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_alerts_instance_created ON alerts(instance_id, created_at DESC, id DESC);
-    CREATE INDEX IF NOT EXISTS idx_decisions_instance_created ON decisions(instance_id, created_at DESC, id DESC);
-  `);
-}
-
-type InstanceIdentityTable = 'alerts' | 'decisions';
-
-interface SqliteTableColumn {
-  name: string;
-  type: string;
-  notnull: number;
-  dflt_value: string | null;
-  pk: number;
-}
-
-function quoteIdentifier(value: string): string {
-  return `"${value.replace(/"/g, '""')}"`;
-}
-
-function sqliteString(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
-}
-
-function hasGlobalUuidConstraint(db: Database, table: InstanceIdentityTable): boolean {
-  const indexes = db.query(`PRAGMA index_list(${sqliteString(table)})`).all() as Array<{ name: string; unique: number }>;
-  return indexes.some((index) => {
-    if (!index.unique) return false;
-    const columns = db.query(`PRAGMA index_info(${sqliteString(index.name)})`).all() as Array<{ name: string }>;
-    return columns.length === 1 && columns[0].name === 'uuid';
-  });
-}
-
-function rebuildTableWithoutGlobalUuidConstraint(db: Database, table: InstanceIdentityTable): boolean {
-  if (!hasGlobalUuidConstraint(db, table)) return false;
-
-  const columns = db.query(`PRAGMA table_info(${sqliteString(table)})`).all() as SqliteTableColumn[];
-  const tempTable = `${table}_instance_identity_migration`;
-  const columnDefinitions = columns.map((column) => {
-    const parts = [quoteIdentifier(column.name), column.type];
-    if (column.pk) parts.push('PRIMARY KEY');
-    if (column.notnull && !column.pk) parts.push('NOT NULL');
-    if (column.dflt_value !== null) parts.push(`DEFAULT ${column.dflt_value}`);
-    return parts.filter(Boolean).join(' ');
-  });
-  const columnNames = columns.map((column) => quoteIdentifier(column.name)).join(', ');
-
-  const migrate = db.transaction(() => {
-    db.exec(`
-      DROP TABLE IF EXISTS ${quoteIdentifier(tempTable)};
-      CREATE TABLE ${quoteIdentifier(tempTable)} (
-        ${columnDefinitions.join(',\n        ')},
-        UNIQUE(instance_id, upstream_id),
-        UNIQUE(instance_id, uuid)
-      );
-      INSERT INTO ${quoteIdentifier(tempTable)} (${columnNames})
-      SELECT ${columnNames} FROM ${quoteIdentifier(table)};
-      DROP TABLE ${quoteIdentifier(table)};
-      ALTER TABLE ${quoteIdentifier(tempTable)} RENAME TO ${quoteIdentifier(table)};
-    `);
-  });
-  migrate();
-  return true;
-}
-
-
-function initDecisionDuplicateDirtyTracking(db: Database): void {
-  db.exec(`
-    DROP TRIGGER IF EXISTS decisions_duplicate_dirty_insert;
-    DROP TRIGGER IF EXISTS decisions_duplicate_dirty_delete;
-    DROP TRIGGER IF EXISTS decisions_duplicate_dirty_update;
-    DROP TABLE IF EXISTS decision_duplicate_dirty;
-    DELETE FROM meta WHERE key = 'decision_duplicate_tracking_enabled';
-  `);
-}
-
-const TIMESTAMP_MIGRATIONS = [
-  { table: 'alerts', timestampColumns: ['created_at'], jsonColumns: ['raw_data'] },
-  { table: 'decisions', timestampColumns: ['created_at', 'stop_at'], jsonColumns: ['raw_data'] },
-  { table: 'auth_users', timestampColumns: ['created_at', 'updated_at'] },
-  { table: 'webauthn_credentials', timestampColumns: ['created_at'] },
-  { table: 'notification_channels', timestampColumns: ['created_at', 'updated_at'] },
-  { table: 'notification_rules', timestampColumns: ['created_at', 'updated_at'] },
-  {
-    table: 'notifications',
-    timestampColumns: ['created_at', 'updated_at', 'read_at'],
-    jsonColumns: ['metadata_json', 'deliveries_json'],
-  },
-  {
-    table: 'notification_incidents',
-    timestampColumns: ['first_seen_at', 'last_seen_at', 'resolved_at'],
-  },
-  { table: 'cve_cache', timestampColumns: ['published_at', 'fetched_at'] },
-] as const;
-
-function migrateTimestamps(db: Database): void {
-  const migrationKey = 'sync_timestamp_format_version';
-  const currentVersion = db.query('SELECT value FROM meta WHERE key = ?').get(migrationKey) as MetaRow | null;
-  if (currentVersion?.value === '2') return;
-
-  const migrate = db.transaction(() => {
-    for (const migration of TIMESTAMP_MIGRATIONS) {
-      const timestampColumns = [...migration.timestampColumns];
-      const jsonColumns = 'jsonColumns' in migration ? [...migration.jsonColumns] : [];
-      const columns = [...timestampColumns, ...jsonColumns];
-      const rows = db.query(`
-        SELECT rowid AS migration_rowid, ${columns.join(', ')}
-        FROM ${migration.table}
-      `).all() as Array<Record<string, unknown>>;
-      const update = db.query(`
-        UPDATE ${migration.table}
-        SET ${columns.map((column) => `${column} = $${column}`).join(', ')}
-        WHERE rowid = $migration_rowid
-      `);
-
-      for (const row of rows) {
-        let changed = false;
-        const params: Record<string, unknown> = { $migration_rowid: row.migration_rowid };
-        for (const column of timestampColumns) {
-          const original = row[column];
-          const normalized = typeof original === 'string' ? normalizeIsoTimestamp(original) : original;
-          params[`$${column}`] = normalized;
-          changed ||= normalized !== original;
-        }
-        for (const column of jsonColumns) {
-          const original = row[column];
-          const normalized = typeof original === 'string' ? normalizeTimestampJson(original) : original;
-          params[`$${column}`] = normalized;
-          changed ||= normalized !== original;
-        }
-        if (changed) {
-          update.run(params);
-        }
-      }
-    }
-    db.query('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(migrationKey, '2');
-  });
-  migrate();
-}
-
-function migrateRecordIndexColumns(db: Database): void {
-  const existingAlertColumns = new Set(
-    (db.query('PRAGMA table_info(alerts)').all() as Array<{ name: string }>).map((column) => column.name),
-  );
-  const shouldBackfillAlertLocations = !existingAlertColumns.has('latitude') || !existingAlertColumns.has('longitude');
-  const shouldBackfillResolvedAlertLocations = !existingAlertColumns.has('region') || !existingAlertColumns.has('city');
-  const existingDecisionColumns = new Set(
-    (db.query('PRAGMA table_info(decisions)').all() as Array<{ name: string }>).map((column) => column.name),
-  );
-  const shouldBackfillResolvedDecisionLocations = !existingDecisionColumns.has('region') || !existingDecisionColumns.has('city');
-
-  ensureColumns(db, 'alerts', [
-    ['start_at', 'TEXT'],
-    ['stop_at', 'TEXT'],
-    ['record_scenario', 'TEXT'],
-    ['kind', 'TEXT'],
-    ['reason', 'TEXT'],
-    ['source_value', 'TEXT'],
-    ['source_scope', 'TEXT'],
-    ['source_range', 'TEXT'],
-    ['source_as_number', 'TEXT'],
-    ['source_extra_data', 'TEXT'],
-    ['machine_id', 'TEXT'],
-    ['machine_alias', 'TEXT'],
-    ['events_count', 'INTEGER'],
-    ['extra_data', 'TEXT'],
-    ['metadata_hash', 'TEXT'],
-    ['latitude', 'REAL'],
-    ['longitude', 'REAL'],
-    ['country', 'TEXT'],
-    ['country_name', 'TEXT'],
-    ['region', 'TEXT'],
-    ['city', 'TEXT'],
-    ['as_name', 'TEXT'],
-    ['target', 'TEXT'],
-    ['machine', 'TEXT'],
-    ['meta_search', 'TEXT'],
-    ['origins', 'TEXT'],
-    ['simulated', 'INTEGER NOT NULL DEFAULT 0'],
-    ['search_text', 'TEXT'],
-  ]);
-  ensureColumns(db, 'decisions', [
-    ['duration', 'TEXT'],
-    ['scope', 'TEXT'],
-    ['extra_data', 'TEXT'],
-    ['country', 'TEXT'],
-    ['country_name', 'TEXT'],
-    ['region', 'TEXT'],
-    ['city', 'TEXT'],
-    ['as_name', 'TEXT'],
-    ['target', 'TEXT'],
-    ['machine', 'TEXT'],
-    ['simulated', 'INTEGER NOT NULL DEFAULT 0'],
-    ['search_text', 'TEXT'],
-    ['is_duplicate', 'INTEGER NOT NULL DEFAULT 0'],
-  ]);
-
-  if (shouldBackfillAlertLocations) {
-    backfillAlertLocationColumns(db);
-  }
-  if (shouldBackfillResolvedAlertLocations || shouldBackfillResolvedDecisionLocations) {
-    backfillResolvedLocationColumns(db);
-  }
-
-  // Replaced by idx_decisions_alert_created_id, which also satisfies the
-  // deterministic decision paging order and covers the history predicate.
-  db.exec('DROP INDEX IF EXISTS idx_decisions_alert_created_at');
-  // Replaced by a covering index so alert-list summaries do not have to read
-  // every matching decision row or build a temporary GROUP BY table.
-  db.exec('DROP INDEX IF EXISTS idx_decisions_alert_id');
-  db.exec('DROP INDEX IF EXISTS idx_decisions_duplicate_created_at');
-  db.exec('DROP INDEX IF EXISTS idx_decisions_duplicate_active');
-  migrateDecisionDuplicateFilterIndex(db);
-  migrateAlertFilterIndex(db);
-  db.exec(CREATE_SYNC_SECONDARY_INDEXES_SQL);
-
-  backfillRecordIndexes(db);
-}
-
-function migrateDecisionDuplicateFilterIndex(db: Database): void {
-  const columns = (
-    db.query("PRAGMA index_info('idx_decisions_duplicate_filters')").all() as Array<{ name: string }>
-  ).map((column) => column.name);
-  if (columns.length > 0 && columns[1] !== 'instance_id') {
-    db.exec('DROP INDEX idx_decisions_duplicate_filters');
-  }
-}
-
-function migrateAlertFilterIndex(db: Database): void {
-  const columns = (
-    db.query("PRAGMA index_info('idx_alerts_filters')").all() as Array<{ name: string }>
-  ).map((column) => column.name);
-  if (columns.length > 0 && !columns.includes('kind')) {
-    db.exec('DROP INDEX idx_alerts_filters');
-  }
-}
-
-function migrateNormalizedDecisionPayloads(db: Database): void {
-  const migrationKey = 'normalized_decision_payload_version';
-  const currentVersion = db.query('SELECT value FROM meta WHERE key = ?').get(migrationKey) as MetaRow | null;
-  const selectRows = db.query(`
-    SELECT rowid AS migration_rowid, raw_data
-    FROM decisions
-    WHERE raw_data IS NOT NULL
-    LIMIT 1000
-  `);
-  let rows = selectRows.all() as Array<{ migration_rowid: number; raw_data: string }>;
-  if (currentVersion?.value === '1' && rows.length === 0) return;
-  const update = db.query(`
-    UPDATE decisions
-    SET duration = COALESCE(duration, $duration),
-        scope = COALESCE(scope, $scope),
-        extra_data = $extra_data,
-        raw_data = NULL
-    WHERE rowid = $migration_rowid
-  `);
-  const migrateBatch = db.transaction((items: typeof rows) => {
-    for (const row of items) {
-      const decision = parseDecisionPayload(row.raw_data);
-      update.run({
-        $migration_rowid: row.migration_rowid,
-        $duration: readOptionalString(decision?.duration),
-        $scope: readOptionalString(decision?.scope),
-        $extra_data: decision
-          ? serializeDecisionExtras(decision)
-          : JSON.stringify({ legacy_payload: row.raw_data }),
-      });
-    }
-  });
-  while (rows.length > 0) {
-    migrateBatch(rows);
-    rows = selectRows.all() as typeof rows;
-  }
-  db.query('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(migrationKey, '1');
-}
-
-function migrateNormalizedAlertPayloads(db: Database): void {
-  const migrationKey = 'normalized_alert_payload_version';
-  const currentVersion = db.query('SELECT value FROM meta WHERE key = ?').get(migrationKey) as MetaRow | null;
-  const selectRows = db.query(`
-    SELECT id, raw_data
-    FROM alerts
-    WHERE raw_data IS NOT NULL
-    LIMIT 500
-  `);
-  let rows = selectRows.all() as Array<{ id: string | number; raw_data: string }>;
-  if (currentVersion?.value === '1' && rows.length === 0) return;
-  const update = db.query(`
-    UPDATE alerts
-    SET start_at = $start_at,
-        stop_at = $stop_at,
-        record_scenario = $record_scenario,
-        kind = $kind,
-        reason = $reason,
-        source_value = $source_value,
-        source_scope = $source_scope,
-        source_range = $source_range,
-        source_as_number = $source_as_number,
-        source_extra_data = $source_extra_data,
-        machine_id = $machine_id,
-        machine_alias = $machine_alias,
-        events_count = $events_count,
-        extra_data = $extra_data,
-        metadata_hash = $metadata_hash,
-        raw_data = NULL
-    WHERE id = $id
-  `);
-  const migrateBatch = db.transaction((items: typeof rows) => {
-    for (const row of items) {
-      const alert = parseAlertPayload(row.raw_data);
-      const source = alert?.source || null;
-      update.run({
-        $id: row.id,
-        $start_at: normalizeOptionalTimestamp(alert?.start_at),
-        $stop_at: normalizeOptionalTimestamp(alert?.stop_at),
-        $record_scenario: readOptionalString(alert?.scenario),
-        $kind: readOptionalString(alert?.kind)?.toLowerCase() || null,
-        $reason: readOptionalString(alert?.reason),
-        $source_value: readOptionalString(source?.value),
-        $source_scope: readOptionalString(source?.scope),
-        $source_range: readOptionalString(source?.range),
-        $source_as_number: source?.as_number === undefined || source?.as_number === null ? null : String(source.as_number),
-        $source_extra_data: serializeAlertSourceExtras(source),
-        $machine_id: readOptionalString(alert?.machine_id),
-        $machine_alias: readOptionalString(alert?.machine_alias),
-        $events_count: typeof alert?.events_count === 'number' ? alert.events_count : null,
-        $extra_data: alert
-          ? serializeAlertExtras(alert)
-          : JSON.stringify({ legacy_payload: row.raw_data }),
-        $metadata_hash: alertMetadataFingerprint(alert),
-      });
-    }
-  });
-  while (rows.length > 0) {
-    migrateBatch(rows);
-    rows = selectRows.all() as typeof rows;
-  }
-  db.query('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(migrationKey, '1');
-}
-
-function migrateAlertKindColumn(db: Database): void {
-  const migrationKey = 'alert_kind_column_version';
-  const currentVersion = db.query('SELECT value FROM meta WHERE key = ?').get(migrationKey) as MetaRow | null;
-  if (currentVersion?.value === '1') return;
-
-  const migrate = db.transaction(() => {
-    db.exec(`
-      UPDATE alerts
-      SET kind = LOWER(TRIM(CAST(json_extract(extra_data, '$.kind') AS TEXT)))
-      WHERE COALESCE(TRIM(kind), '') = ''
-        AND json_valid(extra_data) = 1
-        AND json_type(extra_data, '$.kind') = 'text'
-        AND COALESCE(TRIM(CAST(json_extract(extra_data, '$.kind') AS TEXT)), '') <> '';
-
-      UPDATE alerts
-      SET search_text = TRIM(COALESCE(search_text, '') || ' ' || kind)
-      WHERE COALESCE(TRIM(kind), '') <> ''
-        AND (' ' || LOWER(COALESCE(search_text, '')) || ' ') NOT LIKE
-          ('% ' || LOWER(kind) || ' %');
-    `);
-    db.query('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(migrationKey, '1');
-    db.exec('DROP TABLE IF EXISTS alerts_fts');
-  });
-  migrate();
-}
-
-// Web UI alerts used to get a target guessed from their scenario name (manual/web-ui -> "web").
-// They have no meaningful target, so clear it on stored alerts and their decisions.
-function migrateManualAlertTargets(db: Database): void {
-  const migrationKey = 'manual_alert_target_version';
-  const currentVersion = db.query('SELECT value FROM meta WHERE key = ?').get(migrationKey) as MetaRow | null;
-  if (currentVersion?.value === '2') return;
-
-  const manualAlerts = `
-    SELECT id FROM alerts
-    WHERE substr(message, 1, ${MANUAL_DECISION_MESSAGE_PREFIX.length + 1}) = '${MANUAL_DECISION_MESSAGE_PREFIX}:'
-  `;
-  const withoutTargets = `
-    CASE WHEN json_valid(extra_data)
-      THEN json_remove(extra_data, '$.target', '$.targets', '$.target_count')
-      ELSE extra_data
-    END`;
-
-  const migrate = db.transaction(() => {
-    db.exec(`
-      UPDATE alerts
-      SET target = NULL,
-          extra_data = ${withoutTargets}
-      WHERE id IN (${manualAlerts})
-        AND (target IS NOT NULL OR json_type(extra_data, '$.targets') IS NOT NULL);
-
-      UPDATE decisions
-      SET target = NULL,
-          extra_data = ${withoutTargets}
-      WHERE alert_id IN (${manualAlerts})
-        AND (target IS NOT NULL OR json_type(extra_data, '$.targets') IS NOT NULL);
-    `);
-    db.query('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(migrationKey, '2');
-  });
-  migrate();
-}
-
-function migrateAlertContextSearch(db: Database): void {
-  const migrationKey = 'alert_context_search_version';
-  const currentVersion = db.query('SELECT value FROM meta WHERE key = ?').get(migrationKey) as MetaRow | null;
-  if (currentVersion?.value === '1') return;
-
-  const selectRows = db.query(`
-    SELECT ${ALERT_RECORD_COLUMNS}
-    FROM alerts
-    WHERE CASE
-      WHEN json_valid(extra_data) THEN json_type(extra_data, '$.meta')
-      ELSE NULL
-    END = 'array'
-    ORDER BY alerts.id
-    LIMIT 500 OFFSET ?
-  `);
-  const update = db.query(`
-    UPDATE alerts
-    SET meta_search = $meta_search,
-        search_text = $search_text
-    WHERE id = $id
-  `);
-
-  const migrateBatch = db.transaction((items: NormalizedAlertRow[]) => {
-    for (const row of items) {
-      const alert = alertFromRow(row);
-      const index = deriveAlertIndexValuesFromRecord(alert, {
-        createdAt: alert.created_at,
-        scenario: typeof alert.scenario === 'string' ? alert.scenario : null,
-        sourceIp: typeof alert.source?.ip === 'string' ? alert.source.ip : null,
-        message: typeof alert.message === 'string' ? alert.message : null,
-      });
-      update.run({
-        $id: row.internal_id ?? row.id,
-        $meta_search: index.metaSearch,
-        $search_text: index.searchText,
-      });
-    }
-  });
-
-  let migratedRows = 0;
-  while (true) {
-    const rows = selectRows.all(migratedRows) as NormalizedAlertRow[];
-    if (rows.length === 0) break;
-    migrateBatch(rows);
-    migratedRows += rows.length;
-  }
-
-  const finishMigration = db.transaction(() => {
-    db.query('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(migrationKey, '1');
-    if (migratedRows > 0) db.exec('DROP TABLE IF EXISTS alerts_fts');
-  });
-  finishMigration();
-}
-
-function backfillAlertLocationColumns(db: Database): void {
-  db.exec(`
-    UPDATE alerts
-    SET latitude = CASE
-          WHEN json_valid(raw_data)
-            AND CAST(json_extract(raw_data, '$.source.latitude') AS REAL) BETWEEN -90 AND 90
-          THEN CAST(json_extract(raw_data, '$.source.latitude') AS REAL)
-          ELSE NULL
-        END,
-        longitude = CASE
-          WHEN json_valid(raw_data)
-            AND CAST(json_extract(raw_data, '$.source.longitude') AS REAL) BETWEEN -180 AND 180
-          THEN CAST(json_extract(raw_data, '$.source.longitude') AS REAL)
-          ELSE NULL
-        END
-  `);
-}
-
-function backfillResolvedLocationColumns(db: Database): void {
-  db.exec(`
-    UPDATE alerts
-    SET region = CASE WHEN json_valid(raw_data) THEN json_extract(raw_data, '$.source.region') ELSE NULL END,
-        city = CASE WHEN json_valid(raw_data) THEN json_extract(raw_data, '$.source.city') ELSE NULL END;
-    UPDATE decisions
-    SET region = CASE WHEN json_valid(raw_data) THEN json_extract(raw_data, '$.region') ELSE NULL END,
-        city = CASE WHEN json_valid(raw_data) THEN json_extract(raw_data, '$.city') ELSE NULL END;
-  `);
-}
-
-function ensureColumns(db: Database, tableName: string, columns: Array<[string, string]>): void {
-  const existing = new Set((db.query(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>).map((column) => column.name));
-  for (const [name, definition] of columns) {
-    if (!existing.has(name)) {
-      db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${name} ${definition}`);
-    }
-  }
-}
-
 function readOptionalString(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
@@ -3464,139 +3061,8 @@ function alertRowsToLegacyPayloads(rows: AlertDataRow[]): RowWithRawData[] {
   }));
 }
 
-function backfillRecordIndexes(db: Database): void {
-  const alertRowsStatement = db.query(`
-    SELECT id, created_at, scenario, source_ip, message, raw_data
-    FROM alerts
-    WHERE search_text IS NULL
-    LIMIT 500
-  `);
-  const updateAlertStatement = db.query(`
-    UPDATE alerts
-    SET created_at = $created_at,
-        scenario = $scenario,
-        kind = $kind,
-        source_ip = $source_ip,
-        latitude = $latitude,
-        longitude = $longitude,
-        country = $country,
-        country_name = $country_name,
-        region = $region,
-        city = $city,
-        as_name = $as_name,
-        target = $target,
-        machine = $machine,
-        meta_search = $meta_search,
-        origins = $origins,
-        simulated = $simulated,
-        search_text = $search_text
-    WHERE id = $id
-  `);
-
-  while (true) {
-    const rows = alertRowsStatement.all() as Array<{
-      id: string | number;
-      created_at: string;
-      scenario?: string | null;
-      source_ip?: string | null;
-      message?: string | null;
-      raw_data: string;
-    }>;
-    if (rows.length === 0) break;
-
-    const updateAlerts = db.transaction((items: typeof rows) => {
-      for (const row of items) {
-        const index = deriveAlertIndexValues(row.raw_data, {
-          createdAt: row.created_at,
-          scenario: row.scenario,
-          sourceIp: row.source_ip,
-          message: row.message,
-        });
-        updateAlertStatement.run({
-          $id: row.id,
-          $created_at: index.historyAt,
-          $scenario: index.scenario ?? row.scenario,
-          $kind: index.kind,
-          $source_ip: index.sourceIp ?? row.source_ip,
-          $latitude: index.latitude,
-          $longitude: index.longitude,
-          $country: index.country,
-          $country_name: index.countryName,
-          $region: index.region,
-          $city: index.city,
-          $as_name: index.asName,
-          $target: index.target,
-          $machine: index.machine,
-          $meta_search: index.metaSearch,
-          $origins: index.origins,
-          $simulated: index.simulated,
-          $search_text: index.searchText,
-        });
-      }
-    });
-    updateAlerts(rows);
-  }
-
-  const decisionRowsStatement = db.query(`
-    SELECT id, value, type, origin, scenario, raw_data
-    FROM decisions
-    WHERE search_text IS NULL
-    LIMIT 500
-  `);
-  const updateDecisionStatement = db.query(`
-    UPDATE decisions
-    SET country = $country,
-        country_name = $country_name,
-        region = $region,
-        city = $city,
-        as_name = $as_name,
-        target = $target,
-        machine = $machine,
-        simulated = $simulated,
-        search_text = $search_text
-    WHERE id = $id
-  `);
-
-  while (true) {
-    const rows = decisionRowsStatement.all() as Array<{
-      id: string;
-      value?: string | null;
-      type?: string | null;
-      origin?: string | null;
-      scenario?: string | null;
-      raw_data: string;
-    }>;
-    if (rows.length === 0) break;
-
-    const updateDecisions = db.transaction((items: typeof rows) => {
-      for (const row of items) {
-        const index = deriveDecisionIndexValues(row.raw_data, {
-          value: row.value,
-          type: row.type,
-          origin: row.origin,
-          scenario: row.scenario,
-        });
-        updateDecisionStatement.run({
-          $id: row.id,
-          $country: index.country,
-          $country_name: index.countryName,
-          $region: index.region,
-          $city: index.city,
-          $as_name: index.asName,
-          $target: index.target,
-          $machine: index.machine,
-          $simulated: index.simulated,
-          $search_text: index.searchText,
-        });
-      }
-    });
-    updateDecisions(rows);
-  }
-}
-
 function initSearchIndexes(db: Database): boolean {
   try {
-    dropLegacySearchIndexes(db);
     db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS alerts_fts USING fts5(
         alert_id UNINDEXED,
@@ -3619,23 +3085,6 @@ function initSearchIndexes(db: Database): boolean {
     console.warn('SQLite FTS5 is unavailable; falling back to LIKE search.', (error as Error).message);
     return false;
   }
-}
-
-function dropLegacySearchIndexes(db: Database): void {
-  const definitions = db.query(`
-    SELECT name, sql
-    FROM sqlite_master
-    WHERE type = 'table' AND name IN ('alerts_fts', 'decisions_fts')
-  `).all() as Array<{ name: string; sql?: string | null }>;
-  if (definitions.length === 0 || definitions.every((definition) => /tokenize\s*=\s*['"]trigram['"]/i.test(definition.sql || ''))) {
-    return;
-  }
-
-  db.exec(`
-    DROP TABLE IF EXISTS alerts_fts;
-    DROP TABLE IF EXISTS decisions_fts;
-    DROP TABLE IF EXISTS decision_fts_rows;
-  `);
 }
 
 function backfillSearchIndexes(db: Database): void {
@@ -3738,136 +3187,6 @@ async function backfillSearchIndexesCooperative(db: Database, yieldControl: () =
     lastDecisionRowId = rows[rows.length - 1].rowid;
     await yieldControl();
   }
-}
-
-function migrateAuthUsersTable(db: Database): void {
-  const columns = db.query('PRAGMA table_info(auth_users)').all() as Array<{ name: string }>;
-  if (!columns.some((column) => column.name === 'totp_secret')) {
-    db.exec('ALTER TABLE auth_users ADD COLUMN totp_secret TEXT');
-  }
-  if (!columns.some((column) => column.name === 'totp_enabled')) {
-    db.exec('ALTER TABLE auth_users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0');
-  }
-  if (!columns.some((column) => column.name === 'totp_last_step')) {
-    db.exec('ALTER TABLE auth_users ADD COLUMN totp_last_step INTEGER');
-  }
-  if (!columns.some((column) => column.name === 'oidc_issuer')) {
-    db.exec('ALTER TABLE auth_users ADD COLUMN oidc_issuer TEXT');
-  }
-  if (!columns.some((column) => column.name === 'oidc_subject')) {
-    db.exec('ALTER TABLE auth_users ADD COLUMN oidc_subject TEXT');
-  }
-  if (!columns.some((column) => column.name === 'session_version')) {
-    db.exec('ALTER TABLE auth_users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 1');
-  }
-  db.exec(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_users_oidc_identity
-    ON auth_users(oidc_issuer, oidc_subject)
-    WHERE oidc_issuer IS NOT NULL AND oidc_subject IS NOT NULL
-  `);
-}
-
-function migrateNotificationRulesTable(db: Database, createNotificationRulesTable: string): void {
-  const columns = db.query('PRAGMA table_info(notification_rules)').all() as Array<{ name: string }>;
-  if (!columns.some((column) => column.name === 'cooldown_minutes')) {
-    return;
-  }
-
-  const existingRules = db.query(`
-    SELECT id, created_at, updated_at, name, type, enabled, severity, channel_ids_json, config_json
-    FROM notification_rules
-  `).all() as Array<Record<string, unknown>>;
-
-  db.exec('DROP TABLE IF EXISTS notification_rules');
-  db.exec(createNotificationRulesTable);
-
-  if (existingRules.length === 0) {
-    return;
-  }
-
-  const insertStatement = db.query(`
-    INSERT OR REPLACE INTO notification_rules (
-      id, created_at, updated_at, name, type, enabled, severity, channel_ids_json, config_json
-    )
-    VALUES ($id, $created_at, $updated_at, $name, $type, $enabled, $severity, $channel_ids_json, $config_json)
-  `);
-
-  const restore = db.transaction((rules: Array<Record<string, unknown>>) => {
-    for (const rule of rules) {
-      (insertStatement as any).run({
-        $id: String(rule.id),
-        $created_at: normalizeIsoTimestamp(String(rule.created_at)),
-        $updated_at: normalizeIsoTimestamp(String(rule.updated_at)),
-        $name: String(rule.name),
-        $type: String(rule.type),
-        $enabled: Number(rule.enabled) === 1 ? 1 : 0,
-        $severity: String(rule.severity),
-        $channel_ids_json: String(rule.channel_ids_json || '[]'),
-        $config_json: String(rule.config_json || '{}'),
-      });
-    }
-  });
-
-  restore(existingRules);
-}
-
-function migrateNotificationsTable(db: Database, createNotificationsTable: string): void {
-  const sqlRow = db.query(`
-    SELECT sql
-    FROM sqlite_master
-    WHERE type = 'table' AND name = 'notifications'
-  `).get() as { sql?: string } | null;
-  const tableSql = String(sqlRow?.sql || '');
-  if (!tableSql.includes('dedupe_key TEXT NOT NULL UNIQUE')) {
-    return;
-  }
-
-  const existingNotifications = db.query(`
-    SELECT id, created_at, updated_at, rule_id, rule_name, rule_type, severity, title, message, read_at, metadata_json, deliveries_json, dedupe_key
-    FROM notifications
-    ORDER BY created_at ASC
-  `).all() as Array<Record<string, unknown>>;
-
-  db.exec('DROP INDEX IF EXISTS idx_notifications_created_at');
-  db.exec('DROP INDEX IF EXISTS idx_notifications_read_at');
-  db.exec('DROP INDEX IF EXISTS idx_notifications_rule_id');
-  db.exec('DROP TABLE IF EXISTS notifications');
-  db.exec(createNotificationsTable);
-
-  if (existingNotifications.length === 0) {
-    return;
-  }
-
-  const insertStatement = db.query(`
-    INSERT OR REPLACE INTO notifications (
-      id, created_at, updated_at, rule_id, rule_name, rule_type, severity, title, message, read_at, metadata_json, deliveries_json, dedupe_key
-    )
-    VALUES (
-      $id, $created_at, $updated_at, $rule_id, $rule_name, $rule_type, $severity, $title, $message, $read_at, $metadata_json, $deliveries_json, $dedupe_key
-    )
-  `);
-
-  const restore = db.transaction((notifications: Array<Record<string, unknown>>) => {
-    for (const notification of notifications) {
-      (insertStatement as any).run({
-        $id: String(notification.id),
-        $created_at: normalizeIsoTimestamp(String(notification.created_at)),
-        $updated_at: normalizeIsoTimestamp(String(notification.updated_at)),
-        $rule_id: String(notification.rule_id),
-        $rule_name: String(notification.rule_name),
-        $rule_type: String(notification.rule_type),
-        $severity: String(notification.severity),
-        $title: String(notification.title),
-        $message: String(notification.message),
-        $read_at: notification.read_at == null ? null : normalizeIsoTimestamp(String(notification.read_at)),
-        $metadata_json: normalizeTimestampJson(String(notification.metadata_json || '{}')),
-        $deliveries_json: normalizeTimestampJson(String(notification.deliveries_json || '[]')),
-        $dedupe_key: String(notification.dedupe_key || ''),
-      });
-    }
-  });
-
-  restore(existingNotifications);
 }
 
 function seedNotificationIncidentsFromHistoryIfEmpty(db: Database): void {

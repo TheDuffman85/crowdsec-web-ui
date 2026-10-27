@@ -198,10 +198,11 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
 
   const storage = section(root, 'storage');
   knownKeys(storage, [
-    'dataDir', 'geonamesDir', 'walEnabled', 'incrementalVacuumEnabled', 'journalSizeLimit',
+    'dataDir', 'cacheDir', 'geonamesDir', 'walEnabled', 'incrementalVacuumEnabled', 'journalSizeLimit',
     'queryTimeout', 'analyticsQueryTimeout',
   ], 'storage');
   setString(env, storage, 'dataDir', 'DB_DIR', 'storage');
+  setString(env, storage, 'cacheDir', 'DB_CACHE_DIR', 'storage');
   setString(env, storage, 'geonamesDir', 'GEONAMES_DUMP_DIR', 'storage');
   setDuration(env, storage, 'queryTimeout', 'DB_QUERY_TIMEOUT', 'storage', false);
   setDuration(env, storage, 'analyticsQueryTimeout', 'DB_ANALYTICS_QUERY_TIMEOUT', 'storage', false);
@@ -352,7 +353,7 @@ export const CONFIG_KEY_ORDER = new Map<string, readonly string[]>([
   ['', ['server', 'storage', 'ui', 'updates', 'auth', 'notifications', 'audit', 'crowdsec', 'instances']],
   ['server', ['port', 'basePath']],
   ['storage', [
-    'dataDir', 'geonamesDir', 'walEnabled', 'incrementalVacuumEnabled', 'journalSizeLimit',
+    'dataDir', 'cacheDir', 'geonamesDir', 'walEnabled', 'incrementalVacuumEnabled', 'journalSizeLimit',
     'queryTimeout', 'analyticsQueryTimeout',
   ]],
   ['ui', ['timeZone', 'timeFormat', 'dateFormat', 'readOnly']],
@@ -550,6 +551,7 @@ export function generateApplicationConfig(env: NodeJS.ProcessEnv, config: Runtim
     server: { port: config.port, basePath: config.basePath },
     storage: {
       dataDir: config.dbDir,
+      cacheDir: config.dbCacheDir ?? config.dbDir,
       geonamesDir: config.geonamesDumpDir,
       walEnabled: config.sqliteWalEnabled,
       incrementalVacuumEnabled: config.sqliteIncrementalVacuumEnabled,
@@ -649,6 +651,7 @@ const CONFIG_VALUE_ENV = [
   ['CONFIG_SERVER_PORT', ['server', 'port']],
   ['CONFIG_SERVER_BASE_PATH', ['server', 'basePath']],
   ['CONFIG_STORAGE_DATA_DIR', ['storage', 'dataDir']],
+  ['CONFIG_STORAGE_CACHE_DIR', ['storage', 'cacheDir']],
   ['CONFIG_STORAGE_GEONAMES_DIR', ['storage', 'geonamesDir']],
   ['CONFIG_STORAGE_WAL_ENABLED', ['storage', 'walEnabled']],
   ['CONFIG_STORAGE_INCREMENTAL_VACUUM_ENABLED', ['storage', 'incrementalVacuumEnabled']],

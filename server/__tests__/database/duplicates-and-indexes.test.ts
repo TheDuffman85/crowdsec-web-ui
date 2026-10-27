@@ -181,7 +181,7 @@ describe('CrowdsecDatabase duplicates and indexes', () => {
 
   test('rebuilds persisted duplicate flags after the ranking algorithm changes', () => {
     const dbPath = createTestDatabasePath();
-    let db = new CrowdsecDatabase({ dbPath });
+    let db = new CrowdsecDatabase({ cachePath: dbPath });
     const insertDecision = (id: string) => db.insertDecision({
       $id: id,
       $uuid: id,
@@ -202,7 +202,7 @@ describe('CrowdsecDatabase duplicates and indexes', () => {
     db.db.prepare("DELETE FROM meta WHERE key = 'decision_duplicate_rank_version'").run();
     db.close();
 
-    db = new CrowdsecDatabase({ dbPath });
+    db = new CrowdsecDatabase({ cachePath: dbPath });
     expect(db.refreshDecisionDuplicateFlags('2029-01-01T00:01:00.000Z')).toBe(2);
     expect(db.db.prepare('SELECT id, is_duplicate FROM decisions ORDER BY id').all()).toEqual([
       { id: '10', is_duplicate: 1 },
@@ -271,6 +271,70 @@ describe('CrowdsecDatabase duplicates and indexes', () => {
       { id: 'active-2', is_duplicate: 1 },
     ]);
     expect((db.db.prepare('SELECT COUNT(*) AS count FROM decisions_fts').get() as { count: number }).count).toBe(2);
+
+    db.close();
+  });
+
+  test('limits old alert and decision cleanup to one batch', () => {
+    const db = createTestDatabase();
+    for (let id = 1; id <= 5; id += 1) {
+      db.insertAlert({
+        $id: id,
+        $uuid: `old-alert-${id}`,
+        $created_at: '2025-01-01T00:00:00.000Z',
+        $scenario: 'crowdsecurity/ssh-bf',
+        $source_ip: '1.2.3.4',
+        $message: 'old alert',
+        $raw_data: JSON.stringify({ id }),
+      });
+      db.insertDecision({
+        $id: `old-${id}`,
+        $uuid: `old-${id}`,
+        $alert_id: id,
+        $created_at: '2025-01-01T00:00:00.000Z',
+        $stop_at: '2025-01-02T00:00:00.000Z',
+        $value: `1.2.3.${id}`,
+        $type: 'ban',
+        $origin: 'crowdsec',
+        $scenario: 'crowdsecurity/ssh-bf',
+        $raw_data: JSON.stringify({ id: `old-${id}`, value: `1.2.3.${id}` }),
+      });
+    }
+    const cutoff = '2026-01-01T00:00:00.000Z';
+
+    expect(db.deleteOldAlerts(cutoff, 2)).toBe(2);
+    expect(db.deleteOldDecisions(cutoff, 2)).toBe(2);
+    expect(db.countAlerts()).toBe(3);
+    expect(db.countDecisions()).toBe(3);
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM decisions_fts').get() as { count: number }).count).toBe(3);
+
+    expect(db.deleteOldAlerts(cutoff, 10)).toBe(3);
+    expect(db.deleteOldDecisions(cutoff, 10)).toBe(3);
+    expect(db.countAlerts()).toBe(0);
+    expect(db.countDecisions()).toBe(0);
+    expect((db.db.prepare('SELECT COUNT(*) AS count FROM decisions_fts').get() as { count: number }).count).toBe(0);
+
+    db.close();
+  });
+
+  test('plans active reconciliation windows from a covering index', () => {
+    const db = createTestDatabase();
+    expect(
+      (db.db.prepare("PRAGMA index_info('idx_decisions_stop_alert_id')").all() as Array<{ name: string }>).map((column) => column.name),
+    ).toEqual(['stop_at', 'alert_id', 'instance_id']);
+    const plan = db.db.prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT alerts.created_at
+      FROM alerts
+      WHERE alerts.created_at >= ?
+        AND alerts.id IN (
+          SELECT active.alert_id
+          FROM decisions AS active INDEXED BY idx_decisions_stop_alert_id
+          WHERE active.stop_at > ?
+            AND active.instance_id = ?
+        )
+    `).all('2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z', 'default') as Array<{ detail: string }>;
+    expect(plan.map((row) => row.detail).join('\n')).toContain('COVERING INDEX idx_decisions_stop_alert_id');
 
     db.close();
   });

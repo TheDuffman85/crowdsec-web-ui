@@ -57,9 +57,7 @@ function jsonResponse(body: unknown, status = 200) {
 describe('Settings branding', () => {
   test('disables branding controls for read-only users', async () => {
     renderSettings({ appName: 'Acme SOC', logoUrl: '/api/branding/logo?v=1', logoDarkUrl: null, theme: DEFAULT_BRANDING_THEME });
-    await waitFor(() => expect(fetchConfig).toHaveBeenCalled());
-
-    expect(screen.getByLabelText('pages.settings.appName')).toHaveValue('Acme SOC');
+    expect(await screen.findByLabelText('pages.settings.appName')).toHaveValue('Acme SOC');
     expect(screen.getByLabelText('pages.settings.appName')).toBeDisabled();
     expect(screen.getByRole('button', { name: 'pages.settings.saveAppName' })).toBeDisabled();
     expect(within(screen.getByTestId('settings-logo-default')).getByRole('button', { name: 'pages.settings.uploadLogo' })).toBeDisabled();

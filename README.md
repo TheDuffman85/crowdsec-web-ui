@@ -177,7 +177,7 @@ Adjust the URL and certificate paths. Enable `CONFIG_INSTANCE_LAPI_TLS_CA_FILE` 
 | --- | --- |
 | Client | React, Vite, and Tailwind CSS; builds to `dist/client` |
 | Server | Node.js and Hono; builds to `dist/server` |
-| Storage | SQLite via `better-sqlite3` under `/app/data` |
+| Storage | SQLite via `better-sqlite3`: durable `state.db` and rebuildable `cache.db` under `/app/data` |
 | CrowdSec | Watcher password or agent mTLS; delta refreshes and chunked historical synchronization |
 | Container | Runs as the non-root `node` user |
 
@@ -220,10 +220,11 @@ Use `CONFIG_FILE` only to select another existing file. [`config.example.yaml`](
 | --- | --- | --- | --- |
 | `server.port` | `3000` | HTTP listen port. | `CONFIG_SERVER_PORT` |
 | `server.basePath` | `""` | Optional URL prefix such as `/crowdsec`; no trailing slash. | `CONFIG_SERVER_BASE_PATH` |
-| `storage.dataDir` | `/app/data` | SQLite database and persistent application state. | `CONFIG_STORAGE_DATA_DIR` |
+| `storage.dataDir` | `/app/data` | Location of `state.db`: users, passkeys, notification channels and rules, saved filters, and UI settings. Back it up. | `CONFIG_STORAGE_DATA_DIR` |
+| `storage.cacheDir` | `storage.dataDir` | Location of `cache.db`, the alert and decision cache. It is rebuilt from LAPI when lost, so it can live on fast local storage. | `CONFIG_STORAGE_CACHE_DIR` |
 | `storage.geonamesDir` | `/app/geonames` in Docker; `./geonames` locally | Local GeoNames snapshot used for location labels. | `CONFIG_STORAGE_GEONAMES_DIR` |
-| `storage.walEnabled` | `true` | Enables SQLite write-ahead logging. Set to `false` for filesystems that do not support WAL. | `CONFIG_STORAGE_WAL_ENABLED` |
-| `storage.incrementalVacuumEnabled` | `true` | Uses bounded incremental vacuum while idle on compatible databases. Existing databases are not migrated automatically. | `CONFIG_STORAGE_INCREMENTAL_VACUUM_ENABLED` |
+| `storage.walEnabled` | `true` | Enables SQLite write-ahead logging for `cache.db`. Set to `false` for filesystems that do not support WAL. `state.db` always uses a rollback journal. | `CONFIG_STORAGE_WAL_ENABLED` |
+| `storage.incrementalVacuumEnabled` | `true` | Uses bounded incremental vacuum while idle. Applies when `cache.db` is created. | `CONFIG_STORAGE_INCREMENTAL_VACUUM_ENABLED` |
 | `storage.journalSizeLimit` | `128MiB` | Retained WAL size after checkpoints. This does not cap transactions; use `unlimited` to disable trimming. Ignored when WAL is disabled. | `CONFIG_STORAGE_JOURNAL_SIZE_LIMIT` |
 | `storage.queryTimeout` | `30s` | Maximum execution time for regular database queries, such as list pages and cache synchronization. Raise it for very large databases or slow storage. | `CONFIG_STORAGE_QUERY_TIMEOUT` |
 | `storage.analyticsQueryTimeout` | `60s` | Maximum execution time for dashboard statistics queries. | `CONFIG_STORAGE_ANALYTICS_QUERY_TIMEOUT` |
@@ -969,7 +970,7 @@ Destinations are independently enabled and reusable across rules. **Send Test** 
 - MQTT JSON contains `title`, `message`, `severity`, `metadata`, `sent_at`, `channel_id`, `channel_name`, `channel_type`, `rule_id`, `rule_name`, and `rule_type`. Tests use `rule_id=test`, `rule_name=Test notification`, and `rule_type=test`.
 - Webhook templates expose dotted `event.*` fields for `title`, `message`, `severity`, `metadata`, `sent_at`, `channel_name`, `rule_id`, `rule_name`, `rule_type`, and `app_name` (the configured branding name). Each has a `*Json` variant; nullable rule fields also have `OrUnknown` and `OrUnknownJson` aliases.
 - Failed webhooks store HTTP status and a truncated response. `notifications.debugPayloads: true` also logs a truncated rendered body with sensitive form fields redacted; enable it only while troubleshooting.
-- Destination secrets are masked and encrypted by `notifications.secretKey`, or an auto-generated key stored in application metadata.
+- Destination secrets are masked and encrypted by `notifications.secretKey`, or an auto-generated key stored in `state.db`.
 - `notifications.allowPrivateAddresses: false` blocks private, loopback, and link-local destinations; default: `true`.
 - Telegram, Home Assistant discovery/state, and inbound MQTT commands are not supported.
 
@@ -979,12 +980,23 @@ A [Helm chart for CrowdSec Web UI](https://github.com/zekker6/helm-charts/tree/m
 
 ## Persistence and Alert History
 
-SQLite data lives under `/app/data`. Mount the directory—not only `crowdsec.db`—because WAL mode also uses `crowdsec.db-wal` and `crowdsec.db-shm`.
+Data is split into two SQLite files:
+
+| File | Location | Contents | When lost |
+| --- | --- | --- | --- |
+| `state.db` | `storage.dataDir` | Users, passkeys, notification channels, rules and history, saved filters, queued alert deletions, and UI settings | Gone; restore it from a backup |
+| `cache.db` | `storage.cacheDir` | Alerts and decisions synchronized from LAPI | Rebuilt by the next synchronization |
+
+Mount the directories, not single files: WAL mode also uses `cache.db-wal` and `cache.db-shm`.
 
 ```yaml
 volumes:
   - ./data:/app/data
 ```
+
+To keep the cache on fast node-local storage while `state.db` and `config.yaml` stay on backed-up or network storage, set `storage.cacheDir` to a separate mount. The container only fixes ownership of `/app/data`, so a cache mount elsewhere must be writable by the container user. `state.db` uses a rollback journal and is written rarely, so it works on network filesystems that do not support WAL.
+
+Upgrading from a version that used a single `crowdsec.db` copies its durable data into `state.db` on the first start and then deletes `crowdsec.db`. Cached alerts and decisions are not copied; the first start runs a full synchronization of `crowdsec.sync.lookback`. Back up the data directory before upgrading. Older versions cannot read the new files.
 
 - History survives restarts, merges with new LAPI data, and expires after `crowdsec.sync.lookback` (default: seven days).
 - Initial imports and reconciliation retry in smaller windows after timeouts.
@@ -994,21 +1006,7 @@ Use `POST /api/cache/clear` for a full cache reset. Synchronization internals ar
 
 ### SQLite database maintenance
 
-New databases use SQLite incremental auto-vacuum by default. Existing databases keep their current format to avoid a potentially long, disk-intensive migration. If startup reports reclaimable space, migrate during a maintenance window:
-
-1. Back up the entire data directory, including `crowdsec.db`, `crowdsec.db-wal`, and `crowdsec.db-shm` when present.
-2. Stop CrowdSec Web UI and confirm that no process is using the database. Ensure free disk space is at least the current database size.
-3. Open `crowdsec.db` with SQLite and run:
-
-   ```sql
-   PRAGMA wal_checkpoint(TRUNCATE);
-   PRAGMA auto_vacuum = INCREMENTAL;
-   VACUUM;
-   ```
-
-4. Close SQLite, restart the app, and verify the migration with `PRAGMA auto_vacuum;`. A result of `2` means incremental auto-vacuum is enabled.
-
-`VACUUM` rewrites the database and may take significant time for large installations. Do not interrupt it. The application never runs this migration automatically.
+`cache.db` uses SQLite incremental auto-vacuum by default and reclaims free pages while idle. A cache created with `storage.incrementalVacuumEnabled: false` keeps that format. If startup reports reclaimable space, stop CrowdSec Web UI, delete `cache.db`, `cache.db-wal`, and `cache.db-shm`, and start it again. The cache is recreated with incremental auto-vacuum and refilled by a full synchronization.
 
 ## Documentation
 

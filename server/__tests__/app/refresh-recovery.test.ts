@@ -65,9 +65,9 @@ test.each(['wake', 'restart', 'stop'] as const)('keeps one scheduler owner when 
 });
 
 test('rolls back a refresh blocked by a reader and permits queued writes and a later refresh', async () => {
-  const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+  const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
   seedAlert(database, sampleAlert());
-  const worker = new DatabaseSyncWorker({ dbPath: database.dbPath, timeoutMs: 5000 });
+  const worker = new DatabaseSyncWorker({ dbPath: database.cachePath, timeoutMs: 5000 });
   await worker.setMeta('ready', 'true');
   let releaseLookup!: () => void;
   let startedLookup!: () => void;
@@ -83,9 +83,15 @@ test('rolls back a refresh blocked by a reader and permits queued writes and a l
   let reachedCommit!: () => void;
   const atCommit = new Promise<void>(resolve => { reachedCommit = resolve; });
   const transaction = worker.runTransaction.bind(worker);
-  vi.spyOn(worker, 'runTransaction').mockImplementation((operation, options) => transaction(operation, {
-    beforeCommit: async () => { reachedCommit(); await options?.beforeCommit?.(); },
-  }));
+  let transactions = 0;
+  vi.spyOn(worker, 'runTransaction').mockImplementation((operation, options) => {
+    // The first transaction is the retention cleanup batch, which commits
+    // before the delta transaction that the reader blocks.
+    const isDelta = transactions++ > 0;
+    return transaction(operation, {
+      beforeCommit: async () => { if (isDelta) reachedCommit(); await options?.beforeCommit?.(); },
+    });
+  });
   await lapiClient.login();
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   const read = controller.fetch(new Request('http://localhost/crowdsec/api/alerts'));
@@ -146,6 +152,105 @@ test('does not resume bootstrap after shutdown during authentication', async () 
   } finally {
     releaseLogin(Response.json({ code: 200, token: 'token' }));
     controller.stopBackgroundTasks();
+    destroyTempDir();
+  }
+});
+
+test('retries failed cleanup at the minimum batch size and still completes deltas', async () => {
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+  vi.useFakeTimers({ toFake: ['Date'] });
+  const cleanupOldData = vi.fn()
+    .mockResolvedValueOnce({ alerts: 0, decisions: 1_000 })
+    .mockRejectedValueOnce(new Error('Database maintenance exceeded 600000ms timeout (cleanup-old-data)'))
+    .mockRejectedValueOnce(new Error('Database maintenance exceeded 600000ms timeout (cleanup-old-data)'))
+    .mockResolvedValueOnce({ alerts: 0, decisions: 1 });
+  const syncWorker: NonNullable<CreateAppOptions['syncWorker']> = {
+    persistAlerts: vi.fn(async () => ({ changed: false })),
+    deleteAlertsMissingBetween: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+    deleteCachedAlerts: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+    deleteCachedDecisions: vi.fn(async () => 0),
+    beginDeferredSearchIndexUpdates: vi.fn(async () => {}),
+    rebuildSearchIndexes: vi.fn(async () => {}),
+    refreshDecisionDuplicateFlags: vi.fn(async () => {}),
+    cleanupOldData,
+    clearSyncData: vi.fn(async () => {}), setMeta: vi.fn(async () => {}),
+    runExclusive: vi.fn(async operation => operation()), close: vi.fn(),
+  };
+  const { controller, database, lapiClient } = createController({
+    syncWorker,
+    env: { CROWDSEC_HEARTBEAT_INTERVAL: 'manual' },
+    initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+  });
+  const refresh = () => controller.fetch(new Request('http://localhost/crowdsec/api/cache/refresh', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'delta' }),
+  }));
+  try {
+    await lapiClient.login();
+    const response = await refresh();
+    expect(response.status).toBe(200);
+    expect(cleanupOldData).toHaveBeenCalledTimes(2);
+    expect(cleanupOldData.mock.calls.map(call => call[1])).toEqual([1_000, 2_000]);
+    expect(error.mock.calls.some(call => String(call[0]).includes('Cleanup failed'))).toBe(true);
+    expect(log.mock.calls.some(call => String(call[0]).includes('Delta update complete'))).toBe(true);
+
+    // The oversized batch timed out; retry smaller on the next refresh.
+    expect((await refresh()).status).toBe(200);
+    expect(cleanupOldData.mock.calls.map(call => call[1])).toEqual([1_000, 2_000, 1_000]);
+    // A further timeout at the minimum must not shrink the batch below it.
+    expect((await refresh()).status).toBe(200);
+    expect(cleanupOldData.mock.calls.map(call => call[1])).toEqual([1_000, 2_000, 1_000, 1_000]);
+  } finally {
+    controller.stopBackgroundTasks();
+    vi.useRealTimers();
+    log.mockRestore();
+    error.mockRestore();
+    database.close();
+    destroyTempDir();
+  }
+});
+
+test('adapts cleanup batch size to batch duration and keeps it across refreshes', async () => {
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  vi.useFakeTimers({ toFake: ['Date'] });
+  // Full fast, full fast, full slow, then partial batches.
+  const durations = [0, 0, 10_000, 0, 0];
+  const cleanupOldData = vi.fn(async (_cutoff: string, limit?: number) => {
+    const call = cleanupOldData.mock.calls.length;
+    vi.setSystemTime(Date.now() + (durations[call - 1] ?? 0));
+    return { alerts: 0, decisions: call <= 3 ? limit ?? 0 : 1 };
+  });
+  const syncWorker: NonNullable<CreateAppOptions['syncWorker']> = {
+    persistAlerts: vi.fn(async () => ({ changed: false })),
+    deleteAlertsMissingBetween: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+    deleteCachedAlerts: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
+    deleteCachedDecisions: vi.fn(async () => 0),
+    beginDeferredSearchIndexUpdates: vi.fn(async () => {}),
+    rebuildSearchIndexes: vi.fn(async () => {}),
+    refreshDecisionDuplicateFlags: vi.fn(async () => {}),
+    cleanupOldData,
+    clearSyncData: vi.fn(async () => {}), setMeta: vi.fn(async () => {}),
+    runExclusive: vi.fn(async operation => operation()), close: vi.fn(),
+  };
+  const { controller, database, lapiClient } = createController({
+    syncWorker,
+    env: { CROWDSEC_HEARTBEAT_INTERVAL: 'manual' },
+    initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+  });
+  const refresh = () => controller.fetch(new Request('http://localhost/crowdsec/api/cache/refresh', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'delta' }),
+  }));
+  try {
+    await lapiClient.login();
+    expect((await refresh()).status).toBe(200);
+    expect(cleanupOldData.mock.calls.map(call => call[1])).toEqual([1_000, 2_000, 4_000, 2_000]);
+    expect((await refresh()).status).toBe(200);
+    expect(cleanupOldData.mock.calls.at(-1)?.[1]).toBe(2_000);
+  } finally {
+    controller.stopBackgroundTasks();
+    vi.useRealTimers();
+    log.mockRestore();
+    database.close();
     destroyTempDir();
   }
 });

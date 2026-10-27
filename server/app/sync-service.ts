@@ -97,6 +97,15 @@ const SQLITE_INCREMENTAL_VACUUM_MIN_BYTES = 128 * 1024 * 1024;
 const SQLITE_INCREMENTAL_VACUUM_MIN_RATIO = 0.25;
 const SQLITE_INCREMENTAL_VACUUM_MAX_PAGES = 4096;
 const SQLITE_INCREMENTAL_VACUUM_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+// Cleanup batches adapt to the host: every commit rewrites index pages shared
+// with the next batch, so fast hosts use few large batches, while slow hosts
+// keep batches small enough to commit progress well within worker timeouts.
+const RETENTION_CLEANUP_MIN_BATCH_SIZE = 1_000;
+const RETENTION_CLEANUP_MAX_BATCH_SIZE = 100_000;
+const RETENTION_CLEANUP_TARGET_BATCH_MS = 3_000;
+const RETENTION_CLEANUP_TIME_BUDGET_MS = 60_000;
+
+type CleanupResult = { alerts: number; decisions: number; succeeded: boolean };
 
 export interface SyncServiceState extends Record<string, any> {
   getReconcileWindowState: (instanceId?: string) => ReconcileWindowState;
@@ -120,6 +129,7 @@ export interface SyncServiceDependencies extends Record<string, any> {
 export function createSyncService(dependencies: SyncServiceDependencies) {
   const state = dependencies.state;
   let schedulerGeneration = 0;
+  let retentionCleanupBatchSize = RETENTION_CLEANUP_MIN_BATCH_SIZE;
   const {
     CAPI_ALERT_ORIGIN,
     COMMUNITY_BLOCKLIST_SOURCE_SCOPE,
@@ -160,6 +170,7 @@ export function createSyncService(dependencies: SyncServiceDependencies) {
     instanceLastUpdates,
     instanceNetworkWaiters,
     instanceSyncStatuses,
+    invalidateDashboardStatsCache,
     invalidateFacetResponses,
     isAlertSimulated,
     lapiClient,
@@ -1151,14 +1162,19 @@ function createClosedReconcileWindows(
 
 async function getActiveReconcileWindowKeys(now: number, runtime: InstanceSyncRuntime): Promise<Set<string>> {
   const since = new Date(now - runtime.lookbackMs).toISOString();
+  // The covering index keeps this to an index range scan; large blocklists
+  // would otherwise need one table row lookup per active decision.
   const rows = await queryWorker.all<{ created_at: string }>(`
-    SELECT DISTINCT alerts.created_at
-    FROM decisions AS active INDEXED BY idx_decisions_stop_alert_id
-    JOIN alerts ON alerts.id = active.alert_id
-    WHERE active.stop_at > ?
-      AND active.instance_id = ?
-      AND alerts.created_at >= ?
-  `, [new Date(now).toISOString(), runtime.instanceId, since], {
+    SELECT alerts.created_at
+    FROM alerts
+    WHERE alerts.created_at >= ?
+      AND alerts.id IN (
+        SELECT active.alert_id
+        FROM decisions AS active INDEXED BY idx_decisions_stop_alert_id
+        WHERE active.stop_at > ?
+          AND active.instance_id = ?
+      )
+  `, [since, new Date(now).toISOString(), runtime.instanceId], {
     label: `active alert reconciliation windows (${runtime.instanceId})`,
   });
   const keys = new Set<string>();
@@ -1787,7 +1803,12 @@ async function updateCacheDelta(
     return;
   }
 
+  let removed: CleanupResult = { alerts: 0, decisions: 0, succeeded: true };
+  let removalPublished = false;
   try {
+    // Retention cleanup commits its own batches before the delta transaction.
+    // A slow cleanup can then neither roll back nor block the LAPI delta.
+    removed = await cleanupOldData();
     const deltaStartedAt = Date.now();
     const diffSeconds = Math.ceil((deltaStartedAt - new Date(cache.lastUpdate).getTime()) / 1_000) + 10;
     const normalDeltaStart = deltaStartedAt - diffSeconds * 1_000;
@@ -1801,7 +1822,6 @@ async function updateCacheDelta(
       deltaSummary: WindowSyncSummary;
       reconcileSummary: WindowSyncSummary;
       dataChanged: boolean;
-      cleanupSucceeded: boolean;
     };
     let releasePublishedRevision: (() => void) | null = null;
     try {
@@ -1820,7 +1840,6 @@ async function updateCacheDelta(
         const reconcileSummary: WindowSyncSummary = reconcilePlan
           ? await runPlannedReconcileWindows(reconcilePlan, deltaStartedAt, excludedKeys)
           : { alerts: 0, decisions: 0, errors: [], successfulWindows: 0, changed: false };
-        const removed = await cleanupOldData();
         const dataChanged = deltaSummary.changed
           || reconcileSummary.changed
           || removed.alerts > 0
@@ -1831,7 +1850,7 @@ async function updateCacheDelta(
         // Persist through the worker before commit. A queued post-commit save
         // could wait on another refresh that needs our publication lock.
         if (reconcilePlan) await finishReconcilePlan(reconcilePlan);
-        return { deltaSummary, reconcileSummary, dataChanged, cleanupSucceeded: removed.succeeded };
+        return { deltaSummary, reconcileSummary, dataChanged };
       });
       refreshResult = committedRefresh.result;
       releasePublishedRevision = committedRefresh.releasePublishedRevision;
@@ -1848,6 +1867,7 @@ async function updateCacheDelta(
       // so unchanged deltas only notify clients once time-dependent dashboard
       // statistics were actually rebuilt.
       const publishRevision = dataChanged || options.publishUnchanged === true;
+      removalPublished = true;
       prepareDashboardStatsAfterRefreshInBackground(
         dataChanged,
         undefined,
@@ -1874,8 +1894,9 @@ async function updateCacheDelta(
       releasePublishedRevision?.();
     }
     if (publishedRevision) publishCacheUpdate(publishedRevision);
-    if (refreshResult.cleanupSucceeded) await maybeRunIncrementalVacuum();
+    if (removed.succeeded) await maybeRunIncrementalVacuum();
   } catch (error: any) {
+    if (!removalPublished) publishCleanupChanges(removed);
     console.error('Failed to update cache delta:', error.message);
     lapiClient.updateStatus(false, error);
     if (options.throwOnError) throw error;
@@ -1888,6 +1909,7 @@ async function refreshLatestWindow(): Promise<void> {
       throw new Error('The cache must be initialized before refreshing the latest window');
     }
 
+    const removed = await cleanupOldData();
     const now = Date.now();
     const runtime = getInstanceSyncRuntime(primaryInstance.id);
     const currentWindowStart = Math.floor(now / runtime.reconcileWindowMs) * runtime.reconcileWindowMs;
@@ -1901,14 +1923,14 @@ async function refreshLatestWindow(): Promise<void> {
         lapiClient.updateStatus(false, error);
         throw error;
       }
-      const removed = await cleanupOldData();
       const dataChanged = summary.changed || removed.alerts > 0 || removed.decisions > 0;
       await syncWorker.refreshDecisionDuplicateFlags(new Date().toISOString());
       state.getReconcileWindowState().headLastSuccess = now;
       await saveReconcileWindowState();
-      return { summary, dataChanged, cleanupSucceeded: removed.succeeded };
+      return { summary, dataChanged };
     }).catch((error) => {
       state.setReconcileWindowState(reconcileStateBeforeRefresh);
+      publishCleanupChanges(removed);
       throw error;
     });
     let publishedRevision: string | null = null;
@@ -1925,7 +1947,7 @@ async function refreshLatestWindow(): Promise<void> {
       committedRefresh.releasePublishedRevision();
     }
     if (publishedRevision) publishCacheUpdate(publishedRevision);
-    if (committedRefresh.result.cleanupSucceeded) await maybeRunIncrementalVacuum();
+    if (removed.succeeded) await maybeRunIncrementalVacuum();
     await runNotificationEvaluation('manual latest-window refresh');
   });
 }
@@ -1937,20 +1959,75 @@ async function refreshFullHistory(): Promise<void> {
       throw new Error(summary?.errors[0] || 'Full historical refresh failed');
     }
     const removed = await cleanupOldData();
+    publishCleanupChanges(removed);
     if (removed.succeeded) await maybeRunIncrementalVacuum();
   });
 }
 
-async function cleanupOldData(): Promise<{ alerts: number; decisions: number; succeeded: boolean }> {
-  const cutoff = new Date(Date.now() - config.lookbackMs).toISOString();
+async function cleanupOldData(): Promise<CleanupResult> {
+  const startedAt = Date.now();
+  const cutoff = new Date(startedAt - config.lookbackMs).toISOString();
+  let alerts = 0;
+  let decisions = 0;
   try {
-    const removed = await syncWorker.cleanupOldData(cutoff);
-    console.log(`Cleanup: Removed ${removed.alerts} old alerts, ${removed.decisions} old decisions`);
-    return { ...removed, succeeded: true };
+    while (true) {
+      // Each batch is its own committed transaction, so progress survives a
+      // later timeout and a large backlog is worked off across refreshes.
+      const batchSize = retentionCleanupBatchSize;
+      let batchMs = 0;
+      const batch = await runConsistentDatabaseRefresh<{ alerts: number; decisions: number }>(
+        async () => {
+          // Time only the deletion, not queueing or waiting for readers.
+          const batchStartedAt = Date.now();
+          const removed = await syncWorker.cleanupOldData(cutoff, batchSize);
+          batchMs = Date.now() - batchStartedAt;
+          return removed;
+        },
+        { requiresPublication: (removed) => removed.alerts > 0 || removed.decisions > 0 },
+      );
+      try {
+        alerts += batch.result.alerts;
+        decisions += batch.result.decisions;
+        // Drop cached counts and analytics before readers can see the deleted
+        // rows. Warming and client notification wait for the refresh publish.
+        if (batch.result.alerts > 0 || batch.result.decisions > 0) {
+          invalidateDashboardStatsCache(undefined, { preserveStale: true });
+        }
+      } finally {
+        batch.releasePublishedRevision();
+      }
+      const fullBatch = batch.result.alerts >= batchSize || batch.result.decisions >= batchSize;
+      if (batchMs > RETENTION_CLEANUP_TARGET_BATCH_MS) {
+        retentionCleanupBatchSize = Math.max(RETENTION_CLEANUP_MIN_BATCH_SIZE, Math.floor(batchSize / 2));
+      } else if (fullBatch && batchMs < RETENTION_CLEANUP_TARGET_BATCH_MS / 2) {
+        retentionCleanupBatchSize = Math.min(RETENTION_CLEANUP_MAX_BATCH_SIZE, batchSize * 2);
+      }
+      if (!fullBatch) {
+        console.log(`Cleanup: Removed ${alerts} old alerts, ${decisions} old decisions`);
+        break;
+      }
+      if (state.stopped || Date.now() - startedAt >= RETENTION_CLEANUP_TIME_BUDGET_MS) {
+        console.log(`Cleanup: Removed ${alerts} old alerts, ${decisions} old decisions; remaining old data is removed on the next refresh`);
+        break;
+      }
+    }
+    return { alerts, decisions, succeeded: true };
   } catch (error: any) {
+    // A failed batch has no usable duration for adaptation. Retry at the
+    // minimum next refresh instead of repeatedly timing out at the same size.
+    retentionCleanupBatchSize = RETENTION_CLEANUP_MIN_BATCH_SIZE;
     console.error('Cleanup failed:', error.message);
-    return { alerts: 0, decisions: 0, succeeded: false };
+    return { alerts, decisions, succeeded: false };
   }
+}
+
+// Committed cleanup batches must still invalidate cached dashboard data when
+// the refresh that would normally publish them fails.
+function publishCleanupChanges(removed: CleanupResult): void {
+  if (removed.alerts === 0 && removed.decisions === 0) return;
+  prepareDashboardStatsAfterRefreshInBackground(true, undefined, 'retention cleanup');
+  state.cacheRefreshCompletedAt = new Date().toISOString();
+  publishCacheUpdate(state.cacheRefreshCompletedAt);
 }
 
 async function maybeRunIncrementalVacuum(): Promise<void> {
@@ -1988,12 +2065,16 @@ function runCacheRefresh(operation: () => Promise<void>, skipIfBusy = false): Pr
 
 async function runConsistentDatabaseRefresh<T>(
   operation: () => Promise<T>,
+  options: { requiresPublication?: (result: T) => boolean } = {},
 ): Promise<{ result: T; releasePublishedRevision: () => void }> {
   let releasePublishedRevision: (() => void) | null = null;
+  let operationResult: T;
   try {
     const result = syncWorker.runTransaction
-      ? await syncWorker.runTransaction(operation, {
+      ? await syncWorker.runTransaction(async () => (operationResult = await operation()), {
           beforeCommit: async () => {
+            // Commits that change nothing visible need not wait for readers.
+            if (options.requiresPublication?.(operationResult) === false) return;
             releasePublishedRevision = await acquirePublishedRevisionWrite();
           },
         })

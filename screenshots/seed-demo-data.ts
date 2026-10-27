@@ -1,20 +1,21 @@
 import { rmSync } from 'node:fs';
 import path from 'node:path';
 import { hashPassword } from '../server/app-auth';
-import { CrowdsecDatabase } from '../server/database';
+import { CACHE_DATABASE_FILE, CrowdsecDatabase, STATE_DATABASE_FILE } from '../server/database';
 
 const dbDir = process.env.DB_DIR || path.join(process.env.TMPDIR || '/tmp', 'crowdsec-web-ui-screenshots');
-const dbPath = path.join(dbDir, 'crowdsec.db');
 const configPath = path.join(dbDir, 'screenshot-config.yaml');
 const demoUsername = process.env.CROWDSEC_SCREENSHOT_USERNAME || 'admin';
 const demoPassword = process.env.CROWDSEC_SCREENSHOT_PASSWORD || 'Screenshot123';
 
-rmSync(dbPath, { force: true });
-rmSync(`${dbPath}-shm`, { force: true });
-rmSync(`${dbPath}-wal`, { force: true });
+for (const file of [CACHE_DATABASE_FILE, STATE_DATABASE_FILE, 'crowdsec.db']) {
+  for (const suffix of ['', '-shm', '-wal', '-journal']) {
+    rmSync(path.join(dbDir, `${file}${suffix}`), { force: true });
+  }
+}
 rmSync(configPath, { force: true });
 
-const database = new CrowdsecDatabase({ dbDir });
+const database = new CrowdsecDatabase({ dataDir: dbDir });
 
 const demoUserId = database.createAuthUser({
   username: demoUsername,
@@ -406,4 +407,4 @@ database.setMeta('refresh_interval_ms', '300000');
 database.setMeta('multi_instance_cache_schema_ready', 'true');
 database.close();
 
-console.log(`Seeded screenshot database at ${dbPath}`);
+console.log(`Seeded screenshot databases in ${dbDir}`);

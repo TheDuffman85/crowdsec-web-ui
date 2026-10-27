@@ -148,7 +148,7 @@ describe('createApp synchronization reconciliation', () => {
       created_at: activeCreatedAt,
       decisions: [{ id: 860, value: '8.6.0.1', stop_at: new Date(now + 60 * 60 * 1_000).toISOString() }],
     });
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
     seedAlert(database, oldAlert);
     seedAlert(database, activeAlert);
     const { controller, fetchCalls } = createController({
@@ -196,7 +196,7 @@ describe('createApp synchronization reconciliation', () => {
       created_at: new Date(boundary).toISOString(),
       decisions: [{ id: 870, value: '8.7.0.1', stop_at: new Date(now + windowMs).toISOString() }],
     });
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
     seedAlert(database, boundaryAlert);
     const { controller } = createController({
       database,
@@ -271,7 +271,7 @@ describe('createApp synchronization reconciliation', () => {
   });
 
   test('reuses persisted reconciliation progress after restart', async () => {
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
     const env = {
       CROWDSEC_REFRESH_INTERVAL: '0',
       CROWDSEC_LOOKBACK_PERIOD: '2h',
@@ -308,7 +308,7 @@ describe('createApp synchronization reconciliation', () => {
     const createdAt = new Date(Date.now() - 30_000).toISOString();
     const keptAlert = sampleAlert({ id: 83, uuid: 'alert-83', created_at: createdAt });
     const cachedOnlyAlert = sampleAlert({ id: 84, uuid: 'alert-84', created_at: createdAt });
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
     seedAlert(database, keptAlert);
     seedAlert(database, cachedOnlyAlert);
     const { controller } = createController({

@@ -12,9 +12,9 @@ client/dist
 /data
 /secrets
 agent/certs
-crowdsec.db
-crowdsec.db-shm
-crowdsec.db-wal
+crowdsec.db*
+state.db*
+cache.db*
 coverage
 frontend/coverage
 client/coverage

@@ -25,8 +25,10 @@ const workerOptions = workerData as {
   incrementalVacuumEnabled?: boolean;
   journalSizeLimitBytes?: number;
 };
+// The sync worker only maintains the cache; state.db stays private to the main process.
 const database = new CrowdsecDatabase({
-  dbPath: String(workerOptions.dbPath),
+  cachePath: String(workerOptions.dbPath),
+  statePath: null,
   walEnabled: workerOptions.walEnabled ?? true,
   incrementalVacuumEnabled: workerOptions.incrementalVacuumEnabled ?? true,
   journalSizeLimitBytes: workerOptions.journalSizeLimitBytes,
@@ -125,9 +127,10 @@ function execute(request: WorkerRequest['request']): unknown {
   }
   if (request.type === 'cleanup-old-data') {
     const cutoff = String(request.cutoff);
+    const limit = request.limit === undefined ? undefined : Number(request.limit);
     return {
-      alerts: database.deleteOldAlerts(cutoff),
-      decisions: database.deleteOldDecisions(cutoff),
+      alerts: database.deleteOldAlerts(cutoff, limit),
+      decisions: database.deleteOldDecisions(cutoff, limit),
     };
   }
   if (request.type === 'incremental-vacuum') {

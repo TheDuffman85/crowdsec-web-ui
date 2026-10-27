@@ -90,6 +90,7 @@ export interface RuntimeConfig {
   deploymentMode: 'standard' | 'load-test';
   loadTestProfile: string | null;
   dbDir: string;
+  dbCacheDir?: string;
   geonamesDumpDir: string;
   sqliteWalEnabled: boolean;
   sqliteIncrementalVacuumEnabled: boolean;
@@ -442,6 +443,7 @@ function createRuntimeConfigFromEnvironment(env: NodeJS.ProcessEnv): RuntimeConf
       ? env.LOADTEST_PROFILE?.trim() || 'default'
       : null,
     dbDir: env.DB_DIR || '/app/data',
+    dbCacheDir: env.DB_CACHE_DIR?.trim() || undefined,
     geonamesDumpDir: env.GEONAMES_DUMP_DIR || path.resolve(process.cwd(), 'geonames'),
     sqliteWalEnabled: true,
     sqliteIncrementalVacuumEnabled: true,

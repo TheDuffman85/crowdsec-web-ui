@@ -205,6 +205,38 @@ describe('createApp deletion workflows', () => {
     destroyTempDir();
   });
 
+  test('records deletion queue progress in batched transactions', async () => {
+    const { controller, database, fetchCalls } = createController({
+      env: {
+        CROWDSEC_REFRESH_INTERVAL: 'manual',
+        CROWDSEC_HEARTBEAT_INTERVAL: 'manual',
+      },
+    });
+    const requestedAt = new Date(Date.now() - 60_000).toISOString();
+    database.transaction(() => {
+      for (let id = 1; id <= 250; id += 1) database.queueAlertDeletion(String(id), [], requestedAt);
+    })(undefined);
+    const sqlite = database.db as unknown as { inTransaction: boolean };
+    const completeAlertDeletion = database.completeAlertDeletion.bind(database);
+    const completedInTransaction: boolean[] = [];
+    vi.spyOn(database, 'completeAlertDeletion').mockImplementation((alertId, completedAt) => {
+      completedInTransaction.push(sqlite.inTransaction);
+      completeAlertDeletion(alertId, completedAt);
+    });
+
+    controller.startBackgroundTasks();
+    await vi.waitFor(() => expect(controller.getSyncStatus().state).toBe('complete'));
+
+    expect(fetchCalls.filter((call) => /\/v1\/alerts\/\d+$/.test(call.url) && call.method === 'DELETE')).toHaveLength(250);
+    expect(database.getPendingAlertDeletions()).toEqual([]);
+    expect(completedInTransaction).toHaveLength(250);
+    expect(completedInTransaction.every(Boolean)).toBe(true);
+
+    controller.stopBackgroundTasks();
+    database.close();
+    destroyTempDir();
+  });
+
   test('completes queued deletion when the alert is already missing from LAPI', async () => {
     const { controller, database, lapiClient } = createController({
       fetchResolver: (url, init) => {

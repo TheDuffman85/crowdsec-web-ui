@@ -18,7 +18,7 @@ describe('DatabaseQueryWorker', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-query-worker-'));
     tempDirs.push(dir);
     const dbPath = path.join(dir, 'test.db');
-    const database = new CrowdsecDatabase({ dbPath });
+    const database = new CrowdsecDatabase({ cachePath: dbPath });
     database.insertDecision({
       $id: 'decision-1',
       $uuid: 'decision-1',
@@ -50,7 +50,7 @@ describe('DatabaseQueryWorker', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-query-worker-'));
     tempDirs.push(dir);
     const dbPath = path.join(dir, 'test.db');
-    const database = new CrowdsecDatabase({ dbPath });
+    const database = new CrowdsecDatabase({ cachePath: dbPath });
     const worker = new DatabaseQueryWorker({
       dbPath,
       maxWorkers: 1,
@@ -90,7 +90,7 @@ describe('DatabaseQueryWorker', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-query-worker-'));
     tempDirs.push(dir);
     const dbPath = path.join(dir, 'test.db');
-    const database = new CrowdsecDatabase({ dbPath });
+    const database = new CrowdsecDatabase({ cachePath: dbPath });
     const worker = new DatabaseQueryWorker({
       dbPath,
       maxWorkers: 1,
@@ -121,8 +121,8 @@ describe('DatabaseQueryWorker', () => {
 test('kills a native query on timeout and serves the next read without waiting for SQL completion', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-query-timeout-'));
   tempDirs.push(dir);
-  const database = new CrowdsecDatabase({ dbPath: path.join(dir, 'test.db') });
-  const worker = new DatabaseQueryWorker({ dbPath: database.dbPath, maxWorkers: 1, timeoutMs: 1000 });
+  const database = new CrowdsecDatabase({ cachePath: path.join(dir, 'test.db') });
+  const worker = new DatabaseQueryWorker({ dbPath: database.cachePath, maxWorkers: 1, timeoutMs: 1000 });
   workers.push(worker);
   try {
     await worker.get('SELECT 1');

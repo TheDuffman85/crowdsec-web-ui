@@ -241,7 +241,7 @@ describe('createApp synchronization consistency and pruning', () => {
       ],
       simulated: false,
     });
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
     seedAlert(database, initialAlert);
     const { controller } = createController({
       database,
@@ -660,7 +660,7 @@ describe('createApp synchronization consistency and pruning', () => {
         },
       ],
     });
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
     seedAlert(database, keptAlert);
     seedAlert(database, deletedActiveAlert);
     const { controller } = createController({

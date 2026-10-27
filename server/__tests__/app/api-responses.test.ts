@@ -22,7 +22,7 @@ import {
 
 describe('createApp API responses', () => {
   test('reuses alert totals and a narrow ID window across consecutive pages', async () => {
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
     const now = Date.now();
     for (let index = 0; index < 25; index += 1) {
       seedAlert(database, sampleAlert({
@@ -32,7 +32,7 @@ describe('createApp API responses', () => {
         decisions: [],
       }));
     }
-    const queryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath });
+    const queryWorker = new DatabaseQueryWorker({ dbPath: database.cachePath });
     const getSpy = vi.spyOn(queryWorker, 'get');
     const { controller } = createController({
       database,
@@ -106,9 +106,9 @@ describe('createApp API responses', () => {
         scenario: 'crowdsecurity/page-window',
       })),
     });
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
     seedAlert(database, alert);
-    const queryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath });
+    const queryWorker = new DatabaseQueryWorker({ dbPath: database.cachePath });
     const getSpy = vi.spyOn(queryWorker, 'get');
     const { controller } = createController({
       database,
@@ -177,10 +177,10 @@ describe('createApp API responses', () => {
         },
       ],
     });
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
     seedAlert(database, alert);
     database.refreshDecisionDuplicateFlags(new Date().toISOString());
-    const queryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath });
+    const queryWorker = new DatabaseQueryWorker({ dbPath: database.cachePath });
     const getSpy = vi.spyOn(queryWorker, 'get');
     const allSpy = vi.spyOn(queryWorker, 'all');
     const { controller } = createController({
@@ -221,9 +221,9 @@ describe('createApp API responses', () => {
         { id: 9012, value: '198.51.100.2', stop_at: new Date(Date.now() + 30 * 60_000).toISOString(), type: 'ban', origin: 'lists' },
       ],
     });
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
     seedAlert(database, alert);
-    const queryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath });
+    const queryWorker = new DatabaseQueryWorker({ dbPath: database.cachePath });
     const countQuerySpy = vi.spyOn(queryWorker, 'get');
     const { controller } = createController({
       database,

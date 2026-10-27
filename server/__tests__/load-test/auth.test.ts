@@ -25,7 +25,7 @@ afterEach(() => {
 function createTestDatabase(): CrowdsecDatabase {
   const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-load-test-auth-'));
   tempDirs.push(dir);
-  return new CrowdsecDatabase({ dbPath: path.join(dir, 'test.db') });
+  return new CrowdsecDatabase({ cachePath: path.join(dir, 'test.db') });
 }
 
 function createTestRuntimeConfig(env: NodeJS.ProcessEnv) {

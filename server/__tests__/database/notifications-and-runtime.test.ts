@@ -197,7 +197,7 @@ describe('CrowdsecDatabase notifications and runtime', () => {
 
   test('checkpoints WAL data on close so settings survive container recreation', () => {
     const dbPath = createTestDatabasePath();
-    const db = new CrowdsecDatabase({ dbPath });
+    const db = new CrowdsecDatabase({ cachePath: dbPath });
 
     db.upsertNotificationChannel({
       $id: 'channel-persisted',
@@ -216,7 +216,7 @@ describe('CrowdsecDatabase notifications and runtime', () => {
       expect(statSync(walPath).size).toBe(0);
     }
 
-    const reopened = new CrowdsecDatabase({ dbPath });
+    const reopened = new CrowdsecDatabase({ cachePath: dbPath });
     expect(reopened.listNotificationChannels()).toEqual([
       expect.objectContaining({
         id: 'channel-persisted',
@@ -228,11 +228,11 @@ describe('CrowdsecDatabase notifications and runtime', () => {
 
   test('can disable WAL and persists the rollback journal mode', () => {
     const dbPath = createTestDatabasePath();
-    const walDatabase = new CrowdsecDatabase({ dbPath });
+    const walDatabase = new CrowdsecDatabase({ cachePath: dbPath });
     expect(walDatabase.db.prepare('PRAGMA journal_mode').get()).toEqual({ journal_mode: 'wal' });
     walDatabase.close();
 
-    const rollbackDatabase = new CrowdsecDatabase({ dbPath, walEnabled: false });
+    const rollbackDatabase = new CrowdsecDatabase({ cachePath: dbPath, walEnabled: false });
     expect(rollbackDatabase.db.prepare('PRAGMA journal_mode').get()).toEqual({ journal_mode: 'delete' });
     rollbackDatabase.close();
 
@@ -244,8 +244,7 @@ describe('CrowdsecDatabase notifications and runtime', () => {
   test('docker entrypoint preserves SQLite WAL files for restart recovery', () => {
     const entrypoint = readFileSync(path.resolve(process.cwd(), 'docker-entrypoint.sh'), 'utf8');
 
-    expect(entrypoint).not.toContain('rm -f /app/data/crowdsec.db-wal');
-    expect(entrypoint).not.toContain('rm -f /app/data/crowdsec.db-shm');
+    expect(entrypoint).not.toMatch(/rm -f .*\.db-(wal|shm)/);
   });
 
   test('load-test Docker image keeps synthetic data away from the regular database', () => {
@@ -304,115 +303,5 @@ describe('CrowdsecDatabase notifications and runtime', () => {
     expect(environment).toContain('LOADTEST_SEED=1337');
     expect(environment).toContain(`LOADTEST_DB_DIR=${dbDir}`);
     expect([...environment].some((entry) => entry.startsWith('DB_DIR='))).toBe(false);
-  });
-
-  test('migrates legacy notification rules, notifications, and seeds incidents from history', () => {
-    const dbPath = createTestDatabasePath();
-    const legacy = createLegacyDatabase(dbPath);
-
-    legacy.exec(`
-      CREATE TABLE notification_rules (
-        id TEXT PRIMARY KEY,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        name TEXT NOT NULL,
-        type TEXT NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        severity TEXT NOT NULL,
-        cooldown_minutes INTEGER NOT NULL DEFAULT 60,
-        channel_ids_json TEXT NOT NULL,
-        config_json TEXT NOT NULL
-      );
-      CREATE TABLE notifications (
-        id TEXT PRIMARY KEY,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        rule_id TEXT NOT NULL,
-        rule_name TEXT NOT NULL,
-        rule_type TEXT NOT NULL,
-        severity TEXT NOT NULL,
-        title TEXT NOT NULL,
-        message TEXT NOT NULL,
-        read_at TEXT,
-        metadata_json TEXT NOT NULL,
-        deliveries_json TEXT NOT NULL,
-        dedupe_key TEXT NOT NULL UNIQUE
-      );
-    `);
-
-    legacy.query(`
-      INSERT INTO notification_rules (
-        id, created_at, updated_at, name, type, enabled, severity, cooldown_minutes, channel_ids_json, config_json
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      'rule-legacy',
-      '2025-01-01T00:00:00.000Z',
-      '2025-01-01T00:00:00.000Z',
-      'Legacy threshold',
-      'alert-threshold',
-      1,
-      'warning',
-      60,
-      '[]',
-      JSON.stringify({ window_minutes: 60, alert_threshold: 10 }),
-    );
-    legacy.query(`
-      INSERT INTO notifications (
-        id, created_at, updated_at, rule_id, rule_name, rule_type, severity, title, message, read_at, metadata_json, deliveries_json, dedupe_key
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      'notif-legacy',
-      '2025-01-01T00:00:00.000Z',
-      '2025-01-01T00:00:00.000Z',
-      'rule-legacy',
-      'Legacy threshold',
-      'alert-threshold',
-      'warning',
-      'Threshold exceeded',
-      '10 alerts matched.',
-      null,
-      JSON.stringify({ matched_alerts: 10 }),
-      JSON.stringify([]),
-      'rule-legacy:threshold:28928160',
-    );
-    legacy.close();
-
-    const db = new CrowdsecDatabase({ dbPath });
-
-    expect(db.listNotificationRules()).toEqual([
-      expect.objectContaining({
-        id: 'rule-legacy',
-        name: 'Legacy threshold',
-        severity: 'warning',
-      }),
-    ]);
-    expect(db.listNotificationIncidentsByRule('rule-legacy')).toEqual([
-      expect.objectContaining({
-        rule_id: 'rule-legacy',
-        incident_key: 'threshold:active',
-        resolved_at: null,
-      }),
-    ]);
-
-    expect(db.insertNotification({
-      $id: 'notif-legacy-2',
-      $created_at: '2025-01-01T05:00:00.000Z',
-      $updated_at: '2025-01-01T05:00:00.000Z',
-      $rule_id: 'rule-legacy',
-      $rule_name: 'Legacy threshold',
-      $rule_type: 'alert-threshold',
-      $severity: 'warning',
-      $title: 'Threshold exceeded again',
-      $message: '11 alerts matched.',
-      $read_at: null,
-      $metadata_json: JSON.stringify({ matched_alerts: 11 }),
-      $deliveries_json: JSON.stringify([]),
-      $dedupe_key: 'threshold:active',
-    })).toBe(true);
-    expect(db.listNotifications()).toHaveLength(2);
-
-    db.close();
   });
 });
