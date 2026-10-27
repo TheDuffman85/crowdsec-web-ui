@@ -3,6 +3,7 @@ import { useSearchParams, Link } from "react-router-dom";
 import { fetchAlertsPaginated, fetchAlert, deleteAlert, bulkDeleteAlerts, cleanupByIp, fetchConfig, fetchDecisionsPaginated } from "../lib/api";
 import { isSimulatedAlert, isSimulatedDecision, parseSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
+import { useHistoryBackedOverlay } from "../lib/historyOverlay";
 import { Badge } from "../components/ui/Badge";
 import { Modal } from "../components/ui/Modal";
 import { AddDecisionModal } from "../components/AddDecisionModal";
@@ -311,6 +312,28 @@ export function Alerts() {
     // Ref to track selected alert ID for auto-refresh (avoids stale closure issues)
     const selectedAlertIdRef = useRef<string | number | null>(null);
     const selectedAlertInstanceIdRef = useRef<string | undefined>(undefined);
+
+    // Details and the decision form opened from a row are backed by history
+    // entries, so the browser Back button closes them instead of leaving the page.
+    const alertDetailsHistory = useHistoryBackedOverlay("alertDetailsOpen", () => setSelectedAlert(null));
+    const alertDecisionHistory = useHistoryBackedOverlay("alertDecisionOpen", () => setPendingDecisionAlert(null));
+    const closeAlertDetailsHistory = alertDetailsHistory.close;
+    const closeAlertDecisionHistory = alertDecisionHistory.close;
+
+    const closeAlertDetails = useCallback(() => {
+        setSelectedAlert(null);
+        if (!closeAlertDetailsHistory() && searchParams.has("id")) {
+            // Opened from a deep link: drop the id without adding a history entry
+            const newParams = new URLSearchParams(searchParams);
+            newParams.delete("id");
+            setSearchParams(newParams, { replace: true });
+        }
+    }, [closeAlertDetailsHistory, searchParams, setSearchParams]);
+
+    const closeAlertDecision = useCallback(() => {
+        setPendingDecisionAlert(null);
+        closeAlertDecisionHistory();
+    }, [closeAlertDecisionHistory]);
 
     const PAGE_SIZE = 50;
     const MAX_ALERT_REFRESH_SIZE = 200;
@@ -1209,6 +1232,7 @@ export function Alerts() {
         setSelectedAlert(alert);
         selectedAlertIdRef.current = alert.id;
         selectedAlertInstanceIdRef.current = alert.instance_id;
+        alertDetailsHistory.open();
 
         try {
             const fullAlert = await fetchAlert(alert.id, alert.instance_id);
@@ -1272,6 +1296,7 @@ export function Alerts() {
 
     const openAlertDecision = (alert: AlertSelection) => {
         setPendingDecisionAlert(alert);
+        alertDecisionHistory.open();
     };
 
     const refreshAfterDecision = async () => {
@@ -1306,7 +1331,7 @@ export function Alerts() {
                 );
                 resultMessage = result ? summarizeDeleteResult(result, t) : null;
                 if (selectedAlert && alertKey(selectedAlert) === `${pendingDeleteAction.ref.instance_id}\u0000${pendingDeleteAction.ref.id}`) {
-                    setSelectedAlert(null);
+                    closeAlertDetails();
                 }
                 setSelectedAlertIds((prev) => prev.filter((id) => id !== `${pendingDeleteAction.ref.instance_id}\u0000${pendingDeleteAction.ref.id}`));
             } else if (pendingDeleteAction.kind === "selected") {
@@ -1315,7 +1340,7 @@ export function Alerts() {
                     : pendingDeleteAction.refs.map((ref) => ref.id));
                 resultMessage = summarizeDeleteResult(result, t);
                 if (selectedAlert && pendingDeleteAction.refs.some((ref) => `${ref.instance_id}\u0000${ref.id}` === alertKey(selectedAlert))) {
-                    setSelectedAlert(null);
+                    closeAlertDetails();
                 }
                 setSelectedAlertIds([]);
             } else {
@@ -1333,7 +1358,7 @@ export function Alerts() {
                         : { ip: pendingDeleteAction.ip, scope: 'instance', instance_id: instanceScope });
                 resultMessage = summarizeDeleteResult(result, t);
                 if (selectedAlert && getAlertSourceValue(selectedAlert.source) === pendingDeleteAction.ip) {
-                    setSelectedAlert(null);
+                    closeAlertDetails();
                 }
                 setSelectedAlertIds([]);
                 if (result.deleted_alerts === 0 && result.deleted_decisions === 0 && result.failed.length === 0) {
@@ -1875,12 +1900,7 @@ export function Alerts() {
             {/* Alert Details Modal */}
             <Modal
                 isOpen={!!selectedAlert && !pendingDecisionAlert}
-                onClose={() => {
-                    setSelectedAlert(null);
-                    const newParams = new URLSearchParams(searchParams);
-                    newParams.delete("id");
-                    setSearchParams(newParams);
-                }}
+                onClose={closeAlertDetails}
                 title={selectedAlert ? t('pages.alerts.alertDetailsId', { id: selectedAlert.id }) : t('pages.alerts.alertDetails')}
                 maxWidth="max-w-6xl"
             >
@@ -2107,6 +2127,7 @@ export function Alerts() {
                                                         <td className="px-4 py-2 text-sm">
                                                             {isActive ? (
                                                                 <Link
+                                                                    replace={alertDetailsHistory.isActive || undefined}
                                                                     to={buildDecisionListHref(selectedAlert.id, {
                                                                         instanceId: selectedAlert.instance_id,
                                                                         simulation: simulationsEnabled
@@ -2122,6 +2143,7 @@ export function Alerts() {
                                                                 </Link>
                                                             ) : (
                                                                 <Link
+                                                                    replace={alertDetailsHistory.isActive || undefined}
                                                                     to={buildDecisionListHref(selectedAlert.id, {
                                                                         instanceId: selectedAlert.instance_id,
                                                                         includeExpired: true,
@@ -2208,7 +2230,7 @@ export function Alerts() {
                     currentInstanceId={pendingDecisionAlert.instance_id}
                     currentInstanceName={pendingDecisionAlert.instance_name || instanceNames[pendingDecisionAlert.instance_id || '']}
                     defaultAllInstances={false}
-                    onClose={() => setPendingDecisionAlert(null)}
+                    onClose={closeAlertDecision}
                     onDecisionAdded={refreshAfterDecision}
                 />
             )}

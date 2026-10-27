@@ -66,4 +66,41 @@ describe('Modal', () => {
 
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  test('closes on Escape', () => {
+    const onClose = vi.fn();
+    renderModal(onClose);
+
+    fireEvent.keyDown(screen.getByLabelText('IP Address'), { key: 'Escape' });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  test('closes only the topmost modal on Escape', () => {
+    const onCloseOuter = vi.fn();
+    const onCloseInner = vi.fn();
+    render(
+      <>
+        <Modal isOpen onClose={onCloseOuter} title="Outer" />
+        <Modal isOpen onClose={onCloseInner} title="Inner" />
+      </>,
+    );
+
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+
+    expect(onCloseInner).toHaveBeenCalledTimes(1);
+    expect(onCloseOuter).not.toHaveBeenCalled();
+  });
+
+  test('leaves Escape to a popover inside the dialog that handles it', () => {
+    const onClose = vi.fn();
+    const closePopover = (event: KeyboardEvent) => event.preventDefault();
+    document.addEventListener('keydown', closePopover);
+    renderModal(onClose);
+
+    fireEvent.keyDown(screen.getByLabelText('IP Address'), { key: 'Escape' });
+    document.removeEventListener('keydown', closePopover);
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });

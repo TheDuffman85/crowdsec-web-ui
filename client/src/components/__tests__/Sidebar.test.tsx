@@ -1,5 +1,5 @@
-import { render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { act, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, useLocation, useNavigate, type NavigateFunction } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { Sidebar } from '../Sidebar';
@@ -86,6 +86,7 @@ describe('Sidebar', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
   });
 
   test('leaves room for the default application name at full size', async () => {
@@ -299,6 +300,38 @@ describe('Sidebar', () => {
     expect(await screen.findByText('blocklists-mixed')).toBeInTheDocument();
     expect(screen.getByText(/Load test:/)).toBeInTheDocument();
     expect(screen.queryByText('v2026.5.2')).not.toBeInTheDocument();
+  });
+
+  test('replaces the mobile drawer history entry when navigating from it', async () => {
+    vi.mocked(useNotificationUnreadCount).mockReturnValue({
+      unreadCount: 0,
+      setUnreadCount: vi.fn(),
+      refreshUnreadCount: vi.fn(),
+    });
+    vi.stubGlobal('innerWidth', 500);
+    const onClose = vi.fn();
+    const history: { navigate?: NavigateFunction; pathname?: string } = {};
+    function HistoryProbe() {
+      history.navigate = useNavigate();
+      history.pathname = useLocation().pathname;
+      return null;
+    }
+
+    render(
+      <MemoryRouter initialEntries={['/', { pathname: '/alerts', state: { menuOpen: true } }]} initialIndex={1}>
+        <HistoryProbe />
+        <Sidebar isOpen replaceOnNavigate onClose={onClose} onToggle={vi.fn()} theme="dark" setTheme={setThemeMock} />
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(screen.getAllByRole('link', { name: 'Decisions' })[0]);
+    expect(history.pathname).toBe('/decisions');
+    expect(onClose).not.toHaveBeenCalled();
+
+    act(() => {
+      void history.navigate!(-1);
+    });
+    expect(history.pathname).toBe('/');
   });
 
   test('links to settings and keeps controls out of the sidebar', async () => {

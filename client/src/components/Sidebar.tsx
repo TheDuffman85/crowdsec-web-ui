@@ -35,6 +35,8 @@ interface SidebarProps {
     isOpen: boolean;
     onClose: () => void;
     onToggle: () => void;
+    /** The open drawer is backed by a history entry that navigations should replace. */
+    replaceOnNavigate?: boolean;
     theme: ThemeMode;
     setTheme: (mode: ThemeMode) => void;
 }
@@ -77,7 +79,7 @@ function compareReleaseVersions(left: string, right: string): number {
     return 0;
 }
 
-export function Sidebar({ isOpen, onClose, onToggle, theme, setTheme }: SidebarProps) {
+export function Sidebar({ isOpen, onClose, onToggle, replaceOnNavigate = false, theme, setTheme }: SidebarProps) {
     const { authEnabled, logout, user } = useAuth();
     const { lastUpdated, refreshSignal, syncStatus, refreshNow } = useRefresh();
     const { unreadCount } = useNotificationUnreadCount();
@@ -143,7 +145,11 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, setTheme }: SidebarP
         window.localStorage.setItem('crowdsec-web-ui:instance-scope', instanceId);
         const params = new URLSearchParams(location.search);
         params.set('instance', instanceId);
-        navigate(`${location.pathname}?${params.toString()}`);
+        // Keep the drawer's history entry so Back still closes it
+        navigate(
+            `${location.pathname}?${params.toString()}`,
+            replaceOnNavigate ? { replace: true, state: location.state } : undefined,
+        );
     };
 
     useEffect(() => {
@@ -382,8 +388,10 @@ export function Sidebar({ isOpen, onClose, onToggle, theme, setTheme }: SidebarP
                     <NavLink
                         key={link.to}
                         to={scopedLink(link.to)}
+                        // Replacing the drawer's history entry also closes the drawer
+                        replace={replaceOnNavigate || undefined}
                         onClick={() => {
-                            if (window.innerWidth < 1024) {
+                            if (window.innerWidth < 1024 && !replaceOnNavigate) {
                                 if (onClose) {
                                     onClose();
                                 }

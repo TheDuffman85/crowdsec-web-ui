@@ -29,7 +29,10 @@ export function DropdownSelect({ id, label, value, options, onChange }: Dropdown
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
+      if (event.key !== 'Escape') return;
+      // Keep an enclosing modal open
+      event.preventDefault();
+      setOpen(false);
     };
     document.addEventListener('mousedown', closeOnOutsideClick);
     document.addEventListener('keydown', closeOnEscape);
