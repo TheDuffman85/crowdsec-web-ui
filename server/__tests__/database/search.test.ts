@@ -9,41 +9,6 @@ import { decisionFromRow } from '../../normalized-record';
 import { createLegacyDatabase, createTestDatabase, createTestDatabasePath, tempDirs } from './harness';
 
 describe('CrowdsecDatabase search', () => {
-  test('backfills alert context values into cached search indexes', () => {
-    const dbPath = createTestDatabasePath();
-    let db = new CrowdsecDatabase({ dbPath });
-    const alert = {
-      id: 1,
-      created_at: '2026-07-22T12:00:00.000Z',
-      scenario: 'crowdsecurity/http-bf',
-      message: 'legacy cached alert',
-      source: { ip: '192.0.2.1' },
-      events: [{ meta: [{ key: 'service', value: 'http' }] }],
-      meta: [{ key: 'host', value: 'protected.example.test' }],
-    };
-    db.insertAlert({
-      $id: alert.id,
-      $uuid: 'alert-1',
-      $created_at: alert.created_at,
-      $scenario: alert.scenario,
-      $source_ip: alert.source.ip,
-      $message: alert.message,
-      $raw_data: JSON.stringify(alert),
-    });
-    db.db.prepare("UPDATE alerts SET meta_search = 'http', search_text = 'legacy cached alert http'").run();
-    db.db.prepare("UPDATE alerts_fts SET search_text = 'legacy cached alert http' WHERE alert_id = '1'").run();
-    db.db.prepare("DELETE FROM meta WHERE key = 'alert_context_search_version'").run();
-    db.close();
-
-    db = new CrowdsecDatabase({ dbPath });
-    expect(db.db.prepare('SELECT meta_search FROM alerts WHERE id = 1').get()).toEqual({
-      meta_search: 'http protected.example.test',
-    });
-    expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts WHERE alerts_fts MATCH ?')
-      .get('"protected.example.test"') as { count: number }).count).toBe(1);
-    db.close();
-  });
-
   test('defers only search indexes when reconciling a populated cache', () => {
     const db = createTestDatabase();
     const insertAlert = (id: number, message: string) => db.insertAlert({
@@ -167,7 +132,7 @@ describe('CrowdsecDatabase search', () => {
 
   test('adds rowid mappings for an existing decision search index', () => {
     const dbPath = createTestDatabasePath();
-    let db = new CrowdsecDatabase({ dbPath });
+    let db = new CrowdsecDatabase({ cachePath: dbPath });
     db.insertDecision({
       $id: 'legacy-search-row',
       $uuid: 'legacy-search-row',
@@ -183,7 +148,7 @@ describe('CrowdsecDatabase search', () => {
     db.db.exec('DROP TABLE decision_fts_rows');
     db.close();
 
-    db = new CrowdsecDatabase({ dbPath });
+    db = new CrowdsecDatabase({ cachePath: dbPath });
     expect(db.db.prepare(`
       SELECT search_rows.decision_id
       FROM decision_fts_rows AS search_rows
@@ -191,37 +156,4 @@ describe('CrowdsecDatabase search', () => {
     `).all()).toEqual([{ decision_id: 'legacy-search-row' }]);
     db.close();
   });
-
-  test('migrates legacy search indexes to trigram substring indexes', () => {
-    const dbPath = createTestDatabasePath();
-    let db = new CrowdsecDatabase({ dbPath });
-    db.insertAlert({
-      $id: 1,
-      $uuid: 'legacy-search-alert',
-      $created_at: '2026-01-01T00:00:00.000Z',
-      $scenario: 'crowdsecurity/netgear_rce',
-      $source_ip: '198.51.100.42',
-      $message: 'legacy search alert',
-      $raw_data: JSON.stringify({ id: 1, scenario: 'crowdsecurity/netgear_rce' }),
-    });
-    db.close();
-
-    const legacy = new Database(dbPath);
-    legacy.exec(`
-      DROP TABLE alerts_fts;
-      DROP TABLE decisions_fts;
-      DROP TABLE decision_fts_rows;
-      CREATE VIRTUAL TABLE alerts_fts USING fts5(alert_id UNINDEXED, search_text, tokenize = 'unicode61');
-      CREATE VIRTUAL TABLE decisions_fts USING fts5(decision_id UNINDEXED, search_text, tokenize = 'unicode61');
-      CREATE TABLE decision_fts_rows(decision_id TEXT PRIMARY KEY, fts_rowid INTEGER NOT NULL UNIQUE);
-    `);
-    legacy.close();
-
-    db = new CrowdsecDatabase({ dbPath });
-    const definition = db.db.prepare("SELECT sql FROM sqlite_master WHERE name = 'alerts_fts'").get() as { sql: string };
-    expect(definition.sql).toMatch(/tokenize\s*=\s*'trigram'/i);
-    expect((db.db.prepare('SELECT COUNT(*) AS count FROM alerts_fts WHERE alerts_fts MATCH ?').get('gear_r') as { count: number }).count).toBe(1);
-    db.close();
-  });
-
 });

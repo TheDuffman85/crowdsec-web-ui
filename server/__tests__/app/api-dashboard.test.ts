@@ -52,14 +52,14 @@ describe('createApp dashboard API', () => {
   test('serializes changing dashboard ranges and only warms the newest pending response', async () => {
     const createdAt = new Date().toISOString();
     const dateKey = dashboardDateKey(createdAt, 0);
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
     seedAlert(database, sampleAlert({
       id: 99,
       uuid: 'dashboard-serialized-range-alert',
       created_at: createdAt,
     }));
-    const queryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath });
-    const analyticsQueryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath });
+    const queryWorker = new DatabaseQueryWorker({ dbPath: database.cachePath });
+    const analyticsQueryWorker = new DatabaseQueryWorker({ dbPath: database.cachePath });
     const realAll = analyticsQueryWorker.all.bind(analyticsQueryWorker);
     let releaseFirstTotals!: () => void;
     const firstTotalsGate = new Promise<void>((resolve) => {
@@ -134,9 +134,9 @@ describe('createApp dashboard API', () => {
   });
 
   test('handles an analytics timeout immediately while dashboard enrichment is still pending', async () => {
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
     seedAlert(database, sampleAlert());
-    const queryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath });
+    const queryWorker = new DatabaseQueryWorker({ dbPath: database.cachePath });
     const realAll = queryWorker.all.bind(queryWorker);
     vi.spyOn(queryWorker, 'all').mockImplementation((sql, params, options) => {
       if (sql.includes('SELECT simulated, COUNT(*) AS count')) {
@@ -458,8 +458,8 @@ describe('createApp dashboard API', () => {
       created_at: new Date().toISOString(),
       decisions: [{ id: 1040, value: '1.2.3.4', stop_at: stopAt, type: 'ban', origin: 'crowdsec', simulated: false }],
     });
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
-    const queryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
+    const queryWorker = new DatabaseQueryWorker({ dbPath: database.cachePath });
     const queryAllSpy = vi.spyOn(queryWorker, 'all');
     seedAlert(database, alert);
     const { controller } = createController({
@@ -561,8 +561,8 @@ describe('createApp dashboard API', () => {
       uuid: 'dashboard-alert-303',
       created_at: new Date().toISOString(),
     });
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
-    const analyticsQueryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
+    const analyticsQueryWorker = new DatabaseQueryWorker({ dbPath: database.cachePath });
     const realAll = analyticsQueryWorker.all.bind(analyticsQueryWorker);
     let releaseHistory!: () => void;
     const historyGate = new Promise<void>((resolve) => {
@@ -645,8 +645,8 @@ describe('createApp dashboard API', () => {
       uuid: 'dashboard-alert-302',
       created_at: new Date().toISOString(),
     });
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
-    const analyticsQueryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
+    const analyticsQueryWorker = new DatabaseQueryWorker({ dbPath: database.cachePath });
     const analyticsAllSpy = vi.spyOn(analyticsQueryWorker, 'all');
     const { controller } = createController({
       database,

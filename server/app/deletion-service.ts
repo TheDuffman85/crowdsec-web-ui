@@ -10,6 +10,8 @@ import type { CrowdsecDatabase } from '../database';
 import type { LapiClient } from '../lapi';
 import type { DatabaseQueryWorker } from '../query-worker-client';
 
+const PENDING_DELETION_WRITE_BATCH_SIZE = 100;
+
 type HonoContext = any;
 type AnyError = Error & {
   code?: string;
@@ -355,7 +357,19 @@ async function processPendingAlertDeletions(source: string): Promise<void> {
       logPendingAlertDeletionQueue(rows, `processing (${source})`);
     }
 
+    // The queue lives in state.db, whose commits are fully synced. Progress is written in
+    // bounded batches; LAPI deletions are idempotent, so a crash before a flush only repeats them.
+    const writes: Array<() => void> = [];
+    const flushWrites = async () => {
+      if (writes.length === 0) return;
+      const batch = writes.splice(0);
+      await syncWorker.runExclusive(() => database.transaction<void>(() => {
+        for (const write of batch) write();
+      })(undefined));
+    };
+
     for (const row of rows) {
+      if (writes.length >= PENDING_DELETION_WRITE_BATCH_SIZE) await flushWrites();
       const requestedAt = Date.parse(row.requested_at);
       if (
         config.deletionQueueMaxAgeMs > 0
@@ -365,9 +379,7 @@ async function processPendingAlertDeletions(source: string): Promise<void> {
         const completedAt = new Date().toISOString();
         const maxAge = getIntervalName(config.deletionQueueMaxAgeMs);
         const expirationError = `Maximum deletion queue age of ${maxAge} exceeded${row.last_error ? `; last error: ${row.last_error}` : ''}`;
-        await syncWorker.runExclusive(() => {
-          database.expireAlertDeletion(row.alert_id, completedAt, expirationError);
-        });
+        writes.push(() => database.expireAlertDeletion(row.alert_id, completedAt, expirationError));
         console.error(
           `[deletion-queue] Stopped retrying alert ${row.alert_id} after ${maxAge}; its tombstone remains active.${row.last_error ? ` Last error: ${row.last_error}` : ''}`,
         );
@@ -381,7 +393,8 @@ async function processPendingAlertDeletions(source: string): Promise<void> {
       const instance = config.instances.find((candidate) => candidate.id === instanceId);
       const client: LapiClient | undefined = lapiClients?.get(instanceId) ?? (separator < 0 ? lapiClient : undefined);
       if (!instance || !client) {
-        await syncWorker.runExclusive(() => database.recordAlertDeletionFailure(row.alert_id, new Date().toISOString(), `Instance ${instanceId} is not configured`));
+        const attemptedAt = new Date().toISOString();
+        writes.push(() => database.recordAlertDeletionFailure(row.alert_id, attemptedAt, `Instance ${instanceId} is not configured`));
         continue;
       }
       let decisionsDeletedAt = row.decisions_deleted_at;
@@ -396,9 +409,7 @@ async function processPendingAlertDeletions(source: string): Promise<void> {
           const deletedAt = new Date().toISOString();
           const delayMs = decisionIds.length > 0 ? (instance.sync.bouncerPropagationDelayMs ?? config.bouncerPropagationDelayMs) : 0;
           const dueAt = new Date(Date.now() + delayMs).toISOString();
-          await syncWorker.runExclusive(() => {
-            database.markAlertDeletionDecisionsExpired(row.alert_id, deletedAt, dueAt);
-          });
+          writes.push(() => database.markAlertDeletionDecisionsExpired(row.alert_id, deletedAt, dueAt));
           decisionsDeletedAt = deletedAt;
           deleteAfter = dueAt;
         } catch (error) {
@@ -407,9 +418,7 @@ async function processPendingAlertDeletions(source: string): Promise<void> {
             state.pendingAlertDeletionRerunRequested = true;
           }
           const attemptedAt = new Date().toISOString();
-          await syncWorker.runExclusive(() => {
-            database.recordAlertDeletionFailure(row.alert_id, attemptedAt, typedError.message || 'Decision deletion failed');
-          });
+          writes.push(() => database.recordAlertDeletionFailure(row.alert_id, attemptedAt, typedError.message || 'Decision deletion failed'));
           console.error(`[deletion-queue] Alert ${row.alert_id} decision deletion failed and remains queued: ${typedError.message}`);
           continue;
         }
@@ -422,9 +431,7 @@ async function processPendingAlertDeletions(source: string): Promise<void> {
       try {
         await deleteAlertFromLapi(upstreamId, client);
         const completedAt = new Date().toISOString();
-        await syncWorker.runExclusive(() => {
-          database.completeAlertDeletion(row.alert_id, completedAt);
-        });
+        writes.push(() => database.completeAlertDeletion(row.alert_id, completedAt));
         const decisionCount = parsePendingDecisionIds(row.decision_ids_json).length;
         console.log(`[deletion-queue] Deleted alert ${row.alert_id} and ${decisionCount} linked decision(s).`);
       } catch (error) {
@@ -433,12 +440,12 @@ async function processPendingAlertDeletions(source: string): Promise<void> {
           state.pendingAlertDeletionRerunRequested = true;
         }
         const attemptedAt = new Date().toISOString();
-        await syncWorker.runExclusive(() => {
-          database.recordAlertDeletionFailure(row.alert_id, attemptedAt, typedError.message || 'Alert deletion failed');
-        });
+        writes.push(() => database.recordAlertDeletionFailure(row.alert_id, attemptedAt, typedError.message || 'Alert deletion failed'));
         console.error(`[deletion-queue] Alert ${row.alert_id} deletion failed and remains queued: ${typedError.message}`);
       }
     }
+
+    await flushWrites();
 
     const tombstoneRetentionMs = Math.max(config.lookbackMs, config.lapiRequestTimeoutMs * 2, 60_000);
     const completedBefore = new Date(Date.now() - tombstoneRetentionMs).toISOString();

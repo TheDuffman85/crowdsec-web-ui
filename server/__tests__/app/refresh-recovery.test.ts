@@ -65,9 +65,9 @@ test.each(['wake', 'restart', 'stop'] as const)('keeps one scheduler owner when 
 });
 
 test('rolls back a refresh blocked by a reader and permits queued writes and a later refresh', async () => {
-  const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+  const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
   seedAlert(database, sampleAlert());
-  const worker = new DatabaseSyncWorker({ dbPath: database.dbPath, timeoutMs: 5000 });
+  const worker = new DatabaseSyncWorker({ dbPath: database.cachePath, timeoutMs: 5000 });
   await worker.setMeta('ready', 'true');
   let releaseLookup!: () => void;
   let startedLookup!: () => void;

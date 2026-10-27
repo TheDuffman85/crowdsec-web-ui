@@ -18,9 +18,9 @@ describe('DatabaseSyncWorker', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-sync-worker-'));
     tempDirs.push(dir);
     const dbPath = path.join(dir, 'test.db');
-    const initializer = new CrowdsecDatabase({ dbPath });
+    const initializer = new CrowdsecDatabase({ cachePath: dbPath });
     initializer.close();
-    const database = new CrowdsecDatabase({ dbPath, walEnabled: false });
+    const database = new CrowdsecDatabase({ cachePath: dbPath, walEnabled: false });
     const worker = new DatabaseSyncWorker({ dbPath, walEnabled: false });
     workers.push(worker);
 
@@ -43,7 +43,7 @@ describe('DatabaseSyncWorker', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-sync-worker-'));
     tempDirs.push(dir);
     const dbPath = path.join(dir, 'test.db');
-    const database = new CrowdsecDatabase({ dbPath });
+    const database = new CrowdsecDatabase({ cachePath: dbPath });
     const worker = new DatabaseSyncWorker({ dbPath });
     workers.push(worker);
     const mutations = Array.from({ length: 250 }, (_, index) => ({
@@ -122,7 +122,7 @@ describe('DatabaseSyncWorker', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-sync-worker-'));
     tempDirs.push(dir);
     const dbPath = path.join(dir, 'test.db');
-    const database = new CrowdsecDatabase({ dbPath });
+    const database = new CrowdsecDatabase({ cachePath: dbPath });
     const worker = new DatabaseSyncWorker({ dbPath });
     workers.push(worker);
     const alert = {
@@ -173,7 +173,7 @@ describe('DatabaseSyncWorker', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-sync-worker-'));
     tempDirs.push(dir);
     const dbPath = path.join(dir, 'test.db');
-    const database = new CrowdsecDatabase({ dbPath });
+    const database = new CrowdsecDatabase({ cachePath: dbPath });
     const worker = new DatabaseSyncWorker({ dbPath });
     workers.push(worker);
     database.insertAlert({
@@ -209,7 +209,7 @@ describe('DatabaseSyncWorker', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-sync-worker-'));
     tempDirs.push(dir);
     const dbPath = path.join(dir, 'test.db');
-    const database = new CrowdsecDatabase({ dbPath });
+    const database = new CrowdsecDatabase({ cachePath: dbPath });
     const worker = new DatabaseSyncWorker({ dbPath });
     workers.push(worker);
     const mutation = {
@@ -252,7 +252,7 @@ describe('DatabaseSyncWorker', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-sync-worker-'));
     tempDirs.push(dir);
     const dbPath = path.join(dir, 'test.db');
-    const database = new CrowdsecDatabase({ dbPath });
+    const database = new CrowdsecDatabase({ cachePath: dbPath });
     const worker = new DatabaseSyncWorker({ dbPath });
     workers.push(worker);
     let releaseTransaction!: () => void;
@@ -285,7 +285,7 @@ describe('DatabaseSyncWorker', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-sync-worker-'));
     tempDirs.push(dir);
     const dbPath = path.join(dir, 'test.db');
-    const database = new CrowdsecDatabase({ dbPath });
+    const database = new CrowdsecDatabase({ cachePath: dbPath });
     const worker = new DatabaseSyncWorker({ dbPath });
     workers.push(worker);
     database.insertAlert({

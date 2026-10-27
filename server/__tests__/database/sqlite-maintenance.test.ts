@@ -10,7 +10,7 @@ const tempDirs: string[] = [];
 function databasePath(): string {
   const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-sqlite-maintenance-'));
   tempDirs.push(dir);
-  return path.join(dir, 'crowdsec.db');
+  return path.join(dir, 'cache.db');
 }
 
 afterEach(() => {
@@ -19,13 +19,13 @@ afterEach(() => {
 
 describe('SQLite maintenance', () => {
   test('enables incremental auto-vacuum only for fresh databases when configured', () => {
-    const enabled = new CrowdsecDatabase({ dbPath: databasePath() });
+    const enabled = new CrowdsecDatabase({ cachePath: databasePath() });
     expect(enabled.wasFresh).toBe(true);
     expect(enabled.getStorageStats().autoVacuum).toBe(2);
     enabled.close();
 
     const disabled = new CrowdsecDatabase({
-      dbPath: databasePath(),
+      cachePath: databasePath(),
       incrementalVacuumEnabled: false,
     });
     expect(disabled.wasFresh).toBe(true);
@@ -39,7 +39,7 @@ describe('SQLite maintenance', () => {
     existing.exec('CREATE TABLE existing_data (id INTEGER PRIMARY KEY)');
     existing.close();
 
-    const database = new CrowdsecDatabase({ dbPath, incrementalVacuumEnabled: true });
+    const database = new CrowdsecDatabase({ cachePath: dbPath, incrementalVacuumEnabled: true });
     expect(database.wasFresh).toBe(false);
     expect(database.getStorageStats().autoVacuum).toBe(0);
     database.close();
@@ -61,14 +61,14 @@ describe('SQLite maintenance', () => {
     };
     expect(getSqliteMaintenanceWarning(storage)).toBeNull();
     expect(getSqliteMaintenanceWarning({ ...storage, freeRatio: 0.25 })).toBe(
-      'SQLite can reclaim ~160 MiB. Stop the app and enable incremental vacuum: '
+      'SQLite can reclaim ~160 MiB. Stop the app and delete cache.db to rebuild it with incremental vacuum: '
       + 'https://github.com/TheDuffman85/crowdsec-web-ui#sqlite-database-maintenance',
     );
     expect(getSqliteMaintenanceWarning({ ...storage, autoVacuum: 2, freeRatio: 0.25 })).toBeNull();
   });
 
   test('runs bounded incremental vacuum above thresholds and observes the cooldown', () => {
-    const database = new CrowdsecDatabase({ dbPath: databasePath() });
+    const database = new CrowdsecDatabase({ cachePath: databasePath() });
     database.db.exec('CREATE TABLE vacuum_payload (payload BLOB NOT NULL)');
     const insert = database.db.prepare('INSERT INTO vacuum_payload(payload) VALUES (randomblob(8192))');
     const fill = database.db.transaction(() => {
@@ -102,7 +102,7 @@ describe('SQLite maintenance', () => {
   });
 
   test('skips incremental vacuum below either reclaim threshold', () => {
-    const database = new CrowdsecDatabase({ dbPath: databasePath() });
+    const database = new CrowdsecDatabase({ cachePath: databasePath() });
     const result = database.runIncrementalVacuum({
       now: Date.now(),
       minFreeRatio: 0.25,
@@ -116,7 +116,7 @@ describe('SQLite maintenance', () => {
 
   test('journal size retention does not cap a transaction larger than the limit', () => {
     const dbPath = databasePath();
-    const database = new CrowdsecDatabase({ dbPath, journalSizeLimitBytes: 64 * 1024 });
+    const database = new CrowdsecDatabase({ cachePath: dbPath, journalSizeLimitBytes: 64 * 1024 });
     expect(database.db.prepare('PRAGMA journal_size_limit').get()).toEqual({ journal_size_limit: 64 * 1024 });
     database.db.exec('CREATE TABLE large_transaction (payload BLOB NOT NULL)');
     const insert = database.db.prepare('INSERT INTO large_transaction(payload) VALUES (randomblob(16384))');
@@ -133,12 +133,12 @@ describe('SQLite maintenance', () => {
 
   test('supports unlimited WAL retention and ignores the setting in DELETE mode', () => {
     const dbPath = databasePath();
-    const unlimited = new CrowdsecDatabase({ dbPath, journalSizeLimitBytes: -1 });
+    const unlimited = new CrowdsecDatabase({ cachePath: dbPath, journalSizeLimitBytes: -1 });
     expect(unlimited.db.prepare('PRAGMA journal_size_limit').get()).toEqual({ journal_size_limit: -1 });
     unlimited.close();
 
     const rollback = new CrowdsecDatabase({
-      dbPath,
+      cachePath: dbPath,
       walEnabled: false,
       journalSizeLimitBytes: 1,
     });

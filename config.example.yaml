@@ -16,11 +16,12 @@
 #   basePath: ""
 
 # storage:
-#   dataDir: /app/data
+#   dataDir: /app/data # state.db with users, notification rules, and settings; back this up.
+#   cacheDir: /app/data # cache.db, rebuilt from LAPI when lost; defaults to dataDir.
 #   geonamesDir: /app/geonames
-#   walEnabled: true # Set to false for filesystems that do not support SQLite WAL.
-#   incrementalVacuumEnabled: true # Enables bounded idle maintenance for compatible databases.
-#   journalSizeLimit: 128MiB # Retained WAL size after checkpoints; use unlimited to disable trimming.
+#   walEnabled: true # cache.db only; set to false for filesystems that do not support SQLite WAL.
+#   incrementalVacuumEnabled: true # Enables bounded idle maintenance for compatible cache databases.
+#   journalSizeLimit: 128MiB # Retained cache WAL size after checkpoints; use unlimited to disable trimming.
 #   queryTimeout: 30s # Raise for very large databases or slow storage.
 #   analyticsQueryTimeout: 60s # Timeout for dashboard statistics queries.
 

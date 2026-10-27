@@ -4,9 +4,9 @@ client/dist/
 dist/
 coverage/
 .git/
-crowdsec.db
-crowdsec.db-shm
-crowdsec.db-wal
+crowdsec.db*
+state.db*
+cache.db*
 *.md
 .env*
 config.yaml

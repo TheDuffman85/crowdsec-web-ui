@@ -429,7 +429,7 @@ export function createController(options: {
     ...options.env,
   }, { defaultConfigFile: path.join(tempDir, 'config.yaml') });
 
-  const database = options.database || new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+  const database = options.database || new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
   const fetchCalls: Array<{ url: string; method: string; body?: unknown; headers?: RequestInit['headers']; dispatcher?: unknown }> = [];
   const fetchImpl = async (input: string | URL | Request, init?: LapiRequestInit): Promise<Response> => {
     const requestInit = init;

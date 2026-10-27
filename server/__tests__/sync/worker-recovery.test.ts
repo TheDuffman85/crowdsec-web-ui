@@ -19,8 +19,8 @@ afterEach(async () => {
 
 async function createWorker(timeoutMs = 5_000) {
   const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-sync-recovery-'));
-  const database = new CrowdsecDatabase({ dbPath: path.join(dir, 'test.db') });
-  const client = new DatabaseSyncWorker({ dbPath: database.dbPath, timeoutMs });
+  const database = new CrowdsecDatabase({ cachePath: path.join(dir, 'test.db') });
+  const client = new DatabaseSyncWorker({ dbPath: database.cachePath, timeoutMs });
   const threads = new Set<Worker>();
   cleanups.push(async () => {
     const exits = [...threads].filter((thread) => !thread.exited).map((thread) => (

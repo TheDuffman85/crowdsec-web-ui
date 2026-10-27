@@ -20,7 +20,7 @@ afterEach(() => {
 export function createTestDatabase(): CrowdsecDatabase {
   const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-notifications-'));
   tempDirs.push(dir);
-  return new CrowdsecDatabase({ dbPath: path.join(dir, 'test.db') });
+  return new CrowdsecDatabase({ cachePath: path.join(dir, 'test.db') });
 }
 
 export function createAlert(id: number, createdAt: string, overrides: Partial<AlertRecord> = {}): AlertRecord {

@@ -171,7 +171,7 @@ describe('createApp refresh API', () => {
   });
 
   test('does not publish unchanged on-demand deltas so page reads cannot trigger a refresh loop', async () => {
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
     const cachedAlert = sampleAlert({ id: 941, uuid: 'on-demand-941', decisions: [] });
     seedAlert(database, cachedAlert);
     const lastUpdate = new Date(Date.now() - 10_000).toISOString();
@@ -228,11 +228,11 @@ describe('createApp refresh API', () => {
   });
 
   test.each(['delta', 'latest'] as const)('rolls back %s data and reconciliation state when commit fails', async (mode) => {
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
     const initialAlert = sampleAlert({ id: 931, uuid: 'rollback-931', decisions: [] });
     const refreshedAlert = sampleAlert({ id: 932, uuid: 'rollback-932', decisions: [] });
     seedAlert(database, initialAlert);
-    const syncWorker = new DatabaseSyncWorker({ dbPath: database.dbPath });
+    const syncWorker = new DatabaseSyncWorker({ dbPath: database.cachePath });
     const runTransaction = syncWorker.runTransaction.bind(syncWorker);
     const saveMetadata = vi.spyOn(syncWorker, 'setMeta');
     const cleanupOldData = vi.spyOn(syncWorker, 'cleanupOldData');
@@ -302,7 +302,7 @@ describe('createApp refresh API', () => {
   });
 
   test('invalidates cached analytics when cleanup commits before a delta that later fails', async () => {
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
     const oldAlert = sampleAlert({
       id: 941,
       uuid: 'cleanup-941',
@@ -311,8 +311,8 @@ describe('createApp refresh API', () => {
     });
     seedAlert(database, oldAlert);
     seedAlert(database, sampleAlert({ id: 942, uuid: 'cleanup-942', decisions: [] }));
-    const syncWorker = new DatabaseSyncWorker({ dbPath: database.dbPath });
-    const analyticsQueryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath, maxWorkers: 1 });
+    const syncWorker = new DatabaseSyncWorker({ dbPath: database.cachePath });
+    const analyticsQueryWorker = new DatabaseQueryWorker({ dbPath: database.cachePath, maxWorkers: 1 });
     const analyticsQueries = vi.spyOn(analyticsQueryWorker, 'all');
     let lapiStarted!: () => void;
     const lapiFetchStarted = new Promise<void>((resolve) => { lapiStarted = resolve; });
@@ -414,7 +414,7 @@ describe('createApp refresh API', () => {
         simulated: false,
       }],
     });
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
     seedAlert(database, initialAlert);
     const { controller, lapiClient } = createController({
       database,
@@ -505,10 +505,10 @@ describe('createApp refresh API', () => {
         simulated: false,
       }],
     });
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
     seedAlert(database, initialAlert);
-    const queryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath });
-    const syncWorker = new DatabaseSyncWorker({ dbPath: database.dbPath });
+    const queryWorker = new DatabaseQueryWorker({ dbPath: database.cachePath });
+    const syncWorker = new DatabaseSyncWorker({ dbPath: database.cachePath });
     const realDuplicateRefresh = syncWorker.refreshDecisionDuplicateFlags.bind(syncWorker);
     let releaseCommit!: () => void;
     const commitGate = new Promise<void>((resolve) => {
@@ -603,10 +603,10 @@ describe('createApp refresh API', () => {
         simulated: false,
       }],
     });
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
     seedAlert(database, initialAlert);
-    const queryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath });
-    const analyticsQueryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath, maxWorkers: 1 });
+    const queryWorker = new DatabaseQueryWorker({ dbPath: database.cachePath });
+    const analyticsQueryWorker = new DatabaseQueryWorker({ dbPath: database.cachePath, maxWorkers: 1 });
     const realAll = analyticsQueryWorker.all.bind(analyticsQueryWorker);
     let holdDashboardIndex = false;
     let dashboardIndexHeld = false;
@@ -726,8 +726,8 @@ describe('createApp refresh API', () => {
         simulated: false,
       }],
     });
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
-    const queryWorker = new DatabaseQueryWorker({ dbPath: database.dbPath });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
+    const queryWorker = new DatabaseQueryWorker({ dbPath: database.cachePath });
     const queryAllSpy = vi.spyOn(queryWorker, 'all');
     seedAlert(database, initialAlert);
     const { controller, lapiClient } = createController({

@@ -73,7 +73,7 @@ const config = createRuntimeConfig({
   VITE_COMMIT_HASH: process.env.VITE_COMMIT_HASH || 'screenshot',
 }, { defaultConfigFile: configFile });
 const database = new CrowdsecDatabase({
-  dbDir,
+  dataDir: dbDir,
   walEnabled: config.sqliteWalEnabled,
   incrementalVacuumEnabled: config.sqliteIncrementalVacuumEnabled,
   journalSizeLimitBytes: config.sqliteJournalSizeLimitBytes,

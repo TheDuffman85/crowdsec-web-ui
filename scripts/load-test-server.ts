@@ -75,7 +75,7 @@ const config = createRuntimeConfig({
   VITE_COMMIT_HASH: process.env.VITE_COMMIT_HASH || 'loadtest',
 }, { defaultConfigFile: path.join(dbDir, 'config.yaml') });
 const database = new CrowdsecDatabase({
-  dbDir,
+  dataDir: dbDir,
   walEnabled: config.sqliteWalEnabled,
   incrementalVacuumEnabled: config.sqliteIncrementalVacuumEnabled,
   journalSizeLimitBytes: config.sqliteJournalSizeLimitBytes,

@@ -16,7 +16,7 @@ if [ -d "/app/data" ]; then
     fi
 
     # Keep SQLite WAL/SHM files intact. They can contain committed writes that
-    # have not been checkpointed into crowdsec.db yet, especially after a
+    # have not been checkpointed into the database yet, especially after a
     # container restart.
 fi
 

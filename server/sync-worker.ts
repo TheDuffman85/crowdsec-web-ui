@@ -25,8 +25,10 @@ const workerOptions = workerData as {
   incrementalVacuumEnabled?: boolean;
   journalSizeLimitBytes?: number;
 };
+// The sync worker only maintains the cache; state.db stays private to the main process.
 const database = new CrowdsecDatabase({
-  dbPath: String(workerOptions.dbPath),
+  cachePath: String(workerOptions.dbPath),
+  statePath: null,
   walEnabled: workerOptions.walEnabled ?? true,
   incrementalVacuumEnabled: workerOptions.incrementalVacuumEnabled ?? true,
   journalSizeLimitBytes: workerOptions.journalSizeLimitBytes,

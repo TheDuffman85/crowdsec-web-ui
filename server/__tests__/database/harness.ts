@@ -17,7 +17,7 @@ afterEach(() => {
 export function createTestDatabase(): CrowdsecDatabase {
   const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-'));
   tempDirs.push(dir);
-  return new CrowdsecDatabase({ dbPath: path.join(dir, 'test.db') });
+  return new CrowdsecDatabase({ cachePath: path.join(dir, 'test.db') });
 }
 
 export function createTestDatabasePath(): string {

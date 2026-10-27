@@ -53,6 +53,8 @@ import {
 import type { DatabaseQueryWorker } from './query-worker-client';
 import type { DatabaseWrite } from './sync-worker-client';
 
+const NOTIFICATION_WRITE_BATCH_SIZE = 100;
+
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 type RuleConfigInput = NotificationRuleConfig | Record<string, AlertMetaValue>;
 
@@ -430,10 +432,12 @@ export function createNotificationService(options: NotificationServiceOptions): 
       const unknownPrefixes = crowdsecObservations?.filter((observation) => observation.updateAvailable === null)
         .map((observation) => crowdsecUpdateIncidentPrefix(observation)) || [];
 
+      const writes: Array<() => void> = [];
+
       for (const incident of activeIncidents.values()) {
         if (!candidateKeys.has(incident.incidentKey)
           && !unknownPrefixes.some((prefix) => incident.incidentKey.startsWith(prefix))) {
-          await writeDatabase(() => {
+          writes.push(() => {
             database.resolveNotificationIncident(rule.id, incident.incidentKey, timestamp);
             if (rule.type === 'application-update' || rule.type === 'crowdsec-update') {
               database.deleteNotificationByRuleAndDedupeKey(rule.id, incident.incidentKey);
@@ -445,7 +449,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
       for (const candidate of candidates) {
         const existingIncident = activeIncidents.get(candidate.dedupeKey);
         if (existingIncident) {
-          await writeDatabase(() => database.upsertNotificationIncident({
+          writes.push(() => database.upsertNotificationIncident({
             $rule_id: rule.id,
             $incident_key: existingIncident.incidentKey,
             $first_seen_at: existingIncident.firstSeenAt,
@@ -462,7 +466,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
         }
 
         const incidentStartedAt = candidate.incidentStartedAt || timestamp;
-        await writeDatabase(() => {
+        writes.push(() => {
           database.insertNotification({
             $id: crypto.randomUUID(),
             $created_at: timestamp,
@@ -486,7 +490,23 @@ export function createNotificationService(options: NotificationServiceOptions): 
             $resolved_at: null,
           });
         });
+        // Record sent notifications promptly so a crash cannot resend a large backlog.
+        if (writes.length >= NOTIFICATION_WRITE_BATCH_SIZE) await flushWrites(writes);
       }
+      await flushWrites(writes);
+    }
+  }
+
+  // state.db commits are fully synced, so incident and history updates share bounded
+  // transactions instead of committing every row on its own. Each batch yields afterwards,
+  // also when candidate processing continues, so timers and requests run in between.
+  async function flushWrites(writes: Array<() => void>): Promise<void> {
+    while (writes.length > 0) {
+      const batch = writes.splice(0, NOTIFICATION_WRITE_BATCH_SIZE);
+      await writeDatabase(() => database.transaction<void>(() => {
+        for (const write of batch) write();
+      })(undefined));
+      await new Promise<void>((resolve) => setImmediate(resolve));
     }
   }
 

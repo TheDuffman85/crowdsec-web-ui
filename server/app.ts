@@ -383,7 +383,8 @@ function readSingleQueryValue(value: string | string[] | undefined): string | un
 export function createApp(options: CreateAppOptions = {}): AppController {
   const config = options.config || createRuntimeConfig();
   const database = options.database || new CrowdsecDatabase({
-    dbDir: config.dbDir,
+    dataDir: config.dbDir,
+    cacheDir: config.dbCacheDir,
     walEnabled: config.sqliteWalEnabled,
     incrementalVacuumEnabled: config.sqliteIncrementalVacuumEnabled,
     journalSizeLimitBytes: config.sqliteJournalSizeLimitBytes,
@@ -453,23 +454,23 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     allowPrivateAddresses: config.notificationAllowPrivateAddresses,
   });
   const queryWorker = options.queryWorker || new DatabaseQueryWorker({
-    dbPath: database.dbPath,
+    dbPath: database.cachePath,
     timeoutMs: config.dbQueryTimeoutMs,
   });
   const analyticsQueryWorker = options.analyticsQueryWorker
     || (options.queryWorker ? queryWorker : new DatabaseQueryWorker({
-      dbPath: database.dbPath,
+      dbPath: database.cachePath,
       timeoutMs: config.dbAnalyticsQueryTimeoutMs,
       queueTimeoutMs: 30_000,
       maxWorkers: 1,
     }));
   const facetQueryWorker = options.facetQueryWorker || new DatabaseQueryWorker({
-    dbPath: database.dbPath,
+    dbPath: database.cachePath,
     timeoutMs: 5_000,
     maxWorkers: 1,
   });
   const syncWorker = options.syncWorker || new DatabaseSyncWorker({
-    dbPath: database.dbPath,
+    dbPath: database.cachePath,
     walEnabled: config.sqliteWalEnabled,
     incrementalVacuumEnabled: config.sqliteIncrementalVacuumEnabled,
     journalSizeLimitBytes: config.sqliteJournalSizeLimitBytes,

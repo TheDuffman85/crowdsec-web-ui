@@ -65,7 +65,7 @@ function createMultiController(options: {
       manualDecisionScenarios: options.secondaryManualDecisionScenarios,
     },
   ];
-  const database = new CrowdsecDatabase({ dbDir: dir });
+  const database = new CrowdsecDatabase({ dataDir: dir });
   const primary = fakeClient('primary');
   const secondary = fakeClient('secondary', { failAdd: options.secondaryAddFails });
   if (options.secondarySyncNeverCompletes) {
@@ -98,7 +98,7 @@ describe('multi-instance API', () => {
     const secondaryGate = new Promise<void>((resolve) => { releaseSecondary = resolve; });
     const { controller, database, primary, secondary } = createMultiController({
       createSyncWorker: (database) => {
-        const worker = new DatabaseSyncWorker({ dbPath: database.dbPath });
+        const worker = new DatabaseSyncWorker({ dbPath: database.cachePath });
         const runTransaction = worker.runTransaction.bind(worker);
         let transactionCount = 0;
         vi.spyOn(worker, 'runTransaction').mockImplementation(async (operation, options) => {
@@ -183,7 +183,7 @@ describe('multi-instance API', () => {
       { ...base, id: 'secondary', name: 'Secondary', lapiUrl: 'http://secondary:8080' },
       { ...base, id: 'edge', name: 'Edge', lapiUrl: 'http://edge:8080' },
     ];
-    const database = new CrowdsecDatabase({ dbDir: dir });
+    const database = new CrowdsecDatabase({ dataDir: dir });
     const primary = fakeClient('primary');
     const secondary = fakeClient('secondary');
     const edge = fakeClient('edge');
@@ -276,7 +276,7 @@ describe('multi-instance API', () => {
       { ...base, id: 'secondary', name: 'Secondary', lapiUrl: 'http://secondary:8080' },
       { ...base, id: 'edge', name: 'Edge', lapiUrl: 'http://edge:8080' },
     ];
-    const database = new CrowdsecDatabase({ dbDir: dir });
+    const database = new CrowdsecDatabase({ dataDir: dir });
     const primary = fakeClient('primary');
     const secondary = fakeClient('secondary');
     const edge = fakeClient('edge');
@@ -339,7 +339,7 @@ describe('multi-instance API', () => {
       { ...base, id: 'primary', name: 'Primary', lapiUrl: 'http://primary:8080' },
       { ...base, id: 'secondary', name: 'Secondary', lapiUrl: 'http://secondary:8080' },
     ];
-    const database = new CrowdsecDatabase({ dbDir: dir });
+    const database = new CrowdsecDatabase({ dataDir: dir });
     const createdAt = new Date(Date.now() - 10_000).toISOString();
     const stopAt = new Date(Date.now() + 3_600_000).toISOString();
     const alert = {
@@ -420,7 +420,7 @@ describe('multi-instance API', () => {
       { ...base, id: 'primary', name: 'Primary', lapiUrl: 'http://primary:8080' },
       { ...base, id: 'secondary', name: 'Secondary', lapiUrl: 'http://secondary:8080' },
     ];
-    const database = new CrowdsecDatabase({ dbDir: dir });
+    const database = new CrowdsecDatabase({ dataDir: dir });
     const createdAt = new Date().toISOString();
 
     let releaseSecondary!: () => void;
@@ -824,10 +824,10 @@ test('resumes persisted instance deletion on restart without repeating completed
   const key = 'secondary\u00007';
   database.queueAlertDeletion(key, ['9'], new Date(Date.now() - 60_000).toISOString());
   database.markAlertDeletionDecisionsExpired(key, new Date(Date.now() - 30_000).toISOString(), new Date(Date.now() - 15_000).toISOString());
-  const dbPath = database.dbPath;
+  const dbPath = database.cachePath;
   controller.stopBackgroundTasks();
   database.close();
-  const reopened = new CrowdsecDatabase({ dbPath });
+  const reopened = new CrowdsecDatabase({ cachePath: dbPath });
   controller.config.lookbackPeriod = '1m';
   controller.config.lookbackMs = 60_000;
   controller.config.heartbeatIntervalMs = 0;
@@ -895,7 +895,7 @@ test.each([
     { ...base, id: 'primary', name: 'Primary', lapiUrl: 'http://primary:8080' },
     { ...base, id: 'secondary', name: 'Secondary', lapiUrl: 'http://secondary:8080' },
   ];
-  const database = new CrowdsecDatabase({ dbDir: dir });
+  const database = new CrowdsecDatabase({ dataDir: dir });
   const primary = fakeClient('primary');
   const secondary = fakeClient('secondary');
   const lapiAlerts: any[] = [];

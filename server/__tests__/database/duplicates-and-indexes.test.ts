@@ -181,7 +181,7 @@ describe('CrowdsecDatabase duplicates and indexes', () => {
 
   test('rebuilds persisted duplicate flags after the ranking algorithm changes', () => {
     const dbPath = createTestDatabasePath();
-    let db = new CrowdsecDatabase({ dbPath });
+    let db = new CrowdsecDatabase({ cachePath: dbPath });
     const insertDecision = (id: string) => db.insertDecision({
       $id: id,
       $uuid: id,
@@ -202,7 +202,7 @@ describe('CrowdsecDatabase duplicates and indexes', () => {
     db.db.prepare("DELETE FROM meta WHERE key = 'decision_duplicate_rank_version'").run();
     db.close();
 
-    db = new CrowdsecDatabase({ dbPath });
+    db = new CrowdsecDatabase({ cachePath: dbPath });
     expect(db.refreshDecisionDuplicateFlags('2029-01-01T00:01:00.000Z')).toBe(2);
     expect(db.db.prepare('SELECT id, is_duplicate FROM decisions ORDER BY id').all()).toEqual([
       { id: '10', is_duplicate: 1 },
@@ -318,13 +318,7 @@ describe('CrowdsecDatabase duplicates and indexes', () => {
   });
 
   test('plans active reconciliation windows from a covering index', () => {
-    const dbPath = createTestDatabasePath();
-    const legacy = new CrowdsecDatabase({ dbPath });
-    legacy.db.exec('DROP INDEX idx_decisions_stop_alert_id');
-    legacy.db.exec('CREATE INDEX idx_decisions_stop_alert_id ON decisions(stop_at, alert_id)');
-    legacy.close();
-
-    const db = new CrowdsecDatabase({ dbPath });
+    const db = createTestDatabase();
     expect(
       (db.db.prepare("PRAGMA index_info('idx_decisions_stop_alert_id')").all() as Array<{ name: string }>).map((column) => column.name),
     ).toEqual(['stop_at', 'alert_id', 'instance_id']);

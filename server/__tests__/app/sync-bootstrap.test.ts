@@ -252,7 +252,7 @@ describe('createApp synchronization bootstrap', () => {
         simulated: false,
       })),
     });
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
     seedAlert(database, activeAlert);
     const decisionStopAtLookup = vi.spyOn(database, 'getDecisionStopAtBatch');
     const syncWorker: NonNullable<CreateAppOptions['syncWorker']> = {
@@ -317,7 +317,7 @@ describe('createApp synchronization bootstrap', () => {
         { id: 'delta-new', type: 'ban', value: '203.0.113.250', stop_at: new Date(Date.now() + 60_000).toISOString() },
       ],
     };
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
     seedAlert(database, initialAlert);
     const syncWorker: NonNullable<CreateAppOptions['syncWorker']> = {
       persistAlerts: vi.fn(async () => ({ changed: true })),
@@ -379,7 +379,7 @@ describe('createApp synchronization bootstrap', () => {
         origin: 'lists',
       })),
     });
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
     const syncWorker: NonNullable<CreateAppOptions['syncWorker']> = {
       persistAlerts: vi.fn(async () => ({ changed: true })),
       deleteAlertsMissingBetween: vi.fn(async () => ({ alerts: 0, decisions: 0 })),
@@ -436,7 +436,7 @@ describe('createApp synchronization bootstrap', () => {
       })),
     });
     const refreshedAlert = { ...initialAlert, decisions: initialAlert.decisions?.slice(0, -1) };
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
     seedAlert(database, initialAlert);
     const syncWorker: NonNullable<CreateAppOptions['syncWorker']> = {
       persistAlerts: vi.fn(async () => ({ changed: true })),
@@ -489,7 +489,7 @@ describe('createApp synchronization bootstrap', () => {
         { id: 2061, type: 'ban', value: '198.51.100.2', stop_at: new Date(Date.now() + 60_000).toISOString() },
       ],
     });
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
     seedAlert(database, activeAlert);
     database.deleteDecision('2061');
     const syncWorker: NonNullable<CreateAppOptions['syncWorker']> = {

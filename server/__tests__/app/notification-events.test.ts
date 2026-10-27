@@ -444,7 +444,7 @@ describe('createApp notification events', () => {
         simulated: false,
       }],
     });
-    const database = new CrowdsecDatabase({ dbPath: path.join(tempDir, 'test.db') });
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
     seedAlert(database, cachedOldAlert);
     const { controller } = createController({
       database,

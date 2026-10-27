@@ -2,7 +2,7 @@ import { rmSync } from 'node:fs';
 import path from 'node:path';
 import { parseBooleanEnv, parseLookbackToMs } from '../server/config';
 import { DEFAULT_SQLITE_JOURNAL_SIZE_LIMIT_BYTES, parseByteSize } from '../server/config-file';
-import { CrowdsecDatabase } from '../server/database';
+import { CACHE_DATABASE_FILE, CrowdsecDatabase, STATE_DATABASE_FILE } from '../server/database';
 import { installTimestampedConsole } from '../server/logging';
 import {
   DEFAULT_LOAD_TEST_BLOCKLIST_DECISIONS,
@@ -402,10 +402,11 @@ function buildAlertRecord(alert: AlertTemplate, config: LoadTestConfig, nowMs: n
 }
 
 function removeExistingDatabase(dbDir: string): void {
-  const dbPath = path.join(dbDir, 'crowdsec.db');
-  rmSync(dbPath, { force: true });
-  rmSync(`${dbPath}-shm`, { force: true });
-  rmSync(`${dbPath}-wal`, { force: true });
+  for (const file of [CACHE_DATABASE_FILE, STATE_DATABASE_FILE, 'crowdsec.db']) {
+    for (const suffix of ['', '-shm', '-wal', '-journal']) {
+      rmSync(path.join(dbDir, `${file}${suffix}`), { force: true });
+    }
+  }
 }
 
 function logProgress(label: string, current: number, total: number): void {
@@ -443,7 +444,7 @@ function sourceOrigins(record: ReturnType<typeof buildAlertRecord>): string {
 
 installTimestampedConsole();
 const config = readConfig();
-const dbPath = path.join(config.dbDir, 'crowdsec.db');
+const dbPath = path.join(config.dbDir, CACHE_DATABASE_FILE);
 const nowMs = Date.now();
 const seedStartedAt = Date.now();
 
@@ -462,7 +463,7 @@ if (config.alerts === 0 && config.decisions > 0) {
 removeExistingDatabase(config.dbDir);
 
 const database = new CrowdsecDatabase({
-  dbDir: config.dbDir,
+  dataDir: config.dbDir,
   walEnabled: config.sqliteWalEnabled,
   incrementalVacuumEnabled: config.sqliteIncrementalVacuumEnabled,
   journalSizeLimitBytes: config.sqliteJournalSizeLimitBytes,
