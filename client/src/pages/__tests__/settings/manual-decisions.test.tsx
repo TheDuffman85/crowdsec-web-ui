@@ -50,8 +50,7 @@ describe('Settings manual decision scenarios', () => {
   test('disables editing without settings permission', async () => {
     render(<Settings />);
 
-    await waitFor(() => expect(fetchConfig).toHaveBeenCalled());
-    expect(screen.getByText('manual/web-ui')).toBeInTheDocument();
+    expect(await screen.findByText('manual/web-ui')).toBeInTheDocument();
     expect(screen.getByLabelText('Scenarios')).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Save scenarios' })).toBeDisabled();
   });

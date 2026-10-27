@@ -11,9 +11,7 @@ describe('Settings general and password', () => {
   test('keeps language editable but disables refresh in read-only mode', async () => {
     render(<Settings />);
 
-    await waitFor(() => expect(fetchConfig).toHaveBeenCalled());
-
-    expect(screen.getByLabelText('Language')).toBeEnabled();
+    expect(await screen.findByLabelText('Language')).toBeEnabled();
     expect(screen.getByLabelText('Refresh interval')).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
     expect(screen.getByText('Read-only mode is enabled.')).toBeInTheDocument();
@@ -24,9 +22,7 @@ describe('Settings general and password', () => {
     const user = userEvent.setup();
     render(<Settings />);
 
-    await waitFor(() => expect(fetchConfig).toHaveBeenCalled());
-
-    await user.selectOptions(screen.getByLabelText('Language'), 'de');
+    await user.selectOptions(await screen.findByLabelText('Language'), 'de');
     expect(setLanguagePreferenceMock).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole('button', { name: 'Save' }));
@@ -42,9 +38,7 @@ describe('Settings general and password', () => {
       </FontContext.Provider>,
     );
 
-    await waitFor(() => expect(fetchConfig).toHaveBeenCalled());
-
-    const fontSelect = screen.getByLabelText('Font');
+    const fontSelect = await screen.findByLabelText('Font');
     expect(fontSelect).toBeEnabled();
     expect(screen.getByRole('option', { name: 'Match language (IBM Plex Sans)' })).toBeInTheDocument();
 
@@ -83,9 +77,7 @@ describe('Settings general and password', () => {
 
     render(<Settings />);
 
-    await waitFor(() => expect(fetchConfig).toHaveBeenCalled());
-
-    await user.click(screen.getByRole('switch', { name: 'Show Metrics in sidebar' }));
+    await user.click(await screen.findByRole('switch', { name: 'Show Metrics in sidebar' }));
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
     expect(updateMetricsSidebarPreference).toHaveBeenCalledWith({ visible: false });
@@ -113,9 +105,7 @@ describe('Settings general and password', () => {
     });
 
     render(<Settings />);
-    await waitFor(() => expect(fetchConfig).toHaveBeenCalled());
-
-    await user.click(screen.getByRole('switch', { name: 'Enable manual refresh' }));
+    await user.click(await screen.findByRole('switch', { name: 'Enable manual refresh' }));
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
     expect(updateManualRefreshSetting).toHaveBeenCalledWith({ enabled: true });
