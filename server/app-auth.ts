@@ -12,9 +12,16 @@ import {
 } from '@simplewebauthn/server';
 import { generateSecret, generateURI, verify } from 'otplib';
 import * as oidcClient from 'openid-client';
+import * as jose from 'jose';
 import { parseOidcScope, parseOidcUnmatchedRole, type DashboardAuthConfig, type OidcUnmatchedRole } from './config';
 import { getAppName } from './branding';
-import { CrowdsecDatabase, type AuthUserRow, type OidcUserUpsertParams } from './database';
+import {
+  CrowdsecDatabase,
+  INITIAL_OIDC_LOGOUT_VERSION,
+  OIDC_END_SESSION_LEGACY_DEFAULT_KEY,
+  type AuthUserRow,
+  type OidcUserUpsertParams,
+} from './database';
 import type { DatabaseWrite } from './sync-worker-client';
 
 type HonoContext = any;
@@ -31,7 +38,9 @@ type MutableAuthSettingKey =
   | 'oidc_admin_groups'
   | 'oidc_read_only_groups'
   | 'oidc_unmatched_role'
-  | 'oidc_end_session';
+  | 'oidc_end_session'
+  | 'oidc_auto_login'
+  | 'oidc_backchannel_logout';
 
 interface EffectiveAuthConfig {
   oidcIssuerUrl?: string;
@@ -43,6 +52,8 @@ interface EffectiveAuthConfig {
   oidcReadOnlyGroups: string[];
   oidcUnmatchedRole: OidcUnmatchedRole;
   oidcEndSession: boolean;
+  oidcAutoLogin: boolean;
+  oidcBackchannelLogout: boolean;
 }
 
 export interface OidcRoleConfig {
@@ -82,6 +93,8 @@ const OIDC_NONCE_COOKIE = 'crowdsec_web_ui_oidc_nonce';
 const OIDC_REDIRECT_COOKIE = 'crowdsec_web_ui_oidc_redirect_uri';
 const OIDC_ID_TOKEN_COOKIE = 'crowdsec_web_ui_oidc_id_token';
 const MAX_ID_TOKEN_COOKIE_LENGTH = 3800;
+const BACKCHANNEL_LOGOUT_EVENT = 'http://schemas.openid.net/event/backchannel-logout';
+const LOGOUT_TOKEN_MAX_AGE_SECONDS = 5 * 60;
 const DUMMY_PASSWORD_HASH_PROMISE = hashPassword('timing-safe-dummy-password-pad');
 const ENCRYPTED_SECRET_PREFIX = 'enc:v1:';
 const TOTP_EPOCH_TOLERANCE_SECONDS = 30;
@@ -385,7 +398,10 @@ function signSession(payload: Record<string, unknown>, secret: string): string {
   return `${encodedPayload}.${signature}`;
 }
 
-function verifySessionToken(token: string, secret: string): (SessionData & { sessionVersion: number; issuedAt: number }) | null {
+function verifySessionToken(
+  token: string,
+  secret: string,
+): (SessionData & { sessionVersion: number; issuedAt: number; sid?: string; oidcLogoutVersion: number }) | null {
   const [encodedPayload, signature] = token.split('.');
   if (!encodedPayload || !signature) return null;
   const expectedSignature = crypto.createHmac('sha256', secret).update(encodedPayload).digest('base64url');
@@ -400,6 +416,8 @@ function verifySessionToken(token: string, secret: string): (SessionData & { ses
       exp?: number;
       iat?: number;
       sessionVersion?: number;
+      sid?: unknown;
+      oidcLogoutVersion?: number;
     };
     if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return null;
     if (typeof payload.userId !== 'number' || typeof payload.username !== 'string') return null;
@@ -411,7 +429,12 @@ function verifySessionToken(token: string, secret: string): (SessionData & { ses
       ? Number(payload.sessionVersion)
       : 1;
     const issuedAt = Number.isInteger(payload.iat) && Number(payload.iat) > 0 ? Number(payload.iat) : 0;
-    return { userId: payload.userId, username: payload.username, role, authMethod, sessionVersion, issuedAt };
+    const sid = typeof payload.sid === 'string' && payload.sid ? payload.sid : undefined;
+    // Cookies from before back-channel logout carry no version and belong to the initial one.
+    const oidcLogoutVersion = Number.isInteger(payload.oidcLogoutVersion) && Number(payload.oidcLogoutVersion) > 0
+      ? Number(payload.oidcLogoutVersion)
+      : INITIAL_OIDC_LOGOUT_VERSION;
+    return { userId: payload.userId, username: payload.username, role, authMethod, sessionVersion, issuedAt, sid, oidcLogoutVersion };
   } catch {
     return null;
   }
@@ -496,6 +519,7 @@ async function verifyAuthentication(
 class OidcRuntime {
   private configuration: oidcClient.Configuration | null = null;
   private cacheKey = '';
+  private jwks: { uri: string; keySet: ReturnType<typeof jose.createRemoteJWKSet> } | null = null;
 
   constructor(private readonly getConfig: () => EffectiveAuthConfig) {}
 
@@ -557,6 +581,7 @@ class OidcRuntime {
     role: Role | null;
     issuer: string;
     subject: string;
+    sessionId?: string;
     idToken?: string;
   } | null> {
     const configuration = await this.getConfiguration();
@@ -580,8 +605,67 @@ class OidcRuntime {
       role: resolved.role,
       issuer,
       subject,
+      sessionId: typeof idClaims.sid === 'string' && idClaims.sid ? idClaims.sid : undefined,
       idToken: tokens.id_token,
     };
+  }
+
+  /**
+   * Validates an OpenID Connect Back-Channel Logout token and returns the
+   * identity whose sessions it ends, or null when the token is not acceptable.
+   */
+  async verifyLogoutToken(logoutToken: string): Promise<{
+    issuer: string;
+    subject?: string;
+    sessionId?: string;
+    tokenId: string;
+    tokenExpiresAt: number;
+  } | null> {
+    const configuration = await this.getConfiguration();
+    const config = this.getConfig();
+    const metadata = configuration.serverMetadata();
+    const jwksUri = metadata.jwks_uri;
+    if (!jwksUri) {
+      this.jwks = null;
+    } else if (this.jwks?.uri !== jwksUri) {
+      this.jwks = { uri: jwksUri, keySet: jose.createRemoteJWKSet(new URL(jwksUri)) };
+    }
+    const keySet = this.jwks?.keySet;
+
+    try {
+      const { payload } = await jose.jwtVerify(logoutToken, async (header, token) => {
+        // Providers without a signing key use the client secret, as for their ID tokens.
+        if (header.alg.startsWith('HS')) {
+          if (!config.oidcClientSecret) throw new Error('HMAC-signed logout token, but no client secret is configured');
+          return new TextEncoder().encode(config.oidcClientSecret);
+        }
+        if (!keySet) throw new Error('OIDC provider has no jwks_uri');
+        return keySet(header, token);
+      }, {
+        issuer: metadata.issuer,
+        audience: config.oidcClientId,
+        maxTokenAge: LOGOUT_TOKEN_MAX_AGE_SECONDS,
+        requiredClaims: ['iat', 'jti'],
+      });
+
+      if (!asObject(asObject(payload.events)?.[BACKCHANNEL_LOGOUT_EVENT])) throw new Error('missing back-channel logout event');
+      if ('nonce' in payload) throw new Error('logout tokens must not contain a nonce');
+      if (typeof payload.jti !== 'string' || !payload.jti) throw new Error('logout token has no token ID');
+      const subject = typeof payload.sub === 'string' && payload.sub ? payload.sub : undefined;
+      const sessionId = typeof payload.sid === 'string' && payload.sid ? payload.sid : undefined;
+      if (!subject && !sessionId) throw new Error('logout token has neither sub nor sid');
+      return {
+        issuer: metadata.issuer,
+        subject,
+        sessionId,
+        tokenId: payload.jti,
+        // maxTokenAge accepts the boundary second; retain the replay marker through it.
+        tokenExpiresAt: Math.ceil(payload.iat! + LOGOUT_TOKEN_MAX_AGE_SECONDS) + 1,
+      };
+    } catch (error) {
+      console.warn(`Rejected OIDC back-channel logout token: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
   }
 
   private async fetchUserInfoClaims(
@@ -670,7 +754,9 @@ export function createDashboardAuth(options: {
       oidcAdminGroups: parseCsvList(readAuthSetting(database, 'oidc_admin_groups') ?? config.oidcAdminGroups.join(',')),
       oidcReadOnlyGroups: parseCsvList(readAuthSetting(database, 'oidc_read_only_groups') ?? config.oidcReadOnlyGroups.join(',')),
       oidcUnmatchedRole: parseOidcUnmatchedRole(readAuthSetting(database, 'oidc_unmatched_role') ?? config.oidcUnmatchedRole),
-      oidcEndSession: (readAuthSetting(database, 'oidc_end_session') ?? String(config.oidcEndSession)) !== 'false',
+      oidcEndSession: (readAuthSetting(database, 'oidc_end_session') ?? String(config.oidcEndSession ?? isOidcEndSessionLegacyDefault())) === 'true',
+      oidcAutoLogin: (readAuthSetting(database, 'oidc_auto_login') ?? String(config.oidcAutoLogin)) === 'true',
+      oidcBackchannelLogout: (readAuthSetting(database, 'oidc_backchannel_logout') ?? String(config.oidcBackchannelLogout)) === 'true',
     };
   }
 
@@ -702,7 +788,44 @@ export function createDashboardAuth(options: {
     };
   }
 
+  // End-session used to default to on. Installs that already used OIDC before it defaulted to off keep that
+  // default; it applies only while neither the application config nor Settings sets a value.
+  function isOidcEndSessionLegacyDefault(): boolean {
+    return database.getMeta(OIDC_END_SESSION_LEGACY_DEFAULT_KEY)?.value === 'true';
+  }
+
   const oidc = new OidcRuntime(getEffectiveConfig);
+  if (database.getMeta(OIDC_END_SESSION_LEGACY_DEFAULT_KEY)?.value === 'pending') {
+    database.setMeta(OIDC_END_SESSION_LEGACY_DEFAULT_KEY, oidc.enabled ? 'true' : 'false');
+  }
+  let oidcAutoLoginInactiveReason: string | null = null;
+
+  // Auto-login only applies while SSO is the sole sign-in method. A configured but inactive
+  // setting is logged once per change of the reason, not on every status request.
+  function isOidcAutoLoginActive(): boolean {
+    if (!getEffectiveConfig().oidcAutoLogin) {
+      oidcAutoLoginInactiveReason = null;
+      return false;
+    }
+    const unmetRequirements = [
+      ...(enabled ? [] : ['authentication is disabled']),
+      ...(oidc.enabled ? [] : ['OIDC is not configured']),
+      ...(isPasswordLoginDisabled() ? [] : ['password login is enabled']),
+    ];
+    const reason = unmetRequirements.length > 0 ? unmetRequirements.join(', ') : null;
+    if (reason && reason !== oidcAutoLoginInactiveReason) {
+      console.warn(`OIDC auto-login is enabled but inactive because ${reason}. It requires OIDC to be configured and password login to be disabled.`);
+    }
+    oidcAutoLoginInactiveReason = reason;
+    return !reason;
+  }
+
+  function getOidcAutoLoginSettings() {
+    return {
+      oidcAutoLogin: getEffectiveConfig().oidcAutoLogin,
+      oidcAutoLoginActive: isOidcAutoLoginActive(),
+    };
+  }
 
   function decryptTotpSecret(value: string): string {
     const candidateSecrets = Array.from(new Set([
@@ -745,6 +868,7 @@ export function createDashboardAuth(options: {
     user: AuthUserRow | SessionData,
     authMethod?: AuthMethod,
     authenticatedAt?: number,
+    oidcSessionId?: string,
   ): void {
     const now = Math.floor(Date.now() / 1000);
     const userId = 'id' in user ? user.id : user.userId;
@@ -754,6 +878,10 @@ export function createDashboardAuth(options: {
       ? OIDC_SESSION_LIFETIME_SECONDS
       : SESSION_LIFETIME_SECONDS;
     const absoluteStart = authenticatedAt || now;
+    // Without a provider session ID, back-channel logout can only match this session by its identity's version.
+    const oidcLogoutVersion = effectiveAuthMethod === 'oidc' && !oidcSessionId && persistedUser?.oidc_issuer && persistedUser.oidc_subject
+      ? database.getOidcLogoutVersion(persistedUser.oidc_issuer, persistedUser.oidc_subject)
+      : undefined;
     const token = signSession({
       userId,
       username: user.username,
@@ -761,6 +889,8 @@ export function createDashboardAuth(options: {
       authMethod: effectiveAuthMethod,
       sessionVersion: persistedUser?.session_version || 1,
       authenticatedAt: absoluteStart,
+      ...(oidcSessionId ? { sid: oidcSessionId } : {}),
+      ...(oidcLogoutVersion ? { oidcLogoutVersion } : {}),
       iat: now,
       exp: Math.min(now + sessionLifetime, absoluteStart + sessionLifetime),
     }, sessionSecret);
@@ -790,6 +920,14 @@ export function createDashboardAuth(options: {
     const user = database.getAuthUserById(session.userId);
     if (!user || (session.sessionVersion || 1) !== (user.session_version || 1)) return null;
     if (session.authMethod === 'oidc' && user.auth_provider !== 'oidc') return null;
+    if (session.authMethod === 'oidc' && user.oidc_issuer) {
+      if (session.sid) {
+        if (database.isOidcSessionRevoked(user.oidc_issuer, session.sid)) return null;
+      } else if (
+        user.oidc_subject
+        && session.oidcLogoutVersion !== database.getOidcLogoutVersion(user.oidc_issuer, user.oidc_subject)
+      ) return null;
+    }
     if (session.authMethod === 'passkey' && user.auth_provider === 'oidc' && !user.password_hash) return null;
     return {
       userId: user.id,
@@ -869,6 +1007,7 @@ export function createDashboardAuth(options: {
         user: enabled ? session : null,
         authMethod: enabled ? session?.authMethod ?? null : null,
         oidcEnabled: enabled && oidc.enabled,
+        oidcAutoLogin: isOidcAutoLoginActive(),
         passwordLoginDisabled: enabled && isPasswordLoginDisabled(),
         passkeysEnabled: enabled && database.countWebAuthnCredentials() > 0,
         hasPassword: Boolean(user?.password_hash),
@@ -999,6 +1138,8 @@ export function createDashboardAuth(options: {
         oidcReadOnlyGroups: effectiveConfig.oidcReadOnlyGroups.join(','),
         oidcUnmatchedRole: effectiveConfig.oidcUnmatchedRole,
         oidcEndSession: effectiveConfig.oidcEndSession,
+        oidcBackchannelLogout: effectiveConfig.oidcBackchannelLogout,
+        ...getOidcAutoLoginSettings(),
         hasPassword: Boolean(user?.password_hash),
         passkeysAvailable: !isOidcOnlyAccount(user),
         totpEnabled: isTotpEnabled(user),
@@ -1038,7 +1179,9 @@ export function createDashboardAuth(options: {
           return context.json({ error: 'Invalid OIDC unmatched role' }, 400);
         }
       }
-      if ('oidcEndSession' in body) updates.set('oidc_end_session', body.oidcEndSession === false ? 'false' : 'true');
+      if ('oidcEndSession' in body) updates.set('oidc_end_session', body.oidcEndSession === true ? 'true' : 'false');
+      if ('oidcAutoLogin' in body) updates.set('oidc_auto_login', body.oidcAutoLogin === true ? 'true' : 'false');
+      if ('oidcBackchannelLogout' in body) updates.set('oidc_backchannel_logout', body.oidcBackchannelLogout === true ? 'true' : 'false');
       if (typeof body.oidcIssuerUrl === 'string') updates.set('oidc_issuer_url', body.oidcIssuerUrl.trim());
       if (typeof body.oidcClientId === 'string') updates.set('oidc_client_id', body.oidcClientId.trim());
       if (typeof body.oidcClientSecret === 'string' && body.oidcClientSecret.trim()) {
@@ -1057,6 +1200,8 @@ export function createDashboardAuth(options: {
         return true;
       });
       if (!saved) return context.json({ error: 'Register a passkey or configure OIDC before disabling password login' }, 400);
+      // Log right away when this change leaves auto-login enabled but inactive.
+      isOidcAutoLoginActive();
       if (updates.has('oidc_issuer_url') || updates.has('oidc_client_id') || updates.has('oidc_client_secret')) {
         if (oidc.enabled) {
           try {
@@ -1081,6 +1226,8 @@ export function createDashboardAuth(options: {
           oidcReadOnlyGroups: effectiveConfig.oidcReadOnlyGroups.join(','),
           oidcUnmatchedRole: effectiveConfig.oidcUnmatchedRole,
           oidcEndSession: effectiveConfig.oidcEndSession,
+          oidcBackchannelLogout: effectiveConfig.oidcBackchannelLogout,
+          ...getOidcAutoLoginSettings(),
         },
       });
     });
@@ -1352,7 +1499,7 @@ export function createDashboardAuth(options: {
           subject: result.subject,
         };
         const user = await writeDatabase(() => database.upsertOidcUser(oidcUser));
-        createSession(context, user, 'oidc');
+        createSession(context, user, 'oidc', undefined, result.sessionId);
         // Kept as id_token_hint for RP-initiated logout. Oversized tokens are
         // skipped; logout then falls back to client_id only.
         if (result.idToken && result.idToken.length <= MAX_ID_TOKEN_COOKIE_LENGTH) {
@@ -1376,11 +1523,39 @@ export function createDashboardAuth(options: {
       }
     });
 
+    // OpenID Connect Back-Channel Logout: the provider calls this directly when an SSO session ends.
+    auth.post('/oidc/backchannel-logout', async (context) => {
+      context.header('Cache-Control', 'no-store');
+      if (!enabled || !oidc.enabled) return context.json({ error: 'invalid_request', error_description: 'OIDC is not configured' }, 400);
+      if (!getEffectiveConfig().oidcBackchannelLogout) {
+        return context.json({ error: 'invalid_request', error_description: 'Back-channel logout is disabled' }, 400);
+      }
+      const body = await context.req.parseBody().catch(() => null);
+      const logoutToken = typeof body?.logout_token === 'string' ? body.logout_token : '';
+      if (!logoutToken) return context.json({ error: 'invalid_request', error_description: 'Missing logout_token' }, 400);
+
+      let identity: Awaited<ReturnType<OidcRuntime['verifyLogoutToken']>>;
+      try {
+        identity = await oidc.verifyLogoutToken(logoutToken);
+      } catch (error) {
+        console.warn(`OIDC back-channel logout failed: ${error instanceof Error ? error.message : String(error)}`);
+        return context.json({ error: 'invalid_request', error_description: 'Logout token could not be verified' }, 400);
+      }
+      if (!identity) return context.json({ error: 'invalid_request', error_description: 'Invalid logout token' }, 400);
+
+      await writeDatabase(() => database.applyOidcLogout({
+        ...identity,
+        sessionExpiresAt: Math.floor(Date.now() / 1000) + OIDC_SESSION_LIFETIME_SECONDS,
+      }));
+      return context.body(null, 200);
+    });
+
     app.route(`${basePath}/api/auth`, auth);
   }
 
   // Surface a config-induced password login fallback at startup instead of on the first login attempt.
   if (enabled) isPasswordLoginConfigFallbackActive();
+  isOidcAutoLoginActive();
 
   // Without password setup, only an OIDC admin group can create the first administrator.
   if (enabled && isPasswordLoginDisabled() && database.countAuthUsers() === 0 && getEffectiveConfig().oidcAdminGroups.length === 0) {

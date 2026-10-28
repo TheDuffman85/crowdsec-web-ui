@@ -39,7 +39,10 @@ export interface DashboardAuthConfig {
   oidcAdminGroups: string[];
   oidcReadOnlyGroups: string[];
   oidcUnmatchedRole: OidcUnmatchedRole;
-  oidcEndSession: boolean;
+  /** null when unset; the default then depends on the install, see createDashboardAuth. */
+  oidcEndSession: boolean | null;
+  oidcAutoLogin: boolean;
+  oidcBackchannelLogout: boolean;
 }
 
 export interface RuntimeConfig {
@@ -263,7 +266,9 @@ function parseDashboardAuthConfig(env: NodeJS.ProcessEnv): DashboardAuthConfig {
     oidcAdminGroups: parseCsvEnv(resolveRenamedEnv(env, 'AUTH_OIDC_ADMIN_GROUPS', 'CROWDSEC_AUTH_OIDC_ADMIN_GROUPS')),
     oidcReadOnlyGroups: parseCsvEnv(resolveRenamedEnv(env, 'AUTH_OIDC_READ_ONLY_GROUPS', 'CROWDSEC_AUTH_OIDC_READ_ONLY_GROUPS')),
     oidcUnmatchedRole: parseOidcUnmatchedRole(resolveRenamedEnv(env, 'AUTH_OIDC_UNMATCHED_ROLE', 'CROWDSEC_AUTH_OIDC_UNMATCHED_ROLE')),
-    oidcEndSession: parseBooleanEnv(env.AUTH_OIDC_END_SESSION, true),
+    oidcEndSession: parseOptionalBooleanEnv(env.AUTH_OIDC_END_SESSION),
+    oidcAutoLogin: parseBooleanEnv(env.AUTH_OIDC_AUTO_LOGIN, false),
+    oidcBackchannelLogout: parseBooleanEnv(env.AUTH_OIDC_BACKCHANNEL_LOGOUT, false),
   };
 }
 

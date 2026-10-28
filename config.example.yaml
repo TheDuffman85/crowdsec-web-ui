@@ -57,7 +57,9 @@
 #     adminGroups: []
 #     readOnlyGroups: []
 #     unmatchedRole: deny
-#     endSession: true
+#     endSession: false # Requires the post-logout redirect URI to be registered with the provider.
+#     autoLogin: false # Only active when OIDC is configured and password login is disabled.
+#     backchannelLogout: false # Requires the back-channel logout URI to be registered with the provider.
 
 # notifications:
 #   secretKey:

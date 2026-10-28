@@ -1,4 +1,8 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { CrowdsecDatabase, OIDC_END_SESSION_LEGACY_DEFAULT_KEY } from '../../database';
 import { createAuthSessionCookie, createController } from './harness';
 
 const ISSUER = 'https://idp.example.com/application/o/crowdsec/';
@@ -21,15 +25,18 @@ function stubDiscovery(metadata: Record<string, unknown> = { end_session_endpoin
   }));
 }
 
-function createOidcController(env: Record<string, string> = {}) {
+// An undefined value removes the variable, for example to fall back to a default.
+function createOidcController(env: Record<string, string | undefined> = {}, database?: CrowdsecDatabase) {
   const result = createController({
-    env: {
+    database,
+    env: Object.fromEntries(Object.entries({
       AUTH_ENABLED: 'true',
       AUTH_OIDC_ISSUER_URL: ISSUER,
       AUTH_OIDC_CLIENT_ID: 'crowdsec-client',
       AUTH_OIDC_CLIENT_SECRET: 'oidc-secret',
+      CONFIG_AUTH_OIDC_END_SESSION: 'true',
       ...env,
-    },
+    }).filter((entry): entry is [string, string] => entry[1] !== undefined)),
   });
   const user = result.database.upsertOidcUser({
     username: 'oidc-admin',
@@ -126,6 +133,13 @@ describe('OIDC RP-initiated logout', () => {
     expect(await (await logout(controller, passwordCookie)).json()).toEqual({ status: 'ok' });
   });
 
+  test('only clears the dashboard session by default', async () => {
+    stubDiscovery();
+    const { controller, sessionCookie } = createOidcController({ CONFIG_AUTH_OIDC_END_SESSION: undefined });
+
+    expect(await (await logout(controller, sessionCookie)).json()).toEqual({ status: 'ok' });
+  });
+
   test('respects auth.oidc.endSession from the application config', async () => {
     stubDiscovery();
     const { controller, sessionCookie } = createOidcController({ CONFIG_AUTH_OIDC_END_SESSION: 'false' });
@@ -165,5 +179,65 @@ describe('OIDC RP-initiated logout', () => {
     expect(await enable.json()).toMatchObject({ settings: { oidcEndSession: true } });
     const payload = await (await logout(controller, sessionCookie)).json() as { redirectUrl?: string };
     expect(payload.redirectUrl).toContain(END_SESSION_ENDPOINT);
+  });
+});
+
+describe('OIDC end-session default for existing installations', () => {
+  const tempDirs: string[] = [];
+
+  // Releases before end-session defaulted to off did not record a per-install default.
+  function openExistingInstallDatabase(): CrowdsecDatabase {
+    const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-'));
+    tempDirs.push(dir);
+    const cachePath = path.join(dir, 'test.db');
+    const initial = new CrowdsecDatabase({ cachePath });
+    initial.db.exec(`DELETE FROM state.settings WHERE key = '${OIDC_END_SESSION_LEGACY_DEFAULT_KEY}'`);
+    initial.close();
+    return new CrowdsecDatabase({ cachePath });
+  }
+
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('new installations default to off', () => {
+    const { database } = createOidcController({ CONFIG_AUTH_OIDC_END_SESSION: undefined });
+    expect(database.getMeta(OIDC_END_SESSION_LEGACY_DEFAULT_KEY)?.value).toBe('false');
+  });
+
+  test('installations that already used OIDC keep ending the provider session', async () => {
+    stubDiscovery();
+    const database = openExistingInstallDatabase();
+    expect(database.getMeta(OIDC_END_SESSION_LEGACY_DEFAULT_KEY)?.value).toBe('pending');
+
+    const { controller, sessionCookie } = createOidcController({ CONFIG_AUTH_OIDC_END_SESSION: undefined }, database);
+
+    expect(database.getMeta(OIDC_END_SESSION_LEGACY_DEFAULT_KEY)?.value).toBe('true');
+    const payload = await (await logout(controller, sessionCookie)).json() as { redirectUrl?: string };
+    expect(payload.redirectUrl).toContain(END_SESSION_ENDPOINT);
+  });
+
+  test('the application config still overrides the kept default', async () => {
+    stubDiscovery();
+    const { controller, sessionCookie } = createOidcController({ CONFIG_AUTH_OIDC_END_SESSION: 'false' }, openExistingInstallDatabase());
+
+    expect(await (await logout(controller, sessionCookie)).json()).toEqual({ status: 'ok' });
+  });
+
+  test('installations that configure OIDC only after upgrading get the new default', async () => {
+    stubDiscovery();
+    const database = openExistingInstallDatabase();
+    createController({ env: { AUTH_ENABLED: 'true' }, database });
+    expect(database.getMeta(OIDC_END_SESSION_LEGACY_DEFAULT_KEY)?.value).toBe('false');
+
+    const { controller, sessionCookie } = createOidcController({ CONFIG_AUTH_OIDC_END_SESSION: undefined }, database);
+
+    expect(await (await logout(controller, sessionCookie)).json()).toEqual({ status: 'ok' });
   });
 });

@@ -188,6 +188,9 @@ importers:
       i18next:
         specifier: ^26.5.10
         version: 26.5.10(@typescript/typescript6@6.0.2)
+      jose:
+        specifier: ^6.2.12
+        version: 6.2.12
       local-reverse-geocoder:
         specifier: 0.16.8
         version: 0.16.8

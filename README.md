@@ -253,7 +253,9 @@ Date patterns require one day, month, and year token in any order: `d`/`dd` (day
 | `auth.oidc.adminGroups` | `[]` | Groups granted administrator access. | `CONFIG_AUTH_OIDC_ADMIN_GROUPS` or `CONFIG_AUTH_OIDC_ADMIN_GROUPS_<INDEX>` |
 | `auth.oidc.readOnlyGroups` | `[]` | Groups granted read-only access. | `CONFIG_AUTH_OIDC_READ_ONLY_GROUPS` or `CONFIG_AUTH_OIDC_READ_ONLY_GROUPS_<INDEX>` |
 | `auth.oidc.unmatchedRole` | `deny` | Role for unmatched OIDC users: `deny`, `admin`, or `read-only`. | `CONFIG_AUTH_OIDC_UNMATCHED_ROLE` |
-| `auth.oidc.endSession` | `true` | Also end the identity provider session when an SSO user logs out (RP-initiated logout). | `CONFIG_AUTH_OIDC_END_SESSION` |
+| `auth.oidc.endSession` | `false` (`true` on installations that already used OIDC before it defaulted to off) | Also end the identity provider session when an SSO user logs out (RP-initiated logout). | `CONFIG_AUTH_OIDC_END_SESSION` |
+| `auth.oidc.backchannelLogout` | `false` | Accept back-channel logout notifications, so signing out at the identity provider also ends dashboard sessions. | `CONFIG_AUTH_OIDC_BACKCHANNEL_LOGOUT` |
+| `auth.oidc.autoLogin` | `false` | Redirect the login page straight to the identity provider. Only active while OIDC is configured and password login is disabled. | `CONFIG_AUTH_OIDC_AUTO_LOGIN` |
 
 ### Notifications
 
@@ -583,6 +585,8 @@ auth:
     readOnlyGroups: [crowdsec-viewers]
     unmatchedRole: deny
     endSession: true
+    backchannelLogout: true
+    autoLogin: false
 ```
 
 #### Callback URL
@@ -607,13 +611,27 @@ https://<crowdsec-web-ui-host>/api/auth/oidc/callback
 
 #### Logout
 
-When an SSO user logs out, the dashboard also ends their session at the identity provider (OpenID Connect RP-initiated logout), so the next SSO sign-in asks for credentials again. This requires the provider to advertise an `end_session_endpoint`; otherwise only the dashboard session is cleared. Register this post-logout redirect URI with the identity provider:
+With `auth.oidc.endSession: true` or the matching Settings toggle, logging out of the dashboard also ends the SSO user's session at the identity provider (OpenID Connect RP-initiated logout), so the next SSO sign-in asks for credentials again. It is off by default because the provider may reject the redirect until the URI below is registered. Installations that already used OIDC when upgrading keep the earlier default of on unless the configuration or Settings sets a value. This requires the provider to advertise an `end_session_endpoint`; otherwise only the dashboard session is cleared. Register this post-logout redirect URI with the identity provider:
 
 ```text
 https://<crowdsec-web-ui-host>/login
 ```
 
-Include the base path when one is configured, for example `https://<host>/crowdsec/login`. Set `auth.oidc.endSession: false` or turn it off in Settings to only clear the dashboard session.
+Include the base path when one is configured, for example `https://<host>/crowdsec/login`. Leave it off to only clear the dashboard session.
+
+#### Back-channel logout
+
+To end dashboard sessions when a user signs out at the identity provider, enable `auth.oidc.backchannelLogout` or the matching Settings toggle and register this back-channel logout URI with the provider (OpenID Connect Back-Channel Logout):
+
+```text
+https://<crowdsec-web-ui-host>/api/auth/oidc/backchannel-logout
+```
+
+Include the base path when one is configured. While the setting is off, logout notifications are rejected. The provider must be able to reach the dashboard directly, and logout tokens must be signed with a key from the provider's JWKS or, for HMAC tokens, with the client secret. A logout token with a session ID (`sid`) ends only the sessions from that provider sign-in, even when it also names the user (`sub`); if it names the user, it also ends that user's sessions that carry no `sid`, such as sessions from before the upgrade. Without `sid`, it ends all dashboard sessions for the named user. Repeated notifications with the same issuer and token ID (`jti`) are acknowledged without revoking later sign-ins; this protection survives restarts.
+
+#### Auto-login
+
+With `auth.oidc.autoLogin: true` or the matching Settings toggle, the login page redirects straight to the identity provider. It only applies while OIDC is configured and password login is disabled; otherwise the setting stays inactive and the server logs why. After a logout, the login page is shown once instead of redirecting, so users are not signed straight back in. Open `/login?local=1` to reach the login page anyway, for example to sign in with a passkey.
 
 ## Deployment and Security
 

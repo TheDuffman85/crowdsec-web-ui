@@ -78,6 +78,9 @@ interface AuthSettings {
     oidcReadOnlyGroups: string;
     oidcUnmatchedRole: OidcUnmatchedRole;
     oidcEndSession?: boolean;
+    oidcBackchannelLogout?: boolean;
+    oidcAutoLogin?: boolean;
+    oidcAutoLoginActive?: boolean;
     hasPassword: boolean;
     passkeysAvailable?: boolean;
     totpEnabled: boolean;
@@ -156,7 +159,9 @@ export function Settings() {
         adminGroups: [] as string[],
         readOnlyGroups: [] as string[],
         unmatchedRole: 'deny' as OidcUnmatchedRole,
-        endSession: true,
+        endSession: false,
+        backchannelLogout: false,
+        autoLogin: false,
     });
     const [oidcListDrafts, setOidcListDrafts] = useState({
         scopes: '',
@@ -219,7 +224,9 @@ export function Settings() {
                             adminGroups: parseCsvList(payload.oidcAdminGroups || ''),
                             readOnlyGroups: parseCsvList(payload.oidcReadOnlyGroups || ''),
                             unmatchedRole: payload.oidcUnmatchedRole || 'deny',
-                            endSession: payload.oidcEndSession !== false,
+                            endSession: payload.oidcEndSession === true,
+                            backchannelLogout: payload.oidcBackchannelLogout === true,
+                            autoLogin: payload.oidcAutoLogin === true,
                         });
                     }
                 })
@@ -653,6 +660,8 @@ export function Settings() {
                     oidcReadOnlyGroups: readOnlyGroups,
                     oidcUnmatchedRole: oidcForm.unmatchedRole,
                     oidcEndSession: oidcForm.endSession,
+                    oidcBackchannelLogout: oidcForm.backchannelLogout,
+                    oidcAutoLogin: oidcForm.autoLogin,
                 }),
             });
             const payload = await response.json().catch(() => ({})) as {
@@ -676,6 +685,9 @@ export function Settings() {
                 oidcReadOnlyGroups: readOnlyGroups,
                 oidcUnmatchedRole: oidcForm.unmatchedRole,
                 oidcEndSession: oidcForm.endSession,
+                oidcBackchannelLogout: oidcForm.backchannelLogout,
+                oidcAutoLogin: oidcForm.autoLogin,
+                oidcAutoLoginActive: payload.settings?.oidcAutoLoginActive ?? current.oidcAutoLoginActive,
             } : current);
             setOidcForm((current) => ({ ...current, clientSecret: '' }));
             if (payload.oidcError) {
@@ -1251,6 +1263,41 @@ export function Settings() {
                                         <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                                             {t("pages.settings.oidcEndSessionHelp", { url: `${window.location.origin}${withBasePath('/login')}` })}
                                         </p>
+                                    </div>
+                                </div>
+                                <div className="flex items-start gap-4 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800 lg:col-span-2">
+                                    <Switch
+                                        id="oidc-backchannel-logout"
+                                        checked={oidcForm.backchannelLogout}
+                                        onCheckedChange={(checked) => setOidcForm((current) => ({ ...current, backchannelLogout: checked }))}
+                                        disabled={!canManageAuthSettings}
+                                    />
+                                    <div className="min-w-0">
+                                        <label htmlFor="oidc-backchannel-logout" className={labelClass}>
+                                            {t("pages.settings.oidcBackchannelLogout")}
+                                        </label>
+                                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                            {t("pages.settings.oidcBackchannelLogoutHelp", { url: `${window.location.origin}${withBasePath('/api/auth/oidc/backchannel-logout')}` })}
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="flex items-start gap-4 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800 lg:col-span-2">
+                                    <Switch
+                                        id="oidc-auto-login"
+                                        checked={oidcForm.autoLogin}
+                                        onCheckedChange={(checked) => setOidcForm((current) => ({ ...current, autoLogin: checked }))}
+                                        disabled={!canManageAuthSettings}
+                                    />
+                                    <div className="min-w-0">
+                                        <label htmlFor="oidc-auto-login" className={labelClass}>
+                                            {t("pages.settings.oidcAutoLogin")}
+                                        </label>
+                                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                            {t("pages.settings.oidcAutoLoginHelp", { url: `${window.location.origin}${withBasePath('/login?local=1')}` })}
+                                        </p>
+                                        {authSettings?.oidcAutoLogin && authSettings.oidcAutoLoginActive === false && (
+                                            <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">{t("pages.settings.oidcAutoLoginInactive")}</p>
+                                        )}
                                     </div>
                                 </div>
                             </div>

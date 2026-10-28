@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { isOidcAutoLoginSuppressed, setOidcAutoLoginSuppressed } from '../../lib/oidcAutoLogin';
 import { AuthProvider, useAuth } from '../AuthContext';
 
 function LogoutButton() {
@@ -28,6 +29,7 @@ describe('AuthProvider logout', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    sessionStorage.clear();
   });
 
   test('redirects to the identity provider when logout returns a redirect URL', async () => {
@@ -38,6 +40,15 @@ describe('AuthProvider logout', () => {
 
     await waitFor(() => expect(assign).toHaveBeenCalledWith('https://idp.example.com/end-session?client_id=crowdsec'));
     expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/auth/status'))).toHaveLength(1);
+    expect(isOidcAutoLoginSuppressed()).toBe(true);
+  });
+
+  test('re-enables auto-login once the user is signed in again', async () => {
+    setOidcAutoLoginSuppressed(true);
+    mockAuthApi({ status: 'ok' });
+    render(<AuthProvider><LogoutButton /></AuthProvider>);
+
+    await waitFor(() => expect(isOidcAutoLoginSuppressed()).toBe(false));
   });
 
   test('ignores non-http redirect URLs and refreshes the local session state', async () => {

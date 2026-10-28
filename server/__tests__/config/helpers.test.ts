@@ -231,7 +231,9 @@ describe('config helpers', () => {
       oidcAdminGroups: ['admins', 'secops'],
       oidcReadOnlyGroups: ['viewers'],
       oidcUnmatchedRole: 'read-only',
-      oidcEndSession: true,
+      oidcEndSession: null,
+      oidcAutoLogin: false,
+      oidcBackchannelLogout: false,
     });
   });
 

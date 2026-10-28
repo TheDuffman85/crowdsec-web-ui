@@ -41,6 +41,8 @@ export const CACHE_DATABASE_FILE = 'cache.db';
 export const STATE_DATABASE_FILE = 'state.db';
 const LEGACY_DATABASE_FILE = 'crowdsec.db';
 const STATE_SCHEMA = 'state';
+export const INITIAL_OIDC_LOGOUT_VERSION = 1;
+export const OIDC_END_SESSION_LEGACY_DEFAULT_KEY = 'auth_oidc_end_session_legacy_default';
 // Settings that must survive losing cache.db. They are stored in state.db; every other
 // meta key is cache bookkeeping that stays in cache.db.
 const STATE_SETTING_KEYS = new Set([
@@ -379,6 +381,14 @@ export class CrowdsecDatabase {
   private readonly updateAuthUserTotpLastStepStatement: any;
   private readonly createOidcUserStatement: any;
   private readonly updateOidcUserStatement: any;
+  private readonly revokeOidcUserSessionsStatement: any;
+  private readonly insertRevokedOidcSessionStatement: any;
+  private readonly pruneRevokedOidcSessionsStatement: any;
+  private readonly getRevokedOidcSessionStatement: any;
+  private readonly insertProcessedOidcLogoutStatement: any;
+  private readonly pruneProcessedOidcLogoutsStatement: any;
+  private readonly bumpOidcLogoutVersionStatement: any;
+  private readonly getOidcLogoutVersionStatement: any;
   private readonly listWebAuthnCredentialsByUserStatement: any;
   private readonly countWebAuthnCredentialsStatement: any;
   private readonly createWebAuthnCredentialStatement: any;
@@ -723,6 +733,35 @@ export class CrowdsecDatabase {
           session_version = CASE WHEN role IS NOT $role THEN session_version + 1 ELSE session_version END,
           updated_at = $updated_at
       WHERE id = $id
+    `);
+    this.revokeOidcUserSessionsStatement = this.stateQuery(`
+      UPDATE auth_users
+      SET session_version = session_version + 1,
+          updated_at = $updated_at
+      WHERE oidc_issuer = $oidc_issuer AND oidc_subject = $oidc_subject
+    `);
+    this.insertRevokedOidcSessionStatement = this.stateQuery(`
+      INSERT OR REPLACE INTO oidc_revoked_sessions (issuer, session_id, expires_at)
+      VALUES ($issuer, $session_id, $expires_at)
+    `);
+    this.pruneRevokedOidcSessionsStatement = this.stateQuery('DELETE FROM oidc_revoked_sessions WHERE expires_at <= $now');
+    this.getRevokedOidcSessionStatement = this.stateQuery(`
+      SELECT 1 FROM oidc_revoked_sessions
+      WHERE issuer = $issuer AND session_id = $session_id AND expires_at > $now
+    `);
+    this.insertProcessedOidcLogoutStatement = this.stateQuery(`
+      INSERT OR IGNORE INTO oidc_processed_logouts (issuer, token_id, expires_at)
+      VALUES ($issuer, $token_id, $expires_at)
+    `);
+    this.pruneProcessedOidcLogoutsStatement = this.stateQuery('DELETE FROM oidc_processed_logouts WHERE expires_at <= $now');
+    this.bumpOidcLogoutVersionStatement = this.stateQuery(`
+      INSERT INTO oidc_logout_versions (issuer, subject, version)
+      SELECT $issuer, $subject, ${INITIAL_OIDC_LOGOUT_VERSION + 1}
+      WHERE EXISTS (SELECT 1 FROM auth_users WHERE oidc_issuer = $issuer AND oidc_subject = $subject)
+      ON CONFLICT (issuer, subject) DO UPDATE SET version = version + 1
+    `);
+    this.getOidcLogoutVersionStatement = this.stateQuery(`
+      SELECT version FROM oidc_logout_versions WHERE issuer = $issuer AND subject = $subject
     `);
     this.listWebAuthnCredentialsByUserStatement = this.stateQuery(`
       SELECT * FROM webauthn_credentials
@@ -2083,6 +2122,71 @@ export class CrowdsecDatabase {
     return this.getAuthUserById(user.id)!;
   }
 
+  /** Atomically records a logout event and revokes its sessions, so retries cannot revoke later sign-ins. */
+  applyOidcLogout(params: {
+    issuer: string;
+    subject?: string;
+    sessionId?: string;
+    tokenId: string;
+    tokenExpiresAt: number;
+    sessionExpiresAt: number;
+  }): void {
+    this.db.transaction(() => {
+      this.pruneProcessedOidcLogoutsStatement.run({ $now: Math.floor(Date.now() / 1000) });
+      const inserted = this.insertProcessedOidcLogoutStatement.run({
+        $issuer: params.issuer,
+        $token_id: params.tokenId,
+        $expires_at: params.tokenExpiresAt,
+      });
+      if (!inserted.changes) return;
+
+      // sid narrows the logout even when the provider also supplies sub. Sessions that carry
+      // no sid cannot be matched to the provider session, so those of the named user end too.
+      if (params.sessionId) {
+        this.revokeOidcSession(params.issuer, params.sessionId, params.sessionExpiresAt);
+        if (params.subject) this.bumpOidcLogoutVersion(params.issuer, params.subject);
+      } else if (params.subject) {
+        this.revokeOidcUserSessions(params.issuer, params.subject);
+      } else {
+        throw new Error('OIDC logout requires a subject or session ID');
+      }
+    })();
+  }
+
+  /** Ends every dashboard session of an OIDC identity by bumping its session version. */
+  revokeOidcUserSessions(issuer: string, subject: string): boolean {
+    return this.revokeOidcUserSessionsStatement.run({
+      $oidc_issuer: issuer,
+      $oidc_subject: subject,
+      $updated_at: new Date().toISOString(),
+    }).changes > 0;
+  }
+
+  /** Records a provider session ID as logged out until the dashboard sessions bound to it have expired. */
+  revokeOidcSession(issuer: string, sessionId: string, expiresAt: number): void {
+    this.pruneRevokedOidcSessionsStatement.run({ $now: Math.floor(Date.now() / 1000) });
+    this.insertRevokedOidcSessionStatement.run({ $issuer: issuer, $session_id: sessionId, $expires_at: expiresAt });
+  }
+
+  /** Ends the OIDC sessions of an identity that are not bound to a provider session ID. */
+  bumpOidcLogoutVersion(issuer: string, subject: string): void {
+    this.bumpOidcLogoutVersionStatement.run({ $issuer: issuer, $subject: subject });
+  }
+
+  /** Version that new sessions without a provider session ID are bound to; absent rows are the initial version. */
+  getOidcLogoutVersion(issuer: string, subject: string): number {
+    const row = this.getOidcLogoutVersionStatement.get({ $issuer: issuer, $subject: subject }) as { version: number } | null;
+    return row?.version ?? INITIAL_OIDC_LOGOUT_VERSION;
+  }
+
+  isOidcSessionRevoked(issuer: string, sessionId: string): boolean {
+    return Boolean(this.getRevokedOidcSessionStatement.get({
+      $issuer: issuer,
+      $session_id: sessionId,
+      $now: Math.floor(Date.now() / 1000),
+    }));
+  }
+
   listWebAuthnCredentialsByUser(userId: number): WebAuthnCredentialRow[] {
     return this.listWebAuthnCredentialsByUserStatement.all({ $user_id: userId }) as WebAuthnCredentialRow[];
   }
@@ -2766,6 +2870,28 @@ function initStateSchema(db: Database, schema: string, fresh: boolean): void {
     );
     CREATE INDEX IF NOT EXISTS ${schema}.idx_webauthn_credentials_user_id ON webauthn_credentials(user_id);
 
+    CREATE TABLE IF NOT EXISTS ${schema}.oidc_revoked_sessions (
+      issuer TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      PRIMARY KEY (issuer, session_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS ${schema}.oidc_processed_logouts (
+      issuer TEXT NOT NULL,
+      token_id TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      PRIMARY KEY (issuer, token_id)
+    );
+    CREATE INDEX IF NOT EXISTS ${schema}.idx_oidc_processed_logouts_expiry ON oidc_processed_logouts(expires_at);
+
+    CREATE TABLE IF NOT EXISTS ${schema}.oidc_logout_versions (
+      issuer TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      PRIMARY KEY (issuer, subject)
+    );
+
     CREATE TABLE IF NOT EXISTS ${schema}.notification_channels (
       id TEXT PRIMARY KEY,
       created_at TEXT NOT NULL,
@@ -2856,6 +2982,9 @@ function initStateSchema(db: Database, schema: string, fresh: boolean): void {
   // Only new installations enable authentication by default; migrated ones keep their previous state.
   db.prepare(`INSERT OR IGNORE INTO ${schema}.settings (key, value) VALUES ('auth_existing_install_default_disabled', ?)`)
     .run(fresh ? 'false' : 'true');
+  // Existing installations are resolved on startup, once the effective OIDC configuration is known.
+  db.prepare(`INSERT OR IGNORE INTO ${schema}.settings (key, value) VALUES ('${OIDC_END_SESSION_LEGACY_DEFAULT_KEY}', ?)`)
+    .run(fresh ? 'false' : 'pending');
 }
 
 // Before the split, everything lived in crowdsec.db. Its durable data, including queued

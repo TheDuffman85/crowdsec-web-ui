@@ -94,13 +94,13 @@ These routes are mounted below `/api/auth`. Auth setup/login routes are availabl
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| GET | `/api/auth/status` | Auth state, setup status, current user/session state, OIDC availability, passkey availability, and password-login state. |
+| GET | `/api/auth/status` | Auth state, setup status, current user/session state, OIDC availability, passkey availability, and password-login state. `oidcAutoLogin` is `true` when the login page should redirect straight to the identity provider. |
 | POST | `/api/auth/setup` | Create the first admin user and start a session. Requires `username` and `password`; only works before any auth user exists. |
 | POST | `/api/auth/login` | Password login with `username` and `password`. Accounts with TOTP enabled also require `totpCode`; missing or invalid codes return `requiresTotp: true`. |
 | POST | `/api/auth/logout` | Clear the session cookie. SSO sessions may return a provider `redirectUrl` for RP-initiated logout. |
 | GET | `/api/auth/me` | Current authenticated session user. |
-| GET | `/api/auth/settings` | Auth settings visible to the current user, including OIDC settings metadata and password/passkey state. `passwordLoginManaged` is `true` when `auth.passwordLogin.enabled` is set; `passwordLoginFallback` is `true` when the configuration disables password login but it stays enabled because neither OIDC nor a passkey is configured. |
-| PUT | `/api/auth/settings` | Admin-only auth settings update. Can disable password login (returns `409` with `code: "MANAGED_BY_CONFIG"` when `auth.passwordLogin.enabled` is set) and configure OIDC issuer, client ID, client secret, scopes, groups claim, admin groups, read-only groups, unmatched-user policy, and whether logout also ends the identity provider session. |
+| GET | `/api/auth/settings` | Auth settings visible to the current user, including OIDC settings metadata and password/passkey state. `passwordLoginManaged` is `true` when `auth.passwordLogin.enabled` is set; `passwordLoginFallback` is `true` when the configuration disables password login but it stays enabled because neither OIDC nor a passkey is configured. `oidcAutoLogin` is the saved auto-login setting; `oidcAutoLoginActive` is `false` while it lacks a configured OIDC provider or disabled password login. |
+| PUT | `/api/auth/settings` | Admin-only auth settings update. Can disable password login (returns `409` with `code: "MANAGED_BY_CONFIG"` when `auth.passwordLogin.enabled` is set) and configure OIDC issuer, client ID, client secret, scopes, groups claim, admin groups, read-only groups, unmatched-user policy, whether logout also ends the identity provider session, back-channel logout, and OIDC auto-login. |
 | POST | `/api/auth/change-password` | Change the current user's password. The user must be logged in with password auth. |
 | POST | `/api/auth/totp/setup` | Start TOTP enrollment for the current password-authenticated user. Returns a base32 secret and `otpauth://` URI for QR setup. |
 | POST | `/api/auth/totp/enable` | Complete TOTP enrollment with `{ "code": "123456" }`. |
@@ -114,6 +114,7 @@ These routes are mounted below `/api/auth`. Auth setup/login routes are availabl
 | POST | `/api/auth/webauthn/login/verify` | Complete passkey login and start a session. |
 | GET | `/api/auth/oidc/login` | Redirect to the configured OIDC provider. |
 | GET | `/api/auth/oidc/callback` | OIDC callback handler; creates or updates the OIDC user session and redirects to the UI. |
+| POST | `/api/auth/oidc/backchannel-logout` | OpenID Connect Back-Channel Logout endpoint for the identity provider. Accepts a form-encoded `logout_token`, ends the matching dashboard sessions (`sid` takes precedence over `sub`; with both, the user's sessions without a stored `sid` end too), and returns `200`. Duplicate issuer/`jti` notifications return `200` without repeating revocation; invalid tokens, or requests while `auth.oidc.backchannelLogout` is off (the default), return `400` with `error: "invalid_request"`. |
 
 ## Configuration
 

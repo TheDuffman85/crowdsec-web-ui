@@ -1,8 +1,9 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { KeyRound, LogIn, ShieldCheck } from 'lucide-react';
-import { Navigate } from 'react-router-dom';
+import { Navigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { apiUrl } from '../lib/basePath';
+import { isOidcAutoLoginSuppressed } from '../lib/oidcAutoLogin';
 import { AppLogo } from '../components/AppLogo';
 import { useBranding } from '../contexts/useBranding';
 import { useI18n } from '../lib/i18n';
@@ -12,7 +13,7 @@ import {
 } from '../lib/webauthn';
 
 export function Login() {
-  const { authEnabled, authenticated, login, oidcEnabled, passwordLoginDisabled, passkeysEnabled, refresh } = useAuth();
+  const { authEnabled, authenticated, login, oidcAutoLogin, oidcEnabled, passwordLoginDisabled, passkeysEnabled, refresh } = useAuth();
   const { t } = useI18n();
   const { appName } = useBranding();
   const [username, setUsername] = useState('');
@@ -22,6 +23,15 @@ export function Login() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [searchParams] = useSearchParams();
+  // ?local=1 keeps the login page reachable, for example to sign in with a passkey.
+  const [redirectingToSso] = useState(() => (
+    authEnabled && !authenticated && oidcAutoLogin && searchParams.get('local') !== '1' && !isOidcAutoLoginSuppressed()
+  ));
+
+  useEffect(() => {
+    if (redirectingToSso) window.location.replace(apiUrl('/api/auth/oidc/login'));
+  }, [redirectingToSso]);
 
   if (!authEnabled || authenticated) {
     return <Navigate to="/" replace />;
@@ -146,6 +156,12 @@ export function Login() {
           <div className="mb-4 rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-2 text-sm text-red-200">
             {error}
           </div>
+        )}
+
+        {redirectingToSso && (
+          <p role="status" className="mb-4 text-center text-sm text-gray-400">
+            {t('pages.login.redirectingToSso')}
+          </p>
         )}
 
         {notice && !error && (

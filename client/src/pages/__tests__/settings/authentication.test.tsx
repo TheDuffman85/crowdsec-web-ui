@@ -358,6 +358,9 @@ describe('Settings authentication methods', () => {
           oidcReadOnlyGroups: 'Application User',
           oidcUnmatchedRole: 'deny',
           oidcEndSession: true,
+          oidcBackchannelLogout: true,
+          oidcAutoLogin: true,
+          oidcAutoLoginActive: false,
           hasPassword: true,
           totpEnabled: false,
           authMethod: 'password',
@@ -375,6 +378,17 @@ describe('Settings authentication methods', () => {
     expect(screen.getByText(/Register http:\/\/localhost(:\d+)?\/login as a post-logout redirect URI/)).toBeInTheDocument();
     await user.click(endSessionSwitch);
     expect(endSessionSwitch).toHaveAttribute('aria-checked', 'false');
+    const backchannelSwitch = screen.getByRole('switch', { name: 'End sessions when signing out at the identity provider' });
+    expect(backchannelSwitch).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByText(/Register http:\/\/localhost(:\d+)?\/api\/auth\/oidc\/backchannel-logout as the back-channel logout URI/)).toBeInTheDocument();
+    await user.click(backchannelSwitch);
+    expect(backchannelSwitch).toHaveAttribute('aria-checked', 'false');
+    const autoLoginSwitch = screen.getByRole('switch', { name: 'Sign in with SSO automatically' });
+    expect(autoLoginSwitch).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByText(/Open http:\/\/localhost(:\d+)?\/login\?local=1 to reach the login page anyway/)).toBeInTheDocument();
+    expect(screen.getByText('Auto-login is enabled but inactive: it requires OIDC to be configured and password login to be disabled.')).toBeInTheDocument();
+    await user.click(autoLoginSwitch);
+    expect(autoLoginSwitch).toHaveAttribute('aria-checked', 'false');
     expect(screen.getByLabelText('Unmatched OIDC users')).toHaveValue('deny');
     expect(screen.getByLabelText('Unmatched OIDC users')).toHaveAccessibleDescription('Choose what happens when an OIDC user matches no configured group. The default is deny sign-in.');
     expect(screen.queryByRole('button', { name: 'Remove openid' })).not.toBeInTheDocument();
@@ -403,6 +417,8 @@ describe('Settings authentication methods', () => {
           oidcReadOnlyGroups: 'Application User',
           oidcUnmatchedRole: 'admin',
           oidcEndSession: false,
+          oidcBackchannelLogout: false,
+          oidcAutoLogin: false,
         }),
       }),
     ));
