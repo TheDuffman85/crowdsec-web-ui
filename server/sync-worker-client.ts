@@ -3,6 +3,7 @@ import { DatabaseWorker as Worker } from './database-worker';
 import { isWorkerReadyMessage, terminateWorker, type WorkerReadyMessage } from './worker-lifecycle';
 import type {
   AlertInsertParams,
+  CachedAllowlist,
   DecisionInsertParams,
   IncrementalVacuumOptions,
   IncrementalVacuumResult,
@@ -62,7 +63,8 @@ type SyncWorkerRequest =
   | { type: 'begin-transaction' }
   | { type: 'commit-transaction' }
   | { type: 'rollback-transaction' }
-  | { type: 'clear-sync-data' };
+  | { type: 'clear-sync-data' }
+  | { type: 'replace-allowlists'; instanceId: string; allowlists: CachedAllowlist[] | null; syncState: string };
 
 type SyncWorkerResponse = {
   id: number;
@@ -156,6 +158,10 @@ export class DatabaseSyncWorker {
 
   clearSyncData(): Promise<void> {
     return this.execute({ type: 'clear-sync-data' });
+  }
+
+  replaceAllowlists(instanceId: string, allowlists: CachedAllowlist[] | null, syncState: string): Promise<{ changed: boolean }> {
+    return this.execute({ type: 'replace-allowlists', instanceId, allowlists, syncState });
   }
 
   setMeta(key: string, value: string): Promise<void> {

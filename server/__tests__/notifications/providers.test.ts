@@ -177,6 +177,72 @@ describe('notification providers', () => {
     expect(requests[0]?.init?.body).toBe('过去 60 分钟内匹配到 25 条告警。');
   });
 
+  describe('Gotify and ntfy redirects', () => {
+    const cases: Array<{ type: 'gotify' | 'ntfy'; config: NotificationChannel['config']; label: string }> = [
+      { type: 'gotify', config: { gotifyUrl: 'https://push.example.com', gotifyToken: 'app-token' }, label: 'Gotify URL' },
+      { type: 'ntfy', config: { ntfyUrl: 'https://push.example.com', ntfyTopic: 'alerts' }, label: 'ntfy URL' },
+    ];
+
+    function sendThroughRedirects(
+      type: 'gotify' | 'ntfy',
+      config: NotificationChannel['config'],
+      responses: Response[],
+      restrictedHost?: string,
+    ) {
+      const provider = getNotificationProvider(type);
+      const requests: Array<{ url: string; init?: RequestInit }> = [];
+      const checked: string[] = [];
+      const send = provider.send(createChannel(type, provider.normalizeConfig(config)), { ...basePayload, channel_type: type }, {
+        fetchImpl: async (input, init) => {
+          requests.push({ url: String(input), init });
+          return responses.shift() ?? Response.json({});
+        },
+        assertHostAllowed: async () => {},
+        assertUrlAllowed: async (value, label) => {
+          checked.push(value);
+          if (restrictedHost && new URL(value).hostname === restrictedHost) throw new Error(`${label} points to a restricted address`);
+        },
+      });
+      return { send, requests, checked };
+    }
+
+    const redirect = (status: number, location: string) => new Response(null, { status, headers: { location } });
+
+    test.each(cases)('$type checks every same-origin redirect hop before following it', async ({ type, config }) => {
+      const { send, requests, checked } = sendThroughRedirects(type, config, [redirect(308, '/v2/push')]);
+      await send;
+
+      expect(requests).toHaveLength(2);
+      expect(requests.every((request) => request.init?.redirect === 'manual')).toBe(true);
+      expect(requests[1]?.url).toBe('https://push.example.com/v2/push');
+      expect(requests[1]?.init?.method).toBe('POST');
+      expect(checked).toEqual(requests.map((request) => request.url));
+    });
+
+    test.each(cases)('$type refuses redirects to another host', async ({ type, config, label }) => {
+      const { send, requests } = sendThroughRedirects(type, config, [redirect(307, 'http://127.0.0.1:8080/admin')]);
+      await expect(send).rejects.toThrow(`${label} redirected to another host`);
+      expect(requests).toHaveLength(1);
+    });
+
+    test.each(cases)('$type refuses redirects that would turn the POST into a GET', async ({ type, config, label }) => {
+      const { send } = sendThroughRedirects(type, config, [redirect(302, '/elsewhere')]);
+      await expect(send).rejects.toThrow(`${label} redirected (302)`);
+    });
+
+    test.each(cases)('$type stops after too many redirects', async ({ type, config, label }) => {
+      const { send, requests } = sendThroughRedirects(type, config, Array.from({ length: 5 }, (_, index) => redirect(307, `/hop-${index}`)));
+      await expect(send).rejects.toThrow(`${label} redirected too many times`);
+      expect(requests).toHaveLength(4);
+    });
+
+    test.each(cases)('$type does not send to a restricted configured URL', async ({ type, config, label }) => {
+      const { send, requests } = sendThroughRedirects(type, config, [], 'push.example.com');
+      await expect(send).rejects.toThrow(`${label} points to a restricted address`);
+      expect(requests).toHaveLength(0);
+    });
+  });
+
   test('mqtt provider validates config and publishes the expected payload', async () => {
     const provider = getNotificationProvider('mqtt');
     const config = provider.normalizeConfig({

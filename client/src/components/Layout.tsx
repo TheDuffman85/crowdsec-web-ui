@@ -58,6 +58,8 @@ export function Layout() {
                 return t('pages.alerts.title');
             case '/decisions':
                 return t('pages.decisions.title');
+            case '/allowlists':
+                return t('pages.allowlists.title');
             case '/metrics':
                 return t('pages.metrics.title');
             case '/notifications':

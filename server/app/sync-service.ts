@@ -196,6 +196,7 @@ export function createSyncService(dependencies: SyncServiceDependencies) {
     resolveAlertScenario,
     resolveMachineName,
     saveReconcileWindowState,
+    syncAllowlists,
     syncStatus,
     syncWorker,
     toDuration,
@@ -1948,6 +1949,7 @@ async function refreshLatestWindow(): Promise<void> {
     }
     if (publishedRevision) publishCacheUpdate(publishedRevision);
     if (removed.succeeded) await maybeRunIncrementalVacuum();
+    await syncAllowlists([primaryInstance.id]);
     await runNotificationEvaluation('manual latest-window refresh');
   });
 }
@@ -1961,6 +1963,7 @@ async function refreshFullHistory(): Promise<void> {
     const removed = await cleanupOldData();
     publishCleanupChanges(removed);
     if (removed.succeeded) await maybeRunIncrementalVacuum();
+    await syncAllowlists(config.instances.map((instance) => instance.id));
   });
 }
 
@@ -2102,6 +2105,7 @@ async function updateCache(
 ): Promise<void> {
   return runCacheRefresh(async () => {
     await updateCacheDelta(options);
+    await syncAllowlists([primaryInstance.id]);
     await runNotificationEvaluation('cache update');
   }, options.skipIfBusy);
 }

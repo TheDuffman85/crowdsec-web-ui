@@ -13,6 +13,8 @@ export interface SmtpMessage {
   subject: string;
   text: string;
   timeoutMs?: number;
+  // Resolves the host for the socket, e.g. to restrict which addresses may be reached.
+  lookup?: net.LookupFunction;
 }
 
 export type SmtpTlsMode = 'plain' | 'starttls' | 'tls';
@@ -29,7 +31,7 @@ export async function sendSmtpMail(message: SmtpMessage): Promise<void> {
     }, message.timeoutMs ?? 30_000);
   });
   const deliver = async () => {
-    let socket = await connectSmtp(message.host, message.port, message.tlsMode, message.allowInsecureTls === true, (next) => { activeSocket = next; });
+    let socket = await connectSmtp(message.host, message.port, message.tlsMode, message.allowInsecureTls === true, message.lookup, (next) => { activeSocket = next; });
     reader = createSmtpResponseReader(socket);
     await readExpectedResponse(reader.read, [220]);
     await smtpCommand(socket, reader.read, 'EHLO localhost', [250]);
@@ -88,12 +90,13 @@ function connectSmtp(
   port: number,
   tlsMode: SmtpTlsMode,
   allowInsecureTls: boolean,
+  lookup: net.LookupFunction | undefined,
   onSocket: (socket: net.Socket | tls.TLSSocket) => void,
 ): Promise<net.Socket | tls.TLSSocket> {
   return new Promise((resolve, reject) => {
     const socket = tlsMode === 'tls'
-      ? tls.connect({ host, port, servername: net.isIP(host) ? undefined : host, rejectUnauthorized: !allowInsecureTls }, () => resolve(socket))
-      : net.createConnection({ host, port }, () => resolve(socket));
+      ? tls.connect({ host, port, lookup, servername: net.isIP(host) ? undefined : host, rejectUnauthorized: !allowInsecureTls }, () => resolve(socket))
+      : net.createConnection({ host, port, lookup }, () => resolve(socket));
 
     socket.once('error', reject);
     onSocket(socket);

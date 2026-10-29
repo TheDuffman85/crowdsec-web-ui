@@ -1,4 +1,5 @@
 import './harness';
+import { SettingsRouter } from './router';
 import { describe, expect, test, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -23,15 +24,14 @@ describe('Settings manual decision scenarios', () => {
       success: true,
       manual_decision_scenario_settings: { configured: ['custom/from-config'], custom: ['custom/new'] },
     });
-    render(<Settings />);
+    render(<SettingsRouter tab="general"><Settings /></SettingsRouter>);
 
     await waitFor(() => expect(screen.getByText('custom/old')).toBeInTheDocument());
     expect(screen.getByText('manual/web-ui')).toBeInTheDocument();
     expect(screen.getByText('custom/from-config')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Remove manual/web-ui' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Remove custom/from-config' })).not.toBeInTheDocument();
-    const save = screen.getByRole('button', { name: 'Save scenarios' });
-    expect(save).toBeDisabled();
+    const save = screen.getByRole('button', { name: 'Save' });
 
     await user.click(screen.getByRole('button', { name: 'Remove custom/old' }));
     await user.type(screen.getByLabelText('Scenarios'), 'not a scenario');
@@ -43,15 +43,14 @@ describe('Settings manual decision scenarios', () => {
     expect(screen.getByText('custom/new')).toBeInTheDocument();
 
     await user.click(save);
-    expect(updateManualDecisionScenarios).toHaveBeenCalledWith({ scenarios: ['custom/new'] });
-    await waitFor(() => expect(save).toBeDisabled());
+    await waitFor(() => expect(updateManualDecisionScenarios).toHaveBeenCalledWith({ scenarios: ['custom/new'] }));
   });
 
-  test('disables editing without settings permission', async () => {
-    render(<Settings />);
+  test('hides manual decisions without settings permission', async () => {
+    render(<SettingsRouter tab="general"><Settings /></SettingsRouter>);
 
-    expect(await screen.findByText('manual/web-ui')).toBeInTheDocument();
-    expect(screen.getByLabelText('Scenarios')).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Save scenarios' })).toBeDisabled();
+    expect(await screen.findByRole('tab', { name: 'pages.settings.account' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('tab', { name: 'General' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Scenarios')).not.toBeInTheDocument();
   });
 });

@@ -1,4 +1,5 @@
-import mqtt from 'mqtt';
+import mqtt, { type IClientOptions } from 'mqtt';
+import type { LookupFunction } from 'node:net';
 
 export interface MqttPublishConfig {
   brokerUrl: string;
@@ -10,11 +11,15 @@ export interface MqttPublishConfig {
   qos: 0 | 1;
   topic: string;
   retainEvents: boolean;
+  // Resolves the broker host for the socket, e.g. to restrict which addresses may be reached.
+  lookup?: LookupFunction;
 }
 
 export async function publishMqttNotification(config: MqttPublishConfig, payload: string): Promise<void> {
+  const connectOptions = await resolveConnectOptions(config);
   await new Promise<void>((resolve, reject) => {
     const client = mqtt.connect(config.brokerUrl, {
+      ...connectOptions,
       username: config.username || undefined,
       password: config.password || undefined,
       clientId: config.clientId || undefined,
@@ -61,4 +66,23 @@ export async function publishMqttNotification(config: MqttPublishConfig, payload
       }
     });
   });
+}
+
+async function resolveConnectOptions(config: MqttPublishConfig): Promise<IClientOptions> {
+  const lookup = config.lookup;
+  if (!lookup) return {};
+  const url = new URL(config.brokerUrl);
+  if (url.protocol === 'mqtt:' || url.protocol === 'tcp:') {
+    // mqtt.js does not pass a lookup to plain TCP sockets, so connect to the resolved address directly.
+    const hostname = url.hostname.replace(/^\[(.*)\]$/, '$1');
+    const address = await new Promise<string>((resolve, reject) => {
+      lookup(hostname, {}, (error, result) => {
+        if (error) reject(error);
+        else resolve(typeof result === 'string' ? result : result[0].address);
+      });
+    });
+    return { hostname: address };
+  }
+  // TLS and WebSocket sockets resolve through the lookup and still verify the broker's hostname.
+  return { lookup, wsOptions: { lookup } } as IClientOptions;
 }

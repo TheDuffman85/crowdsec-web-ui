@@ -217,13 +217,15 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
     : parseByteSize(storage.journalSizeLimit, 'storage.journalSizeLimit');
 
   const ui = section(root, 'ui');
-  knownKeys(ui, ['timeZone', 'timeFormat', 'dateFormat', 'readOnly'], 'ui');
+  knownKeys(ui, ['timeZone', 'timeFormat', 'dateFormat', 'readOnly', 'allowlistsSidebarVisible', 'metricsSidebarVisible'], 'ui');
   if (ui.timeZone !== undefined && ui.timeZone !== null && ui.timeZone !== 'browser') {
     env.TZ = string(ui.timeZone, 'ui.timeZone');
   }
   if (ui.timeFormat !== undefined && ui.timeFormat !== 'browser') setString(env, ui, 'timeFormat', 'TIME_FORMAT', 'ui');
   if (ui.dateFormat !== undefined && ui.dateFormat !== 'browser') setString(env, ui, 'dateFormat', 'DATE_FORMAT', 'ui');
   setBoolean(env, ui, 'readOnly', 'PERMISSION_READ_ONLY', 'ui');
+  setBoolean(env, ui, 'allowlistsSidebarVisible', 'UI_ALLOWLISTS_SIDEBAR_VISIBLE', 'ui');
+  setBoolean(env, ui, 'metricsSidebarVisible', 'UI_METRICS_SIDEBAR_VISIBLE', 'ui');
 
   const auth = section(root, 'auth');
   knownKeys(auth, ['enabled', 'sessionSecret', 'totpSecret', 'totpSeed', 'passwordLogin', 'oidc'], 'auth');
@@ -235,7 +237,7 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
   knownKeys(passwordLogin, ['enabled'], 'auth.passwordLogin');
   setBoolean(env, passwordLogin, 'enabled', 'AUTH_PASSWORD_LOGIN_ENABLED', 'auth.passwordLogin');
   const oidc = auth.oidc === undefined ? {} : record(auth.oidc, 'auth.oidc');
-  knownKeys(oidc, ['issuerUrl', 'clientId', 'clientSecret', 'scope', 'groupsClaim', 'adminGroups', 'readOnlyGroups', 'unmatchedRole', 'endSession'], 'auth.oidc');
+  knownKeys(oidc, ['issuerUrl', 'clientId', 'clientSecret', 'scope', 'groupsClaim', 'adminGroups', 'readOnlyGroups', 'unmatchedRole', 'endSession', 'autoLogin', 'backchannelLogout'], 'auth.oidc');
   setString(env, oidc, 'issuerUrl', 'AUTH_OIDC_ISSUER_URL', 'auth.oidc');
   setString(env, oidc, 'clientId', 'AUTH_OIDC_CLIENT_ID', 'auth.oidc');
   applySecretReference(oidc.clientSecret, 'auth.oidc.clientSecret', env, sourceEnv, 'AUTH_OIDC_CLIENT_SECRET');
@@ -245,6 +247,8 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
   setArray(env, oidc, 'readOnlyGroups', 'AUTH_OIDC_READ_ONLY_GROUPS', 'auth.oidc');
   setString(env, oidc, 'unmatchedRole', 'AUTH_OIDC_UNMATCHED_ROLE', 'auth.oidc');
   setBoolean(env, oidc, 'endSession', 'AUTH_OIDC_END_SESSION', 'auth.oidc');
+  setBoolean(env, oidc, 'autoLogin', 'AUTH_OIDC_AUTO_LOGIN', 'auth.oidc');
+  setBoolean(env, oidc, 'backchannelLogout', 'AUTH_OIDC_BACKCHANNEL_LOGOUT', 'auth.oidc');
 
   const notifications = section(root, 'notifications');
   knownKeys(notifications, ['secretKey', 'allowPrivateAddresses', 'debugPayloads'], 'notifications');
@@ -356,11 +360,11 @@ export const CONFIG_KEY_ORDER = new Map<string, readonly string[]>([
     'dataDir', 'cacheDir', 'geonamesDir', 'walEnabled', 'incrementalVacuumEnabled', 'journalSizeLimit',
     'queryTimeout', 'analyticsQueryTimeout',
   ]],
-  ['ui', ['timeZone', 'timeFormat', 'dateFormat', 'readOnly']],
+  ['ui', ['timeZone', 'timeFormat', 'dateFormat', 'readOnly', 'allowlistsSidebarVisible', 'metricsSidebarVisible']],
   ['updates', ['enabled']],
   ['auth', ['enabled', 'sessionSecret', 'totpSecret', 'totpSeed', 'passwordLogin', 'oidc']],
   ['auth.passwordLogin', ['enabled']],
-  ['auth.oidc', ['issuerUrl', 'clientId', 'clientSecret', 'scope', 'groupsClaim', 'adminGroups', 'readOnlyGroups', 'unmatchedRole', 'endSession']],
+  ['auth.oidc', ['issuerUrl', 'clientId', 'clientSecret', 'scope', 'groupsClaim', 'adminGroups', 'readOnlyGroups', 'unmatchedRole', 'endSession', 'autoLogin', 'backchannelLogout']],
   ['notifications', ['secretKey', 'allowPrivateAddresses', 'debugPayloads']],
   ['audit', ['enabled', 'logFile']],
   ['crowdsec', ['simulationsEnabled', 'alertFilters', 'manualDecisions', 'sync']],
@@ -559,7 +563,11 @@ export function generateApplicationConfig(env: NodeJS.ProcessEnv, config: Runtim
       queryTimeout: duration(config.dbQueryTimeoutMs),
       analyticsQueryTimeout: duration(config.dbAnalyticsQueryTimeoutMs),
     },
-    ui: { timeZone: config.timeZone || 'browser', timeFormat: config.timeFormat, dateFormat: config.dateFormat, readOnly: config.readOnly },
+    ui: {
+      timeZone: config.timeZone || 'browser', timeFormat: config.timeFormat, dateFormat: config.dateFormat,
+      readOnly: config.readOnly, allowlistsSidebarVisible: config.allowlistsSidebarVisible,
+      metricsSidebarVisible: config.metricsSidebarVisible,
+    },
     auth: {
       enabled: config.dashboardAuth.enabled === null ? 'auto' : config.dashboardAuth.enabled,
       ...(secretReference(env, 'AUTH_SECRET', 'CROWDSEC_AUTH_SECRET') ? { sessionSecret: secretReference(env, 'AUTH_SECRET', 'CROWDSEC_AUTH_SECRET') } : {}),
@@ -577,7 +585,9 @@ export function generateApplicationConfig(env: NodeJS.ProcessEnv, config: Runtim
         adminGroups: config.dashboardAuth.oidcAdminGroups,
         readOnlyGroups: config.dashboardAuth.oidcReadOnlyGroups,
         unmatchedRole: config.dashboardAuth.oidcUnmatchedRole,
-        endSession: config.dashboardAuth.oidcEndSession,
+        ...(config.dashboardAuth.oidcEndSession !== null ? { endSession: config.dashboardAuth.oidcEndSession } : {}),
+        autoLogin: config.dashboardAuth.oidcAutoLogin,
+        backchannelLogout: config.dashboardAuth.oidcBackchannelLogout,
       },
     },
     notifications: {
@@ -662,6 +672,8 @@ const CONFIG_VALUE_ENV = [
   ['CONFIG_UI_TIME_FORMAT', ['ui', 'timeFormat']],
   ['CONFIG_UI_DATE_FORMAT', ['ui', 'dateFormat']],
   ['CONFIG_UI_READ_ONLY', ['ui', 'readOnly']],
+  ['CONFIG_UI_ALLOWLISTS_SIDEBAR_VISIBLE', ['ui', 'allowlistsSidebarVisible']],
+  ['CONFIG_UI_METRICS_SIDEBAR_VISIBLE', ['ui', 'metricsSidebarVisible']],
   ['CONFIG_AUTH_ENABLED', ['auth', 'enabled']],
   ['CONFIG_AUTH_PASSWORD_LOGIN_ENABLED', ['auth', 'passwordLogin', 'enabled']],
   ['CONFIG_AUTH_OIDC_ISSUER_URL', ['auth', 'oidc', 'issuerUrl']],
@@ -672,6 +684,8 @@ const CONFIG_VALUE_ENV = [
   ['CONFIG_AUTH_OIDC_READ_ONLY_GROUPS', ['auth', 'oidc', 'readOnlyGroups']],
   ['CONFIG_AUTH_OIDC_UNMATCHED_ROLE', ['auth', 'oidc', 'unmatchedRole']],
   ['CONFIG_AUTH_OIDC_END_SESSION', ['auth', 'oidc', 'endSession']],
+  ['CONFIG_AUTH_OIDC_AUTO_LOGIN', ['auth', 'oidc', 'autoLogin']],
+  ['CONFIG_AUTH_OIDC_BACKCHANNEL_LOGOUT', ['auth', 'oidc', 'backchannelLogout']],
   ['CONFIG_NOTIFICATIONS_ALLOW_PRIVATE_ADDRESSES', ['notifications', 'allowPrivateAddresses']],
   ['CONFIG_NOTIFICATIONS_DEBUG_PAYLOADS', ['notifications', 'debugPayloads']],
   ['CONFIG_AUDIT_ENABLED', ['audit', 'enabled']],
@@ -1410,6 +1424,7 @@ function initialConfigReference(document: UnknownRecord): UnknownRecord {
         issuerUrl: 'https://idp.example.com/application/o/crowdsec/',
         clientId: 'crowdsec-web-ui',
         clientSecret: { file: '/run/secrets/oidc_client_secret' },
+        endSession: false,
         ...oidc,
       },
     },

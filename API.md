@@ -94,14 +94,20 @@ These routes are mounted below `/api/auth`. Auth setup/login routes are availabl
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| GET | `/api/auth/status` | Auth state, setup status, current user/session state, OIDC availability, passkey availability, and password-login state. |
+| GET | `/api/auth/status` | Auth state, setup status, current user/session state, OIDC availability, passkey availability, and password-login state. `oidcAutoLogin` is `true` when the login page should redirect straight to the identity provider. `preferences` holds the `language` and `font` the signed-in user saved. |
 | POST | `/api/auth/setup` | Create the first admin user and start a session. Requires `username` and `password`; only works before any auth user exists. |
 | POST | `/api/auth/login` | Password login with `username` and `password`. Accounts with TOTP enabled also require `totpCode`; missing or invalid codes return `requiresTotp: true`. |
 | POST | `/api/auth/logout` | Clear the session cookie. SSO sessions may return a provider `redirectUrl` for RP-initiated logout. |
 | GET | `/api/auth/me` | Current authenticated session user. |
-| GET | `/api/auth/settings` | Auth settings visible to the current user, including OIDC settings metadata and password/passkey state. `passwordLoginManaged` is `true` when `auth.passwordLogin.enabled` is set; `passwordLoginFallback` is `true` when the configuration disables password login but it stays enabled because neither OIDC nor a passkey is configured. |
-| PUT | `/api/auth/settings` | Admin-only auth settings update. Can disable password login (returns `409` with `code: "MANAGED_BY_CONFIG"` when `auth.passwordLogin.enabled` is set) and configure OIDC issuer, client ID, client secret, scopes, groups claim, admin groups, read-only groups, unmatched-user policy, and whether logout also ends the identity provider session. |
-| POST | `/api/auth/change-password` | Change the current user's password. The user must be logged in with password auth. |
+| GET | `/api/auth/settings` | Auth settings visible to the current user. Non-admin sessions only receive their own `hasPassword`, `passkeysAvailable`, `totpEnabled`, and `authMethod`; administrators also receive the OIDC settings metadata and password-login state. `passwordLoginManaged` is `true` when `auth.passwordLogin.enabled` is set; `passwordLoginFallback` is `true` when the configuration disables password login but it stays enabled because neither OIDC nor an administrator passkey is configured. `oidcAutoLogin` is the saved auto-login setting; `oidcAutoLoginActive` is `false` while it lacks a configured OIDC provider or disabled password login. `managedSettings` maps each field that the application config locks, such as `oidcClientId` or `disablePasswordLogin`, to `{ path, env? }`: its config path and, when a `CONFIG_*` variable sets it, that variable's name. |
+| PUT | `/api/auth/settings` | Admin-only auth settings update. Can disable password login and configure OIDC issuer, client ID, client secret, scopes, groups claim, admin groups, read-only groups, unmatched-user policy, whether logout also ends the identity provider session, back-channel logout, and OIDC auto-login. Returns `409` with `code: "MANAGED_BY_CONFIG"` when the body changes password login or an OIDC field that the application config sets. |
+| POST | `/api/auth/change-password` | Change the current user's password. The user must be logged in with password auth. The new password must differ from the current one. Clears a pending password change. |
+| GET | `/api/auth/users` | Admin-only list of users with `id`, `username`, `role`, `source` (`local` or `oidc`), `disabled`, `passwordChangeRequired`, `totpEnabled`, `passkeyCount`, `createdAt`, and `current` (the signed-in user). |
+| POST | `/api/auth/users` | Admin-only. Create a local user with `username`, `password`, `role` (`admin` or `read-only`), and optional `requirePasswordChange` (default `true`). Returns `201`, or `409` when the username exists. |
+| PATCH | `/api/auth/users/:id` | Admin-only. Change a local user's `role` and/or `disabled` state. Disabling ends the user's sessions. |
+| POST | `/api/auth/users/:id/password` | Admin-only. Set a local user's password with `password` and optional `requirePasswordChange` (default `true`). Ends the user's sessions. |
+| POST | `/api/auth/users/:id/reset-mfa` | Admin-only. Remove a local user's TOTP enrollment and passkeys and end their sessions. |
+| DELETE | `/api/auth/users/:id` | Admin-only. Delete a local or OIDC user with their passkeys and saved search filters. |
 | POST | `/api/auth/totp/setup` | Start TOTP enrollment for the current password-authenticated user. Returns a base32 secret and `otpauth://` URI for QR setup. |
 | POST | `/api/auth/totp/enable` | Complete TOTP enrollment with `{ "code": "123456" }`. |
 | DELETE | `/api/auth/totp` | Disable Settings-enrolled TOTP for the current password-authenticated user with `{ "currentPassword": "..." }`. TOTP supplied through `auth.totpSeed` remains deployment-managed and cannot be disabled through the API. |
@@ -114,18 +120,23 @@ These routes are mounted below `/api/auth`. Auth setup/login routes are availabl
 | POST | `/api/auth/webauthn/login/verify` | Complete passkey login and start a session. |
 | GET | `/api/auth/oidc/login` | Redirect to the configured OIDC provider. |
 | GET | `/api/auth/oidc/callback` | OIDC callback handler; creates or updates the OIDC user session and redirects to the UI. |
+| POST | `/api/auth/oidc/backchannel-logout` | OpenID Connect Back-Channel Logout endpoint for the identity provider. Accepts a form-encoded `logout_token`, ends the matching dashboard sessions (`sid` takes precedence over `sub`; with both, the user's sessions without a stored `sid` end too), and returns `200`. Duplicate issuer/`jti` notifications return `200` without repeating revocation; invalid tokens, or requests while `auth.oidc.backchannelLogout` is off (the default), return `400` with `error: "invalid_request"`. |
+
+User management rejects changes to the signed-in user's own account and to OIDC users other than deletion with `400`, changes that would leave no active administrator with `400`, non-admin sessions with `403`, and writes in `ui.readOnly` mode with `403` and `code: "READ_ONLY"`. While a password session has a pending password change, `/api/auth/status` returns `passwordChangeRequired: true` and other protected APIs return `403` with `code: "PASSWORD_CHANGE_REQUIRED"` until `/api/auth/change-password` succeeds.
 
 ## Configuration
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| GET | `/api/config` | Runtime UI config, LAPI status, sync status, simulation setting, time settings, manual refresh availability, metrics availability, metrics sidebar preference, permissions, each instance's effective manual decision scenarios (`manual_decision_scenarios`), and the configured and Settings-managed scenario lists (`manual_decision_scenario_settings`). |
+| GET | `/api/config` | Runtime UI config, LAPI status, sync status, simulation setting, time settings, manual refresh availability, metrics availability, metrics sidebar preference, permissions, each instance's effective manual decision scenarios (`manual_decision_scenarios`), the configured and Settings-managed scenario lists (`manual_decision_scenario_settings`), and the settings that the application config locks (`managed_settings`, mapping `refresh_interval` and `manual_refresh_enabled` to `{ path, env? }` like `/api/auth/settings`). |
 | GET | `/api/instances` | Configured instance identities, LAPI and synchronization status, metrics endpoint identities, per-instance overrides, effective manual decision scenarios (`manual_decision_scenarios`), and aggregate availability. |
-| PUT | `/api/config/metrics-sidebar` | Save the metrics sidebar preference. Body: `{ "visible": true }`. |
-| PUT | `/api/config/refresh-interval` | Update the refresh interval. Body: `{ "interval": "manual" \| "0" \| "5s" \| "30s" \| "1m" \| "5m" }`. Blocked in read-only mode. |
-| PUT | `/api/config/manual-refresh` | Enable or disable manual cache refreshes. Body: `{ "enabled": true }`. Blocked in read-only mode. |
+| PUT | `/api/config/metrics-sidebar` | Save the metrics sidebar preference. Body: `{ "visible": true }`. With dashboard authentication it is saved for the signed-in user; otherwise for the instance. |
+| PUT | `/api/config/allowlists-sidebar` | Save the allowlists sidebar preference. Body: `{ "visible": true }`. With dashboard authentication it is saved for the signed-in user; otherwise for the instance. Editable in read-only mode. |
+| PUT | `/api/config/refresh-interval` | Update the refresh interval. Body: `{ "interval": "manual" \| "0" \| "5s" \| "30s" \| "1m" \| "5m" }`. Blocked in read-only mode. Returns `409` with `code: "MANAGED_BY_CONFIG"` when `crowdsec.sync.refreshInterval` is set. |
+| PUT | `/api/config/manual-refresh` | Enable or disable manual cache refreshes. Body: `{ "enabled": true }`. Blocked in read-only mode. Returns `409` with `code: "MANAGED_BY_CONFIG"` when `crowdsec.sync.manualRefreshEnabled` is set. |
 | PUT | `/api/config/manual-decision-scenarios` | Replace the scenarios added in Settings. Body: `{ "scenarios": ["custom/scanner"] }`. Entries must look like `author/name`; `manual/web-ui` and configured scenarios are ignored; at most 100. They are offered for every instance on top of the configured list. Blocked in read-only mode. |
-| PUT | `/api/config/language` | Save language preference. Body: `{ "language": "browser" }` or a supported locale code. |
+| PUT | `/api/config/language` | Save language preference. Body: `{ "language": "browser" }` or a supported locale code. With dashboard authentication it is saved for the signed-in user; administrators (and deployments without authentication) also set the instance language used for notification texts. |
+| PUT | `/api/config/font` | Save the signed-in user's font preference. Body: `{ "font": "system" }`, `"auto"`, or a font preset ID. Without dashboard authentication the browser keeps the font and nothing is stored. |
 
 ## Branding
 
@@ -175,7 +186,7 @@ Alert facets require `field=id|instance|scenario|kind|country|region|city|as|ip|
 | --- | --- | --- |
 | GET | `/api/decisions` | List decisions. Without `page`, returns an array. With `page`, returns a paginated response. Active decisions are returned by default. |
 | GET | `/api/decisions/facets` | Return one bounded quick-filter facet across the complete effective decision result set. |
-| POST | `/api/decisions` | Add a manual CrowdSec decision through LAPI. Body: `{ "ip": "1.2.3.4", "duration": "4h", "reason": "manual", "type": "ban", "scenario": "manual/web-ui" }`. `type` defaults to `ban` and accepts `ban` or `captcha`; `scenario` defaults to `manual/web-ui` and must look like `author/name` (letters, digits, `_`, `.`, `-`; at most 256 characters); `crowdsec.manualDecisions` only limits the Web UI form, not this endpoint; optional `scope` and `instance_id` select targets. Blocked in read-only mode. |
+| POST | `/api/decisions` | Add a manual CrowdSec decision through LAPI. Body: `{ "ip": "1.2.3.4", "duration": "4h", "reason": "manual", "type": "ban", "scenario": "manual/web-ui" }`. `type` defaults to `ban` and accepts `ban` or `captcha`; `scenario` defaults to `manual/web-ui` and must look like `author/name` (letters, digits, `_`, `.`, `-`; at most 256 characters); `crowdsec.manualDecisions` only limits the Web UI form, not this endpoint; optional `scope` and `instance_id` select targets. Returns `409` when a target instance allowlists the value, unless `bypass_allowlist: true` is sent. Blocked in read-only mode. |
 | POST | `/api/decisions/bulk-delete` | Delete multiple decisions by numeric ID. Body: `{ "ids": [10, "11"] }`. Blocked in read-only mode. |
 | DELETE | `/api/decisions/:id` | Delete one decision from CrowdSec LAPI and local cache. `:id` must be numeric. Blocked in read-only mode. |
 | DELETE | `/api/instances/:instanceId/decisions/:id` | Delete one decision from a specific instance and its local cache. Blocked in read-only mode. |
@@ -186,6 +197,17 @@ Supported decision query parameters: `instance`, `include_expired`, `page`, `pag
 - Duplicate decisions are hidden by default in paginated results. Deduplication is applied after active filters, so the preferred matching row remains visible even when the globally preferred row does not match. Set `hide_duplicates=false` or filter by `alert_id` to show every row.
 - `simulation` accepts `all`, `live`, or `simulated`; unknown values behave like `all`.
 - Bulk deletion accepts `ids` in single-instance deployments or instance-qualified `refs` as described above.
+- LAPI does not check allowlists for decisions sent with an alert, so decision creation checks every target instance first. When any of them allowlists the value, nothing is added and the response is `409`:
+
+  ```json
+  {
+    "error": "10.1.2.3 is allowlisted",
+    "code": "ALLOWLISTED",
+    "allowlisted": [{ "instance_id": "primary", "instance_name": "CrowdSec", "reason": "10.0.0.0/8 from office (VPN)" }]
+  }
+  ```
+
+  Repeat the request with `"bypass_allowlist": true` to add the decision anyway; the audit log records the bypass. Instances that do not support allowlists or cannot be checked do not block the request.
 
 Decision facets require `field=id|instance|alert|scenario|kind|country|region|city|as|ip|target|action|status|machine|origin` and support the same value/label, pagination, and search behavior as alert facets. Status faceting considers both active and expired values within the configured lookback window even when the list is currently active-only.
 
@@ -202,6 +224,49 @@ Both facet endpoints return at most the requested limit and use an empty string 
   "has_more": true
 }
 ```
+
+## Allowlists
+
+CrowdSec centralized allowlists cannot be changed through LAPI, so these routes are read-only and available to read-only users. They accept `instance=<instance-id>` or `instance=all` (the default); an unknown instance returns `404`. Allowlists with the same name on several instances are combined. Like alerts and decisions, allowlists are cached in SQLite: every refresh of an instance (scheduled, manual, or on demand) re-reads its allowlists from LAPI and writes only changed entries, and the list and entry routes read the cache. An instance that has never been synchronized is read once before the response. When LAPI cannot be read, the cached allowlists remain and the instance reports the failure. Checks always query LAPI so that range matching and the manual-decision guard use the current state.
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| GET | `/api/allowlists` | Instance statuses and allowlist summaries without entries. Optional `q` keeps only allowlists whose name, description, or entries contain the text. Always returns `200`; per-instance problems are reported in `status`. |
+| GET | `/api/allowlists/:name/entries` | One page of an allowlist's active entries. Accepts `page`, `page_size` (10–200, default 50), and `q`. Returns `404` for an allowlist that does not exist in the scope. |
+| GET | `/api/allowlists/check?value=<ip\|range>` | Check whether an IP address or CIDR range is covered by an allowlist on each instance. Returns `400` for an invalid value. |
+
+Each instance has a `status` of `available`, `unsupported` (the LAPI predates allowlists, which require CrowdSec 1.6.5) or `unavailable` (with `error`). `partial` is `true` when any instance is `unavailable`.
+
+```json
+{
+  "instances": [{ "instance_id": "primary", "instance_name": "CrowdSec", "status": "available" }],
+  "allowlists": [{
+    "name": "office",
+    "description": "Office network",
+    "created_at": "2026-01-01T00:00:00Z",
+    "updated_at": "2026-01-02T00:00:00Z",
+    "console_managed": false,
+    "instance_ids": ["primary"],
+    "entry_count": 2,
+    "matching_entries": 2
+  }],
+  "partial": false
+}
+```
+
+`instance_ids` lists the instances that have the allowlist, and `matching_entries` counts the entries matching `q` (all entries without it). A `q` that matches the allowlist's name or description keeps every entry.
+
+Entry pages contain the `allowlist` summary, `data`, and the same `pagination` object as Alerts and Decisions, with `unfiltered_total` counting all entries:
+
+```json
+{
+  "allowlist": { "name": "office", "entry_count": 2, "matching_entries": 2, "instance_ids": ["primary"], "console_managed": false },
+  "data": [{ "value": "10.0.0.0/8", "description": "VPN", "created_at": "2026-01-01T00:00:00Z", "expiration": null, "instance_ids": ["primary"] }],
+  "pagination": { "page": 1, "page_size": 50, "total": 2, "total_pages": 1, "unfiltered_total": 2 }
+}
+```
+
+`expiration` is `null` for entries that never expire; expired entries are omitted by LAPI. An entry's `instance_ids` can be shorter than the allowlist's when an instance's copy lacks the entry. Check responses contain `value`, an overall `allowlisted` flag, and per-instance `results` with `status`, `allowlisted`, and CrowdSec's `reason`, for example `10.0.0.0/8 from office (VPN)`.
 
 ## Cleanup and Cache
 

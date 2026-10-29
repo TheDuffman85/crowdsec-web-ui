@@ -41,6 +41,8 @@ auth:
     readOnlyGroups: [viewers]
     unmatchedRole: read-only
     endSession: false
+    autoLogin: true
+    backchannelLogout: false
 notifications:
   secretKey:
     env: YAML_NOTIFICATION_KEY
@@ -134,6 +136,8 @@ instances:
       expect(config.dashboardAuth.sessionSecret).toBe('auth-secret');
       expect(config.dashboardAuth.oidcClientSecret).toBe('oidc-secret');
       expect(config.dashboardAuth.oidcEndSession).toBe(false);
+      expect(config.dashboardAuth.oidcAutoLogin).toBe(true);
+      expect(config.dashboardAuth.oidcBackchannelLogout).toBe(false);
       expect(config.instances[0].lapiAuth).toEqual({ mode: 'password', user: 'watcher', password: 'lapi-secret' });
       expect(warn).toHaveBeenCalledWith(expect.stringMatching(/PORT.*CROWDSEC_URL.*application YAML.*takes precedence.*variables do not affect/i));
       expect(log).toHaveBeenCalledWith(`Loaded application configuration from ${configFile}.`);

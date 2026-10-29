@@ -147,6 +147,14 @@ export interface LapiStatus {
 
 export type SyncState = 'idle' | 'syncing' | 'complete' | 'partial' | 'failed';
 
+/** Progress of caching one instance's allowlists, shown next to the alert sync. */
+export interface AllowlistSyncProgress {
+  state: 'pending' | 'syncing' | 'complete' | 'failed' | 'unsupported';
+  allowlists?: number;
+  entries?: number;
+  error?: string;
+}
+
 export interface InstanceSyncStatus {
   instance_id: string;
   instance_name: string;
@@ -158,6 +166,7 @@ export interface InstanceSyncStatus {
   completedAt: string | null;
   state?: SyncState;
   errors?: string[];
+  allowlists?: AllowlistSyncProgress;
 }
 
 export interface SyncStatus {
@@ -169,6 +178,8 @@ export interface SyncStatus {
   state?: SyncState;
   errors?: string[];
   instances?: InstanceSyncStatus[];
+  /** Single-instance deployments report allowlist progress here instead of per instance. */
+  allowlists?: AllowlistSyncProgress;
 }
 
 export interface AlertMeta {
@@ -571,12 +582,24 @@ export interface UpsertNotificationRuleRequest {
   config: NotificationRuleConfig;
 }
 
+export type ManagedConfigSetting = 'refresh_interval' | 'manual_refresh_enabled' | 'allowlists_sidebar_visible' | 'metrics_sidebar_visible';
+
+/** Where the application config sets a value that Settings cannot change. */
+export interface ManagedSettingSource {
+  /** Application config path, for example crowdsec.sync.refreshInterval. */
+  path: string;
+  /** The CONFIG_ variable that sets the value; unset when it comes from the config file. */
+  env?: string;
+}
+
 export interface ConfigResponse {
   lookback_period: string;
   lookback_hours: number;
   lookback_days: number;
   refresh_interval: number;
   manual_refresh_enabled?: boolean;
+  /** Settings set by the application config, which Settings cannot change. */
+  managed_settings?: Partial<Record<ManagedConfigSetting, ManagedSettingSource>>;
   current_interval_name: string;
   lapi_status: LapiStatus;
   instances?: InstanceSummary[];
@@ -592,6 +615,7 @@ export interface ConfigResponse {
   date_format?: string;
   metrics_enabled?: boolean;
   metrics_sidebar_visible?: boolean;
+  allowlists_sidebar_visible?: boolean;
   manual_decision_scenario_settings?: ManualDecisionScenarioSettings;
   deployment_mode?: 'load-test';
   load_test_profile?: string;
@@ -603,6 +627,10 @@ export interface ConfigResponse {
 }
 
 export interface UpdateMetricsSidebarPreferenceRequest {
+  visible: boolean;
+}
+
+export interface UpdateAllowlistsSidebarPreferenceRequest {
   visible: boolean;
 }
 
@@ -788,6 +816,85 @@ export interface AddDecisionRequest {
   scenario?: string;
   scope?: 'all' | 'instance';
   instance_id?: string;
+  /** LAPI trusts decisions sent with an alert, so allowlists are checked here unless this is set. */
+  bypass_allowlist?: boolean;
+}
+
+export interface AllowlistEntry {
+  value: string;
+  description?: string;
+  created_at?: string;
+  /** Null when the entry never expires. */
+  expiration: string | null;
+  /** Instances in the requested scope whose allowlist of this name contains the entry. */
+  instance_ids: string[];
+}
+
+/** Allowlists with the same name on several instances are combined into one summary. */
+export interface AllowlistSummary {
+  name: string;
+  description?: string;
+  created_at?: string;
+  updated_at?: string;
+  console_managed: boolean;
+  /** Instances in the requested scope that have an allowlist of this name. */
+  instance_ids: string[];
+  entry_count: number;
+  /** Entries matching the `q` filter; equals `entry_count` without a filter. */
+  matching_entries: number;
+}
+
+/** `unsupported` means the LAPI predates centralized allowlists (CrowdSec 1.6.5). */
+export type AllowlistSourceStatus = 'available' | 'unsupported' | 'unavailable';
+
+export interface AllowlistInstanceStatus {
+  instance_id: string;
+  instance_name: string;
+  instance_icon?: string;
+  status: AllowlistSourceStatus;
+  error?: string;
+}
+
+export interface AllowlistsResponse {
+  instances: AllowlistInstanceStatus[];
+  allowlists: AllowlistSummary[];
+  partial: boolean;
+}
+
+export interface AllowlistEntriesResponse {
+  allowlist: AllowlistSummary;
+  data: AllowlistEntry[];
+  pagination: PaginationMeta;
+}
+
+export interface AllowlistCheckInstanceResult {
+  instance_id: string;
+  instance_name: string;
+  instance_icon?: string;
+  status: AllowlistSourceStatus;
+  allowlisted: boolean;
+  /** CrowdSec's description of the matching entries, for example `10.0.0.0/8 from office (VPN)`. */
+  reason?: string;
+  error?: string;
+}
+
+export interface AllowlistCheckResponse {
+  value: string;
+  allowlisted: boolean;
+  results: AllowlistCheckInstanceResult[];
+}
+
+export interface AllowlistMatch {
+  instance_id: string;
+  instance_name: string;
+  reason?: string;
+}
+
+/** Body of the `409` returned when a manual decision targets an allowlisted value. */
+export interface AllowlistedDecisionResponse {
+  error: string;
+  code: 'ALLOWLISTED';
+  allowlisted: AllowlistMatch[];
 }
 
 export interface RefreshIntervalRequest {

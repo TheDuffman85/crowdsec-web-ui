@@ -1292,10 +1292,11 @@ export function createNotificationService(options: NotificationServiceOptions): 
         app_name: getAppName(database),
       };
       await provider.send(channel, payload, {
-        fetchImpl,
+        fetchImpl: options.fetchImpl || outboundGuard.fetch,
         mqttPublishImpl,
         assertHostAllowed: outboundGuard.assertHostAllowed,
         assertUrlAllowed: outboundGuard.assertUrlAllowed,
+        lookup: outboundGuard.lookup,
       });
 
       return {

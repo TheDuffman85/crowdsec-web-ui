@@ -12,10 +12,28 @@ import {
 } from '@simplewebauthn/server';
 import { generateSecret, generateURI, verify } from 'otplib';
 import * as oidcClient from 'openid-client';
-import { parseOidcScope, parseOidcUnmatchedRole, type DashboardAuthConfig, type OidcUnmatchedRole } from './config';
+import * as jose from 'jose';
+import {
+  OIDC_SETTING_PATHS,
+  parseOidcScope,
+  parseOidcUnmatchedRole,
+  resolveManagedSettingSource,
+  type ConfigEnvironmentOverride,
+  type DashboardAuthConfig,
+  type OidcSetting,
+  type OidcUnmatchedRole,
+} from './config';
+import type { ManagedSettingSource } from '../shared/contracts';
 import { getAppName } from './branding';
-import { CrowdsecDatabase, type AuthUserRow, type OidcUserUpsertParams } from './database';
+import {
+  CrowdsecDatabase,
+  INITIAL_OIDC_LOGOUT_VERSION,
+  OIDC_END_SESSION_LEGACY_DEFAULT_KEY,
+  type AuthUserRow,
+  type OidcUserUpsertParams,
+} from './database';
 import type { DatabaseWrite } from './sync-worker-client';
+import type { AuditEvent } from './audit-log';
 
 type HonoContext = any;
 type HonoNext = any;
@@ -31,7 +49,9 @@ type MutableAuthSettingKey =
   | 'oidc_admin_groups'
   | 'oidc_read_only_groups'
   | 'oidc_unmatched_role'
-  | 'oidc_end_session';
+  | 'oidc_end_session'
+  | 'oidc_auto_login'
+  | 'oidc_backchannel_logout';
 
 interface EffectiveAuthConfig {
   oidcIssuerUrl?: string;
@@ -43,6 +63,8 @@ interface EffectiveAuthConfig {
   oidcReadOnlyGroups: string[];
   oidcUnmatchedRole: OidcUnmatchedRole;
   oidcEndSession: boolean;
+  oidcAutoLogin: boolean;
+  oidcBackchannelLogout: boolean;
 }
 
 export interface OidcRoleConfig {
@@ -56,6 +78,8 @@ export interface SessionData {
   username: string;
   role: Role;
   authMethod?: AuthMethod;
+  /** Set while a password session waits for the password an administrator chose to be replaced. */
+  passwordChangeRequired?: boolean;
 }
 
 export interface DashboardAuth {
@@ -79,9 +103,12 @@ const CHALLENGE_COOKIE = 'crowdsec_web_ui_webauthn_challenge';
 const TOTP_SETUP_COOKIE = 'crowdsec_web_ui_totp_setup';
 const OIDC_STATE_COOKIE = 'crowdsec_web_ui_oidc_state';
 const OIDC_NONCE_COOKIE = 'crowdsec_web_ui_oidc_nonce';
+const OIDC_PKCE_COOKIE = 'crowdsec_web_ui_oidc_pkce';
 const OIDC_REDIRECT_COOKIE = 'crowdsec_web_ui_oidc_redirect_uri';
 const OIDC_ID_TOKEN_COOKIE = 'crowdsec_web_ui_oidc_id_token';
 const MAX_ID_TOKEN_COOKIE_LENGTH = 3800;
+const BACKCHANNEL_LOGOUT_EVENT = 'http://schemas.openid.net/event/backchannel-logout';
+const LOGOUT_TOKEN_MAX_AGE_SECONDS = 5 * 60;
 const DUMMY_PASSWORD_HASH_PROMISE = hashPassword('timing-safe-dummy-password-pad');
 const ENCRYPTED_SECRET_PREFIX = 'enc:v1:';
 const TOTP_EPOCH_TOLERANCE_SECONDS = 30;
@@ -156,6 +183,10 @@ function isSecureRequest(context: Context): boolean {
 
 function isOidcOnlyAccount(user: AuthUserRow | null): boolean {
   return Boolean(user && user.auth_provider === 'oidc' && !user.password_hash);
+}
+
+function parseRole(value: unknown): Role | null {
+  return value === 'admin' || value === 'read-only' ? value : null;
 }
 
 function readClaimGroups(claims: Record<string, unknown>, claimName: string): string[] {
@@ -385,7 +416,17 @@ function signSession(payload: Record<string, unknown>, secret: string): string {
   return `${encodedPayload}.${signature}`;
 }
 
-function verifySessionToken(token: string, secret: string): (SessionData & { sessionVersion: number; issuedAt: number }) | null {
+function verifySessionToken(
+  token: string,
+  secret: string,
+): (SessionData & {
+  sessionId: string;
+  sessionVersion: number;
+  issuedAt: number;
+  authenticatedAt: number;
+  sid?: string;
+  oidcLogoutVersion: number;
+}) | null {
   const [encodedPayload, signature] = token.split('.');
   if (!encodedPayload || !signature) return null;
   const expectedSignature = crypto.createHmac('sha256', secret).update(encodedPayload).digest('base64url');
@@ -399,7 +440,11 @@ function verifySessionToken(token: string, secret: string): (SessionData & { ses
     const payload = JSON.parse(fromBase64url(encodedPayload).toString('utf8')) as Partial<SessionData> & {
       exp?: number;
       iat?: number;
+      jti?: unknown;
+      authenticatedAt?: number;
       sessionVersion?: number;
+      sid?: unknown;
+      oidcLogoutVersion?: number;
     };
     if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return null;
     if (typeof payload.userId !== 'number' || typeof payload.username !== 'string') return null;
@@ -411,7 +456,30 @@ function verifySessionToken(token: string, secret: string): (SessionData & { ses
       ? Number(payload.sessionVersion)
       : 1;
     const issuedAt = Number.isInteger(payload.iat) && Number(payload.iat) > 0 ? Number(payload.iat) : 0;
-    return { userId: payload.userId, username: payload.username, role, authMethod, sessionVersion, issuedAt };
+    const authenticatedAt = Number.isInteger(payload.authenticatedAt) && Number(payload.authenticatedAt) > 0
+      ? Number(payload.authenticatedAt)
+      : issuedAt;
+    // Tokens from before session IDs are identified by their signature; refreshing them keeps that ID.
+    const sessionId = typeof payload.jti === 'string' && payload.jti
+      ? payload.jti
+      : crypto.createHash('sha256').update(signature).digest('base64url');
+    const sid = typeof payload.sid === 'string' && payload.sid ? payload.sid : undefined;
+    // Cookies from before back-channel logout carry no version and belong to the initial one.
+    const oidcLogoutVersion = Number.isInteger(payload.oidcLogoutVersion) && Number(payload.oidcLogoutVersion) > 0
+      ? Number(payload.oidcLogoutVersion)
+      : INITIAL_OIDC_LOGOUT_VERSION;
+    return {
+      userId: payload.userId,
+      username: payload.username,
+      role,
+      authMethod,
+      sessionId,
+      sessionVersion,
+      issuedAt,
+      authenticatedAt,
+      sid,
+      oidcLogoutVersion,
+    };
   } catch {
     return null;
   }
@@ -496,6 +564,7 @@ async function verifyAuthentication(
 class OidcRuntime {
   private configuration: oidcClient.Configuration | null = null;
   private cacheKey = '';
+  private jwks: { uri: string; keySet: ReturnType<typeof jose.createRemoteJWKSet> } | null = null;
 
   constructor(private readonly getConfig: () => EffectiveAuthConfig) {}
 
@@ -521,7 +590,7 @@ class OidcRuntime {
     return this.configuration;
   }
 
-  async authorizationUrl(state: string, nonce: string, redirectUri: string): Promise<string> {
+  async authorizationUrl(state: string, nonce: string, codeChallenge: string, redirectUri: string): Promise<string> {
     const configuration = await this.getConfiguration();
     const config = this.getConfig();
     const authorizationEndpoint = configuration.serverMetadata().authorization_endpoint;
@@ -536,6 +605,8 @@ class OidcRuntime {
       scope: config.oidcScope,
       state,
       nonce,
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
     });
     return `${authorizationEndpoint}?${params.toString()}`;
   }
@@ -552,18 +623,20 @@ class OidcRuntime {
     return oidcClient.buildEndSessionUrl(configuration, params).toString();
   }
 
-  async handleCallback(currentUrl: URL, expectedNonce?: string, expectedState?: string): Promise<{
+  async handleCallback(currentUrl: URL, transaction: { state: string; nonce: string; codeVerifier: string }): Promise<{
     username: string;
     role: Role | null;
     issuer: string;
     subject: string;
+    sessionId?: string;
     idToken?: string;
   } | null> {
     const configuration = await this.getConfiguration();
     const config = this.getConfig();
     const tokens = await oidcClient.authorizationCodeGrant(configuration, currentUrl, {
-      expectedNonce,
-      expectedState,
+      pkceCodeVerifier: transaction.codeVerifier,
+      expectedNonce: transaction.nonce,
+      expectedState: transaction.state,
     });
     const idClaims = tokens.claims() as Record<string, unknown> | undefined;
     if (!idClaims) return null;
@@ -580,8 +653,67 @@ class OidcRuntime {
       role: resolved.role,
       issuer,
       subject,
+      sessionId: typeof idClaims.sid === 'string' && idClaims.sid ? idClaims.sid : undefined,
       idToken: tokens.id_token,
     };
+  }
+
+  /**
+   * Validates an OpenID Connect Back-Channel Logout token and returns the
+   * identity whose sessions it ends, or null when the token is not acceptable.
+   */
+  async verifyLogoutToken(logoutToken: string): Promise<{
+    issuer: string;
+    subject?: string;
+    sessionId?: string;
+    tokenId: string;
+    tokenExpiresAt: number;
+  } | null> {
+    const configuration = await this.getConfiguration();
+    const config = this.getConfig();
+    const metadata = configuration.serverMetadata();
+    const jwksUri = metadata.jwks_uri;
+    if (!jwksUri) {
+      this.jwks = null;
+    } else if (this.jwks?.uri !== jwksUri) {
+      this.jwks = { uri: jwksUri, keySet: jose.createRemoteJWKSet(new URL(jwksUri)) };
+    }
+    const keySet = this.jwks?.keySet;
+
+    try {
+      const { payload } = await jose.jwtVerify(logoutToken, async (header, token) => {
+        // Providers without a signing key use the client secret, as for their ID tokens.
+        if (header.alg.startsWith('HS')) {
+          if (!config.oidcClientSecret) throw new Error('HMAC-signed logout token, but no client secret is configured');
+          return new TextEncoder().encode(config.oidcClientSecret);
+        }
+        if (!keySet) throw new Error('OIDC provider has no jwks_uri');
+        return keySet(header, token);
+      }, {
+        issuer: metadata.issuer,
+        audience: config.oidcClientId,
+        maxTokenAge: LOGOUT_TOKEN_MAX_AGE_SECONDS,
+        requiredClaims: ['iat', 'jti'],
+      });
+
+      if (!asObject(asObject(payload.events)?.[BACKCHANNEL_LOGOUT_EVENT])) throw new Error('missing back-channel logout event');
+      if ('nonce' in payload) throw new Error('logout tokens must not contain a nonce');
+      if (typeof payload.jti !== 'string' || !payload.jti) throw new Error('logout token has no token ID');
+      const subject = typeof payload.sub === 'string' && payload.sub ? payload.sub : undefined;
+      const sessionId = typeof payload.sid === 'string' && payload.sid ? payload.sid : undefined;
+      if (!subject && !sessionId) throw new Error('logout token has neither sub nor sid');
+      return {
+        issuer: metadata.issuer,
+        subject,
+        sessionId,
+        tokenId: payload.jti,
+        // maxTokenAge accepts the boundary second; retain the replay marker through it.
+        tokenExpiresAt: Math.ceil(payload.iat! + LOGOUT_TOKEN_MAX_AGE_SECONDS) + 1,
+      };
+    } catch (error) {
+      console.warn(`Rejected OIDC back-channel logout token: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
   }
 
   private async fetchUserInfoClaims(
@@ -607,6 +739,8 @@ export function createDashboardAuth(options: {
   basePath: string;
   instanceReadOnly: boolean;
   writeDatabase?: DatabaseWrite;
+  configEnvironmentOverrides?: readonly ConfigEnvironmentOverride[];
+  recordAudit?: (context: HonoContext, event: AuditEvent) => void;
 }): DashboardAuth {
   const { config, database, basePath, instanceReadOnly } = options;
   const enabled = config.enabled ?? !database.isAuthMigrationDefaultDisabled();
@@ -645,16 +779,32 @@ export function createDashboardAuth(options: {
     return entry.challenge;
   }
 
-  function hasUsablePasskey(excludingId?: number): boolean {
+  // Whether an enabled administrator can still sign in with a passkey, leaving out one credential
+  // or every credential of one account (for example one that is about to lose admin access).
+  function hasAdminPasskey(exclude: { credentialId?: number; userId?: number } = {}): boolean {
     return Boolean(database.db.prepare(`
       SELECT 1 FROM webauthn_credentials c JOIN auth_users u ON u.id = c.user_id
-      WHERE (u.auth_provider <> 'oidc' OR (u.password_hash IS NOT NULL AND u.password_hash <> ''))
-        AND c.id <> ? LIMIT 1
-    `).get(excludingId ?? -1));
+      WHERE u.role = 'admin' AND u.disabled = 0
+        AND (u.auth_provider <> 'oidc' OR (u.password_hash IS NOT NULL AND u.password_hash <> ''))
+        AND c.id <> ? AND u.id <> ? LIMIT 1
+    `).get(exclude.credentialId ?? -1, exclude.userId ?? -1));
+  }
+
+  // While passkeys are the only sign-in method, some administrator must keep one. A passkey of a
+  // read-only user does not help, because nobody could administer the instance with it.
+  function wouldLockOutAdministrators(exclude: { credentialId?: number; userId?: number }): boolean {
+    return isPasswordLoginDisabled() && !oidc.enabled && !hasAdminPasskey(exclude);
+  }
+
+  const managedOidcSettings = new Set<OidcSetting>(config.managedOidcSettings);
+
+  // Values set by the application config win over values saved in Settings.
+  function readOidcSetting(setting: OidcSetting, key: MutableAuthSettingKey): string | undefined {
+    return managedOidcSettings.has(setting) ? undefined : readAuthSetting(database, key);
   }
 
   function getEffectiveConfig(): EffectiveAuthConfig {
-    const encryptedClientSecret = readAuthSetting(database, 'oidc_client_secret');
+    const encryptedClientSecret = readOidcSetting('oidcClientSecret', 'oidc_client_secret');
     const oidcClientSecret = encryptedClientSecret === undefined
       ? config.oidcClientSecret
       : encryptedClientSecret
@@ -662,15 +812,17 @@ export function createDashboardAuth(options: {
         : undefined;
 
     return {
-      oidcIssuerUrl: readAuthSetting(database, 'oidc_issuer_url') ?? config.oidcIssuerUrl,
-      oidcClientId: readAuthSetting(database, 'oidc_client_id') ?? config.oidcClientId,
+      oidcIssuerUrl: readOidcSetting('oidcIssuerUrl', 'oidc_issuer_url') ?? config.oidcIssuerUrl,
+      oidcClientId: readOidcSetting('oidcClientId', 'oidc_client_id') ?? config.oidcClientId,
       oidcClientSecret,
-      oidcScope: readAuthSetting(database, 'oidc_scope')?.trim() || config.oidcScope,
-      oidcGroupsClaim: readAuthSetting(database, 'oidc_groups_claim') || config.oidcGroupsClaim || 'groups',
-      oidcAdminGroups: parseCsvList(readAuthSetting(database, 'oidc_admin_groups') ?? config.oidcAdminGroups.join(',')),
-      oidcReadOnlyGroups: parseCsvList(readAuthSetting(database, 'oidc_read_only_groups') ?? config.oidcReadOnlyGroups.join(',')),
-      oidcUnmatchedRole: parseOidcUnmatchedRole(readAuthSetting(database, 'oidc_unmatched_role') ?? config.oidcUnmatchedRole),
-      oidcEndSession: (readAuthSetting(database, 'oidc_end_session') ?? String(config.oidcEndSession)) !== 'false',
+      oidcScope: readOidcSetting('oidcScope', 'oidc_scope')?.trim() || config.oidcScope,
+      oidcGroupsClaim: readOidcSetting('oidcGroupsClaim', 'oidc_groups_claim') || config.oidcGroupsClaim || 'groups',
+      oidcAdminGroups: parseCsvList(readOidcSetting('oidcAdminGroups', 'oidc_admin_groups') ?? config.oidcAdminGroups.join(',')),
+      oidcReadOnlyGroups: parseCsvList(readOidcSetting('oidcReadOnlyGroups', 'oidc_read_only_groups') ?? config.oidcReadOnlyGroups.join(',')),
+      oidcUnmatchedRole: parseOidcUnmatchedRole(readOidcSetting('oidcUnmatchedRole', 'oidc_unmatched_role') ?? config.oidcUnmatchedRole),
+      oidcEndSession: (readOidcSetting('oidcEndSession', 'oidc_end_session') ?? String(config.oidcEndSession ?? isOidcEndSessionLegacyDefault())) === 'true',
+      oidcAutoLogin: (readOidcSetting('oidcAutoLogin', 'oidc_auto_login') ?? String(config.oidcAutoLogin)) === 'true',
+      oidcBackchannelLogout: (readOidcSetting('oidcBackchannelLogout', 'oidc_backchannel_logout') ?? String(config.oidcBackchannelLogout)) === 'true',
     };
   }
 
@@ -681,9 +833,9 @@ export function createDashboardAuth(options: {
   // Config cannot disable password login while no other sign-in method exists, so it falls back to enabled.
   function isPasswordLoginConfigFallbackActive(): boolean {
     if (config.passwordLoginEnabled !== false) return false;
-    const fallback = !oidc.enabled && !hasUsablePasskey();
+    const fallback = !oidc.enabled && !hasAdminPasskey();
     if (fallback && !passwordLoginFallbackWarned) {
-      console.warn('auth.passwordLogin.enabled is false, but neither OIDC nor a passkey is configured; keeping password login enabled to avoid a lockout.');
+      console.warn('auth.passwordLogin.enabled is false, but neither OIDC nor an administrator passkey is configured; keeping password login enabled to avoid a lockout.');
     }
     passwordLoginFallbackWarned = fallback;
     return fallback;
@@ -694,6 +846,19 @@ export function createDashboardAuth(options: {
     return readAuthSetting(database, 'disable_password_login') === 'true';
   }
 
+  // Settings fields locked by the application config, with where each one is set.
+  function getManagedSettings(): Record<string, ManagedSettingSource> {
+    const overrides = options.configEnvironmentOverrides ?? [];
+    const sources: Record<string, ManagedSettingSource> = {};
+    if (passwordLoginManaged) {
+      sources.disablePasswordLogin = resolveManagedSettingSource(overrides, 'auth.passwordLogin.enabled');
+    }
+    for (const setting of managedOidcSettings) {
+      sources[setting] = resolveManagedSettingSource(overrides, OIDC_SETTING_PATHS[setting]);
+    }
+    return sources;
+  }
+
   function getPasswordLoginSettings() {
     return {
       disablePasswordLogin: isPasswordLoginDisabled(),
@@ -702,7 +867,44 @@ export function createDashboardAuth(options: {
     };
   }
 
+  // End-session used to default to on. Installs that already used OIDC before it defaulted to off keep that
+  // default; it applies only while neither the application config nor Settings sets a value.
+  function isOidcEndSessionLegacyDefault(): boolean {
+    return database.getMeta(OIDC_END_SESSION_LEGACY_DEFAULT_KEY)?.value === 'true';
+  }
+
   const oidc = new OidcRuntime(getEffectiveConfig);
+  if (database.getMeta(OIDC_END_SESSION_LEGACY_DEFAULT_KEY)?.value === 'pending') {
+    database.setMeta(OIDC_END_SESSION_LEGACY_DEFAULT_KEY, oidc.enabled ? 'true' : 'false');
+  }
+  let oidcAutoLoginInactiveReason: string | null = null;
+
+  // Auto-login only applies while SSO is the sole sign-in method. A configured but inactive
+  // setting is logged once per change of the reason, not on every status request.
+  function isOidcAutoLoginActive(): boolean {
+    if (!getEffectiveConfig().oidcAutoLogin) {
+      oidcAutoLoginInactiveReason = null;
+      return false;
+    }
+    const unmetRequirements = [
+      ...(enabled ? [] : ['authentication is disabled']),
+      ...(oidc.enabled ? [] : ['OIDC is not configured']),
+      ...(isPasswordLoginDisabled() ? [] : ['password login is enabled']),
+    ];
+    const reason = unmetRequirements.length > 0 ? unmetRequirements.join(', ') : null;
+    if (reason && reason !== oidcAutoLoginInactiveReason) {
+      console.warn(`OIDC auto-login is enabled but inactive because ${reason}. It requires OIDC to be configured and password login to be disabled.`);
+    }
+    oidcAutoLoginInactiveReason = reason;
+    return !reason;
+  }
+
+  function getOidcAutoLoginSettings() {
+    return {
+      oidcAutoLogin: getEffectiveConfig().oidcAutoLogin,
+      oidcAutoLoginActive: isOidcAutoLoginActive(),
+    };
+  }
 
   function decryptTotpSecret(value: string): string {
     const candidateSecrets = Array.from(new Set([
@@ -740,11 +942,63 @@ export function createDashboardAuth(options: {
     return context.json({ error: 'Too many authentication attempts. Try again later.' }, 429);
   }
 
+  // Every password check shares the login's per-account throttle and concurrency limit,
+  // so a session cannot be used to keep guessing a password the login endpoint has locked.
+  async function verifyAccountPassword(
+    username: string,
+    password: string,
+    passwordHash: string | null | undefined,
+  ): Promise<{ valid: boolean; retryAfter: number | null }> {
+    const accountAttemptKey = getAccountAttemptKey(username);
+    const accountRetryAfter = getAuthThrottleRetryAfter(passwordAccountFailureBuckets, accountAttemptKey);
+    if (accountRetryAfter !== null) return { valid: false, retryAfter: accountRetryAfter };
+    if (activePasswordVerifications >= MAX_CONCURRENT_PASSWORD_VERIFICATIONS) return { valid: false, retryAfter: 1 };
+
+    const hashToVerify = passwordHash || await DUMMY_PASSWORD_HASH_PROMISE;
+    activePasswordVerifications += 1;
+    let valid = false;
+    try {
+      valid = await verifyPassword(password, hashToVerify);
+    } finally {
+      activePasswordVerifications -= 1;
+    }
+    if (!passwordHash || !valid) {
+      recordAuthFailure(passwordAccountFailureBuckets, accountAttemptKey, PASSWORD_MAX_FAILURES);
+      return { valid: false, retryAfter: null };
+    }
+    clearAuthFailures(passwordAccountFailureBuckets, accountAttemptKey);
+    return { valid: true, retryAfter: null };
+  }
+
+  // Checks a TOTP code under the per-user throttle and consumes its time step so it cannot be replayed.
+  async function verifyAccountTotp(
+    userId: number,
+    code: string,
+    secret: string,
+  ): Promise<{ valid: boolean; retryAfter: number | null }> {
+    const totpAttemptKey = String(userId);
+    const totpRetryAfter = getAuthThrottleRetryAfter(totpFailureBuckets, totpAttemptKey);
+    if (totpRetryAfter !== null) return { valid: false, retryAfter: totpRetryAfter };
+    const verification = await verifyTotpCode(code, secret);
+    if (
+      !verification.valid
+      || verification.timeStep === null
+      || !await writeDatabase(() => database.updateAuthUserTotpLastStep(userId, verification.timeStep!))
+    ) {
+      recordAuthFailure(totpFailureBuckets, totpAttemptKey, TOTP_MAX_FAILURES);
+      return { valid: false, retryAfter: null };
+    }
+    clearAuthFailures(totpFailureBuckets, totpAttemptKey);
+    return { valid: true, retryAfter: null };
+  }
+
   function createSession(
     context: HonoContext,
     user: AuthUserRow | SessionData,
     authMethod?: AuthMethod,
     authenticatedAt?: number,
+    oidcSessionId?: string,
+    sessionId: string = crypto.randomUUID(),
   ): void {
     const now = Math.floor(Date.now() / 1000);
     const userId = 'id' in user ? user.id : user.userId;
@@ -754,13 +1008,20 @@ export function createDashboardAuth(options: {
       ? OIDC_SESSION_LIFETIME_SECONDS
       : SESSION_LIFETIME_SECONDS;
     const absoluteStart = authenticatedAt || now;
+    // Without a provider session ID, back-channel logout can only match this session by its identity's version.
+    const oidcLogoutVersion = effectiveAuthMethod === 'oidc' && !oidcSessionId && persistedUser?.oidc_issuer && persistedUser.oidc_subject
+      ? database.getOidcLogoutVersion(persistedUser.oidc_issuer, persistedUser.oidc_subject)
+      : undefined;
     const token = signSession({
+      jti: sessionId,
       userId,
       username: user.username,
       role: user.role,
       authMethod: effectiveAuthMethod,
       sessionVersion: persistedUser?.session_version || 1,
       authenticatedAt: absoluteStart,
+      ...(oidcSessionId ? { sid: oidcSessionId } : {}),
+      ...(oidcLogoutVersion ? { oidcLogoutVersion } : {}),
       iat: now,
       exp: Math.min(now + sessionLifetime, absoluteStart + sessionLifetime),
     }, sessionSecret);
@@ -783,39 +1044,40 @@ export function createDashboardAuth(options: {
     if (!token) return null;
     const session = verifySessionToken(token, sessionSecret);
     if (!session) return null;
+    if (database.isAuthSessionRevoked(session.sessionId)) return null;
     if (
       session.authMethod === 'oidc'
       && (!session.issuedAt || session.issuedAt + OIDC_SESSION_LIFETIME_SECONDS < Math.floor(Date.now() / 1000))
     ) return null;
     const user = database.getAuthUserById(session.userId);
-    if (!user || (session.sessionVersion || 1) !== (user.session_version || 1)) return null;
+    if (!user || user.disabled || (session.sessionVersion || 1) !== (user.session_version || 1)) return null;
     if (session.authMethod === 'oidc' && user.auth_provider !== 'oidc') return null;
+    if (session.authMethod === 'oidc' && user.oidc_issuer) {
+      if (session.sid) {
+        if (database.isOidcSessionRevoked(user.oidc_issuer, session.sid)) return null;
+      } else if (
+        user.oidc_subject
+        && session.oidcLogoutVersion !== database.getOidcLogoutVersion(user.oidc_issuer, user.oidc_subject)
+      ) return null;
+    }
     if (session.authMethod === 'passkey' && user.auth_provider === 'oidc' && !user.password_hash) return null;
     return {
       userId: user.id,
       username: user.username,
       role: user.role,
       authMethod: session.authMethod,
+      ...(session.authMethod === 'password' && user.password_change_required ? { passwordChangeRequired: true } : {}),
     };
   }
 
   function refreshSessionIfNeeded(context: HonoContext, session: SessionData): void {
     const token = getCookie(context, SESSION_COOKIE);
     if (!token) return;
-    try {
-      const payload = JSON.parse(fromBase64url(token.split('.')[0] || '').toString('utf8')) as {
-        iat?: number;
-        authenticatedAt?: number;
-        authMethod?: AuthMethod;
-      };
-      if (!payload.iat) return;
-      if (payload.authMethod === 'oidc') return;
-      const age = Math.floor(Date.now() / 1000) - payload.iat;
-      if (age > SESSION_REFRESH_AFTER_SECONDS) {
-        createSession(context, session, undefined, payload.authenticatedAt || payload.iat);
-      }
-    } catch {
-      // Invalid tokens are handled by getSession.
+    const payload = verifySessionToken(token, sessionSecret);
+    if (!payload?.issuedAt || payload.authMethod === 'oidc') return;
+    const age = Math.floor(Date.now() / 1000) - payload.issuedAt;
+    if (age > SESSION_REFRESH_AFTER_SECONDS) {
+      createSession(context, session, undefined, payload.authenticatedAt, undefined, payload.sessionId);
     }
   }
 
@@ -839,6 +1101,9 @@ export function createDashboardAuth(options: {
     if (!session) {
       return context.json({ error: 'Unauthorized' }, 401);
     }
+    if (session.passwordChangeRequired) {
+      return context.json({ error: 'Change your password to continue', code: 'PASSWORD_CHANGE_REQUIRED' }, 403);
+    }
 
     context.set('user', session);
     refreshSessionIfNeeded(context, session);
@@ -852,6 +1117,208 @@ export function createDashboardAuth(options: {
       secure: isSecureRequest(context),
       maxAge: 300,
       path: cookiePath,
+    });
+  }
+
+  // Display preferences each user saves for themselves; the browser applies them after sign-in.
+  function getPersonalPreferences(userId: number): { language?: string; font?: string } {
+    const { language, font } = database.getUserPreferences(userId);
+    return { ...(language ? { language } : {}), ...(font ? { font } : {}) };
+  }
+
+  function passwordChangeRequiredResponse(context: HonoContext): Response {
+    return context.json({ error: 'Change your password to continue', code: 'PASSWORD_CHANGE_REQUIRED' }, 403);
+  }
+
+  // Returns the administrator's session, or the response that rejects the request.
+  function requireAdmin(context: HonoContext, write: boolean): SessionData | Response {
+    const session = getSession(context);
+    if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
+    if (session.passwordChangeRequired) return passwordChangeRequiredResponse(context);
+    if (session.role !== 'admin') return context.json({ error: 'Administrator access required', code: 'FORBIDDEN' }, 403);
+    if (write && instanceReadOnly) return context.json({ error: 'Read-only mode is enabled', code: 'READ_ONLY' }, 403);
+    return session;
+  }
+
+  function serializeUser(user: AuthUserRow & { passkey_count?: number }, session: SessionData) {
+    return {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      // Accounts that only sign in through the identity provider get their role from it on every sign-in.
+      source: isOidcOnlyAccount(user) ? 'oidc' as const : 'local' as const,
+      disabled: Boolean(user.disabled),
+      passwordChangeRequired: Boolean(user.password_change_required),
+      totpEnabled: Boolean(user.totp_enabled && user.totp_secret),
+      passkeyCount: user.passkey_count ?? database.listWebAuthnCredentialsByUser(user.id).length,
+      createdAt: user.created_at,
+      current: user.id === session.userId,
+    };
+  }
+
+  function recordUserAudit(context: HonoContext, action: AuditEvent['action'], user: Pick<AuthUserRow, 'id' | 'username'>, details: Record<string, unknown> = {}): void {
+    options.recordAudit?.(context, { action, outcome: 'success', target_user_id: user.id, target_username: user.username, ...details });
+  }
+
+  function registerUserRoutes(auth: Hono): void {
+    type UserMutation =
+      | { error: string; status: 400 | 404 | 409 }
+      | { user: AuthUserRow };
+
+    // Looks up the account an administrator acts on and applies the rules every change shares.
+    function getManagedUser(
+      id: number,
+      session: SessionData,
+      localOnly: boolean,
+      selfError = 'You cannot change your own account here',
+    ): UserMutation {
+      const user = Number.isInteger(id) ? database.getAuthUserById(id) : null;
+      if (!user) return { error: 'User not found', status: 404 };
+      if (user.id === session.userId) return { error: selfError, status: 400 };
+      if (localOnly && isOidcOnlyAccount(user)) {
+        return { error: 'OIDC users are managed by the identity provider', status: 400 };
+      }
+      return { user };
+    }
+
+    function isLastActiveAdmin(user: AuthUserRow): boolean {
+      return user.role === 'admin' && !user.disabled && database.countActiveAdmins(user.id) === 0;
+    }
+
+    auth.get('/users', (context) => {
+      const session = requireAdmin(context, false);
+      if (session instanceof Response) return session;
+      return context.json({
+        users: database.listAuthUsers().map((user) => serializeUser(user, session)),
+        totpManagedByConfig: Boolean(config.totpSeed),
+      });
+    });
+
+    auth.post('/users', async (context) => {
+      const session = requireAdmin(context, true);
+      if (session instanceof Response) return session;
+      const body = asObject(await context.req.json().catch(() => null));
+      const username = typeof body?.username === 'string' ? body.username.trim() : '';
+      const password = typeof body?.password === 'string' ? body.password : '';
+      const role = parseRole(body?.role);
+      if (!username || !password) return context.json({ error: 'Username and password required' }, 400);
+      if (username.length > 128 || password.length > 1024) return context.json({ error: 'Username or password is too long' }, 400);
+      if (!role) return context.json({ error: 'Invalid role' }, 400);
+      const passwordError = validatePassword(password);
+      if (passwordError) return context.json({ error: passwordError }, 400);
+
+      const passwordHash = await hashPassword(password);
+      const user = await writeDatabase(() => {
+        if (database.getAuthUserByUsername(username)) return null;
+        const userId = database.createAuthUser({
+          username,
+          passwordHash,
+          role,
+          authProvider: 'password',
+          passwordChangeRequired: body?.requirePasswordChange !== false,
+        });
+        return database.getAuthUserById(userId)!;
+      });
+      if (!user) return context.json({ error: 'A user with this username already exists' }, 409);
+      recordUserAudit(context, 'user.create', user, { target_role: user.role });
+      return context.json({ status: 'ok', user: serializeUser(user, session) }, 201);
+    });
+
+    auth.patch('/users/:id', async (context) => {
+      const session = requireAdmin(context, true);
+      if (session instanceof Response) return session;
+      const body = asObject(await context.req.json().catch(() => null));
+      if (!body) return context.json({ error: 'Invalid request body' }, 400);
+      const role = 'role' in body ? parseRole(body.role) : undefined;
+      if (role === null) return context.json({ error: 'Invalid role' }, 400);
+      if ('disabled' in body && typeof body.disabled !== 'boolean') return context.json({ error: 'Invalid disabled value' }, 400);
+      const disabled = typeof body.disabled === 'boolean' ? body.disabled : undefined;
+
+      const result = await writeDatabase((): UserMutation => {
+        const managed = getManagedUser(Number(context.req.param('id')), session, true);
+        if ('error' in managed) return managed;
+        const { user } = managed;
+        const losesAdmin = (role === 'read-only' && user.role === 'admin') || (disabled === true && user.role === 'admin');
+        if (losesAdmin && isLastActiveAdmin(user)) {
+          return { error: 'At least one active administrator is required', status: 400 };
+        }
+        if (losesAdmin && !user.disabled && wouldLockOutAdministrators({ userId: user.id })) {
+          return { error: 'Enable password login or configure OIDC before removing the last administrator with a passkey', status: 400 };
+        }
+        database.transaction<void>(() => {
+          if (role) database.updateAuthUserRole(user.id, role);
+          if (disabled !== undefined) database.setAuthUserDisabled(user.id, disabled);
+        })(undefined);
+        return { user: database.getAuthUserById(user.id)! };
+      });
+      if ('error' in result) return context.json({ error: result.error }, result.status);
+      const { user } = result;
+      recordUserAudit(context, 'user.update', user, {
+        ...(role ? { target_role: role } : {}),
+        ...(disabled !== undefined ? { disabled } : {}),
+      });
+      return context.json({ status: 'ok', user: serializeUser(user, session) });
+    });
+
+    auth.post('/users/:id/password', async (context) => {
+      const session = requireAdmin(context, true);
+      if (session instanceof Response) return session;
+      const body = asObject(await context.req.json().catch(() => null));
+      const password = typeof body?.password === 'string' ? body.password : '';
+      if (!password) return context.json({ error: 'Password required' }, 400);
+      if (password.length > 1024) return context.json({ error: 'Password is too long' }, 400);
+      const passwordError = validatePassword(password);
+      if (passwordError) return context.json({ error: passwordError }, 400);
+      const changeRequired = body?.requirePasswordChange !== false;
+
+      const passwordHash = await hashPassword(password);
+      const result = await writeDatabase((): UserMutation => {
+        const managed = getManagedUser(Number(context.req.param('id')), session, true);
+        if ('error' in managed) return managed;
+        database.resetAuthUserPassword(managed.user.id, passwordHash, changeRequired);
+        return { user: database.getAuthUserById(managed.user.id)! };
+      });
+      if ('error' in result) return context.json({ error: result.error }, result.status);
+      const { user } = result;
+      recordUserAudit(context, 'user.password-reset', user, { password_change_required: changeRequired });
+      return context.json({ status: 'ok', user: serializeUser(user, session) });
+    });
+
+    auth.post('/users/:id/reset-mfa', async (context) => {
+      const session = requireAdmin(context, true);
+      if (session instanceof Response) return session;
+      const result = await writeDatabase((): UserMutation => {
+        const managed = getManagedUser(Number(context.req.param('id')), session, true);
+        if ('error' in managed) return managed;
+        if (managed.user.role === 'admin' && !managed.user.disabled && wouldLockOutAdministrators({ userId: managed.user.id })) {
+          return { error: 'Enable password login or configure OIDC before removing the passkeys of the last administrator with one', status: 400 };
+        }
+        database.resetAuthUserSecondFactors(managed.user.id);
+        return { user: database.getAuthUserById(managed.user.id)! };
+      });
+      if ('error' in result) return context.json({ error: result.error }, result.status);
+      const { user } = result;
+      recordUserAudit(context, 'user.mfa-reset', user);
+      return context.json({ status: 'ok', user: serializeUser(user, session) });
+    });
+
+    auth.delete('/users/:id', async (context) => {
+      const session = requireAdmin(context, true);
+      if (session instanceof Response) return session;
+      const result = await writeDatabase((): UserMutation => {
+        const managed = getManagedUser(Number(context.req.param('id')), session, false, 'You cannot delete your own account');
+        if ('error' in managed) return managed;
+        if (isLastActiveAdmin(managed.user)) return { error: 'At least one active administrator is required', status: 400 };
+        if (managed.user.role === 'admin' && !managed.user.disabled && wouldLockOutAdministrators({ userId: managed.user.id })) {
+          return { error: 'Enable password login or configure OIDC before deleting the last administrator with a passkey', status: 400 };
+        }
+        database.deleteAuthUser(managed.user.id);
+        return { user: managed.user };
+      });
+      if ('error' in result) return context.json({ error: result.error }, result.status);
+      const { user } = result;
+      recordUserAudit(context, 'user.delete', user, { target_source: isOidcOnlyAccount(user) ? 'oidc' : 'local' });
+      return context.json({ status: 'ok' });
     });
   }
 
@@ -869,10 +1336,13 @@ export function createDashboardAuth(options: {
         user: enabled ? session : null,
         authMethod: enabled ? session?.authMethod ?? null : null,
         oidcEnabled: enabled && oidc.enabled,
+        oidcAutoLogin: isOidcAutoLoginActive(),
         passwordLoginDisabled: enabled && isPasswordLoginDisabled(),
         passkeysEnabled: enabled && database.countWebAuthnCredentials() > 0,
         hasPassword: Boolean(user?.password_hash),
         totpEnabled: isTotpEnabled(user),
+        passwordChangeRequired: Boolean(session?.passwordChangeRequired),
+        preferences: enabled && session ? getPersonalPreferences(session.userId) : null,
       });
     });
 
@@ -913,45 +1383,19 @@ export function createDashboardAuth(options: {
       const totpCode = typeof body?.totpCode === 'string' ? normalizeTotpCode(body.totpCode) : '';
       if (!username || !password) return context.json({ error: 'Username and password required' }, 400);
       if (username.length > 254 || password.length > 1024) return context.json({ error: 'Invalid credentials' }, 401);
-      const accountAttemptKey = getAccountAttemptKey(username);
-      const accountRetryAfter = getAuthThrottleRetryAfter(passwordAccountFailureBuckets, accountAttemptKey);
-      if (accountRetryAfter !== null) return authThrottleResponse(context, accountRetryAfter);
-      if (activePasswordVerifications >= MAX_CONCURRENT_PASSWORD_VERIFICATIONS) {
-        return authThrottleResponse(context, 1);
-      }
-
       const user = database.getAuthUserByUsername(username);
-      const hashToVerify = user?.password_hash || await DUMMY_PASSWORD_HASH_PROMISE;
-      activePasswordVerifications += 1;
-      let valid = false;
-      try {
-        valid = await verifyPassword(password, hashToVerify);
-      } finally {
-        activePasswordVerifications -= 1;
-      }
-      if (!user || !user.password_hash || !valid) {
-        recordAuthFailure(passwordAccountFailureBuckets, accountAttemptKey, PASSWORD_MAX_FAILURES);
-        return context.json({ error: 'Invalid credentials' }, 401);
-      }
-      clearAuthFailures(passwordAccountFailureBuckets, accountAttemptKey);
+      const passwordCheck = await verifyAccountPassword(username, password, user?.password_hash);
+      if (passwordCheck.retryAfter !== null) return authThrottleResponse(context, passwordCheck.retryAfter);
+      if (!user || !passwordCheck.valid) return context.json({ error: 'Invalid credentials' }, 401);
+      if (user.disabled) return context.json({ error: 'This account is disabled' }, 403);
       const totpSeed = getTotpSeed(user);
       if (totpSeed) {
         if (!totpCode) {
           return context.json({ error: 'Authenticator code required', requiresTotp: true }, 401);
         }
-        const totpAttemptKey = String(user.id);
-        const totpRetryAfter = getAuthThrottleRetryAfter(totpFailureBuckets, totpAttemptKey);
-        if (totpRetryAfter !== null) return authThrottleResponse(context, totpRetryAfter);
-        const verification = await verifyTotpCode(totpCode, totpSeed);
-        if (!verification.valid || verification.timeStep === null) {
-          recordAuthFailure(totpFailureBuckets, totpAttemptKey, TOTP_MAX_FAILURES);
-          return context.json({ error: 'Invalid authenticator code', requiresTotp: true }, 401);
-        }
-        if (!await writeDatabase(() => database.updateAuthUserTotpLastStep(user.id, verification.timeStep!))) {
-          recordAuthFailure(totpFailureBuckets, totpAttemptKey, TOTP_MAX_FAILURES);
-          return context.json({ error: 'Invalid authenticator code', requiresTotp: true }, 401);
-        }
-        clearAuthFailures(totpFailureBuckets, totpAttemptKey);
+        const totpCheck = await verifyAccountTotp(user.id, totpCode, totpSeed);
+        if (totpCheck.retryAfter !== null) return authThrottleResponse(context, totpCheck.retryAfter);
+        if (!totpCheck.valid) return context.json({ error: 'Invalid authenticator code', requiresTotp: true }, 401);
       }
 
       createSession(context, user, 'password');
@@ -961,6 +1405,12 @@ export function createDashboardAuth(options: {
     auth.post('/logout', async (context) => {
       const session = getSession(context);
       const idToken = getCookie(context, OIDC_ID_TOKEN_COOKIE);
+      // Revoke the session itself, so a copy of its token stops working once the cookie is gone.
+      const token = enabled ? getCookie(context, SESSION_COOKIE) : undefined;
+      const payload = token ? verifySessionToken(token, sessionSecret) : null;
+      if (payload) {
+        await writeDatabase(() => database.revokeAuthSession(payload.sessionId, payload.authenticatedAt + SESSION_LIFETIME_SECONDS));
+      }
       clearSession(context);
       deleteCookie(context, OIDC_ID_TOKEN_COOKIE, { path: cookiePath });
 
@@ -986,8 +1436,16 @@ export function createDashboardAuth(options: {
     auth.get('/settings', (context) => {
       const session = getSession(context);
       if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
-      const effectiveConfig = getEffectiveConfig();
       const user = database.getAuthUserById(session.userId);
+      const personalSettings = {
+        hasPassword: Boolean(user?.password_hash),
+        passkeysAvailable: !isOidcOnlyAccount(user),
+        totpEnabled: isTotpEnabled(user),
+        authMethod: session.authMethod ?? null,
+      };
+      // Only administrators see how sign-in is configured.
+      if (session.role !== 'admin') return context.json(personalSettings);
+      const effectiveConfig = getEffectiveConfig();
       return context.json({
         ...getPasswordLoginSettings(),
         oidcIssuerUrl: effectiveConfig.oidcIssuerUrl || '',
@@ -999,22 +1457,30 @@ export function createDashboardAuth(options: {
         oidcReadOnlyGroups: effectiveConfig.oidcReadOnlyGroups.join(','),
         oidcUnmatchedRole: effectiveConfig.oidcUnmatchedRole,
         oidcEndSession: effectiveConfig.oidcEndSession,
-        hasPassword: Boolean(user?.password_hash),
-        passkeysAvailable: !isOidcOnlyAccount(user),
-        totpEnabled: isTotpEnabled(user),
-        authMethod: session.authMethod ?? null,
+        oidcBackchannelLogout: effectiveConfig.oidcBackchannelLogout,
+        ...getOidcAutoLoginSettings(),
+        managedSettings: getManagedSettings(),
+        ...personalSettings,
       });
     });
 
     auth.put('/settings', async (context) => {
       const session = getSession(context);
       if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
+      if (session.passwordChangeRequired) return passwordChangeRequiredResponse(context);
       if (session.role !== 'admin' || instanceReadOnly) return context.json({ error: 'Read-only mode is enabled', code: 'READ_ONLY' }, 403);
       const body = asObject(await context.req.json().catch(() => null));
       if (!body) return context.json({ error: 'Invalid request body' }, 400);
 
       if ('disablePasswordLogin' in body && passwordLoginManaged) {
         return context.json({ error: 'Password login is managed by the application configuration', code: 'MANAGED_BY_CONFIG' }, 409);
+      }
+      const managedFields = [...managedOidcSettings].filter((setting) => setting in body);
+      if (managedFields.length > 0) {
+        return context.json({
+          error: `${managedFields.join(', ')} ${managedFields.length === 1 ? 'is' : 'are'} managed by the application configuration`,
+          code: 'MANAGED_BY_CONFIG',
+        }, 409);
       }
 
       const updates = new Map<MutableAuthSettingKey, string>();
@@ -1038,7 +1504,9 @@ export function createDashboardAuth(options: {
           return context.json({ error: 'Invalid OIDC unmatched role' }, 400);
         }
       }
-      if ('oidcEndSession' in body) updates.set('oidc_end_session', body.oidcEndSession === false ? 'false' : 'true');
+      if ('oidcEndSession' in body) updates.set('oidc_end_session', body.oidcEndSession === true ? 'true' : 'false');
+      if ('oidcAutoLogin' in body) updates.set('oidc_auto_login', body.oidcAutoLogin === true ? 'true' : 'false');
+      if ('oidcBackchannelLogout' in body) updates.set('oidc_backchannel_logout', body.oidcBackchannelLogout === true ? 'true' : 'false');
       if (typeof body.oidcIssuerUrl === 'string') updates.set('oidc_issuer_url', body.oidcIssuerUrl.trim());
       if (typeof body.oidcClientId === 'string') updates.set('oidc_client_id', body.oidcClientId.trim());
       if (typeof body.oidcClientSecret === 'string' && body.oidcClientSecret.trim()) {
@@ -1049,14 +1517,16 @@ export function createDashboardAuth(options: {
         const issuer = updates.get('oidc_issuer_url') ?? current.oidcIssuerUrl;
         const clientId = updates.get('oidc_client_id') ?? current.oidcClientId;
         const passwordDisabled = (updates.get('disable_password_login') ?? String(isPasswordLoginDisabled())) === 'true';
-        if (!passwordLoginManaged && passwordDisabled && !hasUsablePasskey() && !(issuer && clientId)) return false;
+        if (!passwordLoginManaged && passwordDisabled && !hasAdminPasskey() && !(issuer && clientId)) return false;
         if (!issuer && !clientId && (updates.has('oidc_issuer_url') || updates.has('oidc_client_id'))) updates.set('oidc_client_secret', '');
         database.transaction<void>(() => {
           for (const [key, value] of updates) writeAuthSetting(database, key, value);
         })(undefined);
         return true;
       });
-      if (!saved) return context.json({ error: 'Register a passkey or configure OIDC before disabling password login' }, 400);
+      if (!saved) return context.json({ error: 'Register a passkey for an administrator or configure OIDC before disabling password login' }, 400);
+      // Log right away when this change leaves auto-login enabled but inactive.
+      isOidcAutoLoginActive();
       if (updates.has('oidc_issuer_url') || updates.has('oidc_client_id') || updates.has('oidc_client_secret')) {
         if (oidc.enabled) {
           try {
@@ -1081,6 +1551,9 @@ export function createDashboardAuth(options: {
           oidcReadOnlyGroups: effectiveConfig.oidcReadOnlyGroups.join(','),
           oidcUnmatchedRole: effectiveConfig.oidcUnmatchedRole,
           oidcEndSession: effectiveConfig.oidcEndSession,
+          oidcBackchannelLogout: effectiveConfig.oidcBackchannelLogout,
+          ...getOidcAutoLoginSettings(),
+          managedSettings: getManagedSettings(),
         },
       });
     });
@@ -1098,8 +1571,12 @@ export function createDashboardAuth(options: {
 
       const user = database.getAuthUserById(session.userId);
       if (!user?.password_hash) return context.json({ error: 'No password set for this account' }, 400);
-      if (!await verifyPassword(currentPassword, user.password_hash)) {
-        return context.json({ error: 'Current password is incorrect' }, 401);
+      if (currentPassword.length > 1024) return context.json({ error: 'Current password is incorrect' }, 401);
+      const passwordCheck = await verifyAccountPassword(user.username, currentPassword, user.password_hash);
+      if (passwordCheck.retryAfter !== null) return authThrottleResponse(context, passwordCheck.retryAfter);
+      if (!passwordCheck.valid) return context.json({ error: 'Current password is incorrect' }, 401);
+      if (newPassword === currentPassword) {
+        return context.json({ error: 'New password must be different from the current password' }, 400);
       }
       const passwordError = validatePassword(newPassword);
       if (passwordError) return context.json({ error: passwordError }, 400);
@@ -1110,9 +1587,12 @@ export function createDashboardAuth(options: {
       return context.json({ status: 'ok' });
     });
 
+    registerUserRoutes(auth);
+
     auth.post('/totp/setup', (context) => {
       const session = getSession(context);
       if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
+      if (session.passwordChangeRequired) return passwordChangeRequiredResponse(context);
       if (session.authMethod !== 'password') {
         return context.json({ error: 'Log in with your password before setting up TOTP' }, 403);
       }
@@ -1133,6 +1613,7 @@ export function createDashboardAuth(options: {
     auth.post('/totp/enable', async (context) => {
       const session = getSession(context);
       if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
+      if (session.passwordChangeRequired) return passwordChangeRequiredResponse(context);
       if (session.authMethod !== 'password') {
         return context.json({ error: 'Log in with your password before setting up TOTP' }, 403);
       }
@@ -1151,20 +1632,24 @@ export function createDashboardAuth(options: {
         return context.json({ error: 'Invalid authenticator code' }, 400);
       }
 
+      // Enabling TOTP ends every other session, so one opened before enrollment cannot remove it again.
       await writeDatabase(() => database.updateAuthUserTotp(user.id, encryptSecret(secret, totpSecretEncryptionSecret), true));
       deleteCookie(context, TOTP_SETUP_COOKIE, { path: cookiePath });
+      createSession(context, database.getAuthUserById(user.id)!, 'password');
       return context.json({ status: 'ok', totpEnabled: true });
     });
 
     auth.delete('/totp', async (context) => {
       const session = getSession(context);
       if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
+      if (session.passwordChangeRequired) return passwordChangeRequiredResponse(context);
       if (session.authMethod !== 'password') {
         return context.json({ error: 'Log in with your password before disabling TOTP' }, 403);
       }
 
       const body = asObject(await context.req.json().catch(() => null));
       const currentPassword = typeof body?.currentPassword === 'string' ? body.currentPassword : '';
+      const code = typeof body?.code === 'string' ? normalizeTotpCode(body.code) : '';
       if (!currentPassword) return context.json({ error: 'Current password required' }, 400);
       const user = database.getAuthUserById(session.userId);
       if (!user?.password_hash) return context.json({ error: 'No password set for this account' }, 400);
@@ -1172,10 +1657,18 @@ export function createDashboardAuth(options: {
         return context.json({ error: 'TOTP is managed by the application configuration and cannot be disabled from Settings' }, 400);
       }
       if (!user.totp_enabled || !user.totp_secret) return context.json({ error: 'TOTP is not enabled for this account' }, 400);
-      if (!await verifyPassword(currentPassword, user.password_hash)) {
-        return context.json({ error: 'Current password is incorrect' }, 401);
-      }
+      if (!code) return context.json({ error: 'Authenticator code required' }, 400);
+      if (!isTotpCodeFormatValid(code)) return context.json({ error: 'Invalid authenticator code' }, 400);
+      if (currentPassword.length > 1024) return context.json({ error: 'Current password is incorrect' }, 401);
+      const passwordCheck = await verifyAccountPassword(user.username, currentPassword, user.password_hash);
+      if (passwordCheck.retryAfter !== null) return authThrottleResponse(context, passwordCheck.retryAfter);
+      if (!passwordCheck.valid) return context.json({ error: 'Current password is incorrect' }, 401);
+      // Removing the factor needs the factor itself, not just a session that may predate it.
+      const totpCheck = await verifyAccountTotp(user.id, code, decryptTotpSecret(user.totp_secret));
+      if (totpCheck.retryAfter !== null) return authThrottleResponse(context, totpCheck.retryAfter);
+      if (!totpCheck.valid) return context.json({ error: 'Invalid authenticator code' }, 400);
       await writeDatabase(() => database.updateAuthUserTotp(user.id, null, false));
+      createSession(context, database.getAuthUserById(user.id)!, 'password');
       return context.json({ status: 'ok', totpEnabled: false });
     });
 
@@ -1198,6 +1691,7 @@ export function createDashboardAuth(options: {
     auth.patch('/passkeys/:id', async (context) => {
       const session = getSession(context);
       if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
+      if (session.passwordChangeRequired) return passwordChangeRequiredResponse(context);
       const user = database.getAuthUserById(session.userId);
       if (isOidcOnlyAccount(user)) {
         return context.json({ error: 'Passkeys are unavailable for OIDC-only accounts' }, 403);
@@ -1214,6 +1708,7 @@ export function createDashboardAuth(options: {
     auth.delete('/passkeys/:id', async (context) => {
       const session = getSession(context);
       if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
+      if (session.passwordChangeRequired) return passwordChangeRequiredResponse(context);
       const user = database.getAuthUserById(session.userId);
       if (isOidcOnlyAccount(user)) {
         return context.json({ error: 'Passkeys are unavailable for OIDC-only accounts' }, 403);
@@ -1221,18 +1716,19 @@ export function createDashboardAuth(options: {
       const id = Number(context.req.param('id'));
       const result = await writeDatabase(() => {
         if (!Number.isInteger(id) || !database.listWebAuthnCredentialsByUser(session.userId).some((credential) => credential.id === id)) return 'missing';
-        if (!passwordLoginManaged && isPasswordLoginDisabled() && !oidc.enabled && !hasUsablePasskey(id)) return 'last';
+        if (session.role === 'admin' && wouldLockOutAdministrators({ credentialId: id })) return 'last';
         database.deleteWebAuthnCredential(id, session.userId);
         return 'deleted';
       });
       if (result === 'missing') return context.json({ error: 'Passkey not found' }, 404);
-      if (result === 'last') return context.json({ error: 'Enable password login or configure OIDC before deleting the last passkey' }, 400);
+      if (result === 'last') return context.json({ error: 'Enable password login or configure OIDC before deleting the last administrator passkey' }, 400);
       return context.json({ status: 'ok' });
     });
 
     auth.post('/webauthn/register/options', async (context) => {
       const session = getSession(context);
       if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
+      if (session.passwordChangeRequired) return passwordChangeRequiredResponse(context);
       const user = database.getAuthUserById(session.userId);
       if (!user || isOidcOnlyAccount(user)) {
         return context.json({ error: 'Passkeys cannot be registered for OIDC-only accounts' }, 403);
@@ -1246,6 +1742,7 @@ export function createDashboardAuth(options: {
     auth.post('/webauthn/register/verify', async (context) => {
       const session = getSession(context);
       if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
+      if (session.passwordChangeRequired) return passwordChangeRequiredResponse(context);
       const user = database.getAuthUserById(session.userId);
       if (!user || isOidcOnlyAccount(user)) {
         return context.json({ error: 'Passkeys cannot be registered for OIDC-only accounts' }, 403);
@@ -1298,6 +1795,7 @@ export function createDashboardAuth(options: {
       if (!body || !challenge || !credential) return context.json({ error: 'Credential not found' }, 400);
       const user = database.getAuthUserById(credential.user_id);
       if (!user) return context.json({ error: 'User not found' }, 400);
+      if (user.disabled) return context.json({ error: 'This account is disabled' }, 403);
       if (isOidcOnlyAccount(user)) {
         return context.json({ error: 'This passkey belongs to an OIDC-only account. Sign in with SSO instead.' }, 403);
       }
@@ -1326,23 +1824,35 @@ export function createDashboardAuth(options: {
       const redirectUri = `${origin}${basePath}/api/auth/oidc/callback`;
       const state = crypto.randomUUID();
       const nonce = crypto.randomUUID();
+      const codeVerifier = oidcClient.randomPKCECodeVerifier();
+      const codeChallenge = await oidcClient.calculatePKCECodeChallenge(codeVerifier);
       setShortCookie(context, OIDC_STATE_COOKIE, state, 'Lax');
       setShortCookie(context, OIDC_NONCE_COOKIE, nonce, 'Lax');
+      setShortCookie(context, OIDC_PKCE_COOKIE, codeVerifier, 'Lax');
       setShortCookie(context, OIDC_REDIRECT_COOKIE, redirectUri, 'Lax');
-      return context.redirect(await oidc.authorizationUrl(state, nonce, redirectUri));
+      return context.redirect(await oidc.authorizationUrl(state, nonce, codeChallenge, redirectUri));
     });
 
     auth.get('/oidc/callback', async (context) => {
       if (!enabled || !oidc.enabled) return context.json({ error: 'OIDC not configured' }, 400);
       const nonce = getCookie(context, OIDC_NONCE_COOKIE);
       const state = getCookie(context, OIDC_STATE_COOKIE);
+      const codeVerifier = getCookie(context, OIDC_PKCE_COOKIE);
       const redirectUri = getCookie(context, OIDC_REDIRECT_COOKIE);
+      // The login transaction is single-use, whether or not this callback succeeds.
+      for (const name of [OIDC_STATE_COOKIE, OIDC_NONCE_COOKIE, OIDC_PKCE_COOKIE, OIDC_REDIRECT_COOKIE]) {
+        deleteCookie(context, name, { path: cookiePath });
+      }
+      // Only the browser that started the login may finish it, so no one can sign it in with their own code.
+      if (!nonce || !state || !codeVerifier || !redirectUri) {
+        return context.json({ error: 'OIDC login session expired or missing. Start the sign-in again.' }, 400);
+      }
 
       try {
         const internalUrl = new URL(context.req.url);
-        const callbackUrl = redirectUri ? new URL(redirectUri) : new URL(`${getPublicOrigin(context)}${basePath}/api/auth/oidc/callback`);
+        const callbackUrl = new URL(redirectUri);
         callbackUrl.search = internalUrl.search;
-        const result = await oidc.handleCallback(callbackUrl, nonce, state);
+        const result = await oidc.handleCallback(callbackUrl, { state, nonce, codeVerifier });
         if (!result) return context.json({ error: 'OIDC authentication failed' }, 400);
         if (!result.role) return context.json({ error: 'OIDC user is not authorized' }, 403);
         const oidcUser: OidcUserUpsertParams = {
@@ -1352,7 +1862,7 @@ export function createDashboardAuth(options: {
           subject: result.subject,
         };
         const user = await writeDatabase(() => database.upsertOidcUser(oidcUser));
-        createSession(context, user, 'oidc');
+        createSession(context, user, 'oidc', undefined, result.sessionId);
         // Kept as id_token_hint for RP-initiated logout. Oversized tokens are
         // skipped; logout then falls back to client_id only.
         if (result.idToken && result.idToken.length <= MAX_ID_TOKEN_COOKIE_LENGTH) {
@@ -1366,9 +1876,6 @@ export function createDashboardAuth(options: {
         } else {
           deleteCookie(context, OIDC_ID_TOKEN_COOKIE, { path: cookiePath });
         }
-        deleteCookie(context, OIDC_STATE_COOKIE, { path: cookiePath });
-        deleteCookie(context, OIDC_NONCE_COOKIE, { path: cookiePath });
-        deleteCookie(context, OIDC_REDIRECT_COOKIE, { path: cookiePath });
         return context.redirect(`${getPublicOrigin(context)}${basePath || '/'}`);
       } catch (error) {
         console.error('OIDC callback error:', error);
@@ -1376,11 +1883,39 @@ export function createDashboardAuth(options: {
       }
     });
 
+    // OpenID Connect Back-Channel Logout: the provider calls this directly when an SSO session ends.
+    auth.post('/oidc/backchannel-logout', async (context) => {
+      context.header('Cache-Control', 'no-store');
+      if (!enabled || !oidc.enabled) return context.json({ error: 'invalid_request', error_description: 'OIDC is not configured' }, 400);
+      if (!getEffectiveConfig().oidcBackchannelLogout) {
+        return context.json({ error: 'invalid_request', error_description: 'Back-channel logout is disabled' }, 400);
+      }
+      const body = await context.req.parseBody().catch(() => null);
+      const logoutToken = typeof body?.logout_token === 'string' ? body.logout_token : '';
+      if (!logoutToken) return context.json({ error: 'invalid_request', error_description: 'Missing logout_token' }, 400);
+
+      let identity: Awaited<ReturnType<OidcRuntime['verifyLogoutToken']>>;
+      try {
+        identity = await oidc.verifyLogoutToken(logoutToken);
+      } catch (error) {
+        console.warn(`OIDC back-channel logout failed: ${error instanceof Error ? error.message : String(error)}`);
+        return context.json({ error: 'invalid_request', error_description: 'Logout token could not be verified' }, 400);
+      }
+      if (!identity) return context.json({ error: 'invalid_request', error_description: 'Invalid logout token' }, 400);
+
+      await writeDatabase(() => database.applyOidcLogout({
+        ...identity,
+        sessionExpiresAt: Math.floor(Date.now() / 1000) + OIDC_SESSION_LIFETIME_SECONDS,
+      }));
+      return context.body(null, 200);
+    });
+
     app.route(`${basePath}/api/auth`, auth);
   }
 
   // Surface a config-induced password login fallback at startup instead of on the first login attempt.
   if (enabled) isPasswordLoginConfigFallbackActive();
+  isOidcAutoLoginActive();
 
   // Without password setup, only an OIDC admin group can create the first administrator.
   if (enabled && isPasswordLoginDisabled() && database.countAuthUsers() === 0 && getEffectiveConfig().oidcAdminGroups.length === 0) {

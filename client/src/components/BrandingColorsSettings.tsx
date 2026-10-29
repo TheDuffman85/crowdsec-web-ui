@@ -1,5 +1,5 @@
 import { useState, type CSSProperties } from "react";
-import { AlertTriangle, RotateCcw, Save } from "lucide-react";
+import { AlertTriangle, RotateCcw } from "lucide-react";
 import {
   DEFAULT_ACCENT_COLOR,
   DEFAULT_BRANDING_THEME,
@@ -17,23 +17,17 @@ import {
   type ThemeModeColors,
   type ThemeModeName,
 } from "../../../shared/branding-theme";
-import { updateAppTheme, type PublicBranding } from "../lib/branding";
 import { useI18n } from "../lib/i18n";
 
 interface BrandingColorsSettingsProps {
   theme: BrandingTheme;
-  canManageSettings: boolean;
+  onChange: (theme: BrandingTheme) => void;
+  disabled: boolean;
   inputClass: string;
   labelClass: string;
-  onSaved: (branding: PublicBranding) => void;
-  showToast: (message: string, type: "success" | "danger") => void;
 }
 
 const secondaryButtonClass = "inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800";
-
-function sameTheme(left: BrandingTheme, right: BrandingTheme): boolean {
-  return THEME_MODES.every((mode) => left[mode].accent === right[mode].accent && left[mode].neutral === right[mode].neutral);
-}
 
 /**
  * Previews a mode with explicit (non-`dark:`) classes and every color variable
@@ -76,24 +70,19 @@ function ThemePreview({ theme, mode }: { theme: BrandingTheme; mode: ThemeModeNa
   );
 }
 
+// Edits the theme draft; the Settings page saves it together with the other branding settings.
 export function BrandingColorsSettings({
-  theme: savedTheme,
-  canManageSettings,
+  theme,
+  onChange,
+  disabled,
   inputClass,
   labelClass,
-  onSaved,
-  showToast,
 }: BrandingColorsSettingsProps) {
   const { t } = useI18n();
-  const [draftTheme, setDraftTheme] = useState<BrandingTheme | null>(null);
   const [hexDrafts, setHexDrafts] = useState<Partial<Record<ThemeModeName, string>>>({});
-  const [isSaving, setIsSaving] = useState(false);
-  const theme = draftTheme ?? savedTheme;
-  const hasChange = !sameTheme(theme, savedTheme);
-  const disabled = !canManageSettings || isSaving;
 
   const updateMode = (mode: ThemeModeName, colors: Partial<ThemeModeColors>) => {
-    setDraftTheme({ ...theme, [mode]: { ...theme[mode], ...colors } });
+    onChange({ ...theme, [mode]: { ...theme[mode], ...colors } });
   };
 
   const handleHexChange = (mode: ThemeModeName, value: string) => {
@@ -114,23 +103,8 @@ export function BrandingColorsSettings({
     });
   };
 
-  const handleSave = async () => {
-    setIsSaving(true);
-    try {
-      onSaved(await updateAppTheme(theme));
-      setDraftTheme(null);
-      setHexDrafts({});
-      showToast(t("pages.settings.colorsSaved"), "success");
-    } catch (error) {
-      console.error("Failed to save colors", error);
-      showToast(error instanceof Error ? error.message : t("pages.settings.failedToSaveColors"), "danger");
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
   const handleRestoreDefaults = () => {
-    setDraftTheme(DEFAULT_BRANDING_THEME);
+    onChange(DEFAULT_BRANDING_THEME);
     setHexDrafts({});
   };
 
@@ -243,15 +217,6 @@ export function BrandingColorsSettings({
       </div>
 
       <div className="mt-6 flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={() => void handleSave()}
-          disabled={disabled || !hasChange}
-          className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          <Save className="h-4 w-4" />
-          {isSaving ? t("common.saving") : t("pages.settings.saveColors")}
-        </button>
         <button
           type="button"
           onClick={handleRestoreDefaults}

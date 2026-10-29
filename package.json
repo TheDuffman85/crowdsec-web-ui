@@ -46,6 +46,7 @@
     "better-sqlite3": "13.0.3",
     "hono": "4.13.14",
     "i18next": "^26.5.10",
+    "jose": "^6.2.12",
     "local-reverse-geocoder": "0.16.8",
     "mqtt": "^5.16.1",
     "openid-client": "^6.8.8",

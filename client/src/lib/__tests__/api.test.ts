@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
   addDecision,
+  checkAllowlist,
   bulkDeleteAlerts,
   bulkDeleteNotifications,
   bulkDeleteDecisions,
@@ -17,6 +18,8 @@ import {
   fetchAlerts,
   fetchAlertsPaginated,
   fetchAlertsForStats,
+  fetchAllowlistEntries,
+  fetchAllowlists,
   fetchConfig,
   fetchCombinedCrowdsecMetrics,
   fetchCrowdsecMetrics,
@@ -269,6 +272,32 @@ describe('api helpers', () => {
       message: 'Permission denied.',
       helpText: 'Trusted IPs for Write Operations',
     });
+  });
+
+  test('allowlist helpers encode the value and scope, and addDecision reports allowlist refusals', async () => {
+    const allowlisted = [{ instance_id: 'eu-west', instance_name: 'EU West', reason: '10.0.0.0/8 from office' }];
+    const fetchMock = vi.fn(async (input: Parameters<typeof fetch>[0]) => String(input).includes('/api/decisions')
+      ? Response.json({ error: '10.1.2.3 is allowlisted', code: 'ALLOWLISTED', allowlisted }, { status: 409 })
+      : Response.json({ ok: true }));
+    mockFetch(fetchMock);
+
+    await expect(fetchAllowlists('eu west')).resolves.toEqual({ ok: true });
+    await expect(fetchAllowlists('all', '10.0')).resolves.toEqual({ ok: true });
+    await expect(fetchAllowlistEntries('office/vpn', 'all', 2)).resolves.toEqual({ ok: true });
+    await expect(fetchAllowlistEntries('office', 'east', 1, 100, 'vpn')).resolves.toEqual({ ok: true });
+    await expect(checkAllowlist('10.0.0.0/24', 'all')).resolves.toEqual({ ok: true });
+    await expect(addDecision({ ip: '10.1.2.3' })).rejects.toMatchObject({
+      message: '10.1.2.3 is allowlisted',
+      code: 'ALLOWLISTED',
+      allowlisted,
+    });
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual(expect.arrayContaining([
+      '/api/allowlists?instance=eu+west',
+      '/api/allowlists?instance=all&q=10.0',
+      '/api/allowlists/office%2Fvpn/entries?instance=all&page=2&page_size=50',
+      '/api/allowlists/office/entries?instance=east&page=1&page_size=100&q=vpn',
+      '/api/allowlists/check?value=10.0.0.0%2F24&instance=all',
+    ]));
   });
 
   test('delete and add helpers surface read-only 403 messages without permission metadata', async () => {

@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { I18nProvider } from '../../lib/I18nProvider';
 import { LANGUAGE_SETTING_KEY } from '../../lib/i18n';
+import { setOidcAutoLoginSuppressed } from '../../lib/oidcAutoLogin';
 import { Login } from '../Login';
 
 const { loginMock, refreshMock, useAuthMock } = vi.hoisted(() => ({
@@ -21,33 +22,89 @@ vi.mock('../../lib/api', () => ({
   updateLanguagePreference: vi.fn(async (language: string) => ({ success: true, language })),
 }));
 
+function createAuthState(overrides: Record<string, unknown> = {}) {
+  return {
+    authEnabled: true,
+    setupRequired: false,
+    authenticated: false,
+    user: null,
+    authMethod: null,
+    oidcEnabled: false,
+    oidcAutoLogin: false,
+    passwordLoginDisabled: false,
+    passkeysEnabled: false,
+    hasPassword: true,
+    totpEnabled: false,
+    loading: false,
+    refresh: refreshMock,
+    login: loginMock,
+    setup: vi.fn(),
+    logout: vi.fn(),
+    ...overrides,
+  };
+}
+
 describe('Login', () => {
   beforeEach(() => {
     loginMock.mockReset();
     refreshMock.mockReset();
-    useAuthMock.mockReturnValue({
-      authEnabled: true,
-      setupRequired: false,
-      authenticated: false,
-      user: null,
-      authMethod: null,
-      oidcEnabled: false,
-      passwordLoginDisabled: false,
-      passkeysEnabled: false,
-      hasPassword: true,
-      totpEnabled: false,
-      loading: false,
-      refresh: refreshMock,
-      login: loginMock,
-      setup: vi.fn(),
-      logout: vi.fn(),
-    });
+    useAuthMock.mockReturnValue(createAuthState());
   });
 
   afterEach(async () => {
     cleanup();
     localStorage.clear();
+    sessionStorage.clear();
+    vi.unstubAllGlobals();
     await i18next.changeLanguage('en');
+  });
+
+  function renderWithAutoLogin(overrides: Record<string, unknown> = {}, initialEntry = '/login') {
+    const replace = vi.fn();
+    vi.stubGlobal('location', { ...window.location, replace });
+    useAuthMock.mockReturnValue(createAuthState({
+      oidcEnabled: true,
+      oidcAutoLogin: true,
+      passwordLoginDisabled: true,
+      ...overrides,
+    }));
+    render(
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <Login />
+      </MemoryRouter>,
+    );
+    return replace;
+  }
+
+  test('redirects to the identity provider when auto-login is active', async () => {
+    const replace = renderWithAutoLogin();
+
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/api/auth/oidc/login'));
+    expect(screen.getByRole('status')).toHaveTextContent('Redirecting to single sign-on…');
+    expect(screen.getByRole('link', { name: 'Continue with SSO' })).toBeInTheDocument();
+  });
+
+  test('stays on the login page when auto-login is inactive', async () => {
+    const replace = renderWithAutoLogin({ oidcAutoLogin: false });
+
+    expect(await screen.findByRole('link', { name: 'Continue with SSO' })).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  test('stays on the login page when opened with ?local=1', async () => {
+    const replace = renderWithAutoLogin({}, '/login?local=1');
+
+    expect(await screen.findByRole('link', { name: 'Continue with SSO' })).toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  test('stays on the login page right after a logout', async () => {
+    setOidcAutoLoginSuppressed(true);
+    const replace = renderWithAutoLogin();
+
+    expect(await screen.findByRole('link', { name: 'Continue with SSO' })).toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
   });
 
   test('uses the stored language preference for login copy', async () => {

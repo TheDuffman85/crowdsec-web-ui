@@ -24,6 +24,11 @@ import {
   normalizeLoadTestBlocklistDecisionCounts,
   withoutLoadTestListAlertAddress,
 } from './load-test-shape';
+import {
+  buildLoadTestAllowlists,
+  createLoadTestAllowlistMatcher,
+  withoutExpiredLoadTestAllowlistItems,
+} from './load-test-allowlists';
 
 const LOADTEST_SOURCE_TABLE = 'loadtest_alert_source';
 installTimestampedConsole();
@@ -57,6 +62,7 @@ if (refreshDecisionMaxPerAlert > 0 && refreshDecisionMaxPerAlert < refreshDecisi
 const useVariableRefreshDecisions = refreshDecisionMaxPerAlert > 0;
 const refreshDecisionOrigins = parseOriginListEnv('LOADTEST_REFRESH_DECISION_ORIGINS');
 const loadTestSeed = parseIntegerEnv('LOADTEST_SEED', 1337);
+const allowlistSizes = parseIntegerListEnv('LOADTEST_ALLOWLIST_SIZES') ?? [];
 const activeDecisionRatio = parseRatioEnv('LOADTEST_ACTIVE_DECISION_RATIO', 0.7);
 const simulationRatio = parseRatioEnv('LOADTEST_SIMULATION_RATIO', 0.1);
 
@@ -122,6 +128,7 @@ ensureLoadTestSourceTable(database);
 
 const dynamicAlerts = new Map<string, AlertRecord>();
 const loadTestStartedAt = Date.now();
+const loadTestAllowlists = createLoadTestAllowlistSources();
 
 // This is a raw Prometheus scrape reconstructed from a representative
 // /api/metrics/crowdsec response. Keep the fixture complete so every metrics
@@ -474,6 +481,30 @@ function parseOriginListEnv(name: string): string[] {
     .map((origin) => origin.trim())
     .filter(Boolean);
   return origins;
+}
+
+function createLoadTestAllowlistSources() {
+  const instanceIds = multiInstanceProfile ? ['primary', 'secondary', 'edge'] : [config.instances[0].id];
+  const startedAt = Date.now();
+  const sources = new Map(instanceIds.map((instanceId, instanceIndex) => {
+    const allowlists = buildLoadTestAllowlists({ sizes: allowlistSizes, seed: loadTestSeed, nowMs: loadTestStartedAt, instanceIndex });
+    return [instanceId, { allowlists, check: createLoadTestAllowlistMatcher(allowlists) }];
+  }));
+  if (allowlistSizes.length > 0) {
+    const entryCount = Array.from(sources.values()).reduce((sum, source) => (
+      sum + source.allowlists.reduce((listSum, allowlist) => listSum + (allowlist.items?.length || 0), 0)
+    ), 0);
+    console.log(`[loadtest] Generated ${allowlistSizes.length} allowlists per instance with ${entryCount.toLocaleString('en-US')} entries in total in ${formatElapsed(Date.now() - startedAt)}.`);
+  }
+  return sources;
+}
+
+function fetchLoadTestAllowlists(instanceId: string) {
+  return withoutExpiredLoadTestAllowlistItems(loadTestAllowlists.get(instanceId)?.allowlists || [], Date.now());
+}
+
+function checkLoadTestAllowlist(instanceId: string, value: string) {
+  return loadTestAllowlists.get(instanceId)?.check(value) || { allowlisted: false };
 }
 
 function ensureLoadTestSourceTable(database: CrowdsecDatabase): void {
@@ -1041,6 +1072,14 @@ function createNamedFakeLapiClient(instanceId: string, tableName: string) {
       if (shouldFail) throw new Error('Synthetic failing LAPI');
       return { message: `Decision added on ${instanceId}` };
     },
+    fetchAllowlists: async () => {
+      if (shouldFail) throw new Error('Synthetic failing LAPI');
+      return fetchLoadTestAllowlists(instanceId);
+    },
+    checkAllowlist: async (value: string) => {
+      if (shouldFail) throw new Error('Synthetic failing LAPI');
+      return checkLoadTestAllowlist(instanceId, value);
+    },
     deleteDecision: async () => {
       if (shouldFail) throw new Error('Synthetic failing LAPI');
       return { message: `Decision deleted on ${instanceId}` };
@@ -1111,6 +1150,8 @@ const fakeLapiClient = {
     const snapshot = database.getAlertDecisionSnapshot(alertId);
     return snapshot ? JSON.parse(snapshot.raw_data) : null;
   },
+  fetchAllowlists: async () => fetchLoadTestAllowlists(config.instances[0].id),
+  checkAllowlist: async (value: string) => checkLoadTestAllowlist(config.instances[0].id, value),
   addDecision: async (
     ip: string,
     type: string,

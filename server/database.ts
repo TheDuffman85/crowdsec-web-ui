@@ -41,12 +41,18 @@ export const CACHE_DATABASE_FILE = 'cache.db';
 export const STATE_DATABASE_FILE = 'state.db';
 const LEGACY_DATABASE_FILE = 'crowdsec.db';
 const STATE_SCHEMA = 'state';
+export const INITIAL_OIDC_LOGOUT_VERSION = 1;
+export const OIDC_END_SESSION_LEGACY_DEFAULT_KEY = 'auth_oidc_end_session_legacy_default';
 // Settings that must survive losing cache.db. They are stored in state.db; every other
 // meta key is cache bookkeeping that stays in cache.db.
+/** Per-instance allowlist sync state: `<prefix><instance id>` holds JSON with the status and snapshot hash. */
+export const ALLOWLIST_SYNC_META_PREFIX = 'allowlist_sync:';
+
 const STATE_SETTING_KEYS = new Set([
   'notification_secret_key',
   'language',
   'metrics_sidebar_visible',
+  'allowlists_sidebar_visible',
   'manual_decision_scenarios',
   'refresh_interval_ms',
   'manual_refresh_enabled',
@@ -182,6 +188,24 @@ export interface DecisionUpdateParams {
   $raw_data: string;
 }
 
+export interface CachedAllowlistItem {
+  value: string;
+  description?: string;
+  created_at?: string;
+  /** Null when the entry never expires. */
+  expiration: string | null;
+}
+
+export interface CachedAllowlist {
+  name: string;
+  allowlist_id?: string;
+  description?: string;
+  created_at?: string;
+  updated_at?: string;
+  console_managed: boolean;
+  items: CachedAllowlistItem[];
+}
+
 export interface SearchIndexRebuildScope {
   alertIds: Array<string | number>;
   decisionIds: Array<string | number>;
@@ -307,8 +331,14 @@ export interface AuthUserRow {
   oidc_issuer: string | null;
   oidc_subject: string | null;
   session_version: number;
+  disabled: number;
+  password_change_required: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface AuthUserListRow extends AuthUserRow {
+  passkey_count: number;
 }
 
 export interface OidcUserUpsertParams {
@@ -379,6 +409,17 @@ export class CrowdsecDatabase {
   private readonly updateAuthUserTotpLastStepStatement: any;
   private readonly createOidcUserStatement: any;
   private readonly updateOidcUserStatement: any;
+  private readonly revokeOidcUserSessionsStatement: any;
+  private readonly insertRevokedOidcSessionStatement: any;
+  private readonly pruneRevokedOidcSessionsStatement: any;
+  private readonly getRevokedOidcSessionStatement: any;
+  private readonly insertRevokedAuthSessionStatement: any;
+  private readonly pruneRevokedAuthSessionsStatement: any;
+  private readonly getRevokedAuthSessionStatement: any;
+  private readonly insertProcessedOidcLogoutStatement: any;
+  private readonly pruneProcessedOidcLogoutsStatement: any;
+  private readonly bumpOidcLogoutVersionStatement: any;
+  private readonly getOidcLogoutVersionStatement: any;
   private readonly listWebAuthnCredentialsByUserStatement: any;
   private readonly countWebAuthnCredentialsStatement: any;
   private readonly createWebAuthnCredentialStatement: any;
@@ -681,8 +722,8 @@ export class CrowdsecDatabase {
     this.setSettingStatement = this.stateQuery('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
     this.countAuthUsersStatement = this.stateQuery('SELECT COUNT(*) as count FROM auth_users');
     this.createAuthUserStatement = this.stateQuery(`
-      INSERT INTO auth_users (username, password_hash, role, auth_provider, created_at, updated_at)
-      VALUES ($username, $password_hash, $role, $auth_provider, $created_at, $updated_at)
+      INSERT INTO auth_users (username, password_hash, role, auth_provider, password_change_required, created_at, updated_at)
+      VALUES ($username, $password_hash, $role, $auth_provider, $password_change_required, $created_at, $updated_at)
     `);
     this.getAuthUserByIdStatement = this.stateQuery('SELECT * FROM auth_users WHERE id = $id');
     this.getAuthUserByUsernameStatement = this.stateQuery('SELECT * FROM auth_users WHERE username = $username');
@@ -693,13 +734,18 @@ export class CrowdsecDatabase {
     this.updateAuthUserPasswordStatement = this.stateQuery(`
       UPDATE auth_users
       SET password_hash = $password_hash,
+          password_change_required = 0,
           session_version = session_version + 1,
           updated_at = $updated_at
       WHERE id = $id
     `);
     this.updateAuthUserTotpStatement = this.stateQuery(`
       UPDATE auth_users
-      SET totp_secret = $totp_secret, totp_enabled = $totp_enabled, totp_last_step = $totp_last_step, updated_at = $updated_at
+      SET totp_secret = $totp_secret,
+          totp_enabled = $totp_enabled,
+          totp_last_step = $totp_last_step,
+          session_version = session_version + 1,
+          updated_at = $updated_at
       WHERE id = $id
     `);
     this.updateAuthUserTotpLastStepStatement = this.stateQuery(`
@@ -724,6 +770,44 @@ export class CrowdsecDatabase {
           updated_at = $updated_at
       WHERE id = $id
     `);
+    this.revokeOidcUserSessionsStatement = this.stateQuery(`
+      UPDATE auth_users
+      SET session_version = session_version + 1,
+          updated_at = $updated_at
+      WHERE oidc_issuer = $oidc_issuer AND oidc_subject = $oidc_subject
+    `);
+    this.insertRevokedOidcSessionStatement = this.stateQuery(`
+      INSERT OR REPLACE INTO oidc_revoked_sessions (issuer, session_id, expires_at)
+      VALUES ($issuer, $session_id, $expires_at)
+    `);
+    this.pruneRevokedOidcSessionsStatement = this.stateQuery('DELETE FROM oidc_revoked_sessions WHERE expires_at <= $now');
+    this.getRevokedOidcSessionStatement = this.stateQuery(`
+      SELECT 1 FROM oidc_revoked_sessions
+      WHERE issuer = $issuer AND session_id = $session_id AND expires_at > $now
+    `);
+    this.insertRevokedAuthSessionStatement = this.stateQuery(`
+      INSERT OR REPLACE INTO revoked_auth_sessions (session_id, expires_at)
+      VALUES ($session_id, $expires_at)
+    `);
+    this.pruneRevokedAuthSessionsStatement = this.stateQuery('DELETE FROM revoked_auth_sessions WHERE expires_at <= $now');
+    this.getRevokedAuthSessionStatement = this.stateQuery(`
+      SELECT 1 FROM revoked_auth_sessions
+      WHERE session_id = $session_id AND expires_at > $now
+    `);
+    this.insertProcessedOidcLogoutStatement = this.stateQuery(`
+      INSERT OR IGNORE INTO oidc_processed_logouts (issuer, token_id, expires_at)
+      VALUES ($issuer, $token_id, $expires_at)
+    `);
+    this.pruneProcessedOidcLogoutsStatement = this.stateQuery('DELETE FROM oidc_processed_logouts WHERE expires_at <= $now');
+    this.bumpOidcLogoutVersionStatement = this.stateQuery(`
+      INSERT INTO oidc_logout_versions (issuer, subject, version)
+      SELECT $issuer, $subject, ${INITIAL_OIDC_LOGOUT_VERSION + 1}
+      WHERE EXISTS (SELECT 1 FROM auth_users WHERE oidc_issuer = $issuer AND oidc_subject = $subject)
+      ON CONFLICT (issuer, subject) DO UPDATE SET version = version + 1
+    `);
+    this.getOidcLogoutVersionStatement = this.stateQuery(`
+      SELECT version FROM oidc_logout_versions WHERE issuer = $issuer AND subject = $subject
+    `);
     this.listWebAuthnCredentialsByUserStatement = this.stateQuery(`
       SELECT * FROM webauthn_credentials
       WHERE user_id = $user_id
@@ -733,7 +817,7 @@ export class CrowdsecDatabase {
       SELECT COUNT(*) as count
       FROM webauthn_credentials credentials
       JOIN auth_users users ON users.id = credentials.user_id
-      WHERE users.auth_provider <> 'oidc' OR users.password_hash IS NOT NULL
+      WHERE users.disabled = 0 AND (users.auth_provider <> 'oidc' OR users.password_hash IS NOT NULL)
     `);
     this.createWebAuthnCredentialStatement = this.stateQuery(`
       INSERT INTO webauthn_credentials (user_id, credential_id, public_key, sign_count, transports, name, created_at)
@@ -921,6 +1005,9 @@ export class CrowdsecDatabase {
     try {
       this.db.exec('DELETE FROM alerts');
       this.db.exec('DELETE FROM decisions');
+      this.db.exec('DELETE FROM allowlists');
+      this.db.exec('DELETE FROM allowlist_items');
+      this.db.exec(`DELETE FROM meta WHERE key LIKE '${ALLOWLIST_SYNC_META_PREFIX}%'`);
       this.decisionDuplicateFlagsDirty = true;
       this.decisionDuplicateFlagsInitialized = false;
       this.lastDecisionDuplicateRefreshAt = null;
@@ -1479,6 +1566,89 @@ export class CrowdsecDatabase {
     return changes;
   }
 
+  /**
+   * Makes one instance's cached allowlists match a complete LAPI snapshot,
+   * writing only rows that were added, changed, or removed, and stores the
+   * instance's sync state with them. A null snapshot only updates the state.
+   */
+  replaceAllowlists(instanceId: string, allowlists: CachedAllowlist[] | null, syncState: string): { changed: boolean } {
+    let changed = false;
+    const replace = this.db.transaction(() => {
+      this.setMeta(`${ALLOWLIST_SYNC_META_PREFIX}${instanceId}`, syncState);
+      if (!allowlists) return;
+      const cachedLists = new Map((this.db.prepare(`
+        SELECT name, allowlist_id, description, created_at, updated_at, console_managed
+        FROM allowlists WHERE instance_id = ?
+      `).all(instanceId) as Array<Record<string, string | number | null>>).map((row) => [String(row.name), row]));
+      const upsertList = this.db.prepare(`
+        INSERT INTO allowlists (instance_id, name, allowlist_id, description, created_at, updated_at, console_managed)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(instance_id, name) DO UPDATE SET
+          allowlist_id = excluded.allowlist_id,
+          description = excluded.description,
+          created_at = excluded.created_at,
+          updated_at = excluded.updated_at,
+          console_managed = excluded.console_managed
+      `);
+      for (const allowlist of allowlists) {
+        const values = [
+          allowlist.allowlist_id ?? null,
+          allowlist.description ?? null,
+          allowlist.created_at ?? null,
+          allowlist.updated_at ?? null,
+          allowlist.console_managed ? 1 : 0,
+        ];
+        const cached = cachedLists.get(allowlist.name);
+        cachedLists.delete(allowlist.name);
+        if (cached && [cached.allowlist_id, cached.description, cached.created_at, cached.updated_at, cached.console_managed]
+          .every((value, index) => value === values[index])) continue;
+        upsertList.run(instanceId, allowlist.name, ...values);
+        changed = true;
+      }
+      const deleteList = this.db.prepare('DELETE FROM allowlists WHERE instance_id = ? AND name = ?');
+      const deleteListItems = this.db.prepare('DELETE FROM allowlist_items WHERE instance_id = ? AND allowlist_name = ?');
+      for (const name of cachedLists.keys()) {
+        deleteList.run(instanceId, name);
+        deleteListItems.run(instanceId, name);
+        changed = true;
+      }
+
+      const cachedItems = new Map<string, Record<string, string | null>>();
+      for (const row of this.db.prepare(`
+        SELECT allowlist_name, value, description, created_at, expiration
+        FROM allowlist_items WHERE instance_id = ?
+      `).all(instanceId) as Array<Record<string, string | null>>) {
+        cachedItems.set(`${row.allowlist_name}\u0000${row.value}`, row);
+      }
+      const upsertItem = this.db.prepare(`
+        INSERT INTO allowlist_items (instance_id, allowlist_name, value, description, created_at, expiration)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(instance_id, allowlist_name, value) DO UPDATE SET
+          description = excluded.description,
+          created_at = excluded.created_at,
+          expiration = excluded.expiration
+      `);
+      for (const allowlist of allowlists) {
+        for (const item of allowlist.items) {
+          const key = `${allowlist.name}\u0000${item.value}`;
+          const values = [item.description ?? null, item.created_at ?? null, item.expiration];
+          const cached = cachedItems.get(key);
+          cachedItems.delete(key);
+          if (cached && cached.description === values[0] && cached.created_at === values[1] && cached.expiration === values[2]) continue;
+          upsertItem.run(instanceId, allowlist.name, item.value, ...values);
+          changed = true;
+        }
+      }
+      const deleteItem = this.db.prepare('DELETE FROM allowlist_items WHERE instance_id = ? AND allowlist_name = ? AND value = ?');
+      for (const row of cachedItems.values()) {
+        deleteItem.run(instanceId, row.allowlist_name, row.value);
+        changed = true;
+      }
+    });
+    replace();
+    return { changed };
+  }
+
   getDecisionById(id: string | number): DecisionDataRow | null {
     return (this.getDecisionByIdStatement.get({ $id: String(id) }) as DecisionDataRow | null) || null;
   }
@@ -1986,6 +2156,7 @@ export class CrowdsecDatabase {
     passwordHash: string | null;
     role: 'admin' | 'read-only';
     authProvider: 'password' | 'oidc';
+    passwordChangeRequired?: boolean;
   }): number {
     const now = new Date().toISOString();
     const result = this.createAuthUserStatement.run({
@@ -1993,6 +2164,7 @@ export class CrowdsecDatabase {
       $password_hash: params.passwordHash,
       $role: params.role,
       $auth_provider: params.authProvider,
+      $password_change_required: params.passwordChangeRequired ? 1 : 0,
       $created_at: now,
       $updated_at: now,
     }) as { lastInsertRowid?: number | bigint };
@@ -2013,6 +2185,81 @@ export class CrowdsecDatabase {
       $password_hash: passwordHash,
       $updated_at: new Date().toISOString(),
     }).changes > 0;
+  }
+
+  listAuthUsers(): AuthUserListRow[] {
+    return this.db.prepare(`
+      SELECT users.*, (SELECT COUNT(*) FROM webauthn_credentials credentials WHERE credentials.user_id = users.id) AS passkey_count
+      FROM auth_users users
+      ORDER BY users.username COLLATE NOCASE, users.id
+    `).all() as AuthUserListRow[];
+  }
+
+  /** Counts administrators who can still sign in, optionally leaving one account out. */
+  countActiveAdmins(excludingId?: number): number {
+    return (this.db.prepare(`
+      SELECT COUNT(*) AS count FROM auth_users WHERE role = 'admin' AND disabled = 0 AND id <> ?
+    `).get(excludingId ?? -1) as CountRow).count;
+  }
+
+  updateAuthUserRole(id: number, role: 'admin' | 'read-only'): boolean {
+    return this.db.prepare('UPDATE auth_users SET role = ?, updated_at = ? WHERE id = ?')
+      .run(role, new Date().toISOString(), id).changes > 0;
+  }
+
+  /** Disabling an account also ends its sessions. */
+  setAuthUserDisabled(id: number, disabled: boolean): boolean {
+    return this.db.prepare(`
+      UPDATE auth_users
+      SET disabled = ?,
+          session_version = CASE WHEN ? = 1 THEN session_version + 1 ELSE session_version END,
+          updated_at = ?
+      WHERE id = ?
+    `).run(disabled ? 1 : 0, disabled ? 1 : 0, new Date().toISOString(), id).changes > 0;
+  }
+
+  /** Sets a password chosen by an administrator and ends the account's sessions. */
+  resetAuthUserPassword(id: number, passwordHash: string, changeRequired: boolean): boolean {
+    return this.db.prepare(`
+      UPDATE auth_users
+      SET password_hash = ?, password_change_required = ?, session_version = session_version + 1, updated_at = ?
+      WHERE id = ?
+    `).run(passwordHash, changeRequired ? 1 : 0, new Date().toISOString(), id).changes > 0;
+  }
+
+  /** Removes the account's TOTP secret and passkeys and ends its sessions. */
+  resetAuthUserSecondFactors(id: number): boolean {
+    return this.db.transaction(() => {
+      this.db.prepare('DELETE FROM webauthn_credentials WHERE user_id = ?').run(id);
+      return this.db.prepare(`
+        UPDATE auth_users
+        SET totp_secret = NULL, totp_enabled = 0, totp_last_step = NULL, session_version = session_version + 1, updated_at = ?
+        WHERE id = ?
+      `).run(new Date().toISOString(), id).changes > 0;
+    })();
+  }
+
+  /** Deletes an account together with its passkeys, preferences and saved search filters. */
+  deleteAuthUser(id: number): boolean {
+    return this.db.transaction(() => {
+      this.db.prepare('DELETE FROM webauthn_credentials WHERE user_id = ?').run(id);
+      this.db.prepare('DELETE FROM user_preferences WHERE user_id = ?').run(id);
+      this.db.prepare('DELETE FROM saved_search_filters WHERE owner_id = ?').run(id);
+      this.db.prepare('DELETE FROM recent_search_filters WHERE owner_id = ?').run(id);
+      return this.db.prepare('DELETE FROM auth_users WHERE id = ?').run(id).changes > 0;
+    })();
+  }
+
+  getUserPreferences(userId: number): Record<string, string> {
+    const rows = this.db.prepare('SELECT key, value FROM user_preferences WHERE user_id = ?').all(userId) as Array<{ key: string; value: string }>;
+    return Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  }
+
+  setUserPreference(userId: number, key: string, value: string): void {
+    this.db.prepare(`
+      INSERT INTO user_preferences (user_id, key, value) VALUES (?, ?, ?)
+      ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value
+    `).run(userId, key, value);
   }
 
   updateAuthUserTotp(id: number, secret: string | null, enabled: boolean): boolean {
@@ -2081,6 +2328,84 @@ export class CrowdsecDatabase {
       $updated_at: now,
     });
     return this.getAuthUserById(user.id)!;
+  }
+
+  /** Atomically records a logout event and revokes its sessions, so retries cannot revoke later sign-ins. */
+  applyOidcLogout(params: {
+    issuer: string;
+    subject?: string;
+    sessionId?: string;
+    tokenId: string;
+    tokenExpiresAt: number;
+    sessionExpiresAt: number;
+  }): void {
+    this.db.transaction(() => {
+      this.pruneProcessedOidcLogoutsStatement.run({ $now: Math.floor(Date.now() / 1000) });
+      const inserted = this.insertProcessedOidcLogoutStatement.run({
+        $issuer: params.issuer,
+        $token_id: params.tokenId,
+        $expires_at: params.tokenExpiresAt,
+      });
+      if (!inserted.changes) return;
+
+      // sid narrows the logout even when the provider also supplies sub. Sessions that carry
+      // no sid cannot be matched to the provider session, so those of the named user end too.
+      if (params.sessionId) {
+        this.revokeOidcSession(params.issuer, params.sessionId, params.sessionExpiresAt);
+        if (params.subject) this.bumpOidcLogoutVersion(params.issuer, params.subject);
+      } else if (params.subject) {
+        this.revokeOidcUserSessions(params.issuer, params.subject);
+      } else {
+        throw new Error('OIDC logout requires a subject or session ID');
+      }
+    })();
+  }
+
+  /** Ends every dashboard session of an OIDC identity by bumping its session version. */
+  revokeOidcUserSessions(issuer: string, subject: string): boolean {
+    return this.revokeOidcUserSessionsStatement.run({
+      $oidc_issuer: issuer,
+      $oidc_subject: subject,
+      $updated_at: new Date().toISOString(),
+    }).changes > 0;
+  }
+
+  /** Records a provider session ID as logged out until the dashboard sessions bound to it have expired. */
+  revokeOidcSession(issuer: string, sessionId: string, expiresAt: number): void {
+    this.pruneRevokedOidcSessionsStatement.run({ $now: Math.floor(Date.now() / 1000) });
+    this.insertRevokedOidcSessionStatement.run({ $issuer: issuer, $session_id: sessionId, $expires_at: expiresAt });
+  }
+
+  /** Ends the OIDC sessions of an identity that are not bound to a provider session ID. */
+  bumpOidcLogoutVersion(issuer: string, subject: string): void {
+    this.bumpOidcLogoutVersionStatement.run({ $issuer: issuer, $subject: subject });
+  }
+
+  /** Version that new sessions without a provider session ID are bound to; absent rows are the initial version. */
+  getOidcLogoutVersion(issuer: string, subject: string): number {
+    const row = this.getOidcLogoutVersionStatement.get({ $issuer: issuer, $subject: subject }) as { version: number } | null;
+    return row?.version ?? INITIAL_OIDC_LOGOUT_VERSION;
+  }
+
+  isOidcSessionRevoked(issuer: string, sessionId: string): boolean {
+    return Boolean(this.getRevokedOidcSessionStatement.get({
+      $issuer: issuer,
+      $session_id: sessionId,
+      $now: Math.floor(Date.now() / 1000),
+    }));
+  }
+
+  /** Records a dashboard session as logged out until every token of it has expired. */
+  revokeAuthSession(sessionId: string, expiresAt: number): void {
+    this.pruneRevokedAuthSessionsStatement.run({ $now: Math.floor(Date.now() / 1000) });
+    this.insertRevokedAuthSessionStatement.run({ $session_id: sessionId, $expires_at: expiresAt });
+  }
+
+  isAuthSessionRevoked(sessionId: string): boolean {
+    return Boolean(this.getRevokedAuthSessionStatement.get({
+      $session_id: sessionId,
+      $now: Math.floor(Date.now() / 1000),
+    }));
   }
 
   listWebAuthnCredentialsByUser(userId: number): WebAuthnCredentialRow[] {
@@ -2715,6 +3040,30 @@ function initCacheSchema(db: Database): boolean {
     CREATE TABLE IF NOT EXISTS alert_deletion_tombstones (
       alert_id TEXT PRIMARY KEY
     );
+
+    CREATE TABLE IF NOT EXISTS allowlists (
+      instance_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      allowlist_id TEXT,
+      description TEXT,
+      created_at TEXT,
+      updated_at TEXT,
+      console_managed INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (instance_id, name)
+    ) WITHOUT ROWID;
+
+    CREATE TABLE IF NOT EXISTS allowlist_items (
+      instance_id TEXT NOT NULL,
+      allowlist_name TEXT NOT NULL,
+      value TEXT NOT NULL,
+      description TEXT,
+      created_at TEXT,
+      expiration TEXT,
+      PRIMARY KEY (instance_id, allowlist_name, value)
+    ) WITHOUT ROWID;
+
+    CREATE INDEX IF NOT EXISTS idx_allowlist_items_name_created
+      ON allowlist_items(allowlist_name, created_at DESC, value);
   `);
   // A refresh drops the secondary indexes while it bulk-loads and recreates them afterwards.
   // Recreate them here too in case the previous process stopped in between.
@@ -2746,6 +3095,8 @@ function initStateSchema(db: Database, schema: string, fresh: boolean): void {
       oidc_issuer TEXT,
       oidc_subject TEXT,
       session_version INTEGER NOT NULL DEFAULT 1,
+      disabled INTEGER NOT NULL DEFAULT 0,
+      password_change_required INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -2765,6 +3116,40 @@ function initStateSchema(db: Database, schema: string, fresh: boolean): void {
       created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS ${schema}.idx_webauthn_credentials_user_id ON webauthn_credentials(user_id);
+
+    CREATE TABLE IF NOT EXISTS ${schema}.user_preferences (
+      user_id INTEGER NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      PRIMARY KEY (user_id, key)
+    );
+
+    CREATE TABLE IF NOT EXISTS ${schema}.oidc_revoked_sessions (
+      issuer TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      PRIMARY KEY (issuer, session_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS ${schema}.revoked_auth_sessions (
+      session_id TEXT PRIMARY KEY,
+      expires_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS ${schema}.oidc_processed_logouts (
+      issuer TEXT NOT NULL,
+      token_id TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      PRIMARY KEY (issuer, token_id)
+    );
+    CREATE INDEX IF NOT EXISTS ${schema}.idx_oidc_processed_logouts_expiry ON oidc_processed_logouts(expires_at);
+
+    CREATE TABLE IF NOT EXISTS ${schema}.oidc_logout_versions (
+      issuer TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      PRIMARY KEY (issuer, subject)
+    );
 
     CREATE TABLE IF NOT EXISTS ${schema}.notification_channels (
       id TEXT PRIMARY KEY,
@@ -2853,9 +3238,20 @@ function initStateSchema(db: Database, schema: string, fresh: boolean): void {
     CREATE INDEX IF NOT EXISTS ${schema}.idx_pending_alert_deletions_due
       ON pending_alert_deletions(completed_at, delete_after, requested_at);
   `);
+  // Columns added after auth_users was introduced.
+  const authUserColumns = (db.prepare(`PRAGMA ${schema}.table_info(auth_users)`).all() as Array<{ name: string }>)
+    .map((column) => column.name);
+  for (const column of ['disabled', 'password_change_required']) {
+    if (!authUserColumns.includes(column)) {
+      db.exec(`ALTER TABLE ${schema}.auth_users ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
+    }
+  }
   // Only new installations enable authentication by default; migrated ones keep their previous state.
   db.prepare(`INSERT OR IGNORE INTO ${schema}.settings (key, value) VALUES ('auth_existing_install_default_disabled', ?)`)
     .run(fresh ? 'false' : 'true');
+  // Existing installations are resolved on startup, once the effective OIDC configuration is known.
+  db.prepare(`INSERT OR IGNORE INTO ${schema}.settings (key, value) VALUES ('${OIDC_END_SESSION_LEGACY_DEFAULT_KEY}', ?)`)
+    .run(fresh ? 'false' : 'pending');
 }
 
 // Before the split, everything lived in crowdsec.db. Its durable data, including queued

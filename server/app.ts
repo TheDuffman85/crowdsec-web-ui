@@ -68,6 +68,7 @@ import { DatabaseQueryWorker, QueryWorkerTimeoutError } from './query-worker-cli
 import { registerApiRoutes } from './app/api-routes';
 import { registerSavedFilterRoutes } from './app/saved-filters';
 import { registerBrandingRoutes } from './app/branding-routes';
+import { createAllowlistService, registerAllowlistRoutes, type AllowlistService } from './app/allowlists';
 import { applyBrandingToIndexHtml, getPublicBranding, serializeBrandingForScript } from './branding';
 import { createQueryService } from './app/query-service';
 import { createDeletionService } from './app/deletion-service';
@@ -85,10 +86,12 @@ import type {
 import {
   loadManualDecisionScenarios,
   loadMetricsSidebarVisible,
+  loadAllowlistsSidebarVisible,
   loadPersistedConfig,
   resolveNotificationSecretKey,
   saveManualDecisionScenarios,
   saveMetricsSidebarVisible,
+  saveAllowlistsSidebarVisible,
   savePersistedConfig,
 } from './app/preferences';
 import {
@@ -229,7 +232,7 @@ export interface CreateAppOptions {
     | 'setMeta'
     | 'runExclusive'
     | 'close'
-  > & Partial<Pick<DatabaseSyncWorker, 'compareAlertDecisions' | 'runTransaction' | 'runIncrementalVacuum'>>;
+  > & Partial<Pick<DatabaseSyncWorker, 'compareAlertDecisions' | 'runTransaction' | 'runIncrementalVacuum' | 'replaceAllowlists'>>;
   attackLocationResolver?: AttackLocationResolver;
 }
 
@@ -373,6 +376,11 @@ function readUpdateCheckOverrides(query: Record<string, string | string[]>): Upd
   };
 }
 
+function describeSettingSource(managed: boolean, saved: unknown): string {
+  if (managed) return 'managed by application config';
+  return saved !== undefined ? 'from saved config' : 'from startup configuration';
+}
+
 function readSingleQueryValue(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) {
     return value[0];
@@ -509,6 +517,9 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     basePath: config.basePath,
     instanceReadOnly: config.readOnly,
     writeDatabase: (operation) => syncWorker.runExclusive(operation),
+    configEnvironmentOverrides: config.configEnvironmentOverrides,
+    // The audit logger needs the auth module to name the actor, so it is created afterwards.
+    recordAudit: (context, event) => auditLog.record(context, event),
   });
   const auditLog = createAuditLogger({
     enabled: config.auditEnabled,
@@ -608,12 +619,20 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   const onDemandRefreshPreparedContextKey = 'onDemandRefreshPrepared';
 
   const persistedConfig = loadPersistedConfig(database);
-  let refreshIntervalMs = persistedConfig.refresh_interval_ms ?? config.refreshIntervalMs;
-  let manualRefreshEnabled = persistedConfig.manual_refresh_enabled ?? config.manualRefreshEnabled;
+  // Values set by the application config win over values saved in Settings.
+  const savedRefreshIntervalMs = config.refreshIntervalManaged ? undefined : persistedConfig.refresh_interval_ms;
+  const savedManualRefreshEnabled = config.manualRefreshEnabledManaged ? undefined : persistedConfig.manual_refresh_enabled;
+  let refreshIntervalMs = savedRefreshIntervalMs ?? config.refreshIntervalMs;
+  let manualRefreshEnabled = savedManualRefreshEnabled ?? config.manualRefreshEnabled;
   // The config endpoint stays available while a fresh cache builds its large
   // SQLite indexes. Keep this tiny preference in memory so startup polling
   // never contends with the index writer (notably when WAL is disabled).
-  let metricsSidebarVisible = loadMetricsSidebarVisible(database);
+  let metricsSidebarVisible = config.metricsSidebarVisibleManaged
+    ? config.metricsSidebarVisible
+    : loadMetricsSidebarVisible(database);
+  let allowlistsSidebarVisible = config.allowlistsSidebarVisibleManaged
+    ? config.allowlistsSidebarVisible
+    : loadAllowlistsSidebarVisible(database);
   let manualDecisionScenarios = loadManualDecisionScenarios(database);
   const reconcileConfigFingerprint = crypto.createHash('sha256').update(JSON.stringify({
     lookbackMs: config.lookbackMs,
@@ -663,7 +682,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   const maxConcurrentInstanceNetworkSyncs = 2;
 
   function aggregateHistoricalSyncStatus(): SyncStatus {
-    if (config.instances.length === 1) return { ...syncStatus };
+    if (config.instances.length === 1) return { ...syncStatus, allowlists: allowlistService?.getSyncProgress(primaryInstance.id) };
 
     const instances = config.instances.map((instance) => {
       const status = instanceSyncStatuses.get(instance.id) || syncStatus;
@@ -684,6 +703,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
         completedAt: waiting ? null : primaryCacheReady ? cache.lastUpdate : status.completedAt,
         state: waiting ? 'idle' as const : primaryCacheReady ? 'complete' as const : status.state,
         errors: [...(status.errors || [])],
+        allowlists: allowlistService?.getSyncProgress(instance.id),
       };
     });
     const isSyncing = syncStatus.isSyncing || historicalInstanceSyncPending.size > 0;
@@ -826,8 +846,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
   console.log(`Cache Configuration:
   Lookback Period: ${config.lookbackPeriod} (${config.lookbackMs}ms)
-  Refresh Interval: ${getIntervalName(refreshIntervalMs)} (${persistedConfig.refresh_interval_ms !== undefined ? 'from saved config' : 'from startup configuration'})
-  Manual Refresh: ${manualRefreshEnabled ? 'Enabled' : 'Disabled'} (${persistedConfig.manual_refresh_enabled !== undefined ? 'from saved config' : 'from startup configuration'})
+  Refresh Interval: ${getIntervalName(refreshIntervalMs)} (${describeSettingSource(config.refreshIntervalManaged, savedRefreshIntervalMs)})
+  Manual Refresh: ${manualRefreshEnabled ? 'Enabled' : 'Disabled'} (${describeSettingSource(config.manualRefreshEnabledManaged, savedManualRefreshEnabled)})
   LAPI Request Timeout: ${getIntervalName(config.lapiRequestTimeoutMs)}
   Alert Sync Chunk: ${getIntervalName(config.alertSyncChunkMs)}
   Alert Sync Min Chunk: ${getIntervalName(config.alertSyncMinChunkMs)}
@@ -1011,6 +1031,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   });
 
   let syncService: any;
+  // Created after the sync service, whose refreshes also refresh cached allowlists.
+  let allowlistService: AllowlistService;
 
   const deletionServiceState = {
     get pendingAlertDeletionTimeout() { return pendingAlertDeletionTimeout; },
@@ -1101,6 +1123,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   };
   syncService = createSyncService({
     state: syncServiceState,
+    syncAllowlists: (instanceIds: string[]) => allowlistService.syncInstances(instanceIds),
     CAPI_ALERT_ORIGIN,
     COMMUNITY_BLOCKLIST_SOURCE_SCOPE,
     ALERT_RECORD_COLUMNS,
@@ -1288,6 +1311,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     set manualRefreshEnabled(value: boolean) { manualRefreshEnabled = value; },
     get metricsSidebarVisible() { return metricsSidebarVisible; },
     set metricsSidebarVisible(value: boolean) { metricsSidebarVisible = value; },
+    get allowlistsSidebarVisible() { return allowlistsSidebarVisible; },
+    set allowlistsSidebarVisible(value: boolean) { allowlistsSidebarVisible = value; },
     get manualDecisionScenarios() { return manualDecisionScenarios; },
     set manualDecisionScenarios(value: string[]) { manualDecisionScenarios = value; },
     get cacheRefreshCompletedAt() { return cacheRefreshCompletedAt; },
@@ -1306,9 +1331,31 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     get initializationPromise() { return initializationPromise; },
     get bootstrapPromise() { return bootstrapPromise; },
   };
+  allowlistService = createAllowlistService({
+    config,
+    lapiClients,
+    database,
+    queryWorker,
+    syncWorker,
+    runConsistentDatabaseRefresh,
+    onChange: (instanceIds) => {
+      const revision = new Date().toISOString();
+      cacheRefreshCompletedAt = revision;
+      publishCacheUpdate(revision, instanceIds);
+    },
+  });
+  registerAllowlistRoutes({
+    app,
+    basePath: config.basePath,
+    ensureAuth,
+    ensurePublishedRevisionRead,
+    allowlistService,
+    isValidIpOrRange,
+  });
   registerApiRoutes({
     app,
     state: apiRouteState,
+    allowlistService,
     ALERT_FACET_FIELDS,
     DECISION_FACET_FIELDS,
     analyticsQueryWorker,
@@ -1394,6 +1441,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     saveLanguagePreference,
     saveManualDecisionScenarios,
     saveMetricsSidebarVisible,
+    saveAllowlistsSidebarVisible,
     savePersistedConfig,
     startRefreshScheduler,
     syncStatus,
@@ -1597,6 +1645,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
           committedRefresh.releasePublishedRevision();
         }
         if (publishedRevision) publishCacheUpdate(publishedRevision, [instanceId]);
+        await allowlistService.syncInstance(instanceId);
       } catch (error: any) {
         client.updateStatus(false, error);
         status.state = 'failed';
@@ -1693,6 +1742,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     }
     startHeartbeatScheduler();
     startRefreshScheduler();
+    // Allowlists do not depend on alert history, so they are cached without waiting for bootstrap.
+    void allowlistService.syncInstances(config.instances.map((instance) => instance.id));
     if (config.instances.length > 1 && !cache.isInitialized) {
       for (const instance of config.instances) historicalInstanceSyncPending.add(instance.id);
     }

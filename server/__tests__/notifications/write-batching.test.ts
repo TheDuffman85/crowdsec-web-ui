@@ -1,4 +1,5 @@
 import { expect, test } from 'vitest';
+import dns from 'node:dns';
 import { createNotificationService } from '../../notifications';
 import { createNotificationSecretStore } from '../../notifications/secret-store';
 import { createDecision, createTestDatabase, insertDecision } from './harness';
@@ -12,7 +13,7 @@ test('batches incident and history writes into bounded transactions', async () =
       writes += 1;
       return operation();
     },
-    outboundGuard: { assertHostAllowed: async () => {}, assertUrlAllowed: async () => {} },
+    outboundGuard: { assertHostAllowed: async () => {}, assertUrlAllowed: async () => {}, lookup: dns.lookup, fetch },
     secretStore: createNotificationSecretStore(),
   });
   const rule = await service.createRule({
@@ -55,7 +56,7 @@ test('yields to timers between batches of new notifications', async () => {
       if (writes === 10) timerFiredBeforeLastBatch = timerFired;
       return operation();
     },
-    outboundGuard: { assertHostAllowed: async () => {}, assertUrlAllowed: async () => {} },
+    outboundGuard: { assertHostAllowed: async () => {}, assertUrlAllowed: async () => {}, lookup: dns.lookup, fetch },
     secretStore: createNotificationSecretStore(),
   });
   await service.createRule({

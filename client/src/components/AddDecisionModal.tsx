@@ -1,9 +1,18 @@
-import { useState, type FormEvent } from 'react';
-import { AlertCircle } from 'lucide-react';
+import { useEffect, useState, type FormEvent } from 'react';
+import { AlertCircle, ShieldCheck } from 'lucide-react';
 import { DEFAULT_MANUAL_DECISION_SCENARIO } from '../../../shared/contracts';
-import { addDecision } from '../lib/api';
+import { addDecision, checkAllowlist } from '../lib/api';
 import { useI18n } from '../lib/i18n';
-import type { AddDecisionRequest, ApiPermissionError, InstanceOperationResult, InstanceSummary, MultiInstanceOperationResponse } from '../types';
+import type {
+    AddDecisionRequest,
+    AllowlistCheckResponse,
+    AllowlistedDecisionError,
+    AllowlistMatch,
+    ApiPermissionError,
+    InstanceOperationResult,
+    InstanceSummary,
+    MultiInstanceOperationResponse,
+} from '../types';
 import { Modal } from './ui/Modal';
 
 interface AddDecisionModalProps {
@@ -23,6 +32,25 @@ const DECISION_TYPES: Array<{ value: NonNullable<AddDecisionRequest['type']>; la
 ];
 
 const scenarioListKey = (scenarios: string[]) => [...scenarios].sort().join('\n');
+const ALLOWLIST_CHECK_DELAY_MS = 400;
+
+interface AllowlistCheckState {
+    value: string;
+    scope: string;
+    matches: AllowlistMatch[];
+}
+
+function allowlistMatchesFrom(response: AllowlistCheckResponse | undefined): AllowlistMatch[] {
+    if (!Array.isArray(response?.results)) return [];
+    return response.results
+        .filter((result) => result.allowlisted)
+        .map(({ instance_id, instance_name, reason }) => ({ instance_id, instance_name, reason }));
+}
+
+function isAllowlistedDecisionError(error: unknown): error is AllowlistedDecisionError {
+    return (error as Partial<AllowlistedDecisionError> | null)?.code === 'ALLOWLISTED'
+        && Array.isArray((error as Partial<AllowlistedDecisionError>).allowlisted);
+}
 
 interface ErrorInfo {
     message: string;
@@ -46,6 +74,8 @@ export function AddDecisionModal({
     const [errorInfo, setErrorInfo] = useState<ErrorInfo | null>(null);
     const [inProgress, setInProgress] = useState(false);
     const [retryInstances, setRetryInstances] = useState<InstanceOperationResult[]>([]);
+    const [allowlistCheck, setAllowlistCheck] = useState<AllowlistCheckState | null>(null);
+    const [bypassAllowlist, setBypassAllowlist] = useState(false);
 
     const targetInstances = !multipleInstances || allInstances
         ? instances
@@ -61,6 +91,33 @@ export function AddDecisionModal({
     const selectedScenario = decision.scenario && scenarioOptions.includes(decision.scenario)
         ? decision.scenario
         : scenarioOptions[0];
+    const decisionValue = (decision.ip || '').trim();
+    const allowlistScope = multipleInstances && !allInstances && currentInstanceId ? currentInstanceId : 'all';
+    // A result only applies to the value and instances it was checked for.
+    const allowlistMatches = allowlistCheck?.value === decisionValue && allowlistCheck.scope === allowlistScope
+        ? allowlistCheck.matches
+        : [];
+    const blockedByAllowlist = allowlistMatches.length > 0 && !bypassAllowlist;
+
+    // Warn before submitting; the server repeats the check and refuses without a bypass.
+    useEffect(() => {
+        if (!decisionValue) return;
+        let cancelled = false;
+        const timeoutId = window.setTimeout(async () => {
+            try {
+                const response = await checkAllowlist(decisionValue, allowlistScope);
+                if (!cancelled) {
+                    setAllowlistCheck({ value: decisionValue, scope: allowlistScope, matches: allowlistMatchesFrom(response) });
+                }
+            } catch {
+                // Invalid or unreachable values are reported by the submission itself.
+            }
+        }, ALLOWLIST_CHECK_DELAY_MS);
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timeoutId);
+        };
+    }, [allowlistScope, decisionValue]);
 
     const close = () => {
         if (!inProgress) onClose();
@@ -70,11 +127,16 @@ export function AddDecisionModal({
         setDecision((current) => ({ ...current, ...change }));
         setRetryInstances([]);
         setErrorInfo(null);
+        if ('ip' in change) setBypassAllowlist(false);
     };
 
     const submit = async (event: FormEvent<HTMLFormElement>) => {
         event.preventDefault();
-        const payload: AddDecisionRequest = { ...decision, scenario: selectedScenario };
+        const payload: AddDecisionRequest = {
+            ...decision,
+            scenario: selectedScenario,
+            ...(bypassAllowlist ? { bypass_allowlist: true } : {}),
+        };
         const request: AddDecisionRequest = !multipleInstances
             ? payload
             : allInstances
@@ -121,6 +183,10 @@ export function AddDecisionModal({
             await onDecisionAdded();
             onClose();
         } catch (error) {
+            if (isAllowlistedDecisionError(error)) {
+                setAllowlistCheck({ value: decisionValue, scope: allowlistScope, matches: error.allowlisted });
+                return;
+            }
             console.error('Failed to add decision', error);
             const apiError = error as Partial<ApiPermissionError> | undefined;
             setErrorInfo({
@@ -215,6 +281,7 @@ export function AddDecisionModal({
                                     setAllInstances(event.target.checked);
                                     setRetryInstances([]);
                                     setErrorInfo(null);
+                                    setBypassAllowlist(false);
                                 }}
                             />
                             {t('pages.decisions.allInstances')}
@@ -229,6 +296,33 @@ export function AddDecisionModal({
                                 {t('pages.decisions.targetInstances', { names: targetInstances.map((instance) => instance.name).join(', ') })}
                             </p>
                         )}
+                    </div>
+                )}
+                {allowlistMatches.length > 0 && (
+                    <div role="alert" className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 p-4 text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-100">
+                        <ShieldCheck size={16} className="mt-0.5 flex-shrink-0" aria-hidden="true" />
+                        <div className="min-w-0 space-y-2 text-sm">
+                            <p className="font-medium">{t('pages.decisions.allowlistedTitle', { value: decisionValue })}</p>
+                            <ul className="list-disc space-y-1 pl-4 text-xs break-words">
+                                {allowlistMatches.map((match) => (
+                                    <li key={match.instance_id}>
+                                        {multipleInstances
+                                            ? t('pages.decisions.allowlistedOn', { instance: match.instance_name, reason: match.reason || t('pages.decisions.allowlistedNoReason') })
+                                            : match.reason || t('pages.decisions.allowlistedNoReason')}
+                                    </li>
+                                ))}
+                            </ul>
+                            <p className="text-xs">{t('pages.decisions.allowlistedHint')}</p>
+                            <label className="flex items-center gap-2 font-medium">
+                                <input
+                                    type="checkbox"
+                                    checked={bypassAllowlist}
+                                    disabled={inProgress}
+                                    onChange={(event) => setBypassAllowlist(event.target.checked)}
+                                />
+                                {t('pages.decisions.bypassAllowlist')}
+                            </label>
+                        </div>
                     </div>
                 )}
                 {errorInfo && (
@@ -251,7 +345,7 @@ export function AddDecisionModal({
                     <button type="button" onClick={close} disabled={inProgress} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white dark:bg-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 disabled:cursor-not-allowed disabled:opacity-50">
                         {t('common.cancel')}
                     </button>
-                    <button type="submit" disabled={inProgress} className="px-4 py-2 text-sm font-medium text-white bg-primary-600 border border-transparent rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50">
+                    <button type="submit" disabled={inProgress || blockedByAllowlist} className="px-4 py-2 text-sm font-medium text-white bg-primary-600 border border-transparent rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50">
                         {inProgress ? t('pages.decisions.adding') : retryInstances.length > 0 ? 'Retry failed instances' : t('pages.decisions.addDecision')}
                     </button>
                 </div>

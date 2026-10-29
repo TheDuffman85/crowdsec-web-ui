@@ -394,6 +394,7 @@ describe('createApp API responses', () => {
     const alert = sampleAlert();
     const simulatedAlert = sampleSimulatedAlert();
     const { controller, database, lapiClient } = createController({
+      env: { CROWDSEC_REFRESH_INTERVAL: undefined },
       fetchResolver: (url) => {
         if (url.includes('/v1/alerts?')) {
           return Response.json([alert, simulatedAlert]);

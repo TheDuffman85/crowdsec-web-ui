@@ -1,4 +1,5 @@
 import { useAuthMock } from './harness';
+import { SettingsRouter } from './router';
 import { describe, expect, test, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -77,9 +78,9 @@ describe('Settings authentication methods', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<Settings />);
+    render(<SettingsRouter><Settings /></SettingsRouter>);
 
-    await screen.findByText('Authentication');
+    await screen.findByRole('heading', { name: 'pages.settings.signInAndSecurity' });
     await user.click(screen.getByRole('button', { name: 'Set Up TOTP' }));
 
     const dialog = await screen.findByRole('dialog', { name: 'Set Up TOTP' });
@@ -165,22 +166,23 @@ describe('Settings authentication methods', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<Settings />);
+    render(<SettingsRouter><Settings /></SettingsRouter>);
 
-    await screen.findByText('Authentication');
+    await screen.findByRole('heading', { name: 'pages.settings.signInAndSecurity' });
     await user.click(screen.getByRole('button', { name: 'Manage TOTP' }));
 
     const dialog = screen.getByRole('dialog', { name: 'Manage TOTP' });
     expect(within(dialog).getByRole('button', { name: 'Disable TOTP' })).toBeDisabled();
     await user.type(within(dialog).getByLabelText('Current password'), 'Secret123');
-    expect(within(dialog).queryByLabelText('Authenticator code')).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Disable TOTP' })).toBeDisabled();
+    await user.type(within(dialog).getByLabelText('Authenticator code'), '123456');
     await user.click(within(dialog).getByRole('button', { name: 'Disable TOTP' }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/api/auth/totp'),
       expect.objectContaining({
         method: 'DELETE',
-        body: JSON.stringify({ currentPassword: 'Secret123' }),
+        body: JSON.stringify({ currentPassword: 'Secret123', code: '123456' }),
       }),
     ));
   });
@@ -280,9 +282,9 @@ describe('Settings authentication methods', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<Settings />);
+    render(<SettingsRouter><Settings /></SettingsRouter>);
 
-    await screen.findByText('Authentication');
+    await screen.findByRole('heading', { name: 'pages.settings.signInAndSecurity' });
     await user.click(screen.getByRole('button', { name: 'Register New Passkey' }));
 
     const dialog = screen.getByRole('dialog', { name: 'Register New Passkey' });
@@ -358,6 +360,9 @@ describe('Settings authentication methods', () => {
           oidcReadOnlyGroups: 'Application User',
           oidcUnmatchedRole: 'deny',
           oidcEndSession: true,
+          oidcBackchannelLogout: true,
+          oidcAutoLogin: true,
+          oidcAutoLoginActive: false,
           hasPassword: true,
           totpEnabled: false,
           authMethod: 'password',
@@ -367,7 +372,7 @@ describe('Settings authentication methods', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<Settings />);
+    render(<SettingsRouter tab="authentication"><Settings /></SettingsRouter>);
 
     await screen.findByText('Application Admin');
     const endSessionSwitch = screen.getByRole('switch', { name: 'Sign out of the identity provider on logout' });
@@ -375,6 +380,17 @@ describe('Settings authentication methods', () => {
     expect(screen.getByText(/Register http:\/\/localhost(:\d+)?\/login as a post-logout redirect URI/)).toBeInTheDocument();
     await user.click(endSessionSwitch);
     expect(endSessionSwitch).toHaveAttribute('aria-checked', 'false');
+    const backchannelSwitch = screen.getByRole('switch', { name: 'End sessions when signing out at the identity provider' });
+    expect(backchannelSwitch).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByText(/Register http:\/\/localhost(:\d+)?\/api\/auth\/oidc\/backchannel-logout as the back-channel logout URI/)).toBeInTheDocument();
+    await user.click(backchannelSwitch);
+    expect(backchannelSwitch).toHaveAttribute('aria-checked', 'false');
+    const autoLoginSwitch = screen.getByRole('switch', { name: 'Sign in with SSO automatically' });
+    expect(autoLoginSwitch).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByText(/Open http:\/\/localhost(:\d+)?\/login\?local=1 to reach the login page anyway/)).toBeInTheDocument();
+    expect(screen.getByText('Auto-login is enabled but inactive: it requires OIDC to be configured and password login to be disabled.')).toBeInTheDocument();
+    await user.click(autoLoginSwitch);
+    expect(autoLoginSwitch).toHaveAttribute('aria-checked', 'false');
     expect(screen.getByLabelText('Unmatched OIDC users')).toHaveValue('deny');
     expect(screen.getByLabelText('Unmatched OIDC users')).toHaveAccessibleDescription('Choose what happens when an OIDC user matches no configured group. The default is deny sign-in.');
     expect(screen.queryByRole('button', { name: 'Remove openid' })).not.toBeInTheDocument();
@@ -387,7 +403,7 @@ describe('Settings authentication methods', () => {
     await user.type(screen.getByLabelText('Admin Groups'), 'security-team');
     await user.click(within(screen.getByLabelText('Admin Groups').closest('form')!).getByRole('button', { name: 'Add' }));
     await user.selectOptions(screen.getByLabelText('Unmatched OIDC users'), 'admin');
-    await user.click(screen.getByRole('button', { name: 'Save OIDC Settings' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/api/auth/settings'),
@@ -403,6 +419,114 @@ describe('Settings authentication methods', () => {
           oidcReadOnlyGroups: 'Application User',
           oidcUnmatchedRole: 'admin',
           oidcEndSession: false,
+          oidcBackchannelLogout: false,
+          oidcAutoLogin: false,
+        }),
+      }),
+    ));
+  });
+
+  test('locks OIDC settings managed by configuration and leaves them out when saving', async () => {
+    const user = userEvent.setup();
+    useAuthMock.mockReturnValue({
+      authEnabled: true,
+      setupRequired: false,
+      authenticated: true,
+      user: { userId: 1, username: 'admin', role: 'admin' },
+      authMethod: 'password',
+      oidcEnabled: true,
+      passwordLoginDisabled: false,
+      passkeysEnabled: true,
+      hasPassword: true,
+      totpEnabled: false,
+      loading: false,
+      refresh: vi.fn(),
+      login: vi.fn(),
+      setup: vi.fn(),
+      logout: vi.fn(),
+    });
+    vi.mocked(fetchConfig).mockResolvedValue({
+      lookback_period: '1h',
+      lookback_hours: 1,
+      lookback_days: 1,
+      refresh_interval: 30000,
+      current_interval_name: '30s',
+      lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
+      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+      simulations_enabled: true,
+      machine_features_enabled: false,
+      origin_features_enabled: false,
+      permissions: {
+        mode: 'admin',
+        can_manage_enforcement: true,
+        can_manage_settings: true,
+      },
+    });
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method || (input instanceof Request ? input.method : 'GET');
+      if (url.includes('/api/auth/passkeys')) {
+        return Response.json({ passkeys: [] });
+      }
+      if (url.includes('/api/auth/settings') && method === 'PUT') {
+        return Response.json({ status: 'ok', settings: {} });
+      }
+      if (url.includes('/api/auth/settings')) {
+        return Response.json({
+          disablePasswordLogin: false,
+          oidcIssuerUrl: 'https://idp.example.com',
+          oidcClientId: 'crowdsec',
+          hasOidcClientSecret: true,
+          oidcScope: 'openid profile email',
+          oidcGroupsClaim: 'groups',
+          oidcAdminGroups: 'admins',
+          oidcReadOnlyGroups: '',
+          oidcUnmatchedRole: 'deny',
+          oidcEndSession: true,
+          oidcBackchannelLogout: false,
+          oidcAutoLogin: false,
+          managedSettings: {
+            oidcIssuerUrl: { path: 'auth.oidc.issuerUrl' },
+            oidcClientId: { path: 'auth.oidc.clientId' },
+            oidcClientSecret: { path: 'auth.oidc.clientSecret', env: 'CONFIG_AUTH_OIDC_CLIENT_SECRET_FILE' },
+            oidcEndSession: { path: 'auth.oidc.endSession' },
+          },
+          hasPassword: true,
+          totpEnabled: false,
+          authMethod: 'password',
+        });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<SettingsRouter tab="authentication"><Settings /></SettingsRouter>);
+
+    await screen.findByText('admins');
+    expect(screen.getByLabelText('Issuer URL')).toBeDisabled();
+    expect(screen.getByLabelText('Client ID')).toBeDisabled();
+    expect(screen.getByLabelText('Client Secret')).toBeDisabled();
+    expect(screen.getByRole('switch', { name: 'Sign out of the identity provider on logout' })).toBeDisabled();
+    expect(screen.getByLabelText('Managed by auth.oidc.issuerUrl in the config file. To manage it here, remove it there and restart.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Managed by auth.oidc.endSession in the config file. To manage it here, remove it there and restart.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Managed by the CONFIG_AUTH_OIDC_CLIENT_SECRET_FILE environment variable. To manage it here, remove it and any copy in the config file, then restart.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Groups Claim')).toBeEnabled();
+
+    await user.click(screen.getByRole('switch', { name: 'End sessions when signing out at the identity provider' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/auth/settings'),
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({
+          oidcScope: 'openid profile email',
+          oidcGroupsClaim: 'groups',
+          oidcAdminGroups: 'admins',
+          oidcReadOnlyGroups: '',
+          oidcUnmatchedRole: 'deny',
+          oidcBackchannelLogout: true,
+          oidcAutoLogin: false,
         }),
       }),
     ));

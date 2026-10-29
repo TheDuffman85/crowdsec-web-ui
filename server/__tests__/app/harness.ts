@@ -116,7 +116,7 @@ export function sampleImplicitSimulatedAlert(): AlertRecord {
 
 export function createAuthSessionCookie(
   database: CrowdsecDatabase,
-  payload: { userId: number; username: string; role: 'admin' | 'read-only'; authMethod: 'password' | 'passkey' | 'oidc' },
+  payload: { userId: number; username: string; role: 'admin' | 'read-only'; authMethod: 'password' | 'passkey' | 'oidc'; sid?: string; oidcLogoutVersion?: number },
   configuredSecret?: string,
   times: { issuedAt?: number; expiresAt?: number } = {},
 ): string {
@@ -373,7 +373,8 @@ export function createController(options: {
   alertDetailPayload?: unknown;
   simulationsEnabled?: boolean;
   authMode?: 'password' | 'mtls' | 'none';
-  env?: Record<string, string>;
+  /** An undefined value removes a default, for example to leave a setting unset in the application config. */
+  env?: Record<string, string | undefined>;
   fetchResolver?: (url: string, init?: LapiRequestInit) => Response | Promise<Response> | undefined;
   notificationFetchResolver?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
   metricsFetchResolver?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
@@ -410,7 +411,7 @@ export function createController(options: {
     writeFileSync(mtlsCaPath, 'test-ca');
   }
 
-  const config = createRuntimeConfig({
+  const env: Record<string, string | undefined> = {
     PORT: '3000',
     BASE_PATH: '/crowdsec',
     CROWDSEC_URL: 'http://crowdsec:8080',
@@ -427,7 +428,11 @@ export function createController(options: {
     AUTH_ENABLED: 'false',
     ...authEnv,
     ...options.env,
-  }, { defaultConfigFile: path.join(tempDir, 'config.yaml') });
+  };
+  for (const [name, value] of Object.entries(env)) {
+    if (value === undefined) delete env[name];
+  }
+  const config = createRuntimeConfig(env, { defaultConfigFile: path.join(tempDir, 'config.yaml') });
 
   const database = options.database || new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
   const fetchCalls: Array<{ url: string; method: string; body?: unknown; headers?: RequestInit['headers']; dispatcher?: unknown }> = [];

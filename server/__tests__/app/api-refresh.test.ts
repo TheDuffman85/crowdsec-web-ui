@@ -17,6 +17,7 @@ import {
 describe('createApp refresh API', () => {
   test('reports the next scheduled automatic refresh', async () => {
     const { controller } = createController({
+      env: { CROWDSEC_REFRESH_INTERVAL: undefined },
       initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
     });
     const beforeUpdate = Date.now();
@@ -37,7 +38,7 @@ describe('createApp refresh API', () => {
 
   test('disables manual refresh by default and allows it to be enabled in settings', async () => {
     const { controller, database } = createController({
-      env: { CROWDSEC_MANUAL_REFRESH_ENABLED: 'false' },
+      env: { CROWDSEC_MANUAL_REFRESH_ENABLED: undefined },
       initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
     });
 
@@ -75,11 +76,49 @@ describe('createApp refresh API', () => {
     expect(await updatedConfig.json()).toEqual(expect.objectContaining({ manual_refresh_enabled: true }));
   });
 
+  test('locks refresh settings that the application config sets', async () => {
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
+    // Values saved in Settings earlier no longer apply once the config sets them.
+    database.setMeta('refresh_interval_ms', '5000');
+    database.setMeta('manual_refresh_enabled', 'false');
+    const { controller } = createController({
+      env: { CROWDSEC_REFRESH_INTERVAL: '30s', CROWDSEC_MANUAL_REFRESH_ENABLED: undefined, CONFIG_CROWDSEC_SYNC_MANUAL_REFRESH_ENABLED: 'true' },
+      database,
+      initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
+    });
+
+    const config = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
+    expect(await config.json()).toMatchObject({
+      refresh_interval: 30_000,
+      manual_refresh_enabled: true,
+      managed_settings: {
+        refresh_interval: { path: 'crowdsec.sync.refreshInterval' },
+        manual_refresh_enabled: { path: 'crowdsec.sync.manualRefreshEnabled', env: 'CONFIG_CROWDSEC_SYNC_MANUAL_REFRESH_ENABLED' },
+      },
+    });
+
+    for (const [route, body] of [['refresh-interval', { interval: '5m' }], ['manual-refresh', { enabled: false }]] as const) {
+      const update = await controller.fetch(new Request(`http://localhost/crowdsec/api/config/${route}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }));
+      expect(update.status).toBe(409);
+      expect(await update.json()).toMatchObject({ code: 'MANAGED_BY_CONFIG' });
+    }
+    expect(database.getMeta('refresh_interval_ms')?.value).toBe('5000');
+    controller.stopBackgroundTasks();
+  });
+
   test('validates manual refresh modes and exposes full refresh as a historical sync', async () => {
     let releaseFirstAlertRequest: ((response: Response) => void) | null = null;
     let holdFirstAlertRequest = true;
+    // A value saved in Settings rather than the application config, so it can still be changed below.
+    const database = new CrowdsecDatabase({ cachePath: path.join(tempDir, 'test.db') });
+    database.setMeta('refresh_interval_ms', '1000');
     const { controller, lapiClient } = createController({
-      env: { CROWDSEC_REFRESH_INTERVAL: '1s' },
+      env: { CROWDSEC_REFRESH_INTERVAL: undefined },
+      database,
       initialCacheState: { isInitialized: true, isComplete: true, lastUpdate: new Date().toISOString() },
       fetchResolver: (url) => {
         if (holdFirstAlertRequest && url.includes('/v1/alerts?')) {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, vi } from 'vitest';
-import { fetchConfig, updateManualRefreshSetting, updateMetricsSidebarPreference } from '../../../lib/api';
+import { fetchConfig, updateAllowlistsSidebarPreference, updateManualRefreshSetting, updateMetricsSidebarPreference } from '../../../lib/api';
 import { useRefresh } from '../../../contexts/useRefresh';
 
 const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
@@ -25,12 +25,9 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
     'pages.settings.font': 'Font',
     'pages.settings.fontAuto': 'Match language ({font})',
     'pages.settings.fontSystem': 'System default',
-    'pages.settings.readOnlyRefresh': 'Read-only mode is enabled.',
     'pages.settings.manualDecisionScenarios': 'Scenarios',
     'pages.settings.manualDecisionScenarioInvalid': '"{scenario}" is not a valid scenario.',
-    'pages.settings.manualDecisionScenariosSaved': 'Scenarios saved',
     'pages.settings.removeManualDecisionScenario': 'Remove {scenario}',
-    'pages.settings.saveManualDecisionScenarios': 'Save scenarios',
     'pages.settings.refresh': 'Refresh',
     'pages.settings.refreshDescription': 'Control how often the backend imports CrowdSec changes.',
     'pages.settings.refreshHelp': 'Pages update immediately after each LAPI refresh.',
@@ -39,6 +36,8 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
     'pages.settings.enableManualRefreshHelp': 'Manual refresh help.',
     'pages.settings.showMetricsInSidebar': 'Show Metrics in sidebar',
     'pages.settings.showMetricsInSidebarHelp': 'Metrics sidebar help.',
+    'pages.settings.showAllowlistsInSidebar': 'Show Allowlists in sidebar',
+    'pages.settings.showAllowlistsInSidebarHelp': 'Allowlists sidebar help.',
     'pages.settings.authDisabledHint': 'Dashboard authentication is disabled. Set CONFIG_AUTH_ENABLED=true and restart the web UI to enable sign-in and account settings.',
     'pages.settings.authentication': 'Authentication',
     'pages.settings.authenticationDescription': 'Manage account sign-in methods.',
@@ -46,7 +45,8 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
     'pages.settings.passwordDescription': 'Change your local password or disable password login after another sign-in method is configured.',
     'pages.settings.disablePasswordLogin': 'Disable password login',
     'pages.settings.disablePasswordLoginDescription': 'When enabled, only passkeys and SSO can be used to sign in.',
-    'pages.settings.passwordLoginManaged': 'Managed by the config file (auth.passwordLogin.enabled).',
+    'pages.settings.managedByConfig': 'Managed by {setting} in the config file. To manage it here, remove it there and restart.',
+    'pages.settings.managedByEnvironment': 'Managed by the {setting} environment variable. To manage it here, remove it and any copy in the config file, then restart.',
     'pages.settings.passwordLoginFallback': 'The config file disables password login, but it stays enabled until OIDC or a passkey is configured.',
     'pages.settings.currentPassword': 'Current password',
     'pages.settings.newPassword': 'New password',
@@ -103,15 +103,17 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
     'pages.settings.oidcUnmatchedRoleReadOnly': 'Read-only access',
     'pages.settings.oidcEndSession': 'Sign out of the identity provider on logout',
     'pages.settings.oidcEndSessionHelp': 'When an SSO user logs out, also end their session at the identity provider so the next SSO sign-in asks for credentials again. Register {url} as a post-logout redirect URI with your provider.',
+    'pages.settings.oidcBackchannelLogout': 'End sessions when signing out at the identity provider',
+    'pages.settings.oidcBackchannelLogoutHelp': 'Accept OpenID Connect back-channel logout notifications, so signing out at the identity provider also ends dashboard sessions. Register {url} as the back-channel logout URI with your provider.',
+    'pages.settings.oidcAutoLogin': 'Sign in with SSO automatically',
+    'pages.settings.oidcAutoLoginHelp': 'Skip the login page and go straight to the identity provider. Only applies while OIDC is configured and password login is disabled. Open {url} to reach the login page anyway, for example to use a passkey.',
+    'pages.settings.oidcAutoLoginInactive': 'Auto-login is enabled but inactive: it requires OIDC to be configured and password login to be disabled.',
     'pages.settings.addGroup': 'Add',
     'pages.settings.noScopesConfigured': 'No scopes configured.',
     'pages.settings.removeScope': 'Remove {scope}',
     'pages.settings.noGroupsConfigured': 'No groups configured.',
     'pages.settings.removeGroup': 'Remove {group}',
     'pages.settings.oidcGroupsHelp': 'Choose what happens when an OIDC user matches no configured group. The default is deny sign-in.',
-    'pages.settings.saveOidcSettings': 'Save OIDC Settings',
-    'pages.settings.oidcSettingsSaved': 'OIDC settings saved.',
-    'pages.settings.failedToSaveOidcSettings': 'Failed to save OIDC settings.',
   };
 
   return {
@@ -135,6 +137,9 @@ vi.mock('../../../lib/api', () => ({
   updateManualDecisionScenarios: vi.fn(),
   updateManualRefreshSetting: vi.fn(),
   updateMetricsSidebarPreference: vi.fn(),
+  updateAllowlistsSidebarPreference: vi.fn(),
+  updateLanguagePreference: vi.fn(async (language: string) => ({ success: true, language })),
+  updateFontPreference: vi.fn(async (font: string) => ({ success: true, font })),
 }));
 
 vi.mock('qrcode', () => ({
@@ -170,6 +175,7 @@ vi.mock('../../../lib/i18n', () => ({
   beforeEach(() => {
     setLanguagePreferenceMock.mockReset();
     vi.mocked(updateMetricsSidebarPreference).mockReset();
+    vi.mocked(updateAllowlistsSidebarPreference).mockReset();
     vi.mocked(updateManualRefreshSetting).mockReset();
     vi.mocked(updateManualRefreshSetting).mockResolvedValue({
       success: true,

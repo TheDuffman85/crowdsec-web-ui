@@ -1,27 +1,32 @@
-import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import i18next from "i18next";
 import QRCode from "qrcode";
-import { Copy, KeyRound, LockKeyhole, Plus, QrCode, RotateCcw, Save, ShieldCheck, Trash2, Upload, X } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
+import { Copy, KeyRound, LockKeyhole, Palette, Plus, QrCode, RotateCcw, Save, ShieldCheck, SlidersHorizontal, Trash2, Upload, UserRound, Users, X } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card";
 import { Modal } from "../components/ui/Modal";
 import { Switch } from "../components/ui/Switch";
 import { Badge } from "../components/ui/Badge";
+import { TabPanel, Tabs, type TabItem } from "../components/ui/Tabs";
 import { useRefresh } from "../contexts/useRefresh";
 import { useOptionalToast } from "../contexts/useToast";
-import { fetchConfig, updateManualDecisionScenarios, updateManualRefreshSetting, updateMetricsSidebarPreference } from "../lib/api";
-import { DEFAULT_MANUAL_DECISION_SCENARIO, isValidDecisionScenario } from "../../../shared/contracts";
+import { fetchConfig, updateAllowlistsSidebarPreference, updateFontPreference, updateLanguagePreference, updateManualDecisionScenarios, updateManualRefreshSetting, updateMetricsSidebarPreference } from "../lib/api";
+import { DEFAULT_MANUAL_DECISION_SCENARIO, isValidDecisionScenario, type ManagedSettingSource } from "../../../shared/contracts";
 import { apiUrl, withBasePath } from "../lib/basePath";
 import { sessionFetch } from "../lib/sessionFetch";
 import { useAuth } from "../contexts/AuthContext";
 import { useBranding } from "../contexts/useBranding";
 import { AppLogo } from "../components/AppLogo";
 import { BrandingColorsSettings } from "../components/BrandingColorsSettings";
+import { UsersSettings } from "../components/UsersSettings";
+import { THEME_MODES, type BrandingTheme } from "../../../shared/branding-theme";
 import {
     ACCEPTED_APP_LOGO_TYPES,
     MAX_APP_LOGO_BYTES,
     MAX_APP_NAME_LENGTH,
     resetAppLogo,
     updateAppName,
+    updateAppTheme,
     uploadAppLogo,
     type AppLogoVariant,
 } from "../lib/branding";
@@ -57,6 +62,7 @@ const REFRESH_OPTIONS = [
 ] as const;
 
 const METRICS_SIDEBAR_PREFERENCE_EVENT = 'metrics-sidebar-preference-changed';
+const ALLOWLISTS_SIDEBAR_PREFERENCE_EVENT = 'allowlists-sidebar-preference-changed';
 const MANUAL_REFRESH_SETTING_EVENT = 'manual-refresh-setting-changed';
 
 interface PasskeySummary {
@@ -78,6 +84,10 @@ interface AuthSettings {
     oidcReadOnlyGroups: string;
     oidcUnmatchedRole: OidcUnmatchedRole;
     oidcEndSession?: boolean;
+    oidcBackchannelLogout?: boolean;
+    oidcAutoLogin?: boolean;
+    oidcAutoLoginActive?: boolean;
+    managedSettings?: Partial<Record<string, ManagedSettingSource>>;
     hasPassword: boolean;
     passkeysAvailable?: boolean;
     totpEnabled: boolean;
@@ -86,6 +96,26 @@ interface AuthSettings {
 
 type OidcUnmatchedRole = 'deny' | 'admin' | 'read-only';
 const DEFAULT_OIDC_SCOPE = 'openid profile email';
+
+const OIDC_SETTINGS = [
+    'oidcIssuerUrl', 'oidcClientId', 'oidcClientSecret', 'oidcScope', 'oidcGroupsClaim', 'oidcAdminGroups',
+    'oidcReadOnlyGroups', 'oidcUnmatchedRole', 'oidcEndSession', 'oidcBackchannelLogout', 'oidcAutoLogin',
+] as const;
+
+type OidcSetting = typeof OIDC_SETTINGS[number];
+
+const SETTINGS_TABS = ['account', 'general', 'authentication', 'users', 'branding'] as const;
+type SettingsTab = typeof SETTINGS_TABS[number];
+const SETTINGS_TAB_PARAM = 'tab';
+
+function sameTheme(left: BrandingTheme, right: BrandingTheme): boolean {
+    return THEME_MODES.every((mode) => left[mode].accent === right[mode].accent && left[mode].neutral === right[mode].neutral);
+}
+
+// Formats a refresh interval from the application config that the preset options do not cover.
+function formatRefreshInterval(ms: number): string {
+    return ms % 60_000 === 0 ? `${ms / 60_000}m` : `${ms / 1000}s`;
+}
 
 function parseCsvList(value: string): string[] {
     return value
@@ -108,12 +138,14 @@ function serializeSpaceSeparatedList(items: string[]): string {
 
 export function Settings() {
     const { intervalMs, setIntervalMs } = useRefresh();
-    const { authEnabled, refresh: refreshAuth } = useAuth();
+    const { authEnabled, user: authUser, refresh: refreshAuth } = useAuth();
     const { browserLanguage, preference, setLanguagePreference, t } = useI18n();
     const { preference: savedFontPreference, setFontPreference } = useFont();
     const { formatDate } = useDateTime();
     const { appName, defaultAppName, logoUrl, logoDarkUrl, theme: brandingTheme, setBranding } = useBranding();
     const toast = useOptionalToast();
+    const [searchParams, setSearchParams] = useSearchParams();
+    const requestedTab = searchParams.get(SETTINGS_TAB_PARAM);
     const [config, setConfig] = useState<ConfigResponse | null>(null);
     const [passkeys, setPasskeys] = useState<PasskeySummary[]>([]);
     const [authSettings, setAuthSettings] = useState<AuthSettings | null>(null);
@@ -123,17 +155,19 @@ export function Settings() {
     const [refreshInterval, setRefreshInterval] = useState(intervalMs);
     const [manualRefreshEnabled, setManualRefreshEnabled] = useState(false);
     const [metricsSidebarVisible, setMetricsSidebarVisible] = useState(true);
+    const [allowlistsSidebarVisible, setAllowlistsSidebarVisible] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
+    const [isSavingPreferences, setIsSavingPreferences] = useState(false);
     const [customScenarios, setCustomScenarios] = useState<string[]>([]);
     const [scenarioDraft, setScenarioDraft] = useState('');
-    const [isSavingScenarios, setIsSavingScenarios] = useState(false);
     const [appNameDraft, setAppNameDraft] = useState<string | null>(null);
-    const [isSavingAppName, setIsSavingAppName] = useState(false);
+    const [themeDraft, setThemeDraft] = useState<BrandingTheme | null>(null);
+    const [isSavingBranding, setIsSavingBranding] = useState(false);
     const [updatingLogo, setUpdatingLogo] = useState<AppLogoVariant | null>(null);
     const logoInputRef = useRef<HTMLInputElement | null>(null);
     const darkLogoInputRef = useRef<HTMLInputElement | null>(null);
     const [disablePasswordLogin, setDisablePasswordLogin] = useState(false);
-    const [isSavingPasswordLogin, setIsSavingPasswordLogin] = useState(false);
+    const [isSavingAuth, setIsSavingAuth] = useState(false);
     const [passkeyModalOpen, setPasskeyModalOpen] = useState(false);
     const [passkeyName, setPasskeyName] = useState('');
     const [isRegisteringPasskey, setIsRegisteringPasskey] = useState(false);
@@ -145,7 +179,6 @@ export function Settings() {
     const [totpQrDataUrl, setTotpQrDataUrl] = useState('');
     const [totpCode, setTotpCode] = useState('');
     const [totpDisablePassword, setTotpDisablePassword] = useState('');
-    const [isSavingOidc, setIsSavingOidc] = useState(false);
     const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
     const [oidcForm, setOidcForm] = useState({
         issuerUrl: '',
@@ -156,7 +189,9 @@ export function Settings() {
         adminGroups: [] as string[],
         readOnlyGroups: [] as string[],
         unmatchedRole: 'deny' as OidcUnmatchedRole,
-        endSession: true,
+        endSession: false,
+        backchannelLogout: false,
+        autoLogin: false,
     });
     const [oidcListDrafts, setOidcListDrafts] = useState({
         scopes: '',
@@ -173,6 +208,7 @@ export function Settings() {
                     setRefreshInterval(nextConfig.refresh_interval);
                     setManualRefreshEnabled(nextConfig.manual_refresh_enabled === true);
                     setMetricsSidebarVisible(nextConfig.metrics_sidebar_visible !== false);
+                    setAllowlistsSidebarVisible(nextConfig.allowlists_sidebar_visible !== false);
                     setCustomScenarios(nextConfig.manual_decision_scenario_settings?.custom ?? []);
                 }
             })
@@ -209,17 +245,20 @@ export function Settings() {
                         } else {
                             setPasskeys([]);
                         }
-                        setDisablePasswordLogin(payload.disablePasswordLogin);
+                        setDisablePasswordLogin(payload.disablePasswordLogin === true);
                         setOidcForm({
-                            issuerUrl: payload.oidcIssuerUrl,
-                            clientId: payload.oidcClientId,
+                            // Sign-in configuration is only returned to administrators.
+                            issuerUrl: payload.oidcIssuerUrl ?? '',
+                            clientId: payload.oidcClientId ?? '',
                             clientSecret: '',
                             scopes: parseSpaceSeparatedList(payload.oidcScope || DEFAULT_OIDC_SCOPE),
                             groupsClaim: payload.oidcGroupsClaim || 'groups',
                             adminGroups: parseCsvList(payload.oidcAdminGroups || ''),
                             readOnlyGroups: parseCsvList(payload.oidcReadOnlyGroups || ''),
                             unmatchedRole: payload.oidcUnmatchedRole || 'deny',
-                            endSession: payload.oidcEndSession !== false,
+                            endSession: payload.oidcEndSession === true,
+                            backchannelLogout: payload.oidcBackchannelLogout === true,
+                            autoLogin: payload.oidcAutoLogin === true,
                         });
                     }
                 })
@@ -269,20 +308,71 @@ export function Settings() {
     const hasManualRefreshChange = manualRefreshEnabled !== savedManualRefreshEnabled;
     const savedMetricsSidebarVisible = config?.metrics_sidebar_visible !== false;
     const hasMetricsSidebarChange = metricsSidebarVisible !== savedMetricsSidebarVisible;
+    const hasAllowlistsSidebarChange = allowlistsSidebarVisible !== (config?.allowlists_sidebar_visible !== false);
     const canManageAuthSettings = canManageSettings;
     const canChangePassword = authSettings?.hasPassword === true && authSettings.authMethod === 'password';
     const passwordLoginManaged = authSettings?.passwordLoginManaged === true;
+    const refreshIntervalSource = config?.managed_settings?.refresh_interval;
+    const manualRefreshSource = config?.managed_settings?.manual_refresh_enabled;
+    const allowlistsSidebarSource = config?.managed_settings?.allowlists_sidebar_visible;
+    const metricsSidebarSource = config?.managed_settings?.metrics_sidebar_visible;
+    const isOidcManaged = (setting: OidcSetting) => Boolean(authSettings?.managedSettings?.[setting]);
+    const refreshOptions: { value: number; label: string }[] = REFRESH_OPTIONS.map((option) => ({ value: option.value, label: t(option.labelKey) }));
+    if (!refreshOptions.some((option) => option.value === refreshInterval)) {
+        refreshOptions.push({ value: refreshInterval, label: formatRefreshInterval(refreshInterval) });
+    }
     const savedAppNameValue = appName === defaultAppName ? '' : appName;
     const appNameValue = appNameDraft ?? savedAppNameValue;
     const hasAppNameChange = appNameValue.trim() !== savedAppNameValue;
+    const themeValue = themeDraft ?? brandingTheme;
     const maxLogoSize = `${MAX_APP_LOGO_BYTES / 1024} KB`;
     const configuredScenarios = config?.manual_decision_scenario_settings?.configured ?? [];
     const lockedScenarios = [...new Set([DEFAULT_MANUAL_DECISION_SCENARIO, ...configuredScenarios])];
     const savedCustomScenarios = config?.manual_decision_scenario_settings?.custom ?? [];
-    const hasScenarioChange = customScenarios.join('\n') !== savedCustomScenarios.join('\n');
+    const hasScenarioChange = customScenarios.length !== savedCustomScenarios.length
+        || customScenarios.some((scenario, index) => scenario !== savedCustomScenarios[index]);
 
     const inputClass = "w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:disabled:bg-gray-800 dark:disabled:text-gray-500";
     const labelClass = "block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400";
+    const renderManagedLock = (source: ManagedSettingSource | undefined) => {
+        if (!source) return null;
+        const setting = source.env ?? source.path;
+        const messageKey = source.env ? "pages.settings.managedByEnvironment" : "pages.settings.managedByConfig";
+        // Translate around a marker so the setting can be rendered as code.
+        const [before, after = ''] = t(messageKey, { setting: MANAGED_SETTING_MARKER }).split(MANAGED_SETTING_MARKER);
+        return (
+            <ManagedLock label={t(messageKey, { setting })}>
+                {before}
+                <code className="rounded bg-gray-700 px-1 py-0.5 font-mono text-[11px] text-gray-100 wrap-anywhere dark:bg-gray-600">{setting}</code>
+                {after}
+            </ManagedLock>
+        );
+    };
+    // Read-only users can change nothing but their own account, so they only see that tab.
+    const allSettingsTabs: Array<TabItem<SettingsTab> & { visible: boolean }> = [
+        { id: 'account', label: t("pages.settings.account"), icon: UserRound, visible: true },
+        { id: 'general', label: t("pages.settings.general"), icon: SlidersHorizontal, visible: canManageSettings },
+        { id: 'authentication', label: t("pages.settings.authentication"), icon: KeyRound, visible: canManageSettings },
+        // Only administrators manage users, and only while dashboard authentication is enabled.
+        { id: 'users', label: t("pages.settings.users"), icon: Users, visible: authEnabled && authUser?.role === 'admin' },
+        { id: 'branding', label: t("pages.settings.branding"), icon: Palette, visible: canManageSettings },
+    ];
+    const settingsTabs: TabItem<SettingsTab>[] = allSettingsTabs
+        .filter((tab) => tab.visible)
+        .map(({ id, label, icon }) => ({ id, label, icon }));
+    const activeTab: SettingsTab = settingsTabs.find((tab) => tab.id === requestedTab)?.id ?? 'account';
+    // Keeps other query parameters, such as the selected instance, and replaces the history entry.
+    const selectTab = (tab: SettingsTab) => {
+        setSearchParams((current) => {
+            const next = new URLSearchParams(current);
+            if (tab === 'account') {
+                next.delete(SETTINGS_TAB_PARAM);
+            } else {
+                next.set(SETTINGS_TAB_PARAM, tab);
+            }
+            return next;
+        }, { replace: true });
+    };
     const showToast = (message: string, type: 'success' | 'danger' | 'info' = 'info') => {
         toast?.addToast(message, type);
     };
@@ -307,21 +397,15 @@ export function Settings() {
                 } : current);
                 window.dispatchEvent(new Event(MANUAL_REFRESH_SETTING_EVENT));
             }
-            if (hasLanguageChange) {
-                setLanguagePreference(languagePreference);
-            }
-            if (hasFontChange) {
-                setFontPreference(fontPreference);
-            }
-            if (hasMetricsSidebarChange) {
-                const payload = await updateMetricsSidebarPreference({ visible: metricsSidebarVisible });
+            if (canManageSettings && hasScenarioChange) {
+                const payload = await updateManualDecisionScenarios({ scenarios: customScenarios });
                 setConfig((current) => current ? {
                     ...current,
-                    metrics_sidebar_visible: payload.metrics_sidebar_visible,
+                    manual_decision_scenario_settings: payload.manual_decision_scenario_settings,
                 } : current);
-                window.dispatchEvent(new Event(METRICS_SIDEBAR_PREFERENCE_EVENT));
+                setCustomScenarios(payload.manual_decision_scenario_settings.custom);
             }
-            showToast(getSettingsSavedMessage(), "success");
+            showToast(t("pages.settings.settingsSaved"), "success");
         } catch (error) {
             console.error("Failed to save settings", error);
             showToast(t("pages.settings.failedToSaveSettings"), "danger");
@@ -330,17 +414,70 @@ export function Settings() {
         }
     };
 
-    const handleSaveAppName = async () => {
-        setIsSavingAppName(true);
+    // Saves the display preferences of the signed-in user.
+    const handleSavePreferences = async () => {
+        setIsSavingPreferences(true);
         try {
-            setBranding(await updateAppName(appNameValue));
-            setAppNameDraft(null);
-            showToast(t("pages.settings.appNameSaved"), "success");
+            // Saved on the server first, so a failure is reported instead of only changing this browser.
+            if (hasLanguageChange) {
+                await updateLanguagePreference(languagePreference);
+                setLanguagePreference(languagePreference, { sync: false });
+            }
+            if (hasFontChange) {
+                await updateFontPreference(fontPreference);
+                setFontPreference(fontPreference, { sync: false });
+            }
+            if (!metricsSidebarSource && hasMetricsSidebarChange) {
+                const payload = await updateMetricsSidebarPreference({ visible: metricsSidebarVisible });
+                setConfig((current) => current ? {
+                    ...current,
+                    metrics_sidebar_visible: payload.metrics_sidebar_visible,
+                } : current);
+                window.dispatchEvent(new Event(METRICS_SIDEBAR_PREFERENCE_EVENT));
+            }
+            if (!allowlistsSidebarSource && hasAllowlistsSidebarChange) {
+                const payload = await updateAllowlistsSidebarPreference({ visible: allowlistsSidebarVisible });
+                setConfig((current) => current ? {
+                    ...current,
+                    allowlists_sidebar_visible: payload.allowlists_sidebar_visible,
+                } : current);
+                window.dispatchEvent(new Event(ALLOWLISTS_SIDEBAR_PREFERENCE_EVENT));
+            }
+            showToast(getSettingsSavedMessage(), "success");
         } catch (error) {
-            console.error("Failed to save application name", error);
-            showToast(error instanceof Error ? error.message : t("pages.settings.failedToSaveAppName"), "danger");
+            console.error("Failed to save preferences", error);
+            showToast(t("pages.settings.failedToSaveSettings"), "danger");
         } finally {
-            setIsSavingAppName(false);
+            setIsSavingPreferences(false);
+        }
+    };
+
+    const handleSaveBranding = async () => {
+        setIsSavingBranding(true);
+        try {
+            if (hasAppNameChange) {
+                try {
+                    setBranding(await updateAppName(appNameValue));
+                    setAppNameDraft(null);
+                } catch (error) {
+                    console.error("Failed to save application name", error);
+                    showToast(error instanceof Error ? error.message : t("pages.settings.failedToSaveAppName"), "danger");
+                    return;
+                }
+            }
+            if (!sameTheme(themeValue, brandingTheme)) {
+                try {
+                    setBranding(await updateAppTheme(themeValue));
+                    setThemeDraft(null);
+                } catch (error) {
+                    console.error("Failed to save colors", error);
+                    showToast(error instanceof Error ? error.message : t("pages.settings.failedToSaveColors"), "danger");
+                    return;
+                }
+            }
+            showToast(t("pages.settings.settingsSaved"), "success");
+        } finally {
+            setIsSavingBranding(false);
         }
     };
 
@@ -560,7 +697,7 @@ export function Settings() {
             const response = await sessionFetch(apiUrl('/api/auth/totp'), {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ currentPassword: totpDisablePassword }),
+                body: JSON.stringify({ currentPassword: totpDisablePassword, code: totpCode }),
             }, { ignoredUnauthorizedErrors: ['Current password is incorrect'] });
             const payload = await response.json().catch(() => ({})) as { error?: string; totpEnabled?: boolean };
             if (!response.ok) {
@@ -583,37 +720,14 @@ export function Settings() {
         showToast(t("pages.settings.copied"), "success");
     };
 
-    const savePasswordLoginSetting = async () => {
-        setIsSavingPasswordLogin(true);
-        try {
-            const response = await sessionFetch(apiUrl('/api/auth/settings'), {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ disablePasswordLogin }),
-            });
-            const payload = await response.json().catch(() => ({})) as { error?: string; settings?: Partial<AuthSettings> };
-            if (!response.ok) {
-                console.error(payload.error || 'Failed to update password login setting');
-                showToast(payload.error || t("pages.settings.failedToSavePasswordLogin"), "danger");
-                return;
-            }
-            const savedValue = payload.settings?.disablePasswordLogin ?? disablePasswordLogin;
-            setAuthSettings((current) => current ? { ...current, ...payload.settings, disablePasswordLogin: savedValue } : current);
-            setDisablePasswordLogin(savedValue);
-            await refreshAuth();
-            showToast(t("pages.settings.passwordLoginSaved"), "success");
-        } catch (error) {
-            console.error("Failed to update password login setting", error);
-            showToast(t("pages.settings.failedToSavePasswordLogin"), "danger");
-        } finally {
-            setIsSavingPasswordLogin(false);
-        }
-    };
-
     const changePassword = async () => {
         if (passwordForm.newPassword !== passwordForm.confirmPassword) {
             console.error('New passwords do not match.');
             showToast(t("pages.settings.passwordsDoNotMatch"), "danger");
+            return;
+        }
+        if (passwordForm.newPassword === passwordForm.currentPassword) {
+            showToast(t("pages.settings.newPasswordMustDiffer"), "danger");
             return;
         }
         const response = await sessionFetch(apiUrl('/api/auth/change-password'), {
@@ -634,8 +748,11 @@ export function Settings() {
         showToast(t("pages.settings.passwordChanged"), "success");
     };
 
-    const saveOidcSettings = async () => {
-        setIsSavingOidc(true);
+    // Saves the password login setting and the OIDC settings in one request, so the server
+    // validates disabling password login against the OIDC settings being saved.
+    const saveAuthSettings = async () => {
+        setIsSavingAuth(true);
+        const passwordLoginChanged = !passwordLoginManaged && disablePasswordLogin !== authSettings?.disablePasswordLogin;
         const scopes = serializeSpaceSeparatedList(oidcForm.scopes);
         const adminGroups = serializeCsvList(oidcForm.adminGroups);
         const readOnlyGroups = serializeCsvList(oidcForm.readOnlyGroups);
@@ -643,16 +760,22 @@ export function Settings() {
             const response = await sessionFetch(apiUrl('/api/auth/settings'), {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
+                // The server rejects settings that the application config locks.
                 body: JSON.stringify({
-                    oidcIssuerUrl: oidcForm.issuerUrl,
-                    oidcClientId: oidcForm.clientId,
-                    oidcClientSecret: oidcForm.clientSecret,
-                    oidcScope: scopes,
-                    oidcGroupsClaim: oidcForm.groupsClaim,
-                    oidcAdminGroups: adminGroups,
-                    oidcReadOnlyGroups: readOnlyGroups,
-                    oidcUnmatchedRole: oidcForm.unmatchedRole,
-                    oidcEndSession: oidcForm.endSession,
+                    ...(passwordLoginChanged ? { disablePasswordLogin } : {}),
+                    ...Object.fromEntries(Object.entries({
+                        oidcIssuerUrl: oidcForm.issuerUrl,
+                        oidcClientId: oidcForm.clientId,
+                        oidcClientSecret: oidcForm.clientSecret,
+                        oidcScope: scopes,
+                        oidcGroupsClaim: oidcForm.groupsClaim,
+                        oidcAdminGroups: adminGroups,
+                        oidcReadOnlyGroups: readOnlyGroups,
+                        oidcUnmatchedRole: oidcForm.unmatchedRole,
+                        oidcEndSession: oidcForm.endSession,
+                        oidcBackchannelLogout: oidcForm.backchannelLogout,
+                        oidcAutoLogin: oidcForm.autoLogin,
+                    } satisfies Record<OidcSetting, unknown>).filter(([setting]) => !isOidcManaged(setting as OidcSetting))),
                 }),
             });
             const payload = await response.json().catch(() => ({})) as {
@@ -661,12 +784,15 @@ export function Settings() {
                 settings?: Partial<AuthSettings>;
             };
             if (!response.ok) {
-                console.error(payload.error || 'Failed to save OIDC settings');
-                showToast(payload.error || t("pages.settings.failedToSaveOidcSettings"), "danger");
+                console.error(payload.error || 'Failed to save authentication settings');
+                showToast(payload.error || t("pages.settings.failedToSaveSettings"), "danger");
                 return;
             }
+            const savedDisablePasswordLogin = payload.settings?.disablePasswordLogin ?? disablePasswordLogin;
             setAuthSettings((current) => current ? {
                 ...current,
+                ...(payload.settings?.passwordLoginFallback !== undefined ? { passwordLoginFallback: payload.settings.passwordLoginFallback } : {}),
+                disablePasswordLogin: savedDisablePasswordLogin,
                 oidcIssuerUrl: oidcForm.issuerUrl.trim(),
                 oidcClientId: oidcForm.clientId.trim(),
                 hasOidcClientSecret: Boolean(oidcForm.clientSecret.trim()) || current.hasOidcClientSecret,
@@ -676,19 +802,26 @@ export function Settings() {
                 oidcReadOnlyGroups: readOnlyGroups,
                 oidcUnmatchedRole: oidcForm.unmatchedRole,
                 oidcEndSession: oidcForm.endSession,
+                oidcBackchannelLogout: oidcForm.backchannelLogout,
+                oidcAutoLogin: oidcForm.autoLogin,
+                oidcAutoLoginActive: payload.settings?.oidcAutoLoginActive ?? current.oidcAutoLoginActive,
             } : current);
+            setDisablePasswordLogin(savedDisablePasswordLogin);
             setOidcForm((current) => ({ ...current, clientSecret: '' }));
+            if (passwordLoginChanged) {
+                await refreshAuth();
+            }
             if (payload.oidcError) {
                 console.error(`OIDC settings saved, but discovery failed: ${payload.oidcError}`);
                 showToast(t("pages.settings.oidcSettingsSavedButDiscoveryFailed", { error: payload.oidcError }), "danger");
             } else {
-                showToast(t("pages.settings.oidcSettingsSaved"), "success");
+                showToast(t("pages.settings.settingsSaved"), "success");
             }
         } catch (error) {
-            console.error("Failed to save OIDC settings", error);
-            showToast(t("pages.settings.failedToSaveOidcSettings"), "danger");
+            console.error("Failed to save authentication settings", error);
+            showToast(t("pages.settings.failedToSaveSettings"), "danger");
         } finally {
-            setIsSavingOidc(false);
+            setIsSavingAuth(false);
         }
     };
 
@@ -703,24 +836,6 @@ export function Settings() {
             setCustomScenarios((current) => [...current, scenario]);
         }
         setScenarioDraft('');
-    };
-
-    const handleSaveScenarios = async () => {
-        setIsSavingScenarios(true);
-        try {
-            const payload = await updateManualDecisionScenarios({ scenarios: customScenarios });
-            setConfig((current) => current ? {
-                ...current,
-                manual_decision_scenario_settings: payload.manual_decision_scenario_settings,
-            } : current);
-            setCustomScenarios(payload.manual_decision_scenario_settings.custom);
-            showToast(t("pages.settings.manualDecisionScenariosSaved"), "success");
-        } catch (error) {
-            console.error("Failed to save manual decision scenarios", error);
-            showToast(error instanceof Error ? error.message : t("pages.settings.failedToSaveManualDecisionScenarios"), "danger");
-        } finally {
-            setIsSavingScenarios(false);
-        }
     };
 
     const addOidcListItem = (field: 'scopes' | 'adminGroups' | 'readOnlyGroups') => {
@@ -753,582 +868,707 @@ export function Settings() {
 
     return (
         <div className="space-y-6">
-            <Card>
-                <CardHeader>
-                    <CardTitle>{t("pages.settings.general")}</CardTitle>
-                    <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.generalDescription")}</p>
-                </CardHeader>
-                <CardContent>
-                    <div className="grid gap-6 xl:grid-cols-2">
-                        <div className="space-y-2">
-                            <label htmlFor="settings-language" className={labelClass}>
-                                {t("pages.settings.language")}
-                            </label>
-                            <select
-                                id="settings-language"
-                                value={languagePreference}
-                                onChange={(event) => setLanguagePreferenceValue(event.target.value as LanguagePreference)}
-                                className={inputClass}
-                            >
-                                <option value={BROWSER_LANGUAGE_SETTING}>
-                                    {t("pages.settings.browserDefaultLanguage", { language: t(getLanguageLabelKey(browserLanguage)) })}
-                                </option>
-                                {SUPPORTED_LANGUAGES.map((language) => (
-                                    <option key={language.code} value={language.code}>
-                                        {t(language.labelKey)}
-                                    </option>
-                                ))}
-                            </select>
-                            <p className="text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.languageHelp")}</p>
-                        </div>
+            <Tabs
+                idPrefix="settings"
+                label={t("components.sidebar.nav.settings")}
+                tabs={settingsTabs}
+                value={activeTab}
+                onChange={selectTab}
+            />
 
-                        <div className="space-y-2">
-                            <label htmlFor="settings-font" className={labelClass}>
-                                {t("pages.settings.font")}
-                            </label>
-                            <select
-                                id="settings-font"
-                                value={fontPreference}
-                                onChange={(event) => setFontPreferenceValue(event.target.value as FontPreference)}
-                                className={inputClass}
-                            >
-                                <option value={SYSTEM_FONT_SETTING}>{t("pages.settings.fontSystem")}</option>
-                                <option value={AUTO_FONT_SETTING}>
-                                    {t("pages.settings.fontAuto", { font: autoFontPreset?.label ?? "" })}
-                                </option>
-                                {FONT_PRESETS.map((preset) => (
-                                    <option key={preset.id} value={preset.id}>
-                                        {preset.label}
-                                    </option>
-                                ))}
-                            </select>
-                            <p className="text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.fontHelp")}</p>
-                        </div>
-
-                        <div className="space-y-2">
-                            <label htmlFor="settings-refresh" className={labelClass}>
-                                {t("pages.settings.refreshInterval")}
-                            </label>
-                            <select
-                                id="settings-refresh"
-                                value={refreshInterval}
-                                onChange={(event) => setRefreshInterval(Number(event.target.value))}
-                                disabled={!canManageSettings || isSaving}
-                                className={inputClass}
-                            >
-                                {REFRESH_OPTIONS.map((option) => (
-                                    <option key={option.value} value={option.value}>
-                                        {t(option.labelKey)}
-                                    </option>
-                                ))}
-                            </select>
-                            <p className="text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.refreshHelp")}</p>
-                        </div>
-
-                        <div className="space-y-2">
-                            <div className="flex items-start gap-4 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-                                <Switch
-                                    id="settings-manual-refresh"
-                                    checked={manualRefreshEnabled}
-                                    onCheckedChange={setManualRefreshEnabled}
-                                    disabled={!canManageSettings || isSaving}
-                                />
-                                <div className="min-w-0">
-                                    <label htmlFor="settings-manual-refresh" className={labelClass}>
-                                        {t("pages.settings.enableManualRefresh")}
+            {activeTab === 'account' && (
+                <TabPanel idPrefix="settings" id="account" className="space-y-6">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>{t("pages.settings.preferences")}</CardTitle>
+                            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.preferencesDescription")}</p>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="grid gap-6 xl:grid-cols-2">
+                                <div className="space-y-2">
+                                    <label htmlFor="settings-language" className={labelClass}>
+                                        {t("pages.settings.language")}
                                     </label>
-                                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                        {t("pages.settings.enableManualRefreshHelp")}
-                                    </p>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="space-y-2">
-                            <div className="flex items-start gap-4 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-                                <Switch
-                                    id="settings-metrics-sidebar"
-                                    checked={metricsSidebarVisible}
-                                    onCheckedChange={setMetricsSidebarVisible}
-                                />
-                                <div className="min-w-0">
-                                    <label htmlFor="settings-metrics-sidebar" className={labelClass}>
-                                        {t("pages.settings.showMetricsInSidebar")}
-                                    </label>
-                                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                        {t("pages.settings.showMetricsInSidebarHelp")}
-                                    </p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    {!canManageSettings && (
-                        <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-100">
-                            <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0" />
-                            <span>{t("pages.settings.readOnlyRefresh")}</span>
-                        </div>
-                    )}
-
-                    {config?.instances?.some((instance) => Object.keys(instance.sync_overrides || {}).length > 0) && (
-                        <div className="mt-6 rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-900/40">
-                            <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Per-instance configuration overrides</h3>
-                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                These values come from the startup YAML file, take precedence over global settings, and are read-only until the process restarts.
-                            </p>
-                            <div className="mt-4 grid gap-3 md:grid-cols-2">
-                                {config.instances.filter((instance) => Object.keys(instance.sync_overrides || {}).length > 0).map((instance) => (
-                                    <div key={instance.id} className="rounded-md border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
-                                        <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{instance.name}</p>
-                                        <dl className="mt-2 space-y-1 text-xs text-gray-600 dark:text-gray-300">
-                                            {Object.entries(instance.sync_overrides || {}).map(([key, value]) => (
-                                                <div key={key} className="flex justify-between gap-4">
-                                                    <dt className="font-mono">{key}</dt>
-                                                    <dd className="font-mono text-right">{String(value)}</dd>
-                                                </div>
-                                            ))}
-                                        </dl>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    <div className="mt-6 flex justify-start">
-                        <button
-                            type="button"
-                            onClick={() => void handleSave()}
-                            disabled={isSaving}
-                            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                            <Save className="h-4 w-4" />
-                            {isSaving ? t("common.saving") : t("common.save")}
-                        </button>
-                    </div>
-                </CardContent>
-            </Card>
-
-            <Card>
-                <CardHeader>
-                    <CardTitle>{t("pages.settings.manualDecisions")}</CardTitle>
-                    <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.manualDecisionsDescription")}</p>
-                </CardHeader>
-                <CardContent>
-                    <GroupListEditor
-                        id="settings-manual-decision-scenarios"
-                        label={t("pages.settings.manualDecisionScenarios")}
-                        groups={[...lockedScenarios, ...customScenarios]}
-                        draft={scenarioDraft}
-                        onDraftChange={setScenarioDraft}
-                        onAdd={addScenario}
-                        onRemove={(scenario) => setCustomScenarios((current) => current.filter((candidate) => candidate !== scenario))}
-                        canRemove={(scenario) => !lockedScenarios.includes(scenario)}
-                        disabled={!canManageSettings || isSavingScenarios}
-                        placeholder="custom/abuse-report"
-                        addLabel={t("pages.settings.addGroup")}
-                        emptyLabel=""
-                        removeLabel={(scenario) => t("pages.settings.removeManualDecisionScenario", { scenario })}
-                        labelClass={labelClass}
-                    />
-                    <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.manualDecisionScenariosHelp")}</p>
-
-                    {!canManageSettings && (
-                        <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-100">
-                            <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0" />
-                            <span>{t("pages.settings.readOnlyManualDecisions")}</span>
-                        </div>
-                    )}
-
-                    <div className="mt-6 flex justify-start">
-                        <button
-                            type="button"
-                            onClick={() => void handleSaveScenarios()}
-                            aria-label={t("pages.settings.saveManualDecisionScenarios")}
-                            disabled={!canManageSettings || isSavingScenarios || !hasScenarioChange}
-                            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                            <Save className="h-4 w-4" />
-                            {isSavingScenarios ? t("common.saving") : t("common.save")}
-                        </button>
-                    </div>
-                </CardContent>
-            </Card>
-
-            {!authEnabled && (
-                <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-100">
-                    <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0" />
-                    <span>{t("pages.settings.authDisabledHint")}</span>
-                </div>
-            )}
-
-            {authEnabled && (
-                <Card>
-                    <CardHeader>
-                        <CardTitle>{t("pages.settings.authentication")}</CardTitle>
-                        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.authenticationDescription")}</p>
-                    </CardHeader>
-                    <CardContent className="space-y-8">
-                        <div className="space-y-4">
-                            <div>
-                                <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{t("pages.settings.password")}</h4>
-                                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.passwordDescription")}</p>
-                            </div>
-                            <div className="space-y-4">
-                                <label className="flex items-start gap-3 text-sm text-gray-700 dark:text-gray-200">
-                                    <input
-                                        type="checkbox"
-                                        checked={disablePasswordLogin}
-                                        onChange={(event) => setDisablePasswordLogin(event.target.checked)}
-                                        disabled={!canManageAuthSettings || passwordLoginManaged || isSavingPasswordLogin}
-                                        className="mt-1 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                                    />
-                                    <span>
-                                        <span className="block font-medium">{t("pages.settings.disablePasswordLogin")}</span>
-                                        <span className="block text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.disablePasswordLoginDescription")}</span>
-                                        {passwordLoginManaged && (
-                                            <span className="mt-1 block text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.passwordLoginManaged")}</span>
-                                        )}
-                                        {authSettings?.passwordLoginFallback && (
-                                            <span className="mt-1 block text-xs text-amber-700 dark:text-amber-400">{t("pages.settings.passwordLoginFallback")}</span>
-                                        )}
-                                    </span>
-                                </label>
-                                {!passwordLoginManaged && (
-                                    <button
-                                        type="button"
-                                        onClick={() => void savePasswordLoginSetting()}
-                                        disabled={!canManageAuthSettings || isSavingPasswordLogin}
-                                        className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                    <select
+                                        id="settings-language"
+                                        value={languagePreference}
+                                        onChange={(event) => setLanguagePreferenceValue(event.target.value as LanguagePreference)}
+                                        className={inputClass}
                                     >
-                                        <Save className="h-4 w-4" />
-                                        {isSavingPasswordLogin ? t("common.saving") : t("common.save")}
-                                    </button>
-                                )}
-                            </div>
+                                        <option value={BROWSER_LANGUAGE_SETTING}>
+                                            {t("pages.settings.browserDefaultLanguage", { language: t(getLanguageLabelKey(browserLanguage)) })}
+                                        </option>
+                                        {SUPPORTED_LANGUAGES.map((language) => (
+                                            <option key={language.code} value={language.code}>
+                                                {t(language.labelKey)}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <p className="text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.languageHelp")}</p>
+                                </div>
 
-                            {canChangePassword && (
-                                <div className="grid gap-4 lg:grid-cols-3">
-                                    <div className="space-y-2">
-                                        <label htmlFor="current-password" className={labelClass}>{t("pages.settings.currentPassword")}</label>
-                                        <input
-                                            id="current-password"
-                                            type="password"
-                                            value={passwordForm.currentPassword}
-                                            onChange={(event) => setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))}
-                                            className={inputClass}
+                                <div className="space-y-2">
+                                    <label htmlFor="settings-font" className={labelClass}>
+                                        {t("pages.settings.font")}
+                                    </label>
+                                    <select
+                                        id="settings-font"
+                                        value={fontPreference}
+                                        onChange={(event) => setFontPreferenceValue(event.target.value as FontPreference)}
+                                        className={inputClass}
+                                    >
+                                        <option value={SYSTEM_FONT_SETTING}>{t("pages.settings.fontSystem")}</option>
+                                        <option value={AUTO_FONT_SETTING}>
+                                            {t("pages.settings.fontAuto", { font: autoFontPreset?.label ?? "" })}
+                                        </option>
+                                        {FONT_PRESETS.map((preset) => (
+                                            <option key={preset.id} value={preset.id}>
+                                                {preset.label}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <p className="text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.fontHelp")}</p>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <div className="flex items-start gap-4 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+                                        <Switch
+                                            id="settings-metrics-sidebar"
+                                            checked={metricsSidebarVisible}
+                                            onCheckedChange={setMetricsSidebarVisible}
+                                            disabled={isSavingPreferences || Boolean(metricsSidebarSource)}
                                         />
-                                    </div>
-                                    <div className="space-y-2">
-                                        <label htmlFor="new-password" className={labelClass}>{t("pages.settings.newPassword")}</label>
-                                        <input
-                                            id="new-password"
-                                            type="password"
-                                            value={passwordForm.newPassword}
-                                            onChange={(event) => setPasswordForm((current) => ({ ...current, newPassword: event.target.value }))}
-                                            className={inputClass}
-                                        />
-                                    </div>
-                                    <div className="space-y-2">
-                                        <label htmlFor="confirm-password" className={labelClass}>{t("pages.settings.confirmPassword")}</label>
-                                        <input
-                                            id="confirm-password"
-                                            type="password"
-                                            value={passwordForm.confirmPassword}
-                                            onChange={(event) => setPasswordForm((current) => ({ ...current, confirmPassword: event.target.value }))}
-                                            className={inputClass}
-                                        />
-                                    </div>
-                                    <div className="lg:col-span-3">
-                                        <button
-                                            type="button"
-                                            onClick={() => void changePassword()}
-                                            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700"
-                                        >
-                                            <Save className="h-4 w-4" />
-                                            {t("pages.settings.changePassword")}
-                                        </button>
+                                        <div className="min-w-0">
+                                            <div className="flex items-center gap-1.5">
+                                                <label htmlFor="settings-metrics-sidebar" className={labelClass}>
+                                                    {t("pages.settings.showMetricsInSidebar")}
+                                                </label>
+                                                {renderManagedLock(metricsSidebarSource)}
+                                            </div>
+                                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                                {t("pages.settings.showMetricsInSidebarHelp")}
+                                            </p>
+                                        </div>
                                     </div>
                                 </div>
-                            )}
 
-                            {canChangePassword && (
-                                <div className="space-y-3">
-                                    <div>
-                                        <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-gray-900 dark:text-gray-100">
-                                            <span>{t("pages.settings.totpTitle")}</span>
-                                            <Badge variant={authSettings?.totpEnabled ? "success" : "secondary"}>
-                                                {authSettings?.totpEnabled ? t("common.enabled") : t("common.disabled")}
-                                            </Badge>
+                                <div className="space-y-2">
+                                    <div className="flex items-start gap-4 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+                                        <Switch
+                                            id="settings-allowlists-sidebar"
+                                            checked={allowlistsSidebarVisible}
+                                            onCheckedChange={setAllowlistsSidebarVisible}
+                                            disabled={isSavingPreferences || Boolean(allowlistsSidebarSource)}
+                                        />
+                                        <div className="min-w-0">
+                                            <div className="flex items-center gap-1.5">
+                                                <label htmlFor="settings-allowlists-sidebar" className={labelClass}>
+                                                    {t("pages.settings.showAllowlistsInSidebar")}
+                                                </label>
+                                                {renderManagedLock(allowlistsSidebarSource)}
+                                            </div>
+                                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                                {t("pages.settings.showAllowlistsInSidebarHelp")}
+                                            </p>
                                         </div>
-                                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                            {authSettings?.totpEnabled ? t("pages.settings.totpEnabledDescription") : t("pages.settings.totpDescription")}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="mt-6 flex justify-start">
+                                <button
+                                    type="button"
+                                    onClick={() => void handleSavePreferences()}
+                                    disabled={isSavingPreferences}
+                                    className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    <Save className="h-4 w-4" />
+                                    {isSavingPreferences ? t("common.saving") : t("common.save")}
+                                </button>
+                            </div>
+                        </CardContent>
+                    </Card>
+
+                    {authEnabled && (
+                        <Card>
+                            <CardHeader>
+                                <CardTitle>{t("pages.settings.signInAndSecurity")}</CardTitle>
+                                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.signInAndSecurityDescription")}</p>
+                            </CardHeader>
+                            <CardContent className="space-y-8">
+                                <div className="space-y-4">
+                                    <div>
+                                        <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{t("pages.settings.password")}</h4>
+                                        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                                            {canChangePassword
+                                                ? t("pages.settings.accountPasswordDescription")
+                                                : authSettings?.hasPassword
+                                                    ? t("pages.settings.passwordChangeRequiresPasswordLogin")
+                                                    : t("pages.settings.passwordManagedByProvider")}
                                         </p>
                                     </div>
-                                    <button
-                                        type="button"
-                                        onClick={() => void openTotpModal()}
-                                        disabled={isLoadingTotpSetup}
-                                        className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
-                                    >
-                                        <QrCode className="h-4 w-4" />
-                                        {authSettings?.totpEnabled ? t("pages.settings.manageTotp") : t("pages.settings.setupTotp")}
-                                    </button>
-                                </div>
-                            )}
-                        </div>
+                                    {canChangePassword && (
+                                        <div className="grid gap-4 lg:grid-cols-3">
+                                            <div className="space-y-2">
+                                                <label htmlFor="current-password" className={labelClass}>{t("pages.settings.currentPassword")}</label>
+                                                <input
+                                                    id="current-password"
+                                                    type="password"
+                                                    value={passwordForm.currentPassword}
+                                                    onChange={(event) => setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))}
+                                                    className={inputClass}
+                                                />
+                                            </div>
+                                            <div className="space-y-2">
+                                                <label htmlFor="new-password" className={labelClass}>{t("pages.settings.newPassword")}</label>
+                                                <input
+                                                    id="new-password"
+                                                    type="password"
+                                                    value={passwordForm.newPassword}
+                                                    onChange={(event) => setPasswordForm((current) => ({ ...current, newPassword: event.target.value }))}
+                                                    className={inputClass}
+                                                />
+                                            </div>
+                                            <div className="space-y-2">
+                                                <label htmlFor="confirm-password" className={labelClass}>{t("pages.settings.confirmPassword")}</label>
+                                                <input
+                                                    id="confirm-password"
+                                                    type="password"
+                                                    value={passwordForm.confirmPassword}
+                                                    onChange={(event) => setPasswordForm((current) => ({ ...current, confirmPassword: event.target.value }))}
+                                                    className={inputClass}
+                                                />
+                                            </div>
+                                            <div className="lg:col-span-3">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void changePassword()}
+                                                    className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700"
+                                                >
+                                                    <Save className="h-4 w-4" />
+                                                    {t("pages.settings.changePassword")}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
 
-                        {authSettings?.passkeysAvailable !== false && (
-                        <div className="space-y-4 border-t border-gray-200 pt-6 dark:border-gray-700">
-                            <div>
-                                <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{t("pages.settings.passkeys")}</h4>
-                                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.passkeysDescription")}</p>
-                            </div>
-                            <div className="space-y-3">
-                                {passkeys.length === 0 ? (
-                                    <p className="text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.noPasskeys")}</p>
-                                ) : (
-                                    passkeys.map((passkey) => (
-                                        <div
-                                            key={passkey.id}
-                                            className="flex items-center justify-between gap-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-gray-900/50"
-                                        >
-                                            <div className="min-w-0">
-                                                <p className="truncate text-sm font-medium text-gray-900 dark:text-gray-100">
-                                                    {passkey.name || t("pages.settings.passkey")}
-                                                </p>
-                                                <p className="text-xs text-gray-500">
-                                                    {t("pages.settings.passkeyAdded", { date: formatDate(passkey.createdAt) })}
+                                    {canChangePassword && (
+                                        <div className="space-y-3">
+                                            <div>
+                                                <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-gray-900 dark:text-gray-100">
+                                                    <span>{t("pages.settings.totpTitle")}</span>
+                                                    <Badge variant={authSettings?.totpEnabled ? "success" : "secondary"}>
+                                                        {authSettings?.totpEnabled ? t("common.enabled") : t("common.disabled")}
+                                                    </Badge>
+                                                </div>
+                                                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                                    {authSettings?.totpEnabled ? t("pages.settings.totpEnabledDescription") : t("pages.settings.totpDescription")}
                                                 </p>
                                             </div>
                                             <button
                                                 type="button"
-                                                onClick={() => void removePasskey(passkey.id)}
-                                                className="rounded-md p-2 text-red-600 transition-colors hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/40"
-                                                aria-label={t("pages.settings.removePasskey")}
-                                                title={t("pages.settings.removePasskey")}
+                                                onClick={() => void openTotpModal()}
+                                                disabled={isLoadingTotpSetup}
+                                                className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
                                             >
-                                                <Trash2 className="h-4 w-4" />
+                                                <QrCode className="h-4 w-4" />
+                                                {authSettings?.totpEnabled ? t("pages.settings.manageTotp") : t("pages.settings.setupTotp")}
                                             </button>
                                         </div>
-                                    ))
-                                )}
-                            </div>
-                            <button
-                                type="button"
-                                onClick={openPasskeyModal}
-                                className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700"
-                            >
-                                <KeyRound className="h-4 w-4" />
-                                {t("pages.settings.registerNewPasskey")}
-                            </button>
-                        </div>
-                        )}
+                                    )}
+                                </div>
 
-                        <div className="space-y-4 border-t border-gray-200 pt-6 dark:border-gray-700">
-                            <div>
-                                <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{t("pages.settings.oidcSso")}</h4>
-                                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.oidcDescription")}</p>
-                            </div>
-                            <div className="grid gap-4 lg:grid-cols-2">
-                                <div className="space-y-2 lg:col-span-2">
-                                    <label htmlFor="oidc-issuer" className={labelClass}>{t("pages.settings.oidcIssuerUrl")}</label>
-                                    <input
-                                        id="oidc-issuer"
-                                        value={oidcForm.issuerUrl}
-                                        onChange={(event) => setOidcForm((current) => ({ ...current, issuerUrl: event.target.value }))}
-                                        disabled={!canManageAuthSettings}
-                                        className={inputClass}
-                                    />
+                                {authSettings?.passkeysAvailable !== false && (
+                                <div className="space-y-4 border-t border-gray-200 pt-6 dark:border-gray-700">
+                                    <div>
+                                        <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{t("pages.settings.passkeys")}</h4>
+                                        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.passkeysDescription")}</p>
+                                    </div>
+                                    <div className="space-y-3">
+                                        {passkeys.length === 0 ? (
+                                            <p className="text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.noPasskeys")}</p>
+                                        ) : (
+                                            passkeys.map((passkey) => (
+                                                <div
+                                                    key={passkey.id}
+                                                    className="flex items-center justify-between gap-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-gray-900/50"
+                                                >
+                                                    <div className="min-w-0">
+                                                        <p className="truncate text-sm font-medium text-gray-900 dark:text-gray-100">
+                                                            {passkey.name || t("pages.settings.passkey")}
+                                                        </p>
+                                                        <p className="text-xs text-gray-500">
+                                                            {t("pages.settings.passkeyAdded", { date: formatDate(passkey.createdAt) })}
+                                                        </p>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void removePasskey(passkey.id)}
+                                                        className="rounded-md p-2 text-red-600 transition-colors hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/40"
+                                                        aria-label={t("pages.settings.removePasskey")}
+                                                        title={t("pages.settings.removePasskey")}
+                                                    >
+                                                        <Trash2 className="h-4 w-4" />
+                                                    </button>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={openPasskeyModal}
+                                        className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700"
+                                    >
+                                        <KeyRound className="h-4 w-4" />
+                                        {t("pages.settings.registerNewPasskey")}
+                                    </button>
                                 </div>
+                                )}
+                            </CardContent>
+                        </Card>
+                    )}
+                </TabPanel>
+            )}
+
+            {activeTab === 'general' && (
+                <TabPanel idPrefix="settings" id="general">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>{t("pages.settings.general")}</CardTitle>
+                            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.generalSettingsDescription")}</p>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="grid gap-6 xl:grid-cols-2">
                                 <div className="space-y-2">
-                                    <label htmlFor="oidc-client-id" className={labelClass}>{t("pages.settings.oidcClientId")}</label>
-                                    <input
-                                        id="oidc-client-id"
-                                        value={oidcForm.clientId}
-                                        onChange={(event) => setOidcForm((current) => ({ ...current, clientId: event.target.value }))}
-                                        disabled={!canManageAuthSettings}
-                                        className={inputClass}
-                                    />
-                                </div>
-                                <div className="space-y-2">
-                                    <label htmlFor="oidc-client-secret" className={labelClass}>{t("pages.settings.oidcClientSecret")}</label>
-                                    <input
-                                        id="oidc-client-secret"
-                                        type="password"
-                                        value={oidcForm.clientSecret}
-                                        onChange={(event) => setOidcForm((current) => ({ ...current, clientSecret: event.target.value }))}
-                                        placeholder={authSettings?.hasOidcClientSecret ? t("pages.settings.unchanged") : ''}
-                                        disabled={!canManageAuthSettings}
-                                        className={inputClass}
-                                    />
-                                </div>
-                                <div className="lg:col-span-2">
-                                    <GroupListEditor
-                                        id="oidc-scopes"
-                                        label={t("pages.settings.oidcScope")}
-                                        groups={oidcForm.scopes}
-                                        draft={oidcListDrafts.scopes}
-                                        onDraftChange={(value) => setOidcListDrafts((current) => ({ ...current, scopes: value }))}
-                                        onAdd={() => addOidcListItem('scopes')}
-                                        onRemove={(scope) => removeOidcListItem('scopes', scope)}
-                                        disabled={!canManageAuthSettings}
-                                        placeholder={DEFAULT_OIDC_SCOPE}
-                                        addLabel={t("pages.settings.addGroup")}
-                                        emptyLabel={t("pages.settings.noScopesConfigured")}
-                                        removeLabel={(scope) => t("pages.settings.removeScope", { scope })}
-                                        canRemove={(scope) => scope !== 'openid'}
-                                        labelClass={labelClass}
-                                    />
-                                </div>
-                                <div className="space-y-2">
-                                    <label htmlFor="oidc-groups-claim" className={labelClass}>{t("pages.settings.oidcGroupsClaim")}</label>
-                                    <input
-                                        id="oidc-groups-claim"
-                                        value={oidcForm.groupsClaim}
-                                        onChange={(event) => setOidcForm((current) => ({ ...current, groupsClaim: event.target.value }))}
-                                        placeholder="groups"
-                                        disabled={!canManageAuthSettings}
-                                        className={inputClass}
-                                    />
-                                </div>
-                                <div className="space-y-2">
-                                    <label htmlFor="oidc-unmatched-role" className={labelClass}>{t("pages.settings.oidcUnmatchedRole")}</label>
+                                    <div className="flex items-center gap-1.5">
+                                        <label htmlFor="settings-refresh" className={labelClass}>
+                                            {t("pages.settings.refreshInterval")}
+                                        </label>
+                                        {renderManagedLock(refreshIntervalSource)}
+                                    </div>
                                     <select
-                                        id="oidc-unmatched-role"
-                                        aria-describedby="oidc-unmatched-role-help"
-                                        value={oidcForm.unmatchedRole}
-                                        onChange={(event) => setOidcForm((current) => ({ ...current, unmatchedRole: event.target.value as OidcUnmatchedRole }))}
-                                        disabled={!canManageAuthSettings}
+                                        id="settings-refresh"
+                                        value={refreshInterval}
+                                        onChange={(event) => setRefreshInterval(Number(event.target.value))}
+                                        disabled={!canManageSettings || isSaving || Boolean(refreshIntervalSource)}
                                         className={inputClass}
                                     >
-                                        <option value="deny">{t("pages.settings.oidcUnmatchedRoleDeny")}</option>
-                                        <option value="admin">{t("pages.settings.oidcUnmatchedRoleAdmin")}</option>
-                                        <option value="read-only">{t("pages.settings.oidcUnmatchedRoleReadOnly")}</option>
+                                        {refreshOptions.map((option) => (
+                                            <option key={option.value} value={option.value}>
+                                                {option.label}
+                                            </option>
+                                        ))}
                                     </select>
-                                    <p id="oidc-unmatched-role-help" className="text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.oidcGroupsHelp")}</p>
+                                    <p className="text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.refreshHelp")}</p>
                                 </div>
-                                <GroupListEditor
-                                    id="oidc-admin-groups"
-                                    label={t("pages.settings.oidcAdminGroups")}
-                                    groups={oidcForm.adminGroups}
-                                    draft={oidcListDrafts.adminGroups}
-                                    onDraftChange={(value) => setOidcListDrafts((current) => ({ ...current, adminGroups: value }))}
-                                    onAdd={() => addOidcListItem('adminGroups')}
-                                    onRemove={(group) => removeOidcListItem('adminGroups', group)}
-                                    disabled={!canManageAuthSettings}
-                                    placeholder="crowdsec-admins"
-                                    addLabel={t("pages.settings.addGroup")}
-                                    emptyLabel={t("pages.settings.noGroupsConfigured")}
-                                    removeLabel={(group) => t("pages.settings.removeGroup", { group })}
-                                    labelClass={labelClass}
-                                />
-                                <GroupListEditor
-                                    id="oidc-read-only-groups"
-                                    label={t("pages.settings.oidcReadOnlyGroups")}
-                                    groups={oidcForm.readOnlyGroups}
-                                    draft={oidcListDrafts.readOnlyGroups}
-                                    onDraftChange={(value) => setOidcListDrafts((current) => ({ ...current, readOnlyGroups: value }))}
-                                    onAdd={() => addOidcListItem('readOnlyGroups')}
-                                    onRemove={(group) => removeOidcListItem('readOnlyGroups', group)}
-                                    disabled={!canManageAuthSettings}
-                                    placeholder="crowdsec-viewers"
-                                    addLabel={t("pages.settings.addGroup")}
-                                    emptyLabel={t("pages.settings.noGroupsConfigured")}
-                                    removeLabel={(group) => t("pages.settings.removeGroup", { group })}
-                                    labelClass={labelClass}
-                                />
-                                <div className="flex items-start gap-4 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800 lg:col-span-2">
-                                    <Switch
-                                        id="oidc-end-session"
-                                        checked={oidcForm.endSession}
-                                        onCheckedChange={(checked) => setOidcForm((current) => ({ ...current, endSession: checked }))}
-                                        disabled={!canManageAuthSettings}
-                                    />
-                                    <div className="min-w-0">
-                                        <label htmlFor="oidc-end-session" className={labelClass}>
-                                            {t("pages.settings.oidcEndSession")}
-                                        </label>
-                                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                            {t("pages.settings.oidcEndSessionHelp", { url: `${window.location.origin}${withBasePath('/login')}` })}
-                                        </p>
+
+                                <div className="space-y-2">
+                                    <div className="flex items-start gap-4 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+                                        <Switch
+                                            id="settings-manual-refresh"
+                                            checked={manualRefreshEnabled}
+                                            onCheckedChange={setManualRefreshEnabled}
+                                            disabled={!canManageSettings || isSaving || Boolean(manualRefreshSource)}
+                                        />
+                                        <div className="min-w-0">
+                                            <div className="flex items-center gap-1.5">
+                                                <label htmlFor="settings-manual-refresh" className={labelClass}>
+                                                    {t("pages.settings.enableManualRefresh")}
+                                                </label>
+                                                {renderManagedLock(manualRefreshSource)}
+                                            </div>
+                                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                                {t("pages.settings.enableManualRefreshHelp")}
+                                            </p>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
-                            <button
-                                type="button"
-                                onClick={() => void saveOidcSettings()}
-                                disabled={!canManageAuthSettings || isSavingOidc}
-                                className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700"
-                            >
-                                <ShieldCheck className="h-4 w-4" />
-                                {isSavingOidc ? t("common.saving") : t("pages.settings.saveOidcSettings")}
-                            </button>
-                        </div>
-                    </CardContent>
-                </Card>
+
+                            <div className="mt-6 border-t border-gray-200 pt-6 dark:border-gray-700">
+                                <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{t("pages.settings.manualDecisions")}</h3>
+                                <p className="mt-1 mb-4 text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.manualDecisionsDescription")}</p>
+                                <GroupListEditor
+                                    id="settings-manual-decision-scenarios"
+                                    label={t("pages.settings.manualDecisionScenarios")}
+                                    groups={[...lockedScenarios, ...customScenarios]}
+                                    draft={scenarioDraft}
+                                    onDraftChange={setScenarioDraft}
+                                    onAdd={addScenario}
+                                    onRemove={(scenario) => setCustomScenarios((current) => current.filter((candidate) => candidate !== scenario))}
+                                    canRemove={(scenario) => !lockedScenarios.includes(scenario)}
+                                    disabled={!canManageSettings || isSaving}
+                                    placeholder="custom/abuse-report"
+                                    addLabel={t("pages.settings.addGroup")}
+                                    emptyLabel=""
+                                    removeLabel={(scenario) => t("pages.settings.removeManualDecisionScenario", { scenario })}
+                                    labelClass={labelClass}
+                                />
+                                <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.manualDecisionScenariosHelp")}</p>
+                            </div>
+
+                            {config?.instances?.some((instance) => Object.keys(instance.sync_overrides || {}).length > 0) && (
+                                <div className="mt-6 rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-900/40">
+                                    <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Per-instance configuration overrides</h3>
+                                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                        These values come from the startup YAML file, take precedence over global settings, and are read-only until the process restarts.
+                                    </p>
+                                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                                        {config.instances.filter((instance) => Object.keys(instance.sync_overrides || {}).length > 0).map((instance) => (
+                                            <div key={instance.id} className="rounded-md border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+                                                <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{instance.name}</p>
+                                                <dl className="mt-2 space-y-1 text-xs text-gray-600 dark:text-gray-300">
+                                                    {Object.entries(instance.sync_overrides || {}).map(([key, value]) => (
+                                                        <div key={key} className="flex justify-between gap-4">
+                                                            <dt className="font-mono">{key}</dt>
+                                                            <dd className="font-mono text-right">{String(value)}</dd>
+                                                        </div>
+                                                    ))}
+                                                </dl>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="mt-6 flex justify-start">
+                                <button
+                                    type="button"
+                                    onClick={() => void handleSave()}
+                                    disabled={isSaving}
+                                    className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    <Save className="h-4 w-4" />
+                                    {isSaving ? t("common.saving") : t("common.save")}
+                                </button>
+                            </div>
+                        </CardContent>
+                    </Card>
+                </TabPanel>
             )}
 
-            <Card>
-                <CardHeader>
-                    <CardTitle>{t("pages.settings.branding")}</CardTitle>
-                    <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.brandingDescription")}</p>
-                </CardHeader>
-                <CardContent>
-                    <div className="grid gap-6 xl:grid-cols-2">
-                        <div className="space-y-2">
-                            <label htmlFor="settings-app-name" className={labelClass}>
-                                {t("pages.settings.appName")}
-                            </label>
-                            <input
-                                id="settings-app-name"
-                                type="text"
-                                value={appNameValue}
-                                maxLength={MAX_APP_NAME_LENGTH}
-                                placeholder={defaultAppName}
-                                onChange={(event) => setAppNameDraft(event.target.value)}
-                                disabled={!canManageSettings || isSavingAppName}
-                                className={inputClass}
-                            />
-                            <p className="text-xs text-gray-500 dark:text-gray-400">
-                                {t("pages.settings.appNameHelp", { defaultName: defaultAppName })}
-                            </p>
-                        </div>
-
-                        {/* Starts a new row so both logos sit side by side below the name. */}
-                        <div className="xl:col-start-1">{renderLogoField("default")}</div>
-                        {renderLogoField("dark")}
-                    </div>
-
-                    {!canManageSettings && (
-                        <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-100">
+            {activeTab === 'authentication' && (
+                <TabPanel idPrefix="settings" id="authentication">
+                    {!authEnabled && (
+                        <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-100">
                             <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0" />
-                            <span>{t("pages.settings.readOnlyBranding")}</span>
+                            <span>{t("pages.settings.authDisabledHint")}</span>
                         </div>
                     )}
 
-                    <div className="mt-6 flex justify-start">
-                        <button
-                            type="button"
-                            onClick={() => void handleSaveAppName()}
-                            aria-label={t("pages.settings.saveAppName")}
-                            disabled={!canManageSettings || isSavingAppName || !hasAppNameChange}
-                            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                            <Save className="h-4 w-4" />
-                            {isSavingAppName ? t("common.saving") : t("common.save")}
-                        </button>
-                    </div>
+                    {authEnabled && (
+                        <Card>
+                            <CardHeader>
+                                <CardTitle>{t("pages.settings.authentication")}</CardTitle>
+                                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.authenticationSettingsDescription")}</p>
+                            </CardHeader>
+                            <CardContent className="space-y-8">
+                                <div className="space-y-4">
+                                    <div>
+                                        <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{t("pages.settings.passwordLogin")}</h4>
+                                        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.passwordLoginDescription")}</p>
+                                    </div>
+                                    <div className="space-y-4">
+                                        <label className="flex items-start gap-3 text-sm text-gray-700 dark:text-gray-200">
+                                            <input
+                                                type="checkbox"
+                                                checked={disablePasswordLogin}
+                                                onChange={(event) => setDisablePasswordLogin(event.target.checked)}
+                                                disabled={!canManageAuthSettings || passwordLoginManaged || isSavingAuth}
+                                                className="mt-1 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                                            />
+                                            <span>
+                                                <span className="flex items-center gap-1.5 font-medium">
+                                                    {t("pages.settings.disablePasswordLogin")}
+                                                    {renderManagedLock(authSettings?.managedSettings?.disablePasswordLogin)}
+                                                </span>
+                                                <span className="block text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.disablePasswordLoginDescription")}</span>
+                                                {authSettings?.passwordLoginFallback && (
+                                                    <span className="mt-1 block text-xs text-amber-700 dark:text-amber-400">{t("pages.settings.passwordLoginFallback")}</span>
+                                                )}
+                                            </span>
+                                        </label>
+                                    </div>
+                                </div>
 
-                    <BrandingColorsSettings
-                        theme={brandingTheme}
-                        canManageSettings={canManageSettings}
+                                <div className="space-y-4 border-t border-gray-200 pt-6 dark:border-gray-700">
+                                    <div>
+                                        <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{t("pages.settings.oidcSso")}</h4>
+                                        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.oidcDescription")}</p>
+                                    </div>
+                                    <div className="grid gap-4 lg:grid-cols-2">
+                                        <div className="space-y-2 lg:col-span-2">
+                                            <div className="flex items-center gap-1.5">
+                                                <label htmlFor="oidc-issuer" className={labelClass}>{t("pages.settings.oidcIssuerUrl")}</label>
+                                                {renderManagedLock(authSettings?.managedSettings?.oidcIssuerUrl)}
+                                            </div>
+                                            <input
+                                                id="oidc-issuer"
+                                                value={oidcForm.issuerUrl}
+                                                onChange={(event) => setOidcForm((current) => ({ ...current, issuerUrl: event.target.value }))}
+                                                disabled={!canManageAuthSettings || isOidcManaged('oidcIssuerUrl')}
+                                                className={inputClass}
+                                            />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <div className="flex items-center gap-1.5">
+                                                <label htmlFor="oidc-client-id" className={labelClass}>{t("pages.settings.oidcClientId")}</label>
+                                                {renderManagedLock(authSettings?.managedSettings?.oidcClientId)}
+                                            </div>
+                                            <input
+                                                id="oidc-client-id"
+                                                value={oidcForm.clientId}
+                                                onChange={(event) => setOidcForm((current) => ({ ...current, clientId: event.target.value }))}
+                                                disabled={!canManageAuthSettings || isOidcManaged('oidcClientId')}
+                                                className={inputClass}
+                                            />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <div className="flex items-center gap-1.5">
+                                                <label htmlFor="oidc-client-secret" className={labelClass}>{t("pages.settings.oidcClientSecret")}</label>
+                                                {renderManagedLock(authSettings?.managedSettings?.oidcClientSecret)}
+                                            </div>
+                                            <input
+                                                id="oidc-client-secret"
+                                                type="password"
+                                                value={oidcForm.clientSecret}
+                                                onChange={(event) => setOidcForm((current) => ({ ...current, clientSecret: event.target.value }))}
+                                                placeholder={authSettings?.hasOidcClientSecret ? t("pages.settings.unchanged") : ''}
+                                                disabled={!canManageAuthSettings || isOidcManaged('oidcClientSecret')}
+                                                className={inputClass}
+                                            />
+                                        </div>
+                                        <div className="lg:col-span-2">
+                                            <GroupListEditor
+                                                id="oidc-scopes"
+                                                labelAddon={renderManagedLock(authSettings?.managedSettings?.oidcScope)}
+                                                label={t("pages.settings.oidcScope")}
+                                                groups={oidcForm.scopes}
+                                                draft={oidcListDrafts.scopes}
+                                                onDraftChange={(value) => setOidcListDrafts((current) => ({ ...current, scopes: value }))}
+                                                onAdd={() => addOidcListItem('scopes')}
+                                                onRemove={(scope) => removeOidcListItem('scopes', scope)}
+                                                disabled={!canManageAuthSettings || isOidcManaged('oidcScope')}
+                                                placeholder={DEFAULT_OIDC_SCOPE}
+                                                addLabel={t("pages.settings.addGroup")}
+                                                emptyLabel={t("pages.settings.noScopesConfigured")}
+                                                removeLabel={(scope) => t("pages.settings.removeScope", { scope })}
+                                                canRemove={(scope) => scope !== 'openid'}
+                                                labelClass={labelClass}
+                                            />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <div className="flex items-center gap-1.5">
+                                                <label htmlFor="oidc-groups-claim" className={labelClass}>{t("pages.settings.oidcGroupsClaim")}</label>
+                                                {renderManagedLock(authSettings?.managedSettings?.oidcGroupsClaim)}
+                                            </div>
+                                            <input
+                                                id="oidc-groups-claim"
+                                                value={oidcForm.groupsClaim}
+                                                onChange={(event) => setOidcForm((current) => ({ ...current, groupsClaim: event.target.value }))}
+                                                placeholder="groups"
+                                                disabled={!canManageAuthSettings || isOidcManaged('oidcGroupsClaim')}
+                                                className={inputClass}
+                                            />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <div className="flex items-center gap-1.5">
+                                                <label htmlFor="oidc-unmatched-role" className={labelClass}>{t("pages.settings.oidcUnmatchedRole")}</label>
+                                                {renderManagedLock(authSettings?.managedSettings?.oidcUnmatchedRole)}
+                                            </div>
+                                            <select
+                                                id="oidc-unmatched-role"
+                                                aria-describedby="oidc-unmatched-role-help"
+                                                value={oidcForm.unmatchedRole}
+                                                onChange={(event) => setOidcForm((current) => ({ ...current, unmatchedRole: event.target.value as OidcUnmatchedRole }))}
+                                                disabled={!canManageAuthSettings || isOidcManaged('oidcUnmatchedRole')}
+                                                className={inputClass}
+                                            >
+                                                <option value="deny">{t("pages.settings.oidcUnmatchedRoleDeny")}</option>
+                                                <option value="admin">{t("pages.settings.oidcUnmatchedRoleAdmin")}</option>
+                                                <option value="read-only">{t("pages.settings.oidcUnmatchedRoleReadOnly")}</option>
+                                            </select>
+                                            <p id="oidc-unmatched-role-help" className="text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.oidcGroupsHelp")}</p>
+                                        </div>
+                                        <GroupListEditor
+                                            id="oidc-admin-groups"
+                                            labelAddon={renderManagedLock(authSettings?.managedSettings?.oidcAdminGroups)}
+                                            label={t("pages.settings.oidcAdminGroups")}
+                                            groups={oidcForm.adminGroups}
+                                            draft={oidcListDrafts.adminGroups}
+                                            onDraftChange={(value) => setOidcListDrafts((current) => ({ ...current, adminGroups: value }))}
+                                            onAdd={() => addOidcListItem('adminGroups')}
+                                            onRemove={(group) => removeOidcListItem('adminGroups', group)}
+                                            disabled={!canManageAuthSettings || isOidcManaged('oidcAdminGroups')}
+                                            placeholder="crowdsec-admins"
+                                            addLabel={t("pages.settings.addGroup")}
+                                            emptyLabel={t("pages.settings.noGroupsConfigured")}
+                                            removeLabel={(group) => t("pages.settings.removeGroup", { group })}
+                                            labelClass={labelClass}
+                                        />
+                                        <GroupListEditor
+                                            id="oidc-read-only-groups"
+                                            labelAddon={renderManagedLock(authSettings?.managedSettings?.oidcReadOnlyGroups)}
+                                            label={t("pages.settings.oidcReadOnlyGroups")}
+                                            groups={oidcForm.readOnlyGroups}
+                                            draft={oidcListDrafts.readOnlyGroups}
+                                            onDraftChange={(value) => setOidcListDrafts((current) => ({ ...current, readOnlyGroups: value }))}
+                                            onAdd={() => addOidcListItem('readOnlyGroups')}
+                                            onRemove={(group) => removeOidcListItem('readOnlyGroups', group)}
+                                            disabled={!canManageAuthSettings || isOidcManaged('oidcReadOnlyGroups')}
+                                            placeholder="crowdsec-viewers"
+                                            addLabel={t("pages.settings.addGroup")}
+                                            emptyLabel={t("pages.settings.noGroupsConfigured")}
+                                            removeLabel={(group) => t("pages.settings.removeGroup", { group })}
+                                            labelClass={labelClass}
+                                        />
+                                        <div className="flex items-start gap-4 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800 lg:col-span-2">
+                                            <Switch
+                                                id="oidc-end-session"
+                                                checked={oidcForm.endSession}
+                                                onCheckedChange={(checked) => setOidcForm((current) => ({ ...current, endSession: checked }))}
+                                                disabled={!canManageAuthSettings || isOidcManaged('oidcEndSession')}
+                                            />
+                                            <div className="min-w-0">
+                                                <div className="flex items-center gap-1.5">
+                                                    <label htmlFor="oidc-end-session" className={labelClass}>
+                                                        {t("pages.settings.oidcEndSession")}
+                                                    </label>
+                                                    {renderManagedLock(authSettings?.managedSettings?.oidcEndSession)}
+                                                </div>
+                                                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                                    {t("pages.settings.oidcEndSessionHelp", { url: `${window.location.origin}${withBasePath('/login')}` })}
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-start gap-4 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800 lg:col-span-2">
+                                            <Switch
+                                                id="oidc-backchannel-logout"
+                                                checked={oidcForm.backchannelLogout}
+                                                onCheckedChange={(checked) => setOidcForm((current) => ({ ...current, backchannelLogout: checked }))}
+                                                disabled={!canManageAuthSettings || isOidcManaged('oidcBackchannelLogout')}
+                                            />
+                                            <div className="min-w-0">
+                                                <div className="flex items-center gap-1.5">
+                                                    <label htmlFor="oidc-backchannel-logout" className={labelClass}>
+                                                        {t("pages.settings.oidcBackchannelLogout")}
+                                                    </label>
+                                                    {renderManagedLock(authSettings?.managedSettings?.oidcBackchannelLogout)}
+                                                </div>
+                                                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                                    {t("pages.settings.oidcBackchannelLogoutHelp", { url: `${window.location.origin}${withBasePath('/api/auth/oidc/backchannel-logout')}` })}
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-start gap-4 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800 lg:col-span-2">
+                                            <Switch
+                                                id="oidc-auto-login"
+                                                checked={oidcForm.autoLogin}
+                                                onCheckedChange={(checked) => setOidcForm((current) => ({ ...current, autoLogin: checked }))}
+                                                disabled={!canManageAuthSettings || isOidcManaged('oidcAutoLogin')}
+                                            />
+                                            <div className="min-w-0">
+                                                <div className="flex items-center gap-1.5">
+                                                    <label htmlFor="oidc-auto-login" className={labelClass}>
+                                                        {t("pages.settings.oidcAutoLogin")}
+                                                    </label>
+                                                    {renderManagedLock(authSettings?.managedSettings?.oidcAutoLogin)}
+                                                </div>
+                                                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                                    {t("pages.settings.oidcAutoLoginHelp", { url: `${window.location.origin}${withBasePath('/login?local=1')}` })}
+                                                </p>
+                                                {authSettings?.oidcAutoLogin && authSettings.oidcAutoLoginActive === false && (
+                                                    <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">{t("pages.settings.oidcAutoLoginInactive")}</p>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="flex justify-start">
+                                    <button
+                                        type="button"
+                                        onClick={() => void saveAuthSettings()}
+                                        disabled={!canManageAuthSettings || isSavingAuth}
+                                        className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        <Save className="h-4 w-4" />
+                                        {isSavingAuth ? t("common.saving") : t("common.save")}
+                                    </button>
+                                </div>
+                            </CardContent>
+                        </Card>
+                    )}
+                </TabPanel>
+            )}
+
+            {activeTab === 'users' && (
+                <TabPanel idPrefix="settings" id="users">
+                    <UsersSettings
+                        canManage={canManageSettings}
                         inputClass={inputClass}
                         labelClass={labelClass}
-                        onSaved={setBranding}
                         showToast={showToast}
                     />
-                </CardContent>
-            </Card>
+                </TabPanel>
+            )}
+
+            {activeTab === 'branding' && (
+                <TabPanel idPrefix="settings" id="branding">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>{t("pages.settings.branding")}</CardTitle>
+                            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.brandingDescription")}</p>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="grid gap-6 xl:grid-cols-2">
+                                <div className="space-y-2">
+                                    <label htmlFor="settings-app-name" className={labelClass}>
+                                        {t("pages.settings.appName")}
+                                    </label>
+                                    <input
+                                        id="settings-app-name"
+                                        type="text"
+                                        value={appNameValue}
+                                        maxLength={MAX_APP_NAME_LENGTH}
+                                        placeholder={defaultAppName}
+                                        onChange={(event) => setAppNameDraft(event.target.value)}
+                                        disabled={!canManageSettings || isSavingBranding}
+                                        className={inputClass}
+                                    />
+                                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                                        {t("pages.settings.appNameHelp", { defaultName: defaultAppName })}
+                                    </p>
+                                </div>
+
+                                {/* Starts a new row so both logos sit side by side below the name. */}
+                                <div className="xl:col-start-1">{renderLogoField("default")}</div>
+                                {renderLogoField("dark")}
+                            </div>
+
+                            <BrandingColorsSettings
+                                theme={themeValue}
+                                onChange={setThemeDraft}
+                                disabled={!canManageSettings || isSavingBranding}
+                                inputClass={inputClass}
+                                labelClass={labelClass}
+                            />
+
+                            <div className="mt-6 flex justify-start">
+                                <button
+                                    type="button"
+                                    onClick={() => void handleSaveBranding()}
+                                    disabled={!canManageSettings || isSavingBranding}
+                                    className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    <Save className="h-4 w-4" />
+                                    {isSavingBranding ? t("common.saving") : t("common.save")}
+                                </button>
+                            </div>
+                        </CardContent>
+                    </Card>
+                </TabPanel>
+            )}
 
             <Modal
                 isOpen={totpModalOpen}
@@ -1360,6 +1600,19 @@ export function Settings() {
                                 autoFocus
                             />
                         </div>
+                        <div className="space-y-2">
+                            <label htmlFor="totp-disable-code" className={labelClass}>{t("pages.settings.authenticatorCode")}</label>
+                            <input
+                                id="totp-disable-code"
+                                value={totpCode}
+                                onChange={(event) => setTotpCode(event.target.value)}
+                                disabled={isSavingTotp}
+                                inputMode="numeric"
+                                autoComplete="one-time-code"
+                                pattern="[0-9 ]*"
+                                className={inputClass}
+                            />
+                        </div>
                         <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
                             <button
                                 type="button"
@@ -1371,7 +1624,7 @@ export function Settings() {
                             </button>
                             <button
                                 type="submit"
-                                disabled={isSavingTotp || !totpDisablePassword}
+                                disabled={isSavingTotp || !totpDisablePassword || !totpCode.trim()}
                                 className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-red-600 px-4 text-sm font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
                             >
                                 <Trash2 className="h-4 w-4" />
@@ -1528,6 +1781,29 @@ export function Settings() {
     );
 }
 
+const MANAGED_SETTING_MARKER = '\u0000';
+
+// Marks a setting that the application config locks; the tooltip names its config path.
+function ManagedLock({ label, children }: { label: string; children: ReactNode }) {
+    return (
+        <span className="group relative inline-flex shrink-0">
+            <span
+                tabIndex={0}
+                aria-label={label}
+                className="rounded text-gray-400 outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-gray-500"
+            >
+                <LockKeyhole className="h-3.5 w-3.5" aria-hidden="true" />
+            </span>
+            <span
+                role="tooltip"
+                className="pointer-events-none absolute left-0 top-full z-20 mt-2 hidden w-80 max-w-[calc(100vw-2rem)] rounded-lg bg-gray-900 px-3 py-2 text-left text-xs font-normal normal-case leading-5 tracking-normal text-white shadow-lg group-hover:block group-focus-within:block dark:bg-gray-700"
+            >
+                {children}
+            </span>
+        </span>
+    );
+}
+
 function GroupListEditor({
     id,
     label,
@@ -1543,6 +1819,7 @@ function GroupListEditor({
     removeLabel,
     canRemove = () => true,
     labelClass,
+    labelAddon,
 }: {
     id: string;
     label: string;
@@ -1558,6 +1835,7 @@ function GroupListEditor({
     removeLabel: (group: string) => string;
     canRemove?: (group: string) => boolean;
     labelClass: string;
+    labelAddon?: ReactNode;
 }) {
     const handleSubmit = (event: FormEvent) => {
         event.preventDefault();
@@ -1566,7 +1844,10 @@ function GroupListEditor({
 
     return (
         <div className="space-y-2">
-            <label htmlFor={id} className={labelClass}>{label}</label>
+            <div className="flex items-center gap-1.5">
+                <label htmlFor={id} className={labelClass}>{label}</label>
+                {labelAddon}
+            </div>
             <form
                 className="flex min-h-11 overflow-hidden rounded-lg border border-gray-300 bg-white focus-within:ring-2 focus-within:ring-primary-500 dark:border-gray-700 dark:bg-gray-900"
                 onSubmit={handleSubmit}

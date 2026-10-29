@@ -1,6 +1,11 @@
 import type {
   AddDecisionRequest,
   AlertRecord,
+  AllowlistCheckResponse,
+  AllowlistEntriesResponse,
+  AllowlistedDecisionError,
+  AllowlistedDecisionResponse,
+  AllowlistsResponse,
   ApiPermissionError,
   BulkDeleteRequest,
   BulkDeleteResult,
@@ -25,6 +30,7 @@ import type {
   StatsAlert,
   StatsDecision,
   UpdateMetricsSidebarPreferenceRequest,
+  UpdateAllowlistsSidebarPreferenceRequest,
   UpdateManualDecisionScenariosRequest,
   UpdateManualRefreshSettingRequest,
   UpsertNotificationChannelRequest,
@@ -317,11 +323,45 @@ export async function addDecision(data: AddDecisionRequest): Promise<unknown> {
         body: JSON.stringify(data),
     });
     const payload = await res.clone().json().catch(() => null) as MultiInstanceOperationResponse | unknown;
+    if (res.status === 409 && (payload as Partial<AllowlistedDecisionResponse> | null)?.code === 'ALLOWLISTED') {
+        const { error, allowlisted } = payload as AllowlistedDecisionResponse;
+        throw Object.assign(new Error(error), { code: 'ALLOWLISTED', allowlisted }) as AllowlistedDecisionError;
+    }
     if (!res.ok && (!payload || typeof payload !== 'object' || !('results' in payload))) {
         await handleApiError(res, 'Failed to add decision', 'Write Operations');
     }
     clearGetCaches();
     return payload;
+}
+
+export async function fetchAllowlists(instanceScope: string, query = ''): Promise<AllowlistsResponse> {
+    const params = new URLSearchParams({ instance: instanceScope });
+    if (query) params.set('q', query);
+    return fetchJson<AllowlistsResponse>(`/api/allowlists?${params.toString()}`, undefined, 'Failed to fetch allowlists');
+}
+
+export async function fetchAllowlistEntries(
+    name: string,
+    instanceScope: string,
+    page: number,
+    pageSize = 50,
+    query = '',
+): Promise<AllowlistEntriesResponse> {
+    const params = new URLSearchParams({ instance: instanceScope, page: String(page), page_size: String(pageSize) });
+    if (query) params.set('q', query);
+    return fetchJson<AllowlistEntriesResponse>(
+        `/api/allowlists/${encodeURIComponent(name)}/entries?${params.toString()}`,
+        undefined,
+        'Failed to fetch allowlist entries',
+    );
+}
+
+export async function checkAllowlist(value: string, instanceScope: string): Promise<AllowlistCheckResponse> {
+    return fetchJson<AllowlistCheckResponse>(
+        `/api/allowlists/check?value=${encodeURIComponent(value)}&instance=${encodeURIComponent(instanceScope)}`,
+        undefined,
+        'Failed to check allowlists',
+    );
 }
 
 export async function fetchConfig(): Promise<ConfigResponse> {
@@ -341,6 +381,17 @@ export async function fetchCombinedCrowdsecMetrics(instanceScope: string): Promi
         undefined,
         'Failed to fetch combined CrowdSec metrics',
     );
+}
+
+export async function updateAllowlistsSidebarPreference(data: UpdateAllowlistsSidebarPreferenceRequest): Promise<{
+    success: boolean;
+    allowlists_sidebar_visible: boolean;
+}> {
+    return sendJson('/api/config/allowlists-sidebar', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    }, 'Failed to update allowlists sidebar preference');
 }
 
 export async function updateMetricsSidebarPreference(data: UpdateMetricsSidebarPreferenceRequest): Promise<{
@@ -385,6 +436,17 @@ export async function updateLanguagePreference(language: string): Promise<{
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ language }),
     }, 'Failed to update language preference');
+}
+
+export async function updateFontPreference(font: string): Promise<{
+    success: boolean;
+    font: string;
+}> {
+    return sendJson('/api/config/font', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ font }),
+    }, 'Failed to update font preference');
 }
 
 async function sendJson<T>(input: string, init: RequestInit, defaultMsg: string): Promise<T> {

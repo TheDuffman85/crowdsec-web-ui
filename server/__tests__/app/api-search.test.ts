@@ -765,7 +765,7 @@ describe('createApp search API', () => {
   });
 
   test('validates bad ids and malformed input', async () => {
-    const { controller, database, lapiClient } = createController();
+    const { controller, database, lapiClient } = createController({ env: { CROWDSEC_REFRESH_INTERVAL: undefined } });
     await lapiClient.login();
 
     const badAlertId = await controller.fetch(new Request('http://localhost/crowdsec/api/alerts/not-a-number'));

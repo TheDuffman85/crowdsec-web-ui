@@ -1,32 +1,142 @@
 import { setLanguagePreferenceMock, useAuthMock } from './harness';
+import { SettingsRouter } from './router';
 import { describe, expect, test, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Settings } from '../../Settings';
-import { fetchConfig, updateManualRefreshSetting, updateMetricsSidebarPreference } from '../../../lib/api';
+import { fetchConfig, updateAllowlistsSidebarPreference, updateFontPreference, updateLanguagePreference, updateManualRefreshSetting, updateMetricsSidebarPreference } from '../../../lib/api';
 import { DateTimeContext, createDateTimeContextValue } from '../../../lib/dateTime';
 import { FontContext } from '../../../lib/font';
 
+async function mockAdminConfig() {
+  const config = await fetchConfig();
+  vi.mocked(fetchConfig).mockResolvedValue({
+    ...config,
+    permissions: { mode: 'admin', can_manage_enforcement: true, can_manage_settings: true },
+  });
+}
+
 describe('Settings general and password', () => {
-  test('keeps language editable but disables refresh in read-only mode', async () => {
-    render(<Settings />);
+  test('defaults allowlists visibility on and only saves changes on Save', async () => {
+    const user = userEvent.setup();
+    const config = await fetchConfig();
+    vi.mocked(fetchConfig).mockResolvedValue({
+      ...config,
+      permissions: { mode: 'admin', can_manage_enforcement: true, can_manage_settings: true },
+    });
+    vi.mocked(updateAllowlistsSidebarPreference).mockResolvedValue({
+      success: true, allowlists_sidebar_visible: false,
+    });
+    const changed = vi.fn();
+    window.addEventListener('allowlists-sidebar-preference-changed', changed);
+    try {
+      render(<SettingsRouter><Settings /></SettingsRouter>);
+      const toggle = await screen.findByRole('switch', { name: 'Show Allowlists in sidebar' });
+      await waitFor(() => expect(toggle).toBeEnabled());
+      expect(toggle).toBeChecked();
+      await user.click(toggle);
+      expect(updateAllowlistsSidebarPreference).not.toHaveBeenCalled();
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(changed).toHaveBeenCalledOnce());
+      expect(updateAllowlistsSidebarPreference).toHaveBeenCalledWith({ visible: false });
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      expect(updateAllowlistsSidebarPreference).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener('allowlists-sidebar-preference-changed', changed);
+    }
+  });
+
+  test.each([
+    ['allowlists_sidebar_visible', 'ui.allowlistsSidebarVisible', 'CONFIG_UI_ALLOWLISTS_SIDEBAR_VISIBLE', 'Show Allowlists in sidebar'],
+    ['metrics_sidebar_visible', 'ui.metricsSidebarVisible', 'CONFIG_UI_METRICS_SIDEBAR_VISIBLE', 'Show Metrics in sidebar'],
+  ] as const)('loads and locks %s managed by configuration', async (key, path, env, label) => {
+    const config = await fetchConfig();
+    vi.mocked(fetchConfig).mockResolvedValue({
+      ...config,
+      [key]: false,
+      managed_settings: {
+        [key]: { path, env },
+      },
+      permissions: { mode: 'admin', can_manage_enforcement: true, can_manage_settings: true },
+    });
+    render(<SettingsRouter><Settings /></SettingsRouter>);
+    expect(await screen.findByLabelText(`Managed by the ${env} environment variable. To manage it here, remove it and any copy in the config file, then restart.`)).toBeInTheDocument();
+    const toggle = screen.getByRole('switch', { name: label });
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toBeDisabled();
+  });
+
+  test('keeps personal preferences editable but disables refresh in read-only mode', async () => {
+    render(<SettingsRouter><Settings /></SettingsRouter>);
 
     expect(await screen.findByLabelText('Language')).toBeEnabled();
-    expect(screen.getByLabelText('Refresh interval')).toBeDisabled();
+    expect(screen.getByRole('switch', { name: 'Show Allowlists in sidebar' })).toBeEnabled();
+    expect(screen.getByRole('switch', { name: 'Show Metrics in sidebar' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
-    expect(screen.getByText('Read-only mode is enabled.')).toBeInTheDocument();
-    expect(screen.getByText('Dashboard authentication is disabled. Set CONFIG_AUTH_ENABLED=true and restart the web UI to enable sign-in and account settings.')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Refresh interval')).not.toBeInTheDocument();
+  });
+
+  test.each(['general', 'branding'])('shows only the account tab to read-only users who open %s', async (tab) => {
+    render(<SettingsRouter tab={tab}><Settings /></SettingsRouter>);
+
+    expect(await screen.findByRole('tab', { name: 'pages.settings.account' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getAllByRole('tab').map((item) => item.textContent)).toEqual(['pages.settings.account']);
+    expect(screen.queryByLabelText('Refresh interval')).not.toBeInTheDocument();
+  });
+
+  test('saves the allowlists sidebar preference for read-only users', async () => {
+    const user = userEvent.setup();
+    vi.mocked(updateAllowlistsSidebarPreference).mockResolvedValue({ success: true, allowlists_sidebar_visible: false });
+    render(<SettingsRouter><Settings /></SettingsRouter>);
+
+    await user.click(await screen.findByRole('switch', { name: 'Show Allowlists in sidebar' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateAllowlistsSidebarPreference).toHaveBeenCalledWith({ visible: false }));
+  });
+
+  test('shows each section in its own tab', async () => {
+    const user = userEvent.setup();
+    await mockAdminConfig();
+    render(<SettingsRouter><Settings /></SettingsRouter>);
+
+    const accountTab = await screen.findByRole('tab', { name: 'pages.settings.account' });
+    expect(accountTab).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByLabelText('Language')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Refresh interval')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: 'General' }));
+    expect(screen.getByLabelText('Refresh interval')).toBeInTheDocument();
+    expect(screen.getByLabelText('Scenarios')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Language')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: 'Authentication' }));
+    expect(screen.getByRole('tab', { name: 'Authentication' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel')).toHaveTextContent('Dashboard authentication is disabled. Set CONFIG_AUTH_ENABLED=true and restart the web UI to enable sign-in and account settings.');
+    expect(screen.queryByLabelText('Language')).not.toBeInTheDocument();
+
+    await user.keyboard('{ArrowRight}');
+    expect(screen.getByRole('tab', { name: 'pages.settings.branding' })).toHaveFocus();
+  });
+
+  test('opens the tab named in the URL', async () => {
+    await mockAdminConfig();
+    render(<SettingsRouter tab="branding"><Settings /></SettingsRouter>);
+
+    expect(await screen.findByRole('tab', { name: 'pages.settings.branding' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByLabelText('pages.settings.appName')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Language')).not.toBeInTheDocument();
   });
 
   test('only applies language changes when saved', async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    render(<SettingsRouter><Settings /></SettingsRouter>);
 
     await user.selectOptions(await screen.findByLabelText('Language'), 'de');
     expect(setLanguagePreferenceMock).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole('button', { name: 'Save' }));
-    expect(setLanguagePreferenceMock).toHaveBeenCalledWith('de');
+    await waitFor(() => expect(setLanguagePreferenceMock).toHaveBeenCalledWith('de', { sync: false }));
+    expect(updateLanguagePreference).toHaveBeenCalledWith('de');
   });
 
   test('only applies font changes when saved', async () => {
@@ -34,7 +144,7 @@ describe('Settings general and password', () => {
     const setFontPreference = vi.fn();
     render(
       <FontContext.Provider value={{ preference: 'system', setFontPreference }}>
-        <Settings />
+        <SettingsRouter><Settings /></SettingsRouter>
       </FontContext.Provider>,
     );
 
@@ -46,7 +156,8 @@ describe('Settings general and password', () => {
     expect(setFontPreference).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole('button', { name: 'Save' }));
-    expect(setFontPreference).toHaveBeenCalledWith('ibm-plex-sans-kr');
+    await waitFor(() => expect(setFontPreference).toHaveBeenCalledWith('ibm-plex-sans-kr', { sync: false }));
+    expect(updateFontPreference).toHaveBeenCalledWith('ibm-plex-sans-kr');
   });
 
   test('saves metrics sidebar visibility from the general settings form', async () => {
@@ -75,7 +186,7 @@ describe('Settings general and password', () => {
       metrics_sidebar_visible: false,
     });
 
-    render(<Settings />);
+    render(<SettingsRouter><Settings /></SettingsRouter>);
 
     await user.click(await screen.findByRole('switch', { name: 'Show Metrics in sidebar' }));
     await user.click(screen.getByRole('button', { name: 'Save' }));
@@ -104,14 +215,50 @@ describe('Settings general and password', () => {
       },
     });
 
-    render(<Settings />);
+    render(<SettingsRouter tab="general"><Settings /></SettingsRouter>);
     await user.click(await screen.findByRole('switch', { name: 'Enable manual refresh' }));
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
     expect(updateManualRefreshSetting).toHaveBeenCalledWith({ enabled: true });
   });
 
-  test('saves password login setting only from its own save button', async () => {
+  test('locks refresh settings managed by configuration', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue({
+      lookback_period: '1h',
+      lookback_hours: 1,
+      lookback_days: 1,
+      refresh_interval: 120000,
+      manual_refresh_enabled: true,
+      managed_settings: {
+        refresh_interval: { path: 'crowdsec.sync.refreshInterval' },
+        manual_refresh_enabled: { path: 'crowdsec.sync.manualRefreshEnabled', env: 'CONFIG_CROWDSEC_SYNC_MANUAL_REFRESH_ENABLED' },
+      },
+      current_interval_name: '2m',
+      lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
+      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+      simulations_enabled: true,
+      machine_features_enabled: false,
+      origin_features_enabled: false,
+      permissions: {
+        mode: 'admin',
+        can_manage_enforcement: true,
+        can_manage_settings: true,
+      },
+    });
+
+    render(<SettingsRouter tab="general"><Settings /></SettingsRouter>);
+
+    expect(await screen.findByLabelText('Managed by crowdsec.sync.refreshInterval in the config file. To manage it here, remove it there and restart.')).toBeInTheDocument();
+    expect(screen.getByText('crowdsec.sync.refreshInterval', { selector: 'code' })).toBeInTheDocument();
+    const refreshSelect = screen.getByLabelText('Refresh interval');
+    expect(refreshSelect).toBeDisabled();
+    expect(refreshSelect).toHaveValue('120000');
+    expect(screen.getByRole('option', { name: '2m' })).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Enable manual refresh' })).toBeDisabled();
+    expect(screen.getByLabelText('Managed by the CONFIG_CROWDSEC_SYNC_MANUAL_REFRESH_ENABLED environment variable. To manage it here, remove it and any copy in the config file, then restart.')).toBeInTheDocument();
+  });
+
+  test('saves the password login setting with the authentication settings', async () => {
     const user = userEvent.setup();
     const refreshAuth = vi.fn();
     useAuthMock.mockReturnValue({
@@ -180,12 +327,13 @@ describe('Settings general and password', () => {
     const dateTime = createDateTimeContextValue({ timeZone: 'America/Los_Angeles', timeFormat: '24h', dateFormat: 'browser' });
     render(
       <DateTimeContext.Provider value={dateTime}>
-        <Settings />
+        <SettingsRouter tab="authentication"><Settings /></SettingsRouter>
       </DateTimeContext.Provider>,
     );
 
-    await screen.findByText('Authentication');
-    expect(screen.getByText(`Added ${dateTime.formatDate('2026-01-01T00:00:00.000Z')}`)).toBeInTheDocument();
+    await screen.findByRole('heading', { name: 'Authentication' });
+    // Personal sign-in methods live on the account tab.
+    expect(screen.queryByText(`Added ${dateTime.formatDate('2026-01-01T00:00:00.000Z')}`)).not.toBeInTheDocument();
     await user.click(screen.getByLabelText(/Disable password login/i));
 
     expect(fetchMock).not.toHaveBeenCalledWith(
@@ -193,20 +341,21 @@ describe('Settings general and password', () => {
       expect.objectContaining({ method: 'PUT' }),
     );
 
-    await user.click(screen.getAllByRole('button', { name: 'Save' })[1]);
+    await user.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/api/auth/settings'),
       expect.objectContaining({
         method: 'PUT',
-        body: JSON.stringify({ disablePasswordLogin: true }),
+        body: expect.stringContaining('"disablePasswordLogin":true'),
       }),
     ));
     expect(refreshAuth).toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'Change Password' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Change Password' })).not.toBeInTheDocument();
   });
 
   test('locks the password login setting when it is managed by configuration', async () => {
+    const user = userEvent.setup();
     useAuthMock.mockReturnValue({
       authEnabled: true,
       setupRequired: false,
@@ -241,7 +390,7 @@ describe('Settings general and password', () => {
         can_manage_settings: true,
       },
     });
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
       if (url.includes('/api/auth/passkeys')) return Response.json({ passkeys: [] });
       if (url.includes('/api/auth/settings')) {
@@ -249,6 +398,7 @@ describe('Settings general and password', () => {
           disablePasswordLogin: false,
           passwordLoginManaged: true,
           passwordLoginFallback: true,
+          managedSettings: { disablePasswordLogin: { path: 'auth.passwordLogin.enabled' } },
           oidcIssuerUrl: '',
           oidcClientId: '',
           hasOidcClientSecret: false,
@@ -263,14 +413,21 @@ describe('Settings general and password', () => {
         });
       }
       return Response.json({});
-    }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
 
-    render(<Settings />);
+    render(<SettingsRouter tab="authentication"><Settings /></SettingsRouter>);
 
-    expect(await screen.findByText(/Managed by the config file/)).toBeInTheDocument();
+    expect(await screen.findByLabelText('Managed by auth.passwordLogin.enabled in the config file. To manage it here, remove it there and restart.')).toBeInTheDocument();
     expect(screen.getByLabelText(/Disable password login/i)).toBeDisabled();
     expect(screen.getByText(/stays enabled until OIDC/)).toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: 'Save' })).toHaveLength(1);
+
+    // Saving leaves out the managed password login setting.
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/auth/settings'),
+      expect.objectContaining({ method: 'PUT', body: expect.not.stringContaining('disablePasswordLogin') }),
+    ));
   });
 
   test('hides password-backed settings when the session was not password-authenticated', async () => {
@@ -315,10 +472,10 @@ describe('Settings general and password', () => {
       return Response.json({});
     }));
 
-    render(<Settings />);
+    render(<SettingsRouter><Settings /></SettingsRouter>);
 
-    await screen.findByText('Authentication');
-
+    await screen.findByRole('heading', { name: 'pages.settings.signInAndSecurity' });
+    expect(screen.getByText('pages.settings.passwordChangeRequiresPasswordLogin')).toBeInTheDocument();
     expect(screen.queryByLabelText('Current password')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Change Password' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Set Up TOTP' })).not.toBeInTheDocument();
@@ -365,9 +522,10 @@ describe('Settings general and password', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<Settings />);
+    render(<SettingsRouter><Settings /></SettingsRouter>);
 
-    await screen.findByText('Authentication');
+    await screen.findByRole('heading', { name: 'pages.settings.signInAndSecurity' });
+    expect(screen.getByText('pages.settings.passwordManagedByProvider')).toBeInTheDocument();
 
     await waitFor(() => expect(screen.queryByText('Passkeys')).not.toBeInTheDocument());
     expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining('/api/auth/passkeys'));

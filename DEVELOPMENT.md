@@ -186,7 +186,7 @@ When changing this flow, cover persistence/query synchronization in `client/src/
 
 ### Storage layout
 
-- `cache.db` is the main SQLite connection and holds everything rebuilt from LAPI: alerts, decisions, search indexes, the Dashboard change journal, CVE lookups, and the `meta` bookkeeping table.
+- `cache.db` is the main SQLite connection and holds everything rebuilt from LAPI: alerts, decisions, allowlists, search indexes, the Dashboard change journal, CVE lookups, and the `meta` bookkeeping table.
 - `state.db` is attached as the `state` schema and holds data that exists nowhere else: users, passkeys, notification channels, rules, history and incidents, saved and recent filters, the alert deletion queue, and the `settings` table. It always uses a rollback journal, so each commit is synced (roughly 10–20 ms on local disks); batch writes there. `storage.walEnabled` only applies to the cache.
 - Queued deletions are unfinished user requests that LAPI cannot reconstruct. The sync worker cannot read `state.db`, so queued alert IDs are mirrored into the cache table `alert_deletion_tombstones`, which is rebuilt from the queue on every start.
 - `getMeta`/`setMeta` route by key: keys listed in `STATE_SETTING_KEYS` or starting with `auth_` or `branding_` go to `state.settings`, everything else to `meta`. Add every new durable setting there, or it is lost with the cache.

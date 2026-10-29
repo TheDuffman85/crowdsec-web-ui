@@ -3,7 +3,16 @@ import path from 'node:path';
 
 type HonoContext = any;
 
-export type AuditAction = 'decision.add' | 'decision.delete' | 'alert.delete' | 'cleanup.by-ip';
+export type AuditAction =
+  | 'decision.add'
+  | 'decision.delete'
+  | 'alert.delete'
+  | 'cleanup.by-ip'
+  | 'user.create'
+  | 'user.update'
+  | 'user.password-reset'
+  | 'user.mfa-reset'
+  | 'user.delete';
 export type AuditOutcome = 'success' | 'partial' | 'failure' | 'queued';
 
 export interface AuditActor {

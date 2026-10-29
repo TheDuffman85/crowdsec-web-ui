@@ -31,10 +31,11 @@ A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alert
 | Dashboard | Alert and active-decision totals, attack map, drilldowns, top lists, shared quick filters, and simulation counts |
 | Alerts | Searchable alert history, persistent count-aware quick filters, CrowdSec alert contexts, IP/AS/location details, event metadata, simulation labels, and configurable columns |
 | Decisions | Active and expired decisions, persistent count-aware quick filters, duplicate hiding, manual bans, custom durations, reasons, and cleanup actions |
-| Multi-instance | Several CrowdSec LAPIs, per-instance views, and a Combined scope for Dashboard, Alerts, and Decisions |
+| Allowlists | Read-only view of CrowdSec centralized allowlists with an IP/range check, cross-instance differences, and allowlist protection for manual decisions |
+| Multi-instance | Several CrowdSec LAPIs, per-instance views, and a Combined scope for Dashboard, Alerts, Decisions, and Allowlists |
 | Metrics | Optional Prometheus views for LAPI activity, bouncers, AppSec, parsers, latency, parsing time, and whitelists |
 | Notifications | Alert, decision, CVE, availability, and update rules delivered through Email, Gotify, MQTT, ntfy, or Webhooks |
-| Security | Initial administrator setup, password and TOTP login, passkeys, OIDC SSO, group roles, and instance-wide read-only mode |
+| Security | Initial administrator setup, local user management with admin and read-only roles, password and TOTP login, passkeys, OIDC SSO, group roles, and instance-wide read-only mode |
 | Localization | Arabic, Chinese, English, French, German, Hindi, Japanese, Korean, Portuguese, Russian, and Spanish |
 | Experience | Unified search, server-synced saved and recent filters, dark/light themes, and responsive layouts |
 | Branding | Custom application name, light and dark mode logos, and colors for the sidebar, browser tab, sign-in page, notifications, and authenticator apps |
@@ -65,7 +66,8 @@ A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alert
   <a href="screenshots/notifications.png"><img src="screenshots/notifications.png" alt="Notification Center" width="48%"></a>
   <a href="screenshots/notification_rule.png"><img src="screenshots/notification_rule.png" alt="Notification Rule" width="48%"></a>
 </p>
-<p align="center">
+<p>
+  <a href="screenshots/allowlists.png"><img src="screenshots/allowlists.png" alt="Allowlists" width="48%"></a>
   <a href="screenshots/settings.png"><img src="screenshots/settings.png" alt="Settings" width="48%"></a>
 </p>
 
@@ -214,6 +216,12 @@ Use `CONFIG_FILE` only to select another existing file. [`config.example.yaml`](
 - Secrets accept a direct string or exactly one `env: NAME` / `file: PATH` reference. Secret overrides also accept `_FILE`.
 - Initial direct secret overrides are stored as environment references, never plaintext. Persisted secret references still require their environment variable.
 
+### Settings managed by configuration
+
+Some values can be set either in Settings or in the application config: the refresh interval, manual refresh, password login, and all OIDC fields. A value set in `config.yaml` or through its `CONFIG_*` variable takes precedence and is locked in Settings, marked with a lock icon whose tooltip names the `CONFIG_*` variable or config path that sets it. Leave it unset to manage it in Settings. Manual decision scenarios from the config are always offered and can't be removed in Settings, but more can be added there.
+
+To manage a locked value in Settings again, remove it from both the environment and `config.yaml`, then restart; the last value saved in Settings applies again. `CONFIG_*` values are written into `config.yaml` when the file is first created, and on every start with `CONFIG_PERSIST_OVERRIDES: "true"`, so removing the variable alone may not unlock the setting.
+
 ### Server, storage, UI, and updates
 
 | YAML field | Default | Purpose | Environment override |
@@ -232,6 +240,8 @@ Use `CONFIG_FILE` only to select another existing file. [`config.example.yaml`](
 | `ui.timeFormat` | `browser` | Clock format: `browser`, `12h`, or `24h`. | `CONFIG_UI_TIME_FORMAT` |
 | `ui.dateFormat` | `browser` | Browser date format or a custom pattern such as `dd/mm/yyyy`, `mm/dd/yyyy`, or `yyyy-MM-dd`. | `CONFIG_UI_DATE_FORMAT` |
 | `ui.readOnly` | `false` | Hides management actions and rejects mutating API operations. | `CONFIG_UI_READ_ONLY` |
+| `ui.allowlistsSidebarVisible` | `true` | Shows the Allowlists sidebar link. The `/allowlists` route remains available when hidden. Omit to let each user choose in Settings > Profile. | `CONFIG_UI_ALLOWLISTS_SIDEBAR_VISIBLE` |
+| `ui.metricsSidebarVisible` | `true` | Shows the Metrics sidebar link. The `/metrics` route remains available when Prometheus metrics are configured. Omit to let each user choose in Settings > Profile. | `CONFIG_UI_METRICS_SIDEBAR_VISIBLE` |
 | `updates.enabled` | `true` in packaged images | Enables the built-in update check. | `CONFIG_UPDATES_ENABLED` |
 
 Date patterns require one day, month, and year token in any order: `d`/`dd` (day), `m`/`mm` (numeric month), `mmm`/`mmmm` (localized month name), and `yy`/`yyyy` (year). Punctuation and spaces are literal; wrap words in single quotes, for example `d 'of' mmmm yyyy`. Date patterns affect full dates and timestamps; compact chart labels keep their own display format. Set `ui.timeFormat` separately for a 12 or 24 hour clock.
@@ -244,7 +254,7 @@ Date patterns require one day, month, and year token in any order: `d`/`dd` (day
 | `auth.sessionSecret` | Generated and stored | Signs sessions and encrypts saved authentication settings. | `CONFIG_AUTH_SESSION_SECRET` or `CONFIG_AUTH_SESSION_SECRET_FILE` |
 | `auth.totpSecret` | `sessionSecret` | Encrypts stored per-account TOTP seeds. | `CONFIG_AUTH_TOTP_SECRET` or `CONFIG_AUTH_TOTP_SECRET_FILE` |
 | `auth.totpSeed` | Unset | Optional base32 fallback TOTP seed for the password user; minimum 26 characters. | `CONFIG_AUTH_TOTP_SEED` or `CONFIG_AUTH_TOTP_SEED_FILE` |
-| `auth.passwordLogin.enabled` | Unset (managed in Settings) | Enables or disables password login from deployment config and locks the Settings toggle. `false` keeps password login enabled until OIDC or a passkey exists. | `CONFIG_AUTH_PASSWORD_LOGIN_ENABLED` |
+| `auth.passwordLogin.enabled` | Unset (managed in Settings) | Enables or disables password login from deployment config and locks the Settings toggle. `false` keeps password login enabled until OIDC or an administrator passkey exists. | `CONFIG_AUTH_PASSWORD_LOGIN_ENABLED` |
 | `auth.oidc.issuerUrl` | Unset | OIDC provider issuer URL. | `CONFIG_AUTH_OIDC_ISSUER_URL` |
 | `auth.oidc.clientId` | Unset | OIDC client identifier. | `CONFIG_AUTH_OIDC_CLIENT_ID` |
 | `auth.oidc.clientSecret` | Unset | OIDC client secret. | `CONFIG_AUTH_OIDC_CLIENT_SECRET` or `CONFIG_AUTH_OIDC_CLIENT_SECRET_FILE` |
@@ -253,7 +263,9 @@ Date patterns require one day, month, and year token in any order: `d`/`dd` (day
 | `auth.oidc.adminGroups` | `[]` | Groups granted administrator access. | `CONFIG_AUTH_OIDC_ADMIN_GROUPS` or `CONFIG_AUTH_OIDC_ADMIN_GROUPS_<INDEX>` |
 | `auth.oidc.readOnlyGroups` | `[]` | Groups granted read-only access. | `CONFIG_AUTH_OIDC_READ_ONLY_GROUPS` or `CONFIG_AUTH_OIDC_READ_ONLY_GROUPS_<INDEX>` |
 | `auth.oidc.unmatchedRole` | `deny` | Role for unmatched OIDC users: `deny`, `admin`, or `read-only`. | `CONFIG_AUTH_OIDC_UNMATCHED_ROLE` |
-| `auth.oidc.endSession` | `true` | Also end the identity provider session when an SSO user logs out (RP-initiated logout). | `CONFIG_AUTH_OIDC_END_SESSION` |
+| `auth.oidc.endSession` | `false` (`true` on installations that already used OIDC before it defaulted to off) | Also end the identity provider session when an SSO user logs out (RP-initiated logout). | `CONFIG_AUTH_OIDC_END_SESSION` |
+| `auth.oidc.backchannelLogout` | `false` | Accept back-channel logout notifications, so signing out at the identity provider also ends dashboard sessions. | `CONFIG_AUTH_OIDC_BACKCHANNEL_LOGOUT` |
+| `auth.oidc.autoLogin` | `false` | Redirect the login page straight to the identity provider. Only active while OIDC is configured and password login is disabled. | `CONFIG_AUTH_OIDC_AUTO_LOGIN` |
 
 ### Notifications
 
@@ -265,7 +277,7 @@ Date patterns require one day, month, and year token in any order: `d`/`dd` (day
 
 ### Audit log
 
-User actions that change CrowdSec state (adding decisions, deleting decisions and alerts, and per-IP cleanup) are recorded as single `[audit]` lines in the application log. Each entry is a JSON object with the timestamp, acting user and role, action, target (IP, range, or entity IDs), and outcome:
+User actions that change CrowdSec state (adding decisions, deleting decisions and alerts, and per-IP cleanup) and user management changes (`user.create`, `user.update`, `user.password-reset`, `user.mfa-reset`, `user.delete`) are recorded as single `[audit]` lines in the application log. Each entry is a JSON object with the timestamp, acting user and role, action, target (IP, range, or entity IDs), and outcome:
 
 ```
 [audit] {"time":"2026-08-17T01:30:00.000Z","user":"tommy","role":"admin","action":"decision.add","ip":"192.0.2.10","type":"ban","scenario":"manual/web-ui","duration":"4h","reason":"manual","instances":["CrowdSec"],"outcome":"success"}
@@ -295,7 +307,9 @@ Omitting `crowdsec.alertFilters` uses the standard non-CAPI feed. Setting any ex
 
 ### Manual decisions
 
-The Add Decision form always offers `manual/web-ui` and selects it by default. With no other scenarios available, the scenario field is hidden and `manual/web-ui` is used; additional scenarios turn it into a dropdown. Admins can also add and remove scenarios under **Settings → Manual decisions**; those are stored in the database, offered for every instance on top of the configured list, and take effect without a restart. Scenarios from `config.yaml` or `CONFIG_` variables are shown there as read-only. When **All instances** targets instances with different lists, only `manual/web-ui` is used and the field is hidden. These lists only shape the form: `POST /api/decisions` accepts any `author/name` scenario. If `crowdsec.alertFilters.legacy.extraScenarios` is used to show manual decisions, add the configured scenarios there too.
+The Add Decision form always offers `manual/web-ui` and selects it by default. With no other scenarios available, the scenario field is hidden and `manual/web-ui` is used; additional scenarios turn it into a dropdown. Admins can also add and remove scenarios under **Settings → General → Manual decisions**; those are stored in the database, offered for every instance on top of the configured list, and take effect without a restart. Scenarios from `config.yaml` or `CONFIG_` variables are shown there as read-only. When **All instances** targets instances with different lists, only `manual/web-ui` is used and the field is hidden. These lists only shape the form: `POST /api/decisions` accepts any `author/name` scenario. If `crowdsec.alertFilters.legacy.extraScenarios` is used to show manual decisions, add the configured scenarios there too.
+
+CrowdSec LAPI does not check allowlists for decisions sent with an alert, which is how the Web UI adds them. Like `cscli decisions add`, the Web UI therefore checks the target instances' allowlists first and refuses an allowlisted IP or range until **Bypass allowlist** is confirmed. Instances whose LAPI predates allowlists (CrowdSec 1.6.5) or cannot be checked do not block the decision.
 
 | YAML field | Default | Purpose | Environment override |
 | --- | --- | --- | --- |
@@ -528,7 +542,8 @@ instances:
 | --- | --- |
 | Dashboard, Alerts, Decisions | Support one instance or Combined scope |
 | Metrics | Defaults to a source-aware Combined view when the selected scope has multiple endpoints; individual endpoints remain selectable |
-| Add decision / clean IP | Runs against every LAPI in Combined scope and reports partial failures |
+| Allowlists | Combined scope groups allowlists by name and marks entries missing on some instances |
+| Add decision / clean IP | Runs against every LAPI in Combined scope and reports partial failures; an allowlist match on any target instance requires a bypass |
 | Row deletion | Uses the row's owning instance; numeric upstream IDs are never broadcast |
 
 ## Authentication
@@ -552,10 +567,12 @@ auth:
 
 ### Local accounts
 
-- Password changes and passkey registration/removal from Settings.
+- Password changes and passkey registration/removal under **Settings → Profile**. A new password must differ from the current one.
 - Optional TOTP enrollment through a QR code, mobile setup link, or manual key.
 - An enrolled TOTP seed overrides the optional base32 `auth.totpSeed` fallback.
-- Administrators can disable password login in Settings, or pin it from deployment config:
+- Enabling or disabling TOTP signs out the account's other sessions. Disabling it requires a current authenticator code.
+- Local sessions last up to 30 days. Logging out revokes the session on the server, so a copied session cookie stops working too.
+- Administrators can disable password login under **Settings → Authentication**, or pin it from deployment config:
 
 ```yaml
 auth:
@@ -563,11 +580,27 @@ auth:
     enabled: false # CONFIG_AUTH_PASSWORD_LOGIN_ENABLED=false
 ```
 
-When `auth.passwordLogin.enabled` is set, it overrides the Settings value and the toggle is shown as managed by configuration. Removing it restores the last value saved in Settings. To avoid a lockout, `false` only takes effect while OIDC or a passkey is configured; otherwise password login stays enabled and a warning is logged. Password hashes are kept, so setting `enabled: true` and restarting restores password login if the identity provider is unreachable.
+When `auth.passwordLogin.enabled` is set, it overrides the Settings value and the toggle is shown as managed by configuration. Removing it restores the last value saved in Settings. To avoid a lockout, `false` only takes effect while OIDC or an administrator's passkey is configured; otherwise password login stays enabled and a warning is logged. Password hashes are kept, so setting `enabled: true` and restarting restores password login if the identity provider is unreachable.
+
+### Personal settings
+
+Every user has a **Settings → Profile** tab with their language, font, and Metrics and Allowlists sidebar visibility, plus their own password, TOTP, and passkeys. The display preferences are saved for the account and follow the user to other browsers; without dashboard authentication they apply to the whole instance. **Profile** remains editable in read-only mode, including when dashboard authentication is disabled. Read-only users only see **Profile**, because they cannot change anything else; **General**, **Authentication** (password login and OIDC), **Users**, and **Branding** are shown to administrators.
+
+### Users
+
+Administrators manage accounts under **Settings → Users**:
+
+- Create local users with a username, an initial password, and the `admin` or `read-only` role. Read-only users have the same permissions as OIDC users in a read-only group.
+- Change a local user's role, or disable and re-enable the account. Disabling ends the user's sessions.
+- Reset a local user's password. By default, the user must choose a new password at the next password sign-in before using anything else; new users start the same way.
+- Reset a local user's TOTP and passkeys, for example after a lost phone. The user's sessions end and both can be set up again.
+- Delete users. OIDC users are listed after their first sign-in; their role comes from the identity provider, so they can only be deleted. A deleted OIDC user is added again on the next sign-in if the identity provider still allows it.
+
+Administrators cannot change, disable, or delete their own account there, and the last active administrator cannot be demoted, disabled, or deleted. While passkeys are the only sign-in method (password login disabled, no OIDC), changes that would leave no enabled administrator with a passkey are rejected. A user with a pending password change cannot register passkeys or set up TOTP until the password is changed. Changes are written to the [audit log](#audit-log).
 
 ### OIDC
 
-Configure OIDC in Settings or YAML.
+Configure OIDC in Settings or YAML. Fields set in YAML are locked in Settings; see [Settings managed by configuration](#settings-managed-by-configuration).
 
 ```yaml
 auth:
@@ -583,6 +616,8 @@ auth:
     readOnlyGroups: [crowdsec-viewers]
     unmatchedRole: deny
     endSession: true
+    backchannelLogout: true
+    autoLogin: false
 ```
 
 #### Callback URL
@@ -600,20 +635,34 @@ https://<crowdsec-web-ui-host>/api/auth/oidc/callback
 - Saved Settings override YAML. Scopes must include `openid`; add provider-specific scopes such as `groups` only when required.
 - Admin-group matches have full access; read-only-group matches can view data and keep permitted preferences; unmatched users follow `auth.oidc.unmatchedRole` (`deny` by default).
 - Set an unmatched fallback role only when every user who can sign in should receive it.
-- `ui.readOnly: true` overrides all roles for the deployment. It blocks CrowdSec writes, refresh changes, notification destination/rule management, test sends, and notification deletion. Language changes and marking notifications read remain available. This is not per-user RBAC.
+- `ui.readOnly: true` overrides all roles for the deployment. It blocks CrowdSec writes, refresh changes, notification destination/rule management, test sends, and notification deletion. Personal preferences under **Profile** (language, font, and Metrics and Allowlists sidebar visibility) and marking notifications read remain available. This is not per-user RBAC.
 - Identities use stable issuer and subject claims. Username collisions with local accounts remain separate.
 - Sessions have a 24-hour absolute lifetime. OIDC-only users cannot add local passkeys; password-backed local accounts retain passkey support.
 - Existing OIDC rows migrate on their next successful SSO login.
 
 #### Logout
 
-When an SSO user logs out, the dashboard also ends their session at the identity provider (OpenID Connect RP-initiated logout), so the next SSO sign-in asks for credentials again. This requires the provider to advertise an `end_session_endpoint`; otherwise only the dashboard session is cleared. Register this post-logout redirect URI with the identity provider:
+With `auth.oidc.endSession: true` or the matching Settings toggle, logging out of the dashboard also ends the SSO user's session at the identity provider (OpenID Connect RP-initiated logout), so the next SSO sign-in asks for credentials again. It is off by default because the provider may reject the redirect until the URI below is registered. Installations that already used OIDC when upgrading keep the earlier default of on unless the configuration or Settings sets a value. This requires the provider to advertise an `end_session_endpoint`; otherwise only the dashboard session is cleared. Register this post-logout redirect URI with the identity provider:
 
 ```text
 https://<crowdsec-web-ui-host>/login
 ```
 
-Include the base path when one is configured, for example `https://<host>/crowdsec/login`. Set `auth.oidc.endSession: false` or turn it off in Settings to only clear the dashboard session.
+Include the base path when one is configured, for example `https://<host>/crowdsec/login`. Leave it off to only clear the dashboard session.
+
+#### Back-channel logout
+
+To end dashboard sessions when a user signs out at the identity provider, enable `auth.oidc.backchannelLogout` or the matching Settings toggle and register this back-channel logout URI with the provider (OpenID Connect Back-Channel Logout):
+
+```text
+https://<crowdsec-web-ui-host>/api/auth/oidc/backchannel-logout
+```
+
+Include the base path when one is configured. While the setting is off, logout notifications are rejected. The provider must be able to reach the dashboard directly, and logout tokens must be signed with a key from the provider's JWKS or, for HMAC tokens, with the client secret. A logout token with a session ID (`sid`) ends only the sessions from that provider sign-in, even when it also names the user (`sub`); if it names the user, it also ends that user's sessions that carry no `sid`, such as sessions from before the upgrade. Without `sid`, it ends all dashboard sessions for the named user. Repeated notifications with the same issuer and token ID (`jti`) are acknowledged without revoking later sign-ins; this protection survives restarts.
+
+#### Auto-login
+
+With `auth.oidc.autoLogin: true` or the matching Settings toggle, the login page redirects straight to the identity provider. It only applies while OIDC is configured and password login is disabled; otherwise the setting stays inactive and the server logs why. After a logout, the login page is shown once instead of redirecting, so users are not signed straight back in. Open `/login?local=1` to reach the login page anyway, for example to sign in with a passkey.
 
 ## Deployment and Security
 
@@ -971,7 +1020,8 @@ Destinations are independently enabled and reusable across rules. **Send Test** 
 - Webhook templates expose dotted `event.*` fields for `title`, `message`, `severity`, `metadata`, `sent_at`, `channel_name`, `rule_id`, `rule_name`, `rule_type`, and `app_name` (the configured branding name). Each has a `*Json` variant; nullable rule fields also have `OrUnknown` and `OrUnknownJson` aliases.
 - Failed webhooks store HTTP status and a truncated response. `notifications.debugPayloads: true` also logs a truncated rendered body with sensitive form fields redacted; enable it only while troubleshooting.
 - Destination secrets are masked and encrypted by `notifications.secretKey`, or an auto-generated key stored in `state.db`.
-- `notifications.allowPrivateAddresses: false` blocks private, loopback, and link-local destinations; default: `true`.
+- `notifications.allowPrivateAddresses: false` blocks private, loopback, and link-local destinations; default: `true`. Hostnames are checked when the connection is made, so a DNS change cannot point a destination at a blocked address. IPv4 addresses embedded in IPv6 forms (for example `::ffff:7f00:1`) are blocked like their IPv4 equivalents.
+- Gotify and ntfy follow only same-origin `307`/`308` redirects, and each redirect target is checked again.
 - Telegram, Home Assistant discovery/state, and inbound MQTT commands are not supported.
 
 ## Kubernetes

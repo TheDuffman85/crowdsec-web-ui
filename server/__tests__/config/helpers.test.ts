@@ -3,11 +3,26 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
 import { parse as parseYaml } from 'yaml';
-import { createRuntimeConfig as createRuntimeConfigImpl, getIntervalName, parseBooleanEnv, parseCsvEnv, parseLookbackToMs, parseOidcScope, parseOidcUnmatchedRole, parseOptionalBooleanEnv, parseRefreshInterval, parseTimeFormat, parseTimeZone } from '../../config';
+import { createRuntimeConfig as createRuntimeConfigImpl, getIntervalName, parseBooleanEnv, parseCsvEnv, parseLookbackToMs, parseOidcScope, parseOidcUnmatchedRole, parseOptionalBooleanEnv, parseRefreshInterval, parseTimeFormat, parseTimeZone, resolveManagedSettingSource } from '../../config';
 import { ConfigurationLoadError } from '../../config-error';
 import { createMissingConfigPath, createRuntimeConfig, createTempConfig, createTempSecret, tempDirs } from './harness';
 
 describe('config helpers', () => {
+  test('resolveManagedSettingSource names the CONFIG_ variable behind a setting', () => {
+    const overrides = [
+      { name: 'CONFIG_AUTH', path: ['auth'] },
+      { name: 'CONFIG_AUTH_OIDC_ADMIN_GROUPS_0', path: ['auth', 'oidc', 'adminGroups', 0] },
+      { name: 'CONFIG_CROWDSEC_SYNC_LOOKBACK', path: ['crowdsec', 'sync', 'lookback'] },
+    ];
+
+    expect(resolveManagedSettingSource(overrides, 'auth.oidc.clientId')).toEqual({ path: 'auth.oidc.clientId', env: 'CONFIG_AUTH' });
+    expect(resolveManagedSettingSource(overrides, 'auth.oidc.adminGroups')).toEqual({
+      path: 'auth.oidc.adminGroups',
+      env: 'CONFIG_AUTH_OIDC_ADMIN_GROUPS_0',
+    });
+    expect(resolveManagedSettingSource(overrides, 'crowdsec.sync.refreshInterval')).toEqual({ path: 'crowdsec.sync.refreshInterval' });
+  });
+
   test('parseRefreshInterval handles supported inputs', () => {
     expect(parseRefreshInterval('manual')).toBe(0);
     expect(parseRefreshInterval('0')).toBe(0);
@@ -207,6 +222,8 @@ describe('config helpers', () => {
     expect(config.reconcileOldIntervalMs).toBe(21_600_000);
     expect(config.reconcileWindowsPerRefresh).toBe(4);
     expect(config.bootstrapRetryEnabled).toBe(false);
+    expect(config.refreshIntervalManaged).toBe(true);
+    expect(config.manualRefreshEnabledManaged).toBe(true);
     expect(config.dockerImageRef).toBe('example/repo');
     expect(config.updateCheckEnabled).toBe(true);
     expect(config.dbDir).toBe('/tmp/app');
@@ -231,7 +248,13 @@ describe('config helpers', () => {
       oidcAdminGroups: ['admins', 'secops'],
       oidcReadOnlyGroups: ['viewers'],
       oidcUnmatchedRole: 'read-only',
-      oidcEndSession: true,
+      oidcEndSession: null,
+      oidcAutoLogin: false,
+      oidcBackchannelLogout: false,
+      managedOidcSettings: [
+        'oidcIssuerUrl', 'oidcClientId', 'oidcClientSecret', 'oidcScope', 'oidcGroupsClaim',
+        'oidcAdminGroups', 'oidcReadOnlyGroups', 'oidcUnmatchedRole',
+      ],
     });
   });
 
@@ -248,6 +271,9 @@ describe('config helpers', () => {
     expect(config.legacyAlertOrigins).toEqual([]);
     expect(config.legacyAlertExtraScenarios).toEqual([]);
     expect(config.simulationsEnabled).toBe(false);
+    expect(config.refreshIntervalManaged).toBe(false);
+    expect(config.manualRefreshEnabledManaged).toBe(false);
+    expect(config.dashboardAuth.managedOidcSettings).toEqual([]);
     expect(config.notificationSecretKey).toBeUndefined();
     expect(config.notificationAllowPrivateAddresses).toBe(true);
     expect(config.notificationDebugPayloads).toBe(false);

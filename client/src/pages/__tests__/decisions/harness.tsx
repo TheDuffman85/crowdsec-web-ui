@@ -154,6 +154,7 @@ vi.mock('../../../lib/api', () => {
       return paginateDecisions(decisions, page, pageSize, defaultDecisions.length);
     }),
     addDecision: vi.fn(),
+    checkAllowlist: vi.fn(async (value: string) => ({ value, allowlisted: false, results: [] })),
     deleteDecision: vi.fn(),
     bulkDeleteDecisions: vi.fn(async () => ({
       requested_alerts: 0,
