@@ -9,6 +9,8 @@ import type {
   CrowdsecMetricsResponse,
   CrowdsecMetricsSource,
   InstanceEntityRef,
+  ManagedConfigSetting,
+  ManagedSettingSource,
   StatsAlert,
   StatsDecision,
   UpdateManualDecisionScenariosRequest,
@@ -19,7 +21,7 @@ import type {
 } from '../../shared/contracts';
 import { DEFAULT_MANUAL_DECISION_SCENARIO, isValidDecisionScenario } from '../../shared/contracts';
 import type { AuditOutcome } from '../audit-log';
-import type { RuntimeConfig } from '../config';
+import { resolveManagedSettingSource, type RuntimeConfig } from '../config';
 import type { CrowdsecDatabase } from '../database';
 import type { LapiClient } from '../lapi';
 import type { DatabaseQueryWorker } from '../query-worker-client';
@@ -631,6 +633,18 @@ const configuredManualDecisionScenarios = (): string[] => [
   ]),
 ];
 const MAX_CUSTOM_MANUAL_DECISION_SCENARIOS = 100;
+const managedConfigSettings: Partial<Record<ManagedConfigSetting, ManagedSettingSource>> = {
+  ...(config.refreshIntervalManaged
+    ? { refresh_interval: resolveManagedSettingSource(config.configEnvironmentOverrides, 'crowdsec.sync.refreshInterval') }
+    : {}),
+  ...(config.manualRefreshEnabledManaged
+    ? { manual_refresh_enabled: resolveManagedSettingSource(config.configEnvironmentOverrides, 'crowdsec.sync.manualRefreshEnabled') }
+    : {}),
+};
+const managedByConfigResponse = (context: HonoContext, setting: string) => context.json({
+  error: `${setting} is managed by the application configuration`,
+  code: 'MANAGED_BY_CONFIG',
+}, 409);
 
 app.get(`${config.basePath}/api/config`, ensureAuth, (context) => {
   const hours = lookbackHours(config.lookbackPeriod);
@@ -640,6 +654,7 @@ app.get(`${config.basePath}/api/config`, ensureAuth, (context) => {
     lookback_days: Math.max(1, Math.round(hours / 24)),
     refresh_interval: state.refreshIntervalMs,
     manual_refresh_enabled: state.manualRefreshEnabled,
+    managed_settings: managedConfigSettings,
     current_interval_name: getIntervalName(state.refreshIntervalMs),
     lapi_status: lapiClient.getStatus(),
     instances: config.instances.map((instance) => ({
@@ -870,6 +885,7 @@ app.put(`${config.basePath}/api/config/manual-decision-scenarios`, ensureAuth, a
 app.put(`${config.basePath}/api/config/refresh-interval`, ensureAuth, async (context) => {
   const readOnlyResponse = ensureCanManageSettings(context);
   if (readOnlyResponse) return readOnlyResponse;
+  if (config.refreshIntervalManaged) return managedByConfigResponse(context, 'Refresh interval');
 
   try {
     const body = await context.req.json<{ interval?: string }>();
@@ -908,6 +924,7 @@ app.put(`${config.basePath}/api/config/refresh-interval`, ensureAuth, async (con
 app.put(`${config.basePath}/api/config/manual-refresh`, ensureAuth, async (context) => {
   const readOnlyResponse = ensureCanManageSettings(context);
   if (readOnlyResponse) return readOnlyResponse;
+  if (config.manualRefreshEnabledManaged) return managedByConfigResponse(context, 'Manual refresh');
 
   try {
     const body = await context.req.json<UpdateManualRefreshSettingRequest>();

@@ -8,6 +8,10 @@
 # CONFIG_INSTANCES_0_LAPI_URL).
 # The zero index may be omitted: CONFIG_INSTANCE_LAPI_URL addresses instance 0,
 # and CONFIG_INSTANCE_METRICS_URL addresses metrics endpoint 0 on instance 0.
+# Values that Settings can also change (refresh interval, manual refresh,
+# password login, OIDC) are locked in Settings while they are set here or
+# through a CONFIG_ variable. To manage one in Settings again, remove it from
+# both places and restart.
 
 # Settings that remain commented continue to follow the defaults of the installed
 # version. Uncomment only values that you want to manage and pin.

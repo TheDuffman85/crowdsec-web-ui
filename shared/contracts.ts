@@ -571,12 +571,24 @@ export interface UpsertNotificationRuleRequest {
   config: NotificationRuleConfig;
 }
 
+export type ManagedConfigSetting = 'refresh_interval' | 'manual_refresh_enabled';
+
+/** Where the application config sets a value that Settings cannot change. */
+export interface ManagedSettingSource {
+  /** Application config path, for example crowdsec.sync.refreshInterval. */
+  path: string;
+  /** The CONFIG_ variable that sets the value; unset when it comes from the config file. */
+  env?: string;
+}
+
 export interface ConfigResponse {
   lookback_period: string;
   lookback_hours: number;
   lookback_days: number;
   refresh_interval: number;
   manual_refresh_enabled?: boolean;
+  /** Settings set by the application config, which Settings cannot change. */
+  managed_settings?: Partial<Record<ManagedConfigSetting, ManagedSettingSource>>;
   current_interval_name: string;
   lapi_status: LapiStatus;
   instances?: InstanceSummary[];

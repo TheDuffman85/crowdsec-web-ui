@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import i18next from "i18next";
 import QRCode from "qrcode";
 import { Copy, KeyRound, LockKeyhole, Plus, QrCode, RotateCcw, Save, ShieldCheck, Trash2, Upload, X } from "lucide-react";
@@ -9,7 +9,7 @@ import { Badge } from "../components/ui/Badge";
 import { useRefresh } from "../contexts/useRefresh";
 import { useOptionalToast } from "../contexts/useToast";
 import { fetchConfig, updateManualDecisionScenarios, updateManualRefreshSetting, updateMetricsSidebarPreference } from "../lib/api";
-import { DEFAULT_MANUAL_DECISION_SCENARIO, isValidDecisionScenario } from "../../../shared/contracts";
+import { DEFAULT_MANUAL_DECISION_SCENARIO, isValidDecisionScenario, type ManagedSettingSource } from "../../../shared/contracts";
 import { apiUrl, withBasePath } from "../lib/basePath";
 import { sessionFetch } from "../lib/sessionFetch";
 import { useAuth } from "../contexts/AuthContext";
@@ -81,6 +81,7 @@ interface AuthSettings {
     oidcBackchannelLogout?: boolean;
     oidcAutoLogin?: boolean;
     oidcAutoLoginActive?: boolean;
+    managedSettings?: Partial<Record<string, ManagedSettingSource>>;
     hasPassword: boolean;
     passkeysAvailable?: boolean;
     totpEnabled: boolean;
@@ -89,6 +90,18 @@ interface AuthSettings {
 
 type OidcUnmatchedRole = 'deny' | 'admin' | 'read-only';
 const DEFAULT_OIDC_SCOPE = 'openid profile email';
+
+const OIDC_SETTINGS = [
+    'oidcIssuerUrl', 'oidcClientId', 'oidcClientSecret', 'oidcScope', 'oidcGroupsClaim', 'oidcAdminGroups',
+    'oidcReadOnlyGroups', 'oidcUnmatchedRole', 'oidcEndSession', 'oidcBackchannelLogout', 'oidcAutoLogin',
+] as const;
+
+type OidcSetting = typeof OIDC_SETTINGS[number];
+
+// Formats a refresh interval from the application config that the preset options do not cover.
+function formatRefreshInterval(ms: number): string {
+    return ms % 60_000 === 0 ? `${ms / 60_000}m` : `${ms / 1000}s`;
+}
 
 function parseCsvList(value: string): string[] {
     return value
@@ -279,6 +292,14 @@ export function Settings() {
     const canManageAuthSettings = canManageSettings;
     const canChangePassword = authSettings?.hasPassword === true && authSettings.authMethod === 'password';
     const passwordLoginManaged = authSettings?.passwordLoginManaged === true;
+    const refreshIntervalSource = config?.managed_settings?.refresh_interval;
+    const manualRefreshSource = config?.managed_settings?.manual_refresh_enabled;
+    const isOidcManaged = (setting: OidcSetting) => Boolean(authSettings?.managedSettings?.[setting]);
+    const allOidcSettingsManaged = OIDC_SETTINGS.every(isOidcManaged);
+    const refreshOptions: { value: number; label: string }[] = REFRESH_OPTIONS.map((option) => ({ value: option.value, label: t(option.labelKey) }));
+    if (!refreshOptions.some((option) => option.value === refreshInterval)) {
+        refreshOptions.push({ value: refreshInterval, label: formatRefreshInterval(refreshInterval) });
+    }
     const savedAppNameValue = appName === defaultAppName ? '' : appName;
     const appNameValue = appNameDraft ?? savedAppNameValue;
     const hasAppNameChange = appNameValue.trim() !== savedAppNameValue;
@@ -290,6 +311,20 @@ export function Settings() {
 
     const inputClass = "w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:disabled:bg-gray-800 dark:disabled:text-gray-500";
     const labelClass = "block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400";
+    const renderManagedLock = (source: ManagedSettingSource | undefined) => {
+        if (!source) return null;
+        const setting = source.env ?? source.path;
+        const messageKey = source.env ? "pages.settings.managedByEnvironment" : "pages.settings.managedByConfig";
+        // Translate around a marker so the setting can be rendered as code.
+        const [before, after = ''] = t(messageKey, { setting: MANAGED_SETTING_MARKER }).split(MANAGED_SETTING_MARKER);
+        return (
+            <ManagedLock label={t(messageKey, { setting })}>
+                {before}
+                <code className="rounded bg-gray-700 px-1 py-0.5 font-mono text-[11px] text-gray-100 wrap-anywhere dark:bg-gray-600">{setting}</code>
+                {after}
+            </ManagedLock>
+        );
+    };
     const showToast = (message: string, type: 'success' | 'danger' | 'info' = 'info') => {
         toast?.addToast(message, type);
     };
@@ -650,7 +685,8 @@ export function Settings() {
             const response = await sessionFetch(apiUrl('/api/auth/settings'), {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
+                // The server rejects settings that the application config locks.
+                body: JSON.stringify(Object.fromEntries(Object.entries({
                     oidcIssuerUrl: oidcForm.issuerUrl,
                     oidcClientId: oidcForm.clientId,
                     oidcClientSecret: oidcForm.clientSecret,
@@ -662,7 +698,7 @@ export function Settings() {
                     oidcEndSession: oidcForm.endSession,
                     oidcBackchannelLogout: oidcForm.backchannelLogout,
                     oidcAutoLogin: oidcForm.autoLogin,
-                }),
+                } satisfies Record<OidcSetting, unknown>).filter(([setting]) => !isOidcManaged(setting as OidcSetting)))),
             });
             const payload = await response.json().catch(() => ({})) as {
                 error?: string;
@@ -818,19 +854,22 @@ export function Settings() {
                         </div>
 
                         <div className="space-y-2">
-                            <label htmlFor="settings-refresh" className={labelClass}>
-                                {t("pages.settings.refreshInterval")}
-                            </label>
+                            <div className="flex items-center gap-1.5">
+                                <label htmlFor="settings-refresh" className={labelClass}>
+                                    {t("pages.settings.refreshInterval")}
+                                </label>
+                                {renderManagedLock(refreshIntervalSource)}
+                            </div>
                             <select
                                 id="settings-refresh"
                                 value={refreshInterval}
                                 onChange={(event) => setRefreshInterval(Number(event.target.value))}
-                                disabled={!canManageSettings || isSaving}
+                                disabled={!canManageSettings || isSaving || Boolean(refreshIntervalSource)}
                                 className={inputClass}
                             >
-                                {REFRESH_OPTIONS.map((option) => (
+                                {refreshOptions.map((option) => (
                                     <option key={option.value} value={option.value}>
-                                        {t(option.labelKey)}
+                                        {option.label}
                                     </option>
                                 ))}
                             </select>
@@ -843,12 +882,15 @@ export function Settings() {
                                     id="settings-manual-refresh"
                                     checked={manualRefreshEnabled}
                                     onCheckedChange={setManualRefreshEnabled}
-                                    disabled={!canManageSettings || isSaving}
+                                    disabled={!canManageSettings || isSaving || Boolean(manualRefreshSource)}
                                 />
                                 <div className="min-w-0">
-                                    <label htmlFor="settings-manual-refresh" className={labelClass}>
-                                        {t("pages.settings.enableManualRefresh")}
-                                    </label>
+                                    <div className="flex items-center gap-1.5">
+                                        <label htmlFor="settings-manual-refresh" className={labelClass}>
+                                            {t("pages.settings.enableManualRefresh")}
+                                        </label>
+                                        {renderManagedLock(manualRefreshSource)}
+                                    </div>
                                     <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                                         {t("pages.settings.enableManualRefreshHelp")}
                                     </p>
@@ -995,11 +1037,11 @@ export function Settings() {
                                         className="mt-1 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                                     />
                                     <span>
-                                        <span className="block font-medium">{t("pages.settings.disablePasswordLogin")}</span>
+                                        <span className="flex items-center gap-1.5 font-medium">
+                                            {t("pages.settings.disablePasswordLogin")}
+                                            {renderManagedLock(authSettings?.managedSettings?.disablePasswordLogin)}
+                                        </span>
                                         <span className="block text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.disablePasswordLoginDescription")}</span>
-                                        {passwordLoginManaged && (
-                                            <span className="mt-1 block text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.passwordLoginManaged")}</span>
-                                        )}
                                         {authSettings?.passwordLoginFallback && (
                                             <span className="mt-1 block text-xs text-amber-700 dark:text-amber-400">{t("pages.settings.passwordLoginFallback")}</span>
                                         )}
@@ -1143,47 +1185,57 @@ export function Settings() {
                             </div>
                             <div className="grid gap-4 lg:grid-cols-2">
                                 <div className="space-y-2 lg:col-span-2">
-                                    <label htmlFor="oidc-issuer" className={labelClass}>{t("pages.settings.oidcIssuerUrl")}</label>
+                                    <div className="flex items-center gap-1.5">
+                                        <label htmlFor="oidc-issuer" className={labelClass}>{t("pages.settings.oidcIssuerUrl")}</label>
+                                        {renderManagedLock(authSettings?.managedSettings?.oidcIssuerUrl)}
+                                    </div>
                                     <input
                                         id="oidc-issuer"
                                         value={oidcForm.issuerUrl}
                                         onChange={(event) => setOidcForm((current) => ({ ...current, issuerUrl: event.target.value }))}
-                                        disabled={!canManageAuthSettings}
+                                        disabled={!canManageAuthSettings || isOidcManaged('oidcIssuerUrl')}
                                         className={inputClass}
                                     />
                                 </div>
                                 <div className="space-y-2">
-                                    <label htmlFor="oidc-client-id" className={labelClass}>{t("pages.settings.oidcClientId")}</label>
+                                    <div className="flex items-center gap-1.5">
+                                        <label htmlFor="oidc-client-id" className={labelClass}>{t("pages.settings.oidcClientId")}</label>
+                                        {renderManagedLock(authSettings?.managedSettings?.oidcClientId)}
+                                    </div>
                                     <input
                                         id="oidc-client-id"
                                         value={oidcForm.clientId}
                                         onChange={(event) => setOidcForm((current) => ({ ...current, clientId: event.target.value }))}
-                                        disabled={!canManageAuthSettings}
+                                        disabled={!canManageAuthSettings || isOidcManaged('oidcClientId')}
                                         className={inputClass}
                                     />
                                 </div>
                                 <div className="space-y-2">
-                                    <label htmlFor="oidc-client-secret" className={labelClass}>{t("pages.settings.oidcClientSecret")}</label>
+                                    <div className="flex items-center gap-1.5">
+                                        <label htmlFor="oidc-client-secret" className={labelClass}>{t("pages.settings.oidcClientSecret")}</label>
+                                        {renderManagedLock(authSettings?.managedSettings?.oidcClientSecret)}
+                                    </div>
                                     <input
                                         id="oidc-client-secret"
                                         type="password"
                                         value={oidcForm.clientSecret}
                                         onChange={(event) => setOidcForm((current) => ({ ...current, clientSecret: event.target.value }))}
                                         placeholder={authSettings?.hasOidcClientSecret ? t("pages.settings.unchanged") : ''}
-                                        disabled={!canManageAuthSettings}
+                                        disabled={!canManageAuthSettings || isOidcManaged('oidcClientSecret')}
                                         className={inputClass}
                                     />
                                 </div>
                                 <div className="lg:col-span-2">
                                     <GroupListEditor
                                         id="oidc-scopes"
+                                        labelAddon={renderManagedLock(authSettings?.managedSettings?.oidcScope)}
                                         label={t("pages.settings.oidcScope")}
                                         groups={oidcForm.scopes}
                                         draft={oidcListDrafts.scopes}
                                         onDraftChange={(value) => setOidcListDrafts((current) => ({ ...current, scopes: value }))}
                                         onAdd={() => addOidcListItem('scopes')}
                                         onRemove={(scope) => removeOidcListItem('scopes', scope)}
-                                        disabled={!canManageAuthSettings}
+                                        disabled={!canManageAuthSettings || isOidcManaged('oidcScope')}
                                         placeholder={DEFAULT_OIDC_SCOPE}
                                         addLabel={t("pages.settings.addGroup")}
                                         emptyLabel={t("pages.settings.noScopesConfigured")}
@@ -1193,24 +1245,30 @@ export function Settings() {
                                     />
                                 </div>
                                 <div className="space-y-2">
-                                    <label htmlFor="oidc-groups-claim" className={labelClass}>{t("pages.settings.oidcGroupsClaim")}</label>
+                                    <div className="flex items-center gap-1.5">
+                                        <label htmlFor="oidc-groups-claim" className={labelClass}>{t("pages.settings.oidcGroupsClaim")}</label>
+                                        {renderManagedLock(authSettings?.managedSettings?.oidcGroupsClaim)}
+                                    </div>
                                     <input
                                         id="oidc-groups-claim"
                                         value={oidcForm.groupsClaim}
                                         onChange={(event) => setOidcForm((current) => ({ ...current, groupsClaim: event.target.value }))}
                                         placeholder="groups"
-                                        disabled={!canManageAuthSettings}
+                                        disabled={!canManageAuthSettings || isOidcManaged('oidcGroupsClaim')}
                                         className={inputClass}
                                     />
                                 </div>
                                 <div className="space-y-2">
-                                    <label htmlFor="oidc-unmatched-role" className={labelClass}>{t("pages.settings.oidcUnmatchedRole")}</label>
+                                    <div className="flex items-center gap-1.5">
+                                        <label htmlFor="oidc-unmatched-role" className={labelClass}>{t("pages.settings.oidcUnmatchedRole")}</label>
+                                        {renderManagedLock(authSettings?.managedSettings?.oidcUnmatchedRole)}
+                                    </div>
                                     <select
                                         id="oidc-unmatched-role"
                                         aria-describedby="oidc-unmatched-role-help"
                                         value={oidcForm.unmatchedRole}
                                         onChange={(event) => setOidcForm((current) => ({ ...current, unmatchedRole: event.target.value as OidcUnmatchedRole }))}
-                                        disabled={!canManageAuthSettings}
+                                        disabled={!canManageAuthSettings || isOidcManaged('oidcUnmatchedRole')}
                                         className={inputClass}
                                     >
                                         <option value="deny">{t("pages.settings.oidcUnmatchedRoleDeny")}</option>
@@ -1221,13 +1279,14 @@ export function Settings() {
                                 </div>
                                 <GroupListEditor
                                     id="oidc-admin-groups"
+                                    labelAddon={renderManagedLock(authSettings?.managedSettings?.oidcAdminGroups)}
                                     label={t("pages.settings.oidcAdminGroups")}
                                     groups={oidcForm.adminGroups}
                                     draft={oidcListDrafts.adminGroups}
                                     onDraftChange={(value) => setOidcListDrafts((current) => ({ ...current, adminGroups: value }))}
                                     onAdd={() => addOidcListItem('adminGroups')}
                                     onRemove={(group) => removeOidcListItem('adminGroups', group)}
-                                    disabled={!canManageAuthSettings}
+                                    disabled={!canManageAuthSettings || isOidcManaged('oidcAdminGroups')}
                                     placeholder="crowdsec-admins"
                                     addLabel={t("pages.settings.addGroup")}
                                     emptyLabel={t("pages.settings.noGroupsConfigured")}
@@ -1236,13 +1295,14 @@ export function Settings() {
                                 />
                                 <GroupListEditor
                                     id="oidc-read-only-groups"
+                                    labelAddon={renderManagedLock(authSettings?.managedSettings?.oidcReadOnlyGroups)}
                                     label={t("pages.settings.oidcReadOnlyGroups")}
                                     groups={oidcForm.readOnlyGroups}
                                     draft={oidcListDrafts.readOnlyGroups}
                                     onDraftChange={(value) => setOidcListDrafts((current) => ({ ...current, readOnlyGroups: value }))}
                                     onAdd={() => addOidcListItem('readOnlyGroups')}
                                     onRemove={(group) => removeOidcListItem('readOnlyGroups', group)}
-                                    disabled={!canManageAuthSettings}
+                                    disabled={!canManageAuthSettings || isOidcManaged('oidcReadOnlyGroups')}
                                     placeholder="crowdsec-viewers"
                                     addLabel={t("pages.settings.addGroup")}
                                     emptyLabel={t("pages.settings.noGroupsConfigured")}
@@ -1254,12 +1314,15 @@ export function Settings() {
                                         id="oidc-end-session"
                                         checked={oidcForm.endSession}
                                         onCheckedChange={(checked) => setOidcForm((current) => ({ ...current, endSession: checked }))}
-                                        disabled={!canManageAuthSettings}
+                                        disabled={!canManageAuthSettings || isOidcManaged('oidcEndSession')}
                                     />
                                     <div className="min-w-0">
-                                        <label htmlFor="oidc-end-session" className={labelClass}>
-                                            {t("pages.settings.oidcEndSession")}
-                                        </label>
+                                        <div className="flex items-center gap-1.5">
+                                            <label htmlFor="oidc-end-session" className={labelClass}>
+                                                {t("pages.settings.oidcEndSession")}
+                                            </label>
+                                            {renderManagedLock(authSettings?.managedSettings?.oidcEndSession)}
+                                        </div>
                                         <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                                             {t("pages.settings.oidcEndSessionHelp", { url: `${window.location.origin}${withBasePath('/login')}` })}
                                         </p>
@@ -1270,12 +1333,15 @@ export function Settings() {
                                         id="oidc-backchannel-logout"
                                         checked={oidcForm.backchannelLogout}
                                         onCheckedChange={(checked) => setOidcForm((current) => ({ ...current, backchannelLogout: checked }))}
-                                        disabled={!canManageAuthSettings}
+                                        disabled={!canManageAuthSettings || isOidcManaged('oidcBackchannelLogout')}
                                     />
                                     <div className="min-w-0">
-                                        <label htmlFor="oidc-backchannel-logout" className={labelClass}>
-                                            {t("pages.settings.oidcBackchannelLogout")}
-                                        </label>
+                                        <div className="flex items-center gap-1.5">
+                                            <label htmlFor="oidc-backchannel-logout" className={labelClass}>
+                                                {t("pages.settings.oidcBackchannelLogout")}
+                                            </label>
+                                            {renderManagedLock(authSettings?.managedSettings?.oidcBackchannelLogout)}
+                                        </div>
                                         <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                                             {t("pages.settings.oidcBackchannelLogoutHelp", { url: `${window.location.origin}${withBasePath('/api/auth/oidc/backchannel-logout')}` })}
                                         </p>
@@ -1286,12 +1352,15 @@ export function Settings() {
                                         id="oidc-auto-login"
                                         checked={oidcForm.autoLogin}
                                         onCheckedChange={(checked) => setOidcForm((current) => ({ ...current, autoLogin: checked }))}
-                                        disabled={!canManageAuthSettings}
+                                        disabled={!canManageAuthSettings || isOidcManaged('oidcAutoLogin')}
                                     />
                                     <div className="min-w-0">
-                                        <label htmlFor="oidc-auto-login" className={labelClass}>
-                                            {t("pages.settings.oidcAutoLogin")}
-                                        </label>
+                                        <div className="flex items-center gap-1.5">
+                                            <label htmlFor="oidc-auto-login" className={labelClass}>
+                                                {t("pages.settings.oidcAutoLogin")}
+                                            </label>
+                                            {renderManagedLock(authSettings?.managedSettings?.oidcAutoLogin)}
+                                        </div>
                                         <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                                             {t("pages.settings.oidcAutoLoginHelp", { url: `${window.location.origin}${withBasePath('/login?local=1')}` })}
                                         </p>
@@ -1304,7 +1373,7 @@ export function Settings() {
                             <button
                                 type="button"
                                 onClick={() => void saveOidcSettings()}
-                                disabled={!canManageAuthSettings || isSavingOidc}
+                                disabled={!canManageAuthSettings || isSavingOidc || allOidcSettingsManaged}
                                 className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700"
                             >
                                 <ShieldCheck className="h-4 w-4" />
@@ -1575,6 +1644,29 @@ export function Settings() {
     );
 }
 
+const MANAGED_SETTING_MARKER = '\u0000';
+
+// Marks a setting that the application config locks; the tooltip names its config path.
+function ManagedLock({ label, children }: { label: string; children: ReactNode }) {
+    return (
+        <span className="group relative inline-flex shrink-0">
+            <span
+                tabIndex={0}
+                aria-label={label}
+                className="rounded text-gray-400 outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-gray-500"
+            >
+                <LockKeyhole className="h-3.5 w-3.5" aria-hidden="true" />
+            </span>
+            <span
+                role="tooltip"
+                className="pointer-events-none absolute left-0 top-full z-20 mt-2 hidden w-80 max-w-[calc(100vw-2rem)] rounded-lg bg-gray-900 px-3 py-2 text-left text-xs font-normal normal-case leading-5 tracking-normal text-white shadow-lg group-hover:block group-focus-within:block dark:bg-gray-700"
+            >
+                {children}
+            </span>
+        </span>
+    );
+}
+
 function GroupListEditor({
     id,
     label,
@@ -1590,6 +1682,7 @@ function GroupListEditor({
     removeLabel,
     canRemove = () => true,
     labelClass,
+    labelAddon,
 }: {
     id: string;
     label: string;
@@ -1605,6 +1698,7 @@ function GroupListEditor({
     removeLabel: (group: string) => string;
     canRemove?: (group: string) => boolean;
     labelClass: string;
+    labelAddon?: ReactNode;
 }) {
     const handleSubmit = (event: FormEvent) => {
         event.preventDefault();
@@ -1613,7 +1707,10 @@ function GroupListEditor({
 
     return (
         <div className="space-y-2">
-            <label htmlFor={id} className={labelClass}>{label}</label>
+            <div className="flex items-center gap-1.5">
+                <label htmlFor={id} className={labelClass}>{label}</label>
+                {labelAddon}
+            </div>
             <form
                 className="flex min-h-11 overflow-hidden rounded-lg border border-gray-300 bg-white focus-within:ring-2 focus-within:ring-primary-500 dark:border-gray-700 dark:bg-gray-900"
                 onSubmit={handleSubmit}

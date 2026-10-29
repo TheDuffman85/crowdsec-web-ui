@@ -13,7 +13,17 @@ import {
 import { generateSecret, generateURI, verify } from 'otplib';
 import * as oidcClient from 'openid-client';
 import * as jose from 'jose';
-import { parseOidcScope, parseOidcUnmatchedRole, type DashboardAuthConfig, type OidcUnmatchedRole } from './config';
+import {
+  OIDC_SETTING_PATHS,
+  parseOidcScope,
+  parseOidcUnmatchedRole,
+  resolveManagedSettingSource,
+  type ConfigEnvironmentOverride,
+  type DashboardAuthConfig,
+  type OidcSetting,
+  type OidcUnmatchedRole,
+} from './config';
+import type { ManagedSettingSource } from '../shared/contracts';
 import { getAppName } from './branding';
 import {
   CrowdsecDatabase,
@@ -691,6 +701,7 @@ export function createDashboardAuth(options: {
   basePath: string;
   instanceReadOnly: boolean;
   writeDatabase?: DatabaseWrite;
+  configEnvironmentOverrides?: readonly ConfigEnvironmentOverride[];
 }): DashboardAuth {
   const { config, database, basePath, instanceReadOnly } = options;
   const enabled = config.enabled ?? !database.isAuthMigrationDefaultDisabled();
@@ -737,8 +748,15 @@ export function createDashboardAuth(options: {
     `).get(excludingId ?? -1));
   }
 
+  const managedOidcSettings = new Set<OidcSetting>(config.managedOidcSettings);
+
+  // Values set by the application config win over values saved in Settings.
+  function readOidcSetting(setting: OidcSetting, key: MutableAuthSettingKey): string | undefined {
+    return managedOidcSettings.has(setting) ? undefined : readAuthSetting(database, key);
+  }
+
   function getEffectiveConfig(): EffectiveAuthConfig {
-    const encryptedClientSecret = readAuthSetting(database, 'oidc_client_secret');
+    const encryptedClientSecret = readOidcSetting('oidcClientSecret', 'oidc_client_secret');
     const oidcClientSecret = encryptedClientSecret === undefined
       ? config.oidcClientSecret
       : encryptedClientSecret
@@ -746,17 +764,17 @@ export function createDashboardAuth(options: {
         : undefined;
 
     return {
-      oidcIssuerUrl: readAuthSetting(database, 'oidc_issuer_url') ?? config.oidcIssuerUrl,
-      oidcClientId: readAuthSetting(database, 'oidc_client_id') ?? config.oidcClientId,
+      oidcIssuerUrl: readOidcSetting('oidcIssuerUrl', 'oidc_issuer_url') ?? config.oidcIssuerUrl,
+      oidcClientId: readOidcSetting('oidcClientId', 'oidc_client_id') ?? config.oidcClientId,
       oidcClientSecret,
-      oidcScope: readAuthSetting(database, 'oidc_scope')?.trim() || config.oidcScope,
-      oidcGroupsClaim: readAuthSetting(database, 'oidc_groups_claim') || config.oidcGroupsClaim || 'groups',
-      oidcAdminGroups: parseCsvList(readAuthSetting(database, 'oidc_admin_groups') ?? config.oidcAdminGroups.join(',')),
-      oidcReadOnlyGroups: parseCsvList(readAuthSetting(database, 'oidc_read_only_groups') ?? config.oidcReadOnlyGroups.join(',')),
-      oidcUnmatchedRole: parseOidcUnmatchedRole(readAuthSetting(database, 'oidc_unmatched_role') ?? config.oidcUnmatchedRole),
-      oidcEndSession: (readAuthSetting(database, 'oidc_end_session') ?? String(config.oidcEndSession ?? isOidcEndSessionLegacyDefault())) === 'true',
-      oidcAutoLogin: (readAuthSetting(database, 'oidc_auto_login') ?? String(config.oidcAutoLogin)) === 'true',
-      oidcBackchannelLogout: (readAuthSetting(database, 'oidc_backchannel_logout') ?? String(config.oidcBackchannelLogout)) === 'true',
+      oidcScope: readOidcSetting('oidcScope', 'oidc_scope')?.trim() || config.oidcScope,
+      oidcGroupsClaim: readOidcSetting('oidcGroupsClaim', 'oidc_groups_claim') || config.oidcGroupsClaim || 'groups',
+      oidcAdminGroups: parseCsvList(readOidcSetting('oidcAdminGroups', 'oidc_admin_groups') ?? config.oidcAdminGroups.join(',')),
+      oidcReadOnlyGroups: parseCsvList(readOidcSetting('oidcReadOnlyGroups', 'oidc_read_only_groups') ?? config.oidcReadOnlyGroups.join(',')),
+      oidcUnmatchedRole: parseOidcUnmatchedRole(readOidcSetting('oidcUnmatchedRole', 'oidc_unmatched_role') ?? config.oidcUnmatchedRole),
+      oidcEndSession: (readOidcSetting('oidcEndSession', 'oidc_end_session') ?? String(config.oidcEndSession ?? isOidcEndSessionLegacyDefault())) === 'true',
+      oidcAutoLogin: (readOidcSetting('oidcAutoLogin', 'oidc_auto_login') ?? String(config.oidcAutoLogin)) === 'true',
+      oidcBackchannelLogout: (readOidcSetting('oidcBackchannelLogout', 'oidc_backchannel_logout') ?? String(config.oidcBackchannelLogout)) === 'true',
     };
   }
 
@@ -778,6 +796,19 @@ export function createDashboardAuth(options: {
   function isPasswordLoginDisabled(): boolean {
     if (passwordLoginManaged) return config.passwordLoginEnabled === false && !isPasswordLoginConfigFallbackActive();
     return readAuthSetting(database, 'disable_password_login') === 'true';
+  }
+
+  // Settings fields locked by the application config, with where each one is set.
+  function getManagedSettings(): Record<string, ManagedSettingSource> {
+    const overrides = options.configEnvironmentOverrides ?? [];
+    const sources: Record<string, ManagedSettingSource> = {};
+    if (passwordLoginManaged) {
+      sources.disablePasswordLogin = resolveManagedSettingSource(overrides, 'auth.passwordLogin.enabled');
+    }
+    for (const setting of managedOidcSettings) {
+      sources[setting] = resolveManagedSettingSource(overrides, OIDC_SETTING_PATHS[setting]);
+    }
+    return sources;
   }
 
   function getPasswordLoginSettings() {
@@ -1140,6 +1171,7 @@ export function createDashboardAuth(options: {
         oidcEndSession: effectiveConfig.oidcEndSession,
         oidcBackchannelLogout: effectiveConfig.oidcBackchannelLogout,
         ...getOidcAutoLoginSettings(),
+        managedSettings: getManagedSettings(),
         hasPassword: Boolean(user?.password_hash),
         passkeysAvailable: !isOidcOnlyAccount(user),
         totpEnabled: isTotpEnabled(user),
@@ -1156,6 +1188,13 @@ export function createDashboardAuth(options: {
 
       if ('disablePasswordLogin' in body && passwordLoginManaged) {
         return context.json({ error: 'Password login is managed by the application configuration', code: 'MANAGED_BY_CONFIG' }, 409);
+      }
+      const managedFields = [...managedOidcSettings].filter((setting) => setting in body);
+      if (managedFields.length > 0) {
+        return context.json({
+          error: `${managedFields.join(', ')} ${managedFields.length === 1 ? 'is' : 'are'} managed by the application configuration`,
+          code: 'MANAGED_BY_CONFIG',
+        }, 409);
       }
 
       const updates = new Map<MutableAuthSettingKey, string>();
@@ -1228,6 +1267,7 @@ export function createDashboardAuth(options: {
           oidcEndSession: effectiveConfig.oidcEndSession,
           oidcBackchannelLogout: effectiveConfig.oidcBackchannelLogout,
           ...getOidcAutoLoginSettings(),
+          managedSettings: getManagedSettings(),
         },
       });
     });

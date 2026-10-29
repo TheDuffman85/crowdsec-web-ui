@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isValidDateFormat, type DateFormat } from '../shared/date-format';
+import type { ManagedSettingSource } from '../shared/contracts';
 export type { DateFormat } from '../shared/date-format';
 import { createCrowdsecAuthConfig, type CrowdsecAuthConfig } from './auth';
 import {
@@ -25,6 +26,46 @@ export type TimeFormat = 'browser' | '12h' | '24h';
 export type OidcUnmatchedRole = 'deny' | 'admin' | 'read-only';
 export const DEFAULT_OIDC_SCOPE = 'openid profile email';
 
+// OIDC settings editable in Settings, with the environment name the application config translates to
+// and their application config path.
+const OIDC_SETTING_ENV = [
+  ['oidcIssuerUrl', 'AUTH_OIDC_ISSUER_URL', 'auth.oidc.issuerUrl'],
+  ['oidcClientId', 'AUTH_OIDC_CLIENT_ID', 'auth.oidc.clientId'],
+  ['oidcClientSecret', 'AUTH_OIDC_CLIENT_SECRET', 'auth.oidc.clientSecret'],
+  ['oidcScope', 'AUTH_OIDC_SCOPE', 'auth.oidc.scope'],
+  ['oidcGroupsClaim', 'AUTH_OIDC_GROUPS_CLAIM', 'auth.oidc.groupsClaim'],
+  ['oidcAdminGroups', 'AUTH_OIDC_ADMIN_GROUPS', 'auth.oidc.adminGroups'],
+  ['oidcReadOnlyGroups', 'AUTH_OIDC_READ_ONLY_GROUPS', 'auth.oidc.readOnlyGroups'],
+  ['oidcUnmatchedRole', 'AUTH_OIDC_UNMATCHED_ROLE', 'auth.oidc.unmatchedRole'],
+  ['oidcEndSession', 'AUTH_OIDC_END_SESSION', 'auth.oidc.endSession'],
+  ['oidcAutoLogin', 'AUTH_OIDC_AUTO_LOGIN', 'auth.oidc.autoLogin'],
+  ['oidcBackchannelLogout', 'AUTH_OIDC_BACKCHANNEL_LOGOUT', 'auth.oidc.backchannelLogout'],
+] as const;
+
+export type OidcSetting = typeof OIDC_SETTING_ENV[number][0];
+
+export const OIDC_SETTING_PATHS = Object.fromEntries(
+  OIDC_SETTING_ENV.map(([setting, , configPath]) => [setting, configPath]),
+) as Record<OidcSetting, string>;
+
+export interface ConfigEnvironmentOverride {
+  name: string;
+  path: readonly (string | number)[];
+}
+
+/** Names the CONFIG_ variable behind a config-set value, so Settings can point to where it is set. */
+export function resolveManagedSettingSource(
+  overrides: readonly ConfigEnvironmentOverride[],
+  configPath: string,
+): ManagedSettingSource {
+  const keys = configPath.split('.');
+  // Section variables cover the whole setting and indexed variables part of it; the last applied one wins.
+  const override = overrides.findLast((candidate) => (
+    candidate.path.slice(0, keys.length).every((key, index) => key === keys[index])
+  ));
+  return override ? { path: configPath, env: override.name } : { path: configPath };
+}
+
 export interface DashboardAuthConfig {
   enabled: boolean | null;
   sessionSecret?: string;
@@ -43,6 +84,8 @@ export interface DashboardAuthConfig {
   oidcEndSession: boolean | null;
   oidcAutoLogin: boolean;
   oidcBackchannelLogout: boolean;
+  /** OIDC settings set by the application config; Settings cannot change them. */
+  managedOidcSettings: OidcSetting[];
 }
 
 export interface RuntimeConfig {
@@ -67,6 +110,11 @@ export interface RuntimeConfig {
   lookbackMs: number;
   refreshIntervalMs: number;
   manualRefreshEnabled: boolean;
+  /** True when the application config sets the value; Settings cannot change it. */
+  refreshIntervalManaged: boolean;
+  manualRefreshEnabledManaged: boolean;
+  /** CONFIG_ variables applied on top of the config file at startup. */
+  configEnvironmentOverrides: ConfigEnvironmentOverride[];
   idleRefreshIntervalMs: number;
   idleThresholdMs: number;
   lapiRequestTimeoutMs: number;
@@ -269,6 +317,10 @@ function parseDashboardAuthConfig(env: NodeJS.ProcessEnv): DashboardAuthConfig {
     oidcEndSession: parseOptionalBooleanEnv(env.AUTH_OIDC_END_SESSION),
     oidcAutoLogin: parseBooleanEnv(env.AUTH_OIDC_AUTO_LOGIN, false),
     oidcBackchannelLogout: parseBooleanEnv(env.AUTH_OIDC_BACKCHANNEL_LOGOUT, false),
+    // Secrets may also be referenced through a _FILE variable.
+    managedOidcSettings: OIDC_SETTING_ENV
+      .filter(([, name]) => hasEnv(env, name) || hasEnv(env, `${name}_FILE`))
+      .map(([setting]) => setting),
   };
 }
 
@@ -420,6 +472,9 @@ function createRuntimeConfigFromEnvironment(env: NodeJS.ProcessEnv): RuntimeConf
     lookbackMs: parseLookbackToMs(lookbackPeriod),
     refreshIntervalMs,
     manualRefreshEnabled: parseBooleanEnv(env.CROWDSEC_MANUAL_REFRESH_ENABLED, false),
+    refreshIntervalManaged: hasEnv(env, 'CROWDSEC_REFRESH_INTERVAL'),
+    manualRefreshEnabledManaged: hasEnv(env, 'CROWDSEC_MANUAL_REFRESH_ENABLED'),
+    configEnvironmentOverrides: [],
     idleRefreshIntervalMs: parseRefreshInterval(env.CROWDSEC_IDLE_REFRESH_INTERVAL || '10m'),
     idleThresholdMs: parseRefreshInterval(env.CROWDSEC_IDLE_THRESHOLD || '2m'),
     lapiRequestTimeoutMs: parsePositiveIntervalEnv(env.CROWDSEC_LAPI_REQUEST_TIMEOUT, '30s'),
@@ -669,6 +724,7 @@ export function createRuntimeConfig(
 
     warnDeprecatedEnvironment(env, { configFile, migrated });
     const runtimeConfig = createRuntimeConfigFromParsedConfig(parsedConfig || loadApplicationConfig(configFile, env));
+    runtimeConfig.configEnvironmentOverrides = appliedOverrides.map(({ name, path }) => ({ name, path }));
     console.log(`Loaded application configuration from ${configFile}.`);
     return runtimeConfig;
   } catch (error) {

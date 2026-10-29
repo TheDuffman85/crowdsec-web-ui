@@ -147,9 +147,9 @@ describe('OIDC RP-initiated logout', () => {
     expect(await (await logout(controller, sessionCookie)).json()).toEqual({ status: 'ok' });
   });
 
-  test('admins can toggle end-session in settings, overriding the config default', async () => {
+  test('admins can toggle end-session in settings while the config leaves it unset', async () => {
     stubDiscovery();
-    const { controller, database, sessionCookie } = createOidcController();
+    const { controller, database, sessionCookie } = createOidcController({ CONFIG_AUTH_OIDC_END_SESSION: undefined });
     const adminCookie = createAuthSessionCookie(database, {
       userId: database.getAuthUserByUsername('oidc-admin')!.id,
       username: 'oidc-admin',
@@ -160,23 +160,59 @@ describe('OIDC RP-initiated logout', () => {
     const initial = await controller.fetch(new Request('https://ui.example.com/crowdsec/api/auth/settings', {
       headers: { cookie: adminCookie },
     }));
-    expect(await initial.json()).toMatchObject({ oidcEndSession: true });
-
-    const disable = await controller.fetch(new Request('https://ui.example.com/crowdsec/api/auth/settings', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', cookie: adminCookie },
-      body: JSON.stringify({ oidcEndSession: false }),
-    }));
-    expect(disable.status).toBe(200);
-    expect(await disable.json()).toMatchObject({ settings: { oidcEndSession: false } });
-    expect(await (await logout(controller, sessionCookie)).json()).toEqual({ status: 'ok' });
+    expect(await initial.json()).toMatchObject({ oidcEndSession: false });
 
     const enable = await controller.fetch(new Request('https://ui.example.com/crowdsec/api/auth/settings', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', cookie: adminCookie },
       body: JSON.stringify({ oidcEndSession: true }),
     }));
+    expect(enable.status).toBe(200);
     expect(await enable.json()).toMatchObject({ settings: { oidcEndSession: true } });
+    const payload = await (await logout(controller, sessionCookie)).json() as { redirectUrl?: string };
+    expect(payload.redirectUrl).toContain(END_SESSION_ENDPOINT);
+
+    const disable = await controller.fetch(new Request('https://ui.example.com/crowdsec/api/auth/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({ oidcEndSession: false }),
+    }));
+    expect(await disable.json()).toMatchObject({ settings: { oidcEndSession: false } });
+    expect(await (await logout(controller, sessionCookie)).json()).toEqual({ status: 'ok' });
+  });
+
+  test('locks end-session when the application config sets it', async () => {
+    stubDiscovery();
+    const { controller, database, sessionCookie } = createOidcController();
+    const adminCookie = createAuthSessionCookie(database, {
+      userId: database.getAuthUserByUsername('oidc-admin')!.id,
+      username: 'oidc-admin',
+      role: 'admin',
+      authMethod: 'oidc',
+    });
+    // A value saved in Settings earlier no longer applies once the config sets one.
+    database.setMeta('auth_oidc_end_session', 'false');
+
+    const initial = await controller.fetch(new Request('https://ui.example.com/crowdsec/api/auth/settings', {
+      headers: { cookie: adminCookie },
+    }));
+    expect(await initial.json()).toMatchObject({
+      oidcEndSession: true,
+      managedSettings: {
+        oidcIssuerUrl: { path: 'auth.oidc.issuerUrl' },
+        oidcClientId: { path: 'auth.oidc.clientId' },
+        oidcClientSecret: { path: 'auth.oidc.clientSecret' },
+        oidcEndSession: { path: 'auth.oidc.endSession', env: 'CONFIG_AUTH_OIDC_END_SESSION' },
+      },
+    });
+
+    const change = await controller.fetch(new Request('https://ui.example.com/crowdsec/api/auth/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({ oidcEndSession: false }),
+    }));
+    expect(change.status).toBe(409);
+    expect(await change.json()).toMatchObject({ code: 'MANAGED_BY_CONFIG' });
     const payload = await (await logout(controller, sessionCookie)).json() as { redirectUrl?: string };
     expect(payload.redirectUrl).toContain(END_SESSION_ENDPOINT);
   });

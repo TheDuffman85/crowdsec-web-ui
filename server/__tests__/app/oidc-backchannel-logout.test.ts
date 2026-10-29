@@ -294,9 +294,9 @@ describe('OIDC back-channel logout', () => {
     expect(await isAuthenticated(controller, cookie)).toBe(true);
   });
 
-  test('admins can toggle back-channel logout in settings, overriding the config default', async () => {
+  test('admins can enable back-channel logout in settings while the config leaves it unset', async () => {
     stubProvider();
-    const { controller, createCookie } = createOidcController();
+    const { controller, createCookie } = createOidcController({ CONFIG_AUTH_OIDC_BACKCHANNEL_LOGOUT: undefined });
     const adminCookie = createCookie('idp-session-1');
     const putSettings = (body: Record<string, unknown>) => controller.fetch(new Request('https://ui.example.com/crowdsec/api/auth/settings', {
       method: 'PUT',
@@ -305,10 +305,7 @@ describe('OIDC back-channel logout', () => {
     }));
 
     const initial = await controller.fetch(new Request('https://ui.example.com/crowdsec/api/auth/settings', { headers: { cookie: adminCookie } }));
-    expect(await initial.json()).toMatchObject({ oidcBackchannelLogout: true });
-
-    const disable = await putSettings({ oidcBackchannelLogout: false });
-    expect(await disable.json()).toMatchObject({ settings: { oidcBackchannelLogout: false } });
+    expect(await initial.json()).toMatchObject({ oidcBackchannelLogout: false });
     expect((await postLogoutToken(controller, await signLogoutToken())).status).toBe(400);
     expect(await isAuthenticated(controller, adminCookie)).toBe(true);
 
@@ -316,6 +313,21 @@ describe('OIDC back-channel logout', () => {
     expect(await enable.json()).toMatchObject({ settings: { oidcBackchannelLogout: true } });
     expect((await postLogoutToken(controller, await signLogoutToken())).status).toBe(200);
     expect(await isAuthenticated(controller, adminCookie)).toBe(false);
+  });
+
+  test('locks back-channel logout when the application config sets it', async () => {
+    stubProvider();
+    const { controller, createCookie } = createOidcController();
+    const adminCookie = createCookie('idp-session-1');
+
+    const change = await controller.fetch(new Request('https://ui.example.com/crowdsec/api/auth/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({ oidcBackchannelLogout: false }),
+    }));
+    expect(change.status).toBe(409);
+    expect(await change.json()).toMatchObject({ code: 'MANAGED_BY_CONFIG' });
+    expect((await postLogoutToken(controller, await signLogoutToken())).status).toBe(200);
   });
 
   test('rejects logout requests while OIDC is not configured', async () => {

@@ -214,6 +214,12 @@ Use `CONFIG_FILE` only to select another existing file. [`config.example.yaml`](
 - Secrets accept a direct string or exactly one `env: NAME` / `file: PATH` reference. Secret overrides also accept `_FILE`.
 - Initial direct secret overrides are stored as environment references, never plaintext. Persisted secret references still require their environment variable.
 
+### Settings managed by configuration
+
+Some values can be set either in Settings or in the application config: the refresh interval, manual refresh, password login, and all OIDC fields. A value set in `config.yaml` or through its `CONFIG_*` variable takes precedence and is locked in Settings, marked with a lock icon whose tooltip names the `CONFIG_*` variable or config path that sets it. Leave it unset to manage it in Settings. Manual decision scenarios from the config are always offered and can't be removed in Settings, but more can be added there.
+
+To manage a locked value in Settings again, remove it from both the environment and `config.yaml`, then restart; the last value saved in Settings applies again. `CONFIG_*` values are written into `config.yaml` when the file is first created, and on every start with `CONFIG_PERSIST_OVERRIDES: "true"`, so removing the variable alone may not unlock the setting.
+
 ### Server, storage, UI, and updates
 
 | YAML field | Default | Purpose | Environment override |
@@ -569,7 +575,7 @@ When `auth.passwordLogin.enabled` is set, it overrides the Settings value and th
 
 ### OIDC
 
-Configure OIDC in Settings or YAML.
+Configure OIDC in Settings or YAML. Fields set in YAML are locked in Settings; see [Settings managed by configuration](#settings-managed-by-configuration).
 
 ```yaml
 auth:

@@ -111,6 +111,42 @@ describe('Settings general and password', () => {
     expect(updateManualRefreshSetting).toHaveBeenCalledWith({ enabled: true });
   });
 
+  test('locks refresh settings managed by configuration', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue({
+      lookback_period: '1h',
+      lookback_hours: 1,
+      lookback_days: 1,
+      refresh_interval: 120000,
+      manual_refresh_enabled: true,
+      managed_settings: {
+        refresh_interval: { path: 'crowdsec.sync.refreshInterval' },
+        manual_refresh_enabled: { path: 'crowdsec.sync.manualRefreshEnabled', env: 'CONFIG_CROWDSEC_SYNC_MANUAL_REFRESH_ENABLED' },
+      },
+      current_interval_name: '2m',
+      lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
+      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+      simulations_enabled: true,
+      machine_features_enabled: false,
+      origin_features_enabled: false,
+      permissions: {
+        mode: 'admin',
+        can_manage_enforcement: true,
+        can_manage_settings: true,
+      },
+    });
+
+    render(<Settings />);
+
+    expect(await screen.findByLabelText('Managed by crowdsec.sync.refreshInterval in the config file. To manage it here, remove it there and restart.')).toBeInTheDocument();
+    expect(screen.getByText('crowdsec.sync.refreshInterval', { selector: 'code' })).toBeInTheDocument();
+    const refreshSelect = screen.getByLabelText('Refresh interval');
+    expect(refreshSelect).toBeDisabled();
+    expect(refreshSelect).toHaveValue('120000');
+    expect(screen.getByRole('option', { name: '2m' })).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Enable manual refresh' })).toBeDisabled();
+    expect(screen.getByLabelText('Managed by the CONFIG_CROWDSEC_SYNC_MANUAL_REFRESH_ENABLED environment variable. To manage it here, remove it and any copy in the config file, then restart.')).toBeInTheDocument();
+  });
+
   test('saves password login setting only from its own save button', async () => {
     const user = userEvent.setup();
     const refreshAuth = vi.fn();
@@ -249,6 +285,7 @@ describe('Settings general and password', () => {
           disablePasswordLogin: false,
           passwordLoginManaged: true,
           passwordLoginFallback: true,
+          managedSettings: { disablePasswordLogin: { path: 'auth.passwordLogin.enabled' } },
           oidcIssuerUrl: '',
           oidcClientId: '',
           hasOidcClientSecret: false,
@@ -267,7 +304,7 @@ describe('Settings general and password', () => {
 
     render(<Settings />);
 
-    expect(await screen.findByText(/Managed by the config file/)).toBeInTheDocument();
+    expect(await screen.findByLabelText('Managed by auth.passwordLogin.enabled in the config file. To manage it here, remove it there and restart.')).toBeInTheDocument();
     expect(screen.getByLabelText(/Disable password login/i)).toBeDisabled();
     expect(screen.getByText(/stays enabled until OIDC/)).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Save' })).toHaveLength(1);

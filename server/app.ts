@@ -373,6 +373,11 @@ function readUpdateCheckOverrides(query: Record<string, string | string[]>): Upd
   };
 }
 
+function describeSettingSource(managed: boolean, saved: unknown): string {
+  if (managed) return 'managed by application config';
+  return saved !== undefined ? 'from saved config' : 'from startup configuration';
+}
+
 function readSingleQueryValue(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) {
     return value[0];
@@ -509,6 +514,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     basePath: config.basePath,
     instanceReadOnly: config.readOnly,
     writeDatabase: (operation) => syncWorker.runExclusive(operation),
+    configEnvironmentOverrides: config.configEnvironmentOverrides,
   });
   const auditLog = createAuditLogger({
     enabled: config.auditEnabled,
@@ -608,8 +614,11 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   const onDemandRefreshPreparedContextKey = 'onDemandRefreshPrepared';
 
   const persistedConfig = loadPersistedConfig(database);
-  let refreshIntervalMs = persistedConfig.refresh_interval_ms ?? config.refreshIntervalMs;
-  let manualRefreshEnabled = persistedConfig.manual_refresh_enabled ?? config.manualRefreshEnabled;
+  // Values set by the application config win over values saved in Settings.
+  const savedRefreshIntervalMs = config.refreshIntervalManaged ? undefined : persistedConfig.refresh_interval_ms;
+  const savedManualRefreshEnabled = config.manualRefreshEnabledManaged ? undefined : persistedConfig.manual_refresh_enabled;
+  let refreshIntervalMs = savedRefreshIntervalMs ?? config.refreshIntervalMs;
+  let manualRefreshEnabled = savedManualRefreshEnabled ?? config.manualRefreshEnabled;
   // The config endpoint stays available while a fresh cache builds its large
   // SQLite indexes. Keep this tiny preference in memory so startup polling
   // never contends with the index writer (notably when WAL is disabled).
@@ -826,8 +835,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
 
   console.log(`Cache Configuration:
   Lookback Period: ${config.lookbackPeriod} (${config.lookbackMs}ms)
-  Refresh Interval: ${getIntervalName(refreshIntervalMs)} (${persistedConfig.refresh_interval_ms !== undefined ? 'from saved config' : 'from startup configuration'})
-  Manual Refresh: ${manualRefreshEnabled ? 'Enabled' : 'Disabled'} (${persistedConfig.manual_refresh_enabled !== undefined ? 'from saved config' : 'from startup configuration'})
+  Refresh Interval: ${getIntervalName(refreshIntervalMs)} (${describeSettingSource(config.refreshIntervalManaged, savedRefreshIntervalMs)})
+  Manual Refresh: ${manualRefreshEnabled ? 'Enabled' : 'Disabled'} (${describeSettingSource(config.manualRefreshEnabledManaged, savedManualRefreshEnabled)})
   LAPI Request Timeout: ${getIntervalName(config.lapiRequestTimeoutMs)}
   Alert Sync Chunk: ${getIntervalName(config.alertSyncChunkMs)}
   Alert Sync Min Chunk: ${getIntervalName(config.alertSyncMinChunkMs)}

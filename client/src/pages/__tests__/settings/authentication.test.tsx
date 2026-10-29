@@ -423,4 +423,110 @@ describe('Settings authentication methods', () => {
       }),
     ));
   });
+
+  test('locks OIDC settings managed by configuration and leaves them out when saving', async () => {
+    const user = userEvent.setup();
+    useAuthMock.mockReturnValue({
+      authEnabled: true,
+      setupRequired: false,
+      authenticated: true,
+      user: { userId: 1, username: 'admin', role: 'admin' },
+      authMethod: 'password',
+      oidcEnabled: true,
+      passwordLoginDisabled: false,
+      passkeysEnabled: true,
+      hasPassword: true,
+      totpEnabled: false,
+      loading: false,
+      refresh: vi.fn(),
+      login: vi.fn(),
+      setup: vi.fn(),
+      logout: vi.fn(),
+    });
+    vi.mocked(fetchConfig).mockResolvedValue({
+      lookback_period: '1h',
+      lookback_hours: 1,
+      lookback_days: 1,
+      refresh_interval: 30000,
+      current_interval_name: '30s',
+      lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
+      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+      simulations_enabled: true,
+      machine_features_enabled: false,
+      origin_features_enabled: false,
+      permissions: {
+        mode: 'admin',
+        can_manage_enforcement: true,
+        can_manage_settings: true,
+      },
+    });
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method || (input instanceof Request ? input.method : 'GET');
+      if (url.includes('/api/auth/passkeys')) {
+        return Response.json({ passkeys: [] });
+      }
+      if (url.includes('/api/auth/settings') && method === 'PUT') {
+        return Response.json({ status: 'ok', settings: {} });
+      }
+      if (url.includes('/api/auth/settings')) {
+        return Response.json({
+          disablePasswordLogin: false,
+          oidcIssuerUrl: 'https://idp.example.com',
+          oidcClientId: 'crowdsec',
+          hasOidcClientSecret: true,
+          oidcScope: 'openid profile email',
+          oidcGroupsClaim: 'groups',
+          oidcAdminGroups: 'admins',
+          oidcReadOnlyGroups: '',
+          oidcUnmatchedRole: 'deny',
+          oidcEndSession: true,
+          oidcBackchannelLogout: false,
+          oidcAutoLogin: false,
+          managedSettings: {
+            oidcIssuerUrl: { path: 'auth.oidc.issuerUrl' },
+            oidcClientId: { path: 'auth.oidc.clientId' },
+            oidcClientSecret: { path: 'auth.oidc.clientSecret', env: 'CONFIG_AUTH_OIDC_CLIENT_SECRET_FILE' },
+            oidcEndSession: { path: 'auth.oidc.endSession' },
+          },
+          hasPassword: true,
+          totpEnabled: false,
+          authMethod: 'password',
+        });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<Settings />);
+
+    await screen.findByText('admins');
+    expect(screen.getByLabelText('Issuer URL')).toBeDisabled();
+    expect(screen.getByLabelText('Client ID')).toBeDisabled();
+    expect(screen.getByLabelText('Client Secret')).toBeDisabled();
+    expect(screen.getByRole('switch', { name: 'Sign out of the identity provider on logout' })).toBeDisabled();
+    expect(screen.getByLabelText('Managed by auth.oidc.issuerUrl in the config file. To manage it here, remove it there and restart.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Managed by auth.oidc.endSession in the config file. To manage it here, remove it there and restart.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Managed by the CONFIG_AUTH_OIDC_CLIENT_SECRET_FILE environment variable. To manage it here, remove it and any copy in the config file, then restart.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Groups Claim')).toBeEnabled();
+
+    await user.click(screen.getByRole('switch', { name: 'End sessions when signing out at the identity provider' }));
+    await user.click(screen.getByRole('button', { name: 'Save OIDC Settings' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/auth/settings'),
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({
+          oidcScope: 'openid profile email',
+          oidcGroupsClaim: 'groups',
+          oidcAdminGroups: 'admins',
+          oidcReadOnlyGroups: '',
+          oidcUnmatchedRole: 'deny',
+          oidcBackchannelLogout: true,
+          oidcAutoLogin: false,
+        }),
+      }),
+    ));
+  });
 });
