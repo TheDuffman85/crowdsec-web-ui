@@ -445,7 +445,7 @@
   "pages.settings.setupTotpTitle": "TOTP einrichten",
   "pages.settings.manageTotpTitle": "TOTP verwalten",
   "pages.settings.setupTotpDescription": "Scanne den QR-Code mit einer Authenticator-App oder öffne den Einrichtungslink auf diesem Gerät. Gib den erzeugten Code ein, um die Einrichtung abzuschließen.",
-  "pages.settings.disableTotpDescription": "Wenn du TOTP deaktivierst, entfällt die zusätzliche Code-Abfrage bei der Passwortanmeldung. Bestätige dies mit deinem aktuellen Passwort.",
+  "pages.settings.disableTotpDescription": "Wenn du TOTP deaktivierst, entfällt die zusätzliche Code-Abfrage bei der Passwortanmeldung. Bestätige dies mit deinem aktuellen Passwort und einem Authenticator-Code.",
   "pages.settings.manualTotpSecret": "Manueller Einrichtungsschlüssel",
   "pages.settings.copyTotpSecret": "Einrichtungsschlüssel kopieren",
   "pages.settings.openAuthenticatorApp": "In Authenticator-App öffnen",

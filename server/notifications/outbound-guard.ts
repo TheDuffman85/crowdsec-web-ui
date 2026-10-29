@@ -1,5 +1,11 @@
 import dns from 'node:dns/promises';
+import type { LookupAddress } from 'node:dns';
 import net from 'node:net';
+import { Agent, fetch as undiciFetch } from 'undici';
+
+type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+export type OutboundLookup = net.LookupFunction;
 
 export interface NotificationOutboundGuardOptions {
   allowPrivateAddresses: boolean;
@@ -8,10 +14,68 @@ export interface NotificationOutboundGuardOptions {
 export interface NotificationOutboundGuard {
   assertHostAllowed(host: string, label: string): Promise<void>;
   assertUrlAllowed(value: string, label: string): Promise<void>;
+  // DNS lookup for sockets: the addresses it validates are the ones the socket connects to,
+  // so a hostname cannot pass validation and then resolve elsewhere (DNS rebinding).
+  lookup: OutboundLookup;
+  // fetch whose connections resolve through `lookup`. TLS still verifies the URL's hostname.
+  // A `tls: { rejectUnauthorized: false }` init field disables certificate checks.
+  fetch: FetchLike;
+}
+
+class RestrictedDestinationError extends Error {
+  readonly retriable = false;
 }
 
 export function createNotificationOutboundGuard(options: NotificationOutboundGuardOptions): NotificationOutboundGuard {
+  const lookup: OutboundLookup = (hostname, lookupOptions, callback) => {
+    resolveAllowedAddresses(hostname, options.allowPrivateAddresses).then(
+      (records) => {
+        const family = lookupOptions.family === 4 || lookupOptions.family === 6 ? lookupOptions.family : 0;
+        const matching = family ? records.filter((record) => record.family === family) : records;
+        if (matching.length === 0) {
+          const error = new Error(`Unable to resolve destination host: ${hostname}`) as NodeJS.ErrnoException;
+          error.code = 'ENOTFOUND';
+          callback(error, []);
+          return;
+        }
+        if (lookupOptions.all) {
+          callback(null, matching);
+        } else {
+          callback(null, matching[0].address, matching[0].family);
+        }
+      },
+      (error: NodeJS.ErrnoException) => callback(error, []),
+    );
+  };
+
+  const agents = new Map<boolean, Agent>();
+  const getAgent = (rejectUnauthorized: boolean) => {
+    let agent = agents.get(rejectUnauthorized);
+    if (!agent) {
+      agent = new Agent({ connect: { lookup, rejectUnauthorized } });
+      agents.set(rejectUnauthorized, agent);
+    }
+    return agent;
+  };
+
+  const guardedFetch: FetchLike = async (input, init) => {
+    const { tls, ...rest } = (init ?? {}) as RequestInit & { tls?: { rejectUnauthorized?: boolean } };
+    try {
+      return await undiciFetch(
+        input as Parameters<typeof undiciFetch>[0],
+        { ...(rest as Parameters<typeof undiciFetch>[1]), dispatcher: getAgent(tls?.rejectUnauthorized !== false) },
+      ) as unknown as Response;
+    } catch (error) {
+      // undici wraps connection failures in a generic "fetch failed"; surface the guard's reason.
+      const cause = error instanceof Error ? error.cause : undefined;
+      if (cause instanceof RestrictedDestinationError) throw cause;
+      throw error;
+    }
+  };
+
   return {
+    lookup,
+    fetch: guardedFetch,
     async assertHostAllowed(host, label) {
       const normalizedHost = host.trim();
       if (!normalizedHost) {
@@ -40,9 +104,27 @@ export function createNotificationOutboundGuard(options: NotificationOutboundGua
       } catch {
         throw new Error(`${label} must be a valid URL`);
       }
-      await this.assertHostAllowed(parsed.hostname, label);
+      // URL hostnames keep the brackets around IPv6 literals.
+      await this.assertHostAllowed(parsed.hostname.replace(/^\[(.*)\]$/, '$1'), label);
     },
   };
+}
+
+async function resolveAllowedAddresses(host: string, allowPrivateAddresses: boolean): Promise<LookupAddress[]> {
+  const records = net.isIP(host)
+    ? [{ address: host, family: net.isIP(host) }]
+    : await dns.lookup(host, { all: true, verbatim: true });
+  if (records.length === 0) {
+    throw new Error(`Unable to resolve destination host: ${host}`);
+  }
+  if (!allowPrivateAddresses) {
+    for (const record of records) {
+      if (classifyAddress(record.address.toLowerCase()) !== 'public') {
+        throw new RestrictedDestinationError(`Destination ${host} points to a restricted address (${record.address})`);
+      }
+    }
+  }
+  return records;
 }
 
 async function resolveHostAddresses(host: string): Promise<string[]> {
@@ -51,25 +133,15 @@ async function resolveHostAddresses(host: string): Promise<string[]> {
   }
 
   if (net.isIP(host)) {
-    return [normalizeIp(host)];
+    return [host.toLowerCase()];
   }
 
   const records = await dns.lookup(host, { all: true, verbatim: true });
-  const addresses = records.map((record) => normalizeIp(record.address));
+  const addresses = records.map((record) => record.address.toLowerCase());
   if (addresses.length === 0) {
     throw new Error(`Unable to resolve destination host: ${host}`);
   }
   return [...new Set(addresses)];
-}
-
-function normalizeIp(value: string): string {
-  if (value.startsWith('::ffff:')) {
-    const mapped = value.slice('::ffff:'.length);
-    if (net.isIP(mapped) === 4) {
-      return mapped;
-    }
-  }
-  return value.toLowerCase();
 }
 
 function classifyAddress(address: string): 'public' | 'private' | 'local' {
@@ -118,10 +190,25 @@ function classifyIpv6(address: string): 'public' | 'private' | 'local' {
     return 'local';
   }
 
+  // Ranges that embed an IPv4 address are judged by that address, whichever way it is written.
+  const embedded = embeddedIpv4(value);
+  if (embedded) {
+    return classifyIpv4(embedded);
+  }
+
   if (inIpv6Range(value, 'fc00::', 7)) return 'private';
   if (inIpv6Range(value, 'fd00::', 8)) return 'private';
   if (inIpv6Range(value, 'fe80::', 10)) return 'local';
   return 'public';
+}
+
+function embeddedIpv4(value: bigint): string | null {
+  const toIpv4 = (bits: bigint) => [24n, 16n, 8n, 0n].map((shift) => Number((bits >> shift) & 0xffn)).join('.');
+  if (inIpv6Range(value, '::ffff:0:0', 96)) return toIpv4(value); // IPv4-mapped
+  if (inIpv6Range(value, '::', 96)) return toIpv4(value); // IPv4-compatible (deprecated)
+  if (inIpv6Range(value, '64:ff9b::', 96)) return toIpv4(value); // NAT64
+  if (inIpv6Range(value, '2002::', 16)) return toIpv4((value >> 80n) & 0xffffffffn); // 6to4
+  return null;
 }
 
 function ipv6ToBigInt(address: string): bigint | null {

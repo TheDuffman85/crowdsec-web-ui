@@ -174,14 +174,15 @@ describe('Settings authentication methods', () => {
     const dialog = screen.getByRole('dialog', { name: 'Manage TOTP' });
     expect(within(dialog).getByRole('button', { name: 'Disable TOTP' })).toBeDisabled();
     await user.type(within(dialog).getByLabelText('Current password'), 'Secret123');
-    expect(within(dialog).queryByLabelText('Authenticator code')).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Disable TOTP' })).toBeDisabled();
+    await user.type(within(dialog).getByLabelText('Authenticator code'), '123456');
     await user.click(within(dialog).getByRole('button', { name: 'Disable TOTP' }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/api/auth/totp'),
       expect.objectContaining({
         method: 'DELETE',
-        body: JSON.stringify({ currentPassword: 'Secret123' }),
+        body: JSON.stringify({ currentPassword: 'Secret123', code: '123456' }),
       }),
     ));
   });

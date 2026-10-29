@@ -25,6 +25,8 @@ export function attachCacheUpdateWebSocket(
   const webSocketServer = new WebSocketServer({ noServer: true, perMessageDeflate: false });
 
   webSocketServer.on('connection', (socket) => {
+    // Protocol errors must only close the offending connection.
+    socket.on('error', () => socket.terminate());
     const aliveSocket = socket as AliveWebSocket;
     aliveSocket.isAlive = true;
     socket.on('pong', () => {
@@ -61,6 +63,9 @@ export function attachCacheUpdateWebSocket(
   heartbeat.unref();
 
   const handleUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+    // ws takes over socket errors only once handleUpgrade() is called.
+    const onSocketError = () => socket.destroy();
+    socket.on('error', onSocketError);
     const host = request.headers.host;
     if (!host || !isExpectedSocketPath(request.url, host, socketPath) || !isSameOrigin(request, host)) {
       rejectUpgrade(socket, 404, 'Not Found');
@@ -73,6 +78,7 @@ export function attachCacheUpdateWebSocket(
         return;
       }
       webSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
+        socket.off('error', onSocketError);
         webSocketServer.emit('connection', webSocket, request);
       });
     }).catch(() => {

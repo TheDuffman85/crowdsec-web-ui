@@ -413,6 +413,9 @@ export class CrowdsecDatabase {
   private readonly insertRevokedOidcSessionStatement: any;
   private readonly pruneRevokedOidcSessionsStatement: any;
   private readonly getRevokedOidcSessionStatement: any;
+  private readonly insertRevokedAuthSessionStatement: any;
+  private readonly pruneRevokedAuthSessionsStatement: any;
+  private readonly getRevokedAuthSessionStatement: any;
   private readonly insertProcessedOidcLogoutStatement: any;
   private readonly pruneProcessedOidcLogoutsStatement: any;
   private readonly bumpOidcLogoutVersionStatement: any;
@@ -738,7 +741,11 @@ export class CrowdsecDatabase {
     `);
     this.updateAuthUserTotpStatement = this.stateQuery(`
       UPDATE auth_users
-      SET totp_secret = $totp_secret, totp_enabled = $totp_enabled, totp_last_step = $totp_last_step, updated_at = $updated_at
+      SET totp_secret = $totp_secret,
+          totp_enabled = $totp_enabled,
+          totp_last_step = $totp_last_step,
+          session_version = session_version + 1,
+          updated_at = $updated_at
       WHERE id = $id
     `);
     this.updateAuthUserTotpLastStepStatement = this.stateQuery(`
@@ -777,6 +784,15 @@ export class CrowdsecDatabase {
     this.getRevokedOidcSessionStatement = this.stateQuery(`
       SELECT 1 FROM oidc_revoked_sessions
       WHERE issuer = $issuer AND session_id = $session_id AND expires_at > $now
+    `);
+    this.insertRevokedAuthSessionStatement = this.stateQuery(`
+      INSERT OR REPLACE INTO revoked_auth_sessions (session_id, expires_at)
+      VALUES ($session_id, $expires_at)
+    `);
+    this.pruneRevokedAuthSessionsStatement = this.stateQuery('DELETE FROM revoked_auth_sessions WHERE expires_at <= $now');
+    this.getRevokedAuthSessionStatement = this.stateQuery(`
+      SELECT 1 FROM revoked_auth_sessions
+      WHERE session_id = $session_id AND expires_at > $now
     `);
     this.insertProcessedOidcLogoutStatement = this.stateQuery(`
       INSERT OR IGNORE INTO oidc_processed_logouts (issuer, token_id, expires_at)
@@ -2379,6 +2395,19 @@ export class CrowdsecDatabase {
     }));
   }
 
+  /** Records a dashboard session as logged out until every token of it has expired. */
+  revokeAuthSession(sessionId: string, expiresAt: number): void {
+    this.pruneRevokedAuthSessionsStatement.run({ $now: Math.floor(Date.now() / 1000) });
+    this.insertRevokedAuthSessionStatement.run({ $session_id: sessionId, $expires_at: expiresAt });
+  }
+
+  isAuthSessionRevoked(sessionId: string): boolean {
+    return Boolean(this.getRevokedAuthSessionStatement.get({
+      $session_id: sessionId,
+      $now: Math.floor(Date.now() / 1000),
+    }));
+  }
+
   listWebAuthnCredentialsByUser(userId: number): WebAuthnCredentialRow[] {
     return this.listWebAuthnCredentialsByUserStatement.all({ $user_id: userId }) as WebAuthnCredentialRow[];
   }
@@ -3100,6 +3129,11 @@ function initStateSchema(db: Database, schema: string, fresh: boolean): void {
       session_id TEXT NOT NULL,
       expires_at INTEGER NOT NULL,
       PRIMARY KEY (issuer, session_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS ${schema}.revoked_auth_sessions (
+      session_id TEXT PRIMARY KEY,
+      expires_at INTEGER NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS ${schema}.oidc_processed_logouts (

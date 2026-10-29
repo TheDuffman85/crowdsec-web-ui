@@ -688,7 +688,7 @@ export function Settings() {
             const response = await sessionFetch(apiUrl('/api/auth/totp'), {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ currentPassword: totpDisablePassword }),
+                body: JSON.stringify({ currentPassword: totpDisablePassword, code: totpCode }),
             }, { ignoredUnauthorizedErrors: ['Current password is incorrect'] });
             const payload = await response.json().catch(() => ({})) as { error?: string; totpEnabled?: boolean };
             if (!response.ok) {
@@ -1629,6 +1629,19 @@ export function Settings() {
                                 autoFocus
                             />
                         </div>
+                        <div className="space-y-2">
+                            <label htmlFor="totp-disable-code" className={labelClass}>{t("pages.settings.authenticatorCode")}</label>
+                            <input
+                                id="totp-disable-code"
+                                value={totpCode}
+                                onChange={(event) => setTotpCode(event.target.value)}
+                                disabled={isSavingTotp}
+                                inputMode="numeric"
+                                autoComplete="one-time-code"
+                                pattern="[0-9 ]*"
+                                className={inputClass}
+                            />
+                        </div>
                         <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
                             <button
                                 type="button"
@@ -1640,7 +1653,7 @@ export function Settings() {
                             </button>
                             <button
                                 type="submit"
-                                disabled={isSavingTotp || !totpDisablePassword}
+                                disabled={isSavingTotp || !totpDisablePassword || !totpCode.trim()}
                                 className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-red-600 px-4 text-sm font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
                             >
                                 <Trash2 className="h-4 w-4" />

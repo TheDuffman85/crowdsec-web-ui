@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { SignJWT, exportJWK, generateKeyPair, type JWK, type JWTPayload } from 'jose';
 import { createAuthSessionCookie, createController } from './harness';
@@ -409,5 +410,76 @@ describe('OIDC back-channel logout', () => {
     const nextToken = await signLogoutToken(logoutClaims({ sid: 'idp-session-2' }));
     expect((await postLogoutToken(controller, nextToken)).status).toBe(200);
     expect(await isAuthenticated(controller, after)).toBe(false);
+  });
+});
+
+describe('OIDC login transaction', () => {
+  beforeAll(async () => {
+    const keyPair = await generateKeyPair('RS256');
+    signingKey = keyPair.privateKey;
+    publicJwk = { ...await exportJWK(keyPair.publicKey), kid: 'test-key', alg: 'RS256', use: 'sig' };
+  });
+
+  beforeEach(() => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  /** Stubs the token endpoint and records the bodies of the requests it receives. */
+  function stubTokenEndpoint(): string[] {
+    const tokenRequests: string[] = [];
+    const providerFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url !== `${ISSUER}token/`) return providerFetch(input, init);
+      tokenRequests.push(String(init?.body ?? ''));
+      return new Response(JSON.stringify({ error: 'invalid_grant' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+    }));
+    return tokenRequests;
+  }
+
+  test('sends a PKCE challenge and redeems the code with the matching verifier', async () => {
+    stubProvider();
+    const { controller } = createOidcController();
+    const loginResponse = await controller.fetch(new Request('https://ui.example.com/crowdsec/api/auth/oidc/login'));
+    const authorizationUrl = new URL(loginResponse.headers.get('location')!);
+    expect(authorizationUrl.searchParams.get('code_challenge_method')).toBe('S256');
+    const challenge = authorizationUrl.searchParams.get('code_challenge');
+
+    const flowCookies = loginResponse.headers.getSetCookie().map((cookie) => cookie.split(';')[0]);
+    const tokenRequests = stubTokenEndpoint();
+    await controller.fetch(new Request(
+      `https://ui.example.com/crowdsec/api/auth/oidc/callback?code=auth-code&state=${authorizationUrl.searchParams.get('state')}`,
+      { headers: { cookie: flowCookies.join('; ') } },
+    ));
+
+    expect(tokenRequests).toHaveLength(1);
+    const verifier = new URLSearchParams(tokenRequests[0]).get('code_verifier')!;
+    expect(createHash('sha256').update(verifier).digest('base64url')).toBe(challenge);
+  });
+
+  test.each([
+    ['no login transaction', () => []],
+    ['a transaction without its PKCE verifier', (cookies: string[]) => cookies.filter((cookie) => !cookie.startsWith('crowdsec_web_ui_oidc_pkce='))],
+  ])('rejects a callback with %s before redeeming the code', async (_label, selectCookies: (cookies: string[]) => string[]) => {
+    stubProvider();
+    const { controller } = createOidcController();
+    const loginResponse = await controller.fetch(new Request('https://ui.example.com/crowdsec/api/auth/oidc/login'));
+    const state = new URL(loginResponse.headers.get('location')!).searchParams.get('state');
+    const flowCookies = loginResponse.headers.getSetCookie().map((cookie) => cookie.split(';')[0]);
+    const tokenRequests = stubTokenEndpoint();
+
+    const response = await controller.fetch(new Request(
+      `https://ui.example.com/crowdsec/api/auth/oidc/callback?code=attacker-code&state=${state}`,
+      { headers: { cookie: selectCookies(flowCookies).join('; ') } },
+    ));
+
+    expect(response.status).toBe(400);
+    expect(tokenRequests).toHaveLength(0);
+    expect(response.headers.getSetCookie().some((cookie) => cookie.startsWith('crowdsec_web_ui_session=') && !cookie.startsWith('crowdsec_web_ui_session=;'))).toBe(false);
   });
 });

@@ -447,7 +447,7 @@
   "pages.settings.setupTotpTitle": "Configurer TOTP",
   "pages.settings.manageTotpTitle": "Gérer TOTP",
   "pages.settings.setupTotpDescription": "Scannez le QR code avec une application d’authentification ou ouvrez le lien de configuration sur cet appareil. Saisissez le code généré pour terminer la configuration.",
-  "pages.settings.disableTotpDescription": "La désactivation de TOTP supprime l’exigence du code supplémentaire lors de la connexion par mot de passe. Confirmez avec votre mot de passe actuel.",
+  "pages.settings.disableTotpDescription": "La désactivation de TOTP supprime l’exigence du code supplémentaire lors de la connexion par mot de passe. Confirmez avec votre mot de passe actuel et un code d’authentification.",
   "pages.settings.manualTotpSecret": "Clé de configuration manuelle",
   "pages.settings.copyTotpSecret": "Copier la clé de configuration",
   "pages.settings.openAuthenticatorApp": "Ouvrir dans l’application d’authentification",

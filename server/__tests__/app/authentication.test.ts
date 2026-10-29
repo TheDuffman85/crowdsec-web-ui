@@ -527,7 +527,7 @@ test('dashboard auth supports optional TOTP for password login', async () => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username: 'admin', password: 'Secret123' }),
   }));
-  const sessionCookie = setup.headers.get('set-cookie') || '';
+  let sessionCookie = setup.headers.get('set-cookie') || '';
 
   const totpSetup = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/totp/setup', {
     method: 'POST',
@@ -561,6 +561,12 @@ test('dashboard auth supports optional TOTP for password login', async () => {
   }));
   expect(enableTotp.status).toBe(200);
   expect(await enableTotp.json()).toMatchObject({ totpEnabled: true });
+  const preEnrollmentCookie = sessionCookie;
+  sessionCookie = sessionCookieFrom(enableTotp);
+  const preEnrollmentSession = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/me', {
+    headers: { cookie: preEnrollmentCookie },
+  }));
+  expect(preEnrollmentSession.status).toBe(401);
   const user = database.getAuthUserByUsername('admin');
   expect(user?.totp_enabled).toBe(1);
   expect(user?.totp_secret).toMatch(/^enc:v1:/);
@@ -631,14 +637,119 @@ test('dashboard auth supports optional TOTP for password login', async () => {
   expect(throttledTotpLogin.status).toBe(429);
   expect(throttledTotpLogin.headers.get('retry-after')).toBeTruthy();
 
-  const disableTotp = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/totp', {
+  // Removing the factor shares the login's TOTP throttle.
+  const throttledDisable = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/totp', {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
-    body: JSON.stringify({ currentPassword: 'Secret123' }),
+    body: JSON.stringify({ currentPassword: 'Secret123', code: await generate({ secret: totpSetupPayload.secret }) }),
   }));
-  expect(disableTotp.status).toBe(200);
-  expect(await disableTotp.json()).toMatchObject({ totpEnabled: false });
+  expect(throttledDisable.status).toBe(429);
+  expect(database.getAuthUserByUsername('admin')?.totp_enabled).toBe(1);
+});
+
+function sessionCookieFrom(response: Response): string {
+  const cookie = response.headers.getSetCookie().find((value) => value.startsWith('crowdsec_web_ui_session='));
+  expect(cookie).toBeTruthy();
+  return cookie!.split(';')[0];
+}
+
+test('disabling TOTP requires a fresh authenticator code', async () => {
+  const { controller, database } = createController({ env: { AUTH_ENABLED: 'true' } });
+  const setup = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/setup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'Secret123' }),
+  }));
+  const setupSessionCookie = setup.headers.get('set-cookie')?.split(';')[0] || '';
+  const totpSetup = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/totp/setup', {
+    method: 'POST',
+    headers: { cookie: setupSessionCookie },
+  }));
+  const { secret } = await totpSetup.json() as { secret: string };
+  const enableTotp = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/totp/enable', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      cookie: `${setupSessionCookie}; ${(totpSetup.headers.get('set-cookie') || '').split(';')[0]}`,
+    },
+    body: JSON.stringify({ code: await generate({ secret }) }),
+  }));
+  expect(enableTotp.status).toBe(200);
+  const sessionCookie = sessionCookieFrom(enableTotp);
+  const disable = (body: Record<string, string>, cookie = sessionCookie) => controller.fetch(new Request('http://localhost/crowdsec/api/auth/totp', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json', cookie },
+    body: JSON.stringify(body),
+  }));
+
+  // A session from before enrollment cannot remove the new factor.
+  expect((await disable({ currentPassword: 'Secret123', code: '000000' }, setupSessionCookie)).status).toBe(401);
+  const withoutCode = await disable({ currentPassword: 'Secret123' });
+  expect(withoutCode.status).toBe(400);
+  expect(await withoutCode.json()).toMatchObject({ error: 'Authenticator code required' });
+  const wrongCode = await disable({ currentPassword: 'Secret123', code: '000000' });
+  expect(wrongCode.status).toBe(400);
+  expect(await wrongCode.json()).toMatchObject({ error: 'Invalid authenticator code' });
+  expect(database.getAuthUserByUsername('admin')?.totp_enabled).toBe(1);
+
+  const disabled = await disable({ currentPassword: 'Secret123', code: await generate({ secret }) });
+  expect(disabled.status).toBe(200);
+  expect(await disabled.json()).toMatchObject({ totpEnabled: false });
   expect(database.getAuthUserByUsername('admin')?.totp_enabled).toBe(0);
+});
+
+test('password checks on account endpoints share the login throttle', async () => {
+  const { controller } = createController({ env: { AUTH_ENABLED: 'true' } });
+  const setup = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/setup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'Secret123' }),
+  }));
+  const sessionCookie = setup.headers.get('set-cookie')?.split(';')[0] || '';
+  const changePassword = (currentPassword: string) => controller.fetch(new Request('http://localhost/crowdsec/api/auth/change-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+    body: JSON.stringify({ currentPassword, newPassword: 'Changed123' }),
+  }));
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const login = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: `wrong-${attempt}` }),
+    }));
+    expect(login.status).toBe(401);
+  }
+
+  const throttled = await changePassword('Secret123');
+  expect(throttled.status).toBe(429);
+  expect(throttled.headers.get('retry-after')).toBeTruthy();
+});
+
+test('failed password checks on account endpoints count toward the login throttle', async () => {
+  const { controller } = createController({ env: { AUTH_ENABLED: 'true' } });
+  const setup = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/setup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'Secret123' }),
+  }));
+  const sessionCookie = setup.headers.get('set-cookie')?.split(';')[0] || '';
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const response = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ currentPassword: `wrong-${attempt}`, newPassword: 'Changed123' }),
+    }));
+    expect(response.status).toBe(401);
+  }
+
+  const login = await controller.fetch(new Request('http://localhost/crowdsec/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'Secret123' }),
+  }));
+  expect(login.status).toBe(429);
 });
 
 test('dashboard auth enforces an environment-configured TOTP seed for the password user', async () => {

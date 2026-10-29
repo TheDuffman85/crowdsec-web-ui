@@ -1,4 +1,5 @@
 import { afterEach } from 'vitest';
+import dns from 'node:dns';
 import { mkdtempSync, rmSync } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
@@ -41,6 +42,6 @@ export function insertDecision(database: CrowdsecDatabase, decision: AlertDecisi
 
 export function createService(options: { fetchImpl?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>; updateChecker?: () => Promise<UpdateCheckResponse>; crowdsecUpdateChecker?: CrowdsecUpdateChecker; getLapiStatus?: () => LapiStatus; getLapiStatuses?: () => Array<{ instanceId: string; instanceName: string; status: LapiStatus }>; debugPayloads?: boolean; instanceAware?: boolean; instances?: Array<{ id: string; name: string }> } = {}) {
   const database = createTestDatabase();
-  const service = createNotificationService({ database, fetchImpl: options.fetchImpl, updateChecker: options.updateChecker, crowdsecUpdateChecker: options.crowdsecUpdateChecker, getLapiStatus: options.getLapiStatus, getLapiStatuses: options.getLapiStatuses, outboundGuard: { assertHostAllowed: async () => {}, assertUrlAllowed: async () => {} }, secretStore: createNotificationSecretStore(), debugPayloads: options.debugPayloads, instanceAware: options.instanceAware, instances: options.instances });
+  const service = createNotificationService({ database, fetchImpl: options.fetchImpl, updateChecker: options.updateChecker, crowdsecUpdateChecker: options.crowdsecUpdateChecker, getLapiStatus: options.getLapiStatus, getLapiStatuses: options.getLapiStatuses, outboundGuard: { assertHostAllowed: async () => {}, assertUrlAllowed: async () => {}, lookup: dns.lookup, fetch }, secretStore: createNotificationSecretStore(), debugPayloads: options.debugPayloads, instanceAware: options.instanceAware, instances: options.instances });
   return { database, service };
 }

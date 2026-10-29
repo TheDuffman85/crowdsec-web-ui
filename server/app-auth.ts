@@ -103,6 +103,7 @@ const CHALLENGE_COOKIE = 'crowdsec_web_ui_webauthn_challenge';
 const TOTP_SETUP_COOKIE = 'crowdsec_web_ui_totp_setup';
 const OIDC_STATE_COOKIE = 'crowdsec_web_ui_oidc_state';
 const OIDC_NONCE_COOKIE = 'crowdsec_web_ui_oidc_nonce';
+const OIDC_PKCE_COOKIE = 'crowdsec_web_ui_oidc_pkce';
 const OIDC_REDIRECT_COOKIE = 'crowdsec_web_ui_oidc_redirect_uri';
 const OIDC_ID_TOKEN_COOKIE = 'crowdsec_web_ui_oidc_id_token';
 const MAX_ID_TOKEN_COOKIE_LENGTH = 3800;
@@ -418,7 +419,14 @@ function signSession(payload: Record<string, unknown>, secret: string): string {
 function verifySessionToken(
   token: string,
   secret: string,
-): (SessionData & { sessionVersion: number; issuedAt: number; sid?: string; oidcLogoutVersion: number }) | null {
+): (SessionData & {
+  sessionId: string;
+  sessionVersion: number;
+  issuedAt: number;
+  authenticatedAt: number;
+  sid?: string;
+  oidcLogoutVersion: number;
+}) | null {
   const [encodedPayload, signature] = token.split('.');
   if (!encodedPayload || !signature) return null;
   const expectedSignature = crypto.createHmac('sha256', secret).update(encodedPayload).digest('base64url');
@@ -432,6 +440,8 @@ function verifySessionToken(
     const payload = JSON.parse(fromBase64url(encodedPayload).toString('utf8')) as Partial<SessionData> & {
       exp?: number;
       iat?: number;
+      jti?: unknown;
+      authenticatedAt?: number;
       sessionVersion?: number;
       sid?: unknown;
       oidcLogoutVersion?: number;
@@ -446,12 +456,30 @@ function verifySessionToken(
       ? Number(payload.sessionVersion)
       : 1;
     const issuedAt = Number.isInteger(payload.iat) && Number(payload.iat) > 0 ? Number(payload.iat) : 0;
+    const authenticatedAt = Number.isInteger(payload.authenticatedAt) && Number(payload.authenticatedAt) > 0
+      ? Number(payload.authenticatedAt)
+      : issuedAt;
+    // Tokens from before session IDs are identified by their signature; refreshing them keeps that ID.
+    const sessionId = typeof payload.jti === 'string' && payload.jti
+      ? payload.jti
+      : crypto.createHash('sha256').update(signature).digest('base64url');
     const sid = typeof payload.sid === 'string' && payload.sid ? payload.sid : undefined;
     // Cookies from before back-channel logout carry no version and belong to the initial one.
     const oidcLogoutVersion = Number.isInteger(payload.oidcLogoutVersion) && Number(payload.oidcLogoutVersion) > 0
       ? Number(payload.oidcLogoutVersion)
       : INITIAL_OIDC_LOGOUT_VERSION;
-    return { userId: payload.userId, username: payload.username, role, authMethod, sessionVersion, issuedAt, sid, oidcLogoutVersion };
+    return {
+      userId: payload.userId,
+      username: payload.username,
+      role,
+      authMethod,
+      sessionId,
+      sessionVersion,
+      issuedAt,
+      authenticatedAt,
+      sid,
+      oidcLogoutVersion,
+    };
   } catch {
     return null;
   }
@@ -562,7 +590,7 @@ class OidcRuntime {
     return this.configuration;
   }
 
-  async authorizationUrl(state: string, nonce: string, redirectUri: string): Promise<string> {
+  async authorizationUrl(state: string, nonce: string, codeChallenge: string, redirectUri: string): Promise<string> {
     const configuration = await this.getConfiguration();
     const config = this.getConfig();
     const authorizationEndpoint = configuration.serverMetadata().authorization_endpoint;
@@ -577,6 +605,8 @@ class OidcRuntime {
       scope: config.oidcScope,
       state,
       nonce,
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
     });
     return `${authorizationEndpoint}?${params.toString()}`;
   }
@@ -593,7 +623,7 @@ class OidcRuntime {
     return oidcClient.buildEndSessionUrl(configuration, params).toString();
   }
 
-  async handleCallback(currentUrl: URL, expectedNonce?: string, expectedState?: string): Promise<{
+  async handleCallback(currentUrl: URL, transaction: { state: string; nonce: string; codeVerifier: string }): Promise<{
     username: string;
     role: Role | null;
     issuer: string;
@@ -604,8 +634,9 @@ class OidcRuntime {
     const configuration = await this.getConfiguration();
     const config = this.getConfig();
     const tokens = await oidcClient.authorizationCodeGrant(configuration, currentUrl, {
-      expectedNonce,
-      expectedState,
+      pkceCodeVerifier: transaction.codeVerifier,
+      expectedNonce: transaction.nonce,
+      expectedState: transaction.state,
     });
     const idClaims = tokens.claims() as Record<string, unknown> | undefined;
     if (!idClaims) return null;
@@ -911,12 +942,63 @@ export function createDashboardAuth(options: {
     return context.json({ error: 'Too many authentication attempts. Try again later.' }, 429);
   }
 
+  // Every password check shares the login's per-account throttle and concurrency limit,
+  // so a session cannot be used to keep guessing a password the login endpoint has locked.
+  async function verifyAccountPassword(
+    username: string,
+    password: string,
+    passwordHash: string | null | undefined,
+  ): Promise<{ valid: boolean; retryAfter: number | null }> {
+    const accountAttemptKey = getAccountAttemptKey(username);
+    const accountRetryAfter = getAuthThrottleRetryAfter(passwordAccountFailureBuckets, accountAttemptKey);
+    if (accountRetryAfter !== null) return { valid: false, retryAfter: accountRetryAfter };
+    if (activePasswordVerifications >= MAX_CONCURRENT_PASSWORD_VERIFICATIONS) return { valid: false, retryAfter: 1 };
+
+    const hashToVerify = passwordHash || await DUMMY_PASSWORD_HASH_PROMISE;
+    activePasswordVerifications += 1;
+    let valid = false;
+    try {
+      valid = await verifyPassword(password, hashToVerify);
+    } finally {
+      activePasswordVerifications -= 1;
+    }
+    if (!passwordHash || !valid) {
+      recordAuthFailure(passwordAccountFailureBuckets, accountAttemptKey, PASSWORD_MAX_FAILURES);
+      return { valid: false, retryAfter: null };
+    }
+    clearAuthFailures(passwordAccountFailureBuckets, accountAttemptKey);
+    return { valid: true, retryAfter: null };
+  }
+
+  // Checks a TOTP code under the per-user throttle and consumes its time step so it cannot be replayed.
+  async function verifyAccountTotp(
+    userId: number,
+    code: string,
+    secret: string,
+  ): Promise<{ valid: boolean; retryAfter: number | null }> {
+    const totpAttemptKey = String(userId);
+    const totpRetryAfter = getAuthThrottleRetryAfter(totpFailureBuckets, totpAttemptKey);
+    if (totpRetryAfter !== null) return { valid: false, retryAfter: totpRetryAfter };
+    const verification = await verifyTotpCode(code, secret);
+    if (
+      !verification.valid
+      || verification.timeStep === null
+      || !await writeDatabase(() => database.updateAuthUserTotpLastStep(userId, verification.timeStep!))
+    ) {
+      recordAuthFailure(totpFailureBuckets, totpAttemptKey, TOTP_MAX_FAILURES);
+      return { valid: false, retryAfter: null };
+    }
+    clearAuthFailures(totpFailureBuckets, totpAttemptKey);
+    return { valid: true, retryAfter: null };
+  }
+
   function createSession(
     context: HonoContext,
     user: AuthUserRow | SessionData,
     authMethod?: AuthMethod,
     authenticatedAt?: number,
     oidcSessionId?: string,
+    sessionId: string = crypto.randomUUID(),
   ): void {
     const now = Math.floor(Date.now() / 1000);
     const userId = 'id' in user ? user.id : user.userId;
@@ -931,6 +1013,7 @@ export function createDashboardAuth(options: {
       ? database.getOidcLogoutVersion(persistedUser.oidc_issuer, persistedUser.oidc_subject)
       : undefined;
     const token = signSession({
+      jti: sessionId,
       userId,
       username: user.username,
       role: user.role,
@@ -961,6 +1044,7 @@ export function createDashboardAuth(options: {
     if (!token) return null;
     const session = verifySessionToken(token, sessionSecret);
     if (!session) return null;
+    if (database.isAuthSessionRevoked(session.sessionId)) return null;
     if (
       session.authMethod === 'oidc'
       && (!session.issuedAt || session.issuedAt + OIDC_SESSION_LIFETIME_SECONDS < Math.floor(Date.now() / 1000))
@@ -989,20 +1073,11 @@ export function createDashboardAuth(options: {
   function refreshSessionIfNeeded(context: HonoContext, session: SessionData): void {
     const token = getCookie(context, SESSION_COOKIE);
     if (!token) return;
-    try {
-      const payload = JSON.parse(fromBase64url(token.split('.')[0] || '').toString('utf8')) as {
-        iat?: number;
-        authenticatedAt?: number;
-        authMethod?: AuthMethod;
-      };
-      if (!payload.iat) return;
-      if (payload.authMethod === 'oidc') return;
-      const age = Math.floor(Date.now() / 1000) - payload.iat;
-      if (age > SESSION_REFRESH_AFTER_SECONDS) {
-        createSession(context, session, undefined, payload.authenticatedAt || payload.iat);
-      }
-    } catch {
-      // Invalid tokens are handled by getSession.
+    const payload = verifySessionToken(token, sessionSecret);
+    if (!payload?.issuedAt || payload.authMethod === 'oidc') return;
+    const age = Math.floor(Date.now() / 1000) - payload.issuedAt;
+    if (age > SESSION_REFRESH_AFTER_SECONDS) {
+      createSession(context, session, undefined, payload.authenticatedAt, undefined, payload.sessionId);
     }
   }
 
@@ -1308,46 +1383,19 @@ export function createDashboardAuth(options: {
       const totpCode = typeof body?.totpCode === 'string' ? normalizeTotpCode(body.totpCode) : '';
       if (!username || !password) return context.json({ error: 'Username and password required' }, 400);
       if (username.length > 254 || password.length > 1024) return context.json({ error: 'Invalid credentials' }, 401);
-      const accountAttemptKey = getAccountAttemptKey(username);
-      const accountRetryAfter = getAuthThrottleRetryAfter(passwordAccountFailureBuckets, accountAttemptKey);
-      if (accountRetryAfter !== null) return authThrottleResponse(context, accountRetryAfter);
-      if (activePasswordVerifications >= MAX_CONCURRENT_PASSWORD_VERIFICATIONS) {
-        return authThrottleResponse(context, 1);
-      }
-
       const user = database.getAuthUserByUsername(username);
-      const hashToVerify = user?.password_hash || await DUMMY_PASSWORD_HASH_PROMISE;
-      activePasswordVerifications += 1;
-      let valid = false;
-      try {
-        valid = await verifyPassword(password, hashToVerify);
-      } finally {
-        activePasswordVerifications -= 1;
-      }
-      if (!user || !user.password_hash || !valid) {
-        recordAuthFailure(passwordAccountFailureBuckets, accountAttemptKey, PASSWORD_MAX_FAILURES);
-        return context.json({ error: 'Invalid credentials' }, 401);
-      }
-      clearAuthFailures(passwordAccountFailureBuckets, accountAttemptKey);
+      const passwordCheck = await verifyAccountPassword(username, password, user?.password_hash);
+      if (passwordCheck.retryAfter !== null) return authThrottleResponse(context, passwordCheck.retryAfter);
+      if (!user || !passwordCheck.valid) return context.json({ error: 'Invalid credentials' }, 401);
       if (user.disabled) return context.json({ error: 'This account is disabled' }, 403);
       const totpSeed = getTotpSeed(user);
       if (totpSeed) {
         if (!totpCode) {
           return context.json({ error: 'Authenticator code required', requiresTotp: true }, 401);
         }
-        const totpAttemptKey = String(user.id);
-        const totpRetryAfter = getAuthThrottleRetryAfter(totpFailureBuckets, totpAttemptKey);
-        if (totpRetryAfter !== null) return authThrottleResponse(context, totpRetryAfter);
-        const verification = await verifyTotpCode(totpCode, totpSeed);
-        if (!verification.valid || verification.timeStep === null) {
-          recordAuthFailure(totpFailureBuckets, totpAttemptKey, TOTP_MAX_FAILURES);
-          return context.json({ error: 'Invalid authenticator code', requiresTotp: true }, 401);
-        }
-        if (!await writeDatabase(() => database.updateAuthUserTotpLastStep(user.id, verification.timeStep!))) {
-          recordAuthFailure(totpFailureBuckets, totpAttemptKey, TOTP_MAX_FAILURES);
-          return context.json({ error: 'Invalid authenticator code', requiresTotp: true }, 401);
-        }
-        clearAuthFailures(totpFailureBuckets, totpAttemptKey);
+        const totpCheck = await verifyAccountTotp(user.id, totpCode, totpSeed);
+        if (totpCheck.retryAfter !== null) return authThrottleResponse(context, totpCheck.retryAfter);
+        if (!totpCheck.valid) return context.json({ error: 'Invalid authenticator code', requiresTotp: true }, 401);
       }
 
       createSession(context, user, 'password');
@@ -1357,6 +1405,12 @@ export function createDashboardAuth(options: {
     auth.post('/logout', async (context) => {
       const session = getSession(context);
       const idToken = getCookie(context, OIDC_ID_TOKEN_COOKIE);
+      // Revoke the session itself, so a copy of its token stops working once the cookie is gone.
+      const token = enabled ? getCookie(context, SESSION_COOKIE) : undefined;
+      const payload = token ? verifySessionToken(token, sessionSecret) : null;
+      if (payload) {
+        await writeDatabase(() => database.revokeAuthSession(payload.sessionId, payload.authenticatedAt + SESSION_LIFETIME_SECONDS));
+      }
       clearSession(context);
       deleteCookie(context, OIDC_ID_TOKEN_COOKIE, { path: cookiePath });
 
@@ -1517,9 +1571,10 @@ export function createDashboardAuth(options: {
 
       const user = database.getAuthUserById(session.userId);
       if (!user?.password_hash) return context.json({ error: 'No password set for this account' }, 400);
-      if (!await verifyPassword(currentPassword, user.password_hash)) {
-        return context.json({ error: 'Current password is incorrect' }, 401);
-      }
+      if (currentPassword.length > 1024) return context.json({ error: 'Current password is incorrect' }, 401);
+      const passwordCheck = await verifyAccountPassword(user.username, currentPassword, user.password_hash);
+      if (passwordCheck.retryAfter !== null) return authThrottleResponse(context, passwordCheck.retryAfter);
+      if (!passwordCheck.valid) return context.json({ error: 'Current password is incorrect' }, 401);
       if (newPassword === currentPassword) {
         return context.json({ error: 'New password must be different from the current password' }, 400);
       }
@@ -1577,8 +1632,10 @@ export function createDashboardAuth(options: {
         return context.json({ error: 'Invalid authenticator code' }, 400);
       }
 
+      // Enabling TOTP ends every other session, so one opened before enrollment cannot remove it again.
       await writeDatabase(() => database.updateAuthUserTotp(user.id, encryptSecret(secret, totpSecretEncryptionSecret), true));
       deleteCookie(context, TOTP_SETUP_COOKIE, { path: cookiePath });
+      createSession(context, database.getAuthUserById(user.id)!, 'password');
       return context.json({ status: 'ok', totpEnabled: true });
     });
 
@@ -1592,6 +1649,7 @@ export function createDashboardAuth(options: {
 
       const body = asObject(await context.req.json().catch(() => null));
       const currentPassword = typeof body?.currentPassword === 'string' ? body.currentPassword : '';
+      const code = typeof body?.code === 'string' ? normalizeTotpCode(body.code) : '';
       if (!currentPassword) return context.json({ error: 'Current password required' }, 400);
       const user = database.getAuthUserById(session.userId);
       if (!user?.password_hash) return context.json({ error: 'No password set for this account' }, 400);
@@ -1599,10 +1657,18 @@ export function createDashboardAuth(options: {
         return context.json({ error: 'TOTP is managed by the application configuration and cannot be disabled from Settings' }, 400);
       }
       if (!user.totp_enabled || !user.totp_secret) return context.json({ error: 'TOTP is not enabled for this account' }, 400);
-      if (!await verifyPassword(currentPassword, user.password_hash)) {
-        return context.json({ error: 'Current password is incorrect' }, 401);
-      }
+      if (!code) return context.json({ error: 'Authenticator code required' }, 400);
+      if (!isTotpCodeFormatValid(code)) return context.json({ error: 'Invalid authenticator code' }, 400);
+      if (currentPassword.length > 1024) return context.json({ error: 'Current password is incorrect' }, 401);
+      const passwordCheck = await verifyAccountPassword(user.username, currentPassword, user.password_hash);
+      if (passwordCheck.retryAfter !== null) return authThrottleResponse(context, passwordCheck.retryAfter);
+      if (!passwordCheck.valid) return context.json({ error: 'Current password is incorrect' }, 401);
+      // Removing the factor needs the factor itself, not just a session that may predate it.
+      const totpCheck = await verifyAccountTotp(user.id, code, decryptTotpSecret(user.totp_secret));
+      if (totpCheck.retryAfter !== null) return authThrottleResponse(context, totpCheck.retryAfter);
+      if (!totpCheck.valid) return context.json({ error: 'Invalid authenticator code' }, 400);
       await writeDatabase(() => database.updateAuthUserTotp(user.id, null, false));
+      createSession(context, database.getAuthUserById(user.id)!, 'password');
       return context.json({ status: 'ok', totpEnabled: false });
     });
 
@@ -1758,23 +1824,35 @@ export function createDashboardAuth(options: {
       const redirectUri = `${origin}${basePath}/api/auth/oidc/callback`;
       const state = crypto.randomUUID();
       const nonce = crypto.randomUUID();
+      const codeVerifier = oidcClient.randomPKCECodeVerifier();
+      const codeChallenge = await oidcClient.calculatePKCECodeChallenge(codeVerifier);
       setShortCookie(context, OIDC_STATE_COOKIE, state, 'Lax');
       setShortCookie(context, OIDC_NONCE_COOKIE, nonce, 'Lax');
+      setShortCookie(context, OIDC_PKCE_COOKIE, codeVerifier, 'Lax');
       setShortCookie(context, OIDC_REDIRECT_COOKIE, redirectUri, 'Lax');
-      return context.redirect(await oidc.authorizationUrl(state, nonce, redirectUri));
+      return context.redirect(await oidc.authorizationUrl(state, nonce, codeChallenge, redirectUri));
     });
 
     auth.get('/oidc/callback', async (context) => {
       if (!enabled || !oidc.enabled) return context.json({ error: 'OIDC not configured' }, 400);
       const nonce = getCookie(context, OIDC_NONCE_COOKIE);
       const state = getCookie(context, OIDC_STATE_COOKIE);
+      const codeVerifier = getCookie(context, OIDC_PKCE_COOKIE);
       const redirectUri = getCookie(context, OIDC_REDIRECT_COOKIE);
+      // The login transaction is single-use, whether or not this callback succeeds.
+      for (const name of [OIDC_STATE_COOKIE, OIDC_NONCE_COOKIE, OIDC_PKCE_COOKIE, OIDC_REDIRECT_COOKIE]) {
+        deleteCookie(context, name, { path: cookiePath });
+      }
+      // Only the browser that started the login may finish it, so no one can sign it in with their own code.
+      if (!nonce || !state || !codeVerifier || !redirectUri) {
+        return context.json({ error: 'OIDC login session expired or missing. Start the sign-in again.' }, 400);
+      }
 
       try {
         const internalUrl = new URL(context.req.url);
-        const callbackUrl = redirectUri ? new URL(redirectUri) : new URL(`${getPublicOrigin(context)}${basePath}/api/auth/oidc/callback`);
+        const callbackUrl = new URL(redirectUri);
         callbackUrl.search = internalUrl.search;
-        const result = await oidc.handleCallback(callbackUrl, nonce, state);
+        const result = await oidc.handleCallback(callbackUrl, { state, nonce, codeVerifier });
         if (!result) return context.json({ error: 'OIDC authentication failed' }, 400);
         if (!result.role) return context.json({ error: 'OIDC user is not authorized' }, 403);
         const oidcUser: OidcUserUpsertParams = {
@@ -1798,9 +1876,6 @@ export function createDashboardAuth(options: {
         } else {
           deleteCookie(context, OIDC_ID_TOKEN_COOKIE, { path: cookiePath });
         }
-        deleteCookie(context, OIDC_STATE_COOKIE, { path: cookiePath });
-        deleteCookie(context, OIDC_NONCE_COOKIE, { path: cookiePath });
-        deleteCookie(context, OIDC_REDIRECT_COOKIE, { path: cookiePath });
         return context.redirect(`${getPublicOrigin(context)}${basePath || '/'}`);
       } catch (error) {
         console.error('OIDC callback error:', error);

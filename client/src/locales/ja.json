@@ -445,7 +445,7 @@
   "pages.settings.setupTotpTitle": "TOTP を設定",
   "pages.settings.manageTotpTitle": "TOTP を管理",
   "pages.settings.setupTotpDescription": "認証アプリで QR コードをスキャンするか、このデバイスで設定リンクを開きます。生成されたコードを入力して設定を完了します。",
-  "pages.settings.disableTotpDescription": "TOTP を無効にすると、パスワードサインイン時の追加コード要件が削除されます。現在のパスワードで確認してください。",
+  "pages.settings.disableTotpDescription": "TOTP を無効にすると、パスワードサインイン時の追加コード要件が削除されます。現在のパスワードと認証アプリのコードで確認してください。",
   "pages.settings.manualTotpSecret": "手動設定キー",
   "pages.settings.copyTotpSecret": "設定キーをコピー",
   "pages.settings.openAuthenticatorApp": "認証アプリで開く",

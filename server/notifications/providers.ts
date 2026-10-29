@@ -9,6 +9,7 @@ import { sendSmtpMail } from '../smtp';
 import type { SmtpTlsMode } from '../smtp';
 import { publishMqttNotification, type MqttPublishConfig } from './mqtt-client';
 import { renderTemplate, validateTemplate } from './webhook-template';
+import type { OutboundLookup } from './outbound-guard';
 
 export const STORED_SECRET_SENTINEL = '(stored)';
 
@@ -34,6 +35,8 @@ export interface NotificationProviderContext {
   mqttPublishImpl?: (config: MqttPublishConfig, payload: string) => Promise<void>;
   assertHostAllowed: (host: string, label: string) => Promise<void>;
   assertUrlAllowed: (value: string, label: string) => Promise<void>;
+  // Validating DNS lookup that sockets must connect through, so the checked address is the one used.
+  lookup?: OutboundLookup;
 }
 
 export interface NotificationProvider {
@@ -97,6 +100,7 @@ interface WebhookConfig {
 const HTTP_METHODS = new Set(['POST', 'PUT', 'PATCH']);
 const NTFY_PRIORITIES = new Set(['auto', 'min', 'low', 'default', 'high', 'urgent']);
 const WEBHOOK_ERROR_BODY_SNIPPET_LIMIT = 500;
+const MAX_NOTIFICATION_REDIRECTS = 3;
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -504,6 +508,36 @@ function createNotificationSendError(
   return error;
 }
 
+// Follows redirects itself so every hop passes the outbound guard, not just the configured URL.
+async function guardedFetch(
+  context: NotificationProviderContext,
+  url: string,
+  init: RequestInit,
+  label: string,
+): Promise<Response> {
+  let current = new URL(url);
+  for (let hop = 0; ; hop += 1) {
+    await context.assertUrlAllowed(current.toString(), label);
+    const response = await context.fetchImpl(current.toString(), { ...init, redirect: 'manual' });
+    const location = response.headers.get('location');
+    if (response.status < 300 || response.status >= 400 || !location) return response;
+    if (hop >= MAX_NOTIFICATION_REDIRECTS) throw new Error(`${label} redirected too many times`);
+    // 301/302/303 would turn the POST into a GET, which the provider does not accept.
+    if (response.status !== 307 && response.status !== 308) {
+      throw new Error(`${label} redirected (${response.status}); configure the final URL instead`);
+    }
+    const next = new URL(location, current);
+    if (next.protocol !== 'http:' && next.protocol !== 'https:') {
+      throw new Error(`${label} redirected to an unsupported protocol`);
+    }
+    // Requests carry tokens or credentials, which must not reach another origin.
+    if (next.origin !== current.origin) {
+      throw new Error(`${label} redirected to another host; configure the final URL instead`);
+    }
+    current = next;
+  }
+}
+
 async function readResponseSnippet(response: Response): Promise<string> {
   try {
     return truncateForLog(await response.text());
@@ -659,6 +693,7 @@ const providers: Record<NotificationChannelType, NotificationProvider> = {
         to: recipients,
         subject: prefix ? `${prefix} ${subject}` : subject,
         text: payload.message,
+        lookup: context.lookup,
       });
     },
     getConfiguredSecrets(config) {
@@ -712,7 +747,6 @@ const providers: Record<NotificationChannelType, NotificationProvider> = {
     async send(channel, payload, context) {
       const config = this.normalizeConfig(channel.config);
       const baseUrl = stringValue(config.gotifyUrl).replace(/\/+$/, '');
-      await context.assertUrlAllowed(baseUrl, 'Gotify URL');
       const url = new URL(`${baseUrl}/message`);
       url.searchParams.set('token', stringValue(config.gotifyToken));
 
@@ -720,7 +754,7 @@ const providers: Record<NotificationChannelType, NotificationProvider> = {
         ? severityToGotifyPriority(payload.severity)
         : Number.parseInt(rawStringValue(config.gotifyPriorityOverride), 10);
 
-      const response = await context.fetchImpl(url.toString(), {
+      const response = await guardedFetch(context, url.toString(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -728,7 +762,7 @@ const providers: Record<NotificationChannelType, NotificationProvider> = {
           message: payload.message,
           priority,
         }),
-      });
+      }, 'Gotify URL');
       if (!response.ok) {
         throw new Error(`Gotify request failed with status ${response.status}`);
       }
@@ -810,6 +844,7 @@ const providers: Record<NotificationChannelType, NotificationProvider> = {
         qos: numberValue(config.qos, 1) === 0 ? 0 : 1,
         topic: stringValue(config.topic),
         retainEvents: booleanValue(config.retainEvents),
+        lookup: context.lookup,
       }, JSON.stringify(payload));
     },
     getConfiguredSecrets(config) {
@@ -876,7 +911,6 @@ const providers: Record<NotificationChannelType, NotificationProvider> = {
     async send(channel, payload, context) {
       const config = this.normalizeConfig(channel.config);
       const baseUrl = stringValue(config.ntfyUrl).replace(/\/+$/, '');
-      await context.assertUrlAllowed(baseUrl, 'ntfy URL');
       const headers: Record<string, string> = {
         Title: encodeHeaderValue(appendPrefix(rawStringValue(config.titlePrefix), payload.title)),
         Priority: rawStringValue(config.ntfyPriorityOverride) === 'auto'
@@ -893,11 +927,11 @@ const providers: Record<NotificationChannelType, NotificationProvider> = {
         headers.Authorization = encodeBasicAuth(rawStringValue(config.ntfyUsername), rawStringValue(config.ntfyPassword));
       }
 
-      const response = await context.fetchImpl(`${baseUrl}/${encodeURIComponent(stringValue(config.ntfyTopic))}`, {
+      const response = await guardedFetch(context, `${baseUrl}/${encodeURIComponent(stringValue(config.ntfyTopic))}`, {
         method: 'POST',
         headers,
         body: payload.message,
-      });
+      }, 'ntfy URL');
       if (!response.ok) {
         throw new Error(`ntfy request failed with status ${response.status}`);
       }

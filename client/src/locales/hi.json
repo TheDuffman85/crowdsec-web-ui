@@ -445,7 +445,7 @@
   "pages.settings.setupTotpTitle": "TOTP सेट करें",
   "pages.settings.manageTotpTitle": "TOTP प्रबंधित करें",
   "pages.settings.setupTotpDescription": "QR कोड को ऑथेंटिकेटर ऐप से स्कैन करें, या इस डिवाइस पर सेटअप लिंक खोलें। सेटअप पूरा करने के लिए जनरेट किया गया कोड दर्ज करें।",
-  "pages.settings.disableTotpDescription": "TOTP अक्षम करने से पासवर्ड साइन-इन के बाद अतिरिक्त कोड की आवश्यकता हट जाती है। अपने मौजूदा पासवर्ड से पुष्टि करें।",
+  "pages.settings.disableTotpDescription": "TOTP अक्षम करने से पासवर्ड साइन-इन के बाद अतिरिक्त कोड की आवश्यकता हट जाती है। अपने मौजूदा पासवर्ड और ऑथेंटिकेटर कोड से पुष्टि करें।",
   "pages.settings.manualTotpSecret": "मैनुअल सेटअप कुंजी",
   "pages.settings.copyTotpSecret": "सेटअप कुंजी कॉपी करें",
   "pages.settings.openAuthenticatorApp": "ऑथेंटिकेटर ऐप में खोलें",

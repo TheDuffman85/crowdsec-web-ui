@@ -445,7 +445,7 @@
   "pages.settings.setupTotpTitle": "إعداد TOTP",
   "pages.settings.manageTotpTitle": "إدارة TOTP",
   "pages.settings.setupTotpDescription": "امسح رمز QR باستخدام تطبيق مصادقة، أو افتح رابط الإعداد على هذا الجهاز. أدخل الرمز الذي تم إنشاؤه لإكمال الإعداد.",
-  "pages.settings.disableTotpDescription": "يؤدي تعطيل TOTP إلى إزالة طلب الرمز الإضافي عند تسجيل الدخول بكلمة المرور. أكّد باستخدام كلمة المرور الحالية.",
+  "pages.settings.disableTotpDescription": "يؤدي تعطيل TOTP إلى إزالة طلب الرمز الإضافي عند تسجيل الدخول بكلمة المرور. أكّد باستخدام كلمة المرور الحالية ورمز من تطبيق المصادقة.",
   "pages.settings.manualTotpSecret": "مفتاح الإعداد اليدوي",
   "pages.settings.copyTotpSecret": "نسخ مفتاح الإعداد",
   "pages.settings.openAuthenticatorApp": "فتح في تطبيق المصادقة",

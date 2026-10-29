@@ -140,6 +140,25 @@ describe('OIDC RP-initiated logout', () => {
     expect(await (await logout(controller, sessionCookie)).json()).toEqual({ status: 'ok' });
   });
 
+  test('revokes the logged-out session server-side but keeps the user\'s other sessions', async () => {
+    stubDiscovery();
+    const { controller, database, sessionCookie } = createOidcController({ CONFIG_AUTH_OIDC_END_SESSION: undefined });
+    const otherCookie = createAuthSessionCookie(database, {
+      userId: database.getAuthUserByUsername('oidc-admin')!.id,
+      username: 'oidc-admin',
+      role: 'admin',
+      authMethod: 'oidc',
+    }, undefined, { issuedAt: Math.floor(Date.now() / 1000) - 1 });
+    const me = (cookie: string) => controller.fetch(new Request('https://ui.example.com/crowdsec/api/auth/me', { headers: { cookie } }));
+
+    expect((await me(sessionCookie)).status).toBe(200);
+    await logout(controller, sessionCookie);
+
+    // Replaying the token that was logged out no longer authenticates.
+    expect((await me(sessionCookie)).status).toBe(401);
+    expect((await me(otherCookie)).status).toBe(200);
+  });
+
   test('respects auth.oidc.endSession from the application config', async () => {
     stubDiscovery();
     const { controller, sessionCookie } = createOidcController({ CONFIG_AUTH_OIDC_END_SESSION: 'false' });
@@ -149,13 +168,16 @@ describe('OIDC RP-initiated logout', () => {
 
   test('admins can toggle end-session in settings while the config leaves it unset', async () => {
     stubDiscovery();
-    const { controller, database, sessionCookie } = createOidcController({ CONFIG_AUTH_OIDC_END_SESSION: undefined });
-    const adminCookie = createAuthSessionCookie(database, {
+    const { controller, database } = createOidcController({ CONFIG_AUTH_OIDC_END_SESSION: undefined });
+    // Logging out revokes a session, so each step signs in afresh with a token of its own.
+    const now = Math.floor(Date.now() / 1000);
+    const signIn = (issuedAt: number) => createAuthSessionCookie(database, {
       userId: database.getAuthUserByUsername('oidc-admin')!.id,
       username: 'oidc-admin',
       role: 'admin',
       authMethod: 'oidc',
-    });
+    }, undefined, { issuedAt });
+    const adminCookie = signIn(now - 1);
 
     const initial = await controller.fetch(new Request('https://ui.example.com/crowdsec/api/auth/settings', {
       headers: { cookie: adminCookie },
@@ -169,7 +191,7 @@ describe('OIDC RP-initiated logout', () => {
     }));
     expect(enable.status).toBe(200);
     expect(await enable.json()).toMatchObject({ settings: { oidcEndSession: true } });
-    const payload = await (await logout(controller, sessionCookie)).json() as { redirectUrl?: string };
+    const payload = await (await logout(controller, signIn(now - 2))).json() as { redirectUrl?: string };
     expect(payload.redirectUrl).toContain(END_SESSION_ENDPOINT);
 
     const disable = await controller.fetch(new Request('https://ui.example.com/crowdsec/api/auth/settings', {
@@ -178,7 +200,7 @@ describe('OIDC RP-initiated logout', () => {
       body: JSON.stringify({ oidcEndSession: false }),
     }));
     expect(await disable.json()).toMatchObject({ settings: { oidcEndSession: false } });
-    expect(await (await logout(controller, sessionCookie)).json()).toEqual({ status: 'ok' });
+    expect(await (await logout(controller, signIn(now - 3))).json()).toEqual({ status: 'ok' });
   });
 
   test('locks end-session when the application config sets it', async () => {

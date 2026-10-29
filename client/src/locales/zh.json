@@ -445,7 +445,7 @@
   "pages.settings.setupTotpTitle": "设置 TOTP",
   "pages.settings.manageTotpTitle": "管理 TOTP",
   "pages.settings.setupTotpDescription": "使用身份验证器应用扫描二维码，或在此设备上打开设置链接。输入生成的代码以完成设置。",
-  "pages.settings.disableTotpDescription": "禁用 TOTP 会移除密码登录后的额外代码要求。请使用当前密码确认。",
+  "pages.settings.disableTotpDescription": "禁用 TOTP 会移除密码登录后的额外代码要求。请使用当前密码和身份验证器代码确认。",
   "pages.settings.manualTotpSecret": "手动设置密钥",
   "pages.settings.copyTotpSecret": "复制设置密钥",
   "pages.settings.openAuthenticatorApp": "在身份验证器应用中打开",
