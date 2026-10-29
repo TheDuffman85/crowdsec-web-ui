@@ -29,6 +29,35 @@ describe('Alerts page details and actions', () => {
     expect(await screen.findByText('AppSec / WAF')).toBeInTheDocument();
   });
 
+  test('marks the source of an alert as allowlisted on the alert instance', async () => {
+    vi.mocked(api.fetchAlert).mockResolvedValueOnce({
+      id: 1,
+      instance_id: 'east',
+      created_at: '2026-03-23T11:00:00.000Z',
+      scenario: 'crowdsecurity/ssh-bf',
+      source: { ip: '10.1.2.3', value: '10.1.2.3' },
+      message: '',
+      decisions: [],
+      events: [],
+    });
+    vi.mocked(api.checkAllowlist).mockImplementationOnce(async (value) => ({
+      value,
+      allowlisted: true,
+      results: [{ instance_id: 'east', instance_name: 'EAST', status: 'available', allowlisted: true, reason: '10.0.0.0/8 from office' }],
+    }));
+
+    render(
+      <MemoryRouter initialEntries={['/alerts?id=1']}>
+        <Alerts />
+      </MemoryRouter>,
+    );
+
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText('Allowlisted')).toBeInTheDocument();
+    expect(within(dialog).getByText('10.0.0.0/8 from office')).toBeInTheDocument();
+    expect(api.checkAllowlist).toHaveBeenCalledWith('10.1.2.3', 'east');
+  });
+
   test('shows alert contexts as an expanded metadata section', async () => {
     vi.mocked(api.fetchAlert).mockResolvedValueOnce({
       id: 1,

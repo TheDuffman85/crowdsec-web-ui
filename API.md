@@ -176,7 +176,7 @@ Alert facets require `field=id|instance|scenario|kind|country|region|city|as|ip|
 | --- | --- | --- |
 | GET | `/api/decisions` | List decisions. Without `page`, returns an array. With `page`, returns a paginated response. Active decisions are returned by default. |
 | GET | `/api/decisions/facets` | Return one bounded quick-filter facet across the complete effective decision result set. |
-| POST | `/api/decisions` | Add a manual CrowdSec decision through LAPI. Body: `{ "ip": "1.2.3.4", "duration": "4h", "reason": "manual", "type": "ban", "scenario": "manual/web-ui" }`. `type` defaults to `ban` and accepts `ban` or `captcha`; `scenario` defaults to `manual/web-ui` and must look like `author/name` (letters, digits, `_`, `.`, `-`; at most 256 characters); `crowdsec.manualDecisions` only limits the Web UI form, not this endpoint; optional `scope` and `instance_id` select targets. Blocked in read-only mode. |
+| POST | `/api/decisions` | Add a manual CrowdSec decision through LAPI. Body: `{ "ip": "1.2.3.4", "duration": "4h", "reason": "manual", "type": "ban", "scenario": "manual/web-ui" }`. `type` defaults to `ban` and accepts `ban` or `captcha`; `scenario` defaults to `manual/web-ui` and must look like `author/name` (letters, digits, `_`, `.`, `-`; at most 256 characters); `crowdsec.manualDecisions` only limits the Web UI form, not this endpoint; optional `scope` and `instance_id` select targets. Returns `409` when a target instance allowlists the value, unless `bypass_allowlist: true` is sent. Blocked in read-only mode. |
 | POST | `/api/decisions/bulk-delete` | Delete multiple decisions by numeric ID. Body: `{ "ids": [10, "11"] }`. Blocked in read-only mode. |
 | DELETE | `/api/decisions/:id` | Delete one decision from CrowdSec LAPI and local cache. `:id` must be numeric. Blocked in read-only mode. |
 | DELETE | `/api/instances/:instanceId/decisions/:id` | Delete one decision from a specific instance and its local cache. Blocked in read-only mode. |
@@ -187,6 +187,17 @@ Supported decision query parameters: `instance`, `include_expired`, `page`, `pag
 - Duplicate decisions are hidden by default in paginated results. Deduplication is applied after active filters, so the preferred matching row remains visible even when the globally preferred row does not match. Set `hide_duplicates=false` or filter by `alert_id` to show every row.
 - `simulation` accepts `all`, `live`, or `simulated`; unknown values behave like `all`.
 - Bulk deletion accepts `ids` in single-instance deployments or instance-qualified `refs` as described above.
+- LAPI does not check allowlists for decisions sent with an alert, so decision creation checks every target instance first. When any of them allowlists the value, nothing is added and the response is `409`:
+
+  ```json
+  {
+    "error": "10.1.2.3 is allowlisted",
+    "code": "ALLOWLISTED",
+    "allowlisted": [{ "instance_id": "primary", "instance_name": "CrowdSec", "reason": "10.0.0.0/8 from office (VPN)" }]
+  }
+  ```
+
+  Repeat the request with `"bypass_allowlist": true` to add the decision anyway; the audit log records the bypass. Instances that do not support allowlists or cannot be checked do not block the request.
 
 Decision facets require `field=id|instance|alert|scenario|kind|country|region|city|as|ip|target|action|status|machine|origin` and support the same value/label, pagination, and search behavior as alert facets. Status faceting considers both active and expired values within the configured lookback window even when the list is currently active-only.
 
@@ -203,6 +214,49 @@ Both facet endpoints return at most the requested limit and use an empty string 
   "has_more": true
 }
 ```
+
+## Allowlists
+
+CrowdSec centralized allowlists cannot be changed through LAPI, so these routes are read-only and available to read-only users. They accept `instance=<instance-id>` or `instance=all` (the default); an unknown instance returns `404`. Allowlists with the same name on several instances are combined. Like alerts and decisions, allowlists are cached in SQLite: every refresh of an instance (scheduled, manual, or on demand) re-reads its allowlists from LAPI and writes only changed entries, and the list and entry routes read the cache. An instance that has never been synchronized is read once before the response. When LAPI cannot be read, the cached allowlists remain and the instance reports the failure. Checks always query LAPI so that range matching and the manual-decision guard use the current state.
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| GET | `/api/allowlists` | Instance statuses and allowlist summaries without entries. Optional `q` keeps only allowlists whose name, description, or entries contain the text. Always returns `200`; per-instance problems are reported in `status`. |
+| GET | `/api/allowlists/:name/entries` | One page of an allowlist's active entries. Accepts `page`, `page_size` (10–200, default 50), and `q`. Returns `404` for an allowlist that does not exist in the scope. |
+| GET | `/api/allowlists/check?value=<ip\|range>` | Check whether an IP address or CIDR range is covered by an allowlist on each instance. Returns `400` for an invalid value. |
+
+Each instance has a `status` of `available`, `unsupported` (the LAPI predates allowlists, which require CrowdSec 1.6.5) or `unavailable` (with `error`). `partial` is `true` when any instance is `unavailable`.
+
+```json
+{
+  "instances": [{ "instance_id": "primary", "instance_name": "CrowdSec", "status": "available" }],
+  "allowlists": [{
+    "name": "office",
+    "description": "Office network",
+    "created_at": "2026-01-01T00:00:00Z",
+    "updated_at": "2026-01-02T00:00:00Z",
+    "console_managed": false,
+    "instance_ids": ["primary"],
+    "entry_count": 2,
+    "matching_entries": 2
+  }],
+  "partial": false
+}
+```
+
+`instance_ids` lists the instances that have the allowlist, and `matching_entries` counts the entries matching `q` (all entries without it). A `q` that matches the allowlist's name or description keeps every entry.
+
+Entry pages contain the `allowlist` summary, `data`, and the same `pagination` object as Alerts and Decisions, with `unfiltered_total` counting all entries:
+
+```json
+{
+  "allowlist": { "name": "office", "entry_count": 2, "matching_entries": 2, "instance_ids": ["primary"], "console_managed": false },
+  "data": [{ "value": "10.0.0.0/8", "description": "VPN", "created_at": "2026-01-01T00:00:00Z", "expiration": null, "instance_ids": ["primary"] }],
+  "pagination": { "page": 1, "page_size": 50, "total": 2, "total_pages": 1, "unfiltered_total": 2 }
+}
+```
+
+`expiration` is `null` for entries that never expire; expired entries are omitted by LAPI. An entry's `instance_ids` can be shorter than the allowlist's when an instance's copy lacks the entry. Check responses contain `value`, an overall `allowlisted` flag, and per-instance `results` with `status`, `allowlisted`, and CrowdSec's `reason`, for example `10.0.0.0/8 from office (VPN)`.
 
 ## Cleanup and Cache
 

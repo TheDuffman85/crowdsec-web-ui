@@ -3,16 +3,66 @@ import { describe, expect, test, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Settings } from '../../Settings';
-import { fetchConfig, updateManualRefreshSetting, updateMetricsSidebarPreference } from '../../../lib/api';
+import { fetchConfig, updateAllowlistsSidebarPreference, updateManualRefreshSetting, updateMetricsSidebarPreference } from '../../../lib/api';
 import { DateTimeContext, createDateTimeContextValue } from '../../../lib/dateTime';
 import { FontContext } from '../../../lib/font';
 
 describe('Settings general and password', () => {
+  test('defaults allowlists visibility on and only saves changes on Save', async () => {
+    const user = userEvent.setup();
+    const config = await fetchConfig();
+    vi.mocked(fetchConfig).mockResolvedValue({
+      ...config,
+      permissions: { mode: 'admin', can_manage_enforcement: true, can_manage_settings: true },
+    });
+    vi.mocked(updateAllowlistsSidebarPreference).mockResolvedValue({
+      success: true, allowlists_sidebar_visible: false,
+    });
+    const changed = vi.fn();
+    window.addEventListener('allowlists-sidebar-preference-changed', changed);
+    try {
+      render(<Settings />);
+      const toggle = await screen.findByRole('switch', { name: 'Show Allowlists in sidebar' });
+      await waitFor(() => expect(toggle).toBeEnabled());
+      expect(toggle).toBeChecked();
+      await user.click(toggle);
+      expect(updateAllowlistsSidebarPreference).not.toHaveBeenCalled();
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(changed).toHaveBeenCalledOnce());
+      expect(updateAllowlistsSidebarPreference).toHaveBeenCalledWith({ visible: false });
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      expect(updateAllowlistsSidebarPreference).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener('allowlists-sidebar-preference-changed', changed);
+    }
+  });
+
+  test.each([
+    ['allowlists_sidebar_visible', 'ui.allowlistsSidebarVisible', 'CONFIG_UI_ALLOWLISTS_SIDEBAR_VISIBLE', 'Show Allowlists in sidebar'],
+    ['metrics_sidebar_visible', 'ui.metricsSidebarVisible', 'CONFIG_UI_METRICS_SIDEBAR_VISIBLE', 'Show Metrics in sidebar'],
+  ] as const)('loads and locks %s managed by configuration', async (key, path, env, label) => {
+    const config = await fetchConfig();
+    vi.mocked(fetchConfig).mockResolvedValue({
+      ...config,
+      [key]: false,
+      managed_settings: {
+        [key]: { path, env },
+      },
+      permissions: { mode: 'admin', can_manage_enforcement: true, can_manage_settings: true },
+    });
+    render(<Settings />);
+    expect(await screen.findByLabelText(`Managed by the ${env} environment variable. To manage it here, remove it and any copy in the config file, then restart.`)).toBeInTheDocument();
+    const toggle = screen.getByRole('switch', { name: label });
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toBeDisabled();
+  });
+
   test('keeps language editable but disables refresh in read-only mode', async () => {
     render(<Settings />);
 
     expect(await screen.findByLabelText('Language')).toBeEnabled();
     expect(screen.getByLabelText('Refresh interval')).toBeDisabled();
+    expect(screen.getByRole('switch', { name: 'Show Allowlists in sidebar' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
     expect(screen.getByText('Read-only mode is enabled.')).toBeInTheDocument();
     expect(screen.getByText('Dashboard authentication is disabled. Set CONFIG_AUTH_ENABLED=true and restart the web UI to enable sign-in and account settings.')).toBeInTheDocument();

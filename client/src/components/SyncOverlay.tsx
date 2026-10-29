@@ -1,6 +1,6 @@
 import { createPortal } from "react-dom";
-import { AlertCircle, CheckCircle2, Database, RefreshCw } from "lucide-react";
-import type { InstanceSyncStatus, SyncStatus } from "../types";
+import { AlertCircle, CheckCircle2, Database, ListChecks, RefreshCw } from "lucide-react";
+import type { AllowlistSyncProgress, InstanceSyncStatus, SyncStatus } from "../types";
 import { useI18n } from "../lib/i18n";
 import { InstanceIcon } from "./InstanceIcon";
 
@@ -80,6 +80,32 @@ function instanceStatusMessage(
     return translateSyncMessage(instance.message, t);
 }
 
+function AllowlistProgress({ progress }: { progress?: AllowlistSyncProgress }) {
+    const { t } = useI18n();
+    if (!progress) return null;
+    const message = progress.state === 'complete'
+        ? t('components.syncOverlay.allowlistsCached', {
+            allowlists: (progress.allowlists ?? 0).toLocaleString(),
+            entries: (progress.entries ?? 0).toLocaleString(),
+        })
+        : progress.state === 'failed'
+            ? t('components.syncOverlay.allowlistsFailed', { error: progress.error || '' })
+            : t(`components.syncOverlay.allowlists${progress.state === 'syncing' ? 'Syncing' : progress.state === 'unsupported' ? 'Unsupported' : 'Waiting'}`);
+    const tone = progress.state === 'failed'
+        ? 'text-amber-700 dark:text-amber-300'
+        : 'text-gray-500 dark:text-gray-400';
+    return (
+        <p className={`mt-1 flex min-w-0 items-center gap-1.5 text-xs ${tone}`} title={message}>
+            {progress.state === 'syncing'
+                ? <RefreshCw className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
+                : progress.state === 'complete'
+                    ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" aria-hidden="true" />
+                    : <ListChecks className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}
+            <span className="truncate">{message}</span>
+        </p>
+    );
+}
+
 export function SyncOverlay({ syncStatus }: SyncOverlayProps) {
     const { t } = useI18n();
 
@@ -136,6 +162,7 @@ export function SyncOverlay({ syncStatus }: SyncOverlayProps) {
                         {progress}%
                     </span>
                 </div>
+                {!instances && <AllowlistProgress progress={syncStatus.allowlists} />}
 
                 {instances && (
                     <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4 text-left">
@@ -176,6 +203,7 @@ export function SyncOverlay({ syncStatus }: SyncOverlayProps) {
                                         <p className={`mt-1.5 truncate text-xs ${failed ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-gray-400'}`}>
                                             {instanceStatusMessage(instance, t)}
                                         </p>
+                                        <AllowlistProgress progress={instance.allowlists} />
                                     </div>
                                 );
                             })}

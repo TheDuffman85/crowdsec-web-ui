@@ -2,6 +2,8 @@ import type { Hono } from 'hono';
 import type {
   AddDecisionRequest,
   AlertRecord,
+  AllowlistedDecisionResponse,
+  AllowlistMatch,
   BulkDeleteResult,
   BulkDeleteRequest,
   CleanupByIpRequest,
@@ -16,6 +18,7 @@ import type {
   UpdateManualDecisionScenariosRequest,
   UpdateManualRefreshSettingRequest,
   UpdateMetricsSidebarPreferenceRequest,
+  UpdateAllowlistsSidebarPreferenceRequest,
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
 } from '../../shared/contracts';
@@ -24,6 +27,7 @@ import type { AuditOutcome } from '../audit-log';
 import { resolveManagedSettingSource, type RuntimeConfig } from '../config';
 import type { CrowdsecDatabase } from '../database';
 import type { LapiClient } from '../lapi';
+import type { AllowlistService } from './allowlists';
 import type { DatabaseQueryWorker } from '../query-worker-client';
 import type { PrometheusSample } from '../metrics';
 import type { DashboardStatsFilters } from './types';
@@ -41,6 +45,7 @@ export interface ApiRouteState {
   refreshIntervalMs: number;
   manualRefreshEnabled: boolean;
   metricsSidebarVisible: boolean;
+  allowlistsSidebarVisible: boolean;
   manualDecisionScenarios: string[];
   cacheRefreshCompletedAt: string | null;
   cache: { isInitialized: boolean; isComplete: boolean; lastUpdate: string | null };
@@ -63,6 +68,7 @@ export interface ApiRouteDependencies extends Record<string, any> {
   lapiClient: LapiClient;
   lapiClients: Map<string, LapiClient>;
   analyticsQueryWorker: DatabaseQueryWorker;
+  allowlistService: AllowlistService;
   state: ApiRouteState;
 }
 
@@ -76,6 +82,7 @@ export function registerApiRoutes(dependencies: ApiRouteDependencies): void {
     attackLocationResolver,
     aggregateHistoricalSyncStatus,
     aggregateLapiStatus,
+    allowlistService,
     applySimulationModeToAlert,
     auditLog,
     buildDashboardStats,
@@ -156,6 +163,7 @@ export function registerApiRoutes(dependencies: ApiRouteDependencies): void {
     saveLanguagePreference,
     saveManualDecisionScenarios,
     saveMetricsSidebarVisible,
+    saveAllowlistsSidebarVisible,
     savePersistedConfig,
     startRefreshScheduler,
     syncStatus,
@@ -634,6 +642,12 @@ const configuredManualDecisionScenarios = (): string[] => [
 ];
 const MAX_CUSTOM_MANUAL_DECISION_SCENARIOS = 100;
 const managedConfigSettings: Partial<Record<ManagedConfigSetting, ManagedSettingSource>> = {
+  ...(config.metricsSidebarVisibleManaged
+    ? { metrics_sidebar_visible: resolveManagedSettingSource(config.configEnvironmentOverrides, 'ui.metricsSidebarVisible') }
+    : {}),
+  ...(config.allowlistsSidebarVisibleManaged
+    ? { allowlists_sidebar_visible: resolveManagedSettingSource(config.configEnvironmentOverrides, 'ui.allowlistsSidebarVisible') }
+    : {}),
   ...(config.refreshIntervalManaged
     ? { refresh_interval: resolveManagedSettingSource(config.configEnvironmentOverrides, 'crowdsec.sync.refreshInterval') }
     : {}),
@@ -679,6 +693,7 @@ app.get(`${config.basePath}/api/config`, ensureAuth, (context) => {
     date_format: config.dateFormat,
     metrics_enabled: config.instances.some((instance) => instance.prometheus.length > 0),
     metrics_sidebar_visible: state.metricsSidebarVisible,
+    allowlists_sidebar_visible: state.allowlistsSidebarVisible,
     manual_decision_scenario_settings: {
       configured: configuredManualDecisionScenarios(),
       custom: [...state.manualDecisionScenarios],
@@ -825,7 +840,30 @@ app.get(`${config.basePath}/api/instances/:instanceId/metrics/:endpointId`, ensu
   }
 });
 
+app.put(`${config.basePath}/api/config/allowlists-sidebar`, ensureAuth, async (context) => {
+  const readOnlyResponse = ensureCanManageSettings(context);
+  if (readOnlyResponse) return readOnlyResponse;
+  if (config.allowlistsSidebarVisibleManaged) return managedByConfigResponse(context, 'Allowlists sidebar visibility');
+
+  try {
+    const body = await context.req.json<UpdateAllowlistsSidebarPreferenceRequest>();
+    if (typeof body.visible !== 'boolean') {
+      return context.json({ error: 'visible must be a boolean' }, 400);
+    }
+
+    await syncWorker.runExclusive(() => saveAllowlistsSidebarVisible(database, body.visible));
+    state.allowlistsSidebarVisible = body.visible;
+
+    return context.json({ success: true, allowlists_sidebar_visible: body.visible });
+  } catch (error: any) {
+    console.error('Error updating allowlists sidebar preference:', error.message);
+    return context.json({ error: 'Failed to update allowlists sidebar preference' }, 500);
+  }
+});
+
 app.put(`${config.basePath}/api/config/metrics-sidebar`, ensureAuth, async (context) => {
+  if (config.metricsSidebarVisibleManaged) return managedByConfigResponse(context, 'Metrics sidebar visibility');
+
   try {
     const body = await context.req.json<UpdateMetricsSidebarPreferenceRequest>();
     if (typeof body.visible !== 'boolean') {
@@ -1432,6 +1470,24 @@ app.post(`${config.basePath}/api/decisions`, ensureAuth, async (context) => {
 
     const targets = resolveOperationInstances(body.scope, body.instance_id);
     if ('error' in targets) return context.json({ error: targets.error }, 400);
+    const bypassAllowlist = body.bypass_allowlist === true;
+    // LAPI skips its allowlist check for alerts that already carry decisions,
+    // so mirror `cscli decisions add` and refuse unless explicitly bypassed.
+    if (!bypassAllowlist) {
+      const check = await allowlistService.checkValue(targets, ip);
+      for (const result of check.results) {
+        if (result.status === 'unavailable') {
+          console.warn(`[decisions] Allowlist check for ${ip} failed on ${result.instance_name}: ${result.error}`);
+        }
+      }
+      const allowlisted: AllowlistMatch[] = check.results.flatMap((result) => result.allowlisted
+        ? [{ instance_id: result.instance_id, instance_name: result.instance_name, ...(result.reason ? { reason: result.reason } : {}) }]
+        : []);
+      if (allowlisted.length > 0) {
+        const response: AllowlistedDecisionResponse = { error: `${ip} is allowlisted`, code: 'ALLOWLISTED', allowlisted };
+        return context.json(response, 409);
+      }
+    }
     const targetOutcomes = new Map<string, AuditOutcome>();
     const results = await Promise.all(targets.map(async (instance: RuntimeConfig['instances'][number]) => {
       const client = lapiClients.get(instance.id)!;
@@ -1466,6 +1522,7 @@ app.post(`${config.basePath}/api/decisions`, ensureAuth, async (context) => {
       scenario,
       duration,
       reason: reason.slice(0, 256),
+      ...(bypassAllowlist ? { bypass_allowlist: true } : {}),
       instances: results.map((result) => result.instance_name),
       instance_results: instanceResults.entries,
       ...(instanceResults.truncated ? { truncated: true } : {}),

@@ -164,6 +164,40 @@ describe('presentational components', () => {
     expect(document.querySelector('.instance-color-icon')).toHaveClass('bg-orange-500');
   });
 
+  test('shows allowlist caching progress next to the alert sync', () => {
+    const instance = {
+      isSyncing: true,
+      progress: 40,
+      message: '',
+      startedAt: '2026-07-19T12:00:00.000Z',
+      completedAt: null,
+      state: 'syncing' as const,
+    };
+    const { rerender } = render(
+      <SyncOverlay
+        syncStatus={{
+          ...instance,
+          instances: [
+            { ...instance, instance_id: 'primary', instance_name: 'Primary', allowlists: { state: 'complete', allowlists: 5, entries: 1234 } },
+            { ...instance, instance_id: 'secondary', instance_name: 'Secondary', allowlists: { state: 'syncing' } },
+            { ...instance, instance_id: 'edge', instance_name: 'Edge', allowlists: { state: 'failed', error: 'Request timeout' } },
+            { ...instance, instance_id: 'old', instance_name: 'Old', allowlists: { state: 'unsupported' } },
+            { ...instance, instance_id: 'new', instance_name: 'New', allowlists: { state: 'pending' } },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText(`Allowlists: 5 allowlists with ${(1234).toLocaleString()} entries cached`)).toBeInTheDocument();
+    expect(screen.getByText('Allowlists: caching...')).toBeInTheDocument();
+    expect(screen.getByText('Allowlists could not be read: Request timeout')).toBeInTheDocument();
+    expect(screen.getByText('Allowlists: not supported by this LAPI')).toBeInTheDocument();
+    expect(screen.getByText('Allowlists: waiting...')).toBeInTheDocument();
+
+    rerender(<SyncOverlay syncStatus={{ ...instance, allowlists: { state: 'syncing' } }} />);
+    expect(screen.getByText('Allowlists: caching...')).toBeInTheDocument();
+  });
+
   test('translates known server sync status messages', () => {
     const i18nValue: I18nContextValue = {
       language: 'de',

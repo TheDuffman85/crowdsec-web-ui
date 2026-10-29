@@ -14,6 +14,7 @@ import { useI18n } from "./lib/i18n";
 const Dashboard = lazy(async () => ({ default: (await import('./pages/Dashboard')).Dashboard }));
 const Alerts = lazy(async () => ({ default: (await import('./pages/Alerts')).Alerts }));
 const Decisions = lazy(async () => ({ default: (await import('./pages/Decisions')).Decisions }));
+const Allowlists = lazy(async () => ({ default: (await import('./pages/Allowlists')).Allowlists }));
 const Metrics = lazy(async () => ({ default: (await import('./pages/Metrics')).Metrics }));
 const Notifications = lazy(async () => ({ default: (await import('./pages/Notifications')).Notifications }));
 const Settings = lazy(async () => ({ default: (await import('./pages/Settings')).Settings }));
@@ -67,6 +68,14 @@ function ProtectedAppShell() {
             element={(
               <Suspense fallback={<RouteFallback />}>
                 <Decisions />
+              </Suspense>
+            )}
+          />
+          <Route
+            path="allowlists"
+            element={(
+              <Suspense fallback={<RouteFallback />}>
+                <Allowlists />
               </Suspense>
             )}
           />

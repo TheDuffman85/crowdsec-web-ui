@@ -168,3 +168,73 @@ describe('shared Add Decision modal on Decisions page', () => {
     }));
   });
 });
+
+describe('allowlist protection in the Add Decision modal', () => {
+  const allowlistedValue = '10.1.2.3';
+  const allowlistedResults = (value: string) => value === allowlistedValue
+    ? [{ instance_id: 'main', instance_name: 'MAIN', status: 'available' as const, allowlisted: true, reason: '10.0.0.0/8 from office (VPN)' }]
+    : [];
+
+  test('warns about an allowlisted value and only submits after the bypass is confirmed', async () => {
+    configureInstances(['main']);
+    vi.mocked(api.checkAllowlist).mockImplementation(async (value) => ({
+      value,
+      allowlisted: value === allowlistedValue,
+      results: allowlistedResults(value),
+    }));
+    vi.mocked(api.addDecision).mockResolvedValue(undefined);
+    const dialog = await openAddDecision('/decisions');
+
+    await userEvent.type(within(dialog).getByRole('textbox', { name: 'IP / Range' }), allowlistedValue);
+    const warning = await within(dialog).findByRole('alert');
+    expect(warning).toHaveTextContent('10.1.2.3 is allowlisted');
+    expect(warning).toHaveTextContent('10.0.0.0/8 from office (VPN)');
+    expect(api.checkAllowlist).toHaveBeenLastCalledWith(allowlistedValue, 'all');
+    const submit = within(dialog).getByRole('button', { name: 'Add Decision' });
+    expect(submit).toBeDisabled();
+
+    await userEvent.click(within(dialog).getByRole('checkbox', { name: 'Bypass allowlist' }));
+    expect(submit).toBeEnabled();
+    await userEvent.click(submit);
+    await waitFor(() => expect(api.addDecision).toHaveBeenCalledWith({
+      ip: allowlistedValue, duration: '4h', type: 'ban', reason: 'manual', scenario: 'manual/web-ui', bypass_allowlist: true,
+    }));
+  });
+
+  test('shows the server refusal and asks again for a bypass after the value changes', async () => {
+    configureMultipleInstances();
+    // The pre-check is still running when the form is submitted.
+    vi.mocked(api.checkAllowlist).mockImplementation(() => new Promise(() => {}));
+    vi.mocked(api.addDecision)
+      .mockRejectedValueOnce(Object.assign(new Error('10.1.2.4 is allowlisted'), {
+        code: 'ALLOWLISTED',
+        allowlisted: [{ instance_id: 'west', instance_name: 'WEST', reason: '10.1.2.4 from partners' }],
+      }))
+      .mockResolvedValueOnce(undefined);
+    try {
+      const dialog = await openAddDecision('/decisions');
+      const input = within(dialog).getByRole('textbox', { name: 'IP / Range' });
+      const submit = within(dialog).getByRole('button', { name: 'Add Decision' });
+
+      await userEvent.type(input, '10.1.2.4');
+      await userEvent.click(submit);
+      expect(await within(dialog).findByRole('alert')).toHaveTextContent('WEST: 10.1.2.4 from partners');
+      expect(submit).toBeDisabled();
+
+      await userEvent.click(within(dialog).getByRole('checkbox', { name: 'Bypass allowlist' }));
+      await userEvent.type(input, '0');
+      expect(within(dialog).queryByRole('checkbox', { name: 'Bypass allowlist' })).not.toBeInTheDocument();
+      await userEvent.type(input, '{Backspace}');
+      expect(within(dialog).getByRole('checkbox', { name: 'Bypass allowlist' })).not.toBeChecked();
+      expect(submit).toBeDisabled();
+
+      await userEvent.click(within(dialog).getByRole('checkbox', { name: 'Bypass allowlist' }));
+      await userEvent.click(submit);
+      await waitFor(() => expect(api.addDecision).toHaveBeenLastCalledWith({
+        ip: '10.1.2.4', duration: '4h', type: 'ban', reason: 'manual', scenario: 'manual/web-ui', scope: 'all', bypass_allowlist: true,
+      }));
+    } finally {
+      vi.mocked(api.checkAllowlist).mockImplementation(async (value) => ({ value, allowlisted: false, results: [] }));
+    }
+  });
+});

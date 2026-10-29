@@ -1,4 +1,4 @@
-import { CrowdsecDatabase } from './database';
+import { CrowdsecDatabase, type CachedAllowlist } from './database';
 import { installTimestampedConsole } from './logging';
 import type { WorkerReadyMessage } from './worker-lifecycle';
 import type {
@@ -145,6 +145,13 @@ function execute(request: WorkerRequest['request']): unknown {
   if (request.type === 'clear-sync-data') {
     database.clearSyncData();
     return undefined;
+  }
+  if (request.type === 'replace-allowlists') {
+    return database.replaceAllowlists(
+      String(request.instanceId),
+      request.allowlists as CachedAllowlist[] | null,
+      String(request.syncState),
+    );
   }
   throw new Error(`Unknown database sync worker operation: ${request.type}`);
 }

@@ -29,6 +29,8 @@ function fakeClient(name: string, options: { failAdd?: boolean } = {}) {
       if (options.failAdd) throw new Error(`${name} unavailable`);
       return { message: `${name} added` };
     }),
+    fetchAllowlists: vi.fn(async (): Promise<any[]> => []),
+    checkAllowlist: vi.fn(async (): Promise<{ allowlisted: boolean; reason?: string }> => ({ allowlisted: false })),
     deleteAlert: vi.fn(async () => ({ message: `${name} alert deleted` })),
     deleteDecision: vi.fn(async () => ({ message: `${name} decision deleted` })),
   };
@@ -692,6 +694,70 @@ describe('multi-instance API', () => {
         { instance_id: 'secondary', success: false },
       ] });
       expect(primary.addDecision).toHaveBeenCalledTimes(1);
+      expect(secondary.addDecision).toHaveBeenCalledTimes(1);
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+    }
+  });
+
+  test('lists allowlists per instance and keeps unsupported LAPIs out of the partial flag', async () => {
+    const { controller, database, primary, secondary } = createMultiController();
+    primary.fetchAllowlists.mockResolvedValue([{ name: 'office', items: [{ value: '10.0.0.0/8' }] }]);
+    secondary.fetchAllowlists.mockRejectedValue(Object.assign(new Error('HTTP 404: Not Found'), { status: 404 }));
+    try {
+      const combined = await controller.fetch(new Request('http://localhost/api/allowlists?instance=all'));
+      expect(await combined.json()).toMatchObject({
+        partial: false,
+        instances: [
+          { instance_id: 'primary', status: 'available' },
+          { instance_id: 'secondary', status: 'unsupported' },
+        ],
+        allowlists: [{ name: 'office', instance_ids: ['primary'], entry_count: 1 }],
+      });
+
+      const entries = await controller.fetch(new Request('http://localhost/api/allowlists/office/entries?instance=all'));
+      expect((await entries.json() as any).data).toEqual([{ value: '10.0.0.0/8', expiration: null, instance_ids: ['primary'] }]);
+
+      const config = await (await controller.fetch(new Request('http://localhost/api/config'))).json() as any;
+      expect(config.sync_status.instances.map((instance: any) => instance.allowlists)).toEqual([
+        { state: 'complete', allowlists: 1, entries: 1 },
+        { state: 'unsupported' },
+      ]);
+
+      const scoped = await controller.fetch(new Request('http://localhost/api/allowlists?instance=secondary'));
+      expect((await scoped.json() as any).instances.map((instance: any) => instance.instance_id)).toEqual(['secondary']);
+      expect(primary.fetchAllowlists).toHaveBeenCalledTimes(1);
+    } finally {
+      controller.stopBackgroundTasks();
+      database.close();
+    }
+  });
+
+  test('refuses Combined decision creation when any target instance allowlists the value', async () => {
+    const { controller, database, primary, secondary } = createMultiController();
+    secondary.checkAllowlist.mockResolvedValue({ allowlisted: true, reason: '1.2.3.4 from partners' });
+    const add = (body: Record<string, unknown>) => controller.fetch(new Request('http://localhost/api/decisions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip: '1.2.3.4', duration: '4h', type: 'ban', ...body }),
+    }));
+    try {
+      const refused = await add({ scope: 'all' });
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toMatchObject({
+        code: 'ALLOWLISTED',
+        allowlisted: [{ instance_id: 'secondary', instance_name: 'Secondary', reason: '1.2.3.4 from partners' }],
+      });
+      expect(primary.addDecision).not.toHaveBeenCalled();
+      expect(secondary.addDecision).not.toHaveBeenCalled();
+
+      // Only the targeted instance's allowlists apply.
+      expect((await add({ scope: 'instance', instance_id: 'primary' })).status).toBe(200);
+      expect(secondary.checkAllowlist).toHaveBeenCalledTimes(1);
+
+      expect((await add({ scope: 'all', bypass_allowlist: true })).status).toBe(200);
+      expect(primary.addDecision).toHaveBeenCalledTimes(2);
       expect(secondary.addDecision).toHaveBeenCalledTimes(1);
     } finally {
       controller.stopBackgroundTasks();

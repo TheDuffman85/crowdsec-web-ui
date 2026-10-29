@@ -36,6 +36,7 @@ Load-test mode logs seed timings, synchronization progress, `/api` requests, and
 ./run.sh loadtest blocklists-mixed
 ./run.sh loadtest multi-instance
 ./run.sh loadtest multi-instance-medium
+./run.sh loadtest allowlists
 ```
 
 | Profile | Initial workload | Main use |
@@ -45,6 +46,7 @@ Load-test mode logs seed timings, synchronization progress, `/api` requests, and
 | `blocklists-mixed` | 10,000 alerts, 500,000 decisions; blocklists of 125,000, 100,000, and 60,000 | Empty, expired, expiring, and large delta-blocklist cases |
 | `multi-instance` | Primary 25k/25k, Secondary 15k/15k, Edge 10k/10k alerts/decisions | Quick multi-instance and colliding upstream-ID checks |
 | `multi-instance-medium` | Three instances with 100,000 alerts and 100,000 decisions each | Medium multi-instance benchmarking |
+| `allowlists` | `multi-instance` alert workload plus five allowlists of 50,000, 25,000, 10,000, 5,000, and 1,000 entries per instance | Allowlists page, cross-instance differences, IP checks, and the manual-decision allowlist guard |
 
 ### Profile details
 
@@ -54,6 +56,9 @@ Load-test mode logs seed timings, synchronization progress, `/api` requests, and
 - In multi-instance profiles, IDs start at `1` independently for each fake LAPI. Primary exposes two metrics endpoints, Secondary one, and Edge none.
 - Multi-instance metrics endpoints return a representative Prometheus snapshot for API, parser, AppSec, scenario, whitelist, timing, and heartbeat views.
 - Set `LOADTEST_FAILING_LAPI=true` to make Edge fail for partial-availability and partial-write tests.
+- `LOADTEST_ALLOWLIST_SIZES` generates deterministic centralized allowlists, held in memory by every fake LAPI. Entries are 70% IPv4 addresses, 15% IPv4 `/28` ranges, and 15% IPv6 addresses or `/80` ranges; 60% have a description and 20% expire within 90 days, while the rest use CrowdSec's zero-time expiration. Every third allowlist is Console-managed.
+- The first allowlist starts with `45.1.0.0/16` to `45.8.0.0/16`, which cover part of the synthetic alert sources, so alert details show the Allowlisted badge and Add Decision asks for a bypass for those addresses.
+- In multi-instance mode, Secondary and Edge each miss every 50th entry (at different offsets) and the last allowlist, so the Combined view shows `Missing on` badges and allowlists that only Primary has. Allowlist checks match addresses inside ranges and ranges containing entries, like LAPI.
 
 Defaults live in `scripts/load-test-profiles/`. Explicit `LOADTEST_*` and `CONFIG_*` environment variables take precedence.
 
@@ -126,6 +131,7 @@ LOADTEST_ALERTS=1000 LOADTEST_DECISIONS=1000 ./run.sh loadtest
 | `LOADTEST_EDGE_ALERTS` | `25000` | Edge initial alerts when not set by a profile. |
 | `LOADTEST_EDGE_DECISIONS` | `50000` | Edge initial decisions when not set by a profile. |
 | `LOADTEST_EDGE_BLOCKLIST_DECISIONS` | `10000` | Edge concentrated blocklist size. |
+| `LOADTEST_ALLOWLIST_SIZES` | Empty | Comma-separated entry counts, one allowlist per value; works with every profile. |
 
 ### Application configuration
 
@@ -160,7 +166,7 @@ services:
       LOADTEST_PROFILE: blocklists-mixed
 ```
 
-`LOADTEST_PROFILE` accepts `default`, `blocklist`, `blocklists-mixed`, `multi-instance`, or `multi-instance-medium`. Individual `LOADTEST_*` and `CONFIG_*` variables override profile defaults. CrowdSec connection settings are ignored.
+`LOADTEST_PROFILE` accepts `default`, `blocklist`, `blocklists-mixed`, `multi-instance`, `multi-instance-medium`, or `allowlists`. Individual `LOADTEST_*` and `CONFIG_*` variables override profile defaults. CrowdSec connection settings are ignored.
 
 ### Database Safety
 

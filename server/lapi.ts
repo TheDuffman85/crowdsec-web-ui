@@ -39,6 +39,23 @@ export interface LapiClientOptions {
   };
 }
 
+export interface LapiAllowlistItem {
+  value?: string;
+  description?: string;
+  created_at?: string;
+  expiration?: string;
+}
+
+export interface LapiAllowlist {
+  allowlist_id?: string;
+  name?: string;
+  description?: string;
+  created_at?: string;
+  updated_at?: string;
+  console_managed?: boolean;
+  items?: LapiAllowlistItem[] | null;
+}
+
 export interface FetchAlertsFilters {
   origin?: string;
   scenario?: string;
@@ -462,6 +479,23 @@ export class LapiClient {
     });
 
     return response.data;
+  }
+
+  async fetchAllowlists(): Promise<LapiAllowlist[]> {
+    const response = await this.fetchLapi<LapiAllowlist[] | null>('/v1/allowlists?with_content=true');
+    return Array.isArray(response.data) ? response.data : [];
+  }
+
+  async checkAllowlist(value: string): Promise<{ allowlisted: boolean; reason?: string }> {
+    // LAPI routes on the raw path, so an escaped CIDR slash stays inside the parameter.
+    const response = await this.fetchLapi<{ allowlisted?: boolean; reason?: string }>(
+      `/v1/allowlists/check/${encodeURIComponent(value)}`,
+    );
+    const reason = response.data?.reason;
+    return {
+      allowlisted: response.data?.allowlisted === true,
+      ...(typeof reason === 'string' && reason ? { reason } : {}),
+    };
   }
 
   async deleteDecision(decisionId: string | number): Promise<unknown> {

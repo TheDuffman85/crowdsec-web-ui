@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, type MouseEvent as ReactMouseEvent } from "react";
 import { useSearchParams, Link } from "react-router-dom";
-import { fetchAlertsPaginated, fetchAlert, deleteAlert, bulkDeleteAlerts, cleanupByIp, fetchConfig, fetchDecisionsPaginated } from "../lib/api";
+import { fetchAlertsPaginated, fetchAlert, deleteAlert, bulkDeleteAlerts, cleanupByIp, fetchConfig, fetchDecisionsPaginated, checkAllowlist } from "../lib/api";
 import { isSimulatedAlert, isSimulatedDecision, parseSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
 import { useHistoryBackedOverlay } from "../lib/historyOverlay";
@@ -1090,6 +1090,35 @@ export function Alerts() {
         previousSelectedAlertIdRef.current = nextSelectedAlertId;
     }, [selectedAlert]);
 
+    // Alerts from allowlisted sources are dropped by LAPI, so a match means the
+    // value was allowlisted after the alert was created.
+    const selectedAlertAllowlistValue = selectedAlert?.source?.ip?.trim() || selectedAlert?.source?.range?.trim() || null;
+    const selectedAlertAllowlistScope = selectedAlert?.instance_id || 'all';
+    const selectedAlertAllowlistKey = selectedAlertAllowlistValue ? `${selectedAlertAllowlistScope}\u0000${selectedAlertAllowlistValue}` : null;
+    const [selectedAlertAllowlist, setSelectedAlertAllowlist] = useState<{ key: string; reasons: string[] } | null>(null);
+    useEffect(() => {
+        if (!selectedAlertAllowlistKey || !selectedAlertAllowlistValue) return;
+        let cancelled = false;
+        void (async () => {
+            try {
+                const response = await checkAllowlist(selectedAlertAllowlistValue, selectedAlertAllowlistScope);
+                if (cancelled || !Array.isArray(response?.results)) return;
+                setSelectedAlertAllowlist({
+                    key: selectedAlertAllowlistKey,
+                    reasons: response.results.filter((result) => result.allowlisted).map((result) => result.reason || ''),
+                });
+            } catch {
+                // The badge is informational; LAPIs without allowlists simply show none.
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [selectedAlertAllowlistKey, selectedAlertAllowlistScope, selectedAlertAllowlistValue]);
+    const selectedAlertAllowlistReasons = selectedAlertAllowlist && selectedAlertAllowlist.key === selectedAlertAllowlistKey
+        ? selectedAlertAllowlist.reasons
+        : [];
+
     const selectedAlertId = selectedAlert ? String(selectedAlert.id) : null;
     const hasMoreModalDecisions = modalDecisionsPage < modalDecisionsTotalPages;
 
@@ -2040,6 +2069,16 @@ export function Alerts() {
                                         </span>
                                     )}
                                 </div>
+                                {selectedAlertAllowlistReasons.length > 0 && (
+                                    <div className="mt-2 flex min-w-0 flex-col items-start gap-1">
+                                        <Badge variant="info">{t('pages.alerts.allowlisted')}</Badge>
+                                        {selectedAlertAllowlistReasons.filter(Boolean).map((reason) => (
+                                            <span key={reason} className={`${ALERT_DETAIL_SECONDARY_CLASS_NAME} block max-w-full truncate`} title={reason}>
+                                                {reason}
+                                            </span>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
                             <div className={ALERT_DETAIL_CARD_CLASS_NAME}>
                                 <h4 className={ALERT_DETAIL_LABEL_CLASS_NAME}>{t('tableColumns.target')}</h4>

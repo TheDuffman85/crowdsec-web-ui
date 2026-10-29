@@ -34,6 +34,10 @@
 #   timeFormat: browser # browser, 12h, or 24h.
 #   dateFormat: browser # Or a pattern such as dd/mm/yyyy, mm/dd/yyyy, or yyyy-MM-dd.
 #   readOnly: false
+#   # Show the Allowlists sidebar link. Omit to manage it from Settings.
+#   allowlistsSidebarVisible: true
+#   # Show the Metrics sidebar link. Omit to manage it from Settings.
+#   metricsSidebarVisible: true
 
 # updates:
 #   enabled: true

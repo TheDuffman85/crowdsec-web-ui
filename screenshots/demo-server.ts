@@ -106,6 +106,40 @@ config.instances = [
   },
 ];
 
+function createDemoAllowlists(instanceId: string) {
+  const createdAt = new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000).toISOString();
+  const allowlists = [
+    {
+      name: 'office-network',
+      description: 'Office and VPN egress addresses',
+      created_at: createdAt,
+      updated_at: createdAt,
+      console_managed: false,
+      items: [
+        { value: '198.51.100.0/24', description: 'Head office', created_at: createdAt },
+        { value: '203.0.113.17', description: 'VPN gateway', created_at: createdAt },
+        ...(instanceId === 'edge' ? [] : [{
+          value: '192.0.2.44',
+          description: 'Contractor access',
+          created_at: createdAt,
+          expiration: new Date(Date.now() + 14 * 24 * 60 * 60 * 1_000).toISOString(),
+        }]),
+      ],
+    },
+  ];
+  if (instanceId === config.instances[0]?.id) {
+    allowlists.push({
+      name: 'uptime-monitors',
+      description: 'External monitoring probes',
+      created_at: createdAt,
+      updated_at: createdAt,
+      console_managed: true,
+      items: [{ value: '2001:db8:4::/48', description: 'Monitoring provider', created_at: createdAt }],
+    });
+  }
+  return allowlists;
+}
+
 function createFakeLapiClient(instanceId: string) {
   return {
     hasAuthConfig: () => true,
@@ -131,6 +165,14 @@ function createFakeLapiClient(instanceId: string) {
       return alert || null;
     },
     addDecision: async () => ({ message: 'Decision added for screenshot demo' }),
+    fetchAllowlists: async () => createDemoAllowlists(instanceId),
+    // Exact matches are enough for the demo; LAPI also matches addresses inside ranges.
+    checkAllowlist: async (value: string) => {
+      const reasons = createDemoAllowlists(instanceId).flatMap((allowlist) => allowlist.items
+        .filter((item) => item.value === value)
+        .map((item) => `${item.value} from ${allowlist.name} (${item.description})`));
+      return reasons.length > 0 ? { allowlisted: true, reason: reasons.join(', ') } : { allowlisted: false };
+    },
     deleteDecision: async () => ({ message: 'Decision deleted for screenshot demo' }),
     deleteAlert: async () => ({ message: 'Alert deleted for screenshot demo' }),
   };

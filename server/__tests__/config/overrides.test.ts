@@ -8,6 +8,42 @@ import { ConfigurationLoadError } from '../../config-error';
 import { createMissingConfigPath, createRuntimeConfig, createTempConfig, createTempSecret, tempDirs } from './harness';
 
 describe('configuration overrides', () => {
+  const sidebarSettings = [
+    ['allowlistsSidebarVisible', 'CONFIG_UI_ALLOWLISTS_SIDEBAR_VISIBLE'],
+    ['metricsSidebarVisible', 'CONFIG_UI_METRICS_SIDEBAR_VISIBLE'],
+  ] as const;
+
+  test.each(sidebarSettings)('defaults %s visibility on without managing it', (setting) => {
+    const configFile = createMissingConfigPath();
+    for (let start = 0; start < 2; start += 1) {
+      const config = createRuntimeConfigImpl({}, { defaultConfigFile: configFile });
+      expect(config[setting]).toBe(true);
+      expect(config[`${setting}Managed`]).toBe(false);
+    }
+  });
+
+  test.each(sidebarSettings)('supports %s in YAML and environment overrides', (setting, envName) => {
+    const configFile = createMissingConfigPath();
+    createRuntimeConfigImpl({}, { defaultConfigFile: configFile });
+    writeFileSync(configFile, `${readFileSync(configFile, 'utf8')}\nui:\n  ${setting}: false\n`);
+    const fromFile = createRuntimeConfigImpl({ CONFIG_FILE: configFile });
+    expect(fromFile[setting]).toBe(false);
+    expect(fromFile[`${setting}Managed`]).toBe(true);
+    const overridden = createRuntimeConfigImpl({ CONFIG_FILE: configFile, [envName]: 'true' });
+    expect(overridden[setting]).toBe(true);
+    expect(overridden.configEnvironmentOverrides).toContainEqual({
+      name: envName, path: ['ui', setting],
+    });
+    expect(createRuntimeConfigImpl({ CONFIG_FILE: configFile })[setting]).toBe(false);
+  });
+
+  test.each(sidebarSettings)('generates and reloads configured %s and rejects invalid values', (setting, envName) => {
+    const configFile = createMissingConfigPath();
+    expect(createRuntimeConfigImpl({ [envName]: 'false' }, { defaultConfigFile: configFile })[setting]).toBe(false);
+    expect(createRuntimeConfigImpl({ CONFIG_FILE: configFile })[setting]).toBe(false);
+    expect(() => createRuntimeConfigImpl({ CONFIG_FILE: configFile, [envName]: 'nope' })).toThrow(`ui.${setting} must be a boolean`);
+  });
+
   const clientIds = [
     ['123456', '123456'],
     ['123456789012345678901', '123456789012345678901'],

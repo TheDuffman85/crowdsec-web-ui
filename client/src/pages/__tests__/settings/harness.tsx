@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, vi } from 'vitest';
-import { fetchConfig, updateManualRefreshSetting, updateMetricsSidebarPreference } from '../../../lib/api';
+import { fetchConfig, updateAllowlistsSidebarPreference, updateManualRefreshSetting, updateMetricsSidebarPreference } from '../../../lib/api';
 import { useRefresh } from '../../../contexts/useRefresh';
 
 const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
@@ -39,6 +39,8 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
     'pages.settings.enableManualRefreshHelp': 'Manual refresh help.',
     'pages.settings.showMetricsInSidebar': 'Show Metrics in sidebar',
     'pages.settings.showMetricsInSidebarHelp': 'Metrics sidebar help.',
+    'pages.settings.showAllowlistsInSidebar': 'Show Allowlists in sidebar',
+    'pages.settings.showAllowlistsInSidebarHelp': 'Allowlists sidebar help.',
     'pages.settings.authDisabledHint': 'Dashboard authentication is disabled. Set CONFIG_AUTH_ENABLED=true and restart the web UI to enable sign-in and account settings.',
     'pages.settings.authentication': 'Authentication',
     'pages.settings.authenticationDescription': 'Manage account sign-in methods.',
@@ -141,6 +143,7 @@ vi.mock('../../../lib/api', () => ({
   updateManualDecisionScenarios: vi.fn(),
   updateManualRefreshSetting: vi.fn(),
   updateMetricsSidebarPreference: vi.fn(),
+  updateAllowlistsSidebarPreference: vi.fn(),
 }));
 
 vi.mock('qrcode', () => ({
@@ -176,6 +179,7 @@ vi.mock('../../../lib/i18n', () => ({
   beforeEach(() => {
     setLanguagePreferenceMock.mockReset();
     vi.mocked(updateMetricsSidebarPreference).mockReset();
+    vi.mocked(updateAllowlistsSidebarPreference).mockReset();
     vi.mocked(updateManualRefreshSetting).mockReset();
     vi.mocked(updateManualRefreshSetting).mockResolvedValue({
       success: true,

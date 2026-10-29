@@ -261,7 +261,7 @@ describe('CrowdsecDatabase notifications and runtime', () => {
     expect(loadTestServer).toContain('CONFIG_STORAGE_DATA_DIR: dbDir');
   });
 
-  test('load-test Docker entrypoint applies a selected profile and keeps environment overrides', () => {
+  function runLoadTestEntrypoint(env: Record<string, string>) {
     const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-loadtest-entrypoint-'));
     tempDirs.push(dir);
     const binDir = path.join(dir, 'bin');
@@ -286,22 +286,33 @@ describe('CrowdsecDatabase notifications and runtime', () => {
         encoding: 'utf8',
         env: {
           PATH: `${binDir}:/usr/bin:/bin`,
-          LOADTEST_PROFILE: 'blocklist',
           LOADTEST_PROFILE_DIR: path.resolve(process.cwd(), 'scripts/load-test-profiles'),
           LOADTEST_DB_DIR: dbDir,
-          LOADTEST_ALERTS: '42',
+          ...env,
         },
       },
     );
 
     expect(result.stderr).toBe('');
     expect(result.status).toBe(0);
-    const environment = new Set(result.stdout.trim().split('\n'));
+    return { dbDir, environment: new Set(result.stdout.trim().split('\n')) };
+  }
+
+  test('load-test Docker entrypoint applies a selected profile and keeps environment overrides', () => {
+    const { dbDir, environment } = runLoadTestEntrypoint({ LOADTEST_PROFILE: 'blocklist', LOADTEST_ALERTS: '42' });
     expect(environment).toContain('LOADTEST_PROFILE=blocklist');
     expect(environment).toContain('LOADTEST_ALERTS=42');
     expect(environment).toContain('LOADTEST_DECISIONS=410463');
     expect(environment).toContain('LOADTEST_SEED=1337');
     expect(environment).toContain(`LOADTEST_DB_DIR=${dbDir}`);
     expect([...environment].some((entry) => entry.startsWith('DB_DIR='))).toBe(false);
+  });
+
+  test('load-test Docker entrypoint accepts the allowlists profile', () => {
+    const { environment } = runLoadTestEntrypoint({ LOADTEST_PROFILE: 'allowlists' });
+    expect(environment).toContain('LOADTEST_PROFILE=allowlists');
+    expect(environment).toContain('LOADTEST_MULTI_INSTANCE=true');
+    expect(environment).toContain('LOADTEST_ALLOWLIST_SIZES=50000,25000,10000,5000,1000');
+    expect(environment).toContain('LOADTEST_SEED=1337');
   });
 });

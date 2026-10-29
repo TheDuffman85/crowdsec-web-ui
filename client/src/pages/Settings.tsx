@@ -8,7 +8,7 @@ import { Switch } from "../components/ui/Switch";
 import { Badge } from "../components/ui/Badge";
 import { useRefresh } from "../contexts/useRefresh";
 import { useOptionalToast } from "../contexts/useToast";
-import { fetchConfig, updateManualDecisionScenarios, updateManualRefreshSetting, updateMetricsSidebarPreference } from "../lib/api";
+import { fetchConfig, updateAllowlistsSidebarPreference, updateManualDecisionScenarios, updateManualRefreshSetting, updateMetricsSidebarPreference } from "../lib/api";
 import { DEFAULT_MANUAL_DECISION_SCENARIO, isValidDecisionScenario, type ManagedSettingSource } from "../../../shared/contracts";
 import { apiUrl, withBasePath } from "../lib/basePath";
 import { sessionFetch } from "../lib/sessionFetch";
@@ -57,6 +57,7 @@ const REFRESH_OPTIONS = [
 ] as const;
 
 const METRICS_SIDEBAR_PREFERENCE_EVENT = 'metrics-sidebar-preference-changed';
+const ALLOWLISTS_SIDEBAR_PREFERENCE_EVENT = 'allowlists-sidebar-preference-changed';
 const MANUAL_REFRESH_SETTING_EVENT = 'manual-refresh-setting-changed';
 
 interface PasskeySummary {
@@ -139,6 +140,7 @@ export function Settings() {
     const [refreshInterval, setRefreshInterval] = useState(intervalMs);
     const [manualRefreshEnabled, setManualRefreshEnabled] = useState(false);
     const [metricsSidebarVisible, setMetricsSidebarVisible] = useState(true);
+    const [allowlistsSidebarVisible, setAllowlistsSidebarVisible] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
     const [customScenarios, setCustomScenarios] = useState<string[]>([]);
     const [scenarioDraft, setScenarioDraft] = useState('');
@@ -191,6 +193,7 @@ export function Settings() {
                     setRefreshInterval(nextConfig.refresh_interval);
                     setManualRefreshEnabled(nextConfig.manual_refresh_enabled === true);
                     setMetricsSidebarVisible(nextConfig.metrics_sidebar_visible !== false);
+                    setAllowlistsSidebarVisible(nextConfig.allowlists_sidebar_visible !== false);
                     setCustomScenarios(nextConfig.manual_decision_scenario_settings?.custom ?? []);
                 }
             })
@@ -289,11 +292,14 @@ export function Settings() {
     const hasManualRefreshChange = manualRefreshEnabled !== savedManualRefreshEnabled;
     const savedMetricsSidebarVisible = config?.metrics_sidebar_visible !== false;
     const hasMetricsSidebarChange = metricsSidebarVisible !== savedMetricsSidebarVisible;
+    const hasAllowlistsSidebarChange = allowlistsSidebarVisible !== (config?.allowlists_sidebar_visible !== false);
     const canManageAuthSettings = canManageSettings;
     const canChangePassword = authSettings?.hasPassword === true && authSettings.authMethod === 'password';
     const passwordLoginManaged = authSettings?.passwordLoginManaged === true;
     const refreshIntervalSource = config?.managed_settings?.refresh_interval;
     const manualRefreshSource = config?.managed_settings?.manual_refresh_enabled;
+    const allowlistsSidebarSource = config?.managed_settings?.allowlists_sidebar_visible;
+    const metricsSidebarSource = config?.managed_settings?.metrics_sidebar_visible;
     const isOidcManaged = (setting: OidcSetting) => Boolean(authSettings?.managedSettings?.[setting]);
     const allOidcSettingsManaged = OIDC_SETTINGS.every(isOidcManaged);
     const refreshOptions: { value: number; label: string }[] = REFRESH_OPTIONS.map((option) => ({ value: option.value, label: t(option.labelKey) }));
@@ -355,13 +361,21 @@ export function Settings() {
             if (hasFontChange) {
                 setFontPreference(fontPreference);
             }
-            if (hasMetricsSidebarChange) {
+            if (!metricsSidebarSource && hasMetricsSidebarChange) {
                 const payload = await updateMetricsSidebarPreference({ visible: metricsSidebarVisible });
                 setConfig((current) => current ? {
                     ...current,
                     metrics_sidebar_visible: payload.metrics_sidebar_visible,
                 } : current);
                 window.dispatchEvent(new Event(METRICS_SIDEBAR_PREFERENCE_EVENT));
+            }
+            if (canManageSettings && !allowlistsSidebarSource && hasAllowlistsSidebarChange) {
+                const payload = await updateAllowlistsSidebarPreference({ visible: allowlistsSidebarVisible });
+                setConfig((current) => current ? {
+                    ...current,
+                    allowlists_sidebar_visible: payload.allowlists_sidebar_visible,
+                } : current);
+                window.dispatchEvent(new Event(ALLOWLISTS_SIDEBAR_PREFERENCE_EVENT));
             }
             showToast(getSettingsSavedMessage(), "success");
         } catch (error) {
@@ -904,13 +918,39 @@ export function Settings() {
                                     id="settings-metrics-sidebar"
                                     checked={metricsSidebarVisible}
                                     onCheckedChange={setMetricsSidebarVisible}
+                                    disabled={isSaving || Boolean(metricsSidebarSource)}
                                 />
                                 <div className="min-w-0">
-                                    <label htmlFor="settings-metrics-sidebar" className={labelClass}>
-                                        {t("pages.settings.showMetricsInSidebar")}
-                                    </label>
+                                    <div className="flex items-center gap-1.5">
+                                        <label htmlFor="settings-metrics-sidebar" className={labelClass}>
+                                            {t("pages.settings.showMetricsInSidebar")}
+                                        </label>
+                                        {renderManagedLock(metricsSidebarSource)}
+                                    </div>
                                     <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                                         {t("pages.settings.showMetricsInSidebarHelp")}
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="space-y-2">
+                            <div className="flex items-start gap-4 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+                                <Switch
+                                    id="settings-allowlists-sidebar"
+                                    checked={allowlistsSidebarVisible}
+                                    onCheckedChange={setAllowlistsSidebarVisible}
+                                    disabled={!canManageSettings || isSaving || Boolean(allowlistsSidebarSource)}
+                                />
+                                <div className="min-w-0">
+                                    <div className="flex items-center gap-1.5">
+                                        <label htmlFor="settings-allowlists-sidebar" className={labelClass}>
+                                            {t("pages.settings.showAllowlistsInSidebar")}
+                                        </label>
+                                        {renderManagedLock(allowlistsSidebarSource)}
+                                    </div>
+                                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                        {t("pages.settings.showAllowlistsInSidebarHelp")}
                                     </p>
                                 </div>
                             </div>

@@ -7,6 +7,7 @@ import { useNotificationUnreadCount } from '../../contexts/useNotificationUnread
 import { I18nContext } from '../../lib/i18n';
 import { BrandingContext } from '../../contexts/branding-context';
 import { DEFAULT_BRANDING } from '../../lib/branding';
+import { updateAllowlistsSidebarPreference } from '../../lib/api';
 
 const { refreshNowMock, setThemeMock } = vi.hoisted(() => ({ refreshNowMock: vi.fn(), setThemeMock: vi.fn() }));
 
@@ -217,6 +218,36 @@ describe('Sidebar', () => {
 
     expect(metricsLink.compareDocumentPosition(notificationsLink) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
     expect(metricsLink.compareDocumentPosition(settingsLink) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  test('updates allowlists visibility when its preference is saved', async () => {
+    vi.mocked(useNotificationUnreadCount).mockReturnValue({
+      unreadCount: 0, setUnreadCount: vi.fn(), refreshUnreadCount: vi.fn(),
+    });
+    let visible: boolean | undefined;
+    fetchMock.mockImplementation(async (input: string | URL | Request) => (
+      String(input).includes('/api/config')
+        ? Response.json({ allowlists_sidebar_visible: visible })
+        : Response.json({ update_available: false })
+    ));
+    renderSidebar();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/config'), undefined));
+    expect(screen.getAllByRole('link', { name: 'Allowlists' })).toHaveLength(2);
+    expect(screen.getAllByRole('link', { name: 'Allowlists' })[0]).toHaveAttribute('href', '/allowlists');
+
+    visible = false;
+    await act(async () => {
+      await updateAllowlistsSidebarPreference({ visible: false });
+      window.dispatchEvent(new Event('allowlists-sidebar-preference-changed'));
+    });
+    await waitFor(() => expect(screen.queryByRole('link', { name: 'Allowlists' })).not.toBeInTheDocument());
+
+    visible = true;
+    await act(async () => {
+      await updateAllowlistsSidebarPreference({ visible: true });
+      window.dispatchEvent(new Event('allowlists-sidebar-preference-changed'));
+    });
+    expect(await screen.findAllByRole('link', { name: 'Allowlists' })).toHaveLength(2);
   });
 
   test('hides metrics when sidebar preference is disabled', async () => {

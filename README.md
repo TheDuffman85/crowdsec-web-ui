@@ -31,6 +31,7 @@ A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alert
 | Dashboard | Alert and active-decision totals, attack map, drilldowns, top lists, shared quick filters, and simulation counts |
 | Alerts | Searchable alert history, persistent count-aware quick filters, CrowdSec alert contexts, IP/AS/location details, event metadata, simulation labels, and configurable columns |
 | Decisions | Active and expired decisions, persistent count-aware quick filters, duplicate hiding, manual bans, custom durations, reasons, and cleanup actions |
+| Allowlists | Read-only view of CrowdSec centralized allowlists with an IP/range check, cross-instance differences, and allowlist protection for manual decisions |
 | Multi-instance | Several CrowdSec LAPIs, per-instance views, and a Combined scope for Dashboard, Alerts, and Decisions |
 | Metrics | Optional Prometheus views for LAPI activity, bouncers, AppSec, parsers, latency, parsing time, and whitelists |
 | Notifications | Alert, decision, CVE, availability, and update rules delivered through Email, Gotify, MQTT, ntfy, or Webhooks |
@@ -238,6 +239,8 @@ To manage a locked value in Settings again, remove it from both the environment 
 | `ui.timeFormat` | `browser` | Clock format: `browser`, `12h`, or `24h`. | `CONFIG_UI_TIME_FORMAT` |
 | `ui.dateFormat` | `browser` | Browser date format or a custom pattern such as `dd/mm/yyyy`, `mm/dd/yyyy`, or `yyyy-MM-dd`. | `CONFIG_UI_DATE_FORMAT` |
 | `ui.readOnly` | `false` | Hides management actions and rejects mutating API operations. | `CONFIG_UI_READ_ONLY` |
+| `ui.allowlistsSidebarVisible` | `true` | Shows the Allowlists sidebar link. The `/allowlists` route remains available when hidden. Omit to manage visibility in Settings > General. | `CONFIG_UI_ALLOWLISTS_SIDEBAR_VISIBLE` |
+| `ui.metricsSidebarVisible` | `true` | Shows the Metrics sidebar link. The `/metrics` route remains available when Prometheus metrics are configured. Omit to manage visibility in Settings > General. | `CONFIG_UI_METRICS_SIDEBAR_VISIBLE` |
 | `updates.enabled` | `true` in packaged images | Enables the built-in update check. | `CONFIG_UPDATES_ENABLED` |
 
 Date patterns require one day, month, and year token in any order: `d`/`dd` (day), `m`/`mm` (numeric month), `mmm`/`mmmm` (localized month name), and `yy`/`yyyy` (year). Punctuation and spaces are literal; wrap words in single quotes, for example `d 'of' mmmm yyyy`. Date patterns affect full dates and timestamps; compact chart labels keep their own display format. Set `ui.timeFormat` separately for a 12 or 24 hour clock.
@@ -304,6 +307,8 @@ Omitting `crowdsec.alertFilters` uses the standard non-CAPI feed. Setting any ex
 ### Manual decisions
 
 The Add Decision form always offers `manual/web-ui` and selects it by default. With no other scenarios available, the scenario field is hidden and `manual/web-ui` is used; additional scenarios turn it into a dropdown. Admins can also add and remove scenarios under **Settings → Manual decisions**; those are stored in the database, offered for every instance on top of the configured list, and take effect without a restart. Scenarios from `config.yaml` or `CONFIG_` variables are shown there as read-only. When **All instances** targets instances with different lists, only `manual/web-ui` is used and the field is hidden. These lists only shape the form: `POST /api/decisions` accepts any `author/name` scenario. If `crowdsec.alertFilters.legacy.extraScenarios` is used to show manual decisions, add the configured scenarios there too.
+
+CrowdSec LAPI does not check allowlists for decisions sent with an alert, which is how the Web UI adds them. Like `cscli decisions add`, the Web UI therefore checks the target instances' allowlists first and refuses an allowlisted IP or range until **Bypass allowlist** is confirmed. Instances whose LAPI predates allowlists (CrowdSec 1.6.5) or cannot be checked do not block the decision.
 
 | YAML field | Default | Purpose | Environment override |
 | --- | --- | --- | --- |
@@ -536,7 +541,8 @@ instances:
 | --- | --- |
 | Dashboard, Alerts, Decisions | Support one instance or Combined scope |
 | Metrics | Defaults to a source-aware Combined view when the selected scope has multiple endpoints; individual endpoints remain selectable |
-| Add decision / clean IP | Runs against every LAPI in Combined scope and reports partial failures |
+| Allowlists | Combined scope groups allowlists by name and marks entries missing on some instances |
+| Add decision / clean IP | Runs against every LAPI in Combined scope and reports partial failures; an allowlist match on any target instance requires a bypass |
 | Row deletion | Uses the row's owning instance; numeric upstream IDs are never broadcast |
 
 ## Authentication

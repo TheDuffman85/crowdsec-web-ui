@@ -3,6 +3,7 @@ import { isValidDecisionScenario } from '../../shared/contracts';
 import type { CrowdsecDatabase } from '../database';
 
 const METRICS_SIDEBAR_VISIBLE_META_KEY = 'metrics_sidebar_visible';
+const ALLOWLISTS_SIDEBAR_VISIBLE_META_KEY = 'allowlists_sidebar_visible';
 const MANUAL_DECISION_SCENARIOS_META_KEY = 'manual_decision_scenarios';
 const NOTIFICATION_SECRET_KEY_META_KEY = 'notification_secret_key';
 
@@ -23,6 +24,19 @@ export function loadMetricsSidebarVisible(database: CrowdsecDatabase): boolean {
 
 export function saveMetricsSidebarVisible(database: CrowdsecDatabase, visible: boolean): void {
   database.setMeta(METRICS_SIDEBAR_VISIBLE_META_KEY, visible ? 'true' : 'false');
+}
+
+export function loadAllowlistsSidebarVisible(database: CrowdsecDatabase): boolean {
+  try {
+    return database.getMeta(ALLOWLISTS_SIDEBAR_VISIBLE_META_KEY)?.value !== 'false';
+  } catch (error) {
+    console.error('Error loading allowlists sidebar preference from database:', error);
+    return true;
+  }
+}
+
+export function saveAllowlistsSidebarVisible(database: CrowdsecDatabase, visible: boolean): void {
+  database.setMeta(ALLOWLISTS_SIDEBAR_VISIBLE_META_KEY, visible ? 'true' : 'false');
 }
 
 export function loadManualDecisionScenarios(database: CrowdsecDatabase): string[] {

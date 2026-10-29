@@ -105,6 +105,7 @@ LOADTEST_ENV_NAMES=(
     LOADTEST_EDGE_ALERTS
     LOADTEST_EDGE_DECISIONS
     LOADTEST_EDGE_BLOCKLIST_DECISIONS
+    LOADTEST_ALLOWLIST_SIZES
     CONFIG_UI_TIME_FORMAT
     CONFIG_AUTH_ENABLED
     CONFIG_AUTH_SESSION_SECRET
@@ -167,9 +168,12 @@ configure_loadtest_profile() {
         multi-instance-medium)
             profile_file="$LOADTEST_PROFILE_DIR/multi-instance-medium.sh"
             ;;
+        allowlists)
+            profile_file="$LOADTEST_PROFILE_DIR/allowlists.sh"
+            ;;
         *)
             log "Error: unknown load-test profile '$LOADTEST_PROFILE'."
-            log "Available profiles: default, blocklist, blocklists-mixed, multi-instance, multi-instance-medium"
+            log "Available profiles: default, blocklist, blocklists-mixed, multi-instance, multi-instance-medium, allowlists"
             exit 1
             ;;
     esac
@@ -234,6 +238,7 @@ export_loadtest_config() {
     export LOADTEST_EDGE_ALERTS
     export LOADTEST_EDGE_DECISIONS
     export LOADTEST_EDGE_BLOCKLIST_DECISIONS
+    export LOADTEST_ALLOWLIST_SIZES
     export CONFIG_CROWDSEC_SYNC_REFRESH_INTERVAL
     export CONFIG_CROWDSEC_SYNC_IDLE_REFRESH_INTERVAL
     export CONFIG_CROWDSEC_SYNC_IDLE_THRESHOLD
@@ -359,6 +364,7 @@ if [ "$MODE" == "loadtest" ]; then
         log "Refresh additions: $LOADTEST_REFRESH_ALERTS alerts, $LOADTEST_REFRESH_DECISIONS decisions"
     fi
     log "Refresh decision origins: ${LOADTEST_REFRESH_DECISION_ORIGINS:-mixed}"
+    log "Allowlist sizes: ${LOADTEST_ALLOWLIST_SIZES:-none}"
     log "Refresh interval: $CONFIG_CROWDSEC_SYNC_REFRESH_INTERVAL"
     log "Reconciliation: $CONFIG_CROWDSEC_SYNC_RECONCILE_WINDOWS_PER_REFRESH window(s) of $CONFIG_CROWDSEC_SYNC_RECONCILE_WINDOW per refresh"
     log "Seed: $LOADTEST_SEED"

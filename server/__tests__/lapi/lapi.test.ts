@@ -287,6 +287,31 @@ describe('LapiClient', () => {
     expect(calls.some((call) => call.url.endsWith('/v1/decisions/10') && call.method === 'DELETE')).toBe(true);
   });
 
+  test('reads allowlists with their content and checks values with an escaped range', async () => {
+    const urls: string[] = [];
+    const client = new LapiClient({
+      crowdsecUrl: 'http://crowdsec:8080',
+      auth: passwordAuth,
+      lookbackPeriod: '1h',
+      version: '1.0.0',
+      fetchImpl: async (input) => {
+        const url = String(input);
+        urls.push(url);
+        if (url.endsWith('/v1/watchers/login')) return Response.json({ code: 200, token: 'token' });
+        if (url.endsWith('/v1/allowlists?with_content=true')) return Response.json([{ name: 'office', items: [{ value: '10.0.0.0/8' }] }]);
+        if (url.endsWith('/v1/allowlists/check/10.1.0.0%2F16')) return Response.json({ allowlisted: true, reason: '10.0.0.0/8 from office' });
+        return Response.json({});
+      },
+    });
+    await client.login();
+
+    await expect(client.fetchAllowlists()).resolves.toEqual([{ name: 'office', items: [{ value: '10.0.0.0/8' }] }]);
+    await expect(client.checkAllowlist('10.1.0.0/16')).resolves.toEqual({ allowlisted: true, reason: '10.0.0.0/8 from office' });
+    // CrowdSec omits `allowlisted` when it is false.
+    await expect(client.checkAllowlist('192.0.2.1')).resolves.toEqual({ allowlisted: false });
+    expect(urls).toContain('http://crowdsec:8080/v1/allowlists/check/192.0.2.1');
+  });
+
   test('sends machine heartbeats with the stored watcher token', async () => {
     const calls: Array<{ url: string; method: string; authorization?: string }> = [];
     const client = new LapiClient({

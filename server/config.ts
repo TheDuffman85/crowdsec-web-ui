@@ -113,6 +113,10 @@ export interface RuntimeConfig {
   /** True when the application config sets the value; Settings cannot change it. */
   refreshIntervalManaged: boolean;
   manualRefreshEnabledManaged: boolean;
+  allowlistsSidebarVisible: boolean;
+  allowlistsSidebarVisibleManaged: boolean;
+  metricsSidebarVisible: boolean;
+  metricsSidebarVisibleManaged: boolean;
   /** CONFIG_ variables applied on top of the config file at startup. */
   configEnvironmentOverrides: ConfigEnvironmentOverride[];
   idleRefreshIntervalMs: number;
@@ -474,6 +478,10 @@ function createRuntimeConfigFromEnvironment(env: NodeJS.ProcessEnv): RuntimeConf
     manualRefreshEnabled: parseBooleanEnv(env.CROWDSEC_MANUAL_REFRESH_ENABLED, false),
     refreshIntervalManaged: hasEnv(env, 'CROWDSEC_REFRESH_INTERVAL'),
     manualRefreshEnabledManaged: hasEnv(env, 'CROWDSEC_MANUAL_REFRESH_ENABLED'),
+    allowlistsSidebarVisible: parseBooleanEnv(env.UI_ALLOWLISTS_SIDEBAR_VISIBLE, true),
+    allowlistsSidebarVisibleManaged: hasEnv(env, 'UI_ALLOWLISTS_SIDEBAR_VISIBLE'),
+    metricsSidebarVisible: parseBooleanEnv(env.UI_METRICS_SIDEBAR_VISIBLE, true),
+    metricsSidebarVisibleManaged: hasEnv(env, 'UI_METRICS_SIDEBAR_VISIBLE'),
     configEnvironmentOverrides: [],
     idleRefreshIntervalMs: parseRefreshInterval(env.CROWDSEC_IDLE_REFRESH_INTERVAL || '10m'),
     idleThresholdMs: parseRefreshInterval(env.CROWDSEC_IDLE_THRESHOLD || '2m'),

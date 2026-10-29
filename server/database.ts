@@ -45,10 +45,14 @@ export const INITIAL_OIDC_LOGOUT_VERSION = 1;
 export const OIDC_END_SESSION_LEGACY_DEFAULT_KEY = 'auth_oidc_end_session_legacy_default';
 // Settings that must survive losing cache.db. They are stored in state.db; every other
 // meta key is cache bookkeeping that stays in cache.db.
+/** Per-instance allowlist sync state: `<prefix><instance id>` holds JSON with the status and snapshot hash. */
+export const ALLOWLIST_SYNC_META_PREFIX = 'allowlist_sync:';
+
 const STATE_SETTING_KEYS = new Set([
   'notification_secret_key',
   'language',
   'metrics_sidebar_visible',
+  'allowlists_sidebar_visible',
   'manual_decision_scenarios',
   'refresh_interval_ms',
   'manual_refresh_enabled',
@@ -182,6 +186,24 @@ export interface DecisionUpdateParams {
   $id: string;
   $stop_at: string;
   $raw_data: string;
+}
+
+export interface CachedAllowlistItem {
+  value: string;
+  description?: string;
+  created_at?: string;
+  /** Null when the entry never expires. */
+  expiration: string | null;
+}
+
+export interface CachedAllowlist {
+  name: string;
+  allowlist_id?: string;
+  description?: string;
+  created_at?: string;
+  updated_at?: string;
+  console_managed: boolean;
+  items: CachedAllowlistItem[];
 }
 
 export interface SearchIndexRebuildScope {
@@ -960,6 +982,9 @@ export class CrowdsecDatabase {
     try {
       this.db.exec('DELETE FROM alerts');
       this.db.exec('DELETE FROM decisions');
+      this.db.exec('DELETE FROM allowlists');
+      this.db.exec('DELETE FROM allowlist_items');
+      this.db.exec(`DELETE FROM meta WHERE key LIKE '${ALLOWLIST_SYNC_META_PREFIX}%'`);
       this.decisionDuplicateFlagsDirty = true;
       this.decisionDuplicateFlagsInitialized = false;
       this.lastDecisionDuplicateRefreshAt = null;
@@ -1516,6 +1541,89 @@ export class CrowdsecDatabase {
     const changes = runChunkedIdMutation(this.db, 'DELETE FROM decisions WHERE id IN', normalizedIds);
     this.deleteDecisionSearchIndexes(normalizedIds);
     return changes;
+  }
+
+  /**
+   * Makes one instance's cached allowlists match a complete LAPI snapshot,
+   * writing only rows that were added, changed, or removed, and stores the
+   * instance's sync state with them. A null snapshot only updates the state.
+   */
+  replaceAllowlists(instanceId: string, allowlists: CachedAllowlist[] | null, syncState: string): { changed: boolean } {
+    let changed = false;
+    const replace = this.db.transaction(() => {
+      this.setMeta(`${ALLOWLIST_SYNC_META_PREFIX}${instanceId}`, syncState);
+      if (!allowlists) return;
+      const cachedLists = new Map((this.db.prepare(`
+        SELECT name, allowlist_id, description, created_at, updated_at, console_managed
+        FROM allowlists WHERE instance_id = ?
+      `).all(instanceId) as Array<Record<string, string | number | null>>).map((row) => [String(row.name), row]));
+      const upsertList = this.db.prepare(`
+        INSERT INTO allowlists (instance_id, name, allowlist_id, description, created_at, updated_at, console_managed)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(instance_id, name) DO UPDATE SET
+          allowlist_id = excluded.allowlist_id,
+          description = excluded.description,
+          created_at = excluded.created_at,
+          updated_at = excluded.updated_at,
+          console_managed = excluded.console_managed
+      `);
+      for (const allowlist of allowlists) {
+        const values = [
+          allowlist.allowlist_id ?? null,
+          allowlist.description ?? null,
+          allowlist.created_at ?? null,
+          allowlist.updated_at ?? null,
+          allowlist.console_managed ? 1 : 0,
+        ];
+        const cached = cachedLists.get(allowlist.name);
+        cachedLists.delete(allowlist.name);
+        if (cached && [cached.allowlist_id, cached.description, cached.created_at, cached.updated_at, cached.console_managed]
+          .every((value, index) => value === values[index])) continue;
+        upsertList.run(instanceId, allowlist.name, ...values);
+        changed = true;
+      }
+      const deleteList = this.db.prepare('DELETE FROM allowlists WHERE instance_id = ? AND name = ?');
+      const deleteListItems = this.db.prepare('DELETE FROM allowlist_items WHERE instance_id = ? AND allowlist_name = ?');
+      for (const name of cachedLists.keys()) {
+        deleteList.run(instanceId, name);
+        deleteListItems.run(instanceId, name);
+        changed = true;
+      }
+
+      const cachedItems = new Map<string, Record<string, string | null>>();
+      for (const row of this.db.prepare(`
+        SELECT allowlist_name, value, description, created_at, expiration
+        FROM allowlist_items WHERE instance_id = ?
+      `).all(instanceId) as Array<Record<string, string | null>>) {
+        cachedItems.set(`${row.allowlist_name}\u0000${row.value}`, row);
+      }
+      const upsertItem = this.db.prepare(`
+        INSERT INTO allowlist_items (instance_id, allowlist_name, value, description, created_at, expiration)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(instance_id, allowlist_name, value) DO UPDATE SET
+          description = excluded.description,
+          created_at = excluded.created_at,
+          expiration = excluded.expiration
+      `);
+      for (const allowlist of allowlists) {
+        for (const item of allowlist.items) {
+          const key = `${allowlist.name}\u0000${item.value}`;
+          const values = [item.description ?? null, item.created_at ?? null, item.expiration];
+          const cached = cachedItems.get(key);
+          cachedItems.delete(key);
+          if (cached && cached.description === values[0] && cached.created_at === values[1] && cached.expiration === values[2]) continue;
+          upsertItem.run(instanceId, allowlist.name, item.value, ...values);
+          changed = true;
+        }
+      }
+      const deleteItem = this.db.prepare('DELETE FROM allowlist_items WHERE instance_id = ? AND allowlist_name = ? AND value = ?');
+      for (const row of cachedItems.values()) {
+        deleteItem.run(instanceId, row.allowlist_name, row.value);
+        changed = true;
+      }
+    });
+    replace();
+    return { changed };
   }
 
   getDecisionById(id: string | number): DecisionDataRow | null {
@@ -2819,6 +2927,30 @@ function initCacheSchema(db: Database): boolean {
     CREATE TABLE IF NOT EXISTS alert_deletion_tombstones (
       alert_id TEXT PRIMARY KEY
     );
+
+    CREATE TABLE IF NOT EXISTS allowlists (
+      instance_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      allowlist_id TEXT,
+      description TEXT,
+      created_at TEXT,
+      updated_at TEXT,
+      console_managed INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (instance_id, name)
+    ) WITHOUT ROWID;
+
+    CREATE TABLE IF NOT EXISTS allowlist_items (
+      instance_id TEXT NOT NULL,
+      allowlist_name TEXT NOT NULL,
+      value TEXT NOT NULL,
+      description TEXT,
+      created_at TEXT,
+      expiration TEXT,
+      PRIMARY KEY (instance_id, allowlist_name, value)
+    ) WITHOUT ROWID;
+
+    CREATE INDEX IF NOT EXISTS idx_allowlist_items_name_created
+      ON allowlist_items(allowlist_name, created_at DESC, value);
   `);
   // A refresh drops the secondary indexes while it bulk-loads and recreates them afterwards.
   // Recreate them here too in case the previous process stopped in between.

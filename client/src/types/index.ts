@@ -1,8 +1,18 @@
 import type { Dispatch, ReactNode, SetStateAction } from 'react';
-import type { SyncStatus } from '../../../shared/contracts';
+import type { AllowlistMatch, SyncStatus } from '../../../shared/contracts';
 
 export type {
   AddDecisionRequest,
+  AllowlistCheckInstanceResult,
+  AllowlistCheckResponse,
+  AllowlistEntriesResponse,
+  AllowlistEntry,
+  AllowlistInstanceStatus,
+  AllowlistSummary,
+  AllowlistMatch,
+  AllowlistedDecisionResponse,
+  AllowlistsResponse,
+  AllowlistSourceStatus,
   AlertDecision,
   AlertDecisionSummary,
   AlertEvent,
@@ -15,6 +25,7 @@ export type {
   InstanceOperationResult,
   InstanceSummary,
   InstanceSyncStatus,
+  AllowlistSyncProgress,
   MultiInstanceOperationResponse,
   DashboardAttackLocationDatum,
   DashboardGranularity,
@@ -50,6 +61,7 @@ export type {
   NotificationItem,
   NotificationListResponse,
   PaginatedResponse,
+  PaginationMeta,
   NotificationRule,
   NotificationRuleTestResult,
   NotificationRuleConfig,
@@ -72,6 +84,7 @@ export type {
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
   UpdateMetricsSidebarPreferenceRequest,
+  UpdateAllowlistsSidebarPreferenceRequest,
   UpdateManualRefreshSettingRequest,
   UpdateManualDecisionScenariosRequest,
   ManualDecisionScenarioSettings,
@@ -145,6 +158,12 @@ export interface NotificationUnreadContextValue {
 export interface ApiPermissionError extends Error {
   helpLink?: string;
   helpText?: string;
+}
+
+/** Thrown by `addDecision` when the target value is allowlisted and the request did not bypass it. */
+export interface AllowlistedDecisionError extends Error {
+  code: 'ALLOWLISTED';
+  allowlisted: AllowlistMatch[];
 }
 
 export interface WithChildren {
