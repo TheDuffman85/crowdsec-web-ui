@@ -328,7 +328,7 @@
   "pages.login.error.passkeyAuthenticationFailed": "Passkey authentication failed",
   "pages.settings.title": "Settings",
   "pages.settings.general": "General",
-  "pages.settings.account": "My account",
+  "pages.settings.account": "Profile",
   "pages.settings.preferences": "Preferences",
   "pages.settings.preferencesDescription": "Personal display settings. They are saved for your account and follow you to other browsers.",
   "pages.settings.signInAndSecurity": "Sign-in and security",

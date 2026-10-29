@@ -326,7 +326,7 @@
   "pages.login.error.passkeyAuthenticationFailed": "Falha na autenticação com passkey",
   "pages.settings.title": "Configurações",
   "pages.settings.general": "Geral",
-  "pages.settings.account": "Minha conta",
+  "pages.settings.account": "Perfil",
   "pages.settings.preferences": "Preferências",
   "pages.settings.preferencesDescription": "Configurações pessoais de exibição. Elas são salvas na sua conta e acompanham você em outros navegadores.",
   "pages.settings.signInAndSecurity": "Login e segurança",

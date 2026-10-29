@@ -32,7 +32,7 @@ A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alert
 | Alerts | Searchable alert history, persistent count-aware quick filters, CrowdSec alert contexts, IP/AS/location details, event metadata, simulation labels, and configurable columns |
 | Decisions | Active and expired decisions, persistent count-aware quick filters, duplicate hiding, manual bans, custom durations, reasons, and cleanup actions |
 | Allowlists | Read-only view of CrowdSec centralized allowlists with an IP/range check, cross-instance differences, and allowlist protection for manual decisions |
-| Multi-instance | Several CrowdSec LAPIs, per-instance views, and a Combined scope for Dashboard, Alerts, and Decisions |
+| Multi-instance | Several CrowdSec LAPIs, per-instance views, and a Combined scope for Dashboard, Alerts, Decisions, and Allowlists |
 | Metrics | Optional Prometheus views for LAPI activity, bouncers, AppSec, parsers, latency, parsing time, and whitelists |
 | Notifications | Alert, decision, CVE, availability, and update rules delivered through Email, Gotify, MQTT, ntfy, or Webhooks |
 | Security | Initial administrator setup, local user management with admin and read-only roles, password and TOTP login, passkeys, OIDC SSO, group roles, and instance-wide read-only mode |
@@ -66,7 +66,8 @@ A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alert
   <a href="screenshots/notifications.png"><img src="screenshots/notifications.png" alt="Notification Center" width="48%"></a>
   <a href="screenshots/notification_rule.png"><img src="screenshots/notification_rule.png" alt="Notification Rule" width="48%"></a>
 </p>
-<p align="center">
+<p>
+  <a href="screenshots/allowlists.png"><img src="screenshots/allowlists.png" alt="Allowlists" width="48%"></a>
   <a href="screenshots/settings.png"><img src="screenshots/settings.png" alt="Settings" width="48%"></a>
 </p>
 
@@ -239,8 +240,8 @@ To manage a locked value in Settings again, remove it from both the environment 
 | `ui.timeFormat` | `browser` | Clock format: `browser`, `12h`, or `24h`. | `CONFIG_UI_TIME_FORMAT` |
 | `ui.dateFormat` | `browser` | Browser date format or a custom pattern such as `dd/mm/yyyy`, `mm/dd/yyyy`, or `yyyy-MM-dd`. | `CONFIG_UI_DATE_FORMAT` |
 | `ui.readOnly` | `false` | Hides management actions and rejects mutating API operations. | `CONFIG_UI_READ_ONLY` |
-| `ui.allowlistsSidebarVisible` | `true` | Shows the Allowlists sidebar link. The `/allowlists` route remains available when hidden. Omit to let each user choose in Settings > My account. | `CONFIG_UI_ALLOWLISTS_SIDEBAR_VISIBLE` |
-| `ui.metricsSidebarVisible` | `true` | Shows the Metrics sidebar link. The `/metrics` route remains available when Prometheus metrics are configured. Omit to let each user choose in Settings > My account. | `CONFIG_UI_METRICS_SIDEBAR_VISIBLE` |
+| `ui.allowlistsSidebarVisible` | `true` | Shows the Allowlists sidebar link. The `/allowlists` route remains available when hidden. Omit to let each user choose in Settings > Profile. | `CONFIG_UI_ALLOWLISTS_SIDEBAR_VISIBLE` |
+| `ui.metricsSidebarVisible` | `true` | Shows the Metrics sidebar link. The `/metrics` route remains available when Prometheus metrics are configured. Omit to let each user choose in Settings > Profile. | `CONFIG_UI_METRICS_SIDEBAR_VISIBLE` |
 | `updates.enabled` | `true` in packaged images | Enables the built-in update check. | `CONFIG_UPDATES_ENABLED` |
 
 Date patterns require one day, month, and year token in any order: `d`/`dd` (day), `m`/`mm` (numeric month), `mmm`/`mmmm` (localized month name), and `yy`/`yyyy` (year). Punctuation and spaces are literal; wrap words in single quotes, for example `d 'of' mmmm yyyy`. Date patterns affect full dates and timestamps; compact chart labels keep their own display format. Set `ui.timeFormat` separately for a 12 or 24 hour clock.
@@ -566,9 +567,11 @@ auth:
 
 ### Local accounts
 
-- Password changes and passkey registration/removal under **Settings → My account**. A new password must differ from the current one.
+- Password changes and passkey registration/removal under **Settings → Profile**. A new password must differ from the current one.
 - Optional TOTP enrollment through a QR code, mobile setup link, or manual key.
 - An enrolled TOTP seed overrides the optional base32 `auth.totpSeed` fallback.
+- Enabling or disabling TOTP signs out the account's other sessions. Disabling it requires a current authenticator code.
+- Local sessions last up to 30 days. Logging out revokes the session on the server, so a copied session cookie stops working too.
 - Administrators can disable password login under **Settings → Authentication**, or pin it from deployment config:
 
 ```yaml
@@ -581,7 +584,7 @@ When `auth.passwordLogin.enabled` is set, it overrides the Settings value and th
 
 ### Personal settings
 
-Every user has a **Settings → My account** tab with their language, font, and Metrics and Allowlists sidebar visibility, plus their own password, TOTP, and passkeys. The display preferences are saved for the account and follow the user to other browsers; without dashboard authentication they apply to the whole instance. **My account** remains editable in read-only mode, including when dashboard authentication is disabled. Read-only users only see **My account**, because they cannot change anything else; **General**, **Authentication** (password login and OIDC), **Users**, and **Branding** are shown to administrators.
+Every user has a **Settings → Profile** tab with their language, font, and Metrics and Allowlists sidebar visibility, plus their own password, TOTP, and passkeys. The display preferences are saved for the account and follow the user to other browsers; without dashboard authentication they apply to the whole instance. **Profile** remains editable in read-only mode, including when dashboard authentication is disabled. Read-only users only see **Profile**, because they cannot change anything else; **General**, **Authentication** (password login and OIDC), **Users**, and **Branding** are shown to administrators.
 
 ### Users
 
@@ -632,7 +635,7 @@ https://<crowdsec-web-ui-host>/api/auth/oidc/callback
 - Saved Settings override YAML. Scopes must include `openid`; add provider-specific scopes such as `groups` only when required.
 - Admin-group matches have full access; read-only-group matches can view data and keep permitted preferences; unmatched users follow `auth.oidc.unmatchedRole` (`deny` by default).
 - Set an unmatched fallback role only when every user who can sign in should receive it.
-- `ui.readOnly: true` overrides all roles for the deployment. It blocks CrowdSec writes, refresh changes, notification destination/rule management, test sends, and notification deletion. Personal preferences under **My account** (language, font, and Metrics and Allowlists sidebar visibility) and marking notifications read remain available. This is not per-user RBAC.
+- `ui.readOnly: true` overrides all roles for the deployment. It blocks CrowdSec writes, refresh changes, notification destination/rule management, test sends, and notification deletion. Personal preferences under **Profile** (language, font, and Metrics and Allowlists sidebar visibility) and marking notifications read remain available. This is not per-user RBAC.
 - Identities use stable issuer and subject claims. Username collisions with local accounts remain separate.
 - Sessions have a 24-hour absolute lifetime. OIDC-only users cannot add local passkeys; password-backed local accounts retain passkey support.
 - Existing OIDC rows migrate on their next successful SSO login.
@@ -1017,7 +1020,8 @@ Destinations are independently enabled and reusable across rules. **Send Test** 
 - Webhook templates expose dotted `event.*` fields for `title`, `message`, `severity`, `metadata`, `sent_at`, `channel_name`, `rule_id`, `rule_name`, `rule_type`, and `app_name` (the configured branding name). Each has a `*Json` variant; nullable rule fields also have `OrUnknown` and `OrUnknownJson` aliases.
 - Failed webhooks store HTTP status and a truncated response. `notifications.debugPayloads: true` also logs a truncated rendered body with sensitive form fields redacted; enable it only while troubleshooting.
 - Destination secrets are masked and encrypted by `notifications.secretKey`, or an auto-generated key stored in `state.db`.
-- `notifications.allowPrivateAddresses: false` blocks private, loopback, and link-local destinations; default: `true`.
+- `notifications.allowPrivateAddresses: false` blocks private, loopback, and link-local destinations; default: `true`. Hostnames are checked when the connection is made, so a DNS change cannot point a destination at a blocked address. IPv4 addresses embedded in IPv6 forms (for example `::ffff:7f00:1`) are blocked like their IPv4 equivalents.
+- Gotify and ntfy follow only same-origin `307`/`308` redirects, and each redirect target is checked again.
 - Telegram, Home Assistant discovery/state, and inbound MQTT commands are not supported.
 
 ## Kubernetes

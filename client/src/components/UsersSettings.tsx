@@ -265,7 +265,7 @@ export function UsersSettings({ canManage, inputClass, labelClass, showToast }: 
                             danger: true,
                         },
                     ];
-                    // Your own account is managed under My account, so it has no actions here.
+                    // Your own account is managed under Profile, so it has no actions here.
                     const showActions = canManage && !user.current;
                     return (
                         <div

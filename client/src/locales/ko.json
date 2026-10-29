@@ -328,7 +328,7 @@
   "pages.login.error.passkeyAuthenticationFailed": "패스키 인증에 실패했습니다",
   "pages.settings.title": "설정",
   "pages.settings.general": "일반",
-  "pages.settings.account": "내 계정",
+  "pages.settings.account": "프로필",
   "pages.settings.preferences": "환경설정",
   "pages.settings.preferencesDescription": "개인 표시 설정입니다. 계정에 저장되며 다른 브라우저에서도 적용됩니다.",
   "pages.settings.signInAndSecurity": "로그인 및 보안",

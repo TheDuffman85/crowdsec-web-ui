@@ -326,7 +326,7 @@
   "pages.login.error.passkeyAuthenticationFailed": "Аутентификация passkey не удалась",
   "pages.settings.title": "Настройки",
   "pages.settings.general": "Общие",
-  "pages.settings.account": "Моя учетная запись",
+  "pages.settings.account": "Профиль",
   "pages.settings.preferences": "Предпочтения",
   "pages.settings.preferencesDescription": "Личные настройки отображения. Они сохраняются для вашей учетной записи и действуют в других браузерах.",
   "pages.settings.signInAndSecurity": "Вход и безопасность",

@@ -328,7 +328,7 @@
   "pages.login.error.passkeyAuthenticationFailed": "Échec de l’authentification par passkey",
   "pages.settings.title": "Paramètres",
   "pages.settings.general": "Général",
-  "pages.settings.account": "Mon compte",
+  "pages.settings.account": "Profil",
   "pages.settings.preferences": "Préférences",
   "pages.settings.preferencesDescription": "Paramètres d’affichage personnels. Ils sont enregistrés pour votre compte et vous suivent dans d’autres navigateurs.",
   "pages.settings.signInAndSecurity": "Connexion et sécurité",

@@ -326,7 +326,7 @@
   "pages.login.error.passkeyAuthenticationFailed": "Passkey प्रमाणीकरण विफल",
   "pages.settings.title": "सेटिंग्स",
   "pages.settings.general": "सामान्य",
-  "pages.settings.account": "मेरा खाता",
+  "pages.settings.account": "प्रोफ़ाइल",
   "pages.settings.preferences": "प्राथमिकताएँ",
   "pages.settings.preferencesDescription": "व्यक्तिगत डिस्प्ले सेटिंग्स। ये आपके खाते के लिए सहेजी जाती हैं और दूसरे ब्राउज़रों में भी लागू होती हैं।",
   "pages.settings.signInAndSecurity": "साइन-इन और सुरक्षा",

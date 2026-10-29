@@ -326,7 +326,7 @@
   "pages.login.error.passkeyAuthenticationFailed": "فشلت المصادقة بمفتاح المرور",
   "pages.settings.title": "الإعدادات",
   "pages.settings.general": "عام",
-  "pages.settings.account": "حسابي",
+  "pages.settings.account": "الملف الشخصي",
   "pages.settings.preferences": "التفضيلات",
   "pages.settings.preferencesDescription": "إعدادات العرض الشخصية. تُحفظ لحسابك وترافقك في المتصفحات الأخرى.",
   "pages.settings.signInAndSecurity": "تسجيل الدخول والأمان",

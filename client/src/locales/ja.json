@@ -326,7 +326,7 @@
   "pages.login.error.passkeyAuthenticationFailed": "Passkey 認証に失敗しました",
   "pages.settings.title": "設定",
   "pages.settings.general": "一般",
-  "pages.settings.account": "マイアカウント",
+  "pages.settings.account": "プロフィール",
   "pages.settings.preferences": "表示設定",
   "pages.settings.preferencesDescription": "個人用の表示設定です。アカウントに保存され、ほかのブラウザーでも適用されます。",
   "pages.settings.signInAndSecurity": "サインインとセキュリティ",

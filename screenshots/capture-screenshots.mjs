@@ -379,6 +379,10 @@ async function main() {
       await clickByText(cdp, "Add Decision");
       await screenshot(cdp, "add_decision.png");
 
+      await navigate(cdp, "/allowlists?instance=all");
+      await waitForText(cdp, "office-network");
+      await screenshot(cdp, "allowlists.png");
+
       await navigate(cdp, "/metrics?instance=primary");
       await screenshot(cdp, "metrics.png");
 
