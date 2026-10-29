@@ -438,6 +438,17 @@ export async function updateLanguagePreference(language: string): Promise<{
     }, 'Failed to update language preference');
 }
 
+export async function updateFontPreference(font: string): Promise<{
+    success: boolean;
+    font: string;
+}> {
+    return sendJson('/api/config/font', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ font }),
+    }, 'Failed to update font preference');
+}
+
 async function sendJson<T>(input: string, init: RequestInit, defaultMsg: string): Promise<T> {
     const response = await sessionFetch(apiUrl(input), init);
     if (!response.ok) {

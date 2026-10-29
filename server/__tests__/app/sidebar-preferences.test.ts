@@ -30,9 +30,9 @@ afterEach(() => {
 });
 
 describe.each([
-  ['allowlists', 'ui.allowlistsSidebarVisible', 'CONFIG_UI_ALLOWLISTS_SIDEBAR_VISIBLE', 403],
-  ['metrics', 'ui.metricsSidebarVisible', 'CONFIG_UI_METRICS_SIDEBAR_VISIBLE', 200],
-] as const)('%s sidebar visibility', (sidebar, configPath, envName, readOnlyStatus) => {
+  ['allowlists', 'ui.allowlistsSidebarVisible', 'CONFIG_UI_ALLOWLISTS_SIDEBAR_VISIBLE'],
+  ['metrics', 'ui.metricsSidebarVisible', 'CONFIG_UI_METRICS_SIDEBAR_VISIBLE'],
+] as const)('%s sidebar visibility', (sidebar, configPath, envName) => {
   const key = `${sidebar}_sidebar_visible`;
 
   test('defaults on, persists changes across restart, and keeps the page route available', async () => {
@@ -74,12 +74,12 @@ describe.each([
     expect(await response.json()).toMatchObject({ code: 'MANAGED_BY_CONFIG' });
   });
 
-  test('rejects invalid visibility and respects existing read-only permissions', async () => {
+  test('rejects invalid visibility and allows display preferences in read-only mode', async () => {
     const { controller } = start();
     expect((await controller.fetch(update(sidebar, 'false'))).status).toBe(400);
     expect(await readConfig(controller)).toMatchObject({ [key]: true });
     const readOnly = start({ env: { CONFIG_UI_READ_ONLY: 'true' } }).controller;
-    expect((await readOnly.fetch(update(sidebar, false))).status).toBe(readOnlyStatus);
-    expect(await readConfig(readOnly)).toMatchObject({ [key]: readOnlyStatus !== 200 });
+    expect((await readOnly.fetch(update(sidebar, false))).status).toBe(200);
+    expect(await readConfig(readOnly)).toMatchObject({ [key]: false });
   });
 });

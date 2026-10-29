@@ -25,7 +25,6 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
     'pages.settings.font': 'Font',
     'pages.settings.fontAuto': 'Match language ({font})',
     'pages.settings.fontSystem': 'System default',
-    'pages.settings.readOnlyRefresh': 'Read-only mode is enabled.',
     'pages.settings.manualDecisionScenarios': 'Scenarios',
     'pages.settings.manualDecisionScenarioInvalid': '"{scenario}" is not a valid scenario.',
     'pages.settings.manualDecisionScenariosSaved': 'Scenarios saved',
@@ -140,6 +139,8 @@ vi.mock('../../../lib/api', () => ({
   updateManualRefreshSetting: vi.fn(),
   updateMetricsSidebarPreference: vi.fn(),
   updateAllowlistsSidebarPreference: vi.fn(),
+  updateLanguagePreference: vi.fn(async (language: string) => ({ success: true, language })),
+  updateFontPreference: vi.fn(async (font: string) => ({ success: true, font })),
 }));
 
 vi.mock('qrcode', () => ({

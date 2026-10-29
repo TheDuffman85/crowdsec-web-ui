@@ -137,7 +137,8 @@ export function getStoredFontPreference(): FontPreference {
 
 export type FontContextValue = {
   preference: FontPreference;
-  setFontPreference: (preference: FontPreference) => void;
+  /** Saves the preference for the signed-in user too, unless `sync` is false. */
+  setFontPreference: (preference: FontPreference, options?: { sync?: boolean }) => void;
 };
 
 export const FontContext = createContext<FontContextValue>({

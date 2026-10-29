@@ -224,6 +224,36 @@ describe('CrowdsecDatabase storage layout', () => {
     expect(existsSync(path.join(dataDir, 'crowdsec.db'))).toBe(true);
   });
 
+  test('adds the user management columns to an existing state.db', () => {
+    const dataDir = createDataDir();
+    const state = createLegacyDatabase(path.join(dataDir, 'state.db'));
+    state.exec(`
+      CREATE TABLE auth_users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL UNIQUE,
+        password_hash TEXT,
+        totp_secret TEXT,
+        totp_enabled INTEGER NOT NULL DEFAULT 0,
+        totp_last_step INTEGER,
+        role TEXT NOT NULL DEFAULT 'admin',
+        auth_provider TEXT NOT NULL DEFAULT 'password',
+        oidc_issuer TEXT,
+        oidc_subject TEXT,
+        session_version INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO auth_users (username, password_hash, created_at, updated_at)
+      VALUES ('admin', 'hash', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+    `);
+    state.close();
+
+    const db = new CrowdsecDatabase({ dataDir });
+    expect(db.getAuthUserByUsername('admin')).toMatchObject({ disabled: 0, password_change_required: 0 });
+    expect(db.countActiveAdmins()).toBe(1);
+    db.close();
+  });
+
   test('enables dashboard auth by default only on new installations', () => {
     const db = new CrowdsecDatabase({ dataDir: createDataDir() });
     expect(db.isAuthMigrationDefaultDisabled()).toBe(false);

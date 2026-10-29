@@ -23,6 +23,10 @@ export interface AuthStatus {
   passkeysEnabled: boolean;
   hasPassword: boolean;
   totpEnabled: boolean;
+  /** The password an administrator set must be replaced before anything else can be used. */
+  passwordChangeRequired?: boolean;
+  /** Display preferences the signed-in user saved; unset ones keep this browser's choice. */
+  preferences?: { language?: string; font?: string } | null;
 }
 
 interface AuthContextValue extends AuthStatus {
@@ -45,6 +49,7 @@ const DEFAULT_STATUS: AuthStatus = {
   passkeysEnabled: false,
   hasPassword: false,
   totpEnabled: false,
+  passwordChangeRequired: false,
 };
 
 const fallbackAuthContext: AuthContextValue = {

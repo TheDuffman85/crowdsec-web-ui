@@ -518,6 +518,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     instanceReadOnly: config.readOnly,
     writeDatabase: (operation) => syncWorker.runExclusive(operation),
     configEnvironmentOverrides: config.configEnvironmentOverrides,
+    // The audit logger needs the auth module to name the actor, so it is created afterwards.
+    recordAudit: (context, event) => auditLog.record(context, event),
   });
   const auditLog = createAuditLogger({
     enabled: config.auditEnabled,

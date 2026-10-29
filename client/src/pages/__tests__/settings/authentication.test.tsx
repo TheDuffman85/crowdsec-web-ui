@@ -78,9 +78,9 @@ describe('Settings authentication methods', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<SettingsRouter tab="authentication"><Settings /></SettingsRouter>);
+    render(<SettingsRouter><Settings /></SettingsRouter>);
 
-    await screen.findByRole('heading', { name: 'Authentication' });
+    await screen.findByRole('heading', { name: 'pages.settings.signInAndSecurity' });
     await user.click(screen.getByRole('button', { name: 'Set Up TOTP' }));
 
     const dialog = await screen.findByRole('dialog', { name: 'Set Up TOTP' });
@@ -166,9 +166,9 @@ describe('Settings authentication methods', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<SettingsRouter tab="authentication"><Settings /></SettingsRouter>);
+    render(<SettingsRouter><Settings /></SettingsRouter>);
 
-    await screen.findByRole('heading', { name: 'Authentication' });
+    await screen.findByRole('heading', { name: 'pages.settings.signInAndSecurity' });
     await user.click(screen.getByRole('button', { name: 'Manage TOTP' }));
 
     const dialog = screen.getByRole('dialog', { name: 'Manage TOTP' });
@@ -281,9 +281,9 @@ describe('Settings authentication methods', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<SettingsRouter tab="authentication"><Settings /></SettingsRouter>);
+    render(<SettingsRouter><Settings /></SettingsRouter>);
 
-    await screen.findByRole('heading', { name: 'Authentication' });
+    await screen.findByRole('heading', { name: 'pages.settings.signInAndSecurity' });
     await user.click(screen.getByRole('button', { name: 'Register New Passkey' }));
 
     const dialog = screen.getByRole('dialog', { name: 'Register New Passkey' });

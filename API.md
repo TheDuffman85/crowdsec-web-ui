@@ -94,14 +94,20 @@ These routes are mounted below `/api/auth`. Auth setup/login routes are availabl
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| GET | `/api/auth/status` | Auth state, setup status, current user/session state, OIDC availability, passkey availability, and password-login state. `oidcAutoLogin` is `true` when the login page should redirect straight to the identity provider. |
+| GET | `/api/auth/status` | Auth state, setup status, current user/session state, OIDC availability, passkey availability, and password-login state. `oidcAutoLogin` is `true` when the login page should redirect straight to the identity provider. `preferences` holds the `language` and `font` the signed-in user saved. |
 | POST | `/api/auth/setup` | Create the first admin user and start a session. Requires `username` and `password`; only works before any auth user exists. |
 | POST | `/api/auth/login` | Password login with `username` and `password`. Accounts with TOTP enabled also require `totpCode`; missing or invalid codes return `requiresTotp: true`. |
 | POST | `/api/auth/logout` | Clear the session cookie. SSO sessions may return a provider `redirectUrl` for RP-initiated logout. |
 | GET | `/api/auth/me` | Current authenticated session user. |
-| GET | `/api/auth/settings` | Auth settings visible to the current user, including OIDC settings metadata and password/passkey state. `passwordLoginManaged` is `true` when `auth.passwordLogin.enabled` is set; `passwordLoginFallback` is `true` when the configuration disables password login but it stays enabled because neither OIDC nor a passkey is configured. `oidcAutoLogin` is the saved auto-login setting; `oidcAutoLoginActive` is `false` while it lacks a configured OIDC provider or disabled password login. `managedSettings` maps each field that the application config locks, such as `oidcClientId` or `disablePasswordLogin`, to `{ path, env? }`: its config path and, when a `CONFIG_*` variable sets it, that variable's name. |
+| GET | `/api/auth/settings` | Auth settings visible to the current user. Non-admin sessions only receive their own `hasPassword`, `passkeysAvailable`, `totpEnabled`, and `authMethod`; administrators also receive the OIDC settings metadata and password-login state. `passwordLoginManaged` is `true` when `auth.passwordLogin.enabled` is set; `passwordLoginFallback` is `true` when the configuration disables password login but it stays enabled because neither OIDC nor an administrator passkey is configured. `oidcAutoLogin` is the saved auto-login setting; `oidcAutoLoginActive` is `false` while it lacks a configured OIDC provider or disabled password login. `managedSettings` maps each field that the application config locks, such as `oidcClientId` or `disablePasswordLogin`, to `{ path, env? }`: its config path and, when a `CONFIG_*` variable sets it, that variable's name. |
 | PUT | `/api/auth/settings` | Admin-only auth settings update. Can disable password login and configure OIDC issuer, client ID, client secret, scopes, groups claim, admin groups, read-only groups, unmatched-user policy, whether logout also ends the identity provider session, back-channel logout, and OIDC auto-login. Returns `409` with `code: "MANAGED_BY_CONFIG"` when the body changes password login or an OIDC field that the application config sets. |
-| POST | `/api/auth/change-password` | Change the current user's password. The user must be logged in with password auth. |
+| POST | `/api/auth/change-password` | Change the current user's password. The user must be logged in with password auth. The new password must differ from the current one. Clears a pending password change. |
+| GET | `/api/auth/users` | Admin-only list of users with `id`, `username`, `role`, `source` (`local` or `oidc`), `disabled`, `passwordChangeRequired`, `totpEnabled`, `passkeyCount`, `createdAt`, and `current` (the signed-in user). |
+| POST | `/api/auth/users` | Admin-only. Create a local user with `username`, `password`, `role` (`admin` or `read-only`), and optional `requirePasswordChange` (default `true`). Returns `201`, or `409` when the username exists. |
+| PATCH | `/api/auth/users/:id` | Admin-only. Change a local user's `role` and/or `disabled` state. Disabling ends the user's sessions. |
+| POST | `/api/auth/users/:id/password` | Admin-only. Set a local user's password with `password` and optional `requirePasswordChange` (default `true`). Ends the user's sessions. |
+| POST | `/api/auth/users/:id/reset-mfa` | Admin-only. Remove a local user's TOTP enrollment and passkeys and end their sessions. |
+| DELETE | `/api/auth/users/:id` | Admin-only. Delete a local or OIDC user with their passkeys and saved search filters. |
 | POST | `/api/auth/totp/setup` | Start TOTP enrollment for the current password-authenticated user. Returns a base32 secret and `otpauth://` URI for QR setup. |
 | POST | `/api/auth/totp/enable` | Complete TOTP enrollment with `{ "code": "123456" }`. |
 | DELETE | `/api/auth/totp` | Disable Settings-enrolled TOTP for the current password-authenticated user with `{ "currentPassword": "..." }`. TOTP supplied through `auth.totpSeed` remains deployment-managed and cannot be disabled through the API. |
@@ -116,17 +122,21 @@ These routes are mounted below `/api/auth`. Auth setup/login routes are availabl
 | GET | `/api/auth/oidc/callback` | OIDC callback handler; creates or updates the OIDC user session and redirects to the UI. |
 | POST | `/api/auth/oidc/backchannel-logout` | OpenID Connect Back-Channel Logout endpoint for the identity provider. Accepts a form-encoded `logout_token`, ends the matching dashboard sessions (`sid` takes precedence over `sub`; with both, the user's sessions without a stored `sid` end too), and returns `200`. Duplicate issuer/`jti` notifications return `200` without repeating revocation; invalid tokens, or requests while `auth.oidc.backchannelLogout` is off (the default), return `400` with `error: "invalid_request"`. |
 
+User management rejects changes to the signed-in user's own account and to OIDC users other than deletion with `400`, changes that would leave no active administrator with `400`, non-admin sessions with `403`, and writes in `ui.readOnly` mode with `403` and `code: "READ_ONLY"`. While a password session has a pending password change, `/api/auth/status` returns `passwordChangeRequired: true` and other protected APIs return `403` with `code: "PASSWORD_CHANGE_REQUIRED"` until `/api/auth/change-password` succeeds.
+
 ## Configuration
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
 | GET | `/api/config` | Runtime UI config, LAPI status, sync status, simulation setting, time settings, manual refresh availability, metrics availability, metrics sidebar preference, permissions, each instance's effective manual decision scenarios (`manual_decision_scenarios`), the configured and Settings-managed scenario lists (`manual_decision_scenario_settings`), and the settings that the application config locks (`managed_settings`, mapping `refresh_interval` and `manual_refresh_enabled` to `{ path, env? }` like `/api/auth/settings`). |
 | GET | `/api/instances` | Configured instance identities, LAPI and synchronization status, metrics endpoint identities, per-instance overrides, effective manual decision scenarios (`manual_decision_scenarios`), and aggregate availability. |
-| PUT | `/api/config/metrics-sidebar` | Save the metrics sidebar preference. Body: `{ "visible": true }`. |
+| PUT | `/api/config/metrics-sidebar` | Save the metrics sidebar preference. Body: `{ "visible": true }`. With dashboard authentication it is saved for the signed-in user; otherwise for the instance. |
+| PUT | `/api/config/allowlists-sidebar` | Save the allowlists sidebar preference. Body: `{ "visible": true }`. With dashboard authentication it is saved for the signed-in user; otherwise for the instance. Editable in read-only mode. |
 | PUT | `/api/config/refresh-interval` | Update the refresh interval. Body: `{ "interval": "manual" \| "0" \| "5s" \| "30s" \| "1m" \| "5m" }`. Blocked in read-only mode. Returns `409` with `code: "MANAGED_BY_CONFIG"` when `crowdsec.sync.refreshInterval` is set. |
 | PUT | `/api/config/manual-refresh` | Enable or disable manual cache refreshes. Body: `{ "enabled": true }`. Blocked in read-only mode. Returns `409` with `code: "MANAGED_BY_CONFIG"` when `crowdsec.sync.manualRefreshEnabled` is set. |
 | PUT | `/api/config/manual-decision-scenarios` | Replace the scenarios added in Settings. Body: `{ "scenarios": ["custom/scanner"] }`. Entries must look like `author/name`; `manual/web-ui` and configured scenarios are ignored; at most 100. They are offered for every instance on top of the configured list. Blocked in read-only mode. |
-| PUT | `/api/config/language` | Save language preference. Body: `{ "language": "browser" }` or a supported locale code. |
+| PUT | `/api/config/language` | Save language preference. Body: `{ "language": "browser" }` or a supported locale code. With dashboard authentication it is saved for the signed-in user; administrators (and deployments without authentication) also set the instance language used for notification texts. |
+| PUT | `/api/config/font` | Save the signed-in user's font preference. Body: `{ "font": "system" }`, `"auto"`, or a font preset ID. Without dashboard authentication the browser keeps the font and nothing is stored. |
 
 ## Branding
 

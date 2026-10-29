@@ -46,11 +46,11 @@ describe('Settings manual decision scenarios', () => {
     await waitFor(() => expect(updateManualDecisionScenarios).toHaveBeenCalledWith({ scenarios: ['custom/new'] }));
   });
 
-  test('disables editing without settings permission', async () => {
+  test('hides manual decisions without settings permission', async () => {
     render(<SettingsRouter tab="manual-decisions"><Settings /></SettingsRouter>);
 
-    expect(await screen.findByText('manual/web-ui')).toBeInTheDocument();
-    expect(screen.getByLabelText('Scenarios')).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(await screen.findByRole('tab', { name: 'pages.settings.account' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('tab', { name: 'pages.settings.manualDecisions' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Scenarios')).not.toBeInTheDocument();
   });
 });

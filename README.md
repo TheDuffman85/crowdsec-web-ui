@@ -35,7 +35,7 @@ A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alert
 | Multi-instance | Several CrowdSec LAPIs, per-instance views, and a Combined scope for Dashboard, Alerts, and Decisions |
 | Metrics | Optional Prometheus views for LAPI activity, bouncers, AppSec, parsers, latency, parsing time, and whitelists |
 | Notifications | Alert, decision, CVE, availability, and update rules delivered through Email, Gotify, MQTT, ntfy, or Webhooks |
-| Security | Initial administrator setup, password and TOTP login, passkeys, OIDC SSO, group roles, and instance-wide read-only mode |
+| Security | Initial administrator setup, local user management with admin and read-only roles, password and TOTP login, passkeys, OIDC SSO, group roles, and instance-wide read-only mode |
 | Localization | Arabic, Chinese, English, French, German, Hindi, Japanese, Korean, Portuguese, Russian, and Spanish |
 | Experience | Unified search, server-synced saved and recent filters, dark/light themes, and responsive layouts |
 | Branding | Custom application name, light and dark mode logos, and colors for the sidebar, browser tab, sign-in page, notifications, and authenticator apps |
@@ -239,8 +239,8 @@ To manage a locked value in Settings again, remove it from both the environment 
 | `ui.timeFormat` | `browser` | Clock format: `browser`, `12h`, or `24h`. | `CONFIG_UI_TIME_FORMAT` |
 | `ui.dateFormat` | `browser` | Browser date format or a custom pattern such as `dd/mm/yyyy`, `mm/dd/yyyy`, or `yyyy-MM-dd`. | `CONFIG_UI_DATE_FORMAT` |
 | `ui.readOnly` | `false` | Hides management actions and rejects mutating API operations. | `CONFIG_UI_READ_ONLY` |
-| `ui.allowlistsSidebarVisible` | `true` | Shows the Allowlists sidebar link. The `/allowlists` route remains available when hidden. Omit to manage visibility in Settings > General. | `CONFIG_UI_ALLOWLISTS_SIDEBAR_VISIBLE` |
-| `ui.metricsSidebarVisible` | `true` | Shows the Metrics sidebar link. The `/metrics` route remains available when Prometheus metrics are configured. Omit to manage visibility in Settings > General. | `CONFIG_UI_METRICS_SIDEBAR_VISIBLE` |
+| `ui.allowlistsSidebarVisible` | `true` | Shows the Allowlists sidebar link. The `/allowlists` route remains available when hidden. Omit to let each user choose in Settings > My account. | `CONFIG_UI_ALLOWLISTS_SIDEBAR_VISIBLE` |
+| `ui.metricsSidebarVisible` | `true` | Shows the Metrics sidebar link. The `/metrics` route remains available when Prometheus metrics are configured. Omit to let each user choose in Settings > My account. | `CONFIG_UI_METRICS_SIDEBAR_VISIBLE` |
 | `updates.enabled` | `true` in packaged images | Enables the built-in update check. | `CONFIG_UPDATES_ENABLED` |
 
 Date patterns require one day, month, and year token in any order: `d`/`dd` (day), `m`/`mm` (numeric month), `mmm`/`mmmm` (localized month name), and `yy`/`yyyy` (year). Punctuation and spaces are literal; wrap words in single quotes, for example `d 'of' mmmm yyyy`. Date patterns affect full dates and timestamps; compact chart labels keep their own display format. Set `ui.timeFormat` separately for a 12 or 24 hour clock.
@@ -253,7 +253,7 @@ Date patterns require one day, month, and year token in any order: `d`/`dd` (day
 | `auth.sessionSecret` | Generated and stored | Signs sessions and encrypts saved authentication settings. | `CONFIG_AUTH_SESSION_SECRET` or `CONFIG_AUTH_SESSION_SECRET_FILE` |
 | `auth.totpSecret` | `sessionSecret` | Encrypts stored per-account TOTP seeds. | `CONFIG_AUTH_TOTP_SECRET` or `CONFIG_AUTH_TOTP_SECRET_FILE` |
 | `auth.totpSeed` | Unset | Optional base32 fallback TOTP seed for the password user; minimum 26 characters. | `CONFIG_AUTH_TOTP_SEED` or `CONFIG_AUTH_TOTP_SEED_FILE` |
-| `auth.passwordLogin.enabled` | Unset (managed in Settings) | Enables or disables password login from deployment config and locks the Settings toggle. `false` keeps password login enabled until OIDC or a passkey exists. | `CONFIG_AUTH_PASSWORD_LOGIN_ENABLED` |
+| `auth.passwordLogin.enabled` | Unset (managed in Settings) | Enables or disables password login from deployment config and locks the Settings toggle. `false` keeps password login enabled until OIDC or an administrator passkey exists. | `CONFIG_AUTH_PASSWORD_LOGIN_ENABLED` |
 | `auth.oidc.issuerUrl` | Unset | OIDC provider issuer URL. | `CONFIG_AUTH_OIDC_ISSUER_URL` |
 | `auth.oidc.clientId` | Unset | OIDC client identifier. | `CONFIG_AUTH_OIDC_CLIENT_ID` |
 | `auth.oidc.clientSecret` | Unset | OIDC client secret. | `CONFIG_AUTH_OIDC_CLIENT_SECRET` or `CONFIG_AUTH_OIDC_CLIENT_SECRET_FILE` |
@@ -276,7 +276,7 @@ Date patterns require one day, month, and year token in any order: `d`/`dd` (day
 
 ### Audit log
 
-User actions that change CrowdSec state (adding decisions, deleting decisions and alerts, and per-IP cleanup) are recorded as single `[audit]` lines in the application log. Each entry is a JSON object with the timestamp, acting user and role, action, target (IP, range, or entity IDs), and outcome:
+User actions that change CrowdSec state (adding decisions, deleting decisions and alerts, and per-IP cleanup) and user management changes (`user.create`, `user.update`, `user.password-reset`, `user.mfa-reset`, `user.delete`) are recorded as single `[audit]` lines in the application log. Each entry is a JSON object with the timestamp, acting user and role, action, target (IP, range, or entity IDs), and outcome:
 
 ```
 [audit] {"time":"2026-08-17T01:30:00.000Z","user":"tommy","role":"admin","action":"decision.add","ip":"192.0.2.10","type":"ban","scenario":"manual/web-ui","duration":"4h","reason":"manual","instances":["CrowdSec"],"outcome":"success"}
@@ -566,10 +566,10 @@ auth:
 
 ### Local accounts
 
-- Password changes and passkey registration/removal from Settings.
+- Password changes and passkey registration/removal under **Settings → My account**. A new password must differ from the current one.
 - Optional TOTP enrollment through a QR code, mobile setup link, or manual key.
 - An enrolled TOTP seed overrides the optional base32 `auth.totpSeed` fallback.
-- Administrators can disable password login in Settings, or pin it from deployment config:
+- Administrators can disable password login under **Settings → Authentication**, or pin it from deployment config:
 
 ```yaml
 auth:
@@ -577,7 +577,23 @@ auth:
     enabled: false # CONFIG_AUTH_PASSWORD_LOGIN_ENABLED=false
 ```
 
-When `auth.passwordLogin.enabled` is set, it overrides the Settings value and the toggle is shown as managed by configuration. Removing it restores the last value saved in Settings. To avoid a lockout, `false` only takes effect while OIDC or a passkey is configured; otherwise password login stays enabled and a warning is logged. Password hashes are kept, so setting `enabled: true` and restarting restores password login if the identity provider is unreachable.
+When `auth.passwordLogin.enabled` is set, it overrides the Settings value and the toggle is shown as managed by configuration. Removing it restores the last value saved in Settings. To avoid a lockout, `false` only takes effect while OIDC or an administrator's passkey is configured; otherwise password login stays enabled and a warning is logged. Password hashes are kept, so setting `enabled: true` and restarting restores password login if the identity provider is unreachable.
+
+### Personal settings
+
+Every user has a **Settings → My account** tab with their language, font, and Metrics and Allowlists sidebar visibility, plus their own password, TOTP, and passkeys. The display preferences are saved for the account and follow the user to other browsers; without dashboard authentication they apply to the whole instance. **My account** remains editable in read-only mode, including when dashboard authentication is disabled. Read-only users only see **My account**, because they cannot change anything else; **General**, **Authentication** (password login and OIDC), **Users**, **Manual decisions**, and **Branding** are shown to administrators.
+
+### Users
+
+Administrators manage accounts under **Settings → Users**:
+
+- Create local users with a username, an initial password, and the `admin` or `read-only` role. Read-only users have the same permissions as OIDC users in a read-only group.
+- Change a local user's role, or disable and re-enable the account. Disabling ends the user's sessions.
+- Reset a local user's password. By default, the user must choose a new password at the next password sign-in before using anything else; new users start the same way.
+- Reset a local user's TOTP and passkeys, for example after a lost phone. The user's sessions end and both can be set up again.
+- Delete users. OIDC users are listed after their first sign-in; their role comes from the identity provider, so they can only be deleted. A deleted OIDC user is added again on the next sign-in if the identity provider still allows it.
+
+Administrators cannot change, disable, or delete their own account there, and the last active administrator cannot be demoted, disabled, or deleted. While passkeys are the only sign-in method (password login disabled, no OIDC), changes that would leave no enabled administrator with a passkey are rejected. A user with a pending password change cannot register passkeys or set up TOTP until the password is changed. Changes are written to the [audit log](#audit-log).
 
 ### OIDC
 
@@ -616,7 +632,7 @@ https://<crowdsec-web-ui-host>/api/auth/oidc/callback
 - Saved Settings override YAML. Scopes must include `openid`; add provider-specific scopes such as `groups` only when required.
 - Admin-group matches have full access; read-only-group matches can view data and keep permitted preferences; unmatched users follow `auth.oidc.unmatchedRole` (`deny` by default).
 - Set an unmatched fallback role only when every user who can sign in should receive it.
-- `ui.readOnly: true` overrides all roles for the deployment. It blocks CrowdSec writes, refresh changes, notification destination/rule management, test sends, and notification deletion. Language changes and marking notifications read remain available. This is not per-user RBAC.
+- `ui.readOnly: true` overrides all roles for the deployment. It blocks CrowdSec writes, refresh changes, notification destination/rule management, test sends, and notification deletion. Personal preferences under **My account** (language, font, and Metrics and Allowlists sidebar visibility) and marking notifications read remain available. This is not per-user RBAC.
 - Identities use stable issuer and subject claims. Username collisions with local accounts remain separate.
 - Sessions have a 24-hour absolute lifetime. OIDC-only users cannot add local passkeys; password-backed local accounts retain passkey support.
 - Existing OIDC rows migrate on their next successful SSO login.

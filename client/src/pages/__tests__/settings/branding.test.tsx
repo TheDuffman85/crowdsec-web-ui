@@ -56,17 +56,11 @@ function jsonResponse(body: unknown, status = 200) {
 }
 
 describe('Settings branding', () => {
-  test('disables branding controls for read-only users', async () => {
+  test('hides branding from read-only users', async () => {
     renderSettings({ appName: 'Acme SOC', logoUrl: '/api/branding/logo?v=1', logoDarkUrl: null, theme: DEFAULT_BRANDING_THEME });
-    expect(await screen.findByLabelText('pages.settings.appName')).toHaveValue('Acme SOC');
-    expect(screen.getByLabelText('pages.settings.appName')).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
-    expect(within(screen.getByTestId('settings-logo-default')).getByRole('button', { name: 'pages.settings.uploadLogo' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'pages.settings.resetLogo' })).toBeDisabled();
-    expect(screen.getByText('pages.settings.readOnlyBranding')).toBeInTheDocument();
-    expect(within(screen.getByTestId('settings-logo-dark')).getByRole('button', { name: 'pages.settings.uploadLogo' })).toBeDisabled();
-    expect(within(screen.getByTestId('settings-theme-light')).getByLabelText('pages.settings.accentColor')).toBeDisabled();
-    expect(within(screen.getByTestId('settings-theme-dark')).getByLabelText('pages.settings.neutralTone')).toBeDisabled();
+    expect(await screen.findByRole('tab', { name: 'pages.settings.account' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('tab', { name: 'pages.settings.branding' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('pages.settings.appName')).not.toBeInTheDocument();
   });
 
   test('saves the application name', async () => {

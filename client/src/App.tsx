@@ -1,4 +1,4 @@
-import { lazy, Suspense, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, type ReactNode } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { Layout } from "./components/Layout";
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -9,7 +9,8 @@ import { ToastProvider } from "./contexts/ToastContext";
 import { useRefresh } from "./contexts/useRefresh";
 import { SyncOverlay } from "./components/SyncOverlay";
 import { getBasePath } from "./lib/basePath";
-import { useI18n } from "./lib/i18n";
+import { normalizeLanguagePreference, useI18n } from "./lib/i18n";
+import { normalizeFontPreference, useFont } from "./lib/font";
 
 const Dashboard = lazy(async () => ({ default: (await import('./pages/Dashboard')).Dashboard }));
 const Alerts = lazy(async () => ({ default: (await import('./pages/Alerts')).Alerts }));
@@ -20,11 +21,28 @@ const Notifications = lazy(async () => ({ default: (await import('./pages/Notifi
 const Settings = lazy(async () => ({ default: (await import('./pages/Settings')).Settings }));
 const Login = lazy(async () => ({ default: (await import('./pages/Login')).Login }));
 const Setup = lazy(async () => ({ default: (await import('./pages/Setup')).Setup }));
+const PasswordChange = lazy(async () => ({ default: (await import('./pages/PasswordChange')).PasswordChange }));
 
 function RouteFallback() {
   const { t } = useI18n();
 
   return <div className="text-center p-8 text-gray-500">{t('app.loading')}</div>;
+}
+
+// Applies the language and font the signed-in user saved, so they follow the user across browsers.
+function useUserPreferenceSync() {
+  const { authenticated, preferences, user } = useAuth();
+  const { setLanguagePreference } = useI18n();
+  const { setFontPreference } = useFont();
+  const userId = user?.userId;
+  const language = preferences?.language;
+  const font = preferences?.font;
+
+  useEffect(() => {
+    if (!authenticated || userId === undefined) return;
+    if (language) setLanguagePreference(normalizeLanguagePreference(language), { sync: false });
+    if (font) setFontPreference(normalizeFontPreference(font), { sync: false });
+  }, [authenticated, font, language, setFontPreference, setLanguagePreference, userId]);
 }
 
 function ProtectedProviders({ children }: { children: ReactNode }) {
@@ -113,7 +131,8 @@ function ProtectedAppShell() {
 }
 
 function AuthenticatedRoutes() {
-  const { authEnabled, authenticated, loading, setupRequired } = useAuth();
+  const { authEnabled, authenticated, loading, passwordChangeRequired, setupRequired } = useAuth();
+  useUserPreferenceSync();
 
   if (loading) {
     return <RouteFallback />;
@@ -137,6 +156,14 @@ function AuthenticatedRoutes() {
           <Route path="/login" element={<Login />} />
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
+      </Suspense>
+    );
+  }
+
+  if (authEnabled && passwordChangeRequired) {
+    return (
+      <Suspense fallback={<RouteFallback />}>
+        <PasswordChange />
       </Suspense>
     );
   }

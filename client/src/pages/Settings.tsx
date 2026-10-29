@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type Rea
 import i18next from "i18next";
 import QRCode from "qrcode";
 import { useSearchParams } from "react-router-dom";
-import { Copy, Gavel, KeyRound, LockKeyhole, Palette, Plus, QrCode, RotateCcw, Save, ShieldCheck, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
+import { Copy, Gavel, KeyRound, LockKeyhole, Palette, Plus, QrCode, RotateCcw, Save, ShieldCheck, SlidersHorizontal, Trash2, Upload, UserRound, Users, X } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card";
 import { Modal } from "../components/ui/Modal";
 import { Switch } from "../components/ui/Switch";
@@ -10,7 +10,7 @@ import { Badge } from "../components/ui/Badge";
 import { TabPanel, Tabs, type TabItem } from "../components/ui/Tabs";
 import { useRefresh } from "../contexts/useRefresh";
 import { useOptionalToast } from "../contexts/useToast";
-import { fetchConfig, updateAllowlistsSidebarPreference, updateManualDecisionScenarios, updateManualRefreshSetting, updateMetricsSidebarPreference } from "../lib/api";
+import { fetchConfig, updateAllowlistsSidebarPreference, updateFontPreference, updateLanguagePreference, updateManualDecisionScenarios, updateManualRefreshSetting, updateMetricsSidebarPreference } from "../lib/api";
 import { DEFAULT_MANUAL_DECISION_SCENARIO, isValidDecisionScenario, type ManagedSettingSource } from "../../../shared/contracts";
 import { apiUrl, withBasePath } from "../lib/basePath";
 import { sessionFetch } from "../lib/sessionFetch";
@@ -18,6 +18,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { useBranding } from "../contexts/useBranding";
 import { AppLogo } from "../components/AppLogo";
 import { BrandingColorsSettings } from "../components/BrandingColorsSettings";
+import { UsersSettings } from "../components/UsersSettings";
 import { THEME_MODES, type BrandingTheme } from "../../../shared/branding-theme";
 import {
     ACCEPTED_APP_LOGO_TYPES,
@@ -103,13 +104,9 @@ const OIDC_SETTINGS = [
 
 type OidcSetting = typeof OIDC_SETTINGS[number];
 
-const SETTINGS_TABS = ['general', 'authentication', 'manual-decisions', 'branding'] as const;
+const SETTINGS_TABS = ['account', 'general', 'authentication', 'users', 'manual-decisions', 'branding'] as const;
 type SettingsTab = typeof SETTINGS_TABS[number];
 const SETTINGS_TAB_PARAM = 'tab';
-
-function isSettingsTab(value: string | null): value is SettingsTab {
-    return SETTINGS_TABS.includes(value as SettingsTab);
-}
 
 function sameTheme(left: BrandingTheme, right: BrandingTheme): boolean {
     return THEME_MODES.every((mode) => left[mode].accent === right[mode].accent && left[mode].neutral === right[mode].neutral);
@@ -141,7 +138,7 @@ function serializeSpaceSeparatedList(items: string[]): string {
 
 export function Settings() {
     const { intervalMs, setIntervalMs } = useRefresh();
-    const { authEnabled, refresh: refreshAuth } = useAuth();
+    const { authEnabled, user: authUser, refresh: refreshAuth } = useAuth();
     const { browserLanguage, preference, setLanguagePreference, t } = useI18n();
     const { preference: savedFontPreference, setFontPreference } = useFont();
     const { formatDate } = useDateTime();
@@ -149,7 +146,6 @@ export function Settings() {
     const toast = useOptionalToast();
     const [searchParams, setSearchParams] = useSearchParams();
     const requestedTab = searchParams.get(SETTINGS_TAB_PARAM);
-    const activeTab: SettingsTab = isSettingsTab(requestedTab) ? requestedTab : 'general';
     const [config, setConfig] = useState<ConfigResponse | null>(null);
     const [passkeys, setPasskeys] = useState<PasskeySummary[]>([]);
     const [authSettings, setAuthSettings] = useState<AuthSettings | null>(null);
@@ -161,6 +157,7 @@ export function Settings() {
     const [metricsSidebarVisible, setMetricsSidebarVisible] = useState(true);
     const [allowlistsSidebarVisible, setAllowlistsSidebarVisible] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
+    const [isSavingPreferences, setIsSavingPreferences] = useState(false);
     const [customScenarios, setCustomScenarios] = useState<string[]>([]);
     const [scenarioDraft, setScenarioDraft] = useState('');
     const [isSavingScenarios, setIsSavingScenarios] = useState(false);
@@ -249,10 +246,11 @@ export function Settings() {
                         } else {
                             setPasskeys([]);
                         }
-                        setDisablePasswordLogin(payload.disablePasswordLogin);
+                        setDisablePasswordLogin(payload.disablePasswordLogin === true);
                         setOidcForm({
-                            issuerUrl: payload.oidcIssuerUrl,
-                            clientId: payload.oidcClientId,
+                            // Sign-in configuration is only returned to administrators.
+                            issuerUrl: payload.oidcIssuerUrl ?? '',
+                            clientId: payload.oidcClientId ?? '',
                             clientSecret: '',
                             scopes: parseSpaceSeparatedList(payload.oidcScope || DEFAULT_OIDC_SCOPE),
                             groupsClaim: payload.oidcGroupsClaim || 'groups',
@@ -348,17 +346,25 @@ export function Settings() {
             </ManagedLock>
         );
     };
-    const settingsTabs: TabItem<SettingsTab>[] = [
-        { id: 'general', label: t("pages.settings.general"), icon: SlidersHorizontal },
-        { id: 'authentication', label: t("pages.settings.authentication"), icon: KeyRound },
-        { id: 'manual-decisions', label: t("pages.settings.manualDecisions"), icon: Gavel },
-        { id: 'branding', label: t("pages.settings.branding"), icon: Palette },
+    // Read-only users can change nothing but their own account, so they only see that tab.
+    const allSettingsTabs: Array<TabItem<SettingsTab> & { visible: boolean }> = [
+        { id: 'account', label: t("pages.settings.account"), icon: UserRound, visible: true },
+        { id: 'general', label: t("pages.settings.general"), icon: SlidersHorizontal, visible: canManageSettings },
+        { id: 'authentication', label: t("pages.settings.authentication"), icon: KeyRound, visible: canManageSettings },
+        // Only administrators manage users, and only while dashboard authentication is enabled.
+        { id: 'users', label: t("pages.settings.users"), icon: Users, visible: authEnabled && authUser?.role === 'admin' },
+        { id: 'manual-decisions', label: t("pages.settings.manualDecisions"), icon: Gavel, visible: canManageSettings },
+        { id: 'branding', label: t("pages.settings.branding"), icon: Palette, visible: canManageSettings },
     ];
+    const settingsTabs: TabItem<SettingsTab>[] = allSettingsTabs
+        .filter((tab) => tab.visible)
+        .map(({ id, label, icon }) => ({ id, label, icon }));
+    const activeTab: SettingsTab = settingsTabs.find((tab) => tab.id === requestedTab)?.id ?? 'account';
     // Keeps other query parameters, such as the selected instance, and replaces the history entry.
     const selectTab = (tab: SettingsTab) => {
         setSearchParams((current) => {
             const next = new URLSearchParams(current);
-            if (tab === 'general') {
+            if (tab === 'account') {
                 next.delete(SETTINGS_TAB_PARAM);
             } else {
                 next.set(SETTINGS_TAB_PARAM, tab);
@@ -390,11 +396,27 @@ export function Settings() {
                 } : current);
                 window.dispatchEvent(new Event(MANUAL_REFRESH_SETTING_EVENT));
             }
+            showToast(t("pages.settings.settingsSaved"), "success");
+        } catch (error) {
+            console.error("Failed to save settings", error);
+            showToast(t("pages.settings.failedToSaveSettings"), "danger");
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    // Saves the display preferences of the signed-in user.
+    const handleSavePreferences = async () => {
+        setIsSavingPreferences(true);
+        try {
+            // Saved on the server first, so a failure is reported instead of only changing this browser.
             if (hasLanguageChange) {
-                setLanguagePreference(languagePreference);
+                await updateLanguagePreference(languagePreference);
+                setLanguagePreference(languagePreference, { sync: false });
             }
             if (hasFontChange) {
-                setFontPreference(fontPreference);
+                await updateFontPreference(fontPreference);
+                setFontPreference(fontPreference, { sync: false });
             }
             if (!metricsSidebarSource && hasMetricsSidebarChange) {
                 const payload = await updateMetricsSidebarPreference({ visible: metricsSidebarVisible });
@@ -404,7 +426,7 @@ export function Settings() {
                 } : current);
                 window.dispatchEvent(new Event(METRICS_SIDEBAR_PREFERENCE_EVENT));
             }
-            if (canManageSettings && !allowlistsSidebarSource && hasAllowlistsSidebarChange) {
+            if (!allowlistsSidebarSource && hasAllowlistsSidebarChange) {
                 const payload = await updateAllowlistsSidebarPreference({ visible: allowlistsSidebarVisible });
                 setConfig((current) => current ? {
                     ...current,
@@ -414,10 +436,10 @@ export function Settings() {
             }
             showToast(getSettingsSavedMessage(), "success");
         } catch (error) {
-            console.error("Failed to save settings", error);
+            console.error("Failed to save preferences", error);
             showToast(t("pages.settings.failedToSaveSettings"), "danger");
         } finally {
-            setIsSaving(false);
+            setIsSavingPreferences(false);
         }
     };
 
@@ -695,6 +717,10 @@ export function Settings() {
             showToast(t("pages.settings.passwordsDoNotMatch"), "danger");
             return;
         }
+        if (passwordForm.newPassword === passwordForm.currentPassword) {
+            showToast(t("pages.settings.newPasswordMustDiffer"), "danger");
+            return;
+        }
         const response = await sessionFetch(apiUrl('/api/auth/change-password'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -859,12 +885,12 @@ export function Settings() {
                 onChange={selectTab}
             />
 
-            {activeTab === 'general' && (
-                <TabPanel idPrefix="settings" id="general">
+            {activeTab === 'account' && (
+                <TabPanel idPrefix="settings" id="account" className="space-y-6">
                     <Card>
                         <CardHeader>
-                            <CardTitle>{t("pages.settings.general")}</CardTitle>
-                            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.generalDescription")}</p>
+                            <CardTitle>{t("pages.settings.preferences")}</CardTitle>
+                            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.preferencesDescription")}</p>
                         </CardHeader>
                         <CardContent>
                             <div className="grid gap-6 xl:grid-cols-2">
@@ -914,57 +940,12 @@ export function Settings() {
                                 </div>
 
                                 <div className="space-y-2">
-                                    <div className="flex items-center gap-1.5">
-                                        <label htmlFor="settings-refresh" className={labelClass}>
-                                            {t("pages.settings.refreshInterval")}
-                                        </label>
-                                        {renderManagedLock(refreshIntervalSource)}
-                                    </div>
-                                    <select
-                                        id="settings-refresh"
-                                        value={refreshInterval}
-                                        onChange={(event) => setRefreshInterval(Number(event.target.value))}
-                                        disabled={!canManageSettings || isSaving || Boolean(refreshIntervalSource)}
-                                        className={inputClass}
-                                    >
-                                        {refreshOptions.map((option) => (
-                                            <option key={option.value} value={option.value}>
-                                                {option.label}
-                                            </option>
-                                        ))}
-                                    </select>
-                                    <p className="text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.refreshHelp")}</p>
-                                </div>
-
-                                <div className="space-y-2">
-                                    <div className="flex items-start gap-4 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-                                        <Switch
-                                            id="settings-manual-refresh"
-                                            checked={manualRefreshEnabled}
-                                            onCheckedChange={setManualRefreshEnabled}
-                                            disabled={!canManageSettings || isSaving || Boolean(manualRefreshSource)}
-                                        />
-                                        <div className="min-w-0">
-                                            <div className="flex items-center gap-1.5">
-                                                <label htmlFor="settings-manual-refresh" className={labelClass}>
-                                                    {t("pages.settings.enableManualRefresh")}
-                                                </label>
-                                                {renderManagedLock(manualRefreshSource)}
-                                            </div>
-                                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                                {t("pages.settings.enableManualRefreshHelp")}
-                                            </p>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div className="space-y-2">
                                     <div className="flex items-start gap-4 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
                                         <Switch
                                             id="settings-metrics-sidebar"
                                             checked={metricsSidebarVisible}
                                             onCheckedChange={setMetricsSidebarVisible}
-                                            disabled={isSaving || Boolean(metricsSidebarSource)}
+                                            disabled={isSavingPreferences || Boolean(metricsSidebarSource)}
                                         />
                                         <div className="min-w-0">
                                             <div className="flex items-center gap-1.5">
@@ -986,7 +967,7 @@ export function Settings() {
                                             id="settings-allowlists-sidebar"
                                             checked={allowlistsSidebarVisible}
                                             onCheckedChange={setAllowlistsSidebarVisible}
-                                            disabled={!canManageSettings || isSaving || Boolean(allowlistsSidebarSource)}
+                                            disabled={isSavingPreferences || Boolean(allowlistsSidebarSource)}
                                         />
                                         <div className="min-w-0">
                                             <div className="flex items-center gap-1.5">
@@ -1003,96 +984,38 @@ export function Settings() {
                                 </div>
                             </div>
 
-                            {!canManageSettings && (
-                                <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-100">
-                                    <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0" />
-                                    <span>{t("pages.settings.readOnlyRefresh")}</span>
-                                </div>
-                            )}
-
-                            {config?.instances?.some((instance) => Object.keys(instance.sync_overrides || {}).length > 0) && (
-                                <div className="mt-6 rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-900/40">
-                                    <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Per-instance configuration overrides</h3>
-                                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                        These values come from the startup YAML file, take precedence over global settings, and are read-only until the process restarts.
-                                    </p>
-                                    <div className="mt-4 grid gap-3 md:grid-cols-2">
-                                        {config.instances.filter((instance) => Object.keys(instance.sync_overrides || {}).length > 0).map((instance) => (
-                                            <div key={instance.id} className="rounded-md border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
-                                                <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{instance.name}</p>
-                                                <dl className="mt-2 space-y-1 text-xs text-gray-600 dark:text-gray-300">
-                                                    {Object.entries(instance.sync_overrides || {}).map(([key, value]) => (
-                                                        <div key={key} className="flex justify-between gap-4">
-                                                            <dt className="font-mono">{key}</dt>
-                                                            <dd className="font-mono text-right">{String(value)}</dd>
-                                                        </div>
-                                                    ))}
-                                                </dl>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-
                             <div className="mt-6 flex justify-start">
                                 <button
                                     type="button"
-                                    onClick={() => void handleSave()}
-                                    disabled={isSaving}
+                                    onClick={() => void handleSavePreferences()}
+                                    disabled={isSavingPreferences}
                                     className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                     <Save className="h-4 w-4" />
-                                    {isSaving ? t("common.saving") : t("common.save")}
+                                    {isSavingPreferences ? t("common.saving") : t("common.save")}
                                 </button>
                             </div>
                         </CardContent>
                     </Card>
-                </TabPanel>
-            )}
-
-            {activeTab === 'authentication' && (
-                <TabPanel idPrefix="settings" id="authentication">
-                    {!authEnabled && (
-                        <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-100">
-                            <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0" />
-                            <span>{t("pages.settings.authDisabledHint")}</span>
-                        </div>
-                    )}
 
                     {authEnabled && (
                         <Card>
                             <CardHeader>
-                                <CardTitle>{t("pages.settings.authentication")}</CardTitle>
-                                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.authenticationDescription")}</p>
+                                <CardTitle>{t("pages.settings.signInAndSecurity")}</CardTitle>
+                                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.signInAndSecurityDescription")}</p>
                             </CardHeader>
                             <CardContent className="space-y-8">
                                 <div className="space-y-4">
                                     <div>
                                         <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{t("pages.settings.password")}</h4>
-                                        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.passwordDescription")}</p>
+                                        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                                            {canChangePassword
+                                                ? t("pages.settings.accountPasswordDescription")
+                                                : authSettings?.hasPassword
+                                                    ? t("pages.settings.passwordChangeRequiresPasswordLogin")
+                                                    : t("pages.settings.passwordManagedByProvider")}
+                                        </p>
                                     </div>
-                                    <div className="space-y-4">
-                                        <label className="flex items-start gap-3 text-sm text-gray-700 dark:text-gray-200">
-                                            <input
-                                                type="checkbox"
-                                                checked={disablePasswordLogin}
-                                                onChange={(event) => setDisablePasswordLogin(event.target.checked)}
-                                                disabled={!canManageAuthSettings || passwordLoginManaged || isSavingAuth}
-                                                className="mt-1 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                                            />
-                                            <span>
-                                                <span className="flex items-center gap-1.5 font-medium">
-                                                    {t("pages.settings.disablePasswordLogin")}
-                                                    {renderManagedLock(authSettings?.managedSettings?.disablePasswordLogin)}
-                                                </span>
-                                                <span className="block text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.disablePasswordLoginDescription")}</span>
-                                                {authSettings?.passwordLoginFallback && (
-                                                    <span className="mt-1 block text-xs text-amber-700 dark:text-amber-400">{t("pages.settings.passwordLoginFallback")}</span>
-                                                )}
-                                            </span>
-                                        </label>
-                                    </div>
-
                                     {canChangePassword && (
                                         <div className="grid gap-4 lg:grid-cols-3">
                                             <div className="space-y-2">
@@ -1210,6 +1133,150 @@ export function Settings() {
                                     </button>
                                 </div>
                                 )}
+                            </CardContent>
+                        </Card>
+                    )}
+                </TabPanel>
+            )}
+
+            {activeTab === 'general' && (
+                <TabPanel idPrefix="settings" id="general">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>{t("pages.settings.general")}</CardTitle>
+                            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.generalSettingsDescription")}</p>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="grid gap-6 xl:grid-cols-2">
+                                <div className="space-y-2">
+                                    <div className="flex items-center gap-1.5">
+                                        <label htmlFor="settings-refresh" className={labelClass}>
+                                            {t("pages.settings.refreshInterval")}
+                                        </label>
+                                        {renderManagedLock(refreshIntervalSource)}
+                                    </div>
+                                    <select
+                                        id="settings-refresh"
+                                        value={refreshInterval}
+                                        onChange={(event) => setRefreshInterval(Number(event.target.value))}
+                                        disabled={!canManageSettings || isSaving || Boolean(refreshIntervalSource)}
+                                        className={inputClass}
+                                    >
+                                        {refreshOptions.map((option) => (
+                                            <option key={option.value} value={option.value}>
+                                                {option.label}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <p className="text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.refreshHelp")}</p>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <div className="flex items-start gap-4 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+                                        <Switch
+                                            id="settings-manual-refresh"
+                                            checked={manualRefreshEnabled}
+                                            onCheckedChange={setManualRefreshEnabled}
+                                            disabled={!canManageSettings || isSaving || Boolean(manualRefreshSource)}
+                                        />
+                                        <div className="min-w-0">
+                                            <div className="flex items-center gap-1.5">
+                                                <label htmlFor="settings-manual-refresh" className={labelClass}>
+                                                    {t("pages.settings.enableManualRefresh")}
+                                                </label>
+                                                {renderManagedLock(manualRefreshSource)}
+                                            </div>
+                                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                                {t("pages.settings.enableManualRefreshHelp")}
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {config?.instances?.some((instance) => Object.keys(instance.sync_overrides || {}).length > 0) && (
+                                <div className="mt-6 rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-900/40">
+                                    <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Per-instance configuration overrides</h3>
+                                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                        These values come from the startup YAML file, take precedence over global settings, and are read-only until the process restarts.
+                                    </p>
+                                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                                        {config.instances.filter((instance) => Object.keys(instance.sync_overrides || {}).length > 0).map((instance) => (
+                                            <div key={instance.id} className="rounded-md border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+                                                <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{instance.name}</p>
+                                                <dl className="mt-2 space-y-1 text-xs text-gray-600 dark:text-gray-300">
+                                                    {Object.entries(instance.sync_overrides || {}).map(([key, value]) => (
+                                                        <div key={key} className="flex justify-between gap-4">
+                                                            <dt className="font-mono">{key}</dt>
+                                                            <dd className="font-mono text-right">{String(value)}</dd>
+                                                        </div>
+                                                    ))}
+                                                </dl>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="mt-6 flex justify-start">
+                                <button
+                                    type="button"
+                                    onClick={() => void handleSave()}
+                                    disabled={isSaving}
+                                    className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    <Save className="h-4 w-4" />
+                                    {isSaving ? t("common.saving") : t("common.save")}
+                                </button>
+                            </div>
+                        </CardContent>
+                    </Card>
+                </TabPanel>
+            )}
+
+            {activeTab === 'authentication' && (
+                <TabPanel idPrefix="settings" id="authentication">
+                    {!authEnabled && (
+                        <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-100">
+                            <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0" />
+                            <span>{t("pages.settings.authDisabledHint")}</span>
+                        </div>
+                    )}
+
+                    {authEnabled && (
+                        <Card>
+                            <CardHeader>
+                                <CardTitle>{t("pages.settings.authentication")}</CardTitle>
+                                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.authenticationSettingsDescription")}</p>
+                            </CardHeader>
+                            <CardContent className="space-y-8">
+                                <div className="space-y-4">
+                                    <div>
+                                        <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{t("pages.settings.passwordLogin")}</h4>
+                                        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.passwordLoginDescription")}</p>
+                                    </div>
+                                    <div className="space-y-4">
+                                        <label className="flex items-start gap-3 text-sm text-gray-700 dark:text-gray-200">
+                                            <input
+                                                type="checkbox"
+                                                checked={disablePasswordLogin}
+                                                onChange={(event) => setDisablePasswordLogin(event.target.checked)}
+                                                disabled={!canManageAuthSettings || passwordLoginManaged || isSavingAuth}
+                                                className="mt-1 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                                            />
+                                            <span>
+                                                <span className="flex items-center gap-1.5 font-medium">
+                                                    {t("pages.settings.disablePasswordLogin")}
+                                                    {renderManagedLock(authSettings?.managedSettings?.disablePasswordLogin)}
+                                                </span>
+                                                <span className="block text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.disablePasswordLoginDescription")}</span>
+                                                {authSettings?.passwordLoginFallback && (
+                                                    <span className="mt-1 block text-xs text-amber-700 dark:text-amber-400">{t("pages.settings.passwordLoginFallback")}</span>
+                                                )}
+                                            </span>
+                                        </label>
+                                    </div>
+                                </div>
 
                                 <div className="space-y-4 border-t border-gray-200 pt-6 dark:border-gray-700">
                                     <div>
@@ -1422,6 +1489,17 @@ export function Settings() {
                 </TabPanel>
             )}
 
+            {activeTab === 'users' && (
+                <TabPanel idPrefix="settings" id="users">
+                    <UsersSettings
+                        canManage={canManageSettings}
+                        inputClass={inputClass}
+                        labelClass={labelClass}
+                        showToast={showToast}
+                    />
+                </TabPanel>
+            )}
+
             {activeTab === 'manual-decisions' && (
                 <TabPanel idPrefix="settings" id="manual-decisions">
                     <Card>
@@ -1447,13 +1525,6 @@ export function Settings() {
                                 labelClass={labelClass}
                             />
                             <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.manualDecisionScenariosHelp")}</p>
-
-                            {!canManageSettings && (
-                                <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-100">
-                                    <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0" />
-                                    <span>{t("pages.settings.readOnlyManualDecisions")}</span>
-                                </div>
-                            )}
 
                             <div className="mt-6 flex justify-start">
                                 <button
@@ -1503,13 +1574,6 @@ export function Settings() {
                                 <div className="xl:col-start-1">{renderLogoField("default")}</div>
                                 {renderLogoField("dark")}
                             </div>
-
-                            {!canManageSettings && (
-                                <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-100">
-                                    <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0" />
-                                    <span>{t("pages.settings.readOnlyBranding")}</span>
-                                </div>
-                            )}
 
                             <BrandingColorsSettings
                                 theme={themeValue}

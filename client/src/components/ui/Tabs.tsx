@@ -93,9 +93,9 @@ export function Tabs<T extends string>({ idPrefix, label, tabs, value, onChange 
     );
 }
 
-export function TabPanel({ idPrefix, id, children }: { idPrefix: string; id: string; children: ReactNode }) {
+export function TabPanel({ idPrefix, id, className, children }: { idPrefix: string; id: string; className?: string; children: ReactNode }) {
     return (
-        <div role="tabpanel" id={tabPanelId(idPrefix, id)} aria-labelledby={tabId(idPrefix, id)}>
+        <div role="tabpanel" id={tabPanelId(idPrefix, id)} aria-labelledby={tabId(idPrefix, id)} className={className}>
             {children}
         </div>
     );

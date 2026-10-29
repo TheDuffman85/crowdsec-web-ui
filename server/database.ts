@@ -331,8 +331,14 @@ export interface AuthUserRow {
   oidc_issuer: string | null;
   oidc_subject: string | null;
   session_version: number;
+  disabled: number;
+  password_change_required: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface AuthUserListRow extends AuthUserRow {
+  passkey_count: number;
 }
 
 export interface OidcUserUpsertParams {
@@ -713,8 +719,8 @@ export class CrowdsecDatabase {
     this.setSettingStatement = this.stateQuery('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
     this.countAuthUsersStatement = this.stateQuery('SELECT COUNT(*) as count FROM auth_users');
     this.createAuthUserStatement = this.stateQuery(`
-      INSERT INTO auth_users (username, password_hash, role, auth_provider, created_at, updated_at)
-      VALUES ($username, $password_hash, $role, $auth_provider, $created_at, $updated_at)
+      INSERT INTO auth_users (username, password_hash, role, auth_provider, password_change_required, created_at, updated_at)
+      VALUES ($username, $password_hash, $role, $auth_provider, $password_change_required, $created_at, $updated_at)
     `);
     this.getAuthUserByIdStatement = this.stateQuery('SELECT * FROM auth_users WHERE id = $id');
     this.getAuthUserByUsernameStatement = this.stateQuery('SELECT * FROM auth_users WHERE username = $username');
@@ -725,6 +731,7 @@ export class CrowdsecDatabase {
     this.updateAuthUserPasswordStatement = this.stateQuery(`
       UPDATE auth_users
       SET password_hash = $password_hash,
+          password_change_required = 0,
           session_version = session_version + 1,
           updated_at = $updated_at
       WHERE id = $id
@@ -794,7 +801,7 @@ export class CrowdsecDatabase {
       SELECT COUNT(*) as count
       FROM webauthn_credentials credentials
       JOIN auth_users users ON users.id = credentials.user_id
-      WHERE users.auth_provider <> 'oidc' OR users.password_hash IS NOT NULL
+      WHERE users.disabled = 0 AND (users.auth_provider <> 'oidc' OR users.password_hash IS NOT NULL)
     `);
     this.createWebAuthnCredentialStatement = this.stateQuery(`
       INSERT INTO webauthn_credentials (user_id, credential_id, public_key, sign_count, transports, name, created_at)
@@ -2133,6 +2140,7 @@ export class CrowdsecDatabase {
     passwordHash: string | null;
     role: 'admin' | 'read-only';
     authProvider: 'password' | 'oidc';
+    passwordChangeRequired?: boolean;
   }): number {
     const now = new Date().toISOString();
     const result = this.createAuthUserStatement.run({
@@ -2140,6 +2148,7 @@ export class CrowdsecDatabase {
       $password_hash: params.passwordHash,
       $role: params.role,
       $auth_provider: params.authProvider,
+      $password_change_required: params.passwordChangeRequired ? 1 : 0,
       $created_at: now,
       $updated_at: now,
     }) as { lastInsertRowid?: number | bigint };
@@ -2160,6 +2169,81 @@ export class CrowdsecDatabase {
       $password_hash: passwordHash,
       $updated_at: new Date().toISOString(),
     }).changes > 0;
+  }
+
+  listAuthUsers(): AuthUserListRow[] {
+    return this.db.prepare(`
+      SELECT users.*, (SELECT COUNT(*) FROM webauthn_credentials credentials WHERE credentials.user_id = users.id) AS passkey_count
+      FROM auth_users users
+      ORDER BY users.username COLLATE NOCASE, users.id
+    `).all() as AuthUserListRow[];
+  }
+
+  /** Counts administrators who can still sign in, optionally leaving one account out. */
+  countActiveAdmins(excludingId?: number): number {
+    return (this.db.prepare(`
+      SELECT COUNT(*) AS count FROM auth_users WHERE role = 'admin' AND disabled = 0 AND id <> ?
+    `).get(excludingId ?? -1) as CountRow).count;
+  }
+
+  updateAuthUserRole(id: number, role: 'admin' | 'read-only'): boolean {
+    return this.db.prepare('UPDATE auth_users SET role = ?, updated_at = ? WHERE id = ?')
+      .run(role, new Date().toISOString(), id).changes > 0;
+  }
+
+  /** Disabling an account also ends its sessions. */
+  setAuthUserDisabled(id: number, disabled: boolean): boolean {
+    return this.db.prepare(`
+      UPDATE auth_users
+      SET disabled = ?,
+          session_version = CASE WHEN ? = 1 THEN session_version + 1 ELSE session_version END,
+          updated_at = ?
+      WHERE id = ?
+    `).run(disabled ? 1 : 0, disabled ? 1 : 0, new Date().toISOString(), id).changes > 0;
+  }
+
+  /** Sets a password chosen by an administrator and ends the account's sessions. */
+  resetAuthUserPassword(id: number, passwordHash: string, changeRequired: boolean): boolean {
+    return this.db.prepare(`
+      UPDATE auth_users
+      SET password_hash = ?, password_change_required = ?, session_version = session_version + 1, updated_at = ?
+      WHERE id = ?
+    `).run(passwordHash, changeRequired ? 1 : 0, new Date().toISOString(), id).changes > 0;
+  }
+
+  /** Removes the account's TOTP secret and passkeys and ends its sessions. */
+  resetAuthUserSecondFactors(id: number): boolean {
+    return this.db.transaction(() => {
+      this.db.prepare('DELETE FROM webauthn_credentials WHERE user_id = ?').run(id);
+      return this.db.prepare(`
+        UPDATE auth_users
+        SET totp_secret = NULL, totp_enabled = 0, totp_last_step = NULL, session_version = session_version + 1, updated_at = ?
+        WHERE id = ?
+      `).run(new Date().toISOString(), id).changes > 0;
+    })();
+  }
+
+  /** Deletes an account together with its passkeys, preferences and saved search filters. */
+  deleteAuthUser(id: number): boolean {
+    return this.db.transaction(() => {
+      this.db.prepare('DELETE FROM webauthn_credentials WHERE user_id = ?').run(id);
+      this.db.prepare('DELETE FROM user_preferences WHERE user_id = ?').run(id);
+      this.db.prepare('DELETE FROM saved_search_filters WHERE owner_id = ?').run(id);
+      this.db.prepare('DELETE FROM recent_search_filters WHERE owner_id = ?').run(id);
+      return this.db.prepare('DELETE FROM auth_users WHERE id = ?').run(id).changes > 0;
+    })();
+  }
+
+  getUserPreferences(userId: number): Record<string, string> {
+    const rows = this.db.prepare('SELECT key, value FROM user_preferences WHERE user_id = ?').all(userId) as Array<{ key: string; value: string }>;
+    return Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  }
+
+  setUserPreference(userId: number, key: string, value: string): void {
+    this.db.prepare(`
+      INSERT INTO user_preferences (user_id, key, value) VALUES (?, ?, ?)
+      ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value
+    `).run(userId, key, value);
   }
 
   updateAuthUserTotp(id: number, secret: string | null, enabled: boolean): boolean {
@@ -2982,6 +3066,8 @@ function initStateSchema(db: Database, schema: string, fresh: boolean): void {
       oidc_issuer TEXT,
       oidc_subject TEXT,
       session_version INTEGER NOT NULL DEFAULT 1,
+      disabled INTEGER NOT NULL DEFAULT 0,
+      password_change_required INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -3001,6 +3087,13 @@ function initStateSchema(db: Database, schema: string, fresh: boolean): void {
       created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS ${schema}.idx_webauthn_credentials_user_id ON webauthn_credentials(user_id);
+
+    CREATE TABLE IF NOT EXISTS ${schema}.user_preferences (
+      user_id INTEGER NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      PRIMARY KEY (user_id, key)
+    );
 
     CREATE TABLE IF NOT EXISTS ${schema}.oidc_revoked_sessions (
       issuer TEXT NOT NULL,
@@ -3111,6 +3204,14 @@ function initStateSchema(db: Database, schema: string, fresh: boolean): void {
     CREATE INDEX IF NOT EXISTS ${schema}.idx_pending_alert_deletions_due
       ON pending_alert_deletions(completed_at, delete_after, requested_at);
   `);
+  // Columns added after auth_users was introduced.
+  const authUserColumns = (db.prepare(`PRAGMA ${schema}.table_info(auth_users)`).all() as Array<{ name: string }>)
+    .map((column) => column.name);
+  for (const column of ['disabled', 'password_change_required']) {
+    if (!authUserColumns.includes(column)) {
+      db.exec(`ALTER TABLE ${schema}.auth_users ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
+    }
+  }
   // Only new installations enable authentication by default; migrated ones keep their previous state.
   db.prepare(`INSERT OR IGNORE INTO ${schema}.settings (key, value) VALUES ('auth_existing_install_default_disabled', ?)`)
     .run(fresh ? 'false' : 'true');

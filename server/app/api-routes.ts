@@ -655,6 +655,30 @@ const managedConfigSettings: Partial<Record<ManagedConfigSetting, ManagedSetting
     ? { manual_refresh_enabled: resolveManagedSettingSource(config.configEnvironmentOverrides, 'crowdsec.sync.manualRefreshEnabled') }
     : {}),
 };
+// Personal preferences belong to the signed-in user. Without dashboard authentication there
+// are no users, so they stay instance-wide.
+const preferenceUserId = (context: HonoContext): number | null => {
+  if (!dashboardAuth.enabled) return null;
+  const userId = dashboardAuth.getSession(context)?.userId;
+  return userId && userId > 0 ? userId : null;
+};
+const SIDEBAR_PREFERENCE_KEYS = ['metrics_sidebar_visible', 'allowlists_sidebar_visible'] as const;
+// The configuration locks a sidebar for everyone; otherwise a user's choice wins over the instance-wide value.
+const resolveSidebarVisibility = (context: HonoContext) => {
+  const userId = preferenceUserId(context);
+  const preferences = userId ? database.getUserPreferences(userId) : {};
+  const [metricsKey, allowlistsKey] = SIDEBAR_PREFERENCE_KEYS;
+  return {
+    metrics_sidebar_visible: !config.metricsSidebarVisibleManaged && preferences[metricsKey] !== undefined
+      ? preferences[metricsKey] === 'true'
+      : state.metricsSidebarVisible,
+    allowlists_sidebar_visible: !config.allowlistsSidebarVisibleManaged && preferences[allowlistsKey] !== undefined
+      ? preferences[allowlistsKey] === 'true'
+      : state.allowlistsSidebarVisible,
+  };
+};
+const FONT_PREFERENCE_PATTERN = /^[a-z0-9-]{1,64}$/;
+
 const managedByConfigResponse = (context: HonoContext, setting: string) => context.json({
   error: `${setting} is managed by the application configuration`,
   code: 'MANAGED_BY_CONFIG',
@@ -692,8 +716,7 @@ app.get(`${config.basePath}/api/config`, ensureAuth, (context) => {
     time_format: config.timeFormat,
     date_format: config.dateFormat,
     metrics_enabled: config.instances.some((instance) => instance.prometheus.length > 0),
-    metrics_sidebar_visible: state.metricsSidebarVisible,
-    allowlists_sidebar_visible: state.allowlistsSidebarVisible,
+    ...resolveSidebarVisibility(context),
     manual_decision_scenario_settings: {
       configured: configuredManualDecisionScenarios(),
       custom: [...state.manualDecisionScenarios],
@@ -841,8 +864,8 @@ app.get(`${config.basePath}/api/instances/:instanceId/metrics/:endpointId`, ensu
 });
 
 app.put(`${config.basePath}/api/config/allowlists-sidebar`, ensureAuth, async (context) => {
-  const readOnlyResponse = ensureCanManageSettings(context);
-  if (readOnlyResponse) return readOnlyResponse;
+  const userId = preferenceUserId(context);
+  // Display preferences remain editable in read-only mode, including without dashboard authentication.
   if (config.allowlistsSidebarVisibleManaged) return managedByConfigResponse(context, 'Allowlists sidebar visibility');
 
   try {
@@ -851,8 +874,12 @@ app.put(`${config.basePath}/api/config/allowlists-sidebar`, ensureAuth, async (c
       return context.json({ error: 'visible must be a boolean' }, 400);
     }
 
-    await syncWorker.runExclusive(() => saveAllowlistsSidebarVisible(database, body.visible));
-    state.allowlistsSidebarVisible = body.visible;
+    if (userId) {
+      await syncWorker.runExclusive(() => database.setUserPreference(userId, 'allowlists_sidebar_visible', String(body.visible)));
+    } else {
+      await syncWorker.runExclusive(() => saveAllowlistsSidebarVisible(database, body.visible));
+      state.allowlistsSidebarVisible = body.visible;
+    }
 
     return context.json({ success: true, allowlists_sidebar_visible: body.visible });
   } catch (error: any) {
@@ -870,8 +897,13 @@ app.put(`${config.basePath}/api/config/metrics-sidebar`, ensureAuth, async (cont
       return context.json({ error: 'visible must be a boolean' }, 400);
     }
 
-    await syncWorker.runExclusive(() => saveMetricsSidebarVisible(database, body.visible));
-    state.metricsSidebarVisible = body.visible;
+    const userId = preferenceUserId(context);
+    if (userId) {
+      await syncWorker.runExclusive(() => database.setUserPreference(userId, 'metrics_sidebar_visible', String(body.visible)));
+    } else {
+      await syncWorker.runExclusive(() => saveMetricsSidebarVisible(database, body.visible));
+      state.metricsSidebarVisible = body.visible;
+    }
 
     return context.json({
       success: true,
@@ -1034,7 +1066,14 @@ app.put(`${config.basePath}/api/config/language`, ensureAuth, async (context) =>
       return context.json({ error: 'Invalid language preference' }, 400);
     }
 
-    await syncWorker.runExclusive(() => saveLanguagePreference(database, normalizedLanguage));
+    const userId = preferenceUserId(context);
+    await syncWorker.runExclusive(() => {
+      if (userId) database.setUserPreference(userId, 'language', normalizedLanguage);
+      // The instance-wide language is used for notification texts, so only administrators change it.
+      if (!userId || dashboardAuth.getPermissions(context).can_manage_settings) {
+        saveLanguagePreference(database, normalizedLanguage);
+      }
+    });
     return context.json({
       success: true,
       language: normalizedLanguage,
@@ -1043,6 +1082,18 @@ app.put(`${config.basePath}/api/config/language`, ensureAuth, async (context) =>
     console.error('Error updating language preference:', error.message);
     return context.json({ error: 'Failed to update language preference' }, 500);
   }
+});
+
+app.put(`${config.basePath}/api/config/font`, ensureAuth, async (context) => {
+  const body = await context.req.json<{ font?: unknown }>().catch(() => null);
+  const font = body?.font;
+  if (typeof font !== 'string' || !FONT_PREFERENCE_PATTERN.test(font)) {
+    return context.json({ error: 'Invalid font preference' }, 400);
+  }
+  // Without users the browser keeps the font on its own.
+  const userId = preferenceUserId(context);
+  if (userId) await syncWorker.runExclusive(() => database.setUserPreference(userId, 'font', font));
+  return context.json({ success: true, font });
 });
 
 app.get(`${config.basePath}/api/notifications`, ensureAuth, (context) => {
