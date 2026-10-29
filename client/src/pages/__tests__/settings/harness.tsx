@@ -30,7 +30,6 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
     'pages.settings.manualDecisionScenarioInvalid': '"{scenario}" is not a valid scenario.',
     'pages.settings.manualDecisionScenariosSaved': 'Scenarios saved',
     'pages.settings.removeManualDecisionScenario': 'Remove {scenario}',
-    'pages.settings.saveManualDecisionScenarios': 'Save scenarios',
     'pages.settings.refresh': 'Refresh',
     'pages.settings.refreshDescription': 'Control how often the backend imports CrowdSec changes.',
     'pages.settings.refreshHelp': 'Pages update immediately after each LAPI refresh.',
@@ -117,9 +116,6 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
     'pages.settings.noGroupsConfigured': 'No groups configured.',
     'pages.settings.removeGroup': 'Remove {group}',
     'pages.settings.oidcGroupsHelp': 'Choose what happens when an OIDC user matches no configured group. The default is deny sign-in.',
-    'pages.settings.saveOidcSettings': 'Save OIDC Settings',
-    'pages.settings.oidcSettingsSaved': 'OIDC settings saved.',
-    'pages.settings.failedToSaveOidcSettings': 'Failed to save OIDC settings.',
   };
 
   return {

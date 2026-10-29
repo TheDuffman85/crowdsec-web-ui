@@ -1,4 +1,5 @@
 import './harness';
+import { SettingsRouter } from './router';
 import { describe, expect, test, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -43,7 +44,7 @@ function renderSettings(branding: Partial<BrandingContextValue> = {}) {
   render(
     <ToastContext.Provider value={{ toasts: [], addToast, removeToast: vi.fn() }}>
       <BrandingContext.Provider value={value}>
-        <Settings />
+        <SettingsRouter tab="branding"><Settings /></SettingsRouter>
       </BrandingContext.Provider>
     </ToastContext.Provider>,
   );
@@ -59,14 +60,13 @@ describe('Settings branding', () => {
     renderSettings({ appName: 'Acme SOC', logoUrl: '/api/branding/logo?v=1', logoDarkUrl: null, theme: DEFAULT_BRANDING_THEME });
     expect(await screen.findByLabelText('pages.settings.appName')).toHaveValue('Acme SOC');
     expect(screen.getByLabelText('pages.settings.appName')).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'pages.settings.saveAppName' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
     expect(within(screen.getByTestId('settings-logo-default')).getByRole('button', { name: 'pages.settings.uploadLogo' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'pages.settings.resetLogo' })).toBeDisabled();
     expect(screen.getByText('pages.settings.readOnlyBranding')).toBeInTheDocument();
     expect(within(screen.getByTestId('settings-logo-dark')).getByRole('button', { name: 'pages.settings.uploadLogo' })).toBeDisabled();
     expect(within(screen.getByTestId('settings-theme-light')).getByLabelText('pages.settings.accentColor')).toBeDisabled();
     expect(within(screen.getByTestId('settings-theme-dark')).getByLabelText('pages.settings.neutralTone')).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'pages.settings.saveColors' })).toBeDisabled();
   });
 
   test('saves the application name', async () => {
@@ -80,17 +80,18 @@ describe('Settings branding', () => {
 
     expect(screen.getByLabelText('pages.settings.appName')).toHaveValue('');
     expect(screen.getByLabelText('pages.settings.appName')).toHaveAttribute('placeholder', 'CrowdSec Web UI');
-    expect(screen.getByRole('button', { name: 'pages.settings.saveAppName' })).toBeDisabled();
 
     await user.type(screen.getByLabelText('pages.settings.appName'), 'Acme SOC');
-    await user.click(screen.getByRole('button', { name: 'pages.settings.saveAppName' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(setBranding).toHaveBeenCalledWith(saved));
     expect(fetchMock).toHaveBeenCalledWith('/api/branding', expect.objectContaining({
       method: 'PUT',
       body: JSON.stringify({ appName: 'Acme SOC' }),
     }));
-    expect(addToast).toHaveBeenCalledWith('pages.settings.appNameSaved', 'success');
+    // The colors are unchanged, so only the name is saved.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(addToast).toHaveBeenCalledWith('Settings saved.', 'success');
   });
 
   test('uploads a logo and rejects unsupported or oversized files before uploading', async () => {
@@ -194,17 +195,15 @@ describe('Settings branding', () => {
     const light = within(await screen.findByTestId('settings-theme-light'));
     const dark = within(screen.getByTestId('settings-theme-dark'));
     await waitFor(() => expect(light.getByLabelText('pages.settings.accentColor')).toBeEnabled());
-    const saveButton = screen.getByRole('button', { name: 'pages.settings.saveColors' });
-    expect(saveButton).toBeDisabled();
+    const saveButton = screen.getByRole('button', { name: 'Save' });
     expect(screen.getByRole('button', { name: 'pages.settings.restoreDefaultColors' })).toBeDisabled();
     expect(screen.getByTestId('settings-theme-preview-light').style.getPropertyValue('--color-primary-600')).toBe('#0284c7');
 
     // Partial hex input is kept as typed but only applied once it is a valid color.
     await user.type(light.getByLabelText('pages.settings.accentColor'), '#e1');
-    expect(saveButton).toBeDisabled();
+    expect(screen.getByTestId('settings-theme-preview-light').style.getPropertyValue('--color-primary-600')).toBe('#0284c7');
     expect(light.getByLabelText('pages.settings.accentColor')).toHaveValue('#e1');
     await user.type(light.getByLabelText('pages.settings.accentColor'), '1d48');
-    expect(saveButton).toBeEnabled();
     expect(screen.getByTestId('settings-theme-preview-light').style.getPropertyValue('--color-primary-600')).toBe('#e11d48');
     // Dark mode inherits the light accent until it gets its own.
     expect(dark.getByLabelText('pages.settings.accentColor')).toHaveAttribute('placeholder', 'pages.settings.sameAsLightMode');
@@ -219,7 +218,8 @@ describe('Settings branding', () => {
     expect(url).toBe('/api/branding/theme');
     expect(init.method).toBe('PUT');
     expect(JSON.parse(String(init.body))).toEqual({ theme: savedTheme });
-    expect(addToast).toHaveBeenLastCalledWith('pages.settings.colorsSaved', 'success');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(addToast).toHaveBeenLastCalledWith('Settings saved.', 'success');
   });
 
   test('warns about low contrast and restores the default colors', async () => {
@@ -244,7 +244,7 @@ describe('Settings branding', () => {
 
     await user.click(screen.getByRole('button', { name: 'pages.settings.restoreDefaultColors' }));
     expect(light.getByLabelText('pages.settings.neutralTone')).toHaveValue('');
-    await user.click(screen.getByRole('button', { name: 'pages.settings.saveColors' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(addToast).toHaveBeenLastCalledWith('Database is busy', 'danger'));
     expect(JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body))).toEqual({ theme: DEFAULT_BRANDING_THEME });
     expect(setBranding).not.toHaveBeenCalled();

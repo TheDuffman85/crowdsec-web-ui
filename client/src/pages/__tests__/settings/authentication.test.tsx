@@ -1,4 +1,5 @@
 import { useAuthMock } from './harness';
+import { SettingsRouter } from './router';
 import { describe, expect, test, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -77,9 +78,9 @@ describe('Settings authentication methods', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<Settings />);
+    render(<SettingsRouter tab="authentication"><Settings /></SettingsRouter>);
 
-    await screen.findByText('Authentication');
+    await screen.findByRole('heading', { name: 'Authentication' });
     await user.click(screen.getByRole('button', { name: 'Set Up TOTP' }));
 
     const dialog = await screen.findByRole('dialog', { name: 'Set Up TOTP' });
@@ -165,9 +166,9 @@ describe('Settings authentication methods', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<Settings />);
+    render(<SettingsRouter tab="authentication"><Settings /></SettingsRouter>);
 
-    await screen.findByText('Authentication');
+    await screen.findByRole('heading', { name: 'Authentication' });
     await user.click(screen.getByRole('button', { name: 'Manage TOTP' }));
 
     const dialog = screen.getByRole('dialog', { name: 'Manage TOTP' });
@@ -280,9 +281,9 @@ describe('Settings authentication methods', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<Settings />);
+    render(<SettingsRouter tab="authentication"><Settings /></SettingsRouter>);
 
-    await screen.findByText('Authentication');
+    await screen.findByRole('heading', { name: 'Authentication' });
     await user.click(screen.getByRole('button', { name: 'Register New Passkey' }));
 
     const dialog = screen.getByRole('dialog', { name: 'Register New Passkey' });
@@ -370,7 +371,7 @@ describe('Settings authentication methods', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<Settings />);
+    render(<SettingsRouter tab="authentication"><Settings /></SettingsRouter>);
 
     await screen.findByText('Application Admin');
     const endSessionSwitch = screen.getByRole('switch', { name: 'Sign out of the identity provider on logout' });
@@ -401,7 +402,7 @@ describe('Settings authentication methods', () => {
     await user.type(screen.getByLabelText('Admin Groups'), 'security-team');
     await user.click(within(screen.getByLabelText('Admin Groups').closest('form')!).getByRole('button', { name: 'Add' }));
     await user.selectOptions(screen.getByLabelText('Unmatched OIDC users'), 'admin');
-    await user.click(screen.getByRole('button', { name: 'Save OIDC Settings' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/api/auth/settings'),
@@ -498,7 +499,7 @@ describe('Settings authentication methods', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<Settings />);
+    render(<SettingsRouter tab="authentication"><Settings /></SettingsRouter>);
 
     await screen.findByText('admins');
     expect(screen.getByLabelText('Issuer URL')).toBeDisabled();
@@ -511,7 +512,7 @@ describe('Settings authentication methods', () => {
     expect(screen.getByLabelText('Groups Claim')).toBeEnabled();
 
     await user.click(screen.getByRole('switch', { name: 'End sessions when signing out at the identity provider' }));
-    await user.click(screen.getByRole('button', { name: 'Save OIDC Settings' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/api/auth/settings'),

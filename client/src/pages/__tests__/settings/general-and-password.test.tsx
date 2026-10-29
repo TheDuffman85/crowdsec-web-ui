@@ -1,4 +1,5 @@
 import { setLanguagePreferenceMock, useAuthMock } from './harness';
+import { SettingsRouter } from './router';
 import { describe, expect, test, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -21,7 +22,7 @@ describe('Settings general and password', () => {
     const changed = vi.fn();
     window.addEventListener('allowlists-sidebar-preference-changed', changed);
     try {
-      render(<Settings />);
+      render(<SettingsRouter><Settings /></SettingsRouter>);
       const toggle = await screen.findByRole('switch', { name: 'Show Allowlists in sidebar' });
       await waitFor(() => expect(toggle).toBeEnabled());
       expect(toggle).toBeChecked();
@@ -50,7 +51,7 @@ describe('Settings general and password', () => {
       },
       permissions: { mode: 'admin', can_manage_enforcement: true, can_manage_settings: true },
     });
-    render(<Settings />);
+    render(<SettingsRouter><Settings /></SettingsRouter>);
     expect(await screen.findByLabelText(`Managed by the ${env} environment variable. To manage it here, remove it and any copy in the config file, then restart.`)).toBeInTheDocument();
     const toggle = screen.getByRole('switch', { name: label });
     expect(toggle).not.toBeChecked();
@@ -58,19 +59,45 @@ describe('Settings general and password', () => {
   });
 
   test('keeps language editable but disables refresh in read-only mode', async () => {
-    render(<Settings />);
+    render(<SettingsRouter><Settings /></SettingsRouter>);
 
     expect(await screen.findByLabelText('Language')).toBeEnabled();
     expect(screen.getByLabelText('Refresh interval')).toBeDisabled();
     expect(screen.getByRole('switch', { name: 'Show Allowlists in sidebar' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
     expect(screen.getByText('Read-only mode is enabled.')).toBeInTheDocument();
-    expect(screen.getByText('Dashboard authentication is disabled. Set CONFIG_AUTH_ENABLED=true and restart the web UI to enable sign-in and account settings.')).toBeInTheDocument();
+  });
+
+  test('shows each section in its own tab', async () => {
+    const user = userEvent.setup();
+    render(<SettingsRouter><Settings /></SettingsRouter>);
+
+    const generalTab = await screen.findByRole('tab', { name: 'General' });
+    expect(generalTab).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByLabelText('Language')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Scenarios')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: 'Authentication' }));
+    expect(screen.getByRole('tab', { name: 'Authentication' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel')).toHaveTextContent('Dashboard authentication is disabled. Set CONFIG_AUTH_ENABLED=true and restart the web UI to enable sign-in and account settings.');
+    expect(screen.queryByLabelText('Language')).not.toBeInTheDocument();
+
+    await user.keyboard('{ArrowRight}');
+    expect(screen.getByRole('tab', { name: 'pages.settings.manualDecisions' })).toHaveFocus();
+    expect(screen.getByLabelText('Scenarios')).toBeInTheDocument();
+  });
+
+  test('opens the tab named in the URL', async () => {
+    render(<SettingsRouter tab="branding"><Settings /></SettingsRouter>);
+
+    expect(await screen.findByRole('tab', { name: 'pages.settings.branding' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByLabelText('pages.settings.appName')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Language')).not.toBeInTheDocument();
   });
 
   test('only applies language changes when saved', async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    render(<SettingsRouter><Settings /></SettingsRouter>);
 
     await user.selectOptions(await screen.findByLabelText('Language'), 'de');
     expect(setLanguagePreferenceMock).not.toHaveBeenCalled();
@@ -84,7 +111,7 @@ describe('Settings general and password', () => {
     const setFontPreference = vi.fn();
     render(
       <FontContext.Provider value={{ preference: 'system', setFontPreference }}>
-        <Settings />
+        <SettingsRouter><Settings /></SettingsRouter>
       </FontContext.Provider>,
     );
 
@@ -125,7 +152,7 @@ describe('Settings general and password', () => {
       metrics_sidebar_visible: false,
     });
 
-    render(<Settings />);
+    render(<SettingsRouter><Settings /></SettingsRouter>);
 
     await user.click(await screen.findByRole('switch', { name: 'Show Metrics in sidebar' }));
     await user.click(screen.getByRole('button', { name: 'Save' }));
@@ -154,7 +181,7 @@ describe('Settings general and password', () => {
       },
     });
 
-    render(<Settings />);
+    render(<SettingsRouter><Settings /></SettingsRouter>);
     await user.click(await screen.findByRole('switch', { name: 'Enable manual refresh' }));
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
@@ -185,7 +212,7 @@ describe('Settings general and password', () => {
       },
     });
 
-    render(<Settings />);
+    render(<SettingsRouter><Settings /></SettingsRouter>);
 
     expect(await screen.findByLabelText('Managed by crowdsec.sync.refreshInterval in the config file. To manage it here, remove it there and restart.')).toBeInTheDocument();
     expect(screen.getByText('crowdsec.sync.refreshInterval', { selector: 'code' })).toBeInTheDocument();
@@ -197,7 +224,7 @@ describe('Settings general and password', () => {
     expect(screen.getByLabelText('Managed by the CONFIG_CROWDSEC_SYNC_MANUAL_REFRESH_ENABLED environment variable. To manage it here, remove it and any copy in the config file, then restart.')).toBeInTheDocument();
   });
 
-  test('saves password login setting only from its own save button', async () => {
+  test('saves the password login setting with the authentication settings', async () => {
     const user = userEvent.setup();
     const refreshAuth = vi.fn();
     useAuthMock.mockReturnValue({
@@ -266,11 +293,11 @@ describe('Settings general and password', () => {
     const dateTime = createDateTimeContextValue({ timeZone: 'America/Los_Angeles', timeFormat: '24h', dateFormat: 'browser' });
     render(
       <DateTimeContext.Provider value={dateTime}>
-        <Settings />
+        <SettingsRouter tab="authentication"><Settings /></SettingsRouter>
       </DateTimeContext.Provider>,
     );
 
-    await screen.findByText('Authentication');
+    await screen.findByRole('heading', { name: 'Authentication' });
     expect(screen.getByText(`Added ${dateTime.formatDate('2026-01-01T00:00:00.000Z')}`)).toBeInTheDocument();
     await user.click(screen.getByLabelText(/Disable password login/i));
 
@@ -279,13 +306,13 @@ describe('Settings general and password', () => {
       expect.objectContaining({ method: 'PUT' }),
     );
 
-    await user.click(screen.getAllByRole('button', { name: 'Save' })[1]);
+    await user.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/api/auth/settings'),
       expect.objectContaining({
         method: 'PUT',
-        body: JSON.stringify({ disablePasswordLogin: true }),
+        body: expect.stringContaining('"disablePasswordLogin":true'),
       }),
     ));
     expect(refreshAuth).toHaveBeenCalled();
@@ -293,6 +320,7 @@ describe('Settings general and password', () => {
   });
 
   test('locks the password login setting when it is managed by configuration', async () => {
+    const user = userEvent.setup();
     useAuthMock.mockReturnValue({
       authEnabled: true,
       setupRequired: false,
@@ -327,7 +355,7 @@ describe('Settings general and password', () => {
         can_manage_settings: true,
       },
     });
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
       if (url.includes('/api/auth/passkeys')) return Response.json({ passkeys: [] });
       if (url.includes('/api/auth/settings')) {
@@ -350,14 +378,21 @@ describe('Settings general and password', () => {
         });
       }
       return Response.json({});
-    }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
 
-    render(<Settings />);
+    render(<SettingsRouter tab="authentication"><Settings /></SettingsRouter>);
 
     expect(await screen.findByLabelText('Managed by auth.passwordLogin.enabled in the config file. To manage it here, remove it there and restart.')).toBeInTheDocument();
     expect(screen.getByLabelText(/Disable password login/i)).toBeDisabled();
     expect(screen.getByText(/stays enabled until OIDC/)).toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: 'Save' })).toHaveLength(1);
+
+    // Saving leaves out the managed password login setting.
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/auth/settings'),
+      expect.objectContaining({ method: 'PUT', body: expect.not.stringContaining('disablePasswordLogin') }),
+    ));
   });
 
   test('hides password-backed settings when the session was not password-authenticated', async () => {
@@ -402,9 +437,9 @@ describe('Settings general and password', () => {
       return Response.json({});
     }));
 
-    render(<Settings />);
+    render(<SettingsRouter tab="authentication"><Settings /></SettingsRouter>);
 
-    await screen.findByText('Authentication');
+    await screen.findByRole('heading', { name: 'Authentication' });
 
     expect(screen.queryByLabelText('Current password')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Change Password' })).not.toBeInTheDocument();
@@ -452,9 +487,9 @@ describe('Settings general and password', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<Settings />);
+    render(<SettingsRouter tab="authentication"><Settings /></SettingsRouter>);
 
-    await screen.findByText('Authentication');
+    await screen.findByRole('heading', { name: 'Authentication' });
 
     await waitFor(() => expect(screen.queryByText('Passkeys')).not.toBeInTheDocument());
     expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining('/api/auth/passkeys'));
