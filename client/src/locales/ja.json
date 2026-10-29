@@ -392,8 +392,6 @@
   "pages.settings.manualDecisionScenariosHelp": "manual/web-ui と設定ファイルのシナリオは常に表示され、ここでは削除できません。ここで追加したシナリオはすべてのインスタンスで選択できます。author/name 形式で指定してください。",
   "pages.settings.manualDecisionScenarioInvalid": "「{scenario}」は有効なシナリオではありません。英数字、_、.、- を使った author/name 形式で指定してください。",
   "pages.settings.removeManualDecisionScenario": "{scenario} を削除",
-  "pages.settings.manualDecisionScenariosSaved": "シナリオを保存しました",
-  "pages.settings.failedToSaveManualDecisionScenarios": "シナリオを保存できませんでした",
   "pages.settings.language": "言語",
   "pages.settings.languageDescription": "インターフェイスで使用する言語を選択します。",
   "pages.settings.browserDefaultLanguage": "ブラウザー既定 ({language})",

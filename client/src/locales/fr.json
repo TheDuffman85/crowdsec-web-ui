@@ -394,8 +394,6 @@
   "pages.settings.manualDecisionScenariosHelp": "manual/web-ui et les scénarios du fichier de configuration sont toujours proposés et ne peuvent pas être supprimés ici. Les scénarios ajoutés ici sont proposés pour chaque instance. Utilisez le format author/name.",
   "pages.settings.manualDecisionScenarioInvalid": "« {scenario} » n’est pas un scénario valide. Utilisez le format author/name avec des lettres, chiffres, _, . ou -.",
   "pages.settings.removeManualDecisionScenario": "Supprimer {scenario}",
-  "pages.settings.manualDecisionScenariosSaved": "Scénarios enregistrés",
-  "pages.settings.failedToSaveManualDecisionScenarios": "Impossible d’enregistrer les scénarios",
   "pages.settings.language": "Langue",
   "pages.settings.languageDescription": "Choisissez la langue utilisée par l’interface.",
   "pages.settings.browserDefaultLanguage": "Langue du navigateur ({language})",

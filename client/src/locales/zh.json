@@ -392,8 +392,6 @@
   "pages.settings.manualDecisionScenariosHelp": "manual/web-ui 和配置文件中的场景始终提供，无法在此移除。在此添加的场景会提供给每个实例。请使用 author/name 格式。",
   "pages.settings.manualDecisionScenarioInvalid": "“{scenario}”不是有效的场景。请使用由字母、数字、_、. 或 - 组成的 author/name 格式。",
   "pages.settings.removeManualDecisionScenario": "移除 {scenario}",
-  "pages.settings.manualDecisionScenariosSaved": "场景已保存",
-  "pages.settings.failedToSaveManualDecisionScenarios": "保存场景失败",
   "pages.settings.language": "语言",
   "pages.settings.languageDescription": "选择界面使用的语言。",
   "pages.settings.browserDefaultLanguage": "浏览器默认 ({language})",

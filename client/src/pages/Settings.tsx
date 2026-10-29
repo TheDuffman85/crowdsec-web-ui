@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type Rea
 import i18next from "i18next";
 import QRCode from "qrcode";
 import { useSearchParams } from "react-router-dom";
-import { Copy, Gavel, KeyRound, LockKeyhole, Palette, Plus, QrCode, RotateCcw, Save, ShieldCheck, SlidersHorizontal, Trash2, Upload, UserRound, Users, X } from "lucide-react";
+import { Copy, KeyRound, LockKeyhole, Palette, Plus, QrCode, RotateCcw, Save, ShieldCheck, SlidersHorizontal, Trash2, Upload, UserRound, Users, X } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card";
 import { Modal } from "../components/ui/Modal";
 import { Switch } from "../components/ui/Switch";
@@ -104,7 +104,7 @@ const OIDC_SETTINGS = [
 
 type OidcSetting = typeof OIDC_SETTINGS[number];
 
-const SETTINGS_TABS = ['account', 'general', 'authentication', 'users', 'manual-decisions', 'branding'] as const;
+const SETTINGS_TABS = ['account', 'general', 'authentication', 'users', 'branding'] as const;
 type SettingsTab = typeof SETTINGS_TABS[number];
 const SETTINGS_TAB_PARAM = 'tab';
 
@@ -160,7 +160,6 @@ export function Settings() {
     const [isSavingPreferences, setIsSavingPreferences] = useState(false);
     const [customScenarios, setCustomScenarios] = useState<string[]>([]);
     const [scenarioDraft, setScenarioDraft] = useState('');
-    const [isSavingScenarios, setIsSavingScenarios] = useState(false);
     const [appNameDraft, setAppNameDraft] = useState<string | null>(null);
     const [themeDraft, setThemeDraft] = useState<BrandingTheme | null>(null);
     const [isSavingBranding, setIsSavingBranding] = useState(false);
@@ -329,6 +328,9 @@ export function Settings() {
     const maxLogoSize = `${MAX_APP_LOGO_BYTES / 1024} KB`;
     const configuredScenarios = config?.manual_decision_scenario_settings?.configured ?? [];
     const lockedScenarios = [...new Set([DEFAULT_MANUAL_DECISION_SCENARIO, ...configuredScenarios])];
+    const savedCustomScenarios = config?.manual_decision_scenario_settings?.custom ?? [];
+    const hasScenarioChange = customScenarios.length !== savedCustomScenarios.length
+        || customScenarios.some((scenario, index) => scenario !== savedCustomScenarios[index]);
 
     const inputClass = "w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:disabled:bg-gray-800 dark:disabled:text-gray-500";
     const labelClass = "block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400";
@@ -353,7 +355,6 @@ export function Settings() {
         { id: 'authentication', label: t("pages.settings.authentication"), icon: KeyRound, visible: canManageSettings },
         // Only administrators manage users, and only while dashboard authentication is enabled.
         { id: 'users', label: t("pages.settings.users"), icon: Users, visible: authEnabled && authUser?.role === 'admin' },
-        { id: 'manual-decisions', label: t("pages.settings.manualDecisions"), icon: Gavel, visible: canManageSettings },
         { id: 'branding', label: t("pages.settings.branding"), icon: Palette, visible: canManageSettings },
     ];
     const settingsTabs: TabItem<SettingsTab>[] = allSettingsTabs
@@ -395,6 +396,14 @@ export function Settings() {
                     manual_refresh_enabled: payload.manual_refresh_enabled,
                 } : current);
                 window.dispatchEvent(new Event(MANUAL_REFRESH_SETTING_EVENT));
+            }
+            if (canManageSettings && hasScenarioChange) {
+                const payload = await updateManualDecisionScenarios({ scenarios: customScenarios });
+                setConfig((current) => current ? {
+                    ...current,
+                    manual_decision_scenario_settings: payload.manual_decision_scenario_settings,
+                } : current);
+                setCustomScenarios(payload.manual_decision_scenario_settings.custom);
             }
             showToast(t("pages.settings.settingsSaved"), "success");
         } catch (error) {
@@ -829,24 +838,6 @@ export function Settings() {
         setScenarioDraft('');
     };
 
-    const handleSaveScenarios = async () => {
-        setIsSavingScenarios(true);
-        try {
-            const payload = await updateManualDecisionScenarios({ scenarios: customScenarios });
-            setConfig((current) => current ? {
-                ...current,
-                manual_decision_scenario_settings: payload.manual_decision_scenario_settings,
-            } : current);
-            setCustomScenarios(payload.manual_decision_scenario_settings.custom);
-            showToast(t("pages.settings.manualDecisionScenariosSaved"), "success");
-        } catch (error) {
-            console.error("Failed to save manual decision scenarios", error);
-            showToast(error instanceof Error ? error.message : t("pages.settings.failedToSaveManualDecisionScenarios"), "danger");
-        } finally {
-            setIsSavingScenarios(false);
-        }
-    };
-
     const addOidcListItem = (field: 'scopes' | 'adminGroups' | 'readOnlyGroups') => {
         const draft = oidcListDrafts[field].trim();
         if (!draft) return;
@@ -1194,6 +1185,28 @@ export function Settings() {
                                 </div>
                             </div>
 
+                            <div className="mt-6 border-t border-gray-200 pt-6 dark:border-gray-700">
+                                <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{t("pages.settings.manualDecisions")}</h3>
+                                <p className="mt-1 mb-4 text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.manualDecisionsDescription")}</p>
+                                <GroupListEditor
+                                    id="settings-manual-decision-scenarios"
+                                    label={t("pages.settings.manualDecisionScenarios")}
+                                    groups={[...lockedScenarios, ...customScenarios]}
+                                    draft={scenarioDraft}
+                                    onDraftChange={setScenarioDraft}
+                                    onAdd={addScenario}
+                                    onRemove={(scenario) => setCustomScenarios((current) => current.filter((candidate) => candidate !== scenario))}
+                                    canRemove={(scenario) => !lockedScenarios.includes(scenario)}
+                                    disabled={!canManageSettings || isSaving}
+                                    placeholder="custom/abuse-report"
+                                    addLabel={t("pages.settings.addGroup")}
+                                    emptyLabel=""
+                                    removeLabel={(scenario) => t("pages.settings.removeManualDecisionScenario", { scenario })}
+                                    labelClass={labelClass}
+                                />
+                                <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.manualDecisionScenariosHelp")}</p>
+                            </div>
+
                             {config?.instances?.some((instance) => Object.keys(instance.sync_overrides || {}).length > 0) && (
                                 <div className="mt-6 rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-900/40">
                                     <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Per-instance configuration overrides</h3>
@@ -1497,48 +1510,6 @@ export function Settings() {
                         labelClass={labelClass}
                         showToast={showToast}
                     />
-                </TabPanel>
-            )}
-
-            {activeTab === 'manual-decisions' && (
-                <TabPanel idPrefix="settings" id="manual-decisions">
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>{t("pages.settings.manualDecisions")}</CardTitle>
-                            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.manualDecisionsDescription")}</p>
-                        </CardHeader>
-                        <CardContent>
-                            <GroupListEditor
-                                id="settings-manual-decision-scenarios"
-                                label={t("pages.settings.manualDecisionScenarios")}
-                                groups={[...lockedScenarios, ...customScenarios]}
-                                draft={scenarioDraft}
-                                onDraftChange={setScenarioDraft}
-                                onAdd={addScenario}
-                                onRemove={(scenario) => setCustomScenarios((current) => current.filter((candidate) => candidate !== scenario))}
-                                canRemove={(scenario) => !lockedScenarios.includes(scenario)}
-                                disabled={!canManageSettings || isSavingScenarios}
-                                placeholder="custom/abuse-report"
-                                addLabel={t("pages.settings.addGroup")}
-                                emptyLabel=""
-                                removeLabel={(scenario) => t("pages.settings.removeManualDecisionScenario", { scenario })}
-                                labelClass={labelClass}
-                            />
-                            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{t("pages.settings.manualDecisionScenariosHelp")}</p>
-
-                            <div className="mt-6 flex justify-start">
-                                <button
-                                    type="button"
-                                    onClick={() => void handleSaveScenarios()}
-                                    disabled={!canManageSettings || isSavingScenarios}
-                                    className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
-                                >
-                                    <Save className="h-4 w-4" />
-                                    {isSavingScenarios ? t("common.saving") : t("common.save")}
-                                </button>
-                            </div>
-                        </CardContent>
-                    </Card>
                 </TabPanel>
             )}
 

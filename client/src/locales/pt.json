@@ -392,8 +392,6 @@
   "pages.settings.manualDecisionScenariosHelp": "manual/web-ui e os cenários do arquivo de configuração são sempre oferecidos e não podem ser removidos aqui. Os cenários adicionados aqui são oferecidos para todas as instâncias. Use o formato author/name.",
   "pages.settings.manualDecisionScenarioInvalid": "\"{scenario}\" não é um cenário válido. Use o formato author/name com letras, dígitos, _, . ou -.",
   "pages.settings.removeManualDecisionScenario": "Remover {scenario}",
-  "pages.settings.manualDecisionScenariosSaved": "Cenários salvos",
-  "pages.settings.failedToSaveManualDecisionScenarios": "Falha ao salvar os cenários",
   "pages.settings.language": "Idioma",
   "pages.settings.languageDescription": "Escolha o idioma usado pela interface.",
   "pages.settings.browserDefaultLanguage": "Padrão do navegador ({language})",

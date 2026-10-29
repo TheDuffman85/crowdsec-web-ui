@@ -392,8 +392,6 @@
   "pages.settings.manualDecisionScenariosHelp": "manual/web-ui और कॉन्फ़िग फ़ाइल के परिदृश्य हमेशा दिए जाते हैं और यहाँ से हटाए नहीं जा सकते। यहाँ जोड़े गए परिदृश्य हर इंस्टेंस के लिए दिए जाते हैं। author/name प्रारूप का उपयोग करें।",
   "pages.settings.manualDecisionScenarioInvalid": "\"{scenario}\" मान्य परिदृश्य नहीं है। अक्षरों, अंकों, _, . या - के साथ author/name प्रारूप का उपयोग करें।",
   "pages.settings.removeManualDecisionScenario": "{scenario} हटाएँ",
-  "pages.settings.manualDecisionScenariosSaved": "परिदृश्य सहेजे गए",
-  "pages.settings.failedToSaveManualDecisionScenarios": "परिदृश्य सहेजने में विफल",
   "pages.settings.language": "भाषा",
   "pages.settings.languageDescription": "इंटरफेस में इस्तेमाल होने वाली भाषा चुनें।",
   "pages.settings.browserDefaultLanguage": "ब्राउज़र डिफ़ॉल्ट ({language})",

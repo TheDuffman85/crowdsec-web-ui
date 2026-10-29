@@ -392,8 +392,6 @@
   "pages.settings.manualDecisionScenariosHelp": "manual/web-ui und Szenarien aus der Konfigurationsdatei werden immer angeboten und können hier nicht entfernt werden. Hier hinzugefügte Szenarien werden für jede Instanz angeboten. Format: author/name.",
   "pages.settings.manualDecisionScenarioInvalid": "„{scenario}“ ist kein gültiges Szenario. Verwende das Format author/name mit Buchstaben, Ziffern, _, . oder -.",
   "pages.settings.removeManualDecisionScenario": "{scenario} entfernen",
-  "pages.settings.manualDecisionScenariosSaved": "Szenarien gespeichert",
-  "pages.settings.failedToSaveManualDecisionScenarios": "Szenarien konnten nicht gespeichert werden",
   "pages.settings.language": "Sprache",
   "pages.settings.languageDescription": "Wähle die Sprache der Oberfläche aus.",
   "pages.settings.browserDefaultLanguage": "Browserstandard ({language})",

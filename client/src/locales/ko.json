@@ -394,8 +394,6 @@
   "pages.settings.manualDecisionScenariosHelp": "manual/web-ui와 설정 파일의 시나리오는 항상 제공되며 여기서 제거할 수 없습니다. 여기서 추가한 시나리오는 모든 인스턴스에 제공됩니다. author/name 형식을 사용하세요.",
   "pages.settings.manualDecisionScenarioInvalid": "\"{scenario}\"은(는) 유효한 시나리오가 아닙니다. 문자, 숫자, _, ., -로 된 author/name 형식을 사용하세요.",
   "pages.settings.removeManualDecisionScenario": "{scenario} 제거",
-  "pages.settings.manualDecisionScenariosSaved": "시나리오를 저장했습니다",
-  "pages.settings.failedToSaveManualDecisionScenarios": "시나리오를 저장하지 못했습니다",
   "pages.settings.language": "언어",
   "pages.settings.languageDescription": "인터페이스에 사용할 언어를 선택합니다.",
   "pages.settings.browserDefaultLanguage": "브라우저 기본값 ({language})",

@@ -394,8 +394,6 @@
   "pages.settings.manualDecisionScenariosHelp": "manual/web-ui and scenarios from the config file are always offered and can't be removed here. Scenarios added here are offered for every instance. Use the format author/name.",
   "pages.settings.manualDecisionScenarioInvalid": "\"{scenario}\" is not a valid scenario. Use the format author/name with letters, digits, _, . or -.",
   "pages.settings.removeManualDecisionScenario": "Remove {scenario}",
-  "pages.settings.manualDecisionScenariosSaved": "Scenarios saved",
-  "pages.settings.failedToSaveManualDecisionScenarios": "Failed to save scenarios",
   "pages.settings.language": "Language",
   "pages.settings.languageDescription": "Choose the language used by the interface.",
   "pages.settings.browserDefaultLanguage": "Browser default ({language})",

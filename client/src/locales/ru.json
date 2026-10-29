@@ -392,8 +392,6 @@
   "pages.settings.manualDecisionScenariosHelp": "manual/web-ui и сценарии из файла конфигурации предлагаются всегда и не могут быть удалены здесь. Добавленные здесь сценарии предлагаются для каждого экземпляра. Формат: author/name.",
   "pages.settings.manualDecisionScenarioInvalid": "«{scenario}» — недопустимый сценарий. Используйте формат author/name из букв, цифр, _, . или -.",
   "pages.settings.removeManualDecisionScenario": "Удалить {scenario}",
-  "pages.settings.manualDecisionScenariosSaved": "Сценарии сохранены",
-  "pages.settings.failedToSaveManualDecisionScenarios": "Не удалось сохранить сценарии",
   "pages.settings.language": "Язык",
   "pages.settings.languageDescription": "Выберите язык интерфейса.",
   "pages.settings.browserDefaultLanguage": "По умолчанию браузера ({language})",

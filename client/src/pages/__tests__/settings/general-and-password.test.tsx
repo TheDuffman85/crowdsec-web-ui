@@ -106,8 +106,8 @@ describe('Settings general and password', () => {
 
     await user.click(screen.getByRole('tab', { name: 'General' }));
     expect(screen.getByLabelText('Refresh interval')).toBeInTheDocument();
+    expect(screen.getByLabelText('Scenarios')).toBeInTheDocument();
     expect(screen.queryByLabelText('Language')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Scenarios')).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('tab', { name: 'Authentication' }));
     expect(screen.getByRole('tab', { name: 'Authentication' })).toHaveAttribute('aria-selected', 'true');
@@ -115,8 +115,7 @@ describe('Settings general and password', () => {
     expect(screen.queryByLabelText('Language')).not.toBeInTheDocument();
 
     await user.keyboard('{ArrowRight}');
-    expect(screen.getByRole('tab', { name: 'pages.settings.manualDecisions' })).toHaveFocus();
-    expect(screen.getByLabelText('Scenarios')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'pages.settings.branding' })).toHaveFocus();
   });
 
   test('opens the tab named in the URL', async () => {

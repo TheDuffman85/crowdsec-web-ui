@@ -27,7 +27,6 @@ const { setLanguagePreferenceMock, tMock, useAuthMock } = vi.hoisted(() => {
     'pages.settings.fontSystem': 'System default',
     'pages.settings.manualDecisionScenarios': 'Scenarios',
     'pages.settings.manualDecisionScenarioInvalid': '"{scenario}" is not a valid scenario.',
-    'pages.settings.manualDecisionScenariosSaved': 'Scenarios saved',
     'pages.settings.removeManualDecisionScenario': 'Remove {scenario}',
     'pages.settings.refresh': 'Refresh',
     'pages.settings.refreshDescription': 'Control how often the backend imports CrowdSec changes.',

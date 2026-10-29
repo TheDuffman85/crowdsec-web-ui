@@ -392,8 +392,6 @@
   "pages.settings.manualDecisionScenariosHelp": "يُعرض manual/web-ui والسيناريوهات من ملف الإعداد دائمًا ولا يمكن إزالتها هنا. تُعرض السيناريوهات المضافة هنا لكل مثيل. استخدم الصيغة author/name.",
   "pages.settings.manualDecisionScenarioInvalid": "\"{scenario}\" ليس سيناريو صالحًا. استخدم الصيغة author/name بأحرف أو أرقام أو _ أو . أو -.",
   "pages.settings.removeManualDecisionScenario": "إزالة {scenario}",
-  "pages.settings.manualDecisionScenariosSaved": "تم حفظ السيناريوهات",
-  "pages.settings.failedToSaveManualDecisionScenarios": "تعذّر حفظ السيناريوهات",
   "pages.settings.language": "اللغة",
   "pages.settings.languageDescription": "اختر اللغة المستخدمة في الواجهة.",
   "pages.settings.browserDefaultLanguage": "افتراضي المتصفح ({language})",

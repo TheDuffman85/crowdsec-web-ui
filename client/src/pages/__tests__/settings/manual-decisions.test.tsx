@@ -24,7 +24,7 @@ describe('Settings manual decision scenarios', () => {
       success: true,
       manual_decision_scenario_settings: { configured: ['custom/from-config'], custom: ['custom/new'] },
     });
-    render(<SettingsRouter tab="manual-decisions"><Settings /></SettingsRouter>);
+    render(<SettingsRouter tab="general"><Settings /></SettingsRouter>);
 
     await waitFor(() => expect(screen.getByText('custom/old')).toBeInTheDocument());
     expect(screen.getByText('manual/web-ui')).toBeInTheDocument();
@@ -47,10 +47,10 @@ describe('Settings manual decision scenarios', () => {
   });
 
   test('hides manual decisions without settings permission', async () => {
-    render(<SettingsRouter tab="manual-decisions"><Settings /></SettingsRouter>);
+    render(<SettingsRouter tab="general"><Settings /></SettingsRouter>);
 
     expect(await screen.findByRole('tab', { name: 'pages.settings.account' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.queryByRole('tab', { name: 'pages.settings.manualDecisions' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'General' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Scenarios')).not.toBeInTheDocument();
   });
 });
