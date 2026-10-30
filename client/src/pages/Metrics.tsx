@@ -53,6 +53,9 @@ type MetricsState =
 const SHOW_CHILD_PARSER_NODES_STORAGE_KEY = 'crowdsec-web-ui:metrics:show-child-parser-nodes';
 const MACHINE_ONLINE_WINDOW_MS = 2 * 60 * 1_000;
 const COMBINED_ENDPOINT_ID = '_combined';
+const LIST_COLLAPSED_COUNT = 12;
+// Bouncer and machine cards are tall, so those lists collapse earlier.
+const ENTITY_LIST_COLLAPSED_COUNT = 6;
 
 const MetricsSourcesContext = createContext<{
   sources: Map<string, CrowdsecMetricsSource>;
@@ -344,6 +347,96 @@ function TimingValue({ value, tooltip, fallback }: { value: number | null; toolt
   );
 }
 
+type CollapsibleList<T> = {
+  id: string;
+  title: string;
+  total: number;
+  filter: string;
+  setFilter: (value: string) => void;
+  expanded: boolean;
+  setExpanded: (update: (value: boolean) => boolean) => void;
+  collapsible: boolean;
+  collapsedCount: number;
+  filtering: boolean;
+  filteredItems: T[];
+  visibleItems: T[];
+};
+
+function useCollapsibleList<T>(
+  id: string,
+  title: string,
+  items: T[],
+  getSearchText: (item: T) => string,
+  collapsedCount = LIST_COLLAPSED_COUNT,
+): CollapsibleList<T> {
+  const [expanded, setExpanded] = useState(false);
+  const [filter, setFilter] = useState('');
+  const collapsible = items.length > collapsedCount;
+  const normalizedFilter = filter.trim().toLowerCase();
+  const filteredItems = normalizedFilter
+    ? items.filter((item) => getSearchText(item).toLowerCase().includes(normalizedFilter))
+    : items;
+  const visibleItems = expanded || normalizedFilter
+    ? filteredItems
+    : filteredItems.slice(0, collapsedCount);
+
+  return {
+    id,
+    title,
+    total: items.length,
+    filter,
+    setFilter,
+    expanded,
+    setExpanded,
+    collapsible,
+    collapsedCount,
+    filtering: normalizedFilter !== '',
+    filteredItems,
+    visibleItems,
+  };
+}
+
+function ListFilterInput<T>({ list }: { list: CollapsibleList<T> }) {
+  const { t } = useI18n();
+  const inputId = `metrics-${list.id}-filter`;
+
+  // Keep an active filter clearable after a refresh shrinks the list.
+  if (!list.collapsible && list.filter === '') return null;
+
+  return (
+    <div className="mb-3">
+      <label htmlFor={inputId} className="sr-only">{t('pages.metrics.listFilterLabel', { title: list.title })}</label>
+      <input
+        id={inputId}
+        type="search"
+        value={list.filter}
+        onChange={(event) => list.setFilter(event.target.value)}
+        placeholder={t('pages.metrics.listFilterPlaceholder', { count: list.total })}
+        className="block w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
+      />
+    </div>
+  );
+}
+
+function ListShowAllButton<T>({ list }: { list: CollapsibleList<T> }) {
+  const { t } = useI18n();
+
+  if (!list.collapsible || list.filtering) return null;
+
+  return (
+    <button
+      type="button"
+      onClick={() => list.setExpanded((value) => !value)}
+      aria-expanded={list.expanded}
+      className="mt-3 w-full cursor-pointer rounded border border-gray-200 bg-gray-50 py-2 text-sm text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:border-gray-700 dark:bg-gray-900/30 dark:hover:bg-gray-800 dark:hover:text-gray-300"
+    >
+      {list.expanded
+        ? t('pages.metrics.listShowLess')
+        : t('pages.metrics.listShowAll', { total: list.total, remaining: list.total - list.collapsedCount })}
+    </button>
+  );
+}
+
 function RouteActivityList({ routes, emptyMessage }: { routes?: CrowdsecMetricsRouteActivity[]; emptyMessage: string }) {
   if (!routes || routes.length === 0) {
     return <p className="text-xs text-gray-500 dark:text-gray-400">{emptyMessage}</p>;
@@ -390,6 +483,7 @@ function EntityList({
   const { t } = useI18n();
   const { formatDateTime } = useDateTime();
   const isMachine = entityType === 'machine';
+  const list = useCollapsibleList(entityType, title, items, (item) => item.name, ENTITY_LIST_COLLAPSED_COUNT);
 
   return (
     <Card className="h-full">
@@ -399,11 +493,14 @@ function EntityList({
         description={description}
       />
       <CardContent>
+        <ListFilterInput list={list} />
         {items.length === 0 ? (
           <EmptyState message={emptyMessage} />
+        ) : list.filteredItems.length === 0 ? (
+          <EmptyState message={t('pages.metrics.listFilterNoMatches')} />
         ) : (
           <div className="space-y-3">
-            {items.map((item) => {
+            {list.visibleItems.map((item) => {
               const nonEmptyDecisions = item.decisionsOk || 0;
               const emptyDecisions = item.decisionsKo || 0;
               const decisionTotal = nonEmptyDecisions + emptyDecisions;
@@ -517,6 +614,7 @@ function EntityList({
             })}
           </div>
         )}
+        <ListShowAllButton list={list} />
         {!isMachine && (
           <p className="mt-3 rounded-md bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800 dark:bg-blue-950/30 dark:text-blue-200">
             {t('pages.metrics.remediationMetricsNote')}
@@ -529,20 +627,25 @@ function EntityList({
 
 function ParserSourceList({ items }: { items: CrowdsecMetricsParserSource[] }) {
   const { t } = useI18n();
+  const title = t('pages.metrics.parserSources');
+  const list = useCollapsibleList('parser-sources', title, items, (item) => `${item.source} ${item.type}`);
 
   return (
     <Card className="overflow-visible">
       <SectionHeader
         icon={FileSearch}
-        title={t('pages.metrics.parserSources')}
+        title={title}
         description={t('pages.metrics.parserSourcesDescription')}
       />
       <CardContent>
+        <ListFilterInput list={list} />
         {items.length === 0 ? (
           <EmptyState message={t('pages.metrics.emptyParserSources')} />
+        ) : list.filteredItems.length === 0 ? (
+          <EmptyState message={t('pages.metrics.listFilterNoMatches')} />
         ) : (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {items.map((item) => (
+            {list.visibleItems.map((item) => (
               <div key={`${item.source_id || ''}-${item.source}-${item.type}`} className="rounded-lg border border-gray-100 p-4 dark:border-gray-700/70">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -586,6 +689,7 @@ function ParserSourceList({ items }: { items: CrowdsecMetricsParserSource[] }) {
             ))}
           </div>
         )}
+        <ListShowAllButton list={list} />
       </CardContent>
     </Card>
   );
@@ -614,17 +718,22 @@ function AppsecActivityBar({ requests, blocked }: { requests: number; blocked: n
 function ScenarioList({ items }: { items?: CrowdsecMetricsScenario[] }) {
   const { t } = useI18n();
   const scenarios = items || [];
+  const title = t('pages.metrics.scenarios');
+  const list = useCollapsibleList('scenarios', title, scenarios, (item) => item.name);
 
   return (
     <Card>
       <SectionHeader
         icon={Activity}
-        title={t('pages.metrics.scenarios')}
+        title={title}
         description={t('pages.metrics.scenariosDescription')}
       />
       <CardContent>
+        <ListFilterInput list={list} />
         {scenarios.length === 0 ? (
           <EmptyState message={t('pages.metrics.emptyScenarios')} />
+        ) : list.filteredItems.length === 0 ? (
+          <EmptyState message={t('pages.metrics.listFilterNoMatches')} />
         ) : (
           <div className="overflow-x-auto rounded-lg border border-gray-100 dark:border-gray-700/70">
             <div className="min-w-[780px]">
@@ -638,7 +747,7 @@ function ScenarioList({ items }: { items?: CrowdsecMetricsScenario[] }) {
                 <span className="text-right">{t('pages.metrics.columns.canceled')}</span>
               </div>
               <div className="divide-y divide-gray-100 dark:divide-gray-700/70">
-                {scenarios.map((item) => (
+                {list.visibleItems.map((item) => (
                   <div key={`${item.source_id || ''}-${item.name}`} className="grid grid-cols-[minmax(0,2fr)_100px_110px_100px_100px_100px_100px] gap-3 px-4 py-3">
                     <div className="min-w-0">
                       <div className="truncate font-medium text-gray-900 dark:text-white" title={item.name}>{item.name}</div>
@@ -656,6 +765,7 @@ function ScenarioList({ items }: { items?: CrowdsecMetricsScenario[] }) {
             </div>
           </div>
         )}
+        <ListShowAllButton list={list} />
       </CardContent>
     </Card>
   );
@@ -664,7 +774,9 @@ function ScenarioList({ items }: { items?: CrowdsecMetricsScenario[] }) {
 function ParserNodeList({ items, showChildNodes, onShowChildNodesChange }: { items: CrowdsecMetricsParserNode[]; showChildNodes: boolean; onShowChildNodesChange: (next: boolean) => void }) {
   const { t } = useI18n();
   const notAvailable = t('pages.metrics.notAvailable');
-  const visibleItems = showChildNodes ? items : items.filter((item) => !item.isChild);
+  const shownItems = showChildNodes ? items : items.filter((item) => !item.isChild);
+  const title = t('pages.metrics.parserNodes');
+  const list = useCollapsibleList('parser-nodes', title, shownItems, (item) => `${item.name} ${item.stage} ${item.type} ${item.source}`);
   const switchId = 'show-child-parser-nodes';
   const switchLabelId = `${switchId}-label`;
 
@@ -672,7 +784,7 @@ function ParserNodeList({ items, showChildNodes, onShowChildNodesChange }: { ite
     <Card>
       <SectionHeader
         icon={DatabaseZap}
-        title={t('pages.metrics.parserNodes')}
+        title={title}
         description={t('pages.metrics.parserNodesDescription')}
         actions={items.length > 0 ? (
           <div className="flex items-center gap-2 rounded-md border border-gray-100 bg-gray-50 px-2.5 py-1.5 dark:border-gray-700/70 dark:bg-gray-900/40">
@@ -684,10 +796,13 @@ function ParserNodeList({ items, showChildNodes, onShowChildNodesChange }: { ite
         ) : undefined}
       />
       <CardContent>
+        <ListFilterInput list={list} />
         {items.length === 0 ? (
           <EmptyState message={t('pages.metrics.emptyParserNodes')} />
-        ) : visibleItems.length === 0 ? (
+        ) : shownItems.length === 0 ? (
           <EmptyState message={t('pages.metrics.emptyParserNodesAfterFilter')} />
+        ) : list.filteredItems.length === 0 ? (
+          <EmptyState message={t('pages.metrics.listFilterNoMatches')} />
         ) : (
           <div className="overflow-hidden rounded-lg border border-gray-100 dark:border-gray-700/70">
             <div className="hidden grid-cols-[minmax(0,2fr)_minmax(0,1fr)_110px_110px] gap-3 border-b border-gray-100 bg-gray-50 px-4 py-2 text-xs font-semibold uppercase text-gray-500 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-400 lg:grid">
@@ -697,7 +812,7 @@ function ParserNodeList({ items, showChildNodes, onShowChildNodesChange }: { ite
               <span className="text-right">{t('pages.metrics.columns.success')}</span>
             </div>
             <div className="divide-y divide-gray-100 dark:divide-gray-700/70">
-              {visibleItems.map((item) => (
+              {list.visibleItems.map((item) => (
                 <div key={`${item.source_id || ''}-${item.name}-${item.stage}-${item.source}-${item.acquisType || ''}`} className="grid gap-2 px-4 py-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_110px_110px] lg:items-center lg:gap-3">
                   <div className="min-w-0">
                     <p className="truncate font-medium text-gray-900 dark:text-white" title={item.name}>{item.name}</p>
@@ -717,6 +832,7 @@ function ParserNodeList({ items, showChildNodes, onShowChildNodesChange }: { ite
             </div>
           </div>
         )}
+        <ListShowAllButton list={list} />
       </CardContent>
     </Card>
   );
@@ -724,6 +840,8 @@ function ParserNodeList({ items, showChildNodes, onShowChildNodesChange }: { ite
 
 function WhitelistList({ items }: { items: CrowdsecMetricsWhitelist[] }) {
   const { t } = useI18n();
+  const title = t('pages.metrics.whitelists');
+  const list = useCollapsibleList('whitelists', title, items, (item) => `${item.name} ${item.reason}`);
 
   if (items.length === 0) {
     return null;
@@ -733,31 +851,37 @@ function WhitelistList({ items }: { items: CrowdsecMetricsWhitelist[] }) {
     <Card>
       <SectionHeader
         icon={ListChecks}
-        title={t('pages.metrics.whitelists')}
+        title={title}
         description={t('pages.metrics.whitelistsDescription')}
       />
       <CardContent>
-        <div className="overflow-hidden rounded-lg border border-gray-100 dark:border-gray-700/70">
-          <div className="hidden grid-cols-[minmax(0,2fr)_minmax(0,2fr)_100px_120px] gap-3 border-b border-gray-100 bg-gray-50 px-4 py-2 text-xs font-semibold uppercase text-gray-500 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-400 lg:grid">
-            <span>{t('pages.metrics.columns.whitelist')}</span>
-            <span>{t('pages.metrics.columns.reason')}</span>
-            <span className="text-right">{t('pages.metrics.columns.hits')}</span>
-            <span className="text-right">{t('pages.metrics.columns.whitelisted')}</span>
-          </div>
-          <div className="divide-y divide-gray-100 dark:divide-gray-700/70">
-            {items.map((item) => (
-              <div key={`${item.source_id || ''}-${item.name}-${item.reason}`} className="grid gap-2 px-4 py-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,2fr)_100px_120px] lg:items-center lg:gap-3">
-                <div className="min-w-0">
-                  <p className="truncate font-medium text-gray-900 dark:text-white" title={item.name}>{item.name}</p>
-                  <div className="mt-1"><MetricsSourceBadge sourceId={item.source_id} /></div>
+        <ListFilterInput list={list} />
+        {list.filteredItems.length === 0 ? (
+          <EmptyState message={t('pages.metrics.listFilterNoMatches')} />
+        ) : (
+          <div className="overflow-hidden rounded-lg border border-gray-100 dark:border-gray-700/70">
+            <div className="hidden grid-cols-[minmax(0,2fr)_minmax(0,2fr)_100px_120px] gap-3 border-b border-gray-100 bg-gray-50 px-4 py-2 text-xs font-semibold uppercase text-gray-500 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-400 lg:grid">
+              <span>{t('pages.metrics.columns.whitelist')}</span>
+              <span>{t('pages.metrics.columns.reason')}</span>
+              <span className="text-right">{t('pages.metrics.columns.hits')}</span>
+              <span className="text-right">{t('pages.metrics.columns.whitelisted')}</span>
+            </div>
+            <div className="divide-y divide-gray-100 dark:divide-gray-700/70">
+              {list.visibleItems.map((item) => (
+                <div key={`${item.source_id || ''}-${item.name}-${item.reason}`} className="grid gap-2 px-4 py-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,2fr)_100px_120px] lg:items-center lg:gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium text-gray-900 dark:text-white" title={item.name}>{item.name}</p>
+                    <div className="mt-1"><MetricsSourceBadge sourceId={item.source_id} /></div>
+                  </div>
+                  <div className="truncate text-sm text-gray-600 dark:text-gray-300" title={item.reason}>{item.reason}</div>
+                  <div className="font-mono text-sm font-semibold text-gray-900 dark:text-white lg:text-right">{formatNumber(item.hits)}</div>
+                  <div className="font-mono text-sm font-semibold text-gray-900 dark:text-white lg:text-right">{formatNumber(item.whitelisted)}</div>
                 </div>
-                <div className="truncate text-sm text-gray-600 dark:text-gray-300" title={item.reason}>{item.reason}</div>
-                <div className="font-mono text-sm font-semibold text-gray-900 dark:text-white lg:text-right">{formatNumber(item.hits)}</div>
-                <div className="font-mono text-sm font-semibold text-gray-900 dark:text-white lg:text-right">{formatNumber(item.whitelisted)}</div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
-        </div>
+        )}
+        <ListShowAllButton list={list} />
       </CardContent>
     </Card>
   );
@@ -767,20 +891,25 @@ function TimingList({ items }: { items: CrowdsecMetricsTiming[] }) {
   const { t } = useI18n();
   const notAvailable = t('pages.metrics.notAvailable');
   const timingTooltip = t('pages.metrics.parserTimingTooltip');
+  const title = t('pages.metrics.parserTiming');
+  const list = useCollapsibleList('parser-timing', title, items, (item) => `${item.source} ${item.type}`);
 
   return (
     <Card className="overflow-visible">
       <SectionHeader
         icon={Clock3}
-        title={t('pages.metrics.parserTiming')}
+        title={title}
         description={t('pages.metrics.parserTimingDescription')}
       />
       <CardContent>
+        <ListFilterInput list={list} />
         {items.length === 0 ? (
           <EmptyState message={t('pages.metrics.emptyParserTiming')} />
+        ) : list.filteredItems.length === 0 ? (
+          <EmptyState message={t('pages.metrics.listFilterNoMatches')} />
         ) : (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {items.map((item) => (
+            {list.visibleItems.map((item) => (
               <div key={`${item.source_id || ''}-${item.source}-${item.type}`} className="rounded-lg bg-gray-50 p-4 dark:bg-gray-900/40">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
@@ -795,6 +924,7 @@ function TimingList({ items }: { items: CrowdsecMetricsTiming[] }) {
             ))}
           </div>
         )}
+        <ListShowAllButton list={list} />
       </CardContent>
     </Card>
   );
@@ -804,17 +934,29 @@ function LapiLatencyList({ items }: { items?: CrowdsecMetricsLapiRoute[] }) {
   const { t } = useI18n();
   const notAvailable = t('pages.metrics.notAvailable');
   const routes = items || [];
+  // LAPI exposes a small, fixed set of routes, so a single LAPI is always
+  // shown in full; only combined views of several endpoints collapse.
+  const routesPerSource = new Map<string, number>();
+  for (const route of routes) {
+    routesPerSource.set(route.source_id || '', (routesPerSource.get(route.source_id || '') || 0) + 1);
+  }
+  const collapsedCount = Math.max(LIST_COLLAPSED_COUNT, ...routesPerSource.values());
+  const title = t('pages.metrics.lapiLatency');
+  const list = useCollapsibleList('lapi-routes', title, routes, (item) => `${item.method} ${item.route}`, collapsedCount);
 
   return (
     <Card>
       <SectionHeader
         icon={Network}
-        title={t('pages.metrics.lapiLatency')}
+        title={title}
         description={t('pages.metrics.lapiLatencyDescription')}
       />
       <CardContent>
+        <ListFilterInput list={list} />
         {routes.length === 0 ? (
           <EmptyState message={t('pages.metrics.emptyLapiLatency')} />
+        ) : list.filteredItems.length === 0 ? (
+          <EmptyState message={t('pages.metrics.listFilterNoMatches')} />
         ) : (
           <div className="overflow-hidden rounded-lg border border-gray-100 dark:border-gray-700/70">
             <div className="hidden grid-cols-[90px_minmax(0,2fr)_110px_130px] gap-3 border-b border-gray-100 bg-gray-50 px-4 py-2 text-xs font-semibold uppercase text-gray-500 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-400 lg:grid">
@@ -824,7 +966,7 @@ function LapiLatencyList({ items }: { items?: CrowdsecMetricsLapiRoute[] }) {
               <span className="text-right">{t('pages.metrics.columns.average')}</span>
             </div>
             <div className="divide-y divide-gray-100 dark:divide-gray-700/70">
-              {routes.map((item) => {
+              {list.visibleItems.map((item) => {
                 const tone = latencyTone(item.averageSeconds);
 
                 return (
@@ -842,6 +984,7 @@ function LapiLatencyList({ items }: { items?: CrowdsecMetricsLapiRoute[] }) {
             </div>
           </div>
         )}
+        <ListShowAllButton list={list} />
       </CardContent>
     </Card>
   );
@@ -852,20 +995,25 @@ function AppsecEngineList({ items }: { items?: CrowdsecMetricsAppsecEngine[] }) 
   const notAvailable = t('pages.metrics.notAvailable');
   const engines = items || [];
   const blockRateTooltip = t('pages.metrics.appsecBlockRateTooltip');
+  const title = t('pages.metrics.appsecEngines');
+  const list = useCollapsibleList('appsec-engines', title, engines, (item) => `${item.engine} ${item.source}`);
 
   return (
     <Card className="overflow-visible">
       <SectionHeader
         icon={ShieldOff}
-        title={t('pages.metrics.appsecEngines')}
+        title={title}
         description={t('pages.metrics.appsecEnginesDescription')}
       />
       <CardContent>
+        <ListFilterInput list={list} />
         {engines.length === 0 ? (
           <EmptyState message={t('pages.metrics.emptyAppsecEngines')} />
+        ) : list.filteredItems.length === 0 ? (
+          <EmptyState message={t('pages.metrics.listFilterNoMatches')} />
         ) : (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {engines.map((item) => {
+            {list.visibleItems.map((item) => {
               const blockTone: MetricTone = item.blocked > 0 ? 'warning' : 'neutral';
               const allowed = Math.max(item.requests - item.blocked, 0);
 
@@ -903,6 +1051,7 @@ function AppsecEngineList({ items }: { items?: CrowdsecMetricsAppsecEngine[] }) 
             })}
           </div>
         )}
+        <ListShowAllButton list={list} />
       </CardContent>
     </Card>
   );

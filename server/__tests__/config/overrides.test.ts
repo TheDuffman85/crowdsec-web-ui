@@ -158,6 +158,24 @@ describe('configuration overrides', () => {
     }
   });
 
+  test('applies and validates CONFIG_SERVER_HOSTNAME', () => {
+    const generatedConfigFile = createMissingConfigPath();
+    createRuntimeConfigImpl({}, { defaultConfigFile: generatedConfigFile });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(createRuntimeConfigImpl({}, { defaultConfigFile: generatedConfigFile }).hostname).toBeUndefined();
+      for (const hostname of ['crowdsec.example.com', 'relay', '192.0.2.1', '2001:db8::1']) {
+        expect(createRuntimeConfigImpl({ CONFIG_SERVER_HOSTNAME: ` ${hostname} ` }, { defaultConfigFile: generatedConfigFile }).hostname).toBe(hostname);
+      }
+      for (const hostname of ['crowdsec.example.com\r\nRSET', 'crowd sec', '-crowdsec.example.com', 'crowdsec..example.com']) {
+        expect(() => createRuntimeConfigImpl({ CONFIG_SERVER_HOSTNAME: hostname }, { defaultConfigFile: generatedConfigFile }))
+          .toThrow(/Invalid server\.hostname value/);
+      }
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   test('applies CONFIG_AUDIT_ overrides', () => {
     const generatedConfigFile = createMissingConfigPath();
     createRuntimeConfigImpl({}, { defaultConfigFile: generatedConfigFile });

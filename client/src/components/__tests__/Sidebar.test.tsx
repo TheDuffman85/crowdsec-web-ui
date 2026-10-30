@@ -196,7 +196,7 @@ describe('Sidebar', () => {
     expect(screen.queryByText('Update Available')).not.toBeInTheDocument();
   });
 
-  test('shows metrics below notifications when sidebar preference is visible', async () => {
+  test('shows notifications below metrics when sidebar preference is visible', async () => {
     vi.mocked(useNotificationUnreadCount).mockReturnValue({
       unreadCount: 0,
       setUnreadCount: vi.fn(),
@@ -216,8 +216,8 @@ describe('Sidebar', () => {
     const notificationsLink = screen.getAllByRole('link', { name: 'Notifications' })[0];
     const settingsLink = screen.getAllByRole('link', { name: 'Settings' })[0];
 
-    expect(metricsLink.compareDocumentPosition(notificationsLink) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
-    expect(metricsLink.compareDocumentPosition(settingsLink) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(notificationsLink.compareDocumentPosition(metricsLink) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+    expect(notificationsLink.compareDocumentPosition(settingsLink) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   test('updates allowlists visibility when its preference is saved', async () => {

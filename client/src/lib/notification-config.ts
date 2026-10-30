@@ -17,6 +17,23 @@ export interface EmailConfig {
   subjectPrefix: string;
 }
 
+export type AppriseMode = 'key' | 'urls';
+export type AppriseType = 'auto' | 'info' | 'success' | 'warning' | 'failure';
+
+export const APPRISE_TYPES: AppriseType[] = ['auto', 'info', 'success', 'warning', 'failure'];
+
+export interface AppriseConfig {
+  appriseUrl: string;
+  appriseMode: AppriseMode;
+  appriseKey: string;
+  appriseTags: string;
+  appriseUrls: string;
+  appriseTypeOverride: AppriseType;
+  appriseUsername: string;
+  apprisePassword: string;
+  titlePrefix: string;
+}
+
 export interface GotifyConfig {
   gotifyUrl: string;
   gotifyToken: string;
@@ -135,6 +152,20 @@ export function defaultEmailConfig(): EmailConfig {
   };
 }
 
+export function defaultAppriseConfig(): AppriseConfig {
+  return {
+    appriseUrl: '',
+    appriseMode: 'key',
+    appriseKey: '',
+    appriseTags: '',
+    appriseUrls: '',
+    appriseTypeOverride: 'auto',
+    appriseUsername: '',
+    apprisePassword: '',
+    titlePrefix: 'CrowdSec',
+  };
+}
+
 export function defaultGotifyConfig(): GotifyConfig {
   return {
     gotifyUrl: '',
@@ -186,6 +217,7 @@ export function defaultWebhookConfig(): WebhookConfig {
 }
 
 export function defaultChannelConfig(type: NotificationChannelType): Record<string, AlertMetaValue> {
+  if (type === 'apprise') return defaultAppriseConfig() as unknown as Record<string, AlertMetaValue>;
   if (type === 'email') return defaultEmailConfig() as unknown as Record<string, AlertMetaValue>;
   if (type === 'gotify') return defaultGotifyConfig() as unknown as Record<string, AlertMetaValue>;
   if (type === 'mqtt') return defaultMqttConfig() as unknown as Record<string, AlertMetaValue>;
@@ -210,6 +242,23 @@ export function coerceEmailConfig(config: unknown): EmailConfig {
       ? raw.emailImportanceOverride
       : 'auto',
     subjectPrefix: stringValue(raw.subjectPrefix, '[CrowdSec]'),
+  };
+}
+
+export function coerceAppriseConfig(config: unknown): AppriseConfig {
+  const raw = asRecord(config);
+  return {
+    appriseUrl: stringValue(raw.appriseUrl),
+    appriseMode: raw.appriseMode === 'urls' ? 'urls' : 'key',
+    appriseKey: stringValue(raw.appriseKey),
+    appriseTags: stringValue(raw.appriseTags),
+    appriseUrls: stringValue(raw.appriseUrls),
+    appriseTypeOverride: APPRISE_TYPES.includes(raw.appriseTypeOverride as AppriseType)
+      ? raw.appriseTypeOverride as AppriseType
+      : 'auto',
+    appriseUsername: stringValue(raw.appriseUsername),
+    apprisePassword: stringValue(raw.apprisePassword),
+    titlePrefix: stringValue(raw.titlePrefix, 'CrowdSec'),
   };
 }
 
@@ -324,6 +373,28 @@ export function validateNotificationChannelConfig(type: NotificationChannelType,
       }
     }
     if (email.smtpPort < 1 || email.smtpPort > 65535) return 'SMTP port must be between 1 and 65535';
+    return null;
+  }
+
+  if (type === 'apprise') {
+    const apprise = coerceAppriseConfig(config);
+    if (!apprise.appriseUrl.trim()) return 'Apprise API URL is required';
+    try {
+      const parsed = new URL(apprise.appriseUrl);
+      if (!['http:', 'https:'].includes(parsed.protocol)) {
+        return 'Apprise API URL must use http or https';
+      }
+    } catch {
+      return 'Apprise API URL must be a valid URL';
+    }
+    if (apprise.appriseMode === 'urls') {
+      if (!apprise.appriseUrls.trim()) return 'Apprise notification URLs are required';
+    } else {
+      if (!apprise.appriseKey.trim()) return 'Apprise configuration key is required';
+      if (!/^[\w-]{1,128}$/.test(apprise.appriseKey.trim())) {
+        return 'Apprise configuration key must only contain letters, numbers, hyphens, and underscores';
+      }
+    }
     return null;
   }
 

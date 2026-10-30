@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { isValidDateFormat, type DateFormat } from '../shared/date-format';
 import type { ManagedSettingSource } from '../shared/contracts';
@@ -91,6 +92,7 @@ export interface DashboardAuthConfig {
 export interface RuntimeConfig {
   port: number;
   basePath: string;
+  hostname?: string;
   crowdsecUrl: string;
   crowdsecAuth: CrowdsecAuthConfig;
   crowdsecAuthMode: CrowdsecAuthConfig['mode'];
@@ -175,6 +177,16 @@ export function parseTimeZone(value: string | undefined): string | null {
   } catch {
     throw new Error(`Invalid TZ value "${timeZone}". Use an IANA time zone such as Europe/Berlin or UTC.`);
   }
+}
+
+const HOSTNAME_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
+
+export function parseHostname(value: string | undefined): string | undefined {
+  const hostname = value?.trim();
+  if (!hostname) return undefined;
+  if (net.isIP(hostname)) return hostname;
+  if (hostname.length <= 253 && hostname.split('.').every((label) => HOSTNAME_LABEL_PATTERN.test(label))) return hostname;
+  throw new Error(`Invalid server.hostname value "${hostname}". Use a hostname such as crowdsec.example.com or an IP address.`);
 }
 
 export function parseTimeFormat(value: string | undefined): TimeFormat {
@@ -464,6 +476,7 @@ function createRuntimeConfigFromEnvironment(env: NodeJS.ProcessEnv): RuntimeConf
   const runtimeConfig: RuntimeConfig = {
     port: Number(env.PORT || 3000),
     basePath: (env.BASE_PATH || '').replace(/\/$/, ''),
+    hostname: parseHostname(env.SERVER_HOSTNAME),
     crowdsecUrl: env.CROWDSEC_URL || 'http://crowdsec:8080',
     crowdsecAuth,
     crowdsecAuthMode: crowdsecAuth.mode,

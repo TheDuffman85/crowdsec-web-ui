@@ -18,6 +18,7 @@
 # server:
 #   port: 3000
 #   basePath: ""
+#   hostname: crowdsec.example.com # Name announced to remote services, such as the SMTP EHLO name; defaults to localhost.
 
 # storage:
 #   dataDir: /app/data # state.db with users, notification rules, and settings; back this up.

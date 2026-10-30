@@ -69,6 +69,7 @@ export interface NotificationServiceOptions {
   getLapiStatus?: () => LapiStatus;
   getLapiStatuses?: () => Array<{ instanceId: string; instanceName: string; status: LapiStatus }>;
   outboundGuard: NotificationOutboundGuard;
+  hostname?: string;
   secretStore: NotificationSecretStore;
   debugPayloads?: boolean;
   timeZone?: string | null;
@@ -1297,6 +1298,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
         assertHostAllowed: outboundGuard.assertHostAllowed,
         assertUrlAllowed: outboundGuard.assertUrlAllowed,
         lookup: outboundGuard.lookup,
+        hostname: options.hostname,
       });
 
       return {
@@ -1529,7 +1531,7 @@ function extractCveIds(alert: AlertRecord): string[] {
 }
 
 function normalizeChannelType(value: unknown): NotificationChannelType {
-  if (value === 'ntfy' || value === 'gotify' || value === 'email' || value === 'mqtt' || value === 'webhook') return value;
+  if (value === 'apprise' || value === 'ntfy' || value === 'gotify' || value === 'email' || value === 'mqtt' || value === 'webhook') return value;
   throw new Error('Invalid notification channel type');
 }
 

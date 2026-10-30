@@ -21,6 +21,8 @@ import {
   fetchConfig,
 } from '../lib/api';
 import {
+  APPRISE_TYPES,
+  coerceAppriseConfig,
   coerceEmailConfig,
   coerceGotifyConfig,
   coerceMqttConfig,
@@ -30,6 +32,7 @@ import {
   hasStoredSecret,
   STORED_SECRET_SENTINEL,
   validateNotificationChannelConfig,
+  type AppriseConfig,
   type EmailConfig,
   type GotifyConfig,
   type MqttConfig,
@@ -200,6 +203,7 @@ function generateChannelName(form: ChannelFormState, t: (key: string) => string)
   };
   let detail = '';
   if (form.type === 'ntfy') detail = setting('ntfyTopic');
+  if (form.type === 'apprise') detail = setting('appriseMode') === 'urls' ? hostAndPath(setting('appriseUrl')) : setting('appriseKey');
   if (form.type === 'gotify') detail = hostAndPath(setting('gotifyUrl'));
   if (form.type === 'email') detail = setting('emailTo').split(/[;,]/)[0].trim();
   if (form.type === 'mqtt') detail = setting('topic') || hostAndPath(setting('brokerUrl'));
@@ -1697,6 +1701,7 @@ function ChannelModal({
               className="h-10 w-full rounded-lg border border-gray-300 px-3 dark:border-gray-700 dark:bg-gray-900"
             >
               <option value="ntfy">ntfy</option>
+              <option value="apprise">Apprise</option>
               <option value="gotify">Gotify</option>
               <option value="email">Email</option>
               <option value="mqtt">MQTT</option>
@@ -1988,6 +1993,10 @@ function ChannelConfigFields({
     const email = coerceEmailConfig(form.config);
     return <EmailChannelFields config={email} onSetForm={onSetForm} />;
   }
+  if (form.type === 'apprise') {
+    const apprise = coerceAppriseConfig(form.config);
+    return <AppriseChannelFields config={apprise} onSetForm={onSetForm} />;
+  }
   if (form.type === 'gotify') {
     const gotify = coerceGotifyConfig(form.config);
     return <GotifyChannelFields config={gotify} onSetForm={onSetForm} />;
@@ -2040,6 +2049,42 @@ function EmailChannelFields({ config, onSetForm }: { config: EmailConfig; onSetF
           <span className="font-medium">{t('pages.notifications.allowInsecureSmtpTls')}</span>
         </label>
       )}
+    </div>
+  );
+}
+
+function AppriseChannelFields({ config, onSetForm }: { config: AppriseConfig; onSetForm: Dispatch<SetStateAction<ChannelFormState>> }) {
+  const { t } = useI18n();
+
+  return (
+    <div className="grid gap-4 rounded-xl border border-gray-200 p-4 md:grid-cols-2 dark:border-gray-700">
+      <LabeledInput label={t('pages.notifications.appriseUrl')} value={config.appriseUrl} onChange={(value) => updateChannelConfig<AppriseConfig>(onSetForm, (current) => ({ ...coerceAppriseConfig(current), appriseUrl: value }))} placeholder="http://apprise:8000" />
+      <label className="space-y-2 text-sm">
+        <span className="font-medium">{t('pages.notifications.appriseMode')}</span>
+        <select value={config.appriseMode} onChange={(event) => updateChannelConfig<AppriseConfig>(onSetForm, (current) => ({ ...coerceAppriseConfig(current), appriseMode: event.target.value === 'urls' ? 'urls' : 'key' }))} className="w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-900">
+          <option value="key">{t('pages.notifications.appriseModeKey')}</option>
+          <option value="urls">{t('pages.notifications.appriseModeUrls')}</option>
+        </select>
+      </label>
+      {config.appriseMode === 'urls' ? (
+        <div className="md:col-span-2">
+          <SecretInput label={t('pages.notifications.appriseUrls')} value={config.appriseUrls} onChange={(value) => updateChannelConfig<AppriseConfig>(onSetForm, (current) => ({ ...coerceAppriseConfig(current), appriseUrls: value || current.appriseUrls }))} />
+        </div>
+      ) : (
+        <>
+          <LabeledInput label={t('pages.notifications.appriseKey')} value={config.appriseKey} onChange={(value) => updateChannelConfig<AppriseConfig>(onSetForm, (current) => ({ ...coerceAppriseConfig(current), appriseKey: value }))} />
+          <LabeledInput label={t('pages.notifications.tags')} value={config.appriseTags} onChange={(value) => updateChannelConfig<AppriseConfig>(onSetForm, (current) => ({ ...coerceAppriseConfig(current), appriseTags: value }))} />
+        </>
+      )}
+      <LabeledInput label={t('pages.notifications.username')} value={config.appriseUsername} onChange={(value) => updateChannelConfig<AppriseConfig>(onSetForm, (current) => ({ ...coerceAppriseConfig(current), appriseUsername: value }))} />
+      <SecretInput label={t('pages.notifications.password')} value={config.apprisePassword} onChange={(value) => updateChannelConfig<AppriseConfig>(onSetForm, (current) => ({ ...coerceAppriseConfig(current), apprisePassword: value || current.apprisePassword }))} />
+      <LabeledInput label={t('pages.notifications.titlePrefix')} value={config.titlePrefix} onChange={(value) => updateChannelConfig<AppriseConfig>(onSetForm, (current) => ({ ...coerceAppriseConfig(current), titlePrefix: value }))} />
+      <label className="space-y-2 text-sm">
+        <span className="font-medium">{t('pages.notifications.appriseType')}</span>
+        <select value={config.appriseTypeOverride} onChange={(event) => updateChannelConfig<AppriseConfig>(onSetForm, (current) => ({ ...coerceAppriseConfig(current), appriseTypeOverride: event.target.value as AppriseConfig['appriseTypeOverride'] }))} className="w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-700 dark:bg-gray-900">
+          {APPRISE_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+        </select>
+      </label>
     </div>
   );
 }

@@ -432,7 +432,7 @@ export interface UpdateCheckResponse {
   error?: string;
 }
 
-export type NotificationChannelType = 'ntfy' | 'gotify' | 'email' | 'mqtt' | 'webhook';
+export type NotificationChannelType = 'apprise' | 'ntfy' | 'gotify' | 'email' | 'mqtt' | 'webhook';
 export type NotificationRuleType = 'alert-spike' | 'alert-threshold' | 'new-alert-decision' | 'new-cve' | 'ip-ban' | 'application-update' | 'crowdsec-update' | 'lapi-availability';
 export type NotificationSeverity = 'info' | 'warning' | 'critical';
 export type NotificationDeliveryStatus = 'delivered' | 'failed' | 'skipped';

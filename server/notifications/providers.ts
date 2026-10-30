@@ -37,6 +37,8 @@ export interface NotificationProviderContext {
   assertUrlAllowed: (value: string, label: string) => Promise<void>;
   // Validating DNS lookup that sockets must connect through, so the checked address is the one used.
   lookup?: OutboundLookup;
+  // Name this installation identifies itself with, such as the SMTP EHLO name.
+  hostname?: string;
 }
 
 export interface NotificationProvider {
@@ -99,6 +101,8 @@ interface WebhookConfig {
 
 const HTTP_METHODS = new Set(['POST', 'PUT', 'PATCH']);
 const NTFY_PRIORITIES = new Set(['auto', 'min', 'low', 'default', 'high', 'urgent']);
+const APPRISE_TYPES = new Set(['auto', 'info', 'success', 'warning', 'failure']);
+const APPRISE_KEY_PATTERN = /^[\w-]{1,128}$/;
 const WEBHOOK_ERROR_BODY_SNIPPET_LIMIT = 500;
 const MAX_NOTIFICATION_REDIRECTS = 3;
 
@@ -188,6 +192,12 @@ function severityToGotifyPriority(severity: NotificationSeverity): number {
   if (severity === 'critical') return 10;
   if (severity === 'warning') return 7;
   return 5;
+}
+
+function severityToAppriseType(severity: NotificationSeverity): 'info' | 'warning' | 'failure' {
+  if (severity === 'critical') return 'failure';
+  if (severity === 'warning') return 'warning';
+  return 'info';
 }
 
 function truncateForLog(value: string, limit = WEBHOOK_ERROR_BODY_SNIPPET_LIMIT): string {
@@ -606,6 +616,128 @@ function normalizeEmailTlsMode(value: unknown, legacySecure: unknown, legacyPort
 }
 
 const providers: Record<NotificationChannelType, NotificationProvider> = {
+  apprise: {
+    type: 'apprise',
+    secretFields: ['appriseUrls', 'apprisePassword'],
+    getDefaultConfig() {
+      return {
+        appriseUrl: '',
+        appriseMode: 'key',
+        appriseKey: '',
+        appriseTags: '',
+        appriseUrls: '',
+        appriseTypeOverride: 'auto',
+        appriseUsername: '',
+        apprisePassword: '',
+        titlePrefix: 'CrowdSec',
+      };
+    },
+    normalizeConfig(config, existingConfig) {
+      const raw = asRecord(config);
+      const existing = existingConfig ? this.normalizeConfig(existingConfig) : this.getDefaultConfig();
+      const incomingUrls = rawStringValue(raw.appriseUrls ?? raw.urls);
+      const incomingPassword = rawStringValue(raw.apprisePassword ?? raw.password);
+      const mode = stringValue(raw.appriseMode ?? raw.mode, stringValue(existing.appriseMode));
+      return {
+        appriseUrl: stringValue(raw.appriseUrl ?? raw.server_url, stringValue(existing.appriseUrl)),
+        appriseMode: mode === 'urls' ? 'urls' : 'key',
+        appriseKey: stringValue(raw.appriseKey ?? raw.key, stringValue(existing.appriseKey)),
+        appriseTags: stringValue(raw.appriseTags ?? raw.tags, stringValue(existing.appriseTags)),
+        appriseUrls: isStoredSecret(incomingUrls)
+          ? rawStringValue(existing.appriseUrls)
+          : incomingUrls.trim(),
+        appriseTypeOverride: stringValue(raw.appriseTypeOverride ?? raw.type, stringValue(existing.appriseTypeOverride) || 'auto'),
+        appriseUsername: rawStringValue(raw.appriseUsername ?? raw.username, rawStringValue(existing.appriseUsername)),
+        apprisePassword: isStoredSecret(incomingPassword)
+          ? rawStringValue(existing.apprisePassword)
+          : incomingPassword,
+        titlePrefix: rawStringValue(raw.titlePrefix ?? raw.title_prefix, rawStringValue(existing.titlePrefix)),
+      };
+    },
+    maskConfig(config) {
+      return {
+        ...config,
+        appriseUrls: maskSecret(rawStringValue(config.appriseUrls)),
+        apprisePassword: maskSecret(rawStringValue(config.apprisePassword)),
+      };
+    },
+    validateConfig(config) {
+      const normalized = this.normalizeConfig(config);
+      if (!stringValue(normalized.appriseUrl)) return 'Apprise API URL is required';
+      const urlError = validateHttpUrl(stringValue(normalized.appriseUrl), 'Apprise API URL');
+      if (urlError) return urlError;
+      if (normalized.appriseMode === 'urls') {
+        if (!stringValue(normalized.appriseUrls)) return 'Apprise notification URLs are required';
+      } else {
+        if (!stringValue(normalized.appriseKey)) return 'Apprise configuration key is required';
+        if (!APPRISE_KEY_PATTERN.test(stringValue(normalized.appriseKey))) {
+          return 'Apprise configuration key must only contain letters, numbers, hyphens, and underscores';
+        }
+      }
+      const type = stringValue(normalized.appriseTypeOverride) || 'auto';
+      if (!APPRISE_TYPES.has(type)) {
+        return `Apprise type override must be one of: ${Array.from(APPRISE_TYPES).join(', ')}`;
+      }
+      return null;
+    },
+    async send(channel, payload, context) {
+      const config = this.normalizeConfig(channel.config);
+      const baseUrl = stringValue(config.appriseUrl).replace(/\/+$/, '');
+      const statelessMode = config.appriseMode === 'urls';
+      const url = statelessMode
+        ? `${baseUrl}/notify`
+        : `${baseUrl}/notify/${encodeURIComponent(stringValue(config.appriseKey))}`;
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      };
+      if (rawStringValue(config.appriseUsername) && rawStringValue(config.apprisePassword)) {
+        headers.Authorization = encodeBasicAuth(rawStringValue(config.appriseUsername), rawStringValue(config.apprisePassword));
+      }
+
+      const body: Record<string, string> = {
+        title: appendPrefix(rawStringValue(config.titlePrefix), payload.title),
+        body: payload.message,
+        type: rawStringValue(config.appriseTypeOverride) === 'auto'
+          ? severityToAppriseType(payload.severity)
+          : rawStringValue(config.appriseTypeOverride),
+        format: 'text',
+      };
+      if (statelessMode) {
+        body.urls = rawStringValue(config.appriseUrls);
+      } else if (stringValue(config.appriseTags)) {
+        body.tag = stringValue(config.appriseTags);
+      }
+
+      const response = await guardedFetch(context, url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      }, 'Apprise API URL');
+      // Apprise API 1.x answers 204 for an empty configuration key or no valid URLs, so nothing was sent (2.x uses 404/400).
+      if (response.status === 204) {
+        throw createNotificationSendError('Apprise API found no notification URLs to send to; check the configuration key or URLs', false, {
+          status: response.status,
+        });
+      }
+      if (!response.ok) {
+        const responseSnippet = await readResponseSnippet(response);
+        const message = responseSnippet
+          ? `Apprise request failed with status ${response.status}: ${responseSnippet}`
+          : `Apprise request failed with status ${response.status}`;
+        throw createNotificationSendError(message, response.status >= 500 || response.status === 429, {
+          status: response.status,
+          responseSnippet,
+        });
+      }
+    },
+    getConfiguredSecrets(config) {
+      const secrets: string[] = [];
+      if (rawStringValue(config.appriseUrls)) secrets.push('appriseUrls');
+      if (rawStringValue(config.apprisePassword)) secrets.push('apprisePassword');
+      return secrets;
+    },
+  },
   email: {
     type: 'email',
     secretFields: ['smtpPassword'],
@@ -687,6 +819,7 @@ const providers: Record<NotificationChannelType, NotificationProvider> = {
         port: numberValue(config.smtpPort, 587),
         tlsMode: rawStringValue(config.smtpTlsMode) as SmtpTlsMode,
         allowInsecureTls: booleanValue(config.allowInsecureTls),
+        heloName: context.hostname,
         username: rawStringValue(config.smtpUser) || undefined,
         password: rawStringValue(config.smtpPassword) || undefined,
         from: stringValue(config.smtpFrom),

@@ -106,6 +106,8 @@ LOADTEST_ENV_NAMES=(
     LOADTEST_EDGE_DECISIONS
     LOADTEST_EDGE_BLOCKLIST_DECISIONS
     LOADTEST_ALLOWLIST_SIZES
+    LOADTEST_METRICS_BOUNCERS
+    LOADTEST_METRICS_MACHINES
     CONFIG_UI_TIME_FORMAT
     CONFIG_AUTH_ENABLED
     CONFIG_AUTH_SESSION_SECRET
@@ -171,9 +173,12 @@ configure_loadtest_profile() {
         allowlists)
             profile_file="$LOADTEST_PROFILE_DIR/allowlists.sh"
             ;;
+        metrics-fleet)
+            profile_file="$LOADTEST_PROFILE_DIR/metrics-fleet.sh"
+            ;;
         *)
             log "Error: unknown load-test profile '$LOADTEST_PROFILE'."
-            log "Available profiles: default, blocklist, blocklists-mixed, multi-instance, multi-instance-medium, allowlists"
+            log "Available profiles: default, blocklist, blocklists-mixed, multi-instance, multi-instance-medium, allowlists, metrics-fleet"
             exit 1
             ;;
     esac
@@ -239,6 +244,8 @@ export_loadtest_config() {
     export LOADTEST_EDGE_DECISIONS
     export LOADTEST_EDGE_BLOCKLIST_DECISIONS
     export LOADTEST_ALLOWLIST_SIZES
+    export LOADTEST_METRICS_BOUNCERS
+    export LOADTEST_METRICS_MACHINES
     export CONFIG_CROWDSEC_SYNC_REFRESH_INTERVAL
     export CONFIG_CROWDSEC_SYNC_IDLE_REFRESH_INTERVAL
     export CONFIG_CROWDSEC_SYNC_IDLE_THRESHOLD

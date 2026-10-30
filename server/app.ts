@@ -503,6 +503,7 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       })),
     } : {}),
     outboundGuard: notificationOutboundGuard,
+    hostname: config.hostname,
     secretStore: notificationSecretStore,
     debugPayloads: config.notificationDebugPayloads,
     timeZone: config.timeZone,

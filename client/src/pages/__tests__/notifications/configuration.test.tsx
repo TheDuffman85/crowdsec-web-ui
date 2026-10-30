@@ -210,6 +210,51 @@ describe('Notifications page configuration', () => {
     expect(screen.getByLabelText('Priority')).toHaveValue('9');
   });
 
+  test('submits Apprise settings for key and stateless URL modes', async () => {
+    const user = userEvent.setup();
+    render(<Notifications />);
+
+    await user.click(await screen.findByRole('button', { name: /add destination/i }));
+    await user.selectOptions(screen.getByLabelText('Type'), 'apprise');
+    expect(screen.queryByLabelText('Apprise URLs')).not.toBeInTheDocument();
+    expect(within(screen.getByLabelText('Notification Type')).getAllByRole('option')).toHaveLength(5);
+
+    await user.type(screen.getByLabelText('Name'), 'Matrix');
+    await user.type(screen.getByLabelText('Apprise API URL'), 'http://apprise:8000');
+    await user.type(screen.getByLabelText('Configuration Key'), 'crowdsec');
+    await user.type(screen.getByLabelText('Tags'), 'matrix');
+    await user.selectOptions(screen.getByLabelText('Notification Type'), 'failure');
+    await user.click(screen.getByRole('button', { name: /save destination/i }));
+
+    await waitFor(() => expect(createNotificationChannel).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'apprise',
+      config: expect.objectContaining({
+        appriseUrl: 'http://apprise:8000',
+        appriseMode: 'key',
+        appriseKey: 'crowdsec',
+        appriseTags: 'matrix',
+        appriseTypeOverride: 'failure',
+      }),
+    })));
+
+    await user.click(screen.getByRole('button', { name: /add destination/i }));
+    await user.selectOptions(screen.getByLabelText('Type'), 'apprise');
+    await user.selectOptions(screen.getByLabelText('Mode'), 'urls');
+    expect(screen.queryByLabelText('Configuration Key')).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText('Name'), 'Matrix stateless');
+    await user.type(screen.getByLabelText('Apprise API URL'), 'http://apprise:8000');
+    await user.type(screen.getByLabelText('Apprise URLs'), 'matrixs://token@matrix.example.com/#alerts');
+    await user.click(screen.getByRole('button', { name: /save destination/i }));
+
+    await waitFor(() => expect(createNotificationChannel).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'apprise',
+      config: expect.objectContaining({
+        appriseMode: 'urls',
+        appriseUrls: 'matrixs://token@matrix.example.com/#alerts',
+      }),
+    })));
+  });
+
   test('shows unchanged placeholder for stored secrets when editing', async () => {
     const user = userEvent.setup();
     render(<Notifications />);

@@ -29,6 +29,7 @@ import {
   createLoadTestAllowlistMatcher,
   withoutExpiredLoadTestAllowlistItems,
 } from './load-test-allowlists';
+import { buildLoadTestFleetMetrics } from './load-test-metrics';
 
 const LOADTEST_SOURCE_TABLE = 'loadtest_alert_source';
 installTimestampedConsole();
@@ -65,6 +66,9 @@ const loadTestSeed = parseIntegerEnv('LOADTEST_SEED', 1337);
 const allowlistSizes = parseIntegerListEnv('LOADTEST_ALLOWLIST_SIZES') ?? [];
 const activeDecisionRatio = parseRatioEnv('LOADTEST_ACTIVE_DECISION_RATIO', 0.7);
 const simulationRatio = parseRatioEnv('LOADTEST_SIMULATION_RATIO', 0.1);
+const metricsFleetBouncers = parseIntegerEnv('LOADTEST_METRICS_BOUNCERS', 0);
+const metricsFleetMachines = parseIntegerEnv('LOADTEST_METRICS_MACHINES', 0);
+const metricsFleetEnabled = metricsFleetBouncers > 0 || metricsFleetMachines > 0;
 
 const config = createRuntimeConfig({
   ...createLoadTestRuntimeEnv(process.env),
@@ -119,6 +123,11 @@ if (multiInstanceProfile) {
       lapiUrl: 'http://loadtest-edge.invalid:8080',
       prometheus: [],
     },
+  ];
+}
+if (!multiInstanceProfile && metricsFleetEnabled) {
+  config.instances[0].prometheus = [
+    { id: 'central', name: 'Central LAPI', url: 'http://loadtest-central.invalid:6060/metrics', auth: { type: 'none' }, tls: {} },
   ];
 }
 const authEnabled = config.dashboardAuth.enabled ?? !database.isAuthMigrationDefaultDisabled();
@@ -1224,11 +1233,17 @@ const controller = createApp({
   },
   notificationFetchImpl: async () => new Response('ok', { status: 200 }),
   metricsFetchImpl: async () => {
-    if (!multiInstanceProfile) {
+    if (!multiInstanceProfile && !metricsFleetEnabled) {
       return new Response('cs_lapi_requests_total{route="/v1/alerts",method="GET"} 100\n', { status: 200 });
     }
 
-    return new Response(loadTestPrometheusMetrics, {
+    const fleetMetrics = buildLoadTestFleetMetrics({
+      bouncers: metricsFleetBouncers,
+      machines: metricsFleetMachines,
+      seed: loadTestSeed,
+      now: Date.now(),
+    });
+    return new Response(loadTestPrometheusMetrics + fleetMetrics, {
       status: 200,
       headers: { 'content-type': 'text/plain; version=0.0.4' },
     });
