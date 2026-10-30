@@ -292,6 +292,26 @@ type MetaRow = { value: string };
 type CountRow = { count: number };
 type IdRow = { id: string | number };
 type DecisionDuplicateKeyRow = { value: string | null; simulated: number };
+export type IpReporterRow = {
+  id: string;
+  created_at: string;
+  updated_at: string;
+  name: string;
+  provider: string;
+  enabled: number;
+  config_json: string;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+};
+export type IpReportRunRow = {
+  id: string;
+  reporter_id: string;
+  started_at: string;
+  finished_at: string;
+  run_trigger: string;
+  status: string;
+  result_json: string;
+};
 type JsonRow = {
   id: string;
   created_at: string;
@@ -431,6 +451,19 @@ export class CrowdsecDatabase {
   private readonly getNotificationChannelByIdStatement: any;
   private readonly upsertNotificationChannelStatement: any;
   private readonly deleteNotificationChannelStatement: any;
+  private readonly listIpReportersStatement: any;
+  private readonly getIpReporterByIdStatement: any;
+  private readonly upsertIpReporterStatement: any;
+  private readonly updateIpReporterRunStateStatement: any;
+  private readonly deleteIpReporterStatement: any;
+  private readonly insertIpReportRunStatement: any;
+  private readonly listIpReportRunsStatement: any;
+  private readonly pruneIpReportRunsStatement: any;
+  private readonly deleteIpReportRunsStatement: any;
+  private readonly listIpReportHistoryStatement: any;
+  private readonly upsertIpReportHistoryStatement: any;
+  private readonly pruneIpReportHistoryStatement: any;
+  private readonly deleteIpReportHistoryStatement: any;
   private readonly listNotificationRulesStatement: any;
   private readonly getNotificationRuleByIdStatement: any;
   private readonly upsertNotificationRuleStatement: any;
@@ -850,6 +883,62 @@ export class CrowdsecDatabase {
       VALUES ($id, $created_at, $updated_at, $name, $type, $enabled, $config_json)
     `);
     this.deleteNotificationChannelStatement = this.stateQuery('DELETE FROM notification_channels WHERE id = $id');
+    this.listIpReportersStatement = this.stateQuery(`
+      SELECT id, created_at, updated_at, name, provider, enabled, config_json, last_attempt_at, last_success_at
+      FROM ip_reporters
+      ORDER BY created_at DESC
+    `);
+    this.getIpReporterByIdStatement = this.stateQuery(`
+      SELECT id, created_at, updated_at, name, provider, enabled, config_json, last_attempt_at, last_success_at
+      FROM ip_reporters
+      WHERE id = $id
+    `);
+    this.upsertIpReporterStatement = this.stateQuery(`
+      INSERT INTO ip_reporters (id, created_at, updated_at, name, provider, enabled, config_json)
+      VALUES ($id, $created_at, $updated_at, $name, $provider, $enabled, $config_json)
+      ON CONFLICT(id) DO UPDATE SET
+        updated_at = excluded.updated_at,
+        name = excluded.name,
+        provider = excluded.provider,
+        enabled = excluded.enabled,
+        config_json = excluded.config_json
+    `);
+    this.updateIpReporterRunStateStatement = this.stateQuery(`
+      UPDATE ip_reporters
+      SET last_attempt_at = $last_attempt_at, last_success_at = $last_success_at
+      WHERE id = $id
+    `);
+    this.deleteIpReporterStatement = this.stateQuery('DELETE FROM ip_reporters WHERE id = $id');
+    this.insertIpReportRunStatement = this.stateQuery(`
+      INSERT INTO ip_report_runs (id, reporter_id, started_at, finished_at, run_trigger, status, result_json)
+      VALUES ($id, $reporter_id, $started_at, $finished_at, $run_trigger, $status, $result_json)
+    `);
+    this.listIpReportRunsStatement = this.stateQuery(`
+      SELECT id, reporter_id, started_at, finished_at, run_trigger, status, result_json
+      FROM ip_report_runs
+      WHERE reporter_id = $reporter_id
+      ORDER BY started_at DESC
+      LIMIT $limit
+    `);
+    this.pruneIpReportRunsStatement = this.stateQuery(`
+      DELETE FROM ip_report_runs
+      WHERE reporter_id = $reporter_id AND id NOT IN (
+        SELECT id FROM ip_report_runs WHERE reporter_id = $reporter_id ORDER BY started_at DESC LIMIT $keep
+      )
+    `);
+    this.deleteIpReportRunsStatement = this.stateQuery('DELETE FROM ip_report_runs WHERE reporter_id = $reporter_id');
+    this.listIpReportHistoryStatement = this.stateQuery(`
+      SELECT ip, reported_at, last_seen_at
+      FROM ip_report_history
+      WHERE reporter_id = $reporter_id
+    `);
+    this.upsertIpReportHistoryStatement = this.stateQuery(`
+      INSERT INTO ip_report_history (reporter_id, ip, reported_at, last_seen_at)
+      VALUES ($reporter_id, $ip, $reported_at, $last_seen_at)
+      ON CONFLICT(reporter_id, ip) DO UPDATE SET reported_at = excluded.reported_at, last_seen_at = excluded.last_seen_at
+    `);
+    this.pruneIpReportHistoryStatement = this.stateQuery('DELETE FROM ip_report_history WHERE reported_at < $before');
+    this.deleteIpReportHistoryStatement = this.stateQuery('DELETE FROM ip_report_history WHERE reporter_id = $reporter_id');
     this.listNotificationRulesStatement = this.stateQuery(`
       SELECT id, created_at, updated_at, name, type, enabled, severity, channel_ids_json, config_json
       FROM notification_rules
@@ -2480,6 +2569,87 @@ export class CrowdsecDatabase {
     this.deleteNotificationChannelStatement.run({ $id: id });
   }
 
+  listIpReporters(): IpReporterRow[] {
+    return this.listIpReportersStatement.all() as IpReporterRow[];
+  }
+
+  getIpReporterById(id: string): IpReporterRow | null {
+    return (this.getIpReporterByIdStatement.get({ $id: id }) as IpReporterRow | null) || null;
+  }
+
+  upsertIpReporter(params: {
+    $id: string;
+    $created_at: string;
+    $updated_at: string;
+    $name: string;
+    $provider: string;
+    $enabled: number;
+    $config_json: string;
+  }): void {
+    this.upsertIpReporterStatement.run({
+      ...params,
+      $created_at: normalizeIsoTimestamp(params.$created_at),
+      $updated_at: normalizeIsoTimestamp(params.$updated_at),
+    });
+  }
+
+  updateIpReporterRunState(id: string, lastAttemptAt: string, lastSuccessAt: string | null): void {
+    this.updateIpReporterRunStateStatement.run({
+      $id: id,
+      $last_attempt_at: normalizeIsoTimestamp(lastAttemptAt),
+      $last_success_at: lastSuccessAt ? normalizeIsoTimestamp(lastSuccessAt) : null,
+    });
+  }
+
+  deleteIpReporter(id: string): void {
+    this.deleteIpReporterStatement.run({ $id: id });
+    this.deleteIpReportRunsStatement.run({ $reporter_id: id });
+    this.deleteIpReportHistoryStatement.run({ $reporter_id: id });
+  }
+
+  insertIpReportRun(params: {
+    $id: string;
+    $reporter_id: string;
+    $started_at: string;
+    $finished_at: string;
+    $run_trigger: string;
+    $status: string;
+    $result_json: string;
+  }, keep: number): void {
+    this.insertIpReportRunStatement.run({
+      ...params,
+      $started_at: normalizeIsoTimestamp(params.$started_at),
+      $finished_at: normalizeIsoTimestamp(params.$finished_at),
+    });
+    this.pruneIpReportRunsStatement.run({ $reporter_id: params.$reporter_id, $keep: keep });
+  }
+
+  listIpReportRuns(reporterId: string, limit: number): IpReportRunRow[] {
+    return this.listIpReportRunsStatement.all({ $reporter_id: reporterId, $limit: limit }) as IpReportRunRow[];
+  }
+
+  listIpReportHistory(reporterId: string): Array<{ ip: string; reported_at: string; last_seen_at: string }> {
+    return this.listIpReportHistoryStatement.all({ $reporter_id: reporterId }) as Array<{ ip: string; reported_at: string; last_seen_at: string }>;
+  }
+
+  recordIpReportHistory(
+    reporterId: string,
+    entries: Array<{ ip: string; lastSeenAt: string }>,
+    reportedAt: string,
+    pruneBefore: string,
+  ): void {
+    const normalizedReportedAt = normalizeIsoTimestamp(reportedAt);
+    for (const entry of entries) {
+      this.upsertIpReportHistoryStatement.run({
+        $reporter_id: reporterId,
+        $ip: entry.ip,
+        $reported_at: normalizedReportedAt,
+        $last_seen_at: normalizeIsoTimestamp(entry.lastSeenAt),
+      });
+    }
+    this.pruneIpReportHistoryStatement.run({ $before: normalizeIsoTimestamp(pruneBefore) });
+  }
+
   listNotificationRules(): JsonRow[] {
     return this.listNotificationRulesStatement.all() as JsonRow[];
   }
@@ -3202,6 +3372,38 @@ function initStateSchema(db: Database, schema: string, fresh: boolean): void {
     );
     CREATE INDEX IF NOT EXISTS ${schema}.idx_notification_incidents_rule_id ON notification_incidents(rule_id);
     CREATE INDEX IF NOT EXISTS ${schema}.idx_notification_incidents_resolved_at ON notification_incidents(resolved_at);
+
+    CREATE TABLE IF NOT EXISTS ${schema}.ip_reporters (
+      id TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      name TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      config_json TEXT NOT NULL,
+      last_attempt_at TEXT,
+      last_success_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS ${schema}.ip_report_runs (
+      id TEXT PRIMARY KEY,
+      reporter_id TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      finished_at TEXT NOT NULL,
+      run_trigger TEXT NOT NULL,
+      status TEXT NOT NULL,
+      result_json TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ${schema}.idx_ip_report_runs_reporter ON ip_report_runs(reporter_id, started_at);
+
+    CREATE TABLE IF NOT EXISTS ${schema}.ip_report_history (
+      reporter_id TEXT NOT NULL,
+      ip TEXT NOT NULL,
+      reported_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      PRIMARY KEY (reporter_id, ip)
+    );
+    CREATE INDEX IF NOT EXISTS ${schema}.idx_ip_report_history_reported_at ON ip_report_history(reported_at);
 
     CREATE TABLE IF NOT EXISTS ${schema}.saved_search_filters (
       id TEXT PRIMARY KEY,

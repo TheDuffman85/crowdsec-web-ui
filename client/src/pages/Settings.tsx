@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type Rea
 import i18next from "i18next";
 import QRCode from "qrcode";
 import { useSearchParams } from "react-router-dom";
-import { Copy, KeyRound, LockKeyhole, Palette, Plus, QrCode, RotateCcw, Save, ShieldCheck, SlidersHorizontal, Trash2, Upload, UserRound, Users, X } from "lucide-react";
+import { Copy, Flag, KeyRound, LockKeyhole, Palette, Plus, QrCode, RotateCcw, Save, ShieldCheck, SlidersHorizontal, Trash2, Upload, UserRound, Users, X } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card";
 import { Modal } from "../components/ui/Modal";
 import { Switch } from "../components/ui/Switch";
@@ -19,6 +19,7 @@ import { useBranding } from "../contexts/useBranding";
 import { AppLogo } from "../components/AppLogo";
 import { BrandingColorsSettings } from "../components/BrandingColorsSettings";
 import { UsersSettings } from "../components/UsersSettings";
+import { IpReportingSettings } from "../components/IpReportingSettings";
 import { THEME_MODES, type BrandingTheme } from "../../../shared/branding-theme";
 import {
     ACCEPTED_APP_LOGO_TYPES,
@@ -104,7 +105,7 @@ const OIDC_SETTINGS = [
 
 type OidcSetting = typeof OIDC_SETTINGS[number];
 
-const SETTINGS_TABS = ['account', 'general', 'authentication', 'users', 'branding'] as const;
+const SETTINGS_TABS = ['account', 'general', 'authentication', 'users', 'branding', 'ip-reports'] as const;
 type SettingsTab = typeof SETTINGS_TABS[number];
 const SETTINGS_TAB_PARAM = 'tab';
 
@@ -356,6 +357,7 @@ export function Settings() {
         // Only administrators manage users, and only while dashboard authentication is enabled.
         { id: 'users', label: t("pages.settings.users"), icon: Users, visible: authEnabled && authUser?.role === 'admin' },
         { id: 'branding', label: t("pages.settings.branding"), icon: Palette, visible: canManageSettings },
+        { id: 'ip-reports', label: t("pages.settings.ipReports.tab"), icon: Flag, visible: canManageSettings },
     ];
     const settingsTabs: TabItem<SettingsTab>[] = allSettingsTabs
         .filter((tab) => tab.visible)
@@ -1506,6 +1508,17 @@ export function Settings() {
                 <TabPanel idPrefix="settings" id="users">
                     <UsersSettings
                         canManage={canManageSettings}
+                        inputClass={inputClass}
+                        labelClass={labelClass}
+                        showToast={showToast}
+                    />
+                </TabPanel>
+            )}
+
+            {activeTab === 'ip-reports' && (
+                <TabPanel idPrefix="settings" id="ip-reports">
+                    <IpReportingSettings
+                        instances={(config?.instances ?? []).map((instance) => ({ id: instance.id, name: instance.name }))}
                         inputClass={inputClass}
                         labelClass={labelClass}
                         showToast={showToast}

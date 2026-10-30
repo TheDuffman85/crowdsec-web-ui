@@ -140,6 +140,12 @@ vi.mock('../../../lib/api', () => ({
   updateAllowlistsSidebarPreference: vi.fn(),
   updateLanguagePreference: vi.fn(async (language: string) => ({ success: true, language })),
   updateFontPreference: vi.fn(async (font: string) => ({ success: true, font })),
+  fetchIpReporters: vi.fn(async () => []),
+  saveIpReporter: vi.fn(),
+  deleteIpReporter: vi.fn(),
+  previewIpReports: vi.fn(),
+  runIpReporter: vi.fn(),
+  fetchIpReportRuns: vi.fn(async () => []),
 }));
 
 vi.mock('qrcode', () => ({

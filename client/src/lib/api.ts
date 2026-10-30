@@ -17,6 +17,12 @@ import type {
   FacetField,
   FacetResponse,
   InstanceEntityRef,
+  IpReporter,
+  IpReportersResponse,
+  IpReportPreview,
+  IpReportPreviewRequest,
+  IpReportRun,
+  IpReportRunsResponse,
   ManualDecisionScenarioSettings,
   MultiInstanceOperationResponse,
   NotificationChannel,
@@ -33,6 +39,7 @@ import type {
   UpdateAllowlistsSidebarPreferenceRequest,
   UpdateManualDecisionScenariosRequest,
   UpdateManualRefreshSettingRequest,
+  UpsertIpReporterRequest,
   UpsertNotificationChannelRequest,
   UpsertNotificationRuleRequest,
 } from '../types';
@@ -512,6 +519,40 @@ export async function deleteNotificationChannel(id: string): Promise<void> {
 
 export async function testNotificationChannel(id: string): Promise<NotificationChannelTestResult> {
     return sendJson<NotificationChannelTestResult>(`/api/notification-channels/${id}/test`, { method: 'POST' }, 'Failed to send test notification');
+}
+
+export async function fetchIpReporters(): Promise<IpReporter[]> {
+    const payload = await fetchJson<IpReportersResponse>('/api/ip-reporters', undefined, 'Failed to load IP reporters');
+    return payload.reporters;
+}
+
+export async function saveIpReporter(id: string | null, data: UpsertIpReporterRequest): Promise<IpReporter> {
+    return sendJson<IpReporter>(id ? `/api/ip-reporters/${id}` : '/api/ip-reporters', {
+        method: id ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    }, 'Failed to save IP reporter');
+}
+
+export async function deleteIpReporter(id: string): Promise<void> {
+    await sendJson(`/api/ip-reporters/${id}`, { method: 'DELETE' }, 'Failed to delete IP reporter');
+}
+
+export async function previewIpReports(data: IpReportPreviewRequest): Promise<IpReportPreview> {
+    return sendJson<IpReportPreview>('/api/ip-reporters/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    }, 'Failed to preview IP reports');
+}
+
+export async function runIpReporter(id: string): Promise<IpReportRun> {
+    return sendJson<IpReportRun>(`/api/ip-reporters/${id}/run`, { method: 'POST' }, 'Failed to run IP report');
+}
+
+export async function fetchIpReportRuns(id: string): Promise<IpReportRun[]> {
+    const payload = await fetchJson<IpReportRunsResponse>(`/api/ip-reporters/${id}/runs`, undefined, 'Failed to load report runs');
+    return payload.runs;
 }
 
 export async function createNotificationRule(data: UpsertNotificationRuleRequest): Promise<NotificationRule> {

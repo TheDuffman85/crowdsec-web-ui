@@ -144,7 +144,7 @@ async function resolveHostAddresses(host: string): Promise<string[]> {
   return [...new Set(addresses)];
 }
 
-function classifyAddress(address: string): 'public' | 'private' | 'local' {
+export function classifyAddress(address: string): 'public' | 'private' | 'local' {
   const version = net.isIP(address);
   if (version === 4) {
     return classifyIpv4(address);

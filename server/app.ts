@@ -49,6 +49,7 @@ import { LapiClient } from './lapi';
 import { createDashboardAuth } from './app-auth';
 import { createAuditLogger } from './audit-log';
 import { createNotificationService } from './notifications';
+import { createIpReportingService } from './ip-reporting/service';
 import type { MqttPublishConfig } from './notifications/mqtt-client';
 import { createNotificationOutboundGuard } from './notifications/outbound-guard';
 import { createNotificationSecretStore } from './notifications/secret-store';
@@ -68,6 +69,7 @@ import { DatabaseQueryWorker, QueryWorkerTimeoutError } from './query-worker-cli
 import { registerApiRoutes } from './app/api-routes';
 import { registerSavedFilterRoutes } from './app/saved-filters';
 import { registerBrandingRoutes } from './app/branding-routes';
+import { registerIpReportingRoutes } from './app/ip-reporting-routes';
 import { createAllowlistService, registerAllowlistRoutes, type AllowlistService } from './app/allowlists';
 import { applyBrandingToIndexHtml, getPublicBranding, serializeBrandingForScript } from './branding';
 import { createQueryService } from './app/query-service';
@@ -211,6 +213,7 @@ export interface CreateAppOptions {
   updateChecker?: UpdateChecker;
   crowdsecUpdateChecker?: CrowdsecUpdateChecker;
   notificationFetchImpl?: FetchLike;
+  ipReportFetchImpl?: FetchLike;
   metricsFetchImpl?: FetchLike;
   mqttPublishImpl?: (config: MqttPublishConfig, payload: string) => Promise<void>;
   initialCacheState?: Partial<CacheState>;
@@ -306,6 +309,7 @@ const delay = (ms: number): Promise<void> => new Promise((resolve) => {
   else setTimeout(resolve, ms);
 });
 const DASHBOARD_LOOP_YIELD_INTERVAL = 250;
+const IP_REPORT_CHECK_INTERVAL_MS = 60_000;
 const DASHBOARD_INDEX_BATCH_SIZE = 250;
 // Keep worker-message overhead reasonable while bounding each transaction so
 // interactive writes do not sit behind a long cache batch in the shared queue.
@@ -511,6 +515,15 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     instanceAware: config.instances.length > 1,
     instances: config.instances.map((instance) => ({ id: instance.id, name: instance.name })),
   });
+  const ipReportingService = createIpReportingService({
+    database,
+    queryWorker,
+    writeDatabase: (operation) => syncWorker.runExclusive(operation),
+    secretStore: notificationSecretStore,
+    fetchImpl: options.ipReportFetchImpl,
+    instances: config.instances.map((instance) => ({ id: instance.id, name: instance.name })),
+    onReportersChanged: () => scheduleIpReports(),
+  });
   const dashboardAuth = createDashboardAuth({
     config: config.dashboardAuth,
     database,
@@ -661,6 +674,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
   let nextRefreshAt: string | null = null;
   let isSchedulerRunning = false;
   let stopped = false;
+  let ipReportTimeout: ReturnType<typeof setTimeout> | null = null;
+  let ipReportsReady = false;
   let heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
   let isHeartbeatSchedulerRunning = false;
   let heartbeatPromise: Promise<void> | null = null;
@@ -1352,6 +1367,13 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     allowlistService,
     isValidIpOrRange,
   });
+  registerIpReportingRoutes({
+    app,
+    basePath: config.basePath,
+    ensureAuth,
+    ensureCanManageSettings,
+    ipReportingService,
+  });
   registerApiRoutes({
     app,
     state: apiRouteState,
@@ -1698,6 +1720,17 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     instanceRefreshTimers.set(instanceId, timer);
   }
 
+  function scheduleIpReports(): void {
+    if (stopped || !ipReportsReady || ipReportTimeout || !ipReportingService.hasEnabledReporters()) return;
+    ipReportTimeout = setTimeout(() => {
+      ipReportTimeout = null;
+      void ipReportingService.runDueReporters()
+        .catch((error: unknown) => console.error('IP reporting failed:', error))
+        .finally(() => scheduleIpReports());
+    }, IP_REPORT_CHECK_INTERVAL_MS);
+    ipReportTimeout.unref();
+  }
+
   if (options.startBackgroundTasks) {
     startBackgroundTasks();
   }
@@ -1718,6 +1751,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
       clearPendingAlertDeletionTimeout();
       for (const timer of instanceRefreshTimers.values()) clearTimeout(timer);
       instanceRefreshTimers.clear();
+      if (ipReportTimeout) clearTimeout(ipReportTimeout);
+      ipReportTimeout = null;
       historicalInstanceSyncPending.clear();
       queryWorker.close();
       if (analyticsQueryWorker !== queryWorker) analyticsQueryWorker.close();
@@ -1750,6 +1785,8 @@ export function createApp(options: CreateAppOptions = {}): AppController {
     void ensureBootstrapReady('startup').then(() => {
       if (stopped) return;
       for (const instance of config.instances.slice(1)) scheduleInstanceRefresh(instance.id);
+      ipReportsReady = true;
+      scheduleIpReports();
     }).catch((error: unknown) => {
       if (!stopped) console.error('Background bootstrap failed:', error);
     });

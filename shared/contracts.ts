@@ -582,6 +582,113 @@ export interface UpsertNotificationRuleRequest {
   config: NotificationRuleConfig;
 }
 
+export type IpReporterProvider = 'abuseipdb';
+export type IpReportSubmitMode = 'bulk' | 'single';
+export type IpReportRunStatus = 'success' | 'partial' | 'failed' | 'empty';
+export type IpReportRunTrigger = 'schedule' | 'manual';
+
+export interface IpReportCategoryRule {
+  pattern: string;
+  categories: number[];
+}
+
+export interface IpReporterConfig {
+  apiKey: string;
+  submitMode: IpReportSubmitMode;
+  intervalMinutes: number;
+  cooldownHours: number;
+  maxReportsPerRun: number;
+  minAlerts: number;
+  includeSimulated: boolean;
+  instanceIds: string[];
+  includeScenarios: string[];
+  excludeScenarios: string[];
+  categoryRules: IpReportCategoryRule[];
+  defaultCategories: number[];
+  commentTemplate: string;
+}
+
+export interface IpReportSkipCounts {
+  cooldown: number;
+  allowlisted: number;
+  not_public: number;
+  below_threshold: number;
+  over_limit: number;
+}
+
+export interface IpReportRejection {
+  ip: string;
+  error: string;
+}
+
+export interface IpReportRun {
+  id: string;
+  reporter_id: string;
+  trigger: IpReportRunTrigger;
+  status: IpReportRunStatus;
+  started_at: string;
+  finished_at: string;
+  window_start: string;
+  window_end: string;
+  candidates: number;
+  submitted: number;
+  saved: number;
+  rejected: IpReportRejection[];
+  skipped: IpReportSkipCounts;
+  error?: string;
+}
+
+export interface IpReporter {
+  id: string;
+  name: string;
+  provider: IpReporterProvider;
+  enabled: boolean;
+  config: IpReporterConfig;
+  configured_secrets: string[];
+  created_at: string;
+  updated_at: string;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  next_run_at: string | null;
+  last_run: IpReportRun | null;
+}
+
+export interface IpReportersResponse {
+  reporters: IpReporter[];
+}
+
+export interface IpReportRunsResponse {
+  runs: IpReportRun[];
+}
+
+export interface UpsertIpReporterRequest {
+  name: string;
+  provider: IpReporterProvider;
+  enabled: boolean;
+  config: Partial<IpReporterConfig>;
+}
+
+export interface IpReportPreviewRequest extends UpsertIpReporterRequest {
+  id?: string;
+}
+
+export interface IpReportPreviewRow {
+  ip: string;
+  categories: number[];
+  report_date: string;
+  comment: string;
+  alerts: number;
+  scenarios: string[];
+}
+
+export interface IpReportPreview {
+  window_start: string;
+  window_end: string;
+  total: number;
+  rows: IpReportPreviewRow[];
+  skipped: IpReportSkipCounts;
+}
+
 export type ManagedConfigSetting = 'refresh_interval' | 'manual_refresh_enabled' | 'allowlists_sidebar_visible' | 'metrics_sidebar_visible';
 
 /** Where the application config sets a value that Settings cannot change. */
