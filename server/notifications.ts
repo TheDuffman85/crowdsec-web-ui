@@ -69,6 +69,7 @@ export interface NotificationServiceOptions {
   getLapiStatus?: () => LapiStatus;
   getLapiStatuses?: () => Array<{ instanceId: string; instanceName: string; status: LapiStatus }>;
   outboundGuard: NotificationOutboundGuard;
+  hostname?: string;
   secretStore: NotificationSecretStore;
   debugPayloads?: boolean;
   timeZone?: string | null;
@@ -1297,6 +1298,7 @@ export function createNotificationService(options: NotificationServiceOptions): 
         assertHostAllowed: outboundGuard.assertHostAllowed,
         assertUrlAllowed: outboundGuard.assertUrlAllowed,
         lookup: outboundGuard.lookup,
+        hostname: options.hostname,
       });
 
       return {

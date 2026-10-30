@@ -228,6 +228,7 @@ To manage a locked value in Settings again, remove it from both the environment 
 | --- | --- | --- | --- |
 | `server.port` | `3000` | HTTP listen port. | `CONFIG_SERVER_PORT` |
 | `server.basePath` | `""` | Optional URL prefix such as `/crowdsec`; no trailing slash. | `CONFIG_SERVER_BASE_PATH` |
+| `server.hostname` | Unset (`localhost`) | Hostname or IP address this installation identifies itself with to remote services. Email destinations announce it in SMTP `EHLO`; set a FQDN for mail servers that reject `localhost`. It is not a listen address. | `CONFIG_SERVER_HOSTNAME` |
 | `storage.dataDir` | `/app/data` | Location of `state.db`: users, passkeys, notification channels and rules, saved filters, and UI settings. Back it up. | `CONFIG_STORAGE_DATA_DIR` |
 | `storage.cacheDir` | `storage.dataDir` | Location of `cache.db`, the alert and decision cache. It is rebuilt from LAPI when lost, so it can live on fast local storage. | `CONFIG_STORAGE_CACHE_DIR` |
 | `storage.geonamesDir` | `/app/geonames` in Docker; `./geonames` locally | Local GeoNames snapshot used for location labels. | `CONFIG_STORAGE_GEONAMES_DIR` |
@@ -1009,7 +1010,7 @@ Destinations are independently enabled and reusable across rules. **Send Test** 
 | Destination | Settings |
 | --- | --- |
 | Apprise | Apprise API URL, then either a configuration key with optional tags (`POST /notify/{key}`, URLs stay on the Apprise server) or notification URLs sent with each request (`POST /notify`, stored encrypted). Optional basic auth for a reverse proxy, title prefix, and notification type (`auto`, `info`, `success`, `warning`, `failure`). Auto type maps `info` to `info`, `warning` to `warning`, and `critical` to `failure`. Use it to reach any [Apprise-supported service](https://github.com/caronc/apprise/wiki) such as Matrix, Discord, Slack, Telegram, or Pushover. |
-| Email | SMTP host/port/security (`Plain SMTP`, `STARTTLS`, `SMTPS / Implicit TLS`), optional user/password, from address, comma-separated recipients, importance (`auto`, `normal`, `important`), and optional insecure TLS for trusted self-signed SMTP endpoints. Auto importance maps `info` to `normal` and `warning`/`critical` to `important`. |
+| Email | SMTP host/port/security (`Plain SMTP`, `STARTTLS`, `SMTPS / Implicit TLS`), optional user/password, from address, comma-separated recipients, importance (`auto`, `normal`, `important`), and optional insecure TLS for trusted self-signed SMTP endpoints. Auto importance maps `info` to `normal` and `warning`/`critical` to `important`. The `EHLO` name comes from [`server.hostname`](#server-storage-ui-and-updates). |
 | Gotify | Gotify URL, app token, and priority (`auto` or explicit integer). Auto priority maps `info` to `5`, `warning` to `7`, and `critical` to `10`. |
 | ntfy | Server URL, topic, optional access token, and priority (`auto`, `min`, `low`, `default`, `high`, `urgent`). Auto priority maps `info` to `default`, `warning` to `high`, and `critical` to `urgent`. |
 | MQTT | Generic publish-only output with broker URL, optional username/password/client ID, QoS `0` or `1`, keepalive, connect timeout, topic, and retain flag. It does not include Home Assistant discovery, entity sync, or command handling. |

@@ -192,9 +192,10 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
   }
 
   const server = section(root, 'server');
-  knownKeys(server, ['port', 'basePath'], 'server');
+  knownKeys(server, ['port', 'basePath', 'hostname'], 'server');
   setInteger(env, server, 'port', 'PORT', 'server');
   setString(env, server, 'basePath', 'BASE_PATH', 'server', true);
+  setString(env, server, 'hostname', 'SERVER_HOSTNAME', 'server', true);
 
   const storage = section(root, 'storage');
   knownKeys(storage, [
@@ -355,7 +356,7 @@ const INITIAL_CONFIG_HEADER = [
 
 export const CONFIG_KEY_ORDER = new Map<string, readonly string[]>([
   ['', ['server', 'storage', 'ui', 'updates', 'auth', 'notifications', 'audit', 'crowdsec', 'instances']],
-  ['server', ['port', 'basePath']],
+  ['server', ['port', 'basePath', 'hostname']],
   ['storage', [
     'dataDir', 'cacheDir', 'geonamesDir', 'walEnabled', 'incrementalVacuumEnabled', 'journalSizeLimit',
     'queryTimeout', 'analyticsQueryTimeout',
@@ -552,7 +553,7 @@ function generatedInstances(env: NodeJS.ProcessEnv, config: RuntimeConfig): unkn
 
 export function generateApplicationConfig(env: NodeJS.ProcessEnv, config: RuntimeConfig): UnknownRecord {
   const document: UnknownRecord = {
-    server: { port: config.port, basePath: config.basePath },
+    server: { port: config.port, basePath: config.basePath, ...(config.hostname ? { hostname: config.hostname } : {}) },
     storage: {
       dataDir: config.dbDir,
       cacheDir: config.dbCacheDir ?? config.dbDir,
@@ -660,6 +661,7 @@ const CONFIG_SECTION_ENV = [
 const CONFIG_VALUE_ENV = [
   ['CONFIG_SERVER_PORT', ['server', 'port']],
   ['CONFIG_SERVER_BASE_PATH', ['server', 'basePath']],
+  ['CONFIG_SERVER_HOSTNAME', ['server', 'hostname']],
   ['CONFIG_STORAGE_DATA_DIR', ['storage', 'dataDir']],
   ['CONFIG_STORAGE_CACHE_DIR', ['storage', 'cacheDir']],
   ['CONFIG_STORAGE_GEONAMES_DIR', ['storage', 'geonamesDir']],
@@ -1320,6 +1322,7 @@ function initialExplicitConfigPaths(env: NodeJS.ProcessEnv, document: UnknownRec
 }
 
 function initialConfigReference(document: UnknownRecord): UnknownRecord {
+  const server = record(document.server, 'server');
   const auth = record(document.auth, 'auth');
   const oidc = record(auth.oidc, 'auth.oidc');
   const notifications = record(document.notifications, 'notifications');
@@ -1413,6 +1416,10 @@ function initialConfigReference(document: UnknownRecord): UnknownRecord {
 
   return {
     ...document,
+    server: {
+      ...server,
+      hostname: server.hostname ?? 'crowdsec.example.com',
+    },
     auth: {
       enabled: 'auto',
       sessionSecret: { env: 'AUTH_SECRET' },

@@ -6,6 +6,8 @@ export interface SmtpMessage {
   port: number;
   tlsMode: SmtpTlsMode;
   allowInsecureTls?: boolean;
+  // Hostname or IP address announced in EHLO; defaults to localhost.
+  heloName?: string;
   username?: string;
   password?: string;
   from: string;
@@ -19,6 +21,15 @@ export interface SmtpMessage {
 
 export type SmtpTlsMode = 'plain' | 'starttls' | 'tls';
 
+// RFC 5321 requires IP addresses in EHLO to be written as address literals.
+function formatHeloName(name: string | undefined): string {
+  if (!name) return 'localhost';
+  const family = net.isIP(name);
+  if (family === 4) return `[${name}]`;
+  if (family === 6) return `[IPv6:${name}]`;
+  return name;
+}
+
 export async function sendSmtpMail(message: SmtpMessage): Promise<void> {
   let activeSocket: net.Socket | tls.TLSSocket | undefined;
   let reader: ReturnType<typeof createSmtpResponseReader> | undefined;
@@ -30,18 +41,19 @@ export async function sendSmtpMail(message: SmtpMessage): Promise<void> {
       activeSocket?.destroy(error);
     }, message.timeoutMs ?? 30_000);
   });
+  const ehlo = `EHLO ${formatHeloName(message.heloName)}`;
   const deliver = async () => {
     let socket = await connectSmtp(message.host, message.port, message.tlsMode, message.allowInsecureTls === true, message.lookup, (next) => { activeSocket = next; });
     reader = createSmtpResponseReader(socket);
     await readExpectedResponse(reader.read, [220]);
-    await smtpCommand(socket, reader.read, 'EHLO localhost', [250]);
+    await smtpCommand(socket, reader.read, ehlo, [250]);
 
     if (message.tlsMode === 'starttls') {
       await smtpCommand(socket, reader.read, 'STARTTLS', [220]);
       reader.dispose();
       socket = await upgradeToTls(socket, message.host, message.allowInsecureTls === true, (next) => { activeSocket = next; });
       reader = createSmtpResponseReader(socket);
-      await smtpCommand(socket, reader.read, 'EHLO localhost', [250]);
+      await smtpCommand(socket, reader.read, ehlo, [250]);
     }
 
     if (message.username && message.password) {

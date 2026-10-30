@@ -57,3 +57,20 @@ test('delivers and dot-stuffs a message, including a closing QUIT reply', async 
   await expect(sendSmtpMail({ ...message, port })).resolves.toBeUndefined();
   expect(payload).toContain('\r\n..Test\r\n.\r\n');
 });
+
+test('announces the configured EHLO name, defaulting to localhost and bracketing IP addresses', async () => {
+  const greetings: string[] = [];
+  const port = await listen(socket => {
+    socket.write('220 Ready\r\n');
+    socket.on('data', data => {
+      const command = data.toString();
+      if (command.startsWith('EHLO')) { greetings.push(command.trim()); socket.write('250 OK\r\n'); }
+      else socket.end();
+    });
+  });
+  await expect(sendSmtpMail({ ...message, port })).rejects.toThrow();
+  await expect(sendSmtpMail({ ...message, port, heloName: 'mail.example.test' })).rejects.toThrow();
+  await expect(sendSmtpMail({ ...message, port, heloName: '192.0.2.1' })).rejects.toThrow();
+  await expect(sendSmtpMail({ ...message, port, heloName: '2001:db8::1' })).rejects.toThrow();
+  expect(greetings).toEqual(['EHLO localhost', 'EHLO mail.example.test', 'EHLO [192.0.2.1]', 'EHLO [IPv6:2001:db8::1]']);
+});

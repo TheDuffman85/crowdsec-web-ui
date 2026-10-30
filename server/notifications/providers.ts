@@ -37,6 +37,8 @@ export interface NotificationProviderContext {
   assertUrlAllowed: (value: string, label: string) => Promise<void>;
   // Validating DNS lookup that sockets must connect through, so the checked address is the one used.
   lookup?: OutboundLookup;
+  // Name this installation identifies itself with, such as the SMTP EHLO name.
+  hostname?: string;
 }
 
 export interface NotificationProvider {
@@ -817,6 +819,7 @@ const providers: Record<NotificationChannelType, NotificationProvider> = {
         port: numberValue(config.smtpPort, 587),
         tlsMode: rawStringValue(config.smtpTlsMode) as SmtpTlsMode,
         allowInsecureTls: booleanValue(config.allowInsecureTls),
+        heloName: context.hostname,
         username: rawStringValue(config.smtpUser) || undefined,
         password: rawStringValue(config.smtpPassword) || undefined,
         from: stringValue(config.smtpFrom),

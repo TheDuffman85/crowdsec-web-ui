@@ -1,3 +1,4 @@
+import net from 'node:net';
 import { describe, expect, test } from 'vitest';
 import type { NotificationChannel } from '../../../shared/contracts';
 import { getNotificationProvider, STORED_SECRET_SENTINEL, type NotificationProviderPayload } from '../../notifications/providers';
@@ -57,6 +58,37 @@ describe('notification providers', () => {
     expect(provider.maskConfig(normalized)).toEqual(expect.objectContaining({
       smtpPassword: STORED_SECRET_SENTINEL,
     }));
+  });
+
+  test('email provider announces the configured hostname in EHLO', async () => {
+    const greetings: string[] = [];
+    const server = net.createServer((socket) => {
+      socket.write('220 Ready\r\n');
+      socket.on('data', (data) => {
+        greetings.push(data.toString().trim());
+        socket.end('421 Closing\r\n');
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const provider = getNotificationProvider('email');
+      const config = provider.normalizeConfig({
+        smtpHost: '127.0.0.1',
+        smtpPort: (server.address() as net.AddressInfo).port,
+        smtpTlsMode: 'plain',
+        smtpFrom: 'ops@example.com',
+        emailTo: 'team@example.com',
+      });
+      await expect(provider.send(createChannel('email', config), { ...basePayload, channel_type: 'email' }, {
+        fetchImpl: fetch,
+        assertHostAllowed: async () => {},
+        assertUrlAllowed: async () => {},
+        hostname: 'crowdsec.example.com',
+      })).rejects.toThrow();
+      expect(greetings).toEqual(['EHLO crowdsec.example.com']);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   test('webhook provider migrates authorization_header into advanced config and preserves masked secrets', () => {
