@@ -111,7 +111,7 @@ interface WhitelistAccumulator {
   whitelisted: number;
 }
 
-const MAX_ROWS = 12;
+const MAX_ENTITY_ROUTES = 12;
 const ACQUISITION_SOURCE_METRICS: Array<{ name: string; label: string }> = [
   { name: 'cs_appsec_reqs_total', label: 'source' },
   { name: 'cs_cloudwatch_stream_hits_total', label: 'stream' },
@@ -200,10 +200,17 @@ function mapValue(map: Map<string, number>, key: string, increment: number): voi
   map.set(key, (map.get(key) || 0) + increment);
 }
 
-function sortedTop<T>(items: T[], getValue: (item: T) => number): T[] {
-  return [...items]
-    .sort((left, right) => getValue(right) - getValue(left))
-    .slice(0, MAX_ROWS);
+// Lists are bounded by the CrowdSec configuration (registered components,
+// sources, parsers, scenarios), so they are returned in full and the page
+// decides how many rows to show.
+function sortedByValue<T>(items: T[], getValue: (item: T) => number): T[] {
+  return [...items].sort((left, right) => getValue(right) - getValue(left));
+}
+
+function sortedEntities(items: CrowdsecMetricsApiEntity[], getValue: (item: CrowdsecMetricsApiEntity) => number): CrowdsecMetricsApiEntity[] {
+  return [...items].sort((left, right) => getValue(right) - getValue(left)
+    || left.name.localeCompare(right.name)
+    || (left.source_id || '').localeCompare(right.source_id || ''));
 }
 
 function routeKey(labels: Record<string, string>): string {
@@ -303,7 +310,7 @@ function aggregateApiEntities(
       const allRouteActivity = Array.from(entity.routes.entries())
         .sort((left, right) => right[1] - left[1])
         .map(([key, requests]) => ({ ...splitRouteKey(key), requests }));
-      const routeActivity = allRouteActivity.slice(0, MAX_ROWS);
+      const routeActivity = allRouteActivity.slice(0, MAX_ENTITY_ROUTES);
       const alertRequests = entityLabel === 'machine'
         ? allRouteActivity
           .filter((route) => route.method === 'POST' && route.route === '/v1/alerts')
@@ -406,7 +413,7 @@ function aggregateParserSources(samples: PrometheusSample[]): CrowdsecMetricsPar
     getSource(sample).whitelisted += sample.value;
   }
 
-  return sortedTop(Array.from(sources.values()), (source) => source.linesRead ?? (source.processed || source.parsedOk + source.parsedKo))
+  return sortedByValue(Array.from(sources.values()), (source) => source.linesRead ?? (source.processed || source.parsedOk + source.parsedKo))
     .map((source) => ({
       ...(source.source_id ? { source_id: source.source_id } : {}),
       source: source.source,
@@ -452,7 +459,7 @@ function aggregateParserNodes(samples: PrometheusSample[]): CrowdsecMetricsParse
     getNode(sample).parsedKo += sample.value;
   }
 
-  return sortedTop(Array.from(nodes.values()), (node) => node.processed || node.parsedOk + node.parsedKo)
+  return sortedByValue(Array.from(nodes.values()), (node) => node.processed || node.parsedOk + node.parsedKo)
     .map((node) => ({
       ...(node.source_id ? { source_id: node.source_id } : {}),
       name: node.name,
@@ -495,7 +502,7 @@ function aggregateParserTimings(samples: PrometheusSample[]): CrowdsecMetricsTim
     getTiming(sample).sum += sample.value;
   }
 
-  return sortedTop(Array.from(timings.values()), (timing) => timing.count)
+  return sortedByValue(Array.from(timings.values()), (timing) => timing.count)
     .map((timing) => ({
       ...(timing.source_id ? { source_id: timing.source_id } : {}),
       source: timing.source,
@@ -528,7 +535,7 @@ function aggregateAppsecEngines(samples: PrometheusSample[]): AppsecEngineAccumu
     getEngine(sample).blocked += sample.value;
   }
 
-  return sortedTop(Array.from(engines.values()), (engine) => engine.requests || engine.blocked);
+  return sortedByValue(Array.from(engines.values()), (engine) => engine.requests || engine.blocked);
 }
 
 function aggregateLapiRoutes(samples: PrometheusSample[]): CrowdsecMetricsLapiRoute[] {
@@ -559,7 +566,7 @@ function aggregateLapiRoutes(samples: PrometheusSample[]): CrowdsecMetricsLapiRo
     getRoute(sample).sum += sample.value;
   }
 
-  return sortedTop(Array.from(routes.values()), (route) => route.requestCount || route.durationCount)
+  return sortedByValue(Array.from(routes.values()), (route) => route.requestCount || route.durationCount)
     .map((route) => ({
       ...(route.source_id ? { source_id: route.source_id } : {}),
       method: route.method,
@@ -626,7 +633,7 @@ function aggregateScenarios(samples: PrometheusSample[]): CrowdsecMetricsScenari
     getScenario(sample).poured += sample.value;
   }
 
-  return sortedTop(
+  return sortedByValue(
     Array.from(scenarios.values()),
     (scenario) => scenario.current + scenario.instantiations + scenario.overflows + scenario.underflows + scenario.canceled + scenario.poured,
   ).map((scenario) => ({
@@ -664,7 +671,7 @@ function aggregateWhitelists(samples: PrometheusSample[]): CrowdsecMetricsWhitel
     getWhitelist(sample).whitelisted += sample.value;
   }
 
-  return sortedTop(Array.from(whitelists.values()), (whitelist) => whitelist.hits || whitelist.whitelisted)
+  return sortedByValue(Array.from(whitelists.values()), (whitelist) => whitelist.hits || whitelist.whitelisted)
     .map((whitelist) => ({
       ...(whitelist.source_id ? { source_id: whitelist.source_id } : {}),
       name: whitelist.name,
@@ -704,11 +711,11 @@ export function summarizeCrowdsecMetrics(samples: PrometheusSample[]): CrowdsecM
     [],
     metric(samples, 'cs_machines_last_heartbeat_timestamp'),
   );
-  const bouncers = sortedTop(
+  const bouncers = sortedEntities(
     allBouncers,
     (entity) => entity.requests + (entity.decisionsOk || 0) + (entity.decisionsKo || 0),
   );
-  const machines = sortedTop(allMachines, (entity) => entity.requests);
+  const machines = sortedEntities(allMachines, (entity) => entity.requests);
   const appsecEngines = aggregateAppsecEngines(samples);
   const whitelists = aggregateWhitelists(samples);
   const scenarios = aggregateScenarios(samples);

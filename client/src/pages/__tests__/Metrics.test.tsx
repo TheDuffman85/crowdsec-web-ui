@@ -10,17 +10,19 @@ const {
   fetchConfigMock,
   fetchCombinedCrowdsecMetricsMock,
   fetchCrowdsecMetricsMock,
+  refreshState,
   setLastUpdatedMock,
 } = vi.hoisted(() => ({
   fetchConfigMock: vi.fn(),
   fetchCombinedCrowdsecMetricsMock: vi.fn(),
   fetchCrowdsecMetricsMock: vi.fn(),
+  refreshState: { signal: 0 },
   setLastUpdatedMock: vi.fn(),
 }));
 
 vi.mock('../../contexts/useRefresh', () => ({
   useRefresh: () => ({
-    refreshSignal: 0,
+    refreshSignal: refreshState.signal,
     setLastUpdated: setLastUpdatedMock,
   }),
 }));
@@ -100,6 +102,7 @@ beforeEach(() => {
   fetchCombinedCrowdsecMetricsMock.mockReset();
   fetchCrowdsecMetricsMock.mockReset();
   setLastUpdatedMock.mockReset();
+  refreshState.signal = 0;
   window.localStorage.clear();
   window.history.replaceState({}, '', '/metrics');
   fetchConfigMock.mockResolvedValue({ metrics_enabled: true });
@@ -452,6 +455,155 @@ describe('Metrics page', () => {
     const remediationNote = screen.getByText(/These are LAPI API counters/);
     expect(remediationNote).toHaveClass('bg-blue-50', 'mt-3');
     expect(remediationNote.compareDocumentPosition(screen.getByText('stream-firewall')) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+  });
+
+  test('collapses large bouncer and machine lists behind Show all and a name filter', async () => {
+    const response = buildMetricsResponse();
+    response.machines = Array.from({ length: 15 }, (_, index) => ({
+      name: `agent-${String(index + 1).padStart(2, '0')}`,
+      requests: 100 - index,
+      topRoute: '/v1/heartbeat',
+      topMethod: 'GET',
+      alertRequests: 0,
+      heartbeatRequests: 100 - index,
+      otherRequests: 0,
+      routes: [{ method: 'GET', route: '/v1/heartbeat', requests: 100 - index }],
+    }));
+    fetchCrowdsecMetricsMock.mockResolvedValue(response);
+    const user = userEvent.setup();
+
+    renderMetrics();
+
+    expect(await screen.findByText('agent-06')).toBeInTheDocument();
+    expect(screen.queryByText('agent-07')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Show all 15 (9 more)' }));
+    expect(screen.getByText('agent-15')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Show fewer' }));
+    expect(screen.queryByText('agent-15')).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText('Filter Log processors'), 'agent-14');
+    expect(screen.getByText('agent-14')).toBeInTheDocument();
+    expect(screen.queryByText('agent-01')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Show all/ })).not.toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText('Filter Log processors'));
+    await user.type(screen.getByLabelText('Filter Log processors'), 'missing');
+    expect(screen.getByText('No entries match the filter.')).toBeInTheDocument();
+  });
+
+  test('keeps an active entity filter clearable after a refresh shrinks the list', async () => {
+    const buildMachine = (index: number) => ({
+      name: `agent-${String(index + 1).padStart(2, '0')}`,
+      requests: 100 - index,
+      topRoute: '/v1/heartbeat',
+      topMethod: 'GET',
+      alertRequests: 0,
+      heartbeatRequests: 100 - index,
+      otherRequests: 0,
+      routes: [{ method: 'GET', route: '/v1/heartbeat', requests: 100 - index }],
+    });
+    const response = buildMetricsResponse();
+    response.machines = Array.from({ length: 15 }, (_, index) => buildMachine(index));
+    fetchCrowdsecMetricsMock.mockResolvedValue(response);
+    const user = userEvent.setup();
+
+    const { rerender } = renderMetrics();
+    await user.type(await screen.findByLabelText('Filter Log processors'), 'agent-14');
+
+    const shrunk = buildMetricsResponse();
+    shrunk.machines = Array.from({ length: 3 }, (_, index) => buildMachine(index));
+    fetchCrowdsecMetricsMock.mockResolvedValue(shrunk);
+    refreshState.signal = 1;
+    rerender(<BrowserRouter><Metrics /></BrowserRouter>);
+
+    expect(await screen.findByText('No entries match the filter.')).toBeInTheDocument();
+    await user.clear(screen.getByLabelText('Filter Log processors'));
+    expect(screen.getByText('agent-01')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Filter Log processors')).not.toBeInTheDocument();
+  });
+
+  test('collapses other metrics lists behind Show all and a filter', async () => {
+    const response = buildMetricsResponse();
+    response.scenarios = Array.from({ length: 16 }, (_, index) => ({
+      name: `loadtest/scenario-${String(index + 1).padStart(2, '0')}`,
+      current: 0,
+      instantiations: 100 - index,
+      overflows: 0,
+      underflows: 0,
+      canceled: 0,
+      poured: 0,
+    }));
+    fetchCrowdsecMetricsMock.mockResolvedValue(response);
+    const user = userEvent.setup();
+
+    renderMetrics();
+
+    expect(await screen.findByText('loadtest/scenario-12')).toBeInTheDocument();
+    expect(screen.queryByText('loadtest/scenario-13')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Show all 16 (4 more)' }));
+    expect(screen.getByText('loadtest/scenario-16')).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText('Filter Scenarios'), 'scenario-09');
+    expect(screen.getByText('loadtest/scenario-09')).toBeInTheDocument();
+    expect(screen.queryByText('loadtest/scenario-01')).not.toBeInTheDocument();
+  });
+
+  test('shows every route of a single LAPI and collapses combined LAPIs to one LAPI worth', async () => {
+    const buildRoutes = (sourceId?: string) => Array.from({ length: 15 }, (_, index) => ({
+      ...(sourceId ? { source_id: sourceId } : {}),
+      method: 'GET',
+      route: `/v1/route-${String(index + 1).padStart(2, '0')}`,
+      requests: 100 - index,
+      averageSeconds: 0.01,
+    }));
+    const single = buildMetricsResponse();
+    single.lapiRoutes = buildRoutes();
+    fetchCrowdsecMetricsMock.mockResolvedValue(single);
+
+    const { unmount } = renderMetrics();
+
+    expect(await screen.findByText('/v1/route-15')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Filter LAPI latency')).not.toBeInTheDocument();
+    unmount();
+
+    const combined = buildMetricsResponse();
+    combined.lapiRoutes = [...buildRoutes('primary'), ...buildRoutes('secondary')];
+    fetchCrowdsecMetricsMock.mockResolvedValue(combined);
+    const user = userEvent.setup();
+
+    renderMetrics();
+
+    expect(await screen.findAllByText('/v1/route-15')).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: 'Show all 30 (15 more)' }));
+    expect(screen.getAllByText('/v1/route-15')).toHaveLength(2);
+  });
+
+  test('collapses parser nodes after hiding child parsers', async () => {
+    const response = buildMetricsResponse();
+    response.parserNodes = Array.from({ length: 30 }, (_, index) => ({
+      name: index % 2 === 0 ? `parser-${String(index + 1).padStart(2, '0')}` : `child-parser-${String(index + 1).padStart(2, '0')}`,
+      stage: 's01-parse',
+      source: '/var/log/auth.log',
+      type: 'file',
+      acquisType: null,
+      isChild: index % 2 === 1,
+      processed: 100 - index,
+      parsedOk: 100 - index,
+      parsedKo: 0,
+      successRate: 1,
+    }));
+    fetchCrowdsecMetricsMock.mockResolvedValue(response);
+    const user = userEvent.setup();
+
+    renderMetrics();
+
+    expect(await screen.findByText('parser-23')).toBeInTheDocument();
+    expect(screen.queryByText('parser-25')).not.toBeInTheDocument();
+    expect(screen.queryByText(/child-parser/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Show all 15 (3 more)' }));
+    expect(screen.getByText('parser-29')).toBeInTheDocument();
   });
 
   test('handles missing optional runtime sections', async () => {

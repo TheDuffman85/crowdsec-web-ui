@@ -179,7 +179,7 @@ cs_bucket_poured_total{name="crowdsecurity/ssh-bf",source="/var/log/auth.log",ty
     });
   });
 
-  test('supports legacy scenario metrics, preserves totals beyond the display limit, and joins invalid routes', () => {
+  test('supports legacy scenario metrics, returns every machine beyond the row limit, and joins invalid routes', () => {
     const machineSamples = Array.from({ length: 13 }, (_, index) => {
       const requests = index + 1;
       return `cs_lapi_machine_requests_total{machine="machine-${index}",route="/v1/alerts",method="POST"} ${requests}`;
@@ -196,7 +196,9 @@ cs_lapi_request_duration_seconds_sum{endpoint="",method="GET"} 0.1
       name: 'crowdsecurity/ssh-bf',
       instantiations: 8,
     })]);
-    expect(summary.machines).toHaveLength(12);
+    expect(summary.machines).toHaveLength(13);
+    expect(summary.machines[0].name).toBe('machine-12');
+    expect(summary.machines[12].name).toBe('machine-0');
     expect(summary.totals).toMatchObject({
       machineRequests: 91,
       machineAlertRequests: 91,
@@ -208,6 +210,55 @@ cs_lapi_request_duration_seconds_sum{endpoint="",method="GET"} 0.1
       requests: 1,
       averageSeconds: 0.1,
     }]);
+  });
+
+  test('returns every bouncer and machine of a large fleet ordered by activity, then name', () => {
+    const bouncerSamples = Array.from({ length: 40 }, (_, index) => (
+      `cs_lapi_bouncer_requests_total{bouncer="bouncer-${String(index).padStart(2, '0')}",route="/v1/decisions/stream",method="GET"} ${index < 20 ? 10 : 5}`
+    ));
+    const machineSamples = Array.from({ length: 45 }, (_, index) => (
+      `cs_lapi_machine_requests_total{machine="agent-${String(44 - index).padStart(2, '0')}",route="/v1/heartbeat",method="GET"} 3`
+    ));
+    const summary = summarizeCrowdsecMetrics(parsePrometheusText(`${bouncerSamples.join('\n')}\n${machineSamples.join('\n')}\n`));
+
+    expect(summary.bouncers).toHaveLength(40);
+    expect(summary.bouncers.slice(0, 2).map((bouncer) => bouncer.name)).toEqual(['bouncer-00', 'bouncer-01']);
+    expect(summary.bouncers[20].name).toBe('bouncer-20');
+    expect(summary.machines).toHaveLength(45);
+    expect(summary.machines.map((machine) => machine.name)).toEqual(
+      Array.from({ length: 45 }, (_, index) => `agent-${String(index).padStart(2, '0')}`),
+    );
+    expect(summary.totals.bouncerRequests).toBe(20 * 10 + 20 * 5);
+  });
+
+  test('returns every list row and computes totals from all rows', () => {
+    const lines = Array.from({ length: 20 }, (_, index) => [
+      `cs_appsec_reqs_total{source="10.0.0.${index}:7422",appsec_engine="appsec"} 10`,
+      `cs_appsec_block_total{source="10.0.0.${index}:7422",appsec_engine="appsec"} 1`,
+      `cs_node_wl_hits_total{name="wl-${index}",reason="trusted",source="/var/log/app-${index}.log",type="file"} 10`,
+      `cs_node_wl_hits_ok_total{name="wl-${index}",reason="trusted",source="/var/log/app-${index}.log",type="file"} 2`,
+      `cs_bucket_instantiation_total{name="scenario-${index}"} 5`,
+      `cs_node_hits_total{name="parser-${index}",stage="s01-parse",source="/var/log/auth.log",type="file"} 7`,
+      `cs_parser_hits_total{source="/var/log/app-${index}.log",type="file"} 3`,
+      `cs_parsing_time_seconds_count{source="/var/log/app-${index}.log",type="file"} 3`,
+      `cs_parsing_time_seconds_sum{source="/var/log/app-${index}.log",type="file"} 0.003`,
+      `cs_lapi_route_requests_total{route="/v1/route-${index}",method="GET"} 4`,
+    ]).flat();
+    const summary = summarizeCrowdsecMetrics(parsePrometheusText(`${lines.join('\n')}\n`));
+
+    expect(summary.appsecEngines).toHaveLength(20);
+    expect(summary.whitelists).toHaveLength(20);
+    expect(summary.scenarios).toHaveLength(20);
+    expect(summary.parserNodes).toHaveLength(20);
+    expect(summary.parserSources).toHaveLength(20);
+    expect(summary.parserTimings).toHaveLength(20);
+    expect(summary.lapiRoutes).toHaveLength(20);
+    expect(summary.totals).toMatchObject({
+      appsecRequests: 200,
+      appsecBlocked: 20,
+      whitelistHits: 200,
+      whitelisted: 40,
+    });
   });
 
   test('aggregates totals while preserving source identity and source-local fallbacks', () => {
