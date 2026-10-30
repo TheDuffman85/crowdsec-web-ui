@@ -168,8 +168,8 @@ export function Sidebar({ isOpen, onClose, onToggle, replaceOnNavigate = false, 
         { to: "/alerts", label: "components.sidebar.nav.alerts", icon: ShieldAlert },
         { to: "/decisions", label: "components.sidebar.nav.decisions", icon: Gavel },
         ...(showAllowlistsNav ? [{ to: "/allowlists", label: "components.sidebar.nav.allowlists", icon: ListChecks }] : []),
-        { to: "/notifications", label: "components.sidebar.nav.notifications", icon: Bell },
         ...(showMetricsNav ? [{ to: "/metrics", label: "components.sidebar.nav.metrics", icon: BarChart3 }] : []),
+        { to: "/notifications", label: "components.sidebar.nav.notifications", icon: Bell },
         { to: "/settings", label: "components.sidebar.nav.settings", icon: SettingsIcon },
     ];
 
