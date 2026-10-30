@@ -34,7 +34,7 @@ A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alert
 | Allowlists | Read-only view of CrowdSec centralized allowlists with an IP/range check, cross-instance differences, and allowlist protection for manual decisions |
 | Multi-instance | Several CrowdSec LAPIs, per-instance views, and a Combined scope for Dashboard, Alerts, Decisions, and Allowlists |
 | Metrics | Optional Prometheus views for LAPI activity, bouncers, AppSec, parsers, latency, parsing time, and whitelists |
-| Notifications | Alert, decision, CVE, availability, and update rules delivered through Email, Gotify, MQTT, ntfy, or Webhooks |
+| Notifications | Alert, decision, CVE, availability, and update rules delivered through Apprise, Email, Gotify, MQTT, ntfy, or Webhooks |
 | Security | Initial administrator setup, local user management with admin and read-only roles, password and TOTP login, passkeys, OIDC SSO, group roles, and instance-wide read-only mode |
 | Localization | Arabic, Chinese, English, French, German, Hindi, Japanese, Korean, Portuguese, Russian, and Spanish |
 | Experience | Unified search, server-synced saved and recent filters, dark/light themes, and responsive layouts |
@@ -1008,6 +1008,7 @@ Destinations are independently enabled and reusable across rules. **Send Test** 
 
 | Destination | Settings |
 | --- | --- |
+| Apprise | Apprise API URL, then either a configuration key with optional tags (`POST /notify/{key}`, URLs stay on the Apprise server) or notification URLs sent with each request (`POST /notify`, stored encrypted). Optional basic auth for a reverse proxy, title prefix, and notification type (`auto`, `info`, `success`, `warning`, `failure`). Auto type maps `info` to `info`, `warning` to `warning`, and `critical` to `failure`. Use it to reach any [Apprise-supported service](https://github.com/caronc/apprise/wiki) such as Matrix, Discord, Slack, Telegram, or Pushover. |
 | Email | SMTP host/port/security (`Plain SMTP`, `STARTTLS`, `SMTPS / Implicit TLS`), optional user/password, from address, comma-separated recipients, importance (`auto`, `normal`, `important`), and optional insecure TLS for trusted self-signed SMTP endpoints. Auto importance maps `info` to `normal` and `warning`/`critical` to `important`. |
 | Gotify | Gotify URL, app token, and priority (`auto` or explicit integer). Auto priority maps `info` to `5`, `warning` to `7`, and `critical` to `10`. |
 | ntfy | Server URL, topic, optional access token, and priority (`auto`, `min`, `low`, `default`, `high`, `urgent`). Auto priority maps `info` to `default`, `warning` to `high`, and `critical` to `urgent`. |
@@ -1021,8 +1022,8 @@ Destinations are independently enabled and reusable across rules. **Send Test** 
 - Failed webhooks store HTTP status and a truncated response. `notifications.debugPayloads: true` also logs a truncated rendered body with sensitive form fields redacted; enable it only while troubleshooting.
 - Destination secrets are masked and encrypted by `notifications.secretKey`, or an auto-generated key stored in `state.db`.
 - `notifications.allowPrivateAddresses: false` blocks private, loopback, and link-local destinations; default: `true`. Hostnames are checked when the connection is made, so a DNS change cannot point a destination at a blocked address. IPv4 addresses embedded in IPv6 forms (for example `::ffff:7f00:1`) are blocked like their IPv4 equivalents.
-- Gotify and ntfy follow only same-origin `307`/`308` redirects, and each redirect target is checked again.
-- Telegram, Home Assistant discovery/state, and inbound MQTT commands are not supported.
+- Apprise, Gotify, and ntfy follow only same-origin `307`/`308` redirects, and each redirect target is checked again.
+- Telegram is not supported natively; use Apprise to reach it. Home Assistant discovery/state and inbound MQTT commands are not supported.
 
 ## Kubernetes
 

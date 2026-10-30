@@ -376,7 +376,7 @@ Channel create/update body:
 }
 ```
 
-Supported channel types: `ntfy`, `gotify`, `email`, `mqtt`, `webhook`.
+Supported channel types: `apprise`, `ntfy`, `gotify`, `email`, `mqtt`, `webhook`.
 
 Rule create/update body:
 

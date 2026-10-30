@@ -177,14 +177,118 @@ describe('notification providers', () => {
     expect(requests[0]?.init?.body).toBe('过去 60 分钟内匹配到 25 条告警。');
   });
 
-  describe('Gotify and ntfy redirects', () => {
-    const cases: Array<{ type: 'gotify' | 'ntfy'; config: NotificationChannel['config']; label: string }> = [
+  describe('Apprise provider', () => {
+    function sendApprise(config: NotificationChannel['config'], response: Response, severity: NotificationProviderPayload['severity'] = 'warning') {
+      const provider = getNotificationProvider('apprise');
+      const requests: Array<{ url: string; init?: RequestInit }> = [];
+      const send = provider.send(createChannel('apprise', provider.normalizeConfig(config)), {
+        ...basePayload,
+        severity,
+        channel_type: 'apprise',
+      }, {
+        fetchImpl: async (input, init) => {
+          requests.push({ url: String(input), init });
+          return response;
+        },
+        assertHostAllowed: async () => {},
+        assertUrlAllowed: async () => {},
+      });
+      return { send, requests };
+    }
+
+    test('posts to the configuration key with tags, basic auth, and severity-mapped type', async () => {
+      const { send, requests } = sendApprise({
+        appriseUrl: 'http://apprise:8000/',
+        appriseKey: 'crowdsec',
+        appriseTags: 'matrix',
+        appriseUsername: 'ops',
+        apprisePassword: 'secret',
+      }, Response.json({}), 'critical');
+      await send;
+
+      expect(requests[0]?.url).toBe('http://apprise:8000/notify/crowdsec');
+      expect(requests[0]?.init?.headers).toEqual(expect.objectContaining({
+        Authorization: `Basic ${Buffer.from('ops:secret').toString('base64')}`,
+      }));
+      expect(JSON.parse(String(requests[0]?.init?.body))).toEqual({
+        title: 'CrowdSec: Alert threshold exceeded',
+        body: '25 alerts matched in the last hour.',
+        type: 'failure',
+        format: 'text',
+        tag: 'matrix',
+      });
+    });
+
+    test('sends notification URLs in stateless mode and honors the type override', async () => {
+      const { send, requests } = sendApprise({
+        appriseUrl: 'https://apprise.example.com/api',
+        appriseMode: 'urls',
+        appriseUrls: 'matrixs://token@matrix.example.com/#alerts',
+        appriseTypeOverride: 'info',
+        titlePrefix: '',
+      }, Response.json({}));
+      await send;
+
+      expect(requests[0]?.url).toBe('https://apprise.example.com/api/notify');
+      expect(JSON.parse(String(requests[0]?.init?.body))).toEqual({
+        title: 'Alert threshold exceeded',
+        body: '25 alerts matched in the last hour.',
+        type: 'info',
+        format: 'text',
+        urls: 'matrixs://token@matrix.example.com/#alerts',
+      });
+    });
+
+    test('reports failed deliveries with the Apprise response', async () => {
+      const { send } = sendApprise(
+        { appriseUrl: 'http://apprise:8000', appriseKey: 'crowdsec' },
+        new Response('{"error":"One or more notification could not be sent."}', { status: 424 }),
+      );
+      await expect(send).rejects.toThrow('Apprise request failed with status 424: {"error":"One or more notification could not be sent."}');
+    });
+
+    test('treats an empty Apprise result as a failure', async () => {
+      const { send } = sendApprise(
+        { appriseUrl: 'http://apprise:8000', appriseKey: 'missing' },
+        new Response(null, { status: 204 }),
+      );
+      await expect(send).rejects.toThrow('Apprise API found no notification URLs to send to');
+    });
+
+    test('validates mode-specific settings and keeps masked secrets', () => {
+      const provider = getNotificationProvider('apprise');
+      expect(provider.validateConfig({ appriseUrl: 'http://apprise:8000' })).toBe('Apprise configuration key is required');
+      expect(provider.validateConfig({ appriseUrl: 'http://apprise:8000', appriseKey: 'bad key' }))
+        .toBe('Apprise configuration key must only contain letters, numbers, hyphens, and underscores');
+      expect(provider.validateConfig({ appriseUrl: 'http://apprise:8000', appriseMode: 'urls' })).toBe('Apprise notification URLs are required');
+      expect(provider.validateConfig({ appriseUrl: 'http://apprise:8000', appriseKey: 'crowdsec', appriseTypeOverride: 'urgent' }))
+        .toBe('Apprise type override must be one of: auto, info, success, warning, failure');
+
+      const stored = provider.normalizeConfig({
+        appriseUrl: 'http://apprise:8000',
+        appriseMode: 'urls',
+        appriseUrls: 'matrixs://token@matrix.example.com/#alerts',
+        apprisePassword: 'secret',
+      });
+      expect(provider.getConfiguredSecrets(stored)).toEqual(['appriseUrls', 'apprisePassword']);
+      const masked = provider.maskConfig(stored);
+      expect(masked).toEqual(expect.objectContaining({ appriseUrls: STORED_SECRET_SENTINEL, apprisePassword: STORED_SECRET_SENTINEL }));
+      expect(provider.normalizeConfig(masked, stored)).toEqual(expect.objectContaining({
+        appriseUrls: 'matrixs://token@matrix.example.com/#alerts',
+        apprisePassword: 'secret',
+      }));
+    });
+  });
+
+  describe('Apprise, Gotify, and ntfy redirects', () => {
+    const cases: Array<{ type: 'apprise' | 'gotify' | 'ntfy'; config: NotificationChannel['config']; label: string }> = [
+      { type: 'apprise', config: { appriseUrl: 'https://push.example.com', appriseKey: 'alerts' }, label: 'Apprise API URL' },
       { type: 'gotify', config: { gotifyUrl: 'https://push.example.com', gotifyToken: 'app-token' }, label: 'Gotify URL' },
       { type: 'ntfy', config: { ntfyUrl: 'https://push.example.com', ntfyTopic: 'alerts' }, label: 'ntfy URL' },
     ];
 
     function sendThroughRedirects(
-      type: 'gotify' | 'ntfy',
+      type: 'apprise' | 'gotify' | 'ntfy',
       config: NotificationChannel['config'],
       responses: Response[],
       restrictedHost?: string,

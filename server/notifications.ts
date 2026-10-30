@@ -1529,7 +1529,7 @@ function extractCveIds(alert: AlertRecord): string[] {
 }
 
 function normalizeChannelType(value: unknown): NotificationChannelType {
-  if (value === 'ntfy' || value === 'gotify' || value === 'email' || value === 'mqtt' || value === 'webhook') return value;
+  if (value === 'apprise' || value === 'ntfy' || value === 'gotify' || value === 'email' || value === 'mqtt' || value === 'webhook') return value;
   throw new Error('Invalid notification channel type');
 }
 
