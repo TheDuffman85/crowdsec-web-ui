@@ -37,7 +37,7 @@ A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alert
 | Notifications | Alert, decision, CVE, availability, and update rules delivered through Apprise, Email, Gotify, MQTT, ntfy, or Webhooks |
 | Security | Initial administrator setup, local user management with admin and read-only roles, password and TOTP login, passkeys, OIDC SSO, linking local accounts to SSO identities, group roles, and instance-wide read-only mode |
 | Localization | Arabic, Chinese, English, French, German, Hindi, Japanese, Korean, Portuguese, Russian, and Spanish |
-| Experience | Unified search, server-synced saved and recent filters, dark/light themes, and responsive layouts |
+| Experience | Unified search, server-synced saved and recent filters, light, dark, and system themes, and responsive layouts |
 | Branding | Custom application name, light and dark mode logos, and colors for the sidebar, browser tab, sign-in page, notifications, and authenticator apps |
 
 ### Screenshots
@@ -888,6 +888,8 @@ AppSec and latency sections appear only when CrowdSec emits those metrics. Time-
 - Alerts and Decisions column layouts persist per browser profile in local storage.
 - `ID`, `Machine`, and `Origin` are hidden by default. `Machine` prefers `machine_alias`, then `machine_id`; multiple alert decision origins display as `Mixed`.
 - Hidden columns remain searchable through fields such as `id:`, `machine:`, and `origin:`.
+- **Grouped by IP** on the Alerts page shows one row per attacking IP session. Alerts from an IP stay in one session until there is a gap of more than 30 minutes. The choice persists per browser profile in local storage.
+- On screens at least 1024 px wide, the expanded or collapsed sidebar persists per browser profile. On smaller screens the sidebar is a drawer that always starts closed.
 
 ### Branding
 

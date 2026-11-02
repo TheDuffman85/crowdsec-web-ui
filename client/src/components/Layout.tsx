@@ -15,22 +15,33 @@ export function Layout() {
     const [theme, setTheme] = useTheme();
     const [isMenuOpen, setIsMenuOpen] = useState(() => {
         if (typeof window !== 'undefined') {
-            const saved = localStorage.getItem("menuOpen");
-            if (saved !== null) {
-                return saved === "true";
+            // The saved value is the desktop preference; the mobile drawer always starts closed
+            if (window.innerWidth < 1024) {
+                return false;
             }
-            return window.innerWidth >= 1024;
+            return localStorage.getItem("menuOpen") !== "false";
         }
         return true;
     });
 
     useEffect(() => {
-        localStorage.setItem("menuOpen", String(isMenuOpen));
+        if (window.innerWidth >= 1024) {
+            localStorage.setItem("menuOpen", String(isMenuOpen));
+        }
     }, [isMenuOpen]);
 
     // On mobile the sidebar is a drawer backed by a history entry, so the
     // browser Back button closes it instead of leaving the page.
     const menuHistory = useHistoryBackedOverlay("menuOpen", () => setIsMenuOpen(false));
+
+    // A reload or restored tab brings the drawer's history entry back without the drawer.
+    const hasStaleMenuEntry = menuHistory.isActive && !isMenuOpen;
+    const closeMenuHistory = menuHistory.close;
+    useEffect(() => {
+        if (hasStaleMenuEntry) {
+            closeMenuHistory();
+        }
+    }, [hasStaleMenuEntry, closeMenuHistory]);
 
     const closeMenu = () => {
         setIsMenuOpen(false);

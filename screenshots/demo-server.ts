@@ -185,7 +185,7 @@ const fakeLapiClients = new Map(config.instances.map((instance) => [
 
 const updateChecker = async () => ({
   update_available: true,
-  current_version: '2026.06.05',
+  local_version: '2026.06.05',
   remote_version: '2026.06.06',
   tag: 'latest',
   release_url: 'https://github.com/TheDuffman85/crowdsec-web-ui/releases/tag/v2026.06.06',

@@ -363,6 +363,8 @@ async function main() {
       await clickByText(cdp, "Netherlands");
       await waitForText(cdp, "Showing 1 of 1 alerts");
       await screenshot(cdp, "quick_filters.png");
+      // Quick filters persist across pages and would otherwise filter the later screenshots
+      await clickByText(cdp, "Reset all filters");
       await clickFirst(cdp, "button[aria-label='Close filters']");
 
       await clickFirst(cdp, "tbody tr");
