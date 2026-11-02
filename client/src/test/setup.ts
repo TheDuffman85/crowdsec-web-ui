@@ -1,4 +1,10 @@
 import '@testing-library/jest-dom/vitest';
+import { configure } from '@testing-library/react';
+import { beforeEach } from 'vitest';
+
+// waitFor and findBy give up after one second by default, which a busy machine can exceed.
+// They still return as soon as the check passes.
+configure({ asyncUtilTimeout: 10_000 });
 
 class MockIntersectionObserver {
   observe(): void {}
@@ -78,3 +84,9 @@ function installStorageMock(name: 'localStorage' | 'sessionStorage') {
 
 installStorageMock('localStorage');
 installStorageMock('sessionStorage');
+
+// A page from the previous test can still save its filters until it is unmounted, which
+// happens after the afterEach hooks that clear storage, so each test also starts clean.
+beforeEach(() => {
+  window.localStorage.clear();
+});

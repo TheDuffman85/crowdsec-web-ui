@@ -333,9 +333,21 @@ export interface AuthUserRow {
   session_version: number;
   disabled: number;
   password_change_required: number;
+  // Set when a local account has a linked SSO identity: 'verified' by its owner, or matched by
+  // 'username'. SSO sessions of such an account use the role and session version below, so the
+  // identity provider cannot affect local sign-ins.
+  oidc_linked_at: string | null;
+  oidc_link_method: OidcLinkMethod | null;
+  oidc_username: string | null;
+  oidc_role: 'admin' | 'read-only' | null;
+  oidc_session_version: number;
+  // Keeps automatic linking by username away from this account.
+  oidc_auto_link_blocked: number;
   created_at: string;
   updated_at: string;
 }
+
+export type OidcLinkMethod = 'verified' | 'username';
 
 export interface AuthUserListRow extends AuthUserRow {
   passkey_count: number;
@@ -343,6 +355,8 @@ export interface AuthUserListRow extends AuthUserRow {
 
 export interface OidcUserUpsertParams {
   username: string;
+  /** Set only when the provider sent the claim; `username` can also come from a fallback. */
+  preferredUsername?: string;
   role: 'admin' | 'read-only';
   issuer: string;
   subject: string;
@@ -410,6 +424,7 @@ export class CrowdsecDatabase {
   private readonly createOidcUserStatement: any;
   private readonly updateOidcUserStatement: any;
   private readonly revokeOidcUserSessionsStatement: any;
+  private readonly denyOidcIdentityStatement: any;
   private readonly insertRevokedOidcSessionStatement: any;
   private readonly pruneRevokedOidcSessionsStatement: any;
   private readonly getRevokedOidcSessionStatement: any;
@@ -722,8 +737,8 @@ export class CrowdsecDatabase {
     this.setSettingStatement = this.stateQuery('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
     this.countAuthUsersStatement = this.stateQuery('SELECT COUNT(*) as count FROM auth_users');
     this.createAuthUserStatement = this.stateQuery(`
-      INSERT INTO auth_users (username, password_hash, role, auth_provider, password_change_required, created_at, updated_at)
-      VALUES ($username, $password_hash, $role, $auth_provider, $password_change_required, $created_at, $updated_at)
+      INSERT INTO auth_users (username, password_hash, role, auth_provider, password_change_required, oidc_auto_link_blocked, created_at, updated_at)
+      VALUES ($username, $password_hash, $role, $auth_provider, $password_change_required, $oidc_auto_link_blocked, $created_at, $updated_at)
     `);
     this.getAuthUserByIdStatement = this.stateQuery('SELECT * FROM auth_users WHERE id = $id');
     this.getAuthUserByUsernameStatement = this.stateQuery('SELECT * FROM auth_users WHERE username = $username');
@@ -772,7 +787,17 @@ export class CrowdsecDatabase {
     `);
     this.revokeOidcUserSessionsStatement = this.stateQuery(`
       UPDATE auth_users
-      SET session_version = session_version + 1,
+      SET session_version = session_version + CASE WHEN oidc_linked_at IS NULL THEN 1 ELSE 0 END,
+          oidc_session_version = oidc_session_version + CASE WHEN oidc_linked_at IS NULL THEN 0 ELSE 1 END,
+          updated_at = $updated_at
+      WHERE oidc_issuer = $oidc_issuer AND oidc_subject = $oidc_subject
+    `);
+    this.denyOidcIdentityStatement = this.stateQuery(`
+      UPDATE auth_users
+      SET role = CASE WHEN COALESCE(password_hash, '') = '' THEN 'read-only' ELSE role END,
+          oidc_role = NULL,
+          session_version = session_version + CASE WHEN oidc_linked_at IS NULL THEN 1 ELSE 0 END,
+          oidc_session_version = oidc_session_version + CASE WHEN oidc_linked_at IS NULL THEN 0 ELSE 1 END,
           updated_at = $updated_at
       WHERE oidc_issuer = $oidc_issuer AND oidc_subject = $oidc_subject
     `);
@@ -2157,6 +2182,7 @@ export class CrowdsecDatabase {
     role: 'admin' | 'read-only';
     authProvider: 'password' | 'oidc';
     passwordChangeRequired?: boolean;
+    oidcAutoLinkBlocked?: boolean;
   }): number {
     const now = new Date().toISOString();
     const result = this.createAuthUserStatement.run({
@@ -2165,6 +2191,7 @@ export class CrowdsecDatabase {
       $role: params.role,
       $auth_provider: params.authProvider,
       $password_change_required: params.passwordChangeRequired ? 1 : 0,
+      $oidc_auto_link_blocked: params.oidcAutoLinkBlocked ? 1 : 0,
       $created_at: now,
       $updated_at: now,
     }) as { lastInsertRowid?: number | bigint };
@@ -2177,6 +2204,13 @@ export class CrowdsecDatabase {
 
   getAuthUserByUsername(username: string): AuthUserRow | null {
     return (this.getAuthUserByUsernameStatement.get({ $username: username }) as AuthUserRow | null) || null;
+  }
+
+  getAuthUserByOidcIdentity(issuer: string, subject: string): AuthUserRow | null {
+    return (this.getAuthUserByOidcIdentityStatement.get({
+      $oidc_issuer: issuer,
+      $oidc_subject: subject,
+    }) as AuthUserRow | null) || null;
   }
 
   updateAuthUserPassword(id: number, passwordHash: string): boolean {
@@ -2282,10 +2316,20 @@ export class CrowdsecDatabase {
 
   upsertOidcUser(params: OidcUserUpsertParams): AuthUserRow {
     const now = new Date().toISOString();
-    let user = this.getAuthUserByOidcIdentityStatement.get({
-      $oidc_issuer: params.issuer,
-      $oidc_subject: params.subject,
-    }) as AuthUserRow | null;
+    let user = this.getAuthUserByOidcIdentity(params.issuer, params.subject);
+
+    // A linked account keeps its local username, role and sessions.
+    if (user?.oidc_linked_at) {
+      this.db.query(`
+        UPDATE auth_users
+        SET oidc_username = $username,
+            oidc_role = $role,
+            oidc_session_version = CASE WHEN oidc_role IS NOT $role THEN oidc_session_version + 1 ELSE oidc_session_version END,
+            updated_at = $updated_at
+        WHERE id = $id
+      `).run({ $id: user.id, $username: params.username, $role: params.role, $updated_at: now });
+      return this.getAuthUserById(user.id)!;
+    }
 
     // Claim a pre-migration OIDC row on its first login. Never claim a row that
     // still has a local password, because older releases could merge an OIDC
@@ -2330,6 +2374,82 @@ export class CrowdsecDatabase {
     return this.getAuthUserById(user.id)!;
   }
 
+  /** The local account an SSO sign-in with this username may link to automatically. */
+  findOidcAutoLinkTarget(username: string): AuthUserRow | null {
+    const user = this.getAuthUserByUsername(username);
+    return user?.password_hash && !user.disabled && !user.oidc_auto_link_blocked && !user.oidc_subject ? user : null;
+  }
+
+  /**
+   * Links an SSO identity to a local account. If the identity already has a separate SSO-only
+   * account, that account is merged: its saved search filters move over and it is removed. A link
+   * the owner verified ends the account's other sessions; one matched by username does not, because
+   * that sign-in must have no effect on local sessions. Merging must not bring back a disabled
+   * account, so one is left alone.
+   * Returns false when the identity belongs to a disabled account or one with local credentials.
+   */
+  linkOidcIdentity(userId: number, identity: OidcUserUpsertParams, method: OidcLinkMethod): boolean {
+    return this.db.transaction(() => {
+      const target = this.getAuthUserById(userId);
+      if (!target?.password_hash || target.oidc_linked_at) return false;
+
+      const owner = this.getAuthUserByOidcIdentity(identity.issuer, identity.subject);
+      if (owner && owner.id !== target.id) {
+        if (owner.password_hash || owner.disabled) return false;
+        // A filter whose name the local account already uses stays behind and is removed with the account.
+        this.db.prepare('UPDATE OR IGNORE saved_search_filters SET owner_id = ? WHERE owner_id = ?').run(target.id, owner.id);
+        this.deleteAuthUser(owner.id);
+      }
+
+      const now = new Date().toISOString();
+      this.db.query(`
+        UPDATE auth_users
+        SET auth_provider = 'oidc',
+            oidc_issuer = $issuer,
+            oidc_subject = $subject,
+            oidc_username = $username,
+            oidc_role = $role,
+            oidc_linked_at = $now,
+            oidc_link_method = $method,
+            oidc_auto_link_blocked = 0,
+            session_version = session_version + $session_bump,
+            updated_at = $now
+        WHERE id = $id
+      `).run({
+        $id: target.id,
+        $issuer: identity.issuer,
+        $subject: identity.subject,
+        $username: identity.username,
+        $role: identity.role,
+        $now: now,
+        $method: method,
+        $session_bump: method === 'verified' ? 1 : 0,
+      });
+      return true;
+    })();
+  }
+
+  /**
+   * Removes an account's SSO identity and ends its sessions. The next SSO sign-in creates a
+   * separate account again instead of linking automatically.
+   */
+  unlinkOidcIdentity(userId: number): boolean {
+    return this.db.prepare(`
+      UPDATE auth_users
+      SET auth_provider = 'password',
+          oidc_issuer = NULL,
+          oidc_subject = NULL,
+          oidc_username = NULL,
+          oidc_role = NULL,
+          oidc_linked_at = NULL,
+          oidc_link_method = NULL,
+          oidc_auto_link_blocked = 1,
+          session_version = session_version + 1,
+          updated_at = ?
+      WHERE id = ?
+    `).run(new Date().toISOString(), userId).changes > 0;
+  }
+
   /** Atomically records a logout event and revokes its sessions, so retries cannot revoke later sign-ins. */
   applyOidcLogout(params: {
     issuer: string;
@@ -2361,9 +2481,25 @@ export class CrowdsecDatabase {
     })();
   }
 
-  /** Ends every dashboard session of an OIDC identity by bumping its session version. */
+  /**
+   * Ends the SSO sessions of an OIDC identity by bumping its session version. A local account with
+   * this identity linked keeps its local sessions, so the identity provider cannot sign out the recovery path.
+   */
   revokeOidcUserSessions(issuer: string, subject: string): boolean {
     return this.revokeOidcUserSessionsStatement.run({
+      $oidc_issuer: issuer,
+      $oidc_subject: subject,
+      $updated_at: new Date().toISOString(),
+    }).changes > 0;
+  }
+
+  /**
+   * Records that the provider denied an OIDC identity: its sessions end and the access it gave is
+   * gone until an allowed sign-in restores it, so last-administrator checks stop counting it. A
+   * password on the account keeps its local role, which the provider has no say over.
+   */
+  denyOidcIdentity(issuer: string, subject: string): boolean {
+    return this.denyOidcIdentityStatement.run({
       $oidc_issuer: issuer,
       $oidc_subject: subject,
       $updated_at: new Date().toISOString(),
@@ -3076,7 +3212,13 @@ function initCacheSchema(db: Database): boolean {
   return searchIndexAvailable;
 }
 
+// One transaction, because the state database syncs every commit to disk: a fresh install would
+// otherwise wait for hundreds of syncs, and a crash could leave it half created and no longer fresh.
 function initStateSchema(db: Database, schema: string, fresh: boolean): void {
+  db.transaction(() => createStateSchema(db, schema, fresh))();
+}
+
+function createStateSchema(db: Database, schema: string, fresh: boolean): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS ${schema}.settings (
       key TEXT PRIMARY KEY,
@@ -3097,6 +3239,12 @@ function initStateSchema(db: Database, schema: string, fresh: boolean): void {
       session_version INTEGER NOT NULL DEFAULT 1,
       disabled INTEGER NOT NULL DEFAULT 0,
       password_change_required INTEGER NOT NULL DEFAULT 0,
+      oidc_linked_at TEXT,
+      oidc_link_method TEXT,
+      oidc_username TEXT,
+      oidc_role TEXT,
+      oidc_session_version INTEGER NOT NULL DEFAULT 0,
+      oidc_auto_link_blocked INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -3241,9 +3389,14 @@ function initStateSchema(db: Database, schema: string, fresh: boolean): void {
   // Columns added after auth_users was introduced.
   const authUserColumns = (db.prepare(`PRAGMA ${schema}.table_info(auth_users)`).all() as Array<{ name: string }>)
     .map((column) => column.name);
-  for (const column of ['disabled', 'password_change_required']) {
+  for (const column of ['disabled', 'password_change_required', 'oidc_session_version', 'oidc_auto_link_blocked']) {
     if (!authUserColumns.includes(column)) {
       db.exec(`ALTER TABLE ${schema}.auth_users ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
+    }
+  }
+  for (const column of ['oidc_linked_at', 'oidc_link_method', 'oidc_username', 'oidc_role']) {
+    if (!authUserColumns.includes(column)) {
+      db.exec(`ALTER TABLE ${schema}.auth_users ADD COLUMN ${column} TEXT`);
     }
   }
   // Only new installations enable authentication by default; migrated ones keep their previous state.

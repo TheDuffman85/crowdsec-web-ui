@@ -251,6 +251,7 @@ describe('config helpers', () => {
       oidcEndSession: null,
       oidcAutoLogin: false,
       oidcBackchannelLogout: false,
+      oidcAutoLinkUsername: false,
       managedOidcSettings: [
         'oidcIssuerUrl', 'oidcClientId', 'oidcClientSecret', 'oidcScope', 'oidcGroupsClaim',
         'oidcAdminGroups', 'oidcReadOnlyGroups', 'oidcUnmatchedRole',

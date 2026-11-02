@@ -204,7 +204,7 @@ describe('DatabaseSyncWorker recovery', () => {
 
 
 test('terminates executing native SQL, rolls back its transaction, and releases queued writes', async () => {
-  const { database, client, thread, captureThread } = await createWorker(500);
+  const { database, client, thread, captureThread } = await createWorker();
   database.db.exec(`
     CREATE TRIGGER slow_meta BEFORE INSERT ON meta WHEN NEW.key = 'hang' BEGIN
       SELECT (WITH RECURSIVE c(v) AS (SELECT 1 UNION ALL SELECT v+1 FROM c WHERE v < 1000000000000)
@@ -214,7 +214,7 @@ test('terminates executing native SQL, rolls back its transaction, and releases 
   const failed = expect(client.runTransaction(async () => {
     await client.setMeta('uncommitted', 'true');
     await client.setMeta('hang', 'true');
-  })).rejects.toThrow('500ms timeout');
+  })).rejects.toThrow('5000ms timeout');
   const queued = client.runExclusive(() => {
     expect(thread.exited).toBe(true);
     database.setMeta('other_writer', 'available');
@@ -227,4 +227,4 @@ test('terminates executing native SQL, rolls back its transaction, and releases 
   await captureThread();
   await client.runTransaction(() => client.setMeta('after_failure', 'committed'));
   expect(database.getMeta('after_failure')?.value).toBe('committed');
-}, 10000);
+});

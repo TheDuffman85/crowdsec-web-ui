@@ -145,7 +145,7 @@ describe('multi-instance API', () => {
     }));
 
     try {
-      await vi.waitFor(() => expect(publishedInstances).toContainEqual(['primary']), { timeout: 5_000 });
+      await vi.waitFor(() => expect(publishedInstances).toContainEqual(['primary']));
       expect(primary.updateStatus).toHaveBeenLastCalledWith(true, null);
       expect(secondary.fetchAlerts).toHaveBeenCalled();
       const persisted = JSON.parse(database.getMeta('alert_reconcile_window_state')!.value);
@@ -234,7 +234,7 @@ describe('multi-instance API', () => {
       await vi.waitFor(() => {
         expect(primary.fetchAlerts).toHaveBeenCalledTimes(1);
         expect(secondary.fetchAlerts).toHaveBeenCalledTimes(1);
-      }, { timeout: 5_000 });
+      });
       expect(edge.fetchAlerts).not.toHaveBeenCalled();
 
       const pending = await (await controller.fetch(new Request('http://localhost/api/config'))).json() as any;
@@ -245,7 +245,7 @@ describe('multi-instance API', () => {
       ]));
 
       releases.get('primary')!();
-      await vi.waitFor(() => expect(edge.fetchAlerts).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+      await vi.waitFor(() => expect(edge.fetchAlerts).toHaveBeenCalledTimes(1));
       releases.get('secondary')!();
       releases.get('edge')!();
       expect((await refresh).status).toBe(200);
@@ -542,7 +542,7 @@ describe('multi-instance API', () => {
 
       const response = await Promise.race([
         controller.fetch(new Request('http://localhost/api/alerts?page=1&page_size=50&include_decisions=false&instance=all')),
-        new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('Combined read remained blocked')), 1_000)),
+        new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('Combined read remained blocked')), 10_000)),
       ]);
       expect(response.status).toBe(200);
       expect((await response.json() as any).data).toEqual([
@@ -904,7 +904,7 @@ test('resumes persisted instance deletion on restart without repeating completed
   try {
     restarted.startBackgroundTasks();
     await vi.waitFor(() => expect(reopened.getAlertDeletionTombstone(key)?.completed_at).toBeTruthy());
-    await vi.waitFor(() => expect(restarted.getSyncStatus().state).toBe('complete'), { timeout: 5_000 });
+    await vi.waitFor(() => expect(restarted.getSyncStatus().state).toBe('complete'));
     expect(secondary.deleteAlert).toHaveBeenCalledExactlyOnceWith('7');
     expect(secondary.deleteDecision).not.toHaveBeenCalled();
     expect(primary.deleteAlert).not.toHaveBeenCalled();

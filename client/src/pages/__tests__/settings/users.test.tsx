@@ -124,6 +124,37 @@ describe('Settings users', () => {
     expect(within(menu).getByRole('menuitem', { name: 'pages.settings.deleteUser' })).toBeEnabled();
   });
 
+  test('shows a linked account with both roles and removes its SSO link', async () => {
+    const user = userEvent.setup();
+    useAuthMock.mockReturnValue(adminAuth);
+    mockAdminConfig();
+    const oidcLink = { issuer: 'https://idp.example.com', username: 'alice', role: 'admin', method: 'username', linkedAt: '2026-01-04T00:00:00.000Z' };
+    const fetchMock = stubUsersFetch();
+    const usersFetch = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/users') && !init?.method) return Response.json({ users: [users[0], { ...users[1], oidcLink }] });
+      if (url.endsWith('/api/auth/users/2/unlink-oidc')) return Response.json({ status: 'ok', user: { ...users[1], oidcLink: null } });
+      return usersFetch(input, init);
+    });
+
+    render(<SettingsRouter tab="users"><Settings /></SettingsRouter>);
+
+    const viewer = await screen.findByTestId('settings-user-viewer');
+    expect(within(viewer).getByText('pages.settings.userSourceLinked')).toBeInTheDocument();
+    expect(within(viewer).getByText('pages.settings.userLinkedByUsername')).toBeInTheDocument();
+    expect(within(viewer).getByText('pages.settings.userLinkedIdentity')).toBeInTheDocument();
+    expect(within(viewer).getByRole('combobox')).toBeEnabled();
+
+    await user.click(within(viewer).getByRole('button', { name: 'pages.settings.userActionsFor' }));
+    await user.click(within(viewer).getByRole('menuitem', { name: 'pages.settings.removeUserOidcLink' }));
+    expect(await screen.findByText('pages.settings.removeUserOidcLinkDescription')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'pages.settings.removeUserOidcLink' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/auth/users/2/unlink-oidc'), expect.objectContaining({ method: 'POST' })));
+    await waitFor(() => expect(within(screen.getByTestId('settings-user-viewer')).getByText('pages.settings.userSourceLocal')).toBeInTheDocument());
+  });
+
   test('creates users, changes roles and deletes OIDC users', async () => {
     const user = userEvent.setup();
     useAuthMock.mockReturnValue(adminAuth);

@@ -30,6 +30,7 @@ import {
   INITIAL_OIDC_LOGOUT_VERSION,
   OIDC_END_SESSION_LEGACY_DEFAULT_KEY,
   type AuthUserRow,
+  type OidcLinkMethod,
   type OidcUserUpsertParams,
 } from './database';
 import type { DatabaseWrite } from './sync-worker-client';
@@ -51,7 +52,8 @@ type MutableAuthSettingKey =
   | 'oidc_unmatched_role'
   | 'oidc_end_session'
   | 'oidc_auto_login'
-  | 'oidc_backchannel_logout';
+  | 'oidc_backchannel_logout'
+  | 'oidc_auto_link_username';
 
 interface EffectiveAuthConfig {
   oidcIssuerUrl?: string;
@@ -65,6 +67,7 @@ interface EffectiveAuthConfig {
   oidcEndSession: boolean;
   oidcAutoLogin: boolean;
   oidcBackchannelLogout: boolean;
+  oidcAutoLinkUsername: boolean;
 }
 
 export interface OidcRoleConfig {
@@ -80,6 +83,31 @@ export interface SessionData {
   authMethod?: AuthMethod;
   /** Set while a password session waits for the password an administrator chose to be replaced. */
   passwordChangeRequired?: boolean;
+  /** An SSO session on a local account with a linked identity; it cannot touch local credentials. */
+  linkedSso?: boolean;
+}
+
+/** A link started from a local session, on its way through the identity provider. */
+interface OidcLinkIntent {
+  purpose: 'oidc-link-intent';
+  userId: number;
+  sessionVersion: number;
+  state: string;
+  exp: number;
+}
+
+/** An identity the provider confirmed, waiting for the account holder to confirm the link. */
+interface OidcLinkPending {
+  purpose: 'oidc-link-pending';
+  /** Tells this attempt from a later one that replaced the cookie in another tab. */
+  attempt: string;
+  userId: number;
+  sessionVersion: number;
+  issuer: string;
+  subject: string;
+  username: string;
+  role: Role;
+  exp: number;
 }
 
 export interface DashboardAuth {
@@ -106,9 +134,14 @@ const OIDC_NONCE_COOKIE = 'crowdsec_web_ui_oidc_nonce';
 const OIDC_PKCE_COOKIE = 'crowdsec_web_ui_oidc_pkce';
 const OIDC_REDIRECT_COOKIE = 'crowdsec_web_ui_oidc_redirect_uri';
 const OIDC_ID_TOKEN_COOKIE = 'crowdsec_web_ui_oidc_id_token';
+const OIDC_LINK_INTENT_COOKIE = 'crowdsec_web_ui_oidc_link_intent';
+const OIDC_LINK_PENDING_COOKIE = 'crowdsec_web_ui_oidc_link_pending';
+const OIDC_LINK_MAX_AGE_SECONDS = 300;
 const MAX_ID_TOKEN_COOKIE_LENGTH = 3800;
 const BACKCHANNEL_LOGOUT_EVENT = 'http://schemas.openid.net/event/backchannel-logout';
 const LOGOUT_TOKEN_MAX_AGE_SECONDS = 5 * 60;
+const OIDC_PROBE_TIMEOUT_SECONDS = 5;
+const OIDC_PROBE_REUSE_MS = 30_000;
 const DUMMY_PASSWORD_HASH_PROMISE = hashPassword('timing-safe-dummy-password-pad');
 const ENCRYPTED_SECRET_PREFIX = 'enc:v1:';
 const TOTP_EPOCH_TOLERANCE_SECONDS = 30;
@@ -185,6 +218,34 @@ function isOidcOnlyAccount(user: AuthUserRow | null): boolean {
   return Boolean(user && user.auth_provider === 'oidc' && !user.password_hash);
 }
 
+/** Local accounts that can also sign in with a linked SSO identity. */
+function isLinkedAccount(user: AuthUserRow | null | undefined): boolean {
+  return Boolean(user?.oidc_linked_at);
+}
+
+/** The access a linked account's SSO sign-ins get; a missing value never grants admin. */
+function normalizeLinkedSsoRole(value: string | null | undefined): Role {
+  return value === 'admin' ? 'admin' : 'read-only';
+}
+
+function summarizeOidcLink(user: AuthUserRow): {
+  issuer: string;
+  username: string | null;
+  /** null: the provider denied the identity at its last sign-in. */
+  role: Role | null;
+  method: OidcLinkMethod;
+  linkedAt: string;
+} | null {
+  if (!user.oidc_linked_at) return null;
+  return {
+    issuer: user.oidc_issuer ?? '',
+    username: user.oidc_username,
+    role: parseRole(user.oidc_role),
+    method: user.oidc_link_method === 'username' ? 'username' : 'verified',
+    linkedAt: user.oidc_linked_at,
+  };
+}
+
 function parseRole(value: unknown): Role | null {
   return value === 'admin' || value === 'read-only' ? value : null;
 }
@@ -225,7 +286,7 @@ export function resolveOidcClaims(
   idClaims: Record<string, unknown>,
   userinfo: Record<string, unknown> | undefined,
   config: OidcRoleConfig & { oidcGroupsClaim: string },
-): { username: string; role: Role | null } | null {
+): { username: string; preferredUsername?: string; role: Role | null } | null {
   const merged = { ...idClaims, ...(userinfo ?? {}) };
   const username = (
     (typeof merged.preferred_username === 'string' && merged.preferred_username) ||
@@ -240,7 +301,12 @@ export function resolveOidcClaims(
     ...readClaimGroups(userinfo ?? {}, config.oidcGroupsClaim),
   ]));
 
-  return { username, role: resolveOidcRole(config, groups) };
+  return {
+    username,
+    // Set only when the provider sent the claim; `username` can also come from a fallback.
+    ...(typeof merged.preferred_username === 'string' && merged.preferred_username.trim() ? { preferredUsername: username } : {}),
+    role: resolveOidcRole(config, groups),
+  };
 }
 
 function encryptSecret(value: string, secret: string): string {
@@ -426,6 +492,7 @@ function verifySessionToken(
   authenticatedAt: number;
   sid?: string;
   oidcLogoutVersion: number;
+  oidcSessionVersion?: number;
 }) | null {
   const [encodedPayload, signature] = token.split('.');
   if (!encodedPayload || !signature) return null;
@@ -445,6 +512,7 @@ function verifySessionToken(
       sessionVersion?: number;
       sid?: unknown;
       oidcLogoutVersion?: number;
+      oidcSessionVersion?: number;
     };
     if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return null;
     if (typeof payload.userId !== 'number' || typeof payload.username !== 'string') return null;
@@ -479,6 +547,7 @@ function verifySessionToken(
       authenticatedAt,
       sid,
       oidcLogoutVersion,
+      ...(Number.isInteger(payload.oidcSessionVersion) ? { oidcSessionVersion: payload.oidcSessionVersion } : {}),
     };
   } catch {
     return null;
@@ -565,6 +634,7 @@ class OidcRuntime {
   private configuration: oidcClient.Configuration | null = null;
   private cacheKey = '';
   private jwks: { uri: string; keySet: ReturnType<typeof jose.createRemoteJWKSet> } | null = null;
+  private probe: { key: string; startedAt: number; reachable: Promise<boolean> } | null = null;
 
   constructor(private readonly getConfig: () => EffectiveAuthConfig) {}
 
@@ -573,24 +643,51 @@ class OidcRuntime {
     return Boolean(config.oidcIssuerUrl && config.oidcClientId);
   }
 
-  async getConfiguration(): Promise<oidcClient.Configuration> {
+  private get configKey(): string {
     const config = this.getConfig();
+    return `${config.oidcIssuerUrl || ''}\n${config.oidcClientId || ''}\n${config.oidcClientSecret || ''}`;
+  }
+
+  private async discover(options?: oidcClient.DiscoveryRequestOptions): Promise<oidcClient.Configuration> {
+    const config = this.getConfig();
+    return oidcClient.discovery(
+      new URL(config.oidcIssuerUrl!),
+      config.oidcClientId!,
+      config.oidcClientSecret || undefined,
+      undefined,
+      options,
+    );
+  }
+
+  async getConfiguration(): Promise<oidcClient.Configuration> {
     if (!this.enabled) {
       throw new Error('OIDC is not configured');
     }
-    const nextCacheKey = `${config.oidcIssuerUrl || ''}\n${config.oidcClientId || ''}\n${config.oidcClientSecret || ''}`;
+    const nextCacheKey = this.configKey;
     if (!this.configuration || this.cacheKey !== nextCacheKey) {
-      this.configuration = await oidcClient.discovery(
-        new URL(config.oidcIssuerUrl!),
-        config.oidcClientId!,
-        config.oidcClientSecret || undefined,
-      );
+      this.configuration = await this.discover();
       this.cacheKey = nextCacheKey;
     }
     return this.configuration;
   }
 
-  async authorizationUrl(state: string, nonce: string, codeChallenge: string, redirectUri: string): Promise<string> {
+  /**
+   * Whether the provider answers right now, which the discovery result kept by getConfiguration
+   * cannot tell. A recent answer is reused, so page loads neither wait on an outage nor add load.
+   */
+  isReachable(): Promise<boolean> {
+    const key = this.configKey;
+    if (this.probe?.key !== key || Date.now() - this.probe.startedAt >= OIDC_PROBE_REUSE_MS) {
+      this.probe = {
+        key,
+        startedAt: Date.now(),
+        reachable: this.discover({ timeout: OIDC_PROBE_TIMEOUT_SECONDS }).then(() => true, () => false),
+      };
+    }
+    return this.probe.reachable;
+  }
+
+  async authorizationUrl(state: string, nonce: string, codeChallenge: string, redirectUri: string, prompt?: string): Promise<string> {
     const configuration = await this.getConfiguration();
     const config = this.getConfig();
     const authorizationEndpoint = configuration.serverMetadata().authorization_endpoint;
@@ -607,6 +704,7 @@ class OidcRuntime {
       nonce,
       code_challenge: codeChallenge,
       code_challenge_method: 'S256',
+      ...(prompt ? { prompt } : {}),
     });
     return `${authorizationEndpoint}?${params.toString()}`;
   }
@@ -625,6 +723,7 @@ class OidcRuntime {
 
   async handleCallback(currentUrl: URL, transaction: { state: string; nonce: string; codeVerifier: string }): Promise<{
     username: string;
+    preferredUsername?: string;
     role: Role | null;
     issuer: string;
     subject: string;
@@ -650,6 +749,7 @@ class OidcRuntime {
 
     return {
       username: resolved.username,
+      preferredUsername: resolved.preferredUsername,
       role: resolved.role,
       issuer,
       subject,
@@ -796,6 +896,37 @@ export function createDashboardAuth(options: {
     return isPasswordLoginDisabled() && !oidc.enabled && !hasAdminPasskey(exclude);
   }
 
+  // Identities carry the issuer the provider reports, which discovery checks against the configured URL.
+  function isCurrentOidcIssuer(issuer: string | null): boolean {
+    const configured = getEffectiveConfig().oidcIssuerUrl;
+    if (!issuer || !configured || !oidc.enabled) return false;
+    try {
+      return new URL(issuer).href === new URL(configured).href;
+    } catch {
+      return false;
+    }
+  }
+
+  // Whether the account can administer the instance through either sign-in method. SSO admin access
+  // only counts while its provider can still sign in.
+  function isActiveAdmin(user: AuthUserRow): boolean {
+    if (user.disabled) return false;
+    return user.role === 'admin' || (isLinkedAccount(user) && user.oidc_role === 'admin' && isCurrentOidcIssuer(user.oidc_issuer));
+  }
+
+  function hasOtherActiveAdmin(user: AuthUserRow): boolean {
+    return database.listAuthUsers().some((other) => other.id !== user.id && isActiveAdmin(other));
+  }
+
+  function isLastActiveAdmin(user: AuthUserRow): boolean {
+    return isActiveAdmin(user) && !hasOtherActiveAdmin(user);
+  }
+
+  // Unlinking keeps the local role and removes the SSO role, which may be the last admin access.
+  function wouldUnlinkRemoveLastAdmin(user: AuthUserRow): boolean {
+    return user.role !== 'admin' && isLastActiveAdmin(user);
+  }
+
   const managedOidcSettings = new Set<OidcSetting>(config.managedOidcSettings);
 
   // Values set by the application config win over values saved in Settings.
@@ -823,6 +954,7 @@ export function createDashboardAuth(options: {
       oidcEndSession: (readOidcSetting('oidcEndSession', 'oidc_end_session') ?? String(config.oidcEndSession ?? isOidcEndSessionLegacyDefault())) === 'true',
       oidcAutoLogin: (readOidcSetting('oidcAutoLogin', 'oidc_auto_login') ?? String(config.oidcAutoLogin)) === 'true',
       oidcBackchannelLogout: (readOidcSetting('oidcBackchannelLogout', 'oidc_backchannel_logout') ?? String(config.oidcBackchannelLogout)) === 'true',
+      oidcAutoLinkUsername: (readOidcSetting('oidcAutoLinkUsername', 'oidc_auto_link_username') ?? String(config.oidcAutoLinkUsername)) === 'true',
     };
   }
 
@@ -992,6 +1124,27 @@ export function createDashboardAuth(options: {
     return { valid: true, retryAfter: null };
   }
 
+  // Asks the account holder for the password and authenticator code before a sign-in method
+  // changes, under the login's throttles. Returns the refusal, if any.
+  async function verifyAccountHolder(context: HonoContext, user: AuthUserRow): Promise<Response | null> {
+    const body = asObject(await context.req.json().catch(() => null));
+    const password = typeof body?.password === 'string' ? body.password : '';
+    const totpCode = typeof body?.totpCode === 'string' ? normalizeTotpCode(body.totpCode) : '';
+    if (!password) return context.json({ error: 'Current password required' }, 400);
+    if (password.length > 1024) return context.json({ error: 'Current password is incorrect' }, 401);
+    const passwordCheck = await verifyAccountPassword(user.username, password, user.password_hash);
+    if (passwordCheck.retryAfter !== null) return authThrottleResponse(context, passwordCheck.retryAfter);
+    if (!passwordCheck.valid) return context.json({ error: 'Current password is incorrect' }, 401);
+    const totpSeed = getTotpSeed(user);
+    if (totpSeed) {
+      if (!totpCode) return context.json({ error: 'Authenticator code required' }, 400);
+      const totpCheck = await verifyAccountTotp(user.id, totpCode, totpSeed);
+      if (totpCheck.retryAfter !== null) return authThrottleResponse(context, totpCheck.retryAfter);
+      if (!totpCheck.valid) return context.json({ error: 'Invalid authenticator code' }, 400);
+    }
+    return null;
+  }
+
   function createSession(
     context: HonoContext,
     user: AuthUserRow | SessionData,
@@ -1012,16 +1165,18 @@ export function createDashboardAuth(options: {
     const oidcLogoutVersion = effectiveAuthMethod === 'oidc' && !oidcSessionId && persistedUser?.oidc_issuer && persistedUser.oidc_subject
       ? database.getOidcLogoutVersion(persistedUser.oidc_issuer, persistedUser.oidc_subject)
       : undefined;
+    const linkedSso = effectiveAuthMethod === 'oidc' && isLinkedAccount(persistedUser);
     const token = signSession({
       jti: sessionId,
       userId,
       username: user.username,
-      role: user.role,
+      role: linkedSso ? normalizeLinkedSsoRole(persistedUser?.oidc_role) : user.role,
       authMethod: effectiveAuthMethod,
       sessionVersion: persistedUser?.session_version || 1,
       authenticatedAt: absoluteStart,
       ...(oidcSessionId ? { sid: oidcSessionId } : {}),
       ...(oidcLogoutVersion ? { oidcLogoutVersion } : {}),
+      ...(linkedSso ? { oidcSessionVersion: persistedUser?.oidc_session_version } : {}),
       iat: now,
       exp: Math.min(now + sessionLifetime, absoluteStart + sessionLifetime),
     }, sessionSecret);
@@ -1052,6 +1207,8 @@ export function createDashboardAuth(options: {
     const user = database.getAuthUserById(session.userId);
     if (!user || user.disabled || (session.sessionVersion || 1) !== (user.session_version || 1)) return null;
     if (session.authMethod === 'oidc' && user.auth_provider !== 'oidc') return null;
+    const linkedSso = session.authMethod === 'oidc' && isLinkedAccount(user);
+    if (linkedSso && session.oidcSessionVersion !== user.oidc_session_version) return null;
     if (session.authMethod === 'oidc' && user.oidc_issuer) {
       if (session.sid) {
         if (database.isOidcSessionRevoked(user.oidc_issuer, session.sid)) return null;
@@ -1064,9 +1221,10 @@ export function createDashboardAuth(options: {
     return {
       userId: user.id,
       username: user.username,
-      role: user.role,
+      role: linkedSso ? normalizeLinkedSsoRole(user.oidc_role) : user.role,
       authMethod: session.authMethod,
       ...(session.authMethod === 'password' && user.password_change_required ? { passwordChangeRequired: true } : {}),
+      ...(linkedSso ? { linkedSso } : {}),
     };
   }
 
@@ -1130,6 +1288,131 @@ export function createDashboardAuth(options: {
     return context.json({ error: 'Change your password to continue', code: 'PASSWORD_CHANGE_REQUIRED' }, 403);
   }
 
+  // Sign-in links are managed from local sessions, never with the identity provider alone.
+  function requireLocalSession(context: HonoContext): SessionData | Response {
+    const session = getSession(context);
+    if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
+    if (session.authMethod !== 'password' && session.authMethod !== 'passkey') {
+      return context.json({ error: 'Sign in with your password or a passkey to manage the SSO link' }, 403);
+    }
+    if (session.passwordChangeRequired) return passwordChangeRequiredResponse(context);
+    return session;
+  }
+
+  // Passkeys are local credentials, so an SSO session on a linked account cannot reach them either.
+  function passkeysUnavailableResponse(context: HonoContext, session: SessionData, user: AuthUserRow | null): Response | null {
+    if (isOidcOnlyAccount(user)) return context.json({ error: 'Passkeys are unavailable for OIDC-only accounts' }, 403);
+    if (session.linkedSso) return context.json({ error: 'Sign in with your password or a passkey to manage passkeys' }, 403);
+    return null;
+  }
+
+  function setOidcLinkCookie(context: HonoContext, name: string, value: OidcLinkIntent | OidcLinkPending): void {
+    // Lax: both cookies must come back with the redirect from the identity provider.
+    setShortCookie(context, name, signShortValue(base64url(JSON.stringify(value)), sessionSecret), 'Lax');
+  }
+
+  function readOidcLinkCookie(context: HonoContext, name: string, purpose: string): Record<string, unknown> | null {
+    const encoded = verifyShortValue(getCookie(context, name), sessionSecret);
+    if (!encoded) return null;
+    try {
+      const parsed = asObject(JSON.parse(fromBase64url(encoded).toString('utf8')));
+      return parsed?.purpose === purpose
+        && typeof parsed.exp === 'number'
+        && parsed.exp >= Math.floor(Date.now() / 1000)
+        ? parsed
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function readOidcLinkIntent(context: HonoContext, state: string | undefined): OidcLinkIntent | null {
+    const intent = readOidcLinkCookie(context, OIDC_LINK_INTENT_COOKIE, 'oidc-link-intent');
+    // A sign-in started after this link replaced the state, so it stays a sign-in.
+    return intent && state && intent.state === state ? intent as unknown as OidcLinkIntent : null;
+  }
+
+  // The pending link of this account; a changed session version invalidates it.
+  function readOidcLinkPending(context: HonoContext, user: AuthUserRow): OidcLinkPending | null {
+    const pending = readOidcLinkCookie(context, OIDC_LINK_PENDING_COOKIE, 'oidc-link-pending');
+    return pending && pending.userId === user.id && pending.sessionVersion === user.session_version
+      ? pending as unknown as OidcLinkPending
+      : null;
+  }
+
+  // The separate SSO account that confirming this link would merge.
+  function getOidcLinkMergeTarget(pending: OidcLinkPending, user: AuthUserRow): AuthUserRow | null {
+    const owner = database.getAuthUserByOidcIdentity(pending.issuer, pending.subject);
+    return owner && owner.id !== user.id && isOidcOnlyAccount(owner) ? owner : null;
+  }
+
+  // Names what a confirmation form showed: the attempt, and the account it warned would be merged.
+  function getOidcLinkConfirmationId(pending: OidcLinkPending, user: AuthUserRow): string {
+    const mergeTarget = getOidcLinkMergeTarget(pending, user);
+    return mergeTarget ? `${pending.attempt}:${mergeTarget.id}` : pending.attempt;
+  }
+
+  function oidcLinkOutcomeUrl(context: HonoContext, outcome: string): string {
+    return `${getPublicOrigin(context)}${basePath}/settings?oidcLink=${outcome}`;
+  }
+
+  // The provider confirmed an identity for a link in progress. Nothing changes yet: the identity
+  // waits in a cookie until the account holder has seen it and confirmed the link.
+  function holdOidcLinkForConfirmation(
+    context: HonoContext,
+    intent: OidcLinkIntent,
+    identity: { issuer: string; subject: string; username: string; role: Role | null },
+  ): string {
+    const session = getSession(context);
+    const user = session ? database.getAuthUserById(session.userId) : null;
+    if (
+      !session
+      || (session.authMethod !== 'password' && session.authMethod !== 'passkey')
+      || !user
+      || user.id !== intent.userId
+      || user.session_version !== intent.sessionVersion
+    ) {
+      return oidcLinkOutcomeUrl(context, 'session');
+    }
+    if (!identity.role) {
+      console.warn(`OIDC user "${identity.username}" matched no configured group and cannot be linked`);
+      return oidcLinkOutcomeUrl(context, 'denied');
+    }
+    const owner = database.getAuthUserByOidcIdentity(identity.issuer, identity.subject);
+    if (owner && owner.id !== user.id) {
+      if (!isOidcOnlyAccount(owner)) return oidcLinkOutcomeUrl(context, 'taken');
+      if (owner.disabled) return oidcLinkOutcomeUrl(context, 'disabled');
+    }
+    setOidcLinkCookie(context, OIDC_LINK_PENDING_COOKIE, {
+      purpose: 'oidc-link-pending',
+      attempt: crypto.randomUUID(),
+      userId: user.id,
+      sessionVersion: intent.sessionVersion,
+      issuer: identity.issuer,
+      subject: identity.subject,
+      username: identity.username,
+      role: identity.role,
+      exp: Math.floor(Date.now() / 1000) + OIDC_LINK_MAX_AGE_SECONDS,
+    });
+    return oidcLinkOutcomeUrl(context, 'confirm');
+  }
+
+  // An unreachable provider is temporary, so only a different or removed one makes a link stale.
+  async function getOidcLinkProviderStatus(issuer: string): Promise<'current' | 'changed' | 'unavailable'> {
+    if (!isCurrentOidcIssuer(issuer)) return 'changed';
+    return await oidc.isReachable() ? 'current' : 'unavailable';
+  }
+
+  // Off by default: this trusts a username the provider reports, so the account's local
+  // credentials and role stay out of its reach. Returns the account that was linked.
+  function autoLinkOidcUser(identity: OidcUserUpsertParams): AuthUserRow | null {
+    if (!identity.preferredUsername || !getEffectiveConfig().oidcAutoLinkUsername) return null;
+    const owner = database.getAuthUserByOidcIdentity(identity.issuer, identity.subject);
+    if (owner && !isOidcOnlyAccount(owner)) return null;
+    const target = database.findOidcAutoLinkTarget(identity.preferredUsername);
+    return target && database.linkOidcIdentity(target.id, identity, 'username') ? database.getAuthUserById(target.id) : null;
+  }
+
   // Returns the administrator's session, or the response that rejects the request.
   function requireAdmin(context: HonoContext, write: boolean): SessionData | Response {
     const session = getSession(context);
@@ -1151,6 +1434,8 @@ export function createDashboardAuth(options: {
       passwordChangeRequired: Boolean(user.password_change_required),
       totpEnabled: Boolean(user.totp_enabled && user.totp_secret),
       passkeyCount: user.passkey_count ?? database.listWebAuthnCredentialsByUser(user.id).length,
+      // The SSO identity of a local account that can use both sign-in methods.
+      oidcLink: summarizeOidcLink(user),
       createdAt: user.created_at,
       current: user.id === session.userId,
     };
@@ -1179,10 +1464,6 @@ export function createDashboardAuth(options: {
         return { error: 'OIDC users are managed by the identity provider', status: 400 };
       }
       return { user };
-    }
-
-    function isLastActiveAdmin(user: AuthUserRow): boolean {
-      return user.role === 'admin' && !user.disabled && database.countActiveAdmins(user.id) === 0;
     }
 
     auth.get('/users', (context) => {
@@ -1216,6 +1497,8 @@ export function createDashboardAuth(options: {
           role,
           authProvider: 'password',
           passwordChangeRequired: body?.requirePasswordChange !== false,
+          // Automatic linking only covers accounts that existed before it was turned on.
+          oidcAutoLinkBlocked: getEffectiveConfig().oidcAutoLinkUsername,
         });
         return database.getAuthUserById(userId)!;
       });
@@ -1238,11 +1521,11 @@ export function createDashboardAuth(options: {
         const managed = getManagedUser(Number(context.req.param('id')), session, true);
         if ('error' in managed) return managed;
         const { user } = managed;
-        const losesAdmin = (role === 'read-only' && user.role === 'admin') || (disabled === true && user.role === 'admin');
+        const losesAdmin = isActiveAdmin(user) && ((role === 'read-only' && user.role === 'admin') || disabled === true);
         if (losesAdmin && isLastActiveAdmin(user)) {
           return { error: 'At least one active administrator is required', status: 400 };
         }
-        if (losesAdmin && !user.disabled && wouldLockOutAdministrators({ userId: user.id })) {
+        if (losesAdmin && wouldLockOutAdministrators({ userId: user.id })) {
           return { error: 'Enable password login or configure OIDC before removing the last administrator with a passkey', status: 400 };
         }
         database.transaction<void>(() => {
@@ -1302,6 +1585,23 @@ export function createDashboardAuth(options: {
       return context.json({ status: 'ok', user: serializeUser(user, session) });
     });
 
+    auth.post('/users/:id/unlink-oidc', async (context) => {
+      const session = requireAdmin(context, true);
+      if (session instanceof Response) return session;
+      const result = await writeDatabase((): UserMutation => {
+        const managed = getManagedUser(Number(context.req.param('id')), session, true, 'Use your profile to unlink your own SSO identity');
+        if ('error' in managed) return managed;
+        if (!isLinkedAccount(managed.user)) return { error: 'This account has no linked SSO identity', status: 400 };
+        if (wouldUnlinkRemoveLastAdmin(managed.user)) return { error: 'At least one active administrator is required', status: 400 };
+        database.unlinkOidcIdentity(managed.user.id);
+        return { user: managed.user };
+      });
+      if ('error' in result) return context.json({ error: result.error }, result.status);
+      const { user } = result;
+      recordUserAudit(context, 'user.oidc-unlink', user, { issuer: user.oidc_issuer, oidc_username: user.oidc_username });
+      return context.json({ status: 'ok', user: serializeUser(database.getAuthUserById(user.id)!, session) });
+    });
+
     auth.delete('/users/:id', async (context) => {
       const session = requireAdmin(context, true);
       if (session instanceof Response) return session;
@@ -1340,7 +1640,8 @@ export function createDashboardAuth(options: {
         passwordLoginDisabled: enabled && isPasswordLoginDisabled(),
         passkeysEnabled: enabled && database.countWebAuthnCredentials() > 0,
         hasPassword: Boolean(user?.password_hash),
-        totpEnabled: isTotpEnabled(user),
+        // An SSO session on a linked account cannot manage the local credentials.
+        totpEnabled: isTotpEnabled(user) && !session?.linkedSso,
         passwordChangeRequired: Boolean(session?.passwordChangeRequired),
         preferences: enabled && session ? getPersonalPreferences(session.userId) : null,
       });
@@ -1366,6 +1667,8 @@ export function createDashboardAuth(options: {
           passwordHash,
           role: 'admin',
           authProvider: 'password',
+          // Automatic linking only covers accounts that existed before it was turned on.
+          oidcAutoLinkBlocked: getEffectiveConfig().oidcAutoLinkUsername,
         });
         return database.getAuthUserById(userId)!;
       });
@@ -1439,8 +1742,9 @@ export function createDashboardAuth(options: {
       const user = database.getAuthUserById(session.userId);
       const personalSettings = {
         hasPassword: Boolean(user?.password_hash),
-        passkeysAvailable: !isOidcOnlyAccount(user),
-        totpEnabled: isTotpEnabled(user),
+        // An SSO session on a linked account cannot manage the local credentials.
+        passkeysAvailable: !isOidcOnlyAccount(user) && !session.linkedSso,
+        totpEnabled: isTotpEnabled(user) && !session.linkedSso,
         authMethod: session.authMethod ?? null,
       };
       // Only administrators see how sign-in is configured.
@@ -1458,6 +1762,7 @@ export function createDashboardAuth(options: {
         oidcUnmatchedRole: effectiveConfig.oidcUnmatchedRole,
         oidcEndSession: effectiveConfig.oidcEndSession,
         oidcBackchannelLogout: effectiveConfig.oidcBackchannelLogout,
+        oidcAutoLinkUsername: effectiveConfig.oidcAutoLinkUsername,
         ...getOidcAutoLoginSettings(),
         managedSettings: getManagedSettings(),
         ...personalSettings,
@@ -1507,6 +1812,7 @@ export function createDashboardAuth(options: {
       if ('oidcEndSession' in body) updates.set('oidc_end_session', body.oidcEndSession === true ? 'true' : 'false');
       if ('oidcAutoLogin' in body) updates.set('oidc_auto_login', body.oidcAutoLogin === true ? 'true' : 'false');
       if ('oidcBackchannelLogout' in body) updates.set('oidc_backchannel_logout', body.oidcBackchannelLogout === true ? 'true' : 'false');
+      if ('oidcAutoLinkUsername' in body) updates.set('oidc_auto_link_username', body.oidcAutoLinkUsername === true ? 'true' : 'false');
       if (typeof body.oidcIssuerUrl === 'string') updates.set('oidc_issuer_url', body.oidcIssuerUrl.trim());
       if (typeof body.oidcClientId === 'string') updates.set('oidc_client_id', body.oidcClientId.trim());
       if (typeof body.oidcClientSecret === 'string' && body.oidcClientSecret.trim()) {
@@ -1552,6 +1858,7 @@ export function createDashboardAuth(options: {
           oidcUnmatchedRole: effectiveConfig.oidcUnmatchedRole,
           oidcEndSession: effectiveConfig.oidcEndSession,
           oidcBackchannelLogout: effectiveConfig.oidcBackchannelLogout,
+          oidcAutoLinkUsername: effectiveConfig.oidcAutoLinkUsername,
           ...getOidcAutoLoginSettings(),
           managedSettings: getManagedSettings(),
         },
@@ -1676,9 +1983,8 @@ export function createDashboardAuth(options: {
       const session = getSession(context);
       if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
       const user = database.getAuthUserById(session.userId);
-      if (isOidcOnlyAccount(user)) {
-        return context.json({ error: 'Passkeys are unavailable for OIDC-only accounts' }, 403);
-      }
+      const unavailable = passkeysUnavailableResponse(context, session, user);
+      if (unavailable) return unavailable;
       return context.json({
         passkeys: database.listWebAuthnCredentialsByUser(session.userId).map((credential) => ({
           id: credential.id,
@@ -1693,9 +1999,8 @@ export function createDashboardAuth(options: {
       if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
       if (session.passwordChangeRequired) return passwordChangeRequiredResponse(context);
       const user = database.getAuthUserById(session.userId);
-      if (isOidcOnlyAccount(user)) {
-        return context.json({ error: 'Passkeys are unavailable for OIDC-only accounts' }, 403);
-      }
+      const unavailable = passkeysUnavailableResponse(context, session, user);
+      if (unavailable) return unavailable;
       const id = Number(context.req.param('id'));
       const body = asObject(await context.req.json().catch(() => null));
       const name = typeof body?.name === 'string' && body.name.trim() ? body.name.trim().slice(0, 80) : null;
@@ -1710,9 +2015,8 @@ export function createDashboardAuth(options: {
       if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
       if (session.passwordChangeRequired) return passwordChangeRequiredResponse(context);
       const user = database.getAuthUserById(session.userId);
-      if (isOidcOnlyAccount(user)) {
-        return context.json({ error: 'Passkeys are unavailable for OIDC-only accounts' }, 403);
-      }
+      const unavailable = passkeysUnavailableResponse(context, session, user);
+      if (unavailable) return unavailable;
       const id = Number(context.req.param('id'));
       const result = await writeDatabase(() => {
         if (!Number.isInteger(id) || !database.listWebAuthnCredentialsByUser(session.userId).some((credential) => credential.id === id)) return 'missing';
@@ -1733,6 +2037,8 @@ export function createDashboardAuth(options: {
       if (!user || isOidcOnlyAccount(user)) {
         return context.json({ error: 'Passkeys cannot be registered for OIDC-only accounts' }, 403);
       }
+      const unavailable = passkeysUnavailableResponse(context, session, user);
+      if (unavailable) return unavailable;
       const origin = getPublicOrigin(context);
       const options = await createRegistrationOptions(session, database, new URL(origin).hostname);
       issueWebAuthnChallenge(context, options.challenge, 'register', session.userId);
@@ -1747,6 +2053,8 @@ export function createDashboardAuth(options: {
       if (!user || isOidcOnlyAccount(user)) {
         return context.json({ error: 'Passkeys cannot be registered for OIDC-only accounts' }, 403);
       }
+      const unavailable = passkeysUnavailableResponse(context, session, user);
+      if (unavailable) return unavailable;
       const body = asObject(await context.req.json().catch(() => null));
       const challenge = consumeWebAuthnChallenge(context, 'register', session.userId);
       if (!body || !challenge) return context.json({ error: 'No registration challenge found' }, 400);
@@ -1818,8 +2126,8 @@ export function createDashboardAuth(options: {
       }
     });
 
-    auth.get('/oidc/login', async (context) => {
-      if (!enabled || !oidc.enabled) return context.json({ error: 'OIDC not configured' }, 400);
+    // Sets the cookies of a sign-in at the provider and returns where to send the browser.
+    async function beginOidcRedirect(context: HonoContext, prompt?: string): Promise<{ url: string; state: string }> {
       const origin = getPublicOrigin(context);
       const redirectUri = `${origin}${basePath}/api/auth/oidc/callback`;
       const state = crypto.randomUUID();
@@ -1830,7 +2138,12 @@ export function createDashboardAuth(options: {
       setShortCookie(context, OIDC_NONCE_COOKIE, nonce, 'Lax');
       setShortCookie(context, OIDC_PKCE_COOKIE, codeVerifier, 'Lax');
       setShortCookie(context, OIDC_REDIRECT_COOKIE, redirectUri, 'Lax');
-      return context.redirect(await oidc.authorizationUrl(state, nonce, codeChallenge, redirectUri));
+      return { url: await oidc.authorizationUrl(state, nonce, codeChallenge, redirectUri, prompt), state };
+    }
+
+    auth.get('/oidc/login', async (context) => {
+      if (!enabled || !oidc.enabled) return context.json({ error: 'OIDC not configured' }, 400);
+      return context.redirect((await beginOidcRedirect(context)).url);
     });
 
     auth.get('/oidc/callback', async (context) => {
@@ -1839,8 +2152,9 @@ export function createDashboardAuth(options: {
       const state = getCookie(context, OIDC_STATE_COOKIE);
       const codeVerifier = getCookie(context, OIDC_PKCE_COOKIE);
       const redirectUri = getCookie(context, OIDC_REDIRECT_COOKIE);
+      const linkIntent = readOidcLinkIntent(context, state);
       // The login transaction is single-use, whether or not this callback succeeds.
-      for (const name of [OIDC_STATE_COOKIE, OIDC_NONCE_COOKIE, OIDC_PKCE_COOKIE, OIDC_REDIRECT_COOKIE]) {
+      for (const name of [OIDC_STATE_COOKIE, OIDC_NONCE_COOKIE, OIDC_PKCE_COOKIE, OIDC_REDIRECT_COOKIE, OIDC_LINK_INTENT_COOKIE]) {
         deleteCookie(context, name, { path: cookiePath });
       }
       // Only the browser that started the login may finish it, so no one can sign it in with their own code.
@@ -1853,15 +2167,32 @@ export function createDashboardAuth(options: {
         const callbackUrl = new URL(redirectUri);
         callbackUrl.search = internalUrl.search;
         const result = await oidc.handleCallback(callbackUrl, { state, nonce, codeVerifier });
-        if (!result) return context.json({ error: 'OIDC authentication failed' }, 400);
-        if (!result.role) return context.json({ error: 'OIDC user is not authorized' }, 403);
+        if (!result) {
+          if (linkIntent) return context.redirect(oidcLinkOutcomeUrl(context, 'failed'));
+          return context.json({ error: 'OIDC authentication failed' }, 400);
+        }
+        // A link in progress must not sign in, create an account or end sessions.
+        if (linkIntent) return context.redirect(holdOidcLinkForConfirmation(context, linkIntent, result));
+        if (!result.role) {
+          // End any SSO sessions the identity still holds from before it lost access, and stop counting that access.
+          await writeDatabase(() => database.denyOidcIdentity(result.issuer, result.subject));
+          return context.json({ error: 'OIDC user is not authorized' }, 403);
+        }
         const oidcUser: OidcUserUpsertParams = {
           username: result.username,
+          preferredUsername: result.preferredUsername,
           role: result.role,
           issuer: result.issuer,
           subject: result.subject,
         };
-        const user = await writeDatabase(() => database.upsertOidcUser(oidcUser));
+        const { user, autoLinked } = await writeDatabase(() => {
+          const linked = autoLinkOidcUser(oidcUser);
+          return { user: linked ?? database.upsertOidcUser(oidcUser), autoLinked: Boolean(linked) };
+        });
+        if (autoLinked) {
+          console.warn(`Linked OIDC user "${result.username}" to local account "${user.username}" by username; ownership was not verified.`);
+          recordUserAudit(context, 'user.oidc-link', user, { user: result.username, method: 'username', issuer: result.issuer, oidc_username: result.username });
+        }
         createSession(context, user, 'oidc', undefined, result.sessionId);
         // Kept as id_token_hint for RP-initiated logout. Oversized tokens are
         // skipped; logout then falls back to client_id only.
@@ -1879,8 +2210,139 @@ export function createDashboardAuth(options: {
         return context.redirect(`${getPublicOrigin(context)}${basePath || '/'}`);
       } catch (error) {
         console.error('OIDC callback error:', error);
+        if (linkIntent) return context.redirect(oidcLinkOutcomeUrl(context, 'failed'));
         return context.json({ error: 'OIDC authentication failed' }, 400);
       }
+    });
+
+    auth.get('/oidc/link', async (context) => {
+      const session = getSession(context);
+      if (!session || !enabled) return context.json({ error: 'Not authenticated' }, 401);
+      const user = database.getAuthUserById(session.userId);
+      if (!user) return context.json({ error: 'Not authenticated' }, 401);
+
+      const link = summarizeOidcLink(user);
+      const pending = readOidcLinkPending(context, user);
+      const mergedAccount = pending && getOidcLinkMergeTarget(pending, user);
+
+      return context.json({
+        available: oidc.enabled && Boolean(user.password_hash),
+        canManage: session.authMethod === 'password' || session.authMethod === 'passkey',
+        username: user.username,
+        totpEnabled: isTotpEnabled(user) && !session.linkedSso,
+        passwordLoginDisabled: isPasswordLoginDisabled(),
+        link: link && { ...link, provider: await getOidcLinkProviderStatus(link.issuer) },
+        pending: pending && {
+          id: getOidcLinkConfirmationId(pending, user),
+          issuer: pending.issuer,
+          username: pending.username,
+          role: pending.role,
+          merge: mergedAccount && { username: mergedAccount.username },
+        },
+      });
+    });
+
+    auth.post('/oidc/link/start', async (context) => {
+      const session = requireLocalSession(context);
+      if (session instanceof Response) return session;
+      if (!oidc.enabled) return context.json({ error: 'OIDC not configured' }, 400);
+      const user = database.getAuthUserById(session.userId);
+      if (!user?.password_hash) return context.json({ error: 'No password set for this account' }, 400);
+      if (isLinkedAccount(user)) return context.json({ error: 'Unlink the current SSO identity first' }, 409);
+
+      try {
+        // Asks the provider for a fresh sign-in where it supports that, so an SSO session
+        // left open in this browser is not linked by accident.
+        const { url, state } = await beginOidcRedirect(context, 'login');
+        setOidcLinkCookie(context, OIDC_LINK_INTENT_COOKIE, {
+          purpose: 'oidc-link-intent',
+          userId: user.id,
+          sessionVersion: user.session_version,
+          state,
+          exp: Math.floor(Date.now() / 1000) + OIDC_LINK_MAX_AGE_SECONDS,
+        });
+        return context.json({ status: 'ok', redirectUrl: url });
+      } catch (error) {
+        console.warn(`OIDC link could not be started: ${error instanceof Error ? error.message : String(error)}`);
+        return context.json({ error: 'The identity provider could not be reached' }, 502);
+      }
+    });
+
+    auth.post('/oidc/link/confirm', async (context) => {
+      const session = requireLocalSession(context);
+      if (session instanceof Response) return session;
+      const user = database.getAuthUserById(session.userId);
+      if (!user) return context.json({ error: 'Not authenticated' }, 401);
+      const pending = readOidcLinkPending(context, user);
+      if (!pending) return context.json({ error: 'SSO link expired. Start again.' }, 400);
+
+      // The cookie is shared between tabs, so it may no longer hold what this form showed. It stays
+      // in place, because it belongs to the tab that replaced it.
+      const linkChanged = () => context.json({ error: 'This SSO link attempt changed. Start again.', code: 'OIDC_LINK_CHANGED' }, 409);
+      const body = asObject(await context.req.json().catch(() => null));
+      const confirmationId = body?.confirmationId;
+      if (confirmationId !== getOidcLinkConfirmationId(pending, user)) return linkChanged();
+
+      const refusal = await verifyAccountHolder(context, user);
+      if (refusal) return refusal;
+
+      const result = await writeDatabase(() => {
+        // An administrator may have reset the credentials during verification.
+        if (database.getAuthUserById(user.id)?.session_version !== user.session_version) return { outcome: 'expired' as const };
+        // An SSO sign-in may have created an account to merge, which the form did not warn about.
+        if (confirmationId !== getOidcLinkConfirmationId(pending, user)) return { outcome: 'changed' as const };
+        const mergeTarget = getOidcLinkMergeTarget(pending, user);
+        return database.linkOidcIdentity(user.id, pending, 'verified')
+          ? { outcome: 'linked' as const, mergedAccount: mergeTarget?.username ?? null }
+          : { outcome: 'refused' as const };
+      });
+      if (result.outcome === 'expired') return context.json({ error: 'SSO link expired. Start again.' }, 400);
+      if (result.outcome === 'changed') return linkChanged();
+      deleteCookie(context, OIDC_LINK_PENDING_COOKIE, { path: cookiePath });
+      if (result.outcome === 'refused') return context.json({ error: 'This SSO identity cannot be linked to this account' }, 409);
+      // The change ended the session this request came with, so name the actor here.
+      recordUserAudit(context, 'user.oidc-link', user, {
+        user: user.username,
+        role: session.role,
+        method: 'verified',
+        issuer: pending.issuer,
+        oidc_username: pending.username,
+        ...(result.mergedAccount ? { merged_account: result.mergedAccount } : {}),
+      });
+      createSession(context, database.getAuthUserById(user.id)!, session.authMethod);
+      return context.json({ status: 'ok' });
+    });
+
+    auth.delete('/oidc/link', async (context) => {
+      const session = requireLocalSession(context);
+      if (session instanceof Response) return session;
+      const user = database.getAuthUserById(session.userId);
+      if (!user) return context.json({ error: 'Not authenticated' }, 401);
+      if (!isLinkedAccount(user)) return context.json({ error: 'This account has no linked SSO identity' }, 400);
+      // Refuse early so the attempt does not use up the authenticator code.
+      if (wouldUnlinkRemoveLastAdmin(user)) return context.json({ error: 'At least one active administrator is required' }, 400);
+
+      const refusal = await verifyAccountHolder(context, user);
+      if (refusal) return refusal;
+
+      const outcome = await writeDatabase(() => {
+        const current = database.getAuthUserById(user.id);
+        if (current?.session_version !== user.session_version) return 'expired';
+        if (wouldUnlinkRemoveLastAdmin(current)) return 'last-admin';
+        database.unlinkOidcIdentity(user.id);
+        return 'unlinked';
+      });
+      if (outcome === 'expired') return context.json({ error: 'Not authenticated' }, 401);
+      if (outcome === 'last-admin') return context.json({ error: 'At least one active administrator is required' }, 400);
+      // The change ended the session this request came with, so name the actor here.
+      recordUserAudit(context, 'user.oidc-unlink', user, {
+        user: user.username,
+        role: session.role,
+        issuer: user.oidc_issuer,
+        oidc_username: user.oidc_username,
+      });
+      createSession(context, database.getAuthUserById(user.id)!, session.authMethod);
+      return context.json({ status: 'ok' });
     });
 
     // OpenID Connect Back-Channel Logout: the provider calls this directly when an SSO session ends.

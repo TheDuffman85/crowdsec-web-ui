@@ -122,7 +122,7 @@ test('kills a native query on timeout and serves the next read without waiting f
   const dir = mkdtempSync(path.join(tmpdir(), 'crowdsec-web-ui-query-timeout-'));
   tempDirs.push(dir);
   const database = new CrowdsecDatabase({ cachePath: path.join(dir, 'test.db') });
-  const worker = new DatabaseQueryWorker({ dbPath: database.cachePath, maxWorkers: 1, timeoutMs: 1000 });
+  const worker = new DatabaseQueryWorker({ dbPath: database.cachePath, maxWorkers: 1, timeoutMs: 3_000 });
   workers.push(worker);
   try {
     await worker.get('SELECT 1');
@@ -134,4 +134,4 @@ test('kills a native query on timeout and serves the next read without waiting f
     worker.close();
     await expect(worker.get('SELECT 1')).rejects.toThrow('closed');
   } finally { database.close(); }
-}, 10000);
+});

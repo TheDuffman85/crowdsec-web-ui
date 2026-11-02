@@ -35,7 +35,7 @@ A self-hosted dashboard for [CrowdSec](https://crowdsec.net/): investigate alert
 | Multi-instance | Several CrowdSec LAPIs, per-instance views, and a Combined scope for Dashboard, Alerts, Decisions, and Allowlists |
 | Metrics | Optional Prometheus views for LAPI activity, bouncers, AppSec, parsers, latency, parsing time, and whitelists |
 | Notifications | Alert, decision, CVE, availability, and update rules delivered through Apprise, Email, Gotify, MQTT, ntfy, or Webhooks |
-| Security | Initial administrator setup, local user management with admin and read-only roles, password and TOTP login, passkeys, OIDC SSO, group roles, and instance-wide read-only mode |
+| Security | Initial administrator setup, local user management with admin and read-only roles, password and TOTP login, passkeys, OIDC SSO, linking local accounts to SSO identities, group roles, and instance-wide read-only mode |
 | Localization | Arabic, Chinese, English, French, German, Hindi, Japanese, Korean, Portuguese, Russian, and Spanish |
 | Experience | Unified search, server-synced saved and recent filters, dark/light themes, and responsive layouts |
 | Branding | Custom application name, light and dark mode logos, and colors for the sidebar, browser tab, sign-in page, notifications, and authenticator apps |
@@ -267,6 +267,7 @@ Date patterns require one day, month, and year token in any order: `d`/`dd` (day
 | `auth.oidc.endSession` | `false` (`true` on installations that already used OIDC before it defaulted to off) | Also end the identity provider session when an SSO user logs out (RP-initiated logout). | `CONFIG_AUTH_OIDC_END_SESSION` |
 | `auth.oidc.backchannelLogout` | `false` | Accept back-channel logout notifications, so signing out at the identity provider also ends dashboard sessions. | `CONFIG_AUTH_OIDC_BACKCHANNEL_LOGOUT` |
 | `auth.oidc.autoLogin` | `false` | Redirect the login page straight to the identity provider. Only active while OIDC is configured and password login is disabled. | `CONFIG_AUTH_OIDC_AUTO_LOGIN` |
+| `auth.oidc.autoLinkUsername` | `false` | Link SSO sign-ins to existing local accounts with the same username. See [Linking local and SSO sign-in](#linking-local-and-sso-sign-in). | `CONFIG_AUTH_OIDC_AUTO_LINK_USERNAME` |
 
 ### Notifications
 
@@ -278,7 +279,7 @@ Date patterns require one day, month, and year token in any order: `d`/`dd` (day
 
 ### Audit log
 
-User actions that change CrowdSec state (adding decisions, deleting decisions and alerts, and per-IP cleanup) and user management changes (`user.create`, `user.update`, `user.password-reset`, `user.mfa-reset`, `user.delete`) are recorded as single `[audit]` lines in the application log. Each entry is a JSON object with the timestamp, acting user and role, action, target (IP, range, or entity IDs), and outcome:
+User actions that change CrowdSec state (adding decisions, deleting decisions and alerts, and per-IP cleanup) and user management changes (`user.create`, `user.update`, `user.password-reset`, `user.mfa-reset`, `user.oidc-link`, `user.oidc-unlink`, `user.delete`) are recorded as single `[audit]` lines in the application log. Each entry is a JSON object with the timestamp, acting user and role, action, target (IP, range, or entity IDs), and outcome:
 
 ```
 [audit] {"time":"2026-08-17T01:30:00.000Z","user":"tommy","role":"admin","action":"decision.add","ip":"192.0.2.10","type":"ban","scenario":"manual/web-ui","duration":"4h","reason":"manual","instances":["CrowdSec"],"outcome":"success"}
@@ -585,7 +586,7 @@ When `auth.passwordLogin.enabled` is set, it overrides the Settings value and th
 
 ### Personal settings
 
-Every user has a **Settings → Profile** tab with their language, font, and Metrics and Allowlists sidebar visibility, plus their own password, TOTP, and passkeys. The display preferences are saved for the account and follow the user to other browsers; without dashboard authentication they apply to the whole instance. **Profile** remains editable in read-only mode, including when dashboard authentication is disabled. Read-only users only see **Profile**, because they cannot change anything else; **General**, **Authentication** (password login and OIDC), **Users**, and **Branding** are shown to administrators.
+Every user has a **Settings → Profile** tab with their language, font, and Metrics and Allowlists sidebar visibility, plus their own password, TOTP, and passkeys and, while OIDC is configured, their [linked SSO identity](#linking-local-and-sso-sign-in). The display preferences are saved for the account and follow the user to other browsers; without dashboard authentication they apply to the whole instance. **Profile** remains editable in read-only mode, including when dashboard authentication is disabled. Read-only users only see **Profile**, because they cannot change anything else; **General**, **Authentication** (password login and OIDC), **Users**, and **Branding** are shown to administrators.
 
 ### Users
 
@@ -595,7 +596,8 @@ Administrators manage accounts under **Settings → Users**:
 - Change a local user's role, or disable and re-enable the account. Disabling ends the user's sessions.
 - Reset a local user's password. By default, the user must choose a new password at the next password sign-in before using anything else; new users start the same way.
 - Reset a local user's TOTP and passkeys, for example after a lost phone. The user's sessions end and both can be set up again.
-- Delete users. OIDC users are listed after their first sign-in; their role comes from the identity provider, so they can only be deleted. A deleted OIDC user is added again on the next sign-in if the identity provider still allows it.
+- Delete users. OIDC users are listed after their first sign-in; their role comes from the identity provider, so they can only be deleted. A deleted OIDC user is added again on the next sign-in if the identity provider still allows it. An OIDC user the group settings deny is shown as read-only and no longer counts as an administrator until an allowed sign-in restores the role.
+- Remove the SSO link of an account shown as **Local + SSO**. These accounts are managed like local accounts, and the local sign-in stays.
 
 Administrators cannot change, disable, or delete their own account there, and the last active administrator cannot be demoted, disabled, or deleted. While passkeys are the only sign-in method (password login disabled, no OIDC), changes that would leave no enabled administrator with a passkey are rejected. A user with a pending password change cannot register passkeys or set up TOTP until the password is changed. Changes are written to the [audit log](#audit-log).
 
@@ -640,6 +642,7 @@ https://<crowdsec-web-ui-host>/api/auth/oidc/callback
 - Identities use stable issuer and subject claims. Username collisions with local accounts remain separate.
 - Sessions have a 24-hour absolute lifetime. OIDC-only users cannot add local passkeys; password-backed local accounts retain passkey support.
 - Existing OIDC rows migrate on their next successful SSO login.
+- If the provider cannot be reached, local sign-in keeps working and SSO comes back without a restart once the provider responds.
 
 #### Logout
 
@@ -664,6 +667,31 @@ Include the base path when one is configured. While the setting is off, logout n
 #### Auto-login
 
 With `auth.oidc.autoLogin: true` or the matching Settings toggle, the login page redirects straight to the identity provider. It only applies while OIDC is configured and password login is disabled; otherwise the setting stays inactive and the server logs why. After a logout, the login page is shown once instead of redirecting, so users are not signed straight back in. Open `/login?local=1` to reach the login page anyway, for example to sign in with a passkey.
+
+#### Linking local and SSO sign-in
+
+A local account can also sign in with one SSO identity, so a single account has both sign-in methods and local sign-in stays available during an identity provider outage. The strictest setup is still a separate emergency account that is not linked to anything; linking is for when you want one account per person.
+
+**To link an account**, sign in with your password or a passkey and open **Settings → Profile → Single sign-on → Link SSO identity**. After you sign in at the identity provider, the dashboard shows the identity it received and asks for your password and, if enabled, your authenticator code. Identities are matched by issuer and subject (`iss` + `sub`), never by username or email. An identity the group settings deny cannot be linked. Confirming only applies to the identity on screen: if a newer attempt in another tab replaced it, nothing is linked and you start again.
+
+If the identity already has a separate SSO account, such as `admin#oidc-1a2b3c4d5e`, confirming the link merges it into the local account and removes it. Its saved search filters move over, unless the local account already has a filter with that name. Its display preferences and recent filters are dropped in favor of the local account's. A disabled SSO account is not merged; delete it first if that person should have access again.
+
+**What each sign-in method can do on a linked account:**
+
+- Password and passkey sessions use the local role set under **Settings → Users**. Nothing from the identity provider changes it, ends those sessions, or blocks that sign-in. A local username is never renamed.
+- SSO sessions use the role from the identity provider, last updated at SSO sign-in. A denied identity loses SSO access only, and its SSO role is cleared until an allowed sign-in restores it. SSO sessions cannot change the password, TOTP, passkeys, or the link.
+- Disabling or deleting the account applies to both sign-in methods. So do local credential changes and resets, which end all of the account's sessions.
+- Last-administrator checks count either role, but the SSO role only while its issuer is still the configured one and the provider has not denied the identity. Unlinking is refused when the account's SSO role is the last administrator access.
+
+**Removing someone from the identity provider does not remove their local password.** The dashboard cannot detect this until they try to use SSO, so also disable their account under **Settings → Users**.
+
+The same section shows whether the provider is reachable, checked when the page loads and reused for up to 30 seconds. **Provider unavailable** is temporary and leaves the link in place, while **Provider changed** means the configured issuer is no longer the one the identity came from.
+
+**To unlink an account**, use the same section with your password and authenticator code, or **Remove SSO link** as another administrator. This ends the account's sessions, and the next SSO sign-in creates a separate account again. If the identity provider's issuer changes, existing links stop working; local sign-in keeps working, and each account has to be unlinked and linked again.
+
+**Linking existing accounts by username** (**Settings → Authentication**, or `auth.oidc.autoLinkUsername: true`) is off by default and meant for migrations. While it is on, an allowed SSO sign-in links automatically to an enabled local account with exactly the same `preferred_username`, and merges any separate SSO account of that identity, without asking for the local password. Accounts already linked, accounts created while the setting is on, and accounts that were unlinked are left out. These links are logged as warnings and marked **Linked by username (unverified)**.
+
+Usernames from a provider can change and are not proof of ownership, so only turn this on when your provider controls them, and turn it off after migrating. Anyone who gets a matching username at the provider is linked to that account, although they only get their SSO role and none of its local credentials. Such a mix-up keeps the real owner's identity out until an administrator removes the link.
 
 ## Deployment and Security
 

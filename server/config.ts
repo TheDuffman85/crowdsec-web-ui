@@ -41,6 +41,7 @@ const OIDC_SETTING_ENV = [
   ['oidcEndSession', 'AUTH_OIDC_END_SESSION', 'auth.oidc.endSession'],
   ['oidcAutoLogin', 'AUTH_OIDC_AUTO_LOGIN', 'auth.oidc.autoLogin'],
   ['oidcBackchannelLogout', 'AUTH_OIDC_BACKCHANNEL_LOGOUT', 'auth.oidc.backchannelLogout'],
+  ['oidcAutoLinkUsername', 'AUTH_OIDC_AUTO_LINK_USERNAME', 'auth.oidc.autoLinkUsername'],
 ] as const;
 
 export type OidcSetting = typeof OIDC_SETTING_ENV[number][0];
@@ -85,6 +86,7 @@ export interface DashboardAuthConfig {
   oidcEndSession: boolean | null;
   oidcAutoLogin: boolean;
   oidcBackchannelLogout: boolean;
+  oidcAutoLinkUsername: boolean;
   /** OIDC settings set by the application config; Settings cannot change them. */
   managedOidcSettings: OidcSetting[];
 }
@@ -333,6 +335,7 @@ function parseDashboardAuthConfig(env: NodeJS.ProcessEnv): DashboardAuthConfig {
     oidcEndSession: parseOptionalBooleanEnv(env.AUTH_OIDC_END_SESSION),
     oidcAutoLogin: parseBooleanEnv(env.AUTH_OIDC_AUTO_LOGIN, false),
     oidcBackchannelLogout: parseBooleanEnv(env.AUTH_OIDC_BACKCHANNEL_LOGOUT, false),
+    oidcAutoLinkUsername: parseBooleanEnv(env.AUTH_OIDC_AUTO_LINK_USERNAME, false),
     // Secrets may also be referenced through a _FILE variable.
     managedOidcSettings: OIDC_SETTING_ENV
       .filter(([, name]) => hasEnv(env, name) || hasEnv(env, `${name}_FILE`))

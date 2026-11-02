@@ -421,6 +421,7 @@ describe('Settings authentication methods', () => {
           oidcEndSession: false,
           oidcBackchannelLogout: false,
           oidcAutoLogin: false,
+          oidcAutoLinkUsername: false,
         }),
       }),
     ));
@@ -527,8 +528,76 @@ describe('Settings authentication methods', () => {
           oidcUnmatchedRole: 'deny',
           oidcBackchannelLogout: true,
           oidcAutoLogin: false,
+          oidcAutoLinkUsername: false,
         }),
       }),
     ));
+  });
+
+  test('asks for confirmation before turning on linking by username', async () => {
+    const user = userEvent.setup();
+    useAuthMock.mockReturnValue({
+      authEnabled: true,
+      setupRequired: false,
+      authenticated: true,
+      user: { userId: 1, username: 'admin', role: 'admin' },
+      authMethod: 'password',
+      oidcEnabled: true,
+      passwordLoginDisabled: false,
+      passkeysEnabled: false,
+      hasPassword: true,
+      totpEnabled: false,
+      loading: false,
+      refresh: vi.fn(),
+      login: vi.fn(),
+      setup: vi.fn(),
+      logout: vi.fn(),
+    });
+    vi.mocked(fetchConfig).mockResolvedValue({
+      lookback_period: '1h',
+      lookback_hours: 1,
+      lookback_days: 1,
+      refresh_interval: 30000,
+      current_interval_name: '30s',
+      lapi_status: { isConnected: true, lastCheck: null, lastError: null, offline_since: null },
+      sync_status: { isSyncing: false, progress: 100, message: 'done', startedAt: null, completedAt: null },
+      simulations_enabled: true,
+      machine_features_enabled: false,
+      origin_features_enabled: false,
+      permissions: { mode: 'admin', can_manage_enforcement: true, can_manage_settings: true },
+    });
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/auth/passkeys')) return Response.json({ passkeys: [] });
+      if (url.includes('/api/auth/settings') && init?.method === 'PUT') return Response.json({ status: 'ok', settings: {} });
+      if (url.includes('/api/auth/settings')) {
+        return Response.json({ disablePasswordLogin: false, oidcIssuerUrl: 'https://idp.example.com', oidcClientId: 'crowdsec', hasPassword: true, totpEnabled: false, authMethod: 'password' });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<SettingsRouter tab="authentication"><Settings /></SettingsRouter>);
+
+    const autoLinkSwitch = await screen.findByRole('switch', { name: 'pages.settings.oidcAutoLink' });
+    await user.click(autoLinkSwitch);
+    expect(autoLinkSwitch).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByText('pages.settings.oidcAutoLinkConfirmMessage')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(autoLinkSwitch).toHaveAttribute('aria-checked', 'false');
+
+    await user.click(autoLinkSwitch);
+    await user.click(screen.getByRole('button', { name: 'pages.settings.oidcAutoLinkConfirm' }));
+    expect(autoLinkSwitch).toHaveAttribute('aria-checked', 'true');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/auth/settings'),
+      expect.objectContaining({ method: 'PUT', body: expect.stringContaining('"oidcAutoLinkUsername":true') }),
+    ));
+
+    // Turning it off needs no confirmation.
+    await user.click(autoLinkSwitch);
+    expect(autoLinkSwitch).toHaveAttribute('aria-checked', 'false');
   });
 });

@@ -980,8 +980,15 @@ describe('resolveOidcClaims', () => {
     };
     expect(resolveOidcClaims(idClaims, undefined, config)).toEqual({
       username: 'id-token-user',
+      preferredUsername: 'id-token-user',
       role: 'read-only',
     });
+  });
+
+  test('only reports a preferred username the provider sent', () => {
+    const resolved = resolveOidcClaims({ sub: '1', email: 'user@example.com' }, undefined, config);
+    expect(resolved).toMatchObject({ username: 'user@example.com' });
+    expect(resolved).not.toHaveProperty('preferredUsername');
   });
 
   test('unions groups so an empty UserInfo groups value cannot erase ID-token groups', () => {

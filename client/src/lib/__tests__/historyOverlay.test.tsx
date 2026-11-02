@@ -1,7 +1,7 @@
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useEffect, useState } from 'react';
-import { MemoryRouter, Route, Routes, useLocation, useNavigate, type NavigateFunction } from 'react-router-dom';
+import { MemoryRouter, Route, Router, Routes, useLocation, useNavigate, type Location, type NavigateFunction, type Navigator, type To } from 'react-router-dom';
 import { describe, expect, test } from 'vitest';
 import { useHistoryBackedOverlay } from '../historyOverlay';
 
@@ -50,7 +50,67 @@ function renderOverlays() {
   return { history, goBack };
 }
 
+// A router whose navigations stay queued until the test lands them, as they do while React
+// has not committed them yet, so a test can decide the order they arrive in.
+function renderOverlayWithQueuedNavigation() {
+  const entries: Location[] = [{ pathname: '/page', search: '', hash: '', state: null, key: 'initial' }];
+  const queue: Array<() => void> = [];
+  let index = 0;
+  let nextKey = 0;
+
+  function QueuedRouter() {
+    const [location, setLocation] = useState(entries[0]);
+    const [navigator] = useState<Navigator>(() => ({
+      createHref: (to: To) => String(to),
+      go: (delta) => {
+        queue.push(() => {
+          index += delta;
+          setLocation(entries[index]);
+        });
+      },
+      push: (to, state) => {
+        queue.push(() => {
+          index += 1;
+          entries.splice(index, entries.length, { ...entries[0], ...(to as object), state, key: `pushed-${nextKey += 1}` });
+          setLocation(entries[index]);
+        });
+      },
+      replace: () => {
+        throw new Error('This overlay should pop the entry it pushed');
+      },
+    }));
+    return <Router location={location} navigator={navigator}><Overlay name="dialog" /></Router>;
+  }
+
+  render(<QueuedRouter />);
+  const land = () => {
+    act(() => queue.shift()!());
+  };
+  return { land };
+}
+
 describe('useHistoryBackedOverlay', () => {
+  test('stays open when reopened before its own close has landed', async () => {
+    const { land } = renderOverlayWithQueuedNavigation();
+    await userEvent.click(screen.getByRole('button', { name: 'Open dialog' }));
+    land();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Close dialog' }));
+    expect(screen.queryByText('dialog is open')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Open dialog' }));
+
+    // The close lands first and must not count as the user leaving the reopened overlay.
+    land();
+    expect(screen.getByText('dialog is open')).toBeInTheDocument();
+    land();
+    expect(screen.getByText('dialog is open')).toBeInTheDocument();
+
+    // Once the push has landed, the overlay is tracked as usual again.
+    await userEvent.click(screen.getByRole('button', { name: 'Close dialog' }));
+    land();
+    expect(screen.queryByText('dialog is open')).not.toBeInTheDocument();
+  });
+
   test('closes on Back without leaving the page', async () => {
     const { history, goBack } = renderOverlays();
     await userEvent.click(screen.getByRole('button', { name: 'Open drawer' }));

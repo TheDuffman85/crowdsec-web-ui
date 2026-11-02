@@ -238,7 +238,7 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
   knownKeys(passwordLogin, ['enabled'], 'auth.passwordLogin');
   setBoolean(env, passwordLogin, 'enabled', 'AUTH_PASSWORD_LOGIN_ENABLED', 'auth.passwordLogin');
   const oidc = auth.oidc === undefined ? {} : record(auth.oidc, 'auth.oidc');
-  knownKeys(oidc, ['issuerUrl', 'clientId', 'clientSecret', 'scope', 'groupsClaim', 'adminGroups', 'readOnlyGroups', 'unmatchedRole', 'endSession', 'autoLogin', 'backchannelLogout'], 'auth.oidc');
+  knownKeys(oidc, ['issuerUrl', 'clientId', 'clientSecret', 'scope', 'groupsClaim', 'adminGroups', 'readOnlyGroups', 'unmatchedRole', 'endSession', 'autoLogin', 'backchannelLogout', 'autoLinkUsername'], 'auth.oidc');
   setString(env, oidc, 'issuerUrl', 'AUTH_OIDC_ISSUER_URL', 'auth.oidc');
   setString(env, oidc, 'clientId', 'AUTH_OIDC_CLIENT_ID', 'auth.oidc');
   applySecretReference(oidc.clientSecret, 'auth.oidc.clientSecret', env, sourceEnv, 'AUTH_OIDC_CLIENT_SECRET');
@@ -250,6 +250,7 @@ export function parseApplicationConfig(parsed: unknown, sourceEnv: NodeJS.Proces
   setBoolean(env, oidc, 'endSession', 'AUTH_OIDC_END_SESSION', 'auth.oidc');
   setBoolean(env, oidc, 'autoLogin', 'AUTH_OIDC_AUTO_LOGIN', 'auth.oidc');
   setBoolean(env, oidc, 'backchannelLogout', 'AUTH_OIDC_BACKCHANNEL_LOGOUT', 'auth.oidc');
+  setBoolean(env, oidc, 'autoLinkUsername', 'AUTH_OIDC_AUTO_LINK_USERNAME', 'auth.oidc');
 
   const notifications = section(root, 'notifications');
   knownKeys(notifications, ['secretKey', 'allowPrivateAddresses', 'debugPayloads'], 'notifications');
@@ -365,7 +366,7 @@ export const CONFIG_KEY_ORDER = new Map<string, readonly string[]>([
   ['updates', ['enabled']],
   ['auth', ['enabled', 'sessionSecret', 'totpSecret', 'totpSeed', 'passwordLogin', 'oidc']],
   ['auth.passwordLogin', ['enabled']],
-  ['auth.oidc', ['issuerUrl', 'clientId', 'clientSecret', 'scope', 'groupsClaim', 'adminGroups', 'readOnlyGroups', 'unmatchedRole', 'endSession', 'autoLogin', 'backchannelLogout']],
+  ['auth.oidc', ['issuerUrl', 'clientId', 'clientSecret', 'scope', 'groupsClaim', 'adminGroups', 'readOnlyGroups', 'unmatchedRole', 'endSession', 'autoLogin', 'backchannelLogout', 'autoLinkUsername']],
   ['notifications', ['secretKey', 'allowPrivateAddresses', 'debugPayloads']],
   ['audit', ['enabled', 'logFile']],
   ['crowdsec', ['simulationsEnabled', 'alertFilters', 'manualDecisions', 'sync']],
@@ -589,6 +590,7 @@ export function generateApplicationConfig(env: NodeJS.ProcessEnv, config: Runtim
         ...(config.dashboardAuth.oidcEndSession !== null ? { endSession: config.dashboardAuth.oidcEndSession } : {}),
         autoLogin: config.dashboardAuth.oidcAutoLogin,
         backchannelLogout: config.dashboardAuth.oidcBackchannelLogout,
+        autoLinkUsername: config.dashboardAuth.oidcAutoLinkUsername,
       },
     },
     notifications: {
@@ -688,6 +690,7 @@ const CONFIG_VALUE_ENV = [
   ['CONFIG_AUTH_OIDC_END_SESSION', ['auth', 'oidc', 'endSession']],
   ['CONFIG_AUTH_OIDC_AUTO_LOGIN', ['auth', 'oidc', 'autoLogin']],
   ['CONFIG_AUTH_OIDC_BACKCHANNEL_LOGOUT', ['auth', 'oidc', 'backchannelLogout']],
+  ['CONFIG_AUTH_OIDC_AUTO_LINK_USERNAME', ['auth', 'oidc', 'autoLinkUsername']],
   ['CONFIG_NOTIFICATIONS_ALLOW_PRIVATE_ADDRESSES', ['notifications', 'allowPrivateAddresses']],
   ['CONFIG_NOTIFICATIONS_DEBUG_PAYLOADS', ['notifications', 'debugPayloads']],
   ['CONFIG_AUDIT_ENABLED', ['audit', 'enabled']],

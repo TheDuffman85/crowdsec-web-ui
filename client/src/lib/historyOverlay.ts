@@ -49,6 +49,9 @@ export function useHistoryBackedOverlay(key: string, onBack: () => void): Histor
     });
 
     useEffect(() => {
+        // An earlier navigation, such as the close before a quick reopen, can land while the
+        // push is still on its way. That is not the user leaving this overlay.
+        if (pushPendingRef.current && activeRef.current && !isActive) return;
         const wasActive = activeRef.current;
         activeRef.current = isActive;
         if (isActive && pushPendingRef.current) {
