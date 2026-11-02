@@ -8,6 +8,19 @@ import { Decisions } from '../../Decisions';
 import { I18nContext } from '../../../lib/i18n';
 
 describe('Decisions page presentation and columns', () => {
+  test('pins the actions column', async () => {
+    render(
+      <MemoryRouter initialEntries={['/decisions']}>
+        <Decisions />
+      </MemoryRouter>,
+    );
+
+    const row = (await screen.findByText('1.2.3.4')).closest('tr')!;
+    expect(row).toHaveClass('group');
+    expect(row.lastElementChild).toHaveClass('lg:sticky', 'lg:end-0');
+    expect(screen.getByRole('columnheader', { name: 'Actions' })).toHaveClass('lg:sticky', 'lg:end-0');
+  });
+
   test('hides enforcement actions in read-only mode', async () => {
     vi.mocked(api.fetchConfig).mockResolvedValue({
       lookback_period: '1h',

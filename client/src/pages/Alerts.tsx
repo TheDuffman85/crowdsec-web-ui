@@ -21,6 +21,7 @@ import { TargetDisplay } from "../components/TargetDisplay";
 import { EventCard } from "../components/EventCard";
 import { ContextSummary } from "../components/ContextSummary";
 import { Collapsible } from "../components/ui/Collapsible";
+import { HorizontalScrollArea } from "../components/ui/HorizontalScrollArea";
 import { getDisplayMetadata, isAppSecEvent } from "../lib/alertMetadata";
 import { getCountryCodesMatchingName, getCountryName } from "../lib/utils";
 import { getDecisionExpirationState } from "../lib/decisionExpiration";
@@ -28,6 +29,8 @@ import {
     loadStoredTableColumnOrders,
     loadStoredTableColumnPreferences,
     saveStoredTableColumnPreferences,
+    STICKY_ACTIONS_CELL_CLASS_NAME,
+    STICKY_ACTIONS_HEADER_CLASS_NAME,
 } from "../lib/tableColumns";
 import {
     ALERT_QUICK_FILTER_FIELDS,
@@ -70,6 +73,7 @@ type AlertSelection = AlertListItem | AlertRecord;
 type AlertDeleteAction =
     | { kind: "single"; ref: InstanceEntityRef }
     | { kind: "selected"; refs: InstanceEntityRef[]; sessions?: AlertSession[] }
+    | { kind: "session"; session: AlertSession }
     | { kind: "ip"; ip: string };
 
 const ALERT_DETAIL_CARD_CLASS_NAME = "min-w-0 overflow-hidden p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50";
@@ -1466,6 +1470,12 @@ export function Alerts() {
         setPendingDeleteAction({ kind: "single", ref: alertRef(alert) });
     };
 
+    const requestSessionDelete = (session: AlertSession, event: ReactMouseEvent<HTMLButtonElement>) => {
+        event.stopPropagation();
+        setPendingDeleteErrorInfo(null);
+        setPendingDeleteAction({ kind: "session", session });
+    };
+
     // The session list only carries each session's newest alert, so the rest are read
     // with the same search that "View alerts" opens.
     const resolveAlertSessionRefs = async (sessions: AlertSession[]): Promise<InstanceEntityRef[]> => {
@@ -1512,10 +1522,11 @@ export function Alerts() {
                     closeAlertDetails();
                 }
                 setSelectedAlertIds((prev) => prev.filter((id) => id !== `${pendingDeleteAction.ref.instance_id}\u0000${pendingDeleteAction.ref.id}`));
-            } else if (pendingDeleteAction.kind === "selected") {
-                const refs = pendingDeleteAction.sessions
-                    ? await resolveAlertSessionRefs(pendingDeleteAction.sessions)
-                    : pendingDeleteAction.refs;
+            } else if (pendingDeleteAction.kind === "selected" || pendingDeleteAction.kind === "session") {
+                const sessions = pendingDeleteAction.kind === "session" ? [pendingDeleteAction.session] : pendingDeleteAction.sessions;
+                const refs = sessions
+                    ? await resolveAlertSessionRefs(sessions)
+                    : pendingDeleteAction.kind === "selected" ? pendingDeleteAction.refs : [];
                 const result = await bulkDeleteAlerts(multipleInstances
                     ? refs
                     : refs.map((ref) => ref.id));
@@ -1523,7 +1534,10 @@ export function Alerts() {
                 if (selectedAlert && refs.some((ref) => `${ref.instance_id}\u0000${ref.id}` === alertKey(selectedAlert))) {
                     closeAlertDetails();
                 }
-                setSelectedAlertIds([]);
+                // Deleting one row leaves the checkboxes ticked on the other rows.
+                setSelectedAlertIds((prev) => (pendingDeleteAction.kind === "session"
+                    ? prev.filter((id) => id !== pendingDeleteAction.session.key)
+                    : []));
             } else {
                 const instanceScope = searchParams.get('instance');
                 const result = retryCleanupInstances.length > 0
@@ -1569,7 +1583,9 @@ export function Alerts() {
                 ? t('pages.alerts.deleteFailed')
                 : pendingDeleteAction.kind === "selected"
                     ? t('pages.alerts.deleteSelectedFailed')
-                    : t('pages.alerts.deleteIpFailed');
+                    : pendingDeleteAction.kind === "session"
+                        ? t('pages.alerts.deleteSessionFailed')
+                        : t('pages.alerts.deleteIpFailed');
             console.error("Failed to delete alert entries", error);
             setPendingDeleteErrorInfo(toErrorInfo(error, fallbackMessage));
         } finally {
@@ -1636,14 +1652,17 @@ export function Alerts() {
         ? t('pages.alerts.deleteAlertTitle')
         : pendingDeleteAction?.kind === "selected"
             ? t('pages.alerts.deleteSelectedTitle')
-            : pendingDeleteAction?.kind === "ip"
-                ? t('pages.alerts.deleteAllIpTitle')
-                : t('common.delete');
+            : pendingDeleteAction?.kind === "session"
+                ? t('pages.alerts.deleteSessionTitle')
+                : pendingDeleteAction?.kind === "ip"
+                    ? t('pages.alerts.deleteAllIpTitle')
+                    : t('common.delete');
     const selectedAlertCount = groupedView
         ? selectedAlertSessions.reduce((total, session) => total + session.alert_count, 0)
         : selectedFilteredAlertIds.length;
     const pendingSingleAlertId = pendingDeleteAction?.kind === "single" ? pendingDeleteAction.ref.id : null;
     const pendingIp = pendingDeleteAction?.kind === "ip" ? pendingDeleteAction.ip : null;
+    const pendingSession = pendingDeleteAction?.kind === "session" ? pendingDeleteAction.session : null;
     const alertSessionCountLabel = hasMoreAlerts ? `${alertSessions.length}+` : String(alertSessions.length);
     const summaryText = initialLoading && !hasLoadedAlerts
         ? t('pages.alerts.loading')
@@ -1829,11 +1848,12 @@ export function Alerts() {
         }
     };
 
-    const renderAlertActionsCell = (alert: AlertListItem, includeDeleteAlert = true) => {
+    const renderAlertActionsCell = (alert: AlertListItem, session?: AlertSession) => {
         const sourceValue = getAlertSourceValue(alert.source);
+        const deleteLabel = session ? t('pages.alerts.deleteSession') : t('pages.alerts.deleteAlert');
 
         return (
-            <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+            <td className={`px-6 py-4 whitespace-nowrap text-right text-sm font-medium ${STICKY_ACTIONS_CELL_CLASS_NAME}`}>
                 <div className="flex items-center justify-end gap-2">
                     {getAlertDecisionIp(alert) && (
                         <button
@@ -1862,16 +1882,14 @@ export function Alerts() {
                             <ShieldBan size={16} aria-hidden="true" />
                         </button>
                     )}
-                    {includeDeleteAlert && (
-                        <button
-                            onClick={(e) => requestDelete(alert, e)}
-                            className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
-                            title={t('pages.alerts.deleteAlert')}
-                            aria-label={t('pages.alerts.deleteAlert')}
-                        >
-                            <Trash2 size={16} />
-                        </button>
-                    )}
+                    <button
+                        onClick={(e) => (session ? requestSessionDelete(session, e) : requestDelete(alert, e))}
+                        className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
+                        title={deleteLabel}
+                        aria-label={deleteLabel}
+                    >
+                        <Trash2 size={16} />
+                    </button>
                 </div>
             </td>
         );
@@ -1896,20 +1914,20 @@ export function Alerts() {
                     <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[320px]">
                         <div className="space-y-2">
                             {session.scenario_groups.map((group) => (
-                                <div key={group.kind ?? ''} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                <div key={group.kind ?? ''} className="space-y-1">
                                     {group.kind && (
-                                        <span className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">{group.kind}</span>
+                                        <div className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">{group.kind}</div>
                                     )}
                                     {group.scenarios.map((entry) => (
-                                        <span key={entry.scenario} className="inline-flex min-w-0 items-center gap-1" title={entry.scenario}>
-                                            <Badge variant="secondary">{entry.count}x</Badge>
+                                        <div key={entry.scenario} className="flex min-w-0 items-center gap-1" title={entry.scenario}>
+                                            <Badge variant="secondary" className="flex-shrink-0">{entry.count}x</Badge>
                                             <ScenarioName name={entry.scenario} simulated={simulationsEnabled && isSimulatedAlert(session.latest)} />
-                                        </span>
+                                        </div>
                                     ))}
                                     {group.scenario_count > group.scenarios.length && (
-                                        <span className="text-xs text-gray-500 dark:text-gray-400">
+                                        <div className="text-xs text-gray-500 dark:text-gray-400">
                                             {t('pages.alerts.sessionMoreScenarios', { count: group.scenario_count - group.scenarios.length })}
-                                        </span>
+                                        </div>
                                     )}
                                 </div>
                             ))}
@@ -1976,7 +1994,7 @@ export function Alerts() {
             key={session.key}
             ref={index === alertSessions.length - 1 ? lastAlertElementRef : null}
             onClick={() => openAlertSession(session)}
-            className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors cursor-pointer"
+            className="group hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors cursor-pointer"
         >
             {canManageEnforcement && (
                 <td className="px-6 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
@@ -2001,7 +2019,7 @@ export function Alerts() {
                 </div>
             </td>
             {visibleAlertColumns.map((columnId) => renderAlertSessionCell(session, columnId))}
-            {canManageEnforcement && renderAlertActionsCell(session.latest, session.alert_count === 1)}
+            {canManageEnforcement && renderAlertActionsCell(session.latest, session.alert_count > 1 ? session : undefined)}
         </tr>
     );
 
@@ -2169,8 +2187,9 @@ export function Alerts() {
                 className="bg-white dark:bg-gray-800 shadow-sm rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700"
                 aria-busy={tableBusy}
             >
-                <div className="overflow-x-auto">
-                    <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 transition-opacity duration-200">
+                <HorizontalScrollArea>
+                    {/* The grouped view adds the Session column, so it tightens every cell to make room. */}
+                    <table className={`min-w-full divide-y divide-gray-200 dark:divide-gray-700 transition-opacity duration-200 ${groupedView ? '[&_td]:px-3 [&_th]:px-3' : ''}`}>
                         <thead className="bg-gray-50 dark:bg-gray-900/50">
                             <tr>
                                 {canManageEnforcement && (
@@ -2204,7 +2223,7 @@ export function Alerts() {
                                     );
                                 })}
                                 {canManageEnforcement && (
-                                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('tableColumns.actions')}</th>
+                                    <th className={`px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider ${STICKY_ACTIONS_HEADER_CLASS_NAME}`}>{t('tableColumns.actions')}</th>
                                 )}
                             </tr>
                         </thead>
@@ -2225,7 +2244,7 @@ export function Alerts() {
                                             key={rowKey}
                                             ref={isLastElement ? lastAlertElementRef : null}
                                             onClick={() => handleAlertClick(alert)}
-                                            className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors cursor-pointer"
+                                            className="group hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors cursor-pointer"
                                         >
                                             {canManageEnforcement && (
                                                 <td className="px-6 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
@@ -2249,7 +2268,7 @@ export function Alerts() {
                             )}
                         </tbody>
                     </table>
-                </div>
+                </HorizontalScrollArea>
             </div>
 
             {/* Alert Details Modal */}
@@ -2621,6 +2640,11 @@ export function Alerts() {
                         <>
                             {t('common.deleteIpConfirmPrefix')} <span className="font-mono text-sm font-bold">{pendingIp}</span>? {t('common.actionCannotBeUndone')}
                         </>
+                    ) : pendingSession ? (
+                        <>{t('pages.alerts.deleteSessionConfirm', {
+                            count: pendingSession.alert_count,
+                            ip: getAlertSourceValue(pendingSession.latest.source) ?? pendingSession.latest.id,
+                        })}</>
                     ) : (
                         <>{t('pages.alerts.deleteSelectedConfirm', { count: selectedAlertCount })}</>
                     )}
