@@ -21,6 +21,7 @@ import {
   getLoadTestRefreshDecisionCount,
   getLoadTestSourceAlertIdForDecisionLayout,
   isLoadTestListOrigin,
+  LOAD_TEST_ALERT_SOURCE_IP_BASE,
   normalizeLoadTestBlocklistDecisionCounts,
   withoutLoadTestListAlertAddress,
 } from './load-test-shape';
@@ -54,6 +55,7 @@ const initialBlocklistDecisionCounts = normalizeLoadTestBlocklistDecisionCounts(
 );
 const initialEmptyAlertCount = parseIntegerEnv('LOADTEST_EMPTY_ALERTS', 0);
 const refreshAlertCount = parseIntegerEnv('LOADTEST_REFRESH_ALERTS', 100);
+const alertSourceIps = parseIntegerEnv('LOADTEST_ALERT_SOURCE_IPS', 0);
 const refreshDecisionCount = parseIntegerEnv('LOADTEST_REFRESH_DECISIONS', 100);
 const refreshDecisionMinPerAlert = parseIntegerEnv('LOADTEST_REFRESH_DECISIONS_MIN_PER_ALERT', 0);
 const refreshDecisionMaxPerAlert = parseIntegerEnv('LOADTEST_REFRESH_DECISIONS_MAX_PER_ALERT', 0);
@@ -450,6 +452,7 @@ const machines = [
 ] as const;
 
 const refreshOrigins = ['crowdsec', 'manual', 'cscli-import', 'lists'] as const;
+const REFRESH_ATTACKER_IPS = 5;
 
 function parseIntegerEnv(name: string, defaultValue: number): number {
   const raw = process.env[name];
@@ -594,11 +597,19 @@ function buildEvents(createdAt: string, target: string) {
   }];
 }
 
+// Refresh alerts return to a few attackers, so their sessions grow while the
+// test runs instead of the grouped list filling with one-alert sessions.
+function generatedAlertIp(alertId: number): string {
+  if (alertSourceIps <= 0) return ipFor(alertId, loadTestSeed);
+  const attacker = hash32(alertId, loadTestSeed) % Math.min(alertSourceIps, REFRESH_ATTACKER_IPS);
+  return ipFor(LOAD_TEST_ALERT_SOURCE_IP_BASE + attacker, loadTestSeed);
+}
+
 function buildGeneratedAlert(alertId: number, createdAt: string, decisions: AlertDecision[] = []): AlertRecord {
   const scenarioTuple = pick(scenarios, alertId, loadTestSeed, 11);
   const countryTuple = pick(countries, alertId, loadTestSeed, 17);
   const asTuple = pick(asNames, alertId, loadTestSeed, 23);
-  const ip = ipFor(alertId, loadTestSeed);
+  const ip = generatedAlertIp(alertId);
   const target = scenarioTuple[2];
   const machine = pick(machines, alertId, loadTestSeed, 31);
   const simulated = fraction(alertId, loadTestSeed, 47) < simulationRatio || decisions.some((decision) => decision.simulated === true);

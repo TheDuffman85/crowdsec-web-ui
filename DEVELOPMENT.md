@@ -10,8 +10,8 @@ Contributor setup, build metadata, verification, and implementation notes for Cr
 
 | Tool | Version |
 | --- | --- |
-| Node.js | `24.22.1` (LTS) |
-| pnpm | `12.15.0` |
+| Node.js | `24.22.2` (LTS) |
+| pnpm | `12.16.1` |
 | CrowdSec | A reachable LAPI for normal development |
 
 ### Install dependencies
@@ -177,6 +177,7 @@ Keep these invariants when changing filters:
 - Alerts paging caches exact totals and a bounded 20-page internal-ID window for every filter/search combination, then loads full records only for the requested page. Cache validity is bounded by the lookback expiry of the oldest matching row and every data publication invalidates it.
 - Default decision requests use the precomputed `is_duplicate` indexes. Boolean combinations of duplicate-group identity fields (`instance`, `ip`, and `sim`, plus `status` in the active-only view) must stay on that indexed path because they cannot split a group.
 - If active filters can exclude the global primary, rank only internal IDs and ranking columns, then load full records after the page is bounded. The first request caches a bounded 20-page ID window; consecutive pages must not repeat the window function. Keep filtered totals and promotion semantics in the same ranking pass.
+- Grouped Alerts must stay opt-in at no cost to other paths: no schema, index, or sync work. Alerts are read newest first in short batches on the isolated facet worker, because the first alert seen of a session is its last activity and only the head of the list is needed. A session is returned only when nothing newer can still grow. Never add an exact session total or a window function over all matching alerts; both read the complete result set again after every data publication. Page windows grow by a factor of five from 200 sessions, and decision totals are loaded only for the requested page.
 - Dashboard row indexes carry a durable SQLite change epoch and revision. Normal refreshes patch cached Alert and Decision records from `dashboard_record_changes`; bulk rebuild epochs force one safe full rebuild. Keep update triggers limited to Dashboard-relevant columns, prune journal entries only through the oldest retained cache revision, and never discard the previous complete index during normal invalidation. Empty-cache and oversized-journal invalidations reset the epoch so installations that do not use Dashboard cannot accumulate an unbounded journal.
 - Post-refresh Dashboard warming is background work. Full-build batches must yield while a foreground Alerts or Decisions list query is active so analytics cache preparation cannot multiply paging latency.
 

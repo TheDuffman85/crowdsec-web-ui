@@ -151,6 +151,7 @@ export function registerApiRoutes(dependencies: ApiRouteDependencies): void {
     queryAlertFacet,
     queryDecisionFacet,
     queryPaginatedAlerts,
+    queryAlertSessions,
     queryPaginatedDecisions,
     QueryWorkerTimeoutError,
     readUpdateCheckOverrides,
@@ -297,6 +298,38 @@ app.get(`${config.basePath}/api/alerts/facets`, ensureAuth, ensurePublishedRevis
     }
     console.error('Error serving alert facets from database:', error.message);
     return context.json({ error: 'Failed to retrieve alert facets' }, 500);
+  }
+});
+
+app.get(`${config.basePath}/api/alerts/sessions`, ensureAuth, ensurePublishedRevisionRead, async (context) => {
+  try {
+    await prepareOnDemandRefresh(context);
+    await prepareReadCache('alert sessions request');
+
+    const filters = getAlertListFilters(context, config.timeZone);
+    const compiledSearch = compileAlertSearch(filters.q, {
+      machineEnabled: true,
+      originEnabled: true,
+    }, {
+      timezoneOffsetMinutes: filters.timezoneOffsetMinutes,
+      timeZone: filters.timeZone,
+    });
+    if (!compiledSearch.ok) {
+      return context.json(toSearchErrorResponse(compiledSearch.error), 400);
+    }
+
+    return context.json(await queryAlertSessions(
+      getPageRequest(context) ?? { page: 1, pageSize: 50 },
+      filters,
+      compiledSearch.ast,
+    ));
+  } catch (error: any) {
+    if (error instanceof QueryWorkerTimeoutError) {
+      console.warn('Timed out serving alert sessions from database:', error.message);
+      return context.json({ error: 'Alert session query timed out' }, 504);
+    }
+    console.error('Error serving alert sessions from database:', error.message);
+    return context.json({ error: 'Failed to retrieve alert sessions' }, 500);
   }
 });
 

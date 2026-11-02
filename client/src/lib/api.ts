@@ -1,6 +1,7 @@
 import type {
   AddDecisionRequest,
   AlertRecord,
+  AlertSessionsResponse,
   AllowlistCheckResponse,
   AllowlistEntriesResponse,
   AllowlistedDecisionError,
@@ -119,6 +120,21 @@ export async function fetchAlertsPaginated(
         if (value) params.set(key, value);
     }
     return fetchJson<PaginatedResponse<SlimAlert>>(`/api/alerts?${params.toString()}`, undefined, 'Failed to fetch alerts');
+}
+
+export async function fetchAlertSessionsPaginated(
+    page: number,
+    pageSize = 50,
+    filters?: Record<string, string>,
+): Promise<AlertSessionsResponse> {
+    const params = new URLSearchParams({
+        page: String(page),
+        page_size: String(pageSize),
+    });
+    for (const [key, value] of Object.entries(filters ?? {})) {
+        if (value) params.set(key, value);
+    }
+    return fetchJson<AlertSessionsResponse>(`/api/alerts/sessions?${params.toString()}`, undefined, 'Failed to fetch alert sessions');
 }
 
 export async function fetchAlert(id: string | number, instanceId?: string): Promise<AlertRecord> {

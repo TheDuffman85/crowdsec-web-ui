@@ -249,7 +249,16 @@ describe('CrowdsecDatabase storage layout', () => {
     state.close();
 
     const db = new CrowdsecDatabase({ dataDir });
-    expect(db.getAuthUserByUsername('admin')).toMatchObject({ disabled: 0, password_change_required: 0 });
+    expect(db.getAuthUserByUsername('admin')).toMatchObject({
+      disabled: 0,
+      password_change_required: 0,
+      oidc_linked_at: null,
+      oidc_link_method: null,
+      oidc_username: null,
+      oidc_role: null,
+      oidc_session_version: 0,
+      oidc_auto_link_blocked: 0,
+    });
     expect(db.countActiveAdmins()).toBe(1);
     db.close();
   });

@@ -45,6 +45,7 @@ import {
 import { useNotificationUnreadCount } from '../contexts/useNotificationUnreadCount';
 import { useDateTime } from '../lib/dateTime';
 import { useRefresh } from '../contexts/useRefresh';
+import { useBranding } from '../contexts/useBranding';
 import { Badge } from '../components/ui/Badge';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
 import { Modal } from '../components/ui/Modal';
@@ -341,6 +342,7 @@ function getMetadataNumber(item: NotificationItem, key: string): number | null {
 function localizeNotificationText(
   item: NotificationItem,
   t: (key: string, values?: Record<string, string | number | boolean | null | undefined>) => string,
+  appName: string,
 ): { title: string; message: string } {
   const titleValues = { ruleName: item.rule_name };
 
@@ -440,6 +442,7 @@ function localizeNotificationText(
       return {
         title: t('server.notifications.applicationUpdate.title', titleValues),
         message: t('server.notifications.applicationUpdate.message', {
+          appName,
           currentVersion: localVersion || t('server.notifications.currentVersion'),
           targetVersion: tag === 'dev' ? `dev-${targetVersion}` : targetVersion,
         }),
@@ -1408,7 +1411,8 @@ function NotificationRow({
 }) {
   const { t } = useI18n();
   const { formatDateTime } = useDateTime();
-  const localizedText = localizeNotificationText(item, t);
+  const { appName } = useBranding();
+  const localizedText = localizeNotificationText(item, t, appName);
   const releaseUrl = item.rule_type === 'crowdsec-update' ? getMetadataString(item, 'release_url') : null;
   const safeReleaseUrl = releaseUrl?.startsWith('https://github.com/crowdsecurity/crowdsec/releases/') ? releaseUrl : null;
 
@@ -2368,6 +2372,7 @@ function RuleConfigFields({
   onSetForm: Dispatch<SetStateAction<RuleFormState>>;
 }) {
   const { t } = useI18n();
+  const { appName } = useBranding();
   const input = (key: string, label: string) => <LabeledInput key={key} label={label} value={form.config[key] || ''} onChange={(value) => onChange(key, value)} />;
   const windowHelp = (key: string) => <p className="text-xs text-gray-500 dark:text-gray-400">{t(key)}</p>;
   if (form.type === 'alert-spike') return (
@@ -2450,7 +2455,7 @@ function RuleConfigFields({
   if (form.type === 'application-update' || form.type === 'crowdsec-update') {
     return (
       <div className="rounded-xl border border-blue-200 bg-blue-50/80 p-4 text-sm text-blue-900 dark:border-blue-900/40 dark:bg-blue-950/20 dark:text-blue-200">
-        {t(form.type === 'crowdsec-update' ? 'pages.notifications.crowdsecUpdateHelp' : 'pages.notifications.applicationUpdateHelp')}
+        {t(form.type === 'crowdsec-update' ? 'pages.notifications.crowdsecUpdateHelp' : 'pages.notifications.applicationUpdateHelp', { appName })}
       </div>
     );
   }

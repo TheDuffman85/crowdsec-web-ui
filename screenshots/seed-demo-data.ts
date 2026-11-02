@@ -396,7 +396,7 @@ database.insertNotification({
   $title: 'CrowdSec Web UI update available',
   $message: 'Version 2026.06.06 is available for the configured container image.',
   $read_at: iso(29),
-  $metadata_json: JSON.stringify({ current_version: '2026.06.05', remote_version: '2026.06.06' }),
+  $metadata_json: JSON.stringify({ local_version: '2026.06.05', remote_version: '2026.06.06' }),
   $deliveries_json: JSON.stringify([
     { channel_id: 'channel-email', channel_name: 'Security Email', status: 'delivered' },
   ]),

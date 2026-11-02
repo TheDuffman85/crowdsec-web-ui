@@ -4,6 +4,8 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Notifications } from '../../Notifications';
 import { fetchNotificationSettings, fetchNotificationsPaginated, testNotificationChannel, testNotificationRule } from '../../../lib/api';
+import { BrandingContext } from '../../../contexts/branding-context';
+import { DEFAULT_BRANDING } from '../../../lib/branding';
 
 describe('Notifications page localization and delivery', () => {
   test('localizes notification badges, rule types, delivery statuses, and stored server messages', async () => {
@@ -118,6 +120,44 @@ describe('Notifications page localization and delivery', () => {
       'https://github.com/crowdsecurity/crowdsec/releases/tag/v1.8.0',
     );
     expect(screen.getByText('CrowdSec 更新')).toBeInTheDocument();
+  });
+
+  test('names the branded application in application update notices and rule help', async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchNotificationSettings).mockResolvedValueOnce(buildSettings());
+    vi.mocked(fetchNotificationsPaginated).mockResolvedValueOnce(buildNotificationPage({
+      data: [{
+        id: 'notif-update',
+        rule_id: 'rule-update',
+        rule_name: 'Updates',
+        rule_type: 'application-update',
+        severity: 'info',
+        title: 'Updates: application update available',
+        message: 'An update is available',
+        created_at: '2026-09-24T10:00:00.000Z',
+        read_at: null,
+        metadata: {
+          local_version: '2026.06.05',
+          remote_version: '2026.06.06',
+        },
+        deliveries: [],
+      }],
+      selectable_ids: ['notif-update'],
+      unread_count: 1,
+      total: 1,
+    }));
+
+    render(
+      <BrandingContext.Provider value={{ ...DEFAULT_BRANDING, appName: 'Acme SOC', setBranding: vi.fn(), refreshBranding: vi.fn() }}>
+        <Notifications />
+      </BrandingContext.Provider>,
+    );
+
+    expect(await screen.findByText('A newer Acme SOC version is available: 2026.06.05 -> 2026.06.06.')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Add Rule' }));
+    await user.selectOptions(screen.getByLabelText('Rule Type'), 'application-update');
+    expect(screen.getByText('This rule uses the built-in update check and fires when a newer Acme SOC version is available.')).toBeInTheDocument();
   });
 
   test('shows destination test content and delivery in the shared result modal', async () => {

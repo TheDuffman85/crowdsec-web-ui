@@ -69,6 +69,7 @@
 #     endSession: false # Requires the post-logout redirect URI to be registered with the provider.
 #     autoLogin: false # Only active when OIDC is configured and password login is disabled.
 #     backchannelLogout: false # Requires the back-channel logout URI to be registered with the provider.
+#     autoLinkUsername: false # Links SSO sign-ins to local accounts by username, without verifying ownership. Meant for migrations.
 
 # notifications:
 #   secretKey:

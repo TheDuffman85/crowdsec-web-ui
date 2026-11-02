@@ -1,6 +1,7 @@
 import type { AlertSource } from '../shared/contracts';
 
 export const DEFAULT_LOAD_TEST_BLOCKLIST_DECISIONS = 100_000;
+export const LOAD_TEST_ALERT_SOURCE_IP_BASE = 40_000_000;
 
 export function isLoadTestListOrigin(origin: string | null | undefined): boolean {
   const normalized = origin?.trim().toLowerCase();

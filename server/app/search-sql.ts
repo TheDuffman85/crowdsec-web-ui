@@ -117,7 +117,7 @@ export function getAlertCountIndexHint(
 }
 
 export function getDecisionPageIndexHint(filters: DecisionListFilters, searchAst: SearchNode | null): string {
-  if (filters.showDuplicates || filters.alertId || searchAstContainsField(searchAst, 'id', 'alert')) {
+  if (filters.showDuplicates || filters.alertIds.length > 0 || searchAstContainsField(searchAst, 'id', 'alert')) {
     return '';
   }
 

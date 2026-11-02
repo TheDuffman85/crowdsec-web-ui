@@ -179,6 +179,10 @@ vi.mock('../../../lib/api', () => {
       }
       return paginateAlerts(alerts, page, pageSize, defaultAlerts.length);
     }),
+    fetchAlertSessionsPaginated: vi.fn(async (page: number, pageSize: number) => ({
+      data: [],
+      pagination: { page, page_size: pageSize, has_more: false, total_alerts: 0, unfiltered_total_alerts: 0 },
+    })),
     fetchAlert: vi.fn(async (id: string | number) => ({
       id,
       created_at: '2026-03-23T11:00:00.000Z',

@@ -19,6 +19,7 @@ import { useBranding } from "../contexts/useBranding";
 import { AppLogo } from "../components/AppLogo";
 import { BrandingColorsSettings } from "../components/BrandingColorsSettings";
 import { UsersSettings } from "../components/UsersSettings";
+import { OidcLinkSettings } from "../components/OidcLinkSettings";
 import { THEME_MODES, type BrandingTheme } from "../../../shared/branding-theme";
 import {
     ACCEPTED_APP_LOGO_TYPES,
@@ -87,6 +88,7 @@ interface AuthSettings {
     oidcBackchannelLogout?: boolean;
     oidcAutoLogin?: boolean;
     oidcAutoLoginActive?: boolean;
+    oidcAutoLinkUsername?: boolean;
     managedSettings?: Partial<Record<string, ManagedSettingSource>>;
     hasPassword: boolean;
     passkeysAvailable?: boolean;
@@ -100,6 +102,7 @@ const DEFAULT_OIDC_SCOPE = 'openid profile email';
 const OIDC_SETTINGS = [
     'oidcIssuerUrl', 'oidcClientId', 'oidcClientSecret', 'oidcScope', 'oidcGroupsClaim', 'oidcAdminGroups',
     'oidcReadOnlyGroups', 'oidcUnmatchedRole', 'oidcEndSession', 'oidcBackchannelLogout', 'oidcAutoLogin',
+    'oidcAutoLinkUsername',
 ] as const;
 
 type OidcSetting = typeof OIDC_SETTINGS[number];
@@ -168,6 +171,7 @@ export function Settings() {
     const darkLogoInputRef = useRef<HTMLInputElement | null>(null);
     const [disablePasswordLogin, setDisablePasswordLogin] = useState(false);
     const [isSavingAuth, setIsSavingAuth] = useState(false);
+    const [autoLinkConfirmOpen, setAutoLinkConfirmOpen] = useState(false);
     const [passkeyModalOpen, setPasskeyModalOpen] = useState(false);
     const [passkeyName, setPasskeyName] = useState('');
     const [isRegisteringPasskey, setIsRegisteringPasskey] = useState(false);
@@ -192,6 +196,7 @@ export function Settings() {
         endSession: false,
         backchannelLogout: false,
         autoLogin: false,
+        autoLinkUsername: false,
     });
     const [oidcListDrafts, setOidcListDrafts] = useState({
         scopes: '',
@@ -259,6 +264,7 @@ export function Settings() {
                             endSession: payload.oidcEndSession === true,
                             backchannelLogout: payload.oidcBackchannelLogout === true,
                             autoLogin: payload.oidcAutoLogin === true,
+                            autoLinkUsername: payload.oidcAutoLinkUsername === true,
                         });
                     }
                 })
@@ -775,6 +781,7 @@ export function Settings() {
                         oidcEndSession: oidcForm.endSession,
                         oidcBackchannelLogout: oidcForm.backchannelLogout,
                         oidcAutoLogin: oidcForm.autoLogin,
+                        oidcAutoLinkUsername: oidcForm.autoLinkUsername,
                     } satisfies Record<OidcSetting, unknown>).filter(([setting]) => !isOidcManaged(setting as OidcSetting))),
                 }),
             });
@@ -805,6 +812,7 @@ export function Settings() {
                 oidcBackchannelLogout: oidcForm.backchannelLogout,
                 oidcAutoLogin: oidcForm.autoLogin,
                 oidcAutoLoginActive: payload.settings?.oidcAutoLoginActive ?? current.oidcAutoLoginActive,
+                oidcAutoLinkUsername: oidcForm.autoLinkUsername,
             } : current);
             setDisablePasswordLogin(savedDisablePasswordLogin);
             setOidcForm((current) => ({ ...current, clientSecret: '' }));
@@ -1127,6 +1135,8 @@ export function Settings() {
                             </CardContent>
                         </Card>
                     )}
+
+                    {authEnabled && <OidcLinkSettings inputClass={inputClass} labelClass={labelClass} showToast={showToast} />}
                 </TabPanel>
             )}
 
@@ -1482,6 +1492,31 @@ export function Settings() {
                                                 )}
                                             </div>
                                         </div>
+                                        <div className="flex items-start gap-4 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800 lg:col-span-2">
+                                            <Switch
+                                                id="oidc-auto-link-username"
+                                                checked={oidcForm.autoLinkUsername}
+                                                onCheckedChange={(checked) => {
+                                                    if (checked) {
+                                                        setAutoLinkConfirmOpen(true);
+                                                    } else {
+                                                        setOidcForm((current) => ({ ...current, autoLinkUsername: false }));
+                                                    }
+                                                }}
+                                                disabled={!canManageAuthSettings || isOidcManaged('oidcAutoLinkUsername')}
+                                            />
+                                            <div className="min-w-0">
+                                                <div className="flex items-center gap-1.5">
+                                                    <label htmlFor="oidc-auto-link-username" className={labelClass}>
+                                                        {t("pages.settings.oidcAutoLink")}
+                                                    </label>
+                                                    {renderManagedLock(authSettings?.managedSettings?.oidcAutoLinkUsername)}
+                                                </div>
+                                                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                                    {t("pages.settings.oidcAutoLinkHelp")}
+                                                </p>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
 
@@ -1501,6 +1536,31 @@ export function Settings() {
                     )}
                 </TabPanel>
             )}
+
+            <Modal isOpen={autoLinkConfirmOpen} onClose={() => setAutoLinkConfirmOpen(false)} title={t("pages.settings.oidcAutoLinkConfirmTitle")}>
+                <div className="space-y-5">
+                    <p className="text-sm text-gray-500 dark:text-gray-400">{t("pages.settings.oidcAutoLinkConfirmMessage")}</p>
+                    <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                        <button
+                            type="button"
+                            onClick={() => setAutoLinkConfirmOpen(false)}
+                            className="inline-flex h-10 items-center justify-center rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800"
+                        >
+                            {t("common.cancel")}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setOidcForm((current) => ({ ...current, autoLinkUsername: true }));
+                                setAutoLinkConfirmOpen(false);
+                            }}
+                            className="inline-flex h-10 items-center justify-center rounded-lg bg-red-600 px-4 text-sm font-medium text-white hover:bg-red-700"
+                        >
+                            {t("pages.settings.oidcAutoLinkConfirm")}
+                        </button>
+                    </div>
+                </div>
+            </Modal>
 
             {activeTab === 'users' && (
                 <TabPanel idPrefix="settings" id="users">

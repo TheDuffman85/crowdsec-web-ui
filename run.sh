@@ -34,7 +34,7 @@ ensure_pnpm() {
 
     if ! command -v corepack >/dev/null 2>&1; then
         log "Error: neither 'pnpm' nor 'corepack' is installed."
-        log "Please install pnpm 12.15.0 or enable corepack for Node.js 24.22.1."
+        log "Please install pnpm 12.16.1 or enable corepack for Node.js 24.22.2."
         log "Alternatively, use Docker to run the containerized application."
         exit 1
     fi
@@ -50,7 +50,7 @@ EOF
 
     if ! pnpm --version >/dev/null 2>&1; then
         log "Error: failed to start pnpm via corepack."
-        log "Try: corepack enable && corepack prepare pnpm@12.15.0 --activate"
+        log "Try: corepack enable && corepack prepare pnpm@12.16.1 --activate"
         exit 1
     fi
 
@@ -91,6 +91,9 @@ LOADTEST_ENV_NAMES=(
     LOADTEST_BLOCKLIST_SIZES
     LOADTEST_EMPTY_ALERTS
     LOADTEST_EXPIRED_ALERTS
+    LOADTEST_ALERT_SESSION_SIZE
+    LOADTEST_ALERT_SOURCE_IPS
+    LOADTEST_ALERT_BURST_SIZE
     LOADTEST_EXPIRING_SOON_DECISIONS
     LOADTEST_REFRESH_ALERTS
     LOADTEST_REFRESH_DECISIONS
@@ -176,9 +179,15 @@ configure_loadtest_profile() {
         metrics-fleet)
             profile_file="$LOADTEST_PROFILE_DIR/metrics-fleet.sh"
             ;;
+        alert-sessions)
+            profile_file="$LOADTEST_PROFILE_DIR/alert-sessions.sh"
+            ;;
+        alert-sessions-multi)
+            profile_file="$LOADTEST_PROFILE_DIR/alert-sessions-multi.sh"
+            ;;
         *)
             log "Error: unknown load-test profile '$LOADTEST_PROFILE'."
-            log "Available profiles: default, blocklist, blocklists-mixed, multi-instance, multi-instance-medium, allowlists, metrics-fleet"
+            log "Available profiles: default, blocklist, blocklists-mixed, multi-instance, multi-instance-medium, allowlists, metrics-fleet, alert-sessions, alert-sessions-multi"
             exit 1
             ;;
     esac
@@ -229,6 +238,9 @@ export_loadtest_config() {
     export LOADTEST_BLOCKLIST_SIZES
     export LOADTEST_EMPTY_ALERTS
     export LOADTEST_EXPIRED_ALERTS
+    export LOADTEST_ALERT_SESSION_SIZE
+    export LOADTEST_ALERT_SOURCE_IPS
+    export LOADTEST_ALERT_BURST_SIZE
     export LOADTEST_EXPIRING_SOON_DECISIONS
     export LOADTEST_REFRESH_ALERTS
     export LOADTEST_REFRESH_DECISIONS
@@ -345,7 +357,7 @@ trap cleanup_pnpm_shim EXIT
 # Check for Node.js and pnpm
 if ! command -v node &> /dev/null; then
     log "Error: 'node' is not installed."
-    log "Please install Node.js 24.22.1 to run this application locally."
+    log "Please install Node.js 24.22.2 to run this application locally."
     log "Alternatively, use Docker to run the containerized application."
     exit 1
 fi

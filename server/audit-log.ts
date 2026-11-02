@@ -12,6 +12,8 @@ export type AuditAction =
   | 'user.update'
   | 'user.password-reset'
   | 'user.mfa-reset'
+  | 'user.oidc-link'
+  | 'user.oidc-unlink'
   | 'user.delete';
 export type AuditOutcome = 'success' | 'partial' | 'failure' | 'queued';
 

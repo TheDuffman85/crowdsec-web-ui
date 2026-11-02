@@ -116,7 +116,7 @@ export function sampleImplicitSimulatedAlert(): AlertRecord {
 
 export function createAuthSessionCookie(
   database: CrowdsecDatabase,
-  payload: { userId: number; username: string; role: 'admin' | 'read-only'; authMethod: 'password' | 'passkey' | 'oidc'; sid?: string; oidcLogoutVersion?: number },
+  payload: { userId: number; username: string; role: 'admin' | 'read-only'; authMethod: 'password' | 'passkey' | 'oidc'; sid?: string; oidcLogoutVersion?: number; oidcSessionVersion?: number; sessionVersion?: number },
   configuredSecret?: string,
   times: { issuedAt?: number; expiresAt?: number } = {},
 ): string {

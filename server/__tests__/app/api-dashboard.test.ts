@@ -450,8 +450,8 @@ describe('createApp dashboard API', () => {
   test('refreshes cached dashboard active totals when a decision expires without a database mutation', async () => {
     vi.useRealTimers();
     // The first request syncs and builds the dashboard index before the
-    // decision may expire, which can take over a second on loaded CI runners.
-    const stopAt = new Date(Date.now() + 3_000).toISOString();
+    // decision may expire, which can take several seconds on loaded CI runners.
+    const stopAt = new Date(Date.now() + 8_000).toISOString();
     const alert = sampleAlert({
       id: 104,
       uuid: 'dashboard-expiring-alert',

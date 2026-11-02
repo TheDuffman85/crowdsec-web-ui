@@ -3,7 +3,7 @@
 # ==========================================
 # Stage 0: Node + pnpm
 # ==========================================
-FROM node:24.22.1-trixie-slim AS node-pnpm
+FROM node:24.22.2-trixie-slim AS node-pnpm
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
@@ -14,7 +14,7 @@ RUN npm config set fetch-retries 5 \
     && npm config set fetch-retry-mintimeout 20000 \
     && npm config set fetch-retry-maxtimeout 120000 \
     && npm config set registry https://registry.npmjs.org/ \
-    && npm install -g pnpm@12.15.0
+    && npm install -g pnpm@12.16.1
 
 
 # ==========================================

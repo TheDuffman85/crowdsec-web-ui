@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, type MouseEvent as ReactMouseEvent } from "react";
 import { useSearchParams, Link } from "react-router-dom";
-import { fetchAlertsPaginated, fetchAlert, deleteAlert, bulkDeleteAlerts, cleanupByIp, fetchConfig, fetchDecisionsPaginated, checkAllowlist } from "../lib/api";
+import { fetchAlertsPaginated, fetchAlertSessionsPaginated, fetchAlert, deleteAlert, bulkDeleteAlerts, cleanupByIp, fetchConfig, fetchDecisionsPaginated, checkAllowlist } from "../lib/api";
 import { isSimulatedAlert, isSimulatedDecision, parseSimulationFilter } from "../lib/simulation";
 import { useRefresh } from "../contexts/useRefresh";
 import { useHistoryBackedOverlay } from "../lib/historyOverlay";
@@ -45,6 +45,7 @@ import {
     type StoredQuickFilters,
 } from "../lib/quickFilters";
 import { getQuickFilterCompatibility } from "../lib/quickFilterCompatibility";
+import { formatAlertSessionDuration, loadStoredAlertGrouping, saveStoredAlertGrouping } from "../lib/alertGrouping";
 import { TABLE_COLUMN_DEFINITIONS } from "../../../shared/contracts";
 import { resolveMachineName } from "../../../shared/machine";
 import { collectDistinctOrigins, getOriginDisplayValue, getOriginTitle } from "../../../shared/origin";
@@ -59,8 +60,8 @@ import {
     type SearchDateRange,
     type SearchParseError,
 } from "../../../shared/search";
-import { Info, ExternalLink, Shield, ShieldBan, Gavel, Trash2, X, AlertCircle, Columns3, Loader2 } from "lucide-react";
-import type { AlertRecord, AlertSource, ApiPermissionError, BulkDeleteResult, DecisionListItem, FacetField, InstanceEntityRef, InstanceOperationResult, InstanceSummary, SimulationFilter, SlimAlert, TableColumnId, TableColumnPreferences } from '../types';
+import { Info, ExternalLink, Shield, ShieldBan, Gavel, Trash2, X, AlertCircle, Columns3, Layers, Loader2 } from "lucide-react";
+import type { AlertRecord, AlertSession, AlertSource, ApiPermissionError, BulkDeleteResult, DecisionListItem, FacetField, InstanceEntityRef, InstanceOperationResult, InstanceSummary, SimulationFilter, SlimAlert, TableColumnId, TableColumnPreferences } from '../types';
 import { useI18n, type I18nContextValue } from "../lib/i18n";
 import { getBrowserTimeZone, useDateTime } from "../lib/dateTime";
 
@@ -68,7 +69,7 @@ type AlertListItem = SlimAlert;
 type AlertSelection = AlertListItem | AlertRecord;
 type AlertDeleteAction =
     | { kind: "single"; ref: InstanceEntityRef }
-    | { kind: "selected"; refs: InstanceEntityRef[] }
+    | { kind: "selected"; refs: InstanceEntityRef[]; sessions?: AlertSession[] }
     | { kind: "ip"; ip: string };
 
 const ALERT_DETAIL_CARD_CLASS_NAME = "min-w-0 overflow-hidden p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-700/50";
@@ -201,10 +202,10 @@ function getAlertDecisionCounts(
 }
 
 function buildDecisionListHref(
-    alertId: string | number,
+    alertId: string | number | string[],
     options: { includeExpired?: boolean; simulation?: SimulationFilter; instanceId?: string } = {},
 ) {
-    const params = new URLSearchParams({ alert_id: String(alertId) });
+    const params = new URLSearchParams({ alert_id: Array.isArray(alertId) ? alertId.join(',') : String(alertId) });
 
     if (options.instanceId) params.set('instance', options.instanceId);
 
@@ -265,6 +266,8 @@ export function Alerts() {
         persistedQuickFilters,
     ));
     const [alerts, setAlerts] = useState<AlertListItem[]>([]);
+    const [alertSessions, setAlertSessions] = useState<AlertSession[]>([]);
+    const [groupingPreference, setGroupingPreference] = useState(() => loadStoredAlertGrouping());
     const [lookbackHours, setLookbackHours] = useState(168);
     const [simulationsEnabled, setSimulationsEnabled] = useState(false);
     const [canManageEnforcement, setCanManageEnforcement] = useState(false);
@@ -304,6 +307,8 @@ export function Alerts() {
     const [showAllEvents, setShowAllEvents] = useState(false);
     const currentSimulationFilter = simulationsEnabled ? parseSimulationFilter(searchParams.get("simulation")) : 'all';
     const alertIdParam = searchParams.get("id");
+    const groupParam = searchParams.get("group");
+    const groupedView = groupParam === "ip" || (groupParam !== "none" && groupingPreference);
     const queryParam = searchParams.get("q");
     useRecentFilter(queryParam ?? '', 'alerts', quickFiltersOpen);
     const dateStartParam = searchParams.get("dateStart") ?? "";
@@ -346,6 +351,9 @@ export function Alerts() {
     const previousSelectedAlertIdRef = useRef<string | null>(null);
     const modalSelectedAlertIdRef = useRef<string | null>(null);
     const alertsRef = useRef<AlertListItem[]>([]);
+    const alertSessionsRef = useRef<AlertSession[]>([]);
+    const previousGroupedViewRef = useRef(groupedView);
+    const alertSessionDrillDownQueryRef = useRef<string | null>(null);
     const currentPageRef = useRef(1);
     const inFlightLoadKeysRef = useRef(new Map<string, number>());
     const loadRequestSequenceRef = useRef(0);
@@ -437,7 +445,7 @@ export function Alerts() {
         [],
     );
     const visibleAlertColumnCount = visibleAlertColumns.length;
-    const alertTableColSpan = visibleAlertColumnCount + (canManageEnforcement ? 2 : 0);
+    const alertTableColSpan = visibleAlertColumnCount + (canManageEnforcement ? 2 : 0) + (groupedView ? 1 : 0);
     const isAlertColumnVisible = useCallback((columnId: TableColumnId) => (
         visibleAlertColumns.includes(columnId)
     ), [visibleAlertColumns]);
@@ -567,7 +575,11 @@ export function Alerts() {
         currentSimulationFilter,
     );
 
+    const isAlertSessionDrillDown = searchParams.has("session");
+
     useEffect(() => {
+        // A session drill-down is a temporary view, not a filter to come back to.
+        if (isAlertSessionDrillDown || alertSessionDrillDownQueryRef.current === debouncedSearchDraft.trim()) return;
         if (!compiledSearch.ok || !quickFilterCompatibility.compatible) return;
         const current = persistedQuickFiltersRef.current;
         const next = syncStoredQuickFiltersFromSearch(
@@ -579,7 +591,7 @@ export function Alerts() {
         if (storedQuickFiltersEqual(current, next)) return;
         persistedQuickFiltersRef.current = next;
         saveStoredQuickFilters(next);
-    }, [compiledSearch, quickFilterCompatibility.compatible, quickFilterDateRange]);
+    }, [compiledSearch, debouncedSearchDraft, isAlertSessionDrillDown, quickFilterCompatibility.compatible, quickFilterDateRange]);
 
     const applyFacetSelection = useCallback((field: FacetField, selection: SearchFacetSelection) => {
         updatePersistedQuickFilters((current) => setStoredQuickFilterSelection(
@@ -796,6 +808,7 @@ export function Alerts() {
             loadedPage: preserveLoadedPages ? currentPageRef.current : undefined,
             filter: appliedQuery,
             search: searchParams.toString(),
+            groupedView,
             refreshConfig,
         });
         const lastCompletedLoad = lastCompletedLoadRef.current;
@@ -831,38 +844,73 @@ export function Alerts() {
             const requestedPageSize = !append && preserveLoadedPages
                 ? Math.min(MAX_ALERT_REFRESH_SIZE, loadedPageCount * PAGE_SIZE)
                 : PAGE_SIZE;
-            const alertsResult = await fetchAlertsPaginated(page, requestedPageSize, filters);
-            if (!isCurrentRequest()) return;
-            let alertsData = alertsResult.data;
-            let nextPage = alertsResult.pagination.page;
-            const totalPagesAtDefaultSize = Math.ceil(alertsResult.pagination.total / PAGE_SIZE);
+            let alertsData: AlertListItem[];
+            if (groupedView) {
+                const sessionsResult = await fetchAlertSessionsPaginated(page, requestedPageSize, filters);
+                if (!isCurrentRequest()) return;
+                const { has_more: hasMore, total_alerts: totalAlertCount, unfiltered_total_alerts: unfilteredAlertCount } = sessionsResult.pagination;
+                let sessionData = sessionsResult.data;
+                let nextPage = sessionsResult.pagination.page;
 
-            if (!append && preserveLoadedPages) {
-                nextPage = Math.max(1, Math.min(loadedPageCount, totalPagesAtDefaultSize || 1));
-                const refreshedAlertKeys = new Set(alertsData.map(alertKey));
-                const visibleAlertCount = Math.min(
-                    alertsResult.pagination.total,
-                    nextPage * PAGE_SIZE,
-                );
-                alertsData = [
-                    ...alertsData,
-                    ...alertsRef.current.filter((alert) => !refreshedAlertKeys.has(alertKey(alert))),
-                ].slice(0, visibleAlertCount);
-            } else if (append) {
-                alertsData = [...alertsRef.current, ...alertsData];
-            }
+                if (!append && preserveLoadedPages) {
+                    const refreshedKeys = new Set(sessionData.map((session) => session.key));
+                    const olderLoadedSessions = hasMore
+                        ? alertSessionsRef.current.filter((session) => !refreshedKeys.has(session.key))
+                        : [];
+                    sessionData = [...sessionData, ...olderLoadedSessions].slice(0, loadedPageCount * PAGE_SIZE);
+                    nextPage = hasMore ? loadedPageCount : Math.max(1, Math.ceil(sessionData.length / PAGE_SIZE));
+                } else if (append) {
+                    const loadedKeys = new Set(alertSessionsRef.current.map((session) => session.key));
+                    sessionData = [...alertSessionsRef.current, ...sessionData.filter((session) => !loadedKeys.has(session.key))];
+                }
 
-            alertsRef.current = alertsData;
-            setAlerts(alertsData);
-            currentPageRef.current = append ? alertsResult.pagination.page : nextPage;
-            setCurrentPage(currentPageRef.current);
-            setTotalPages(totalPagesAtDefaultSize);
-            setTotalAlerts(alertsResult.pagination.total);
-            setTotalUnfilteredAlerts(alertsResult.pagination.unfiltered_total);
-            const nextSelectableIds = alertsData.map(alertKey);
-            setSelectableAlertIds(nextSelectableIds);
-            if (!append) {
-                setSelectedAlertIds((current) => current.filter((id) => nextSelectableIds.includes(id)));
+                alertSessionsRef.current = sessionData;
+                setAlertSessions(sessionData);
+                alertsData = sessionData.map((session) => session.latest);
+                const nextSelectableIds = sessionData.map((session) => session.key);
+                setSelectableAlertIds(nextSelectableIds);
+                if (!append) {
+                    setSelectedAlertIds((current) => current.filter((id) => nextSelectableIds.includes(id)));
+                }
+                currentPageRef.current = nextPage;
+                setCurrentPage(nextPage);
+                setTotalPages(hasMore ? nextPage + 1 : nextPage);
+                setTotalAlerts(totalAlertCount);
+                setTotalUnfilteredAlerts(unfilteredAlertCount);
+            } else {
+                const alertsResult = await fetchAlertsPaginated(page, requestedPageSize, filters);
+                if (!isCurrentRequest()) return;
+                alertsData = alertsResult.data;
+                let nextPage = alertsResult.pagination.page;
+                const totalPagesAtDefaultSize = Math.ceil(alertsResult.pagination.total / PAGE_SIZE);
+
+                if (!append && preserveLoadedPages) {
+                    nextPage = Math.max(1, Math.min(loadedPageCount, totalPagesAtDefaultSize || 1));
+                    const refreshedAlertKeys = new Set(alertsData.map(alertKey));
+                    const visibleAlertCount = Math.min(
+                        alertsResult.pagination.total,
+                        nextPage * PAGE_SIZE,
+                    );
+                    alertsData = [
+                        ...alertsData,
+                        ...alertsRef.current.filter((alert) => !refreshedAlertKeys.has(alertKey(alert))),
+                    ].slice(0, visibleAlertCount);
+                } else if (append) {
+                    alertsData = [...alertsRef.current, ...alertsData];
+                }
+
+                alertsRef.current = alertsData;
+                setAlerts(alertsData);
+                currentPageRef.current = append ? alertsResult.pagination.page : nextPage;
+                setCurrentPage(currentPageRef.current);
+                setTotalPages(totalPagesAtDefaultSize);
+                setTotalAlerts(alertsResult.pagination.total);
+                setTotalUnfilteredAlerts(alertsResult.pagination.unfiltered_total);
+                const nextSelectableIds = alertsData.map(alertKey);
+                setSelectableAlertIds(nextSelectableIds);
+                if (!append) {
+                    setSelectedAlertIds((current) => current.filter((id) => nextSelectableIds.includes(id)));
+                }
             }
             hasLoadedAlertsRef.current = true;
             setHasLoadedAlerts(true);
@@ -913,14 +961,12 @@ export function Alerts() {
                     lastCompletedLoadRef.current = { key: loadKey, completedAt: Date.now() };
                 }
                 if (append) setLoadingMore(false);
-                if (shouldBlockWithInitialLoading) {
-                    setInitialLoading(false);
-                } else {
-                    setBackgroundLoading(false);
-                }
+                // A superseded request may have raised either flag and will not clear it itself.
+                setInitialLoading(false);
+                setBackgroundLoading(false);
             }
         }
-    }, [alertIdParam, appliedQuery, buildServerFilters, loadConfig, searchParams]);
+    }, [alertIdParam, appliedQuery, buildServerFilters, groupedView, loadConfig, searchParams]);
 
     useLayoutEffect(() => () => {
         loadRequestSequenceRef.current += 1;
@@ -931,6 +977,23 @@ export function Alerts() {
     useEffect(() => {
         loadAlertsRef.current = loadAlerts;
     }, [loadAlerts]);
+
+    // Rows from the other view must not stay on screen while this view loads.
+    useLayoutEffect(() => {
+        if (previousGroupedViewRef.current === groupedView) return;
+        previousGroupedViewRef.current = groupedView;
+        alertsRef.current = [];
+        alertSessionsRef.current = [];
+        currentPageRef.current = 1;
+        hasLoadedAlertsRef.current = false;
+        setAlerts([]);
+        setAlertSessions([]);
+        setSelectableAlertIds([]);
+        setSelectedAlertIds([]);
+        setCurrentPage(1);
+        setTotalPages(1);
+        setInitialLoading(true);
+    }, [groupedView]);
 
     useEffect(() => {
         const intervalId = window.setInterval(() => setNowMs(Date.now()), 1_000);
@@ -1272,6 +1335,67 @@ export function Alerts() {
         }
     };
 
+    const toggleGroupedView = () => {
+        const nextGrouped = !groupedView;
+        saveStoredAlertGrouping(nextGrouped);
+        setGroupingPreference(nextGrouped);
+        const nextParams = new URLSearchParams(searchParams);
+        nextParams.delete("session");
+        nextParams.set("group", nextGrouped ? "ip" : "none");
+        setSearchParams(nextParams);
+    };
+
+    const buildAlertSessionQuery = (session: AlertSession): string | null => {
+        const currentSearch = compileAlertSearch(searchParams.get('q') ?? '', searchValidationFeatures, searchDateOptions);
+        if (!currentSearch.ok) return null;
+
+        let nextSearchAst = currentSearch.ast;
+        const sourceValue = getAlertSourceValue(session.latest.source);
+        if (sourceValue) {
+            nextSearchAst = replaceSearchFacetSelection(nextSearchAst, 'ip', { included: [sourceValue], excluded: [] });
+        }
+        if (multipleInstances && session.latest.instance_id) {
+            nextSearchAst = replaceSearchFacetSelection(nextSearchAst, 'instance', { included: [session.latest.instance_id], excluded: [] });
+        }
+        if (simulationsEnabled) {
+            nextSearchAst = replaceSearchFacetSelection(
+                nextSearchAst,
+                'sim',
+                quickFilterSimulationSelection(isSimulatedAlert(session.latest) ? 'simulated' : 'live'),
+            );
+        }
+        nextSearchAst = replaceSearchDateRange(nextSearchAst, { start: session.first_seen, end: session.last_seen });
+
+        return serializeSearchNode(nextSearchAst);
+    };
+
+    const openAlertSession = (session: AlertSession) => {
+        if (session.alert_count === 1) {
+            void handleAlertClick(session.latest);
+            return;
+        }
+
+        const nextQuery = buildAlertSessionQuery(session);
+        if (nextQuery === null) return;
+
+        const nextParams = new URLSearchParams(searchParams);
+        nextParams.delete('dateStart');
+        nextParams.delete('dateEnd');
+        nextParams.delete('simulation');
+        nextParams.set('q', nextQuery);
+        nextParams.set('group', 'none');
+        nextParams.set('session', '1');
+
+        alertSessionDrillDownQueryRef.current = nextQuery;
+        cancelSearchDebounce();
+        searchDraftRef.current = nextQuery;
+        searchSelectionRef.current = { start: nextQuery.length, end: nextQuery.length };
+        skipSearchParamSyncRef.current = nextQuery;
+        setSearchDraft(nextQuery);
+        setDebouncedSearchDraft(nextQuery);
+        setSearchParams(nextParams);
+    };
+
     const applySavedFilter = useCallback((query: string) => {
         cancelSearchDebounce();
         searchDraftRef.current = query;
@@ -1342,6 +1466,31 @@ export function Alerts() {
         setPendingDeleteAction({ kind: "single", ref: alertRef(alert) });
     };
 
+    // The session list only carries each session's newest alert, so the rest are read
+    // with the same search that "View alerts" opens.
+    const resolveAlertSessionRefs = async (sessions: AlertSession[]): Promise<InstanceEntityRef[]> => {
+        const refs: InstanceEntityRef[] = [];
+        for (const session of sessions) {
+            if (session.alert_count === 1) {
+                refs.push(alertRef(session.latest));
+                continue;
+            }
+
+            const query = buildAlertSessionQuery(session);
+            if (query === null) throw new Error('Invalid search');
+            const { dateStart: _dateStart, dateEnd: _dateEnd, ...filters } = buildServerFilters('all');
+            let page = 1;
+            let totalPages: number;
+            do {
+                const result = await fetchAlertsPaginated(page, MAX_ALERT_REFRESH_SIZE, { ...filters, q: query });
+                refs.push(...result.data.map(alertRef));
+                totalPages = result.pagination.total_pages;
+                page += 1;
+            } while (page <= totalPages);
+        }
+        return refs;
+    };
+
     const confirmDelete = async () => {
         if (!pendingDeleteAction) return;
         setDeleteInProgress(true);
@@ -1364,11 +1513,14 @@ export function Alerts() {
                 }
                 setSelectedAlertIds((prev) => prev.filter((id) => id !== `${pendingDeleteAction.ref.instance_id}\u0000${pendingDeleteAction.ref.id}`));
             } else if (pendingDeleteAction.kind === "selected") {
+                const refs = pendingDeleteAction.sessions
+                    ? await resolveAlertSessionRefs(pendingDeleteAction.sessions)
+                    : pendingDeleteAction.refs;
                 const result = await bulkDeleteAlerts(multipleInstances
-                    ? pendingDeleteAction.refs
-                    : pendingDeleteAction.refs.map((ref) => ref.id));
+                    ? refs
+                    : refs.map((ref) => ref.id));
                 resultMessage = summarizeDeleteResult(result, t);
-                if (selectedAlert && pendingDeleteAction.refs.some((ref) => `${ref.instance_id}\u0000${ref.id}` === alertKey(selectedAlert))) {
+                if (selectedAlert && refs.some((ref) => `${ref.instance_id}\u0000${ref.id}` === alertKey(selectedAlert))) {
                     closeAlertDetails();
                 }
                 setSelectedAlertIds([]);
@@ -1444,6 +1596,7 @@ export function Alerts() {
     const selectedFilteredAlertRefs = filteredAlerts
         .filter((alert) => selectedFilteredAlertIds.includes(alertKey(alert)))
         .map(alertRef);
+    const selectedAlertSessions = alertSessions.filter((session) => selectedFilteredAlertIds.includes(session.key));
     const allFilteredAlertsSelected = selectableAlertIds.length > 0 && selectedFilteredAlertIds.length === selectableAlertIds.length;
     const someFilteredAlertsSelected = selectedFilteredAlertIds.length > 0 && !allFilteredAlertsSelected;
 
@@ -1486,11 +1639,18 @@ export function Alerts() {
             : pendingDeleteAction?.kind === "ip"
                 ? t('pages.alerts.deleteAllIpTitle')
                 : t('common.delete');
-    const selectedAlertCount = selectedFilteredAlertIds.length;
+    const selectedAlertCount = groupedView
+        ? selectedAlertSessions.reduce((total, session) => total + session.alert_count, 0)
+        : selectedFilteredAlertIds.length;
     const pendingSingleAlertId = pendingDeleteAction?.kind === "single" ? pendingDeleteAction.ref.id : null;
     const pendingIp = pendingDeleteAction?.kind === "ip" ? pendingDeleteAction.ip : null;
+    const alertSessionCountLabel = hasMoreAlerts ? `${alertSessions.length}+` : String(alertSessions.length);
     const summaryText = initialLoading && !hasLoadedAlerts
         ? t('pages.alerts.loading')
+        : groupedView
+            ? totalAlerts !== totalUnfilteredAlerts
+                ? t('pages.alerts.sessionSummaryFiltered', { count: alertSessionCountLabel, total: totalAlerts, unfiltered: totalUnfilteredAlerts })
+                : t('pages.alerts.sessionSummary', { count: alertSessionCountLabel, total: totalAlerts })
         : totalAlerts !== totalUnfilteredAlerts
             ? t('pages.alerts.summaryFiltered', { count: visibleAlerts.length, total: totalAlerts, unfiltered: totalUnfilteredAlerts })
             : t('pages.alerts.summary', { count: visibleAlerts.length, total: totalAlerts });
@@ -1520,6 +1680,333 @@ export function Alerts() {
         disabledReason: quickFilterDisabledReason,
     };
 
+    const renderAlertCell = (alert: AlertListItem, columnId: TableColumnId) => {
+        const sourceValue = getAlertSourceValue(alert.source);
+        const alertOrigins = getAlertOrigins(alert);
+        const alertOriginDisplay = getOriginDisplayValue(alertOrigins);
+        const alertOriginTitle = getOriginTitle(alertOrigins);
+
+        switch (columnId) {
+            case 'instance':
+                return (
+                    <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                        <Badge variant="secondary">{alert.instance_name || alert.instance_id || 'default'}</Badge>
+                    </td>
+                );
+            case 'id':
+                return (
+                    <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-900 dark:text-gray-100">
+                        #{alert.id}
+                    </td>
+                );
+            case 'time':
+                return (
+                    <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                        <TimeDisplay timestamp={alert.created_at} />
+                    </td>
+                );
+            case 'scenario':
+                return (
+                    <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={alert.scenario}>
+                        <ScenarioName
+                            name={alert.scenario}
+                            reason={alert.reason}
+                            showLink={true}
+                            simulated={simulationsEnabled && isSimulatedAlert(alert)}
+                        />
+                    </td>
+                );
+            case 'kind':
+                return (
+                    <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                        {alert.kind || "-"}
+                    </td>
+                );
+            case 'target':
+                return (
+                    <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[180px]">
+                        <TargetDisplay target={alert.target} targetCount={alert.target_count} />
+                    </td>
+                );
+            case 'country':
+                return (
+                    <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 align-middle">
+                        {alert.source?.cn && alert.source?.cn !== "Unknown" ? (
+                            <div className="flex items-center gap-2" title={alert.source.cn}>
+                                <CountryFlag code={alert.source.cn} />
+                                <span className="truncate max-w-[150px]">{getCountryName(alert.source.cn, language)}</span>
+                            </div>
+                        ) : (
+                            "-"
+                        )}
+                    </td>
+                );
+            case 'city':
+                return (
+                    <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[160px] truncate" title={alert.source?.city}>
+                        {alert.source?.city || "-"}
+                    </td>
+                );
+            case 'region':
+                return (
+                    <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[180px] truncate" title={alert.source?.region}>
+                        {alert.source?.region || "-"}
+                    </td>
+                );
+            case 'as':
+                return (
+                    <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[150px] truncate" title={alert.source?.as_name}>
+                        {alert.source?.as_name || "-"}
+                    </td>
+                );
+            case 'source':
+                return (
+                    <td key={columnId} className="px-6 py-4 text-sm font-mono text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={sourceValue}>
+                        {sourceValue || "-"}
+                    </td>
+                );
+            case 'machine':
+                return (
+                    <td key={columnId} className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[120px] truncate" title={resolveMachineName(alert)}>
+                        {resolveMachineName(alert) || "-"}
+                    </td>
+                );
+            case 'origin':
+                return (
+                    <td key={columnId} className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[140px] truncate" title={alertOriginTitle}>
+                        {alertOriginDisplay}
+                    </td>
+                );
+            case 'decisions':
+                return (
+                    <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
+                        {(() => {
+                            const decisionCounts = getAlertDecisionCounts(
+                                alert,
+                                simulationsEnabled,
+                                currentSimulationFilter,
+                            );
+                            const activeDecisionCount = decisionCounts.active;
+                            const expiredDecisionCount = decisionCounts.expired;
+                            const decisionFilter = simulationsEnabled && currentSimulationFilter !== 'all'
+                                ? currentSimulationFilter
+                                : undefined;
+
+                            if (activeDecisionCount > 0 || expiredDecisionCount > 0) {
+                                return (
+                                    <div className="flex flex-wrap gap-2">
+                                        {activeDecisionCount > 0 && (
+                                            <Link
+                                                to={buildDecisionListHref(alert.id, { simulation: decisionFilter, instanceId: alert.instance_id })}
+                                                className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors border border-primary-200 dark:border-primary-800"
+                                                title={t('pages.alerts.viewActiveDecisions', { count: activeDecisionCount })}
+                                            >
+                                                <Shield size={14} className="fill-current" />
+                                                <span className="text-xs font-semibold">{t('common.active')}: {activeDecisionCount}</span>
+                                                <ExternalLink size={12} className="ml-0.5" />
+                                            </Link>
+                                        )}
+                                        {expiredDecisionCount > 0 && (
+                                            <Link
+                                                to={buildDecisionListHref(alert.id, { includeExpired: true, simulation: decisionFilter, instanceId: alert.instance_id })}
+                                                className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                                                title={t('pages.alerts.viewExpiredDecisions', { count: expiredDecisionCount })}
+                                            >
+                                                <Shield size={14} className="opacity-50" />
+                                                <span className="text-xs font-medium">{t('common.inactive')}: {expiredDecisionCount}</span>
+                                            </Link>
+                                        )}
+                                    </div>
+                                );
+                            }
+
+                            return <span className="text-gray-400">-</span>;
+                        })()}
+                    </td>
+                );
+            default:
+                return null;
+        }
+    };
+
+    const renderAlertActionsCell = (alert: AlertListItem, includeDeleteAlert = true) => {
+        const sourceValue = getAlertSourceValue(alert.source);
+
+        return (
+            <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                <div className="flex items-center justify-end gap-2">
+                    {getAlertDecisionIp(alert) && (
+                        <button
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                openAlertDecision(alert);
+                            }}
+                            className="text-primary-600 hover:text-primary-900 dark:text-primary-400 dark:hover:text-primary-300 hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
+                            title={t('pages.decisions.addDecision')}
+                            aria-label={t('pages.decisions.addDecision')}
+                        >
+                            <Gavel size={16} aria-hidden="true" />
+                        </button>
+                    )}
+                    {sourceValue && (
+                        <button
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                setPendingDeleteErrorInfo(null);
+                                setPendingDeleteAction({ kind: "ip", ip: sourceValue });
+                            }}
+                            className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
+                            title={t('common.deleteAllForIp', { value: sourceValue })}
+                            aria-label={t('common.deleteAllForIp', { value: sourceValue })}
+                        >
+                            <ShieldBan size={16} aria-hidden="true" />
+                        </button>
+                    )}
+                    {includeDeleteAlert && (
+                        <button
+                            onClick={(e) => requestDelete(alert, e)}
+                            className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
+                            title={t('pages.alerts.deleteAlert')}
+                            aria-label={t('pages.alerts.deleteAlert')}
+                        >
+                            <Trash2 size={16} />
+                        </button>
+                    )}
+                </div>
+            </td>
+        );
+    };
+
+    const renderAlertSessionCell = (session: AlertSession, columnId: TableColumnId) => {
+        if (session.alert_count === 1) return renderAlertCell(session.latest, columnId);
+
+        switch (columnId) {
+            case 'id':
+                return (
+                    <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">-</td>
+                );
+            case 'time':
+                return (
+                    <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                        <TimeDisplay timestamp={session.last_seen} />
+                    </td>
+                );
+            case 'scenario':
+                return (
+                    <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[320px]">
+                        <div className="space-y-2">
+                            {session.scenario_groups.map((group) => (
+                                <div key={group.kind ?? ''} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                    {group.kind && (
+                                        <span className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">{group.kind}</span>
+                                    )}
+                                    {group.scenarios.map((entry) => (
+                                        <span key={entry.scenario} className="inline-flex min-w-0 items-center gap-1" title={entry.scenario}>
+                                            <Badge variant="secondary">{entry.count}x</Badge>
+                                            <ScenarioName name={entry.scenario} simulated={simulationsEnabled && isSimulatedAlert(session.latest)} />
+                                        </span>
+                                    ))}
+                                    {group.scenario_count > group.scenarios.length && (
+                                        <span className="text-xs text-gray-500 dark:text-gray-400">
+                                            {t('pages.alerts.sessionMoreScenarios', { count: group.scenario_count - group.scenarios.length })}
+                                        </span>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    </td>
+                );
+            case 'kind':
+                return (
+                    <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                        {session.scenario_groups.map((group) => group.kind).filter(Boolean).join(', ') || "-"}
+                    </td>
+                );
+            case 'target':
+                return (
+                    <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[180px]">
+                        <TargetDisplay target={session.targets[0]?.value} targetCount={session.target_count} />
+                    </td>
+                );
+            case 'decisions': {
+                const decisionCounts = getAlertDecisionCounts(session.latest, simulationsEnabled, currentSimulationFilter);
+                const partialSuffix = session.decision_summary_partial ? '+' : '';
+                const decisionFilter = simulationsEnabled && currentSimulationFilter !== 'all'
+                    ? currentSimulationFilter
+                    : undefined;
+                return (
+                    <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
+                        {decisionCounts.active > 0 || decisionCounts.expired > 0 ? (
+                            <div className="flex flex-wrap gap-2">
+                                {decisionCounts.active > 0 && (
+                                    <Link
+                                        to={buildDecisionListHref(session.decision_alert_ids, { simulation: decisionFilter, instanceId: session.latest.instance_id })}
+                                        className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors border border-primary-200 dark:border-primary-800"
+                                        title={t('pages.alerts.viewActiveDecisions', { count: decisionCounts.active })}
+                                    >
+                                        <Shield size={14} className="fill-current" />
+                                        <span className="text-xs font-semibold">{t('common.active')}: {decisionCounts.active}{partialSuffix}</span>
+                                        <ExternalLink size={12} className="ml-0.5" />
+                                    </Link>
+                                )}
+                                {decisionCounts.expired > 0 && (
+                                    <Link
+                                        to={buildDecisionListHref(session.decision_alert_ids, { includeExpired: true, simulation: decisionFilter, instanceId: session.latest.instance_id })}
+                                        className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                                        title={t('pages.alerts.viewExpiredDecisions', { count: decisionCounts.expired })}
+                                    >
+                                        <Shield size={14} className="opacity-50" />
+                                        <span className="text-xs font-medium">{t('common.inactive')}: {decisionCounts.expired}{partialSuffix}</span>
+                                    </Link>
+                                )}
+                            </div>
+                        ) : (
+                            <span className="text-gray-400">-</span>
+                        )}
+                    </td>
+                );
+            }
+            default:
+                return renderAlertCell(session.latest, columnId);
+        }
+    };
+
+    const renderAlertSessionRow = (session: AlertSession, index: number) => (
+        <tr
+            key={session.key}
+            ref={index === alertSessions.length - 1 ? lastAlertElementRef : null}
+            onClick={() => openAlertSession(session)}
+            className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors cursor-pointer"
+        >
+            {canManageEnforcement && (
+                <td className="px-6 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
+                    <input
+                        type="checkbox"
+                        aria-label={t('pages.alerts.selectSession', { ip: getAlertSourceValue(session.latest.source) ?? session.latest.id })}
+                        checked={selectedAlertIds.includes(session.key)}
+                        onChange={() => toggleAlertSelection(session.key)}
+                        className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                    />
+                </td>
+            )}
+            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                <div className="font-medium">
+                    {t('pages.alerts.sessionAlertCount', {
+                        count: session.alert_count,
+                        duration: formatAlertSessionDuration(session.first_seen, session.last_seen),
+                    })}
+                </div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">
+                    {t('pages.alerts.sessionStarted', { time: formatDateTime(session.first_seen) })}
+                </div>
+            </td>
+            {visibleAlertColumns.map((columnId) => renderAlertSessionCell(session, columnId))}
+            {canManageEnforcement && renderAlertActionsCell(session.latest, session.alert_count === 1)}
+        </tr>
+    );
+
+    const alertTableRowCount = groupedView ? alertSessions.length : visibleAlerts.length;
+
     return (
         <div className="space-y-6">
             <div
@@ -1541,7 +2028,11 @@ export function Alerts() {
                     <button
                         onClick={() => {
                             setPendingDeleteErrorInfo(null);
-                            setPendingDeleteAction({ kind: "selected", refs: selectedFilteredAlertRefs });
+                            setPendingDeleteAction({
+                                kind: "selected",
+                                refs: selectedFilteredAlertRefs,
+                                sessions: groupedView ? selectedAlertSessions : undefined,
+                            });
                         }}
                         disabled={selectedAlertCount === 0}
                         className="rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
@@ -1604,7 +2095,7 @@ export function Alerts() {
             }
 
             <div className="space-y-2">
-                <div className="flex items-start gap-2">
+                <div className="flex flex-wrap items-start gap-x-1.5 gap-y-2 min-[360px]:gap-x-2 sm:flex-nowrap">
                     <button
                         type="button"
                         onClick={() => setShowColumnsModal(true)}
@@ -1614,11 +2105,25 @@ export function Alerts() {
                     >
                         <Columns3 size={18} />
                     </button>
-                    <div className="ml-auto flex min-w-0 flex-1 items-start justify-end gap-2">
+                    <button
+                        type="button"
+                        onClick={toggleGroupedView}
+                        aria-label={t('pages.alerts.groupByIp')}
+                        aria-pressed={groupedView}
+                        title={t('pages.alerts.groupByIpDescription')}
+                        className={`mr-auto inline-flex min-h-11 flex-shrink-0 items-center justify-center gap-2 rounded-md border px-3 text-sm font-medium transition-colors ${groupedView
+                            ? 'border-primary-300 bg-primary-50 text-primary-700 hover:bg-primary-100 dark:border-primary-700 dark:bg-primary-900/30 dark:text-primary-300 dark:hover:bg-primary-900/40'
+                            : 'border-gray-300 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'}`}
+                    >
+                        <Layers size={18} aria-hidden="true" />
+                        <span className="hidden sm:inline">{t('pages.alerts.groupByIp')}</span>
+                    </button>
+                    <div className="contents sm:ml-auto sm:flex sm:min-w-0 sm:flex-1 sm:items-start sm:justify-end sm:gap-2">
                         <CollapsibleSearchControls
                             inputRef={searchInputRef}
                             onHelp={() => setShowSearchSyntaxModal(true)}
                             forceExpanded={Boolean(quickFilterDisabledReason)}
+                            stackInputOnMobile
                             footer={(queryError || quickFilterDisabledReason) ? (
                                 <div className="space-y-1">
                                     {queryError && (
@@ -1636,8 +2141,8 @@ export function Alerts() {
                                 ref={searchInputRef}
                                 searchPage="alerts"
                                 showSearchIcon={false}
-                                containerClassName="rounded-r-none"
-                                className="rounded-r-none"
+                                containerClassName="sm:rounded-r-none"
+                                className="sm:rounded-r-none"
                                 searchFeatures={searchValidationFeatures}
                                 placeholder={t('pages.alerts.filterPlaceholder')}
                                 value={searchDraft}
@@ -1681,6 +2186,11 @@ export function Alerts() {
                                         />
                                     </th>
                                 )}
+                                {groupedView && (
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                                        {t('pages.alerts.session')}
+                                    </th>
+                                )}
                                 {visibleAlertColumns.map((columnId) => {
                                     const column = alertColumnDefinitionById.get(columnId);
                                     if (!column) {
@@ -1699,17 +2209,15 @@ export function Alerts() {
                             </tr>
                         </thead>
                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                            {initialLoading && visibleAlerts.length === 0 ? (
+                            {initialLoading && alertTableRowCount === 0 ? (
                                 <tr><td colSpan={alertTableColSpan} className="px-6 py-4 text-center text-sm text-gray-500">{t('pages.alerts.loading')}</td></tr>
-                            ) : visibleAlerts.length === 0 ? (
+                            ) : alertTableRowCount === 0 ? (
                                 <tr><td colSpan={alertTableColSpan} className="px-6 py-4 text-center text-sm text-gray-500">{t('pages.alerts.noAlerts')}</td></tr>
+                            ) : groupedView ? (
+                                alertSessions.map(renderAlertSessionRow)
                             ) : (
                                 visibleAlerts.map((alert, index) => {
                                     const isLastElement = index === visibleAlerts.length - 1;
-                                    const sourceValue = getAlertSourceValue(alert.source);
-                                    const alertOrigins = getAlertOrigins(alert);
-                                    const alertOriginDisplay = getOriginDisplayValue(alertOrigins);
-                                    const alertOriginTitle = getOriginTitle(alertOrigins);
                                     const rowKey = alertKey(alert);
                                     const isSelected = selectedAlertIds.includes(rowKey);
                                     return (
@@ -1730,195 +2238,13 @@ export function Alerts() {
                                                     />
                                                 </td>
                                             )}
-                                            {visibleAlertColumns.map((columnId) => {
-                                                switch (columnId) {
-                                                    case 'instance':
-                                                        return (
-                                                            <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
-                                                                <Badge variant="secondary">{alert.instance_name || alert.instance_id || 'default'}</Badge>
-                                                            </td>
-                                                        );
-                                                    case 'id':
-                                                        return (
-                                                            <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-900 dark:text-gray-100">
-                                                                #{alert.id}
-                                                            </td>
-                                                        );
-                                                    case 'time':
-                                                        return (
-                                                            <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
-                                                                <TimeDisplay timestamp={alert.created_at} />
-                                                            </td>
-                                                        );
-                                                    case 'scenario':
-                                                        return (
-                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[200px]" title={alert.scenario}>
-                                                                <ScenarioName
-                                                                    name={alert.scenario}
-                                                                    reason={alert.reason}
-                                                                    showLink={true}
-                                                                    simulated={simulationsEnabled && isSimulatedAlert(alert)}
-                                                                />
-                                                            </td>
-                                                        );
-                                                    case 'kind':
-                                                        return (
-                                                            <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
-                                                                {alert.kind || "-"}
-                                                            </td>
-                                                        );
-                                                    case 'target':
-                                                        return (
-                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[180px]">
-                                                                <TargetDisplay target={alert.target} targetCount={alert.target_count} />
-                                                            </td>
-                                                        );
-                                                    case 'country':
-                                                        return (
-                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 align-middle">
-                                                                {alert.source?.cn && alert.source?.cn !== "Unknown" ? (
-                                                                    <div className="flex items-center gap-2" title={alert.source.cn}>
-                                                                        <CountryFlag code={alert.source.cn} />
-                                                                        <span className="truncate max-w-[150px]">{getCountryName(alert.source.cn, language)}</span>
-                                                                    </div>
-                                                                ) : (
-                                                                    "-"
-                                                                )}
-                                                            </td>
-                                                        );
-                                                    case 'city':
-                                                        return (
-                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[160px] truncate" title={alert.source?.city}>
-                                                                {alert.source?.city || "-"}
-                                                            </td>
-                                                        );
-                                                    case 'region':
-                                                        return (
-                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[180px] truncate" title={alert.source?.region}>
-                                                                {alert.source?.region || "-"}
-                                                            </td>
-                                                        );
-                                                    case 'as':
-                                                        return (
-                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 max-w-[150px] truncate" title={alert.source?.as_name}>
-                                                                {alert.source?.as_name || "-"}
-                                                            </td>
-                                                        );
-                                                    case 'source':
-                                                        return (
-                                                            <td key={columnId} className="px-6 py-4 text-sm font-mono text-gray-900 dark:text-gray-100 max-w-[200px] truncate" title={sourceValue}>
-                                                                {sourceValue || "-"}
-                                                            </td>
-                                                        );
-                                                    case 'machine':
-                                                        return (
-                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[120px] truncate" title={resolveMachineName(alert)}>
-                                                                {resolveMachineName(alert) || "-"}
-                                                            </td>
-                                                        );
-                                                    case 'origin':
-                                                        return (
-                                                            <td key={columnId} className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-[140px] truncate" title={alertOriginTitle}>
-                                                                {alertOriginDisplay}
-                                                            </td>
-                                                        );
-                                                    case 'decisions':
-                                                        return (
-                                                            <td key={columnId} className="px-6 py-4 whitespace-nowrap text-sm" onClick={(e) => e.stopPropagation()}>
-                                                                {(() => {
-                                                                    const decisionCounts = getAlertDecisionCounts(
-                                                                        alert,
-                                                                        simulationsEnabled,
-                                                                        currentSimulationFilter,
-                                                                    );
-                                                                    const activeDecisionCount = decisionCounts.active;
-                                                                    const expiredDecisionCount = decisionCounts.expired;
-                                                                    const decisionFilter = simulationsEnabled && currentSimulationFilter !== 'all'
-                                                                        ? currentSimulationFilter
-                                                                        : undefined;
-
-                                                                    if (activeDecisionCount > 0 || expiredDecisionCount > 0) {
-                                                                        return (
-                                                                            <div className="flex flex-wrap gap-2">
-                                                                                {activeDecisionCount > 0 && (
-                                                                                    <Link
-                                                                                        to={buildDecisionListHref(alert.id, { simulation: decisionFilter, instanceId: alert.instance_id })}
-                                                                                        className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors border border-primary-200 dark:border-primary-800"
-                                                                                        title={t('pages.alerts.viewActiveDecisions', { count: activeDecisionCount })}
-                                                                                    >
-                                                                                        <Shield size={14} className="fill-current" />
-                                                                                        <span className="text-xs font-semibold">{t('common.active')}: {activeDecisionCount}</span>
-                                                                                        <ExternalLink size={12} className="ml-0.5" />
-                                                                                    </Link>
-                                                                                )}
-                                                                                {expiredDecisionCount > 0 && (
-                                                                                    <Link
-                                                                                        to={buildDecisionListHref(alert.id, { includeExpired: true, simulation: decisionFilter, instanceId: alert.instance_id })}
-                                                                                        className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-                                                                                        title={t('pages.alerts.viewExpiredDecisions', { count: expiredDecisionCount })}
-                                                                                    >
-                                                                                        <Shield size={14} className="opacity-50" />
-                                                                                        <span className="text-xs font-medium">{t('common.inactive')}: {expiredDecisionCount}</span>
-                                                                                    </Link>
-                                                                                )}
-                                                                            </div>
-                                                                        );
-                                                                    }
-
-                                                                    return <span className="text-gray-400">-</span>;
-                                                                })()}
-                                                            </td>
-                                                        );
-                                                    default:
-                                                        return null;
-                                                }
-                                            })}
-                                            {canManageEnforcement && (
-                                                <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                                    <div className="flex items-center justify-end gap-2">
-                                                        {getAlertDecisionIp(alert) && (
-                                                            <button
-                                                                onClick={(event) => {
-                                                                    event.stopPropagation();
-                                                                    openAlertDecision(alert);
-                                                                }}
-                                                                className="text-primary-600 hover:text-primary-900 dark:text-primary-400 dark:hover:text-primary-300 hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
-                                                                title={t('pages.decisions.addDecision')}
-                                                                aria-label={t('pages.decisions.addDecision')}
-                                                            >
-                                                                <Gavel size={16} aria-hidden="true" />
-                                                            </button>
-                                                        )}
-                                                        {sourceValue && (
-                                                            <button
-                                                                onClick={(e) => {
-                                                                    e.stopPropagation();
-                                                                    setPendingDeleteErrorInfo(null);
-                                                                    setPendingDeleteAction({ kind: "ip", ip: sourceValue });
-                                                                }}
-                                                                className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
-                                                                title={t('common.deleteAllForIp', { value: sourceValue })}
-                                                                aria-label={t('common.deleteAllForIp', { value: sourceValue })}
-                                                            >
-                                                                <ShieldBan size={16} aria-hidden="true" />
-                                                            </button>
-                                                        )}
-                                                        <button
-                                                            onClick={(e) => requestDelete(alert, e)}
-                                                            className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors p-2 rounded-full relative z-10 cursor-pointer"
-                                                            title={t('pages.alerts.deleteAlert')}
-                                                            aria-label={t('pages.alerts.deleteAlert')}
-                                                        >
-                                                            <Trash2 size={16} />
-                                                        </button>
-                                                    </div>
-                                                </td>
-                                            )}
+                                            {visibleAlertColumns.map((columnId) => renderAlertCell(alert, columnId))}
+                                            {canManageEnforcement && renderAlertActionsCell(alert)}
                                         </tr>
                                     );
                                 })
                             )}
-                            {loadingMore && visibleAlerts.length > 0 && (
+                            {loadingMore && alertTableRowCount > 0 && (
                                 <TableLoadingRow colSpan={alertTableColSpan} label={t('pages.alerts.loadingMore')} />
                             )}
                         </tbody>
@@ -2296,7 +2622,7 @@ export function Alerts() {
                             {t('common.deleteIpConfirmPrefix')} <span className="font-mono text-sm font-bold">{pendingIp}</span>? {t('common.actionCannotBeUndone')}
                         </>
                     ) : (
-                        <>{t('pages.alerts.deleteSelectedConfirm', { count: selectedFilteredAlertIds.length })}</>
+                        <>{t('pages.alerts.deleteSelectedConfirm', { count: selectedAlertCount })}</>
                     )}
                 </p>
                 {pendingDeleteErrorInfo && (

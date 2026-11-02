@@ -2,6 +2,8 @@ import type {
   AlertDecision,
   AlertDecisionSummary,
   AlertRecord,
+  AlertSession,
+  AlertSessionsResponse,
   DashboardStatsResponse,
   DashboardStatsTotals,
   DecisionListItem,
@@ -26,6 +28,12 @@ import type {
   PageRequest,
 } from './types';
 import type { SqlCondition, SqlWhere } from './search-sql';
+import {
+  ALERT_SESSION_SCAN_BATCH_SIZE,
+  AlertSessionWalker,
+  type AlertSessionScan,
+  type AlertSessionScanRow,
+} from './alert-sessions';
 
 export interface QueryServiceState extends Record<string, any> {
   facetCacheVersion: number;
@@ -167,7 +175,14 @@ export function createQueryService(dependencies: QueryServiceDependencies) {
     validUntil: number;
     promise: Promise<number[]>;
   }>();
+  const alertSessionWindowCache = new Map<string, {
+    validUntil: number;
+    promise: Promise<AlertSessionWindow>;
+  }>();
   const ALERT_LIST_CACHE_MAX_ENTRIES = 100;
+  const ALERT_SESSION_CACHE_MAX_ENTRIES = 20;
+  const ALERT_SESSION_MIN_WINDOW = 200;
+  const ALERT_SESSION_WINDOW_GROWTH = 5;
   const ALERT_LIST_PAGE_WINDOW_PAGES = 20;
   const DECISION_LIST_PAGE_WINDOW_CACHE_MAX_ENTRIES = 100;
   const DECISION_LIST_PAGE_WINDOW_PAGES = 20;
@@ -262,6 +277,40 @@ function hydrateDecisionForAlert(
   };
 }
 
+function buildAlertListWhere(
+  filters: AlertListFilters,
+  searchAst: SearchNode | null,
+): { baseWhere: SqlWhere; filteredWhere: SqlWhere; listCacheKey: string } {
+  const since = new Date(Date.now() - config.lookbackMs).toISOString();
+  const baseWhere = createSqlWhere();
+  baseWhere.add('created_at >= ?', since);
+  if (filters.instanceId !== 'all') {
+    baseWhere.add('instance_id = ?', filters.instanceId);
+  } else {
+    baseWhere.add(`instance_id IN (${config.instances.map(() => '?').join(',')})`, ...config.instances.map((instance) => instance.id));
+  }
+  if (!config.simulationsEnabled) {
+    baseWhere.add('simulated = 0');
+  }
+
+  const filteredWhere = baseWhere.clone();
+  addAlertSqlFilters(filteredWhere, filters);
+  const searchWhere = compileAlertSearchSql(searchAst, filters);
+  if (searchWhere) {
+    filteredWhere.add(searchWhere.sql, ...searchWhere.params);
+  }
+
+  return {
+    baseWhere,
+    filteredWhere,
+    listCacheKey: JSON.stringify({
+      filters,
+      search: searchAst ? serializeSearchNode(searchAst) : '',
+      simulationsEnabled: config.simulationsEnabled,
+    }),
+  };
+}
+
 async function queryPaginatedAlerts(
   pageRequest: PageRequest,
   filters: AlertListFilters,
@@ -270,30 +319,7 @@ async function queryPaginatedAlerts(
 ): Promise<PaginatedResponse<SlimAlert>> {
   activeAlertListQueries += 1;
   try {
-    const since = new Date(Date.now() - config.lookbackMs).toISOString();
-    const baseWhere = createSqlWhere();
-    baseWhere.add('created_at >= ?', since);
-    if (filters.instanceId !== 'all') {
-      baseWhere.add('instance_id = ?', filters.instanceId);
-    } else {
-      baseWhere.add(`instance_id IN (${config.instances.map(() => '?').join(',')})`, ...config.instances.map((instance) => instance.id));
-    }
-    if (!config.simulationsEnabled) {
-      baseWhere.add('simulated = 0');
-    }
-
-    const filteredWhere = baseWhere.clone();
-    addAlertSqlFilters(filteredWhere, filters);
-    const searchWhere = compileAlertSearchSql(searchAst, filters);
-    if (searchWhere) {
-      filteredWhere.add(searchWhere.sql, ...searchWhere.params);
-    }
-
-    const listCacheKey = JSON.stringify({
-      filters,
-      search: searchAst ? serializeSearchNode(searchAst) : '',
-      simulationsEnabled: config.simulationsEnabled,
-    });
+    const { baseWhere, filteredWhere, listCacheKey } = buildAlertListWhere(filters, searchAst);
     const windowNumber = Math.floor((pageRequest.page - 1) / ALERT_LIST_PAGE_WINDOW_PAGES);
     const windowOffset = windowNumber * ALERT_LIST_PAGE_WINDOW_PAGES * pageRequest.pageSize;
     const windowLimit = ALERT_LIST_PAGE_WINDOW_PAGES * pageRequest.pageSize;
@@ -463,6 +489,189 @@ async function queryAlertRowsByInternalIds(internalIds: number[]): Promise<Norma
   return rows;
 }
 
+type AlertSessionWindow = {
+  sessions: AlertSessionScan[];
+  exhausted: boolean;
+};
+
+async function queryAlertSessions(
+  pageRequest: PageRequest,
+  filters: AlertListFilters,
+  searchAst: SearchNode | null,
+): Promise<AlertSessionsResponse> {
+  activeAlertListQueries += 1;
+  try {
+    const { baseWhere, filteredWhere, listCacheKey } = buildAlertListWhere(filters, searchAst);
+    const countsPromise = queryAlertListCounts(
+      listCacheKey,
+      baseWhere,
+      filteredWhere,
+      getAlertCountIndexHint(filters, searchAst),
+    );
+    const offset = (pageRequest.page - 1) * pageRequest.pageSize;
+    let windowSize = ALERT_SESSION_MIN_WINDOW;
+    while (windowSize < offset + pageRequest.pageSize) windowSize *= ALERT_SESSION_WINDOW_GROWTH;
+
+    const window = await queryAlertSessionWindow(`${listCacheKey}:${windowSize}`, filteredWhere, windowSize, countsPromise);
+    const counts = await countsPromise;
+
+    return {
+      data: await buildAlertSessions(window.sessions.slice(offset, offset + pageRequest.pageSize)),
+      pagination: {
+        page: pageRequest.page,
+        page_size: pageRequest.pageSize,
+        has_more: window.sessions.length > offset + pageRequest.pageSize || !window.exhausted,
+        total_alerts: counts.total,
+        unfiltered_total_alerts: counts.unfilteredTotal,
+      },
+    };
+  } finally {
+    activeAlertListQueries = Math.max(0, activeAlertListQueries - 1);
+  }
+}
+
+async function queryAlertSessionWindow(
+  cacheKey: string,
+  where: SqlWhere,
+  windowSize: number,
+  countsPromise: Promise<AlertListCounts>,
+): Promise<AlertSessionWindow> {
+  const now = Date.now();
+  const cached = alertSessionWindowCache.get(cacheKey);
+  if (cached && cached.validUntil > now) return cached.promise;
+  if (cached) alertSessionWindowCache.delete(cacheKey);
+
+  const promise = Promise.all([
+    countsPromise,
+    scanAlertSessions(where, windowSize),
+  ]).then(([counts, window]) => {
+    const entry = alertSessionWindowCache.get(cacheKey);
+    if (entry?.promise === promise) entry.validUntil = counts.validUntil;
+    return window;
+  }).catch((error) => {
+    if (alertSessionWindowCache.get(cacheKey)?.promise === promise) {
+      alertSessionWindowCache.delete(cacheKey);
+    }
+    throw error;
+  });
+  alertSessionWindowCache.set(cacheKey, { validUntil: Number.POSITIVE_INFINITY, promise });
+  trimMap(alertSessionWindowCache, ALERT_SESSION_CACHE_MAX_ENTRIES);
+  return promise;
+}
+
+// Reads short batches on the isolated facet worker, so list pages keep their own
+// workers, and stops as soon as enough sessions are complete instead of ranking
+// the whole result set.
+async function scanAlertSessions(where: SqlWhere, windowSize: number): Promise<AlertSessionWindow> {
+  const walker = new AlertSessionWalker();
+  let cursor: { createdAt: string; id: number } | null = null;
+
+  while (walker.completeCount < windowSize) {
+    const batchWhere = where.clone();
+    if (cursor) {
+      batchWhere.add('created_at <= ?', cursor.createdAt);
+      batchWhere.add('NOT (created_at = ? AND id >= ?)', cursor.createdAt, cursor.id);
+    }
+    const rows: AlertSessionScanRow[] = await facetQueryWorker.all<AlertSessionScanRow>(`
+      SELECT id, instance_id, created_at, source_ip, source_scope, simulated, kind, scenario, target
+      FROM alerts
+      ${batchWhere.toSql()}
+      ORDER BY created_at DESC, id DESC
+      LIMIT ?
+    `, [...batchWhere.params, ALERT_SESSION_SCAN_BATCH_SIZE]);
+
+    for (const row of rows) walker.add(row);
+    if (rows.length < ALERT_SESSION_SCAN_BATCH_SIZE) {
+      walker.finish();
+      return { sessions: walker.toScans(), exhausted: true };
+    }
+
+    const last = rows[rows.length - 1];
+    cursor = { createdAt: last.created_at, id: last.id };
+    walker.advanceTo(last.created_at);
+  }
+
+  return { sessions: walker.toScans(), exhausted: false };
+}
+
+// The IDs travel in a Decisions page URL, which has to stay short enough for proxies.
+const MAX_SESSION_DECISION_ALERT_IDS = 500;
+
+// Decisions are read for the requested page only, because their active and expired
+// counts change with time and cannot be cached with the session window.
+async function buildAlertSessions(scans: AlertSessionScan[]): Promise<AlertSession[]> {
+  const rows = await queryAlertRowsByInternalIds(scans.map((scan) => scan.latestAlertId));
+  const summariesByAlertId = await queryAlertDecisionSummariesInChunks(scans.flatMap((scan) => scan.alertIds));
+  const scansByLatestAlertId = new Map(scans.map((scan) => [String(scan.latestAlertId), scan]));
+  const sessionSummaries = new Map<string, AlertDecisionSummary>(scans.map((scan) => [
+    String(scan.latestAlertId),
+    mergeAlertDecisionSummaries(scan.alertIds.map((id) => summariesByAlertId.get(String(id)))),
+  ]));
+  const latestAlerts = await buildSlimAlertList(rows, sessionSummaries);
+  const upstreamIdsWithDecisions = await queryAlertUpstreamIdsWithDecisions(scans.flatMap((scan) => scan.alertIds));
+
+  return latestAlerts.flatMap((latest, index) => {
+    const scan = scansByLatestAlertId.get(String(rows[index]?.internal_id));
+    if (!scan) return [];
+    return [{
+      key: scan.key,
+      alert_count: scan.alertCount,
+      first_seen: scan.firstSeen,
+      last_seen: scan.lastSeen,
+      scenario_groups: scan.scenarioGroups,
+      scenario_count: scan.scenarioCount,
+      targets: scan.targets,
+      target_count: scan.targetCount,
+      decision_summary_partial: scan.alertIds.length < scan.alertCount,
+      decision_alert_ids: scan.alertIds
+        .flatMap((id) => upstreamIdsWithDecisions.get(String(id)) ?? [])
+        .slice(0, MAX_SESSION_DECISION_ALERT_IDS),
+      latest,
+    }];
+  });
+}
+
+async function queryAlertUpstreamIdsWithDecisions(alertIds: number[]): Promise<Map<string, string>> {
+  const upstreamIds = new Map<string, string>();
+  for (let offset = 0; offset < alertIds.length; offset += 900) {
+    const chunk = alertIds.slice(offset, offset + 900);
+    const rows = await queryWorker.all<{ alert_id: string | number; alert_upstream_id: string | number | null }>(`
+      SELECT DISTINCT alert_id, alert_upstream_id
+      FROM decisions
+      WHERE alert_id IN (${chunk.map(() => '?').join(',')})
+    `, chunk);
+    for (const row of rows) {
+      if (row.alert_upstream_id !== null) upstreamIds.set(String(row.alert_id), String(row.alert_upstream_id));
+    }
+  }
+  return upstreamIds;
+}
+
+async function queryAlertDecisionSummariesInChunks(alertIds: number[]): Promise<Map<string, AlertDecisionSummary>> {
+  const summaries = new Map<string, AlertDecisionSummary>();
+  // queryAlertDecisionSummaries reads the whole table above this size.
+  for (let offset = 0; offset < alertIds.length; offset += 900) {
+    const chunk = await queryAlertDecisionSummaries(alertIds.slice(offset, offset + 900));
+    for (const [alertId, summary] of chunk) summaries.set(alertId, summary);
+  }
+  return summaries;
+}
+
+function mergeAlertDecisionSummaries(summaries: Array<AlertDecisionSummary | undefined>): AlertDecisionSummary {
+  const merged = emptyAlertDecisionSummary();
+  const origins = new Set<string>();
+  for (const summary of summaries) {
+    if (!summary) continue;
+    merged.active_count += summary.active_count;
+    merged.expired_count += summary.expired_count;
+    merged.simulated_active_count += summary.simulated_active_count;
+    merged.simulated_expired_count += summary.simulated_expired_count;
+    for (const origin of summary.origins) origins.add(origin);
+  }
+  merged.origins = [...origins].sort((left, right) => left.localeCompare(right));
+  return merged;
+}
+
 async function buildFullSlimAlertList(rows: NormalizedAlertRow[]): Promise<SlimAlert[]> {
   const internalIds = rows.map((row) => row.internal_id).filter((id): id is string | number => id !== undefined);
   const decisionsByInternalId = new Map<string, NormalizedDecisionRow[]>();
@@ -492,9 +701,12 @@ async function buildFullSlimAlertList(rows: NormalizedAlertRow[]): Promise<SlimA
     .map(toSlimAlert));
 }
 
-async function buildSlimAlertList(rows: NormalizedAlertRow[]): Promise<SlimAlert[]> {
+async function buildSlimAlertList(
+  rows: NormalizedAlertRow[],
+  knownDecisionSummaries?: Map<string, AlertDecisionSummary>,
+): Promise<SlimAlert[]> {
   const internalIds = rows.map((row) => row.internal_id).filter((id): id is string | number => id !== undefined);
-  const decisionSummaries = await queryAlertDecisionSummaries(internalIds);
+  const decisionSummaries = knownDecisionSummaries ?? await queryAlertDecisionSummaries(internalIds);
   return enrichAlertLocations(rows.map(alertFromRow)
     .map(withInstanceName)
     .map((alert) => applySimulationModeToAlert(alert, config.simulationsEnabled))
@@ -921,7 +1133,7 @@ function decisionFiltersCanSplitDuplicateGroup(
 ): boolean {
   return Boolean(
     decisionSearchCanSplitDuplicateGroup(searchAst, includeExpired)
-    || filters.alertId
+    || filters.alertIds.length > 0
     || filters.country
     || filters.scenario
     || filters.as
@@ -1038,7 +1250,7 @@ async function queryDashboardFilteredListTotals(
   const decisionFilters: DecisionListFilters = {
     instanceId: filters.instanceId,
     q: filters.decisionQ,
-    alertId: '',
+    alertIds: [],
     country: filters.country,
     scenario: filters.scenario,
     as: filters.as,
@@ -1739,7 +1951,15 @@ function addDecisionSqlFilters(
   if (includeDuplicateFilter && !filters.showDuplicates) {
     where.add('decisions.is_duplicate = 0');
   }
-  if (filters.alertId) where.add('alert_id = ?', filters.alertId);
+  if (filters.alertIds.length > 0) {
+    // Requests use the API's alert IDs. Only the primary instance stores them as the internal ID.
+    const instanceIds = filters.instanceId !== 'all' ? [filters.instanceId] : config.instances.map((instance) => instance.id);
+    where.add(
+      `alert_id IN (SELECT id FROM alerts WHERE instance_id IN (${instanceIds.map(() => '?').join(',')}) AND upstream_id IN (${filters.alertIds.map(() => '?').join(',')}))`,
+      ...instanceIds,
+      ...filters.alertIds,
+    );
+  }
   addSimulationFilter(where, filters.simulation);
   if (filters.country) where.add('country = ?', filters.country);
   if (filters.scenario) where.add('scenario = ?', filters.scenario);
@@ -3204,6 +3424,7 @@ function invalidateFacetResponses(): void {
   state.facetResponseCache.clear();
   alertListCountCache.clear();
   alertListPageWindowCache.clear();
+  alertSessionWindowCache.clear();
   decisionListCountCache.clear();
   decisionListPageWindowCache.clear();
   state.facetCacheVersion += 1;
@@ -3274,6 +3495,7 @@ function normalizeAlertDetail(input: unknown, alertId: string): AlertRecord | nu
     hydrateAlertWithDecisions,
     hydrateAlertsBatch,
     queryPaginatedAlerts,
+    queryAlertSessions,
     queryPaginatedDecisions,
     queryAlertFacet,
     queryDecisionFacet,

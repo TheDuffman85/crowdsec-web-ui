@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from "react";
-import { Eye, KeyRound, LockKeyhole, MoreVertical, ShieldCheck, ShieldOff, Trash2, UserCheck, UserPlus, UserX } from "lucide-react";
+import { Eye, KeyRound, LockKeyhole, MoreVertical, ShieldCheck, ShieldOff, Trash2, Unlink, UserCheck, UserPlus, UserX } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/Card";
 import { Modal } from "./ui/Modal";
@@ -20,11 +20,20 @@ export interface ManagedUser {
     passwordChangeRequired: boolean;
     totpEnabled: boolean;
     passkeyCount: number;
+    /** The SSO identity of a local account that can use both sign-in methods. */
+    oidcLink: {
+        issuer: string;
+        username: string | null;
+        /** null: the provider denied the identity at its last sign-in. */
+        role: UserRole | null;
+        method: 'verified' | 'username';
+        linkedAt: string;
+    } | null;
     createdAt: string;
     current: boolean;
 }
 
-type ConfirmAction = 'delete' | 'reset-mfa' | 'disable';
+type ConfirmAction = 'delete' | 'reset-mfa' | 'disable' | 'remove-link';
 
 interface UserAction {
     key: string;
@@ -97,9 +106,10 @@ export function UsersSettings({ canManage, inputClass, labelClass, showToast }: 
         setUsers((current) => current.map((candidate) => candidate.id === user.id ? user : candidate));
     };
 
-    const activeAdminCount = users.filter((user) => user.role === 'admin' && !user.disabled).length;
+    const isActiveAdmin = (user: ManagedUser) => !user.disabled && (user.role === 'admin' || user.oidcLink?.role === 'admin');
+    const activeAdminCount = users.filter(isActiveAdmin).length;
     // Mirrors the server rule so the controls that would remove the last administrator are disabled.
-    const isLastActiveAdmin = (user: ManagedUser) => user.role === 'admin' && !user.disabled && activeAdminCount <= 1;
+    const isLastActiveAdmin = (user: ManagedUser) => isActiveAdmin(user) && activeAdminCount <= 1;
 
     // Runs an action on one user and applies the returned account, or removes it when none is returned.
     const runUserAction = async (
@@ -184,7 +194,9 @@ export function UsersSettings({ canManage, inputClass, labelClass, showToast }: 
             ? await runUserAction(user, { path: '', method: 'DELETE' }, t("pages.settings.userDeleted", { username: user.username }), t("pages.settings.failedToUpdateUser"))
             : action === 'reset-mfa'
                 ? await runUserAction(user, { path: '/reset-mfa', method: 'POST' }, t("pages.settings.userMfaReset", { username: user.username }), t("pages.settings.failedToUpdateUser"))
-                : await runUserAction(user, { path: '', method: 'PATCH', body: { disabled: true } }, t("pages.settings.userDisabled", { username: user.username }), t("pages.settings.failedToUpdateUser"));
+                : action === 'remove-link'
+                    ? await runUserAction(user, { path: '/unlink-oidc', method: 'POST' }, t("pages.settings.userOidcLinkRemoved"), t("pages.settings.failedToUpdateUser"))
+                    : await runUserAction(user, { path: '', method: 'PATCH', body: { disabled: true } }, t("pages.settings.userDisabled", { username: user.username }), t("pages.settings.failedToUpdateUser"));
         if (done) setConfirm(null);
     };
 
@@ -192,12 +204,16 @@ export function UsersSettings({ canManage, inputClass, labelClass, showToast }: 
         ? t("pages.settings.deleteUserTitle")
         : confirm?.action === 'reset-mfa'
             ? t("pages.settings.resetUserMfaTitle")
-            : t("pages.settings.disableUserTitle");
+            : confirm?.action === 'remove-link'
+                ? t("pages.settings.removeUserOidcLinkTitle")
+                : t("pages.settings.disableUserTitle");
     const confirmDescription = !confirm ? '' : confirm.action === 'delete'
         ? t(confirm.user.source === 'oidc' ? "pages.settings.deleteOidcUserDescription" : "pages.settings.deleteUserDescription", { username: confirm.user.username })
         : confirm.action === 'reset-mfa'
             ? t("pages.settings.resetUserMfaDescription", { username: confirm.user.username })
-            : t("pages.settings.disableUserDescription", { username: confirm.user.username });
+            : confirm.action === 'remove-link'
+                ? t("pages.settings.removeUserOidcLinkDescription", { username: confirm.user.username })
+                : t("pages.settings.disableUserDescription", { username: confirm.user.username });
 
     return (
         <Card className="overflow-visible">
@@ -237,6 +253,13 @@ export function UsersSettings({ canManage, inputClass, labelClass, showToast }: 
                                 onSelect: () => setConfirm({ action: 'reset-mfa' as const, user }),
                                 disabled: !editable || (!user.totpEnabled && user.passkeyCount === 0),
                             },
+                            ...(user.oidcLink ? [{
+                                key: 'remove-link',
+                                icon: Unlink,
+                                label: t("pages.settings.removeUserOidcLink"),
+                                onSelect: () => setConfirm({ action: 'remove-link' as const, user }),
+                                disabled: !editable,
+                            }] : []),
                             user.disabled ? {
                                 key: 'enable',
                                 icon: UserCheck,
@@ -284,7 +307,10 @@ export function UsersSettings({ canManage, inputClass, labelClass, showToast }: 
                                     <div className="flex flex-wrap items-center gap-2">
                                         <span className="truncate text-sm font-medium text-gray-900 dark:text-gray-100">{user.username}</span>
                                         {user.current && <Badge variant="info">{t("pages.settings.userYou")}</Badge>}
-                                        <Badge variant="outline">{local ? t("pages.settings.userSourceLocal") : t("pages.settings.userSourceOidc")}</Badge>
+                                        <Badge variant="outline">
+                                            {user.oidcLink ? t("pages.settings.userSourceLinked") : local ? t("pages.settings.userSourceLocal") : t("pages.settings.userSourceOidc")}
+                                        </Badge>
+                                        {user.oidcLink?.method === 'username' && <Badge variant="warning">{t("pages.settings.userLinkedByUsername")}</Badge>}
                                         {user.disabled && <Badge variant="danger">{t("common.disabled")}</Badge>}
                                         {user.passwordChangeRequired && <Badge variant="warning">{t("pages.settings.userPasswordChangePending")}</Badge>}
                                         {user.totpEnabled && <Badge variant="secondary">{t("pages.settings.userTotp")}</Badge>}
@@ -297,6 +323,16 @@ export function UsersSettings({ canManage, inputClass, labelClass, showToast }: 
                                             ? t("pages.settings.userCreatedAt", { date: formatDate(user.createdAt) })
                                             : t("pages.settings.userOidcHint", { date: formatDate(user.createdAt) })}
                                     </p>
+                                    {user.oidcLink && (
+                                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                            {t("pages.settings.userLinkedIdentity", {
+                                                username: user.oidcLink.username ?? '',
+                                                role: !user.oidcLink.role
+                                                    ? t("pages.settings.oidcLink.roleDenied")
+                                                    : user.oidcLink.role === 'admin' ? t("pages.settings.userRoleAdmin") : t("pages.settings.userRoleReadOnly"),
+                                            })}
+                                        </p>
+                                    )}
                                 </div>
                             </div>
                             <div className="flex shrink-0 items-center gap-2 pl-12 sm:pl-0">
@@ -315,7 +351,7 @@ export function UsersSettings({ canManage, inputClass, labelClass, showToast }: 
                                                     t("pages.settings.userRoleChanged", { username: user.username }),
                                                     t("pages.settings.failedToUpdateUser"),
                                                 )}
-                                                disabled={busy || lastAdmin}
+                                                disabled={busy || (lastAdmin && user.role === 'admin')}
                                                 className={inputClass}
                                             >
                                                 <option value="admin">{t("pages.settings.userRoleAdmin")}</option>
@@ -484,12 +520,15 @@ export function UsersSettings({ canManage, inputClass, labelClass, showToast }: 
                         <button type="button" onClick={() => void runConfirmedAction()} disabled={busyUserId !== null} className={dangerButtonClass}>
                             {confirm?.action === 'delete' && <Trash2 className="h-4 w-4" />}
                             {confirm?.action === 'reset-mfa' && <ShieldOff className="h-4 w-4" />}
+                            {confirm?.action === 'remove-link' && <Unlink className="h-4 w-4" />}
                             {confirm?.action === 'disable' && <UserX className="h-4 w-4" />}
                             {confirm?.action === 'delete'
                                 ? t("common.delete")
                                 : confirm?.action === 'reset-mfa'
                                     ? t("pages.settings.resetUserMfa")
-                                    : t("pages.settings.disableUser")}
+                                    : confirm?.action === 'remove-link'
+                                        ? t("pages.settings.removeUserOidcLink")
+                                        : t("pages.settings.disableUser")}
                         </button>
                     </div>
                 </div>

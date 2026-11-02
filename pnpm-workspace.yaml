@@ -4,4 +4,4 @@ allowBuilds:
   local-reverse-geocoder: false
 overrides:
   ip-address: 10.7.5
-  ws: 8.22.0
+  ws: 8.22.1

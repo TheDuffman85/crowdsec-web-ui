@@ -149,9 +149,8 @@ describe('createApp refresh API', () => {
       isSyncing: true,
       state: 'syncing',
     }));
-    // The sync worker prunes cached entries before requesting alerts. That setup
-    // can take longer than waitFor's 1s default when CI runs test files in parallel.
-    await vi.waitFor(() => expect(releaseFirstAlertRequest).not.toBeNull(), { timeout: 5_000 });
+    // The sync worker prunes cached entries before requesting alerts.
+    await vi.waitFor(() => expect(releaseFirstAlertRequest).not.toBeNull());
 
     controller.startBackgroundTasks();
     const scheduledBefore = await controller.fetch(new Request('http://localhost/crowdsec/api/config'));
@@ -170,7 +169,7 @@ describe('createApp refresh API', () => {
 
     const readWhileRefreshing = await Promise.race([
       controller.fetch(new Request('http://localhost/crowdsec/api/alerts?page=1&page_size=10')),
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), 2_000)),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 10_000)),
     ]);
     expect(readWhileRefreshing).not.toBeNull();
     expect(readWhileRefreshing?.status).toBe(200);

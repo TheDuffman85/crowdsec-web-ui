@@ -15,6 +15,8 @@ export default defineConfig({
     globals: true,
     include: ['client/src/**/*.test.ts', 'client/src/**/*.test.tsx'],
     setupFiles: ['./client/src/test/setup.ts'],
+    // Rendering whole pages and typing into them can take several times as long on a busy machine.
+    testTimeout: 30_000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov'],

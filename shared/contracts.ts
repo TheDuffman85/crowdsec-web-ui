@@ -290,6 +290,44 @@ export interface SlimAlert {
   simulated?: boolean;
 }
 
+export interface AlertSessionScenarioGroup {
+  kind: string | null;
+  scenario_count: number;
+  alert_count: number;
+  scenarios: Array<{ scenario: string; count: number }>;
+}
+
+export interface AlertSessionTarget {
+  value: string;
+  count: number;
+}
+
+export interface AlertSession {
+  key: string;
+  alert_count: number;
+  first_seen: string;
+  last_seen: string;
+  scenario_groups: AlertSessionScenarioGroup[];
+  scenario_count: number;
+  targets: AlertSessionTarget[];
+  target_count: number;
+  decision_summary_partial: boolean;
+  /** IDs of the session's alerts that have decisions, newest first, for the `alert_id` decision filter. */
+  decision_alert_ids: string[];
+  latest: SlimAlert;
+}
+
+export interface AlertSessionsResponse {
+  data: AlertSession[];
+  pagination: {
+    page: number;
+    page_size: number;
+    has_more: boolean;
+    total_alerts: number;
+    unfiltered_total_alerts: number;
+  };
+}
+
 export interface DecisionListDetail {
   origin: string;
   type?: string;
