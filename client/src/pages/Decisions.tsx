@@ -1292,8 +1292,9 @@ export function Decisions() {
                         </Badge>
                     )}
                     {alertIdFilter && (
-                        <Badge variant="secondary" className="flex items-center gap-1">
-                            <span className="font-semibold">{t('tableColumns.alert')}:</span> #{alertIdFilter}
+                        <Badge variant="secondary" className="flex items-center gap-1 max-w-full">
+                            <span className="font-semibold">{t('tableColumns.alert')}:</span>
+                            <span className="truncate max-w-[320px]" title={alertIdFilter}>#{alertIdFilter.split(',').join(', #')}</span>
                             <button
                                 onClick={() => removeParam("alert_id")}
                                 className="ml-1 hover:text-red-500"
@@ -1327,21 +1328,22 @@ export function Decisions() {
             )}
 
             <div className="space-y-2">
-                <div className="flex items-start gap-2">
+                <div className="flex flex-wrap items-start gap-x-1.5 gap-y-2 min-[360px]:gap-x-2 sm:flex-nowrap">
                     <button
                         type="button"
                         onClick={() => setShowColumnsModal(true)}
-                        className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-gray-600 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
+                        className="mr-auto inline-flex min-h-11 min-w-11 items-center justify-center rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 text-gray-600 dark:text-gray-300 transition-colors hover:bg-gray-50 dark:hover:bg-gray-700"
                         aria-label={t('components.tableColumns.chooseDecisionColumns')}
                         title={t('components.tableColumns.chooseColumns')}
                     >
                         <Columns3 size={18} />
                     </button>
-                    <div className="ml-auto flex min-w-0 flex-1 items-start justify-end gap-2">
+                    <div className="contents sm:ml-auto sm:flex sm:min-w-0 sm:flex-1 sm:items-start sm:justify-end sm:gap-2">
                         <CollapsibleSearchControls
                             inputRef={searchInputRef}
                             onHelp={() => setShowSearchSyntaxModal(true)}
                             forceExpanded={Boolean(quickFilterDisabledReason)}
+                            stackInputOnMobile
                             footer={(queryError || quickFilterDisabledReason) ? (
                                 <div className="space-y-1">
                                     {queryError && (
@@ -1359,8 +1361,8 @@ export function Decisions() {
                                 ref={searchInputRef}
                                 searchPage="decisions"
                                 showSearchIcon={false}
-                                containerClassName="rounded-r-none"
-                                className="rounded-r-none"
+                                containerClassName="sm:rounded-r-none"
+                                className="sm:rounded-r-none"
                                 searchFeatures={searchValidationFeatures}
                                 placeholder={t('pages.decisions.filterPlaceholder')}
                                 value={searchDraft}

@@ -3,6 +3,8 @@ import type { AllowlistMatch, SyncStatus } from '../../../shared/contracts';
 
 export type {
   AddDecisionRequest,
+  AlertSession,
+  AlertSessionsResponse,
   AllowlistCheckInstanceResult,
   AllowlistCheckResponse,
   AllowlistEntriesResponse,

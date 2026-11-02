@@ -38,7 +38,7 @@ export interface AlertListFilters {
 export interface DecisionListFilters {
   instanceId: string;
   q: string;
-  alertId: string;
+  alertIds: string[];
   country: string;
   scenario: string;
   as: string;

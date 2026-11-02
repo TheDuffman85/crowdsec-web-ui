@@ -14,6 +14,8 @@ const warmFilteredDecisionPageLimitMs = Number(process.env.LOADTEST_FILTERED_DEC
 const decisionDateStart = new Date(Date.now() - 30 * 24 * 60 * 60_000).toISOString().slice(0, 16);
 const filteredAlertQuery = `date>=${decisionDateStart} AND scenario:ssh`;
 const filteredAlertPath = `/api/alerts?paginated=true&page=1&page_size=50&include_decisions=false&instance=${encodeURIComponent(scopeId)}&q=${encodeURIComponent(filteredAlertQuery)}`;
+const alertSessionsPath = `/api/alerts/sessions?page=1&page_size=50&instance=${encodeURIComponent(scopeId)}`;
+const filteredAlertSessionsPath = `${alertSessionsPath}&q=${encodeURIComponent(filteredAlertQuery)}`;
 const filteredDecisionQuery = `date>=${decisionDateStart}`;
 const filteredDecisionPath = `/api/decisions?paginated=true&page=1&page_size=50&instance=${encodeURIComponent(scopeId)}&q=${encodeURIComponent(filteredDecisionQuery)}`;
 
@@ -24,7 +26,10 @@ const listRequests = [
   [`${scopeName} filtered decisions`, filteredDecisionPath],
   [`${scopeName} search`, `/api/alerts?paginated=true&page=1&page_size=50&instance=${encodeURIComponent(scopeId)}&q=scenario%3Assh`],
   [`${scopeName} dashboard`, `/api/dashboard/stats?instance=${encodeURIComponent(scopeId)}`],
+  [`${scopeName} alert sessions`, alertSessionsPath],
+  [`${scopeName} filtered alert sessions`, filteredAlertSessionsPath],
   ['Combined alerts', '/api/alerts?paginated=true&page=1&page_size=50&include_decisions=false&instance=all'],
+  ['Combined alert sessions', '/api/alerts/sessions?page=1&page_size=50&instance=all'],
   ['Combined decisions', '/api/decisions?paginated=true&page=1&page_size=50&instance=all'],
   ['Combined search', '/api/alerts?paginated=true&page=1&page_size=50&instance=all&q=scenario%3Assh'],
   ['Combined dashboard', '/api/dashboard/stats?instance=all'],
@@ -92,6 +97,17 @@ if (coldFilteredAlertElapsed > coldFilteredAlertLimitMs) {
   );
 }
 
+for (const [name, path] of [
+  ['Cold alert session window', alertSessionsPath],
+  ['Cold filtered alert session window', filteredAlertSessionsPath],
+]) {
+  const elapsed = await timedRequest(path);
+  console.log(`${name} | ${elapsed.toFixed(1)} ms`);
+  if (elapsed > coldFilteredAlertLimitMs) {
+    failures.push(`${name} latency ${elapsed.toFixed(1)} ms exceeds ${coldFilteredAlertLimitMs} ms`);
+  }
+}
+
 for (const [, path] of listRequests) await timedRequest(path);
 
 console.log('\nCached filtered alert paging');
@@ -102,6 +118,15 @@ for (let page = 2; page <= 4; page += 1) {
     failures.push(
       `cached filtered alert page ${page} latency ${elapsed.toFixed(1)} ms exceeds ${warmFilteredAlertPageLimitMs} ms`,
     );
+  }
+}
+
+console.log('\nCached alert session paging');
+for (let page = 2; page <= 4; page += 1) {
+  const elapsed = await timedRequest(alertSessionsPath.replace('page=1', `page=${page}`));
+  console.log(`page ${page} | ${elapsed.toFixed(1)} ms`);
+  if (elapsed > warmFilteredAlertPageLimitMs) {
+    failures.push(`cached alert session page ${page} latency ${elapsed.toFixed(1)} ms exceeds ${warmFilteredAlertPageLimitMs} ms`);
   }
 }
 
@@ -140,7 +165,7 @@ for (const [name, values] of measurements) {
 
 const mixedPaths = {
   list: listRequests[0][1],
-  search: listRequests[4][1],
+  search: `/api/alerts?paginated=true&page=1&page_size=50&instance=${encodeURIComponent(scopeId)}&q=scenario%3Assh`,
   facet: facetRequests[2][1],
 };
 const mixedMeasurements = { list: [], search: [], facet: [] };
@@ -154,6 +179,17 @@ for (let sample = 0; sample < runs * samplesPerRun; sample += 1) {
   mixedMeasurements.list.push(list);
   mixedMeasurements.search.push(search);
   mixedMeasurements.facet.push(facet);
+}
+
+const sessionConcurrency = [];
+for (let sample = 0; sample < runs * samplesPerRun; sample += 1) {
+  const absentIp = `203.0.113.${sample % 250}`;
+  const uncachedSessionPath = `${alertSessionsPath}&q=${encodeURIComponent(`ip<>${absentIp} AND date>=${decisionDateStart}`)}`;
+  const [list] = await Promise.all([
+    timedRequest(mixedPaths.list),
+    timedRequest(uncachedSessionPath),
+  ]);
+  sessionConcurrency.push(list);
 }
 
 const filteredDecisionConcurrency = [];
@@ -177,6 +213,12 @@ console.log(
   `filtered decisions + dashboard | p50 ${percentile(filteredDecisionConcurrency, 0.5).toFixed(1)} ms`
   + ` | p95 ${percentile(filteredDecisionConcurrency, 0.95).toFixed(1)} ms`,
 );
+console.log(`list + cold alert sessions | p50 ${percentile(sessionConcurrency, 0.5).toFixed(1)} ms | p95 ${percentile(sessionConcurrency, 0.95).toFixed(1)} ms`);
+// Cached pages take about 3 ms, so the absolute allowance keeps sub-millisecond noise from failing the gate.
+const sessionConcurrencyBaselineP95 = percentile(measurements.get(`${scopeName} alerts`), 0.95);
+if (percentile(sessionConcurrency, 0.95) > Math.max(sessionConcurrencyBaselineP95 * 1.25, sessionConcurrencyBaselineP95 + 5)) {
+  failures.push('list p95 regressed by more than 25% and 5 ms with concurrent cold alert sessions');
+}
 if (percentile(filteredDecisionConcurrency, 0.95) > coldFilteredDecisionLimitMs) {
   failures.push('filtered decision paging exceeded its cold limit while dashboard analytics ran concurrently');
 }

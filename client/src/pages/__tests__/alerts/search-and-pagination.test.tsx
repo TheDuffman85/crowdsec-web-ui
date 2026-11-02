@@ -21,9 +21,9 @@ async function expandAlertSearch() {
   expect(screen.getByRole('button', { name: 'Search syntax help' })).toBeInTheDocument();
   const collapseButton = screen.getByRole('button', { name: 'Collapse search' });
   expect(collapseButton).toHaveAttribute('aria-expanded', 'true');
-  expect(collapseButton).toHaveClass('border-l-0');
+  expect(collapseButton).toHaveClass('sm:border-l-0');
   expect(collapseButton.previousElementSibling).toContainElement(input);
-  expect(input.parentElement).toHaveClass('rounded-r-none');
+  expect(input.parentElement).toHaveClass('sm:rounded-r-none');
   expect(screen.getByRole('button', { name: 'Search syntax help' }).compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(input.parentElement?.querySelector('.lucide-search')).toBeNull();
   return input;
@@ -44,15 +44,22 @@ describe('Alerts page search and pagination', () => {
     const savedFiltersButton = screen.getByRole('button', { name: 'Saved filters' });
     const columnsButton = screen.getByRole('button', { name: 'Choose alert table columns' });
     expect(columnsButton.parentElement!.firstElementChild).toBe(columnsButton);
-    expect(Array.from(columnsButton.nextElementSibling!.children)).toEqual([
+    const groupingButton = screen.getByRole('button', { name: 'Grouped by IP' });
+    expect(columnsButton.nextElementSibling).toBe(groupingButton);
+    const rightControls = groupingButton.nextElementSibling!;
+    expect(Array.from(rightControls.children)).toEqual([
       searchButton.parentElement!.parentElement!,
       savedFiltersButton,
       filtersButton.parentElement!,
     ]);
-    expect(columnsButton.nextElementSibling).toHaveClass('ml-auto');
+    expect(columnsButton.parentElement).toHaveClass('flex-wrap', 'sm:flex-nowrap');
+    expect(rightControls).toHaveClass('contents', 'sm:ml-auto');
     expect(screen.queryByPlaceholderText('Filter alerts...')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Search syntax help' })).not.toBeInTheDocument();
     await expandAlertSearch();
+    expect(screen.getByPlaceholderText('Filter alerts...').closest('.basis-full')).toContainElement(
+      screen.getByRole('button', { name: 'Search syntax help' }),
+    );
     await userEvent.click(screen.getByRole('button', { name: 'Collapse search' }));
     expect(screen.queryByPlaceholderText('Filter alerts...')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Search syntax help' })).not.toBeInTheDocument();

@@ -91,6 +91,9 @@ LOADTEST_ENV_NAMES=(
     LOADTEST_BLOCKLIST_SIZES
     LOADTEST_EMPTY_ALERTS
     LOADTEST_EXPIRED_ALERTS
+    LOADTEST_ALERT_SESSION_SIZE
+    LOADTEST_ALERT_SOURCE_IPS
+    LOADTEST_ALERT_BURST_SIZE
     LOADTEST_EXPIRING_SOON_DECISIONS
     LOADTEST_REFRESH_ALERTS
     LOADTEST_REFRESH_DECISIONS
@@ -176,9 +179,12 @@ configure_loadtest_profile() {
         metrics-fleet)
             profile_file="$LOADTEST_PROFILE_DIR/metrics-fleet.sh"
             ;;
+        alert-sessions)
+            profile_file="$LOADTEST_PROFILE_DIR/alert-sessions.sh"
+            ;;
         *)
             log "Error: unknown load-test profile '$LOADTEST_PROFILE'."
-            log "Available profiles: default, blocklist, blocklists-mixed, multi-instance, multi-instance-medium, allowlists, metrics-fleet"
+            log "Available profiles: default, blocklist, blocklists-mixed, multi-instance, multi-instance-medium, allowlists, metrics-fleet, alert-sessions"
             exit 1
             ;;
     esac
@@ -229,6 +235,9 @@ export_loadtest_config() {
     export LOADTEST_BLOCKLIST_SIZES
     export LOADTEST_EMPTY_ALERTS
     export LOADTEST_EXPIRED_ALERTS
+    export LOADTEST_ALERT_SESSION_SIZE
+    export LOADTEST_ALERT_SOURCE_IPS
+    export LOADTEST_ALERT_BURST_SIZE
     export LOADTEST_EXPIRING_SOON_DECISIONS
     export LOADTEST_REFRESH_ALERTS
     export LOADTEST_REFRESH_DECISIONS

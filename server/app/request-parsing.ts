@@ -117,7 +117,7 @@ export function withoutAlertFacetFilter(filters: AlertListFilters, field: FacetF
 export function withoutDecisionFacetFilter(filters: DecisionListFilters, field: FacetField): DecisionListFilters {
   const result = { ...filters };
   if (field === 'instance') result.instanceId = 'all';
-  if (field === 'alert') result.alertId = '';
+  if (field === 'alert') result.alertIds = [];
   if (field === 'country') result.country = '';
   if (field === 'scenario') result.scenario = '';
   if (field === 'as') result.as = '';
@@ -149,11 +149,11 @@ export function getDecisionListFilters(context: HonoContext, timeZone: string | 
 }
 
 export function getDecisionListFiltersFromValues(readValue: (key: string) => string | undefined, timeZone: string | null): DecisionListFilters {
-  const alertId = readValue('alert_id') || '';
+  const alertIds = [...new Set((readValue('alert_id') || '').split(',').map((id) => id.trim()).filter(Boolean))];
   return {
     instanceId: readValue('instance') || 'all',
     q: readValue('q') || '',
-    alertId,
+    alertIds,
     country: readValue('country') || '',
     scenario: readValue('scenario') || '',
     as: readValue('as') || '',
@@ -162,7 +162,7 @@ export function getDecisionListFiltersFromValues(readValue: (key: string) => str
     dateStart: readValue('dateStart') || '',
     dateEnd: readValue('dateEnd') || '',
     simulation: readValue('simulation') || 'all',
-    showDuplicates: readValue('hide_duplicates') === 'false' || Boolean(alertId),
+    showDuplicates: readValue('hide_duplicates') === 'false' || alertIds.length > 0,
     timezoneOffsetMinutes: parseTimezoneOffsetValue(readValue('tz_offset')),
     timeZone: getEffectiveRequestTimeZoneValue(readValue('browser_tz'), timeZone),
   };
@@ -305,7 +305,7 @@ export function matchesAlertListFilters(alert: SlimAlert, filters: AlertListFilt
 
 export function matchesDecisionListFilters(decision: DecisionListItem, filters: DecisionListFilters): boolean {
   if (!filters.showDuplicates && decision.is_duplicate) return false;
-  if (filters.alertId && String(decision.detail.alert_id) !== filters.alertId) return false;
+  if (filters.alertIds.length > 0 && !filters.alertIds.includes(String(decision.detail.alert_id))) return false;
   if (!matchesSimulationFilter(decision.simulated === true, filters.simulation)) return false;
   if (filters.country && decision.detail.country !== filters.country) return false;
   if (filters.scenario && decision.detail.reason !== filters.scenario) return false;

@@ -867,6 +867,23 @@ test.each(['single', 'bulk', 'cleanup'])('%s scoped alert deletion waits for pro
   }
 });
 
+test('filters decisions by the alert IDs of a secondary instance', async () => {
+  const { controller, database } = createMultiController();
+  seedDeletionAlert(database, 'primary', 7, 9);
+  seedDeletionAlert(database, 'secondary', 7, 9);
+  seedDeletionAlert(database, 'secondary', 8, 10, 1_800_000);
+  try {
+    const single = await controller.fetch(new Request('http://localhost/api/decisions?page=1&alert_id=7&instance=secondary'));
+    expect((await single.json() as any).data).toEqual([expect.objectContaining({ id: 9, instance_id: 'secondary' })]);
+
+    const list = await controller.fetch(new Request('http://localhost/api/decisions?page=1&alert_id=7,8&instance=secondary'));
+    expect((await list.json() as any).data.map((row: any) => row.id).sort()).toEqual([10, 9]);
+  } finally {
+    controller.stopBackgroundTasks();
+    database.close();
+  }
+});
+
 test.each(['decision', 'alert'])('scoped %s deletion promotes the remaining active duplicate immediately', async (kind) => {
   const { controller, database } = createMultiController();
   seedDeletionAlert(database, 'secondary', 7, 9);

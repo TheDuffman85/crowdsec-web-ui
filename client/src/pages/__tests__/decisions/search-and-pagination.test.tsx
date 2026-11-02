@@ -20,9 +20,9 @@ async function expandDecisionSearch() {
   expect(screen.getByRole('button', { name: 'Search syntax help' })).toBeInTheDocument();
   const collapseButton = screen.getByRole('button', { name: 'Collapse search' });
   expect(collapseButton).toHaveAttribute('aria-expanded', 'true');
-  expect(collapseButton).toHaveClass('border-l-0');
+  expect(collapseButton).toHaveClass('sm:border-l-0');
   expect(collapseButton.previousElementSibling).toContainElement(input);
-  expect(input.parentElement).toHaveClass('rounded-r-none');
+  expect(input.parentElement).toHaveClass('sm:rounded-r-none');
   expect(screen.getByRole('button', { name: 'Search syntax help' }).compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(input.parentElement?.querySelector('.lucide-search')).toBeNull();
   return input;
@@ -43,15 +43,20 @@ describe('Decisions page search and pagination', () => {
     const savedFiltersButton = screen.getByRole('button', { name: 'Saved filters' });
     const columnsButton = screen.getByRole('button', { name: 'Choose decision table columns' });
     expect(columnsButton.parentElement!.firstElementChild).toBe(columnsButton);
-    expect(Array.from(columnsButton.nextElementSibling!.children)).toEqual([
+    const rightControls = columnsButton.nextElementSibling!;
+    expect(Array.from(rightControls.children)).toEqual([
       searchButton.parentElement!.parentElement!,
       savedFiltersButton,
       filtersButton.parentElement!,
     ]);
-    expect(columnsButton.nextElementSibling).toHaveClass('ml-auto');
+    expect(columnsButton.parentElement).toHaveClass('flex-wrap', 'sm:flex-nowrap');
+    expect(rightControls).toHaveClass('contents', 'sm:ml-auto');
     expect(screen.queryByPlaceholderText('Filter decisions...')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Search syntax help' })).not.toBeInTheDocument();
     const input = await expandDecisionSearch();
+    expect(screen.getByPlaceholderText('Filter decisions...').closest('.basis-full')).toContainElement(
+      screen.getByRole('button', { name: 'Search syntax help' }),
+    );
     fireEvent.change(input, { target: { value: 'origin:(manual OR' } });
     await flushDecisionSearchDebounce();
 

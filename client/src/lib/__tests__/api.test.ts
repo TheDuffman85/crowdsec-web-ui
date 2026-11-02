@@ -17,6 +17,7 @@ import {
   fetchAlert,
   fetchAlerts,
   fetchAlertsPaginated,
+  fetchAlertSessionsPaginated,
   fetchAlertsForStats,
   fetchAllowlistEntries,
   fetchAllowlists,
@@ -78,6 +79,20 @@ describe('api helpers', () => {
     await expect(fetchNotifications()).resolves.toEqual({ data: [{ id: 1 }], pagination: { page: 1, page_size: 50, total: 1, total_pages: 1, unfiltered_total: 1 }, selectable_ids: ['1'], unread_count: 1 });
     await expect(fetchNotificationsPaginated()).resolves.toEqual({ data: [{ id: 1 }], pagination: { page: 1, page_size: 50, total: 1, total_pages: 1, unfiltered_total: 1 }, selectable_ids: ['1'], unread_count: 1 });
     expect(String(vi.mocked(fetch).mock.calls.find(([input]) => String(input).includes('/api/alerts/1'))?.[0])).toContain('include_decisions=false');
+  });
+
+  test('requests alert sessions with only populated filters', async () => {
+    const fetchMock = vi.fn(async (_input: Parameters<typeof fetch>[0], _init?: Parameters<typeof fetch>[1]) =>
+      Response.json({ data: [] }),
+    );
+    mockFetch(fetchMock);
+
+    await fetchAlertSessionsPaginated(2, 25, { scenario: 'ssh', country: '' });
+    await fetchAlertSessionsPaginated(1);
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/api/alerts/sessions?page=2&page_size=25&scenario=ssh');
+    expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain('country=');
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/api/alerts/sessions?page=1&page_size=50');
   });
 
   test('paginated helpers include only populated filters', async () => {

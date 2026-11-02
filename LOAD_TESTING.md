@@ -38,6 +38,7 @@ Load-test mode logs seed timings, synchronization progress, `/api` requests, and
 ./run.sh loadtest multi-instance-medium
 ./run.sh loadtest allowlists
 ./run.sh loadtest metrics-fleet
+./run.sh loadtest alert-sessions
 ```
 
 | Profile | Initial workload | Main use |
@@ -49,6 +50,7 @@ Load-test mode logs seed timings, synchronization progress, `/api` requests, and
 | `multi-instance-medium` | Three instances with 100,000 alerts and 100,000 decisions each | Medium multi-instance benchmarking |
 | `allowlists` | `multi-instance` alert workload plus five allowlists of 50,000, 25,000, 10,000, 5,000, and 1,000 entries per instance | Allowlists page, cross-instance differences, IP checks, and the manual-decision allowlist guard |
 | `metrics-fleet` | 10,000 alerts, 10,000 decisions; one central LAPI metrics endpoint with 40 remediation components, 45 log processors, and per-agent parser, AppSec, whitelist, and scenario metrics | Metrics page lists beyond their collapsed size, filtering, Show all, and totals |
+| `alert-sessions` | 300,000 alerts and decisions: 20-alert bursts from 5,000 repeat IPs, plus a 60,000-alert burst from one IP in the newest 20 minutes | Grouped Alerts paging, including the longest session read |
 
 ### Profile details
 
@@ -96,7 +98,7 @@ The benchmark measures cold and warm low-cardinality, alert-decision-state, and 
 | `LOADTEST_FILTERED_DECISIONS_COLD_LIMIT_MS` | `5000` | Maximum cold date-filtered Decisions page latency, including exact totals and duplicate promotion. |
 | `LOADTEST_FILTERED_DECISIONS_WARM_PAGE_LIMIT_MS` | `500` | Maximum latency for pages 2–4 served from the bounded filtered-page window. |
 
-Warm facets fail above 500ms, cold facets fail above two seconds, and list/search fail when one concurrent facet raises p95 by more than 25%. Filtered Alerts fail when the cold ID window exceeds two seconds or cached pages 2–4 exceed 500ms. Date-filtered Decisions fail when the cold ranking window exceeds five seconds, cached pages 2–4 exceed 500ms, or concurrent Dashboard analytics pushes paging beyond the cold limit. Set the two historical baseline variables to enforce the no-facet 10% regression gates. Compare Primary-only results, bootstrap logs, and process RSS with the existing 300k baseline; the script deliberately does not combine them into one score.
+Warm facets fail above 500ms, cold facets fail above two seconds, and list/search fail when one concurrent facet raises p95 by more than 25%. Filtered Alerts fail when the cold ID window exceeds two seconds or cached pages 2–4 exceed 500ms. Date-filtered Decisions fail when the cold ranking window exceeds five seconds, cached pages 2–4 exceed 500ms, or concurrent Dashboard analytics pushes paging beyond the cold limit. Grouped Alerts fail when a cold session window exceeds the filtered Alerts cold limit, cached pages 2–4 exceed the warm page limit, or a concurrent cold session window raises list p95 by more than 25%. Run them with `./run.sh loadtest alert-sessions` for realistic groups, because the other profiles generate almost no repeat IPs. Set the two historical baseline variables to enforce the no-facet 10% regression gates. Compare Primary-only results, bootstrap logs, and process RSS with the existing 300k baseline; the script deliberately does not combine them into one score.
 
 ## Dataset Overrides
 
@@ -122,6 +124,9 @@ LOADTEST_ALERTS=1000 LOADTEST_DECISIONS=1000 ./run.sh loadtest
 | `LOADTEST_EMPTY_ALERTS` | `0` | Trailing alerts with no decisions. |
 | `LOADTEST_EXPIRED_ALERTS` | `0` | Preceding decision-bearing alerts containing only expired decisions. |
 | `LOADTEST_EXPIRING_SOON_DECISIONS` | `0` | Decisions expiring 5–15 minutes after the seed timestamp. |
+| `LOADTEST_ALERT_SESSION_SIZE` | `1` | Consecutive alerts generated as one burst from one IP. |
+| `LOADTEST_ALERT_SOURCE_IPS` | `0` | Size of the IP pool bursts draw from; `0` gives each burst its own IP. |
+| `LOADTEST_ALERT_BURST_SIZE` | `0` | Alerts from one IP in the newest 20 minutes, the longest read for grouped Alerts. |
 | `LOADTEST_REFRESH_ALERTS` | `100` | Alerts added in each due head refresh. |
 | `LOADTEST_REFRESH_DECISIONS` | `100` | Decisions added in each normal refresh. |
 | `LOADTEST_REFRESH_DECISIONS_MIN_PER_ALERT` | `0` | Minimum decisions per refresh alert in blocklist mode. |

@@ -167,6 +167,7 @@ Theme colors: `accent` is a `#rrggbb` (or `#rgb`) color from which the full acce
 | --- | --- | --- |
 | GET | `/api/alerts` | List synced alerts. Without `page`, returns an array. With `page`, returns a paginated response. |
 | GET | `/api/alerts/facets` | Return one bounded quick-filter facet across the complete effective alert result set. |
+| GET | `/api/alerts/sessions` | List alerts grouped into attack sessions, newest activity first. |
 | GET | `/api/alerts/:id` | Fetch alert details, including CrowdSec `meta` context entries, from CrowdSec LAPI; hydrate with decisions; and apply simulation visibility. `:id` must be numeric. |
 | GET | `/api/instances/:instanceId/alerts/:id` | Fetch an alert from a specific instance. |
 | POST | `/api/alerts/bulk-delete` | Immediately hide multiple alerts and durably queue deletion of them and their linked decisions. Body: `{ "ids": [1, "2"] }`. Blocked in read-only mode. |
@@ -182,6 +183,8 @@ Alert records expose the most frequent event target as `target` and the total nu
 `simulation` accepts `all`, `live`, or `simulated`; unknown values behave like `all`.
 
 Set `include_decisions=false` to omit decision hydration from paginated lists or single-instance alert details. Bulk deletion accepts `ids` in single-instance deployments or instance-qualified `refs` as described above.
+
+`GET /api/alerts/sessions` accepts `page`, `page_size`, and the filters of the paginated alert endpoint. Filters apply first, then matching alerts from one instance, IP or range, and simulation state join a session until more than 30 minutes separate two consecutive alerts. Alerts with any other source stay in sessions of their own. Each row has `key`, `alert_count`, `first_seen`, `last_seen`, `scenario_groups` (per kind, with the three most frequent scenarios), `scenario_count`, `targets` (the three most frequent), `target_count`, `decision_alert_ids` (the newest 500 of its alerts that have decisions, for the `alert_id` decision filter), and `latest`, the session's newest alert with `decision_summary` totals for the session. When a session has more than 2,000 alerts those totals cover its newest 2,000 and `decision_summary_partial` is `true`. `pagination` carries `page`, `page_size`, `has_more`, `total_alerts`, and `unfiltered_total_alerts`; there is deliberately no session total, because counting sessions requires reading every matching alert.
 
 Alert facets require `field=id|instance|scenario|kind|country|region|city|as|ip|target|machine|origin|decision`. The `decision` facet returns `active`, `expired`, and an empty value for alerts without decisions. Facets accept the same filters as the paginated alert endpoint, plus optional case-insensitive `search`, `offset` (clamped to `0–500`), and `limit` (default `10`, maximum `50`). A facet value can include a `label`; the browser displays that label while applying `value` as the exact `=` predicate. Instance and machine facets therefore retain stable IDs while showing configured names or aliases, and `search` matches both values and labels. Multi-origin and multi-target alerts contribute once to each distinct origin or target bucket. The requested field's own predicates are removed so counts remain disjunctive. Facet requests return `400` for unsupported fields and `504` when their isolated five-second query budget is exhausted.
 
@@ -200,6 +203,7 @@ Supported decision query parameters: `instance`, `include_expired`, `page`, `pag
 
 - `include_expired=true` includes expired decisions within the configured lookback window.
 - Duplicate decisions are hidden by default in paginated results. Deduplication is applied after active filters, so the preferred matching row remains visible even when the globally preferred row does not match. Set `hide_duplicates=false` or filter by `alert_id` to show every row.
+- `alert_id` accepts one alert ID or a comma-separated list. Combine it with `instance` when instances can share alert IDs.
 - `simulation` accepts `all`, `live`, or `simulated`; unknown values behave like `all`.
 - Bulk deletion accepts `ids` in single-instance deployments or instance-qualified `refs` as described above.
 - LAPI does not check allowlists for decisions sent with an alert, so decision creation checks every target instance first. When any of them allowlists the value, nothing is added and the response is `409`:
