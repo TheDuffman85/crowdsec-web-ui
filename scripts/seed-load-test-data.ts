@@ -8,6 +8,7 @@ import {
   DEFAULT_LOAD_TEST_BLOCKLIST_DECISIONS,
   getLoadTestDecisionIdsForAlertLayout,
   isLoadTestListOrigin,
+  LOAD_TEST_ALERT_SOURCE_IP_BASE,
   normalizeLoadTestBlocklistDecisionCounts,
   withoutLoadTestListAlertAddress,
 } from './load-test-shape';
@@ -39,6 +40,7 @@ interface LoadTestConfig {
   alertSessionSize: number;
   alertSourceIps: number;
   alertBurstSize: number;
+  alertIpSeed: number;
   lookbackMs: number;
   sqliteWalEnabled: boolean;
   sqliteIncrementalVacuumEnabled: boolean;
@@ -133,6 +135,7 @@ const machines = [
 ] as const;
 
 const origins = ['crowdsec', 'manual', 'cscli-import', 'lists'] as const;
+const attackOrigins = ['crowdsec', 'manual', 'cscli-import'] as const;
 
 function parseIntegerEnv(name: string, defaultValue: number): number {
   const raw = process.env[name];
@@ -205,6 +208,8 @@ function readConfig(): LoadTestConfig {
     alertSessionSize: Math.max(1, parseIntegerEnv('LOADTEST_ALERT_SESSION_SIZE', 1)),
     alertSourceIps: parseIntegerEnv('LOADTEST_ALERT_SOURCE_IPS', 0),
     alertBurstSize: Math.min(parseIntegerEnv('LOADTEST_ALERT_BURST_SIZE', 0), regularAlertCapacity),
+    // Instances keep this seed, so one attacker can reach several of them.
+    alertIpSeed: parseIntegerEnv('LOADTEST_SEED', DEFAULT_SEED),
     lookbackMs: parseLookbackToMs(process.env.CONFIG_CROWDSEC_SYNC_LOOKBACK || '30d'),
     sqliteWalEnabled: parseBooleanEnv(process.env.CONFIG_STORAGE_WAL_ENABLED, true),
     sqliteIncrementalVacuumEnabled: parseBooleanEnv(
@@ -249,7 +254,7 @@ function alertSessionFor(id: number, config: LoadTestConfig): { ip: string; offs
   const burstEnd = config.blocklistDecisionCounts.length + config.alertBurstSize;
   if (id > config.blocklistDecisionCounts.length && id <= burstEnd) {
     return {
-      ip: ipFor(30_000_000, config.seed),
+      ip: ipFor(30_000_000, config.alertIpSeed),
       offsetMs: Math.floor(fraction(id, config.seed, 83) * ALERT_BURST_WINDOW_MS),
     };
   }
@@ -258,7 +263,7 @@ function alertSessionFor(id: number, config: LoadTestConfig): { ip: string; offs
   const sessionOffsetMs = Math.floor(fraction(sessionId, config.seed, 29) * config.lookbackMs * 0.95);
   return {
     ip: config.alertSourceIps > 0
-      ? ipFor(40_000_000 + (hash32(sessionId, config.seed) % config.alertSourceIps), config.seed)
+      ? ipFor(LOAD_TEST_ALERT_SOURCE_IP_BASE + (hash32(sessionId, config.seed) % config.alertSourceIps), config.alertIpSeed)
       : ipFor(sessionId, config.seed),
     offsetMs: config.alertSessionSize > 1
       ? sessionOffsetMs + Math.floor(fraction(id, config.seed, 89) * ALERT_SESSION_WINDOW_MS)
@@ -302,7 +307,10 @@ function buildAlertTemplate(id: number, config: LoadTestConfig, nowMs: number): 
     asNumber: asTuple[1],
     target: isBlocklist ? 'blocklist' : scenarioTuple[2],
     machine: pick(machines, id, config.seed, 31),
-    origin: isBlocklist ? (id % 2 === 0 ? 'CAPI' : 'lists') : pick(origins, id, config.seed, 37),
+    // List origins drop the source address, so in bursts they would only add one-alert rows.
+    origin: isBlocklist
+      ? (id % 2 === 0 ? 'CAPI' : 'lists')
+      : pick(config.alertSessionSize > 1 ? attackOrigins : origins, id, config.seed, 37),
     latitude: countryTuple[1] + (fraction(id, config.seed, 41) - 0.5) * 4,
     longitude: countryTuple[2] + (fraction(id, config.seed, 43) - 0.5) * 4,
     simulated: fraction(id, config.seed, 47) < config.simulationRatio,

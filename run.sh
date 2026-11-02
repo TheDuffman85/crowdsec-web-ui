@@ -182,9 +182,12 @@ configure_loadtest_profile() {
         alert-sessions)
             profile_file="$LOADTEST_PROFILE_DIR/alert-sessions.sh"
             ;;
+        alert-sessions-multi)
+            profile_file="$LOADTEST_PROFILE_DIR/alert-sessions-multi.sh"
+            ;;
         *)
             log "Error: unknown load-test profile '$LOADTEST_PROFILE'."
-            log "Available profiles: default, blocklist, blocklists-mixed, multi-instance, multi-instance-medium, allowlists, metrics-fleet, alert-sessions"
+            log "Available profiles: default, blocklist, blocklists-mixed, multi-instance, multi-instance-medium, allowlists, metrics-fleet, alert-sessions, alert-sessions-multi"
             exit 1
             ;;
     esac

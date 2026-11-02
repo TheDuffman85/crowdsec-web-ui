@@ -39,6 +39,7 @@ Load-test mode logs seed timings, synchronization progress, `/api` requests, and
 ./run.sh loadtest allowlists
 ./run.sh loadtest metrics-fleet
 ./run.sh loadtest alert-sessions
+./run.sh loadtest alert-sessions-multi
 ```
 
 | Profile | Initial workload | Main use |
@@ -51,6 +52,7 @@ Load-test mode logs seed timings, synchronization progress, `/api` requests, and
 | `allowlists` | `multi-instance` alert workload plus five allowlists of 50,000, 25,000, 10,000, 5,000, and 1,000 entries per instance | Allowlists page, cross-instance differences, IP checks, and the manual-decision allowlist guard |
 | `metrics-fleet` | 10,000 alerts, 10,000 decisions; one central LAPI metrics endpoint with 40 remediation components, 45 log processors, and per-agent parser, AppSec, whitelist, and scenario metrics | Metrics page lists beyond their collapsed size, filtering, Show all, and totals |
 | `alert-sessions` | 300,000 alerts and decisions: 20-alert bursts from 5,000 repeat IPs, plus a 60,000-alert burst from one IP in the newest 20 minutes | Grouped Alerts paging, including the longest session read |
+| `alert-sessions-multi` | Primary 25k/25k, Secondary 15k/15k, Edge 10k/10k alerts/decisions: 20-alert bursts from 500 IPs shared by all instances, plus a 3,000-alert burst from one IP on each instance | Hands-on testing of grouped Alerts per instance and in the Combined view |
 
 ### Profile details
 
@@ -61,6 +63,7 @@ Load-test mode logs seed timings, synchronization progress, `/api` requests, and
 - Multi-instance metrics endpoints return a representative Prometheus snapshot for API, parser, AppSec, scenario, whitelist, timing, and heartbeat views.
 - `metrics-fleet` adds a `Central LAPI` metrics endpoint to the single instance. Bouncers mix stream, live, and mixed modes; machines are 70% online, 20% stale, and 10% without a heartbeat timestamp. Heartbeats are computed on each scrape, so statuses stay current. Each machine also adds a parser source, two parser nodes, and parser timing; every third machine adds an AppSec listener and every fourth a whitelist, and the fleet adds 30 scenarios.
 - `LOADTEST_METRICS_BOUNCERS` and `LOADTEST_METRICS_MACHINES` work with every profile; in multi-instance profiles the fleet is added to every metrics endpoint.
+- `alert-sessions-multi` gives one attacker a separate session on every instance it reaches. The burst exceeds the 2,000 alert IDs a session keeps, so its decision counts are partial. Small blocklists add rows without an address, and each minute adds 10 alerts per instance from five of the shared IPs, so those sessions grow while the test runs.
 - Set `LOADTEST_FAILING_LAPI=true` to make Edge fail for partial-availability and partial-write tests.
 - `LOADTEST_ALLOWLIST_SIZES` generates deterministic centralized allowlists, held in memory by every fake LAPI. Entries are 70% IPv4 addresses, 15% IPv4 `/28` ranges, and 15% IPv6 addresses or `/80` ranges; 60% have a description and 20% expire within 90 days, while the rest use CrowdSec's zero-time expiration. Every third allowlist is Console-managed.
 - The first allowlist starts with `45.1.0.0/16` to `45.8.0.0/16`, which cover part of the synthetic alert sources, so alert details show the Allowlisted badge and Add Decision asks for a bypass for those addresses.
@@ -124,9 +127,9 @@ LOADTEST_ALERTS=1000 LOADTEST_DECISIONS=1000 ./run.sh loadtest
 | `LOADTEST_EMPTY_ALERTS` | `0` | Trailing alerts with no decisions. |
 | `LOADTEST_EXPIRED_ALERTS` | `0` | Preceding decision-bearing alerts containing only expired decisions. |
 | `LOADTEST_EXPIRING_SOON_DECISIONS` | `0` | Decisions expiring 5–15 minutes after the seed timestamp. |
-| `LOADTEST_ALERT_SESSION_SIZE` | `1` | Consecutive alerts generated as one burst from one IP. |
-| `LOADTEST_ALERT_SOURCE_IPS` | `0` | Size of the IP pool bursts draw from; `0` gives each burst its own IP. |
-| `LOADTEST_ALERT_BURST_SIZE` | `0` | Alerts from one IP in the newest 20 minutes, the longest read for grouped Alerts. |
+| `LOADTEST_ALERT_SESSION_SIZE` | `1` | Consecutive alerts generated as one burst from one IP. Values above `1` leave out list origins, which have no address to group by. |
+| `LOADTEST_ALERT_SOURCE_IPS` | `0` | Size of the IP pool bursts draw from, shared by all instances; `0` gives each burst its own IP. When set, refresh alerts come from five IPs of the pool. |
+| `LOADTEST_ALERT_BURST_SIZE` | `0` | Alerts from one IP in the newest 20 minutes, the longest read for grouped Alerts. In multi-instance profiles, every instance gets this burst from the same IP. |
 | `LOADTEST_REFRESH_ALERTS` | `100` | Alerts added in each due head refresh. |
 | `LOADTEST_REFRESH_DECISIONS` | `100` | Decisions added in each normal refresh. |
 | `LOADTEST_REFRESH_DECISIONS_MIN_PER_ALERT` | `0` | Minimum decisions per refresh alert in blocklist mode. |
@@ -177,7 +180,7 @@ services:
       LOADTEST_PROFILE: blocklists-mixed
 ```
 
-`LOADTEST_PROFILE` accepts `default`, `blocklist`, `blocklists-mixed`, `multi-instance`, `multi-instance-medium`, `allowlists`, or `metrics-fleet`. Individual `LOADTEST_*` and `CONFIG_*` variables override profile defaults. CrowdSec connection settings are ignored.
+`LOADTEST_PROFILE` accepts `default`, `blocklist`, `blocklists-mixed`, `multi-instance`, `multi-instance-medium`, `allowlists`, `metrics-fleet`, `alert-sessions`, or `alert-sessions-multi`. Individual `LOADTEST_*` and `CONFIG_*` variables override profile defaults. CrowdSec connection settings are ignored.
 
 ### Database Safety
 
